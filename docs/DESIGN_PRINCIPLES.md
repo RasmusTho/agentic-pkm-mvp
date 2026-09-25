@@ -179,9 +179,19 @@ It exists to keep high-level design work systematic:
 
 - Every new or revised human-facing visual component, whether it belongs to a Product surface or a
   Builder surface, must use the canonical **Yggdrasil Design System**.
-- `companion-ui/companion-app/colors_and_type.css` is the repository's binding token source for
-  governed design handoffs. The matching live design system must pass the
-  `.codex/skills/yggdrasil-design-handoff/SKILL.md` parity gate before external design generation.
+- The token source is `design-system/yggdrasil/` (DTCG JSON plus the deterministic `build.py`),
+  versioned by `design-system/yggdrasil/VERSION`. Its generated
+  `companion-ui/companion-app/colors_and_type.css` is the repository's binding token sheet for
+  governed design handoffs; never edit a generated sheet by hand. The matching live design system
+  must pass the `.codex/skills/yggdrasil-design-handoff/SKILL.md` parity gate before external design
+  generation.
+- Two themes: **Yggdrasil Dark** (the default) and **Yggdrasil Light "Shell"** (a per-user choice,
+  graduated 2026-09-25). Density is `comfortable` or `compact`. Components never branch on theme or
+  density; both are token and material swaps.
+- Effects rule: glow and grid are opt-in `.fx-*` state markers, never resting decoration. Shell's
+  night-city motion (`.fx-city`) stops under `prefers-reduced-motion`. Readable text never uses
+  `--fg-3`.
+- The owner doc is `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md`.
 - Existing Yggdrasil primitives should be reused before a new primitive, token, or visual idiom is
   proposed. A necessary extension is an explicit design-system proposal, not a silent local
   invention.

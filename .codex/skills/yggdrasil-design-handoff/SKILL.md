@@ -88,15 +88,17 @@ Complete this gate before asking a design model to produce or revise any `novel`
    stop for reconciliation.
 2. Read the live design system's `SKILL.md`, `README.md`, `colors_and_type.css`, and the relevant
    component/reference previews. Do not rely on its name alone.
-3. Hash the live `colors_and_type.css` and the repo's binding token source,
-   `companion-ui/companion-app/colors_and_type.css`. They must match byte for byte. If they do not,
-   stop before design generation and reconcile the two authorities.
+3. Hash the live `colors_and_type.css` and the repo's binding token sheet,
+   `companion-ui/companion-app/colors_and_type.css`, which is generated from `design-system/yggdrasil/`
+   by `build.py`. They must match byte for byte. If they do not, stop before design generation and
+   reconcile the two authorities (upload the generated sheet, read it back, and record the hash in
+   `companion-ui/docs/DESIGN_HANDOFF_GOVERNANCE.md :: Yggdrasil design-system gate`).
 4. Select the Yggdrasil Design System when creating the Claude Design project. If an existing
    project cannot express selection, copy/attach the live skill, README, exact token sheet, and
    relevant previews under `design-system/`, then put the binding preamble in the design request.
    Never assume that a default project inherited the system.
-5. Record the exact system name and ID, selection/attachment mechanism, token source, and token
-   SHA-256 in the handoff package README.
+5. Record the exact system name and ID, selection/attachment mechanism, token source, token
+   `VERSION` (`design-system/yggdrasil/VERSION`), and token SHA-256 in the handoff package README.
 
 No successful gate means no design generation. Do not silently fall back to a generic aesthetic,
 invent a replacement token set, or continue with an unverified similarly named system. A copied
@@ -155,6 +157,7 @@ Yggdrasil Design Handoff Receipt:
 - Design system ID:
 - Selection/attachment mechanism:
 - Repo token source:
+- Token VERSION:
 - Token SHA-256:
 - Token parity: pass|fail
 - Output/project:

@@ -207,7 +207,7 @@ a Crossing-B cleanup task.
   (`design-system/yggdrasil/VERSION`), token SHA-256
   `207a2a97b30abb919b9280f0123a97699fab39e547488f228bda39c97d71b97b`, reconciled 2026-09-24 by
   reading the live `colors_and_type.css` back after a targeted upload of the Shell night-city
-  change. A live
+  change. The owner confirmed on 2026-09-25 that the live project no longer shows as Legacy. A live
   or repo sheet with any other hash fails this gate until the next reconciliation records it here.
 - Select it at project creation. For an existing project that cannot express selection, attach its
   `SKILL.md`, `README.md`, exact `colors_and_type.css`, and relevant component/reference previews
@@ -237,7 +237,7 @@ B when all of the following are true:
 
 - [ ] The package README names the surface it covers and declares its authority status ("Visual guidance only" or equivalent).
 - [ ] The package README contains a passing Yggdrasil design-system receipt: exact live name and ID,
-      selection/attachment mechanism, binding repo token path, matching token SHA-256, and relevant
+      selection/attachment mechanism, binding repo token path, token `VERSION`, matching token SHA-256, and relevant
       component/preview inputs.
 - [ ] `authority-boundaries.md` is present and distinguishes: design guidance / normalized spec / architecture contract / runtime truth.
 - [ ] `implementation-contracts.md` is present and lists the state enum, allowed transitions, and data attributes.
