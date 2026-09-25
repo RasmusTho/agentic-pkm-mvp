@@ -13,7 +13,7 @@ Last reviewed: 2026-09-13
 
 Provide one small, host-local provisioning boundary for development and runtime processes without
 placing credentials in Git, iCloud, BuilderOps records, Mimer content, or ordinary deploy files.
-The initial implementation uses **macOS Keychain** as secret source of truth. Heimdal owns the
+The current Mac-hosted implementation uses **macOS Keychain** as its secret source of truth. The accepted Linux BWS target is specified in docs/CLOUD_SECRET_PROVISIONING/README.md and is not claimed as live-qualified here. Heimdal owns the
 lifecycle of external-helper credentials, while a narrowly scoped
 bootstrap resolves only the secrets a channel/process needs through a temporary owner-readable
 runtime surface, cleans it up, and redacts all values from logs and receipts.
@@ -25,8 +25,8 @@ Product/Runtime consumers may use channel-scoped runtime credentials such as
 authority, retention, or product memory.
 
 For external helper systems, Builder Vault records the non-secret credential reference and Heimdal
-ownership metadata; the execution host's approved secure store remains the secret source (macOS
-Keychain for the Mac-hosted path, or the approved Linux/Proxmox host-native store for that path).
+ownership metadata. The Mac-hosted path uses macOS Keychain; Linux channel VMs use the accepted BWS
+target defined in docs/CLOUD_SECRET_PROVISIONING/README.md, subject to repository delivery and later live qualification.
 External provider identities, including the Discord webhook identity, remain owned and provisioned
 outside this design; the value-free binding is declared below and is not a value stored in the Vault
 or repository.
@@ -41,7 +41,12 @@ ingress transport only; it is never a secret store or raw-audio archive.
    BuilderOps artifacts, Mimer/vault notes, command output, CI logs, or receipts.
 2. **Least privilege by consumer and channel.** A dev capture watcher receives its raw-store key and
    watched path only; it does not receive unrelated provider or deployment credentials. `dev`,
-   `test`, and `prod` secrets remain distinct.
+   `test`, and `prod` secret values remain distinct except for the narrow BWS exception approved in
+   #5667: `openai.api-key`, `anthropic.api-key`, `github.token`, and `discord.webhook` use one
+   externally issued `shared/` value mirrored in the prod and non-prod BWS projects. This records
+   the accepted tradeoff that a non-prod project reader can retrieve those same provider values used
+   by prod. No other identity is shared across channels, and this exception does not widen consumer
+   grants or change the dev capture watcher's least-privilege grant.
 3. **Fail closed.** A missing, malformed, or inaccessible required secret prevents the named process
    from starting; it does not select a default, print the value, or silently weaken encryption. Since
    #4489 "required" is a property the schema states rather than assumes: every declaration carries an
@@ -51,8 +56,10 @@ ingress transport only; it is never a secret store or raw-audio archive.
    secret that guards a shipped lane.
 4. **Key material stays outside the raw volume and database.** This preserves Heimdal's raw-store
    trust boundary.
-5. **No cloud secret service now.** 1Password Developer/CLI is a future migration option only when
-   sharing/rotation across hosts or CI makes it worthwhile. It is not a prerequisite for v1.
+5. **Mac Keychain remains the current Mac-hosted source.** The 2026-09-24 owner decision accepts
+   BWS for Linux channel VMs; that target is specified separately in docs/CLOUD_SECRET_PROVISIONING/README.md
+   and does not replace the Keychain path for Mac. The Linux target is not live-qualified until its
+   operator receipt is recorded.
 
 ### Declared identifier contract
 
@@ -184,10 +191,11 @@ did not regress capture-watch health. Acceptance is that receipt plus an owner-d
 
 ## Out of scope
 
-Cloud secret managers, 1Password installation, CI secret migration, automatic key rotation, generic
-configuration management, secret discovery, provider calls, model routing, CKM grants, and
-credential provisioning. Runtime consumers and provider execution remain separately governed by
-ADR-0064 and the Model Access Substrate task chain.
+Linux BWS provisioning is specified in docs/CLOUD_SECRET_PROVISIONING/README.md; this directory
+continues to own the Mac Keychain contract. 1Password installation, CI secret migration, automatic key
+rotation, generic configuration management, secret discovery, provider calls, model routing, CKM
+grants, and credential provisioning remain out of scope. Runtime consumers and provider execution
+remain separately governed by ADR-0064 and the Model Access Substrate task chain.
 
 ## Related sources
 
