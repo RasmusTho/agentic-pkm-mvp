@@ -207,7 +207,7 @@ a Crossing-B cleanup task.
   (`design-system/yggdrasil/VERSION`), token SHA-256
   `207a2a97b30abb919b9280f0123a97699fab39e547488f228bda39c97d71b97b`, reconciled 2026-09-24 by
   reading the live `colors_and_type.css` back after a targeted upload of the Shell night-city
-  change. A live
+  change. The owner confirmed on 2026-09-25 that the live project no longer shows as Legacy. A live
   or repo sheet with any other hash fails this gate until the next reconciliation records it here.
 - Select it at project creation. For an existing project that cannot express selection, attach its
   `SKILL.md`, `README.md`, exact `colors_and_type.css`, and relevant component/reference previews

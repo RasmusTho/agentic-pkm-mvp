@@ -77,6 +77,12 @@ Each child posts an exact-SHA receipt here. After YDS-03, the owner uses Shell i
 records the trial decision here. YDS-06 re-reads live Issue and PR state, records the owner-doc
 disposition, and hands this issue to `verification-and-closure`.
 
+**Handoff recorded (YDS-06, #5631, 2026-09-25):** YDS-01–04 (#5627–#5630) and YDS-05
+(`RasmusTho/bifrost#70`) are closed with merge receipts; #5637 (DevUI) left the v2 scope by owner
+decision (option B). The owner confirmed that the live system no longer shows as Legacy and chose to
+keep Shell. The README in this directory is promoted to the owner doc. This parent is handed to
+`verification-and-closure`.
+
 ## Out of Scope
 
 - Redesigning individual surfaces, renaming tokens, or Shell on iOS before the trial graduates.
