@@ -290,3 +290,16 @@ def test_city_night_motion_is_shell_only_and_reduced_motion_safe() -> None:
     glitch = css[css.index("@keyframes fx-city-glitch") : css.index("@keyframes fx-city-dip")]
     dip = css[css.index("@keyframes fx-city-dip") : css.index(".fx-city::before,\n")]
     assert glitch.count("opacity: 1;") <= 2 and dip.count("opacity: 1;") + dip.count("opacity: 0.7;") <= 2
+
+
+def test_shell_is_not_labelled_trial() -> None:
+    """#5673: Shell graduated (#5631); no source or generated output calls it a trial."""
+    build = _build()
+    sources = [DS / "build.py", DS / "tokens" / "themes" / "shell.json", *(DS / "claude-design").rglob("*")]
+    outputs = [REPO_ROOT / path for path in (*build.CSS_OUTPUTS, *build.TOKENS_CSS_OUTPUTS)]
+    offenders = [
+        str(path.relative_to(REPO_ROOT))
+        for path in (*sources, *outputs)
+        if path.is_file() and "trial" in path.read_text(encoding="utf-8").lower()
+    ]
+    assert offenders == []

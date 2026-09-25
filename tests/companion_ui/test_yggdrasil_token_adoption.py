@@ -95,7 +95,7 @@ def test_light_theme_is_per_user_opt_in() -> None:
     # The choice is a display preference in the settings drawer, off by default.
     select = html.split('data-testid="display-pref-theme"', 1)[1].split("</select>", 1)[0]
     assert '<option value="dark">Dark</option>' in select
-    assert '<option value="light">Light — Shell (trial)</option>' in select
+    assert '<option value="light">Light — Shell</option>' in select
     # It persists through the shipped per-user display-preference storage and
     # sets data-theme="light" only when the stored choice is "light".
     script = html[html.index("var storageKey = 'companion.displayPreferences.v1'") :]

@@ -91,7 +91,7 @@ DISPLAY_PREF_CANONICAL: dict[str, object] = {
     "lineHeight": "1.65",
     "readingWidth": "68ch",
     "focusMode": False,
-    # YDS-03 (#5629): Yggdrasil Dark is canonical; "light" is the Shell trial.
+    # YDS-03 (#5629): Yggdrasil Dark is canonical; "light" is Shell (graduated #5631).
     "theme": "dark",
 }
 
@@ -294,7 +294,7 @@ def _display_section_form() -> str:
                 name="theme"
                 aria-label="Theme">
                 <option value="dark">Dark</option>
-                <option value="light">Light — Shell (trial)</option>
+                <option value="light">Light — Shell</option>
               </select>
             </label>
             <label class="display-preference-toggle">

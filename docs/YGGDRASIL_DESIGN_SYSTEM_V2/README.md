@@ -243,7 +243,7 @@ Other type steps and spacing are unchanged between profiles.
 | DevUI candidate (`companion_ui/workspace/devui_candidate/`) and served managed DevUI (`app/builderops/devui_managed.css`, hash-pinned in `devui_assets.py`) | this | Inline Yggdrasil Dark copy (41/44 identical; system fonts under a strict CSP) | compact | #5637 |
 | CKM overview (`app/builderops/ckm/overview_html.py`) | this | Own inlined token copy | compact | S4 |
 | Bifrost: Heimdal capture, Mimer knowledge (`Yggdrasil/DesignSystem/Theme.swift`) | `RasmusTho/bifrost` | iOS system colours | native (Dynamic Type) | S5 |
-| Claude Design live system `f2b13410-…` | Claude Design | Reconciled to v2.0.0 on 2026-09-23 (token SHA-256 parity; DS-1 closed; DS-2 kept with reason); re-reconciled to v2.1.0 (#5652) and v2.2.0 (#5662, night city) on 2026-09-24 | — | S2 (delivered) |
+| Claude Design live system `f2b13410-…` | Claude Design | Reconciled to v2.0.0 on 2026-09-23 (token SHA-256 parity; DS-1 closed; DS-2 kept with reason); re-reconciled to v2.1.0 (#5652) and v2.2.0 (#5662, night city) on 2026-09-24, and v2.2.1 (#5673, trial label removed) on 2026-09-25 | — | S2 (delivered) |
 
 ### Bifrost
 
