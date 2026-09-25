@@ -14,10 +14,13 @@ volatile memory (INV-YSS-7).
 
 from __future__ import annotations
 
+from contextlib import AbstractContextManager, nullcontext
+
 import json
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
@@ -58,7 +61,12 @@ _QUOTA_REASONS = frozenset(
 class AccessTokenProvider(Protocol):
     """The YSS-02 token-provider port consumed by this client."""
 
-    def get_access_token(self) -> str: ...
+    def get_access_token(
+        self, *, deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        check_active: Callable[[], None] | None = None,
+        commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
+    ) -> str: ...
 
 
 class InvalidYouTubeRefError(ValueError):
@@ -470,6 +478,10 @@ class YouTubeApiClient:
         *,
         etag: str | None = None,
         page_token: str | None = None,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        check_active: Callable[[], None] | None = None,
+        commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
     ) -> PlaylistItemsPage | NotModified:
         playlist_id = validate_playlist_id(playlist_id)
         token = _validate_page_token(page_token)
@@ -494,6 +506,10 @@ class YouTubeApiClient:
                 },
                 etag=etag if page_index == 0 else None,
                 allow_not_modified=page_index == 0,
+                deadline=deadline,
+                monotonic=monotonic,
+                check_active=check_active,
+                commit_guard=commit_guard,
             )
             if isinstance(payload, NotModified):
                 return payload
@@ -547,9 +563,28 @@ class YouTubeApiClient:
         *,
         etag: str | None = None,
         allow_not_modified: bool = False,
+        deadline: float | None = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        check_active: Callable[[], None] | None = None,
+        commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
     ) -> tuple[dict[str, Any] | NotModified, str | None]:
+        def guard() -> float:
+            if check_active is not None:
+                check_active()
+            remaining = self._timeout if deadline is None else deadline - monotonic()
+            if remaining <= 0:
+                raise YouTubeApiError("api_unavailable", None, "Data API poll deadline expired")
+            return min(self._timeout, remaining)
+
+        guard()
         url = _validate_absolute_data_url(urljoin(self._base_url, resource), require_path=True)
-        access_token = self._tokens.get_access_token()
+        if deadline is not None or check_active is not None:
+            access_token = self._tokens.get_access_token(
+                deadline=deadline, monotonic=monotonic, check_active=check_active,
+                **({"commit_guard": commit_guard} if commit_guard is not nullcontext else {}),
+            )
+        else:
+            access_token = self._tokens.get_access_token()
         headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
         if etag:
             headers["If-None-Match"] = etag
@@ -558,7 +593,7 @@ class YouTubeApiClient:
             url,
             params=params,
             headers=headers,
-            timeout=self._timeout,
+            timeout=guard(),
         )
         # An injected/default Client may carry a cookie jar. This API boundary
         # is bearer-only, so strip cookies at the final production call site.
@@ -618,7 +653,7 @@ class YouTubeApiClient:
                     )
             elif not_modified is None:
                 try:
-                    raw = _read_bounded(response, self._max_response_bytes)
+                    raw = _read_bounded(response, self._max_response_bytes, check_active=guard)
                 except httpx.DecodingError:
                     pending_error = (
                         status_error({})
@@ -704,7 +739,9 @@ def _validate_absolute_data_url(value: str, *, require_path: bool) -> str:
     return value
 
 
-def _read_bounded(response: httpx.Response, maximum: int) -> bytes:
+def _read_bounded(
+    response: httpx.Response, maximum: int, *, check_active: Callable[[], Any] | None = None
+) -> bytes:
     declared = response.headers.get("content-length")
     if declared:
         try:
@@ -716,7 +753,11 @@ def _read_bounded(response: httpx.Response, maximum: int) -> bytes:
             pass
     chunks: list[bytes] = []
     total = 0
+    if check_active is not None:
+        check_active()
     for chunk in response.iter_bytes():
+        if check_active is not None:
+            check_active()
         total += len(chunk)
         if total > maximum:
             raise YouTubeApiError(

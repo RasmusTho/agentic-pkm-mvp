@@ -375,7 +375,7 @@ class _MemoryAcquisitionRequestsBackend:
         self._rows: dict[str, AcquisitionRequest] = {}
 
     def insert_or_append(
-        self, row: AcquisitionRequest, trigger: DiscoveryTrigger
+        self, row: AcquisitionRequest, trigger: DiscoveryTrigger, *, transaction_conn: Any = None
     ) -> tuple[AcquisitionRequest, bool]:
         with self._lock:
             existing = self._rows.get(row.request_id)
@@ -518,7 +518,7 @@ class _MemoryAcquisitionRequestsBackend:
                 updated_at=_iso(now),
             )
 
-    def reset_stale(self, older_than_seconds: int, now: datetime) -> int:
+    def reset_stale(self, older_than_seconds: int, now: datetime, *, transaction_conn: Any = None) -> int:
         with self._lock:
             threshold = now - timedelta(seconds=older_than_seconds)
             count = 0
@@ -695,9 +695,9 @@ class _PgAcquisitionRequestsBackend:
             conn.close()
 
     def insert_or_append(
-        self, row: AcquisitionRequest, trigger: DiscoveryTrigger
+        self, row: AcquisitionRequest, trigger: DiscoveryTrigger, *, transaction_conn: Any = None
     ) -> tuple[AcquisitionRequest, bool]:
-        conn = _pg_connect()
+        conn = transaction_conn if transaction_conn is not None else _pg_connect()
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
@@ -767,7 +767,8 @@ class _PgAcquisitionRequestsBackend:
             assert fetched is not None  # conflicted on an existing row
             return fetched, False
         finally:
-            conn.close()
+            if transaction_conn is None:
+                conn.close()
 
     def get(self, request_id: str, conn: Any = None) -> AcquisitionRequest | None:
         own = conn is None
@@ -919,8 +920,8 @@ class _PgAcquisitionRequestsBackend:
             expected_attempt=expected_attempt,
         )
 
-    def reset_stale(self, older_than_seconds: int, now: datetime) -> int:
-        conn = _pg_connect()
+    def reset_stale(self, older_than_seconds: int, now: datetime, *, transaction_conn: Any = None) -> int:
+        conn = transaction_conn if transaction_conn is not None else _pg_connect()
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
@@ -934,7 +935,8 @@ class _PgAcquisitionRequestsBackend:
             )
             return cur.rowcount
         finally:
-            conn.close()
+            if transaction_conn is None:
+                conn.close()
 
 
 # --- Service layer ------------------------------------------------------------
@@ -972,6 +974,7 @@ class AcquisitionRequests:
         trace_id: str | None = None,
         now: datetime | None = None,
         conn: Any = None,
+        transaction_conn: Any = None,
     ) -> AcquisitionRequest:
         """Idempotent enqueue (INV-YSS-2). Emits ``youtube.source.discovered``
         (key-deduped per ``(binding_id, item_ref)``) and, on first insert only,
@@ -1059,7 +1062,9 @@ class AcquisitionRequests:
             artifact_path=None,
             updated_at=stamp,
         )
-        stored, created = self._backend.insert_or_append(row, trigger)
+        if transaction_conn is not None:
+            conn = transaction_conn
+        stored, created = self._backend.insert_or_append(row, trigger, transaction_conn=transaction_conn)
 
         # Discovery lineage: youtube-shaped sources only (the queue itself is
         # source-agnostic; the topic is not).
@@ -1320,12 +1325,13 @@ class AcquisitionRequests:
         *,
         older_than_seconds: int = DEFAULT_STALE_IN_PROGRESS_SECONDS,
         now: datetime | None = None,
+        transaction_conn: Any = None,
     ) -> int:
         """Restart recovery: rows stuck ``in_progress`` past the threshold go back
         to ``pending`` (attempts untouched, no event — the next claim emits its
         own attempt-scoped ``acquisition.started``). Returns the reset count.
         """
-        return self._backend.reset_stale(older_than_seconds, _now(now))
+        return self._backend.reset_stale(older_than_seconds, _now(now), transaction_conn=transaction_conn)
 
     # -- reads ----------------------------------------------------------------
 

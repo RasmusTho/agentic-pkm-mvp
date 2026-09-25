@@ -1152,6 +1152,28 @@
       ],
       "rebuild_mechanism": "row-scoped",
       "escalation_conditions": []
+    },
+    "youtube_sync_state": {
+      "classification": "explicitly-global",
+      "reason": "`youtube_sync_state` is scheduler bookkeeping for the YouTube adapter, written by `app/knowledge_acquisition/sync_state.py`: the single-runner lease, per-source poll backoff, and the tick heartbeat. Every family it holds is keyed to objects that are themselves explicitly-global -- one external account and its `acquisition_source_registry` bindings -- so no column on it records a vault. The lease in particular guards polling of one external account, which is an instance-wide fact rather than a per-binding one.",
+      "owning_revision": "c9d0e1f2a3b4",
+      "declaring_revisions": [
+        "c9d0e1f2a3b4"
+      ],
+      "binding_key": "not-applicable",
+      "binding_column": null,
+      "producers": [
+        {
+          "module": "app/knowledge_acquisition/sync_state.py",
+          "operations": [
+            "delete",
+            "insert",
+            "update"
+          ]
+        }
+      ],
+      "rebuild_mechanism": "row-scoped",
+      "escalation_conditions": []
     }
   }
 }

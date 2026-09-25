@@ -71,6 +71,7 @@ class StubApiClient:
         *,
         etag: str | None = None,
         page_token: str | None = None,
+        **kwargs: Any,
     ) -> PlaylistItemsPage | NotModified:
         self.calls.append(
             {"playlist_id": playlist_id, "etag": etag, "page_token": page_token}
@@ -185,6 +186,9 @@ def _memory_backends(monkeypatch: pytest.MonkeyPatch):
     reset_memory_source_registry()
     reset_memory_acquisition_requests()
     object_store_module._MEMORY_STORE.clear()
+    from app.knowledge_acquisition import sync_state
+    state = sync_state.MemorySyncStateStore()
+    monkeypatch.setattr(sync_state, "for_runtime", lambda: state)
     clear_registry()
     synthesis_extractor.register(
         complete=lambda **_kwargs: json.dumps({

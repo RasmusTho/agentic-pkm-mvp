@@ -14,6 +14,7 @@ from __future__ import annotations
 import time
 import uuid
 from copy import deepcopy
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from typing import Any, Callable, NoReturn
 
@@ -26,6 +27,8 @@ from app.knowledge_acquisition.source_registry import (
     SourceBinding,
     SourceRegistry,
 )
+from app.knowledge_acquisition.sync_scheduler import SyncScheduler, SyncStateStore
+from app.knowledge_acquisition.sync_state import SyncLeaseLostError
 from app.knowledge_acquisition.youtube_api_client import (
     NotModified,
     PlaylistItemsPage,
@@ -105,15 +108,20 @@ def _raise_persistence_error() -> NoReturn:
 def _best_effort_persistence_degradation(
     binding_id: str,
     registry: SourceRegistry,
+    commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
 ) -> None:
     """Record a fixed failure without ever forwarding backend diagnostics."""
 
     try:
-        registry.record_poll_failure(
-            binding_id,
-            reason_code="network_error",
-            detail="Durable source-sync storage was unavailable; retry the manual sync.",
-        )
+        with commit_guard() as conn:
+            registry.record_poll_failure(
+                binding_id,
+                reason_code="network_error",
+                detail="Durable source-sync storage was unavailable; retry the manual sync.",
+                **({"transaction_conn": conn} if conn is not None else {}),
+            )
+    except SyncLeaseLostError:
+        raise
     except Exception:
         # A failed status store cannot safely provide more detail. The detached
         # public exception below remains the only caller-visible diagnostic.
@@ -148,13 +156,18 @@ def _successful_result(
     enqueued: int,
     deduped: int,
     not_modified: bool,
+    commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
 ) -> SourcePollResult:
     persistence_failed = False
     try:
-        registry.record_poll_success(
-            binding.binding_id,
-            cursor=cursor,
-        )
+        with commit_guard() as conn:
+            registry.record_poll_success(
+                binding.binding_id,
+                cursor=cursor,
+                **({"transaction_conn": conn} if conn is not None else {}),
+            )
+    except SyncLeaseLostError:
+        raise
     except Exception:
         persistence_failed = True
     if persistence_failed:
@@ -177,7 +190,7 @@ def _successful_result(
                 or recovered.last_attempt_at != binding.last_attempt_at
             )
         ):
-            _best_effort_persistence_degradation(binding.binding_id, registry)
+            _best_effort_persistence_degradation(binding.binding_id, registry, commit_guard)
             _raise_persistence_error()
     duration_ms = _duration_ms(started)
     quota_units_spent = max(0, quota_after - quota_before)
@@ -201,16 +214,21 @@ def _degraded_result(
     started: float,
     reason_code: str,
     detail: str | None = None,
+    commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
 ) -> SourcePollResult:
     normalized_reason = reason_code if reason_code in SAFE_REASON_CODES else "api_unavailable"
     safe_detail = detail or _SAFE_REASON_DETAILS[normalized_reason]
     persistence_failed = False
     try:
-        registry.record_poll_failure(
-            binding.binding_id,
-            reason_code=normalized_reason,
-            detail=safe_detail,
-        )
+        with commit_guard() as conn:
+            registry.record_poll_failure(
+                binding.binding_id,
+                reason_code=normalized_reason,
+                detail=safe_detail,
+                **({"transaction_conn": conn} if conn is not None else {}),
+            )
+    except SyncLeaseLostError:
+        raise
     except Exception:
         persistence_failed = True
     if persistence_failed:
@@ -281,6 +299,10 @@ def poll_source(
     api_client: Any,
     requests: Any,
     registry: SourceRegistry,
+    deadline: float | None = None,
+    monotonic: Callable[[], float] = time.monotonic,
+    check_active: Callable[[], None] | None = None,
+    commit_guard: Callable[[], AbstractContextManager[Any]] = nullcontext,
 ) -> SourcePollResult:
     """Poll the one enabled V1 Inbox and publish only a disposed frontier.
 
@@ -294,6 +316,19 @@ def poll_source(
     run_id = str(uuid.uuid4())
     started = time.monotonic()
 
+    def guard() -> None:
+        if check_active is not None:
+            check_active()
+
+    def degraded(binding: SourceBinding, **kwargs: Any) -> SourcePollResult:
+        guard()
+        return _degraded_result(binding, commit_guard=commit_guard, **kwargs)
+
+    def successful(binding: SourceBinding, **kwargs: Any) -> SourcePollResult:
+        guard()
+        return _successful_result(binding, commit_guard=commit_guard, **kwargs)
+
+    guard()
     current: SourceBinding | None = None
     persistence_failed = False
     try:
@@ -301,7 +336,8 @@ def poll_source(
     except Exception:
         persistence_failed = True
     if persistence_failed:
-        _best_effort_persistence_degradation(binding.binding_id, registry)
+        guard()
+        _best_effort_persistence_degradation(binding.binding_id, registry, commit_guard)
         _raise_persistence_error()
     if current is None:
         raise KeyError(f"no such binding: {binding.binding_id}")
@@ -313,7 +349,7 @@ def poll_source(
             "V1 Inbox must be an ordinary owned playlist; Liked Videos is unavailable"
         )
     if not current.account_binding_id:
-        return _degraded_result(
+        return degraded(
             current,
             registry=registry,
             run_id=run_id,
@@ -323,7 +359,7 @@ def poll_source(
 
     binding = current
     if not binding.enabled:
-        return _degraded_result(
+        return degraded(
             binding,
             registry=registry,
             run_id=run_id,
@@ -334,7 +370,7 @@ def poll_source(
     policy = deepcopy(binding.acquisition_policy)
     mode = policy.get("mode")
     if mode != V1_REQUEST_MODE:
-        return _degraded_result(
+        return degraded(
             binding,
             registry=registry,
             run_id=run_id,
@@ -352,24 +388,30 @@ def poll_source(
             binding.collection_ref,
             etag=prior_cursor.get("etag") if isinstance(prior_cursor.get("etag"), str) else None,
             page_token=None,
+            **({"deadline": deadline, "monotonic": monotonic, "check_active": check_active,
+                "commit_guard": commit_guard}
+               if deadline is not None or check_active is not None else {}),
         )
+    except SyncLeaseLostError:
+        raise
     except YouTubeApiError as exc:
         failure_reason = exc.reason_code
     except Exception as exc:
         reason_code = getattr(exc, "reason_code", "network_error")
         failure_reason = reason_code if isinstance(reason_code, str) else "network_error"
     if failure_reason is not None:
-        return _degraded_result(
+        return degraded(
             binding,
             registry=registry,
             run_id=run_id,
             started=started,
             reason_code=failure_reason,
         )
+    guard()
     quota_after = _quota_spent(api_client)
 
     if isinstance(page, NotModified):
-        return _successful_result(
+        return successful(
             binding,
             registry=registry,
             run_id=run_id,
@@ -383,7 +425,7 @@ def poll_source(
             not_modified=True,
         )
     if not isinstance(page, PlaylistItemsPage):
-        return _degraded_result(
+        return degraded(
             binding,
             registry=registry,
             run_id=run_id,
@@ -414,21 +456,26 @@ def poll_source(
                     existing = getter(
                         request_identity("youtube_url", item.video_id, policy_version)
                     )
-            requests.enqueue(
-                source_kind="youtube_url",
-                item_ref=item.video_id,
-                source_ref=f"https://www.youtube.com/watch?v={item.video_id}",
-                trigger=DiscoveryTrigger(
-                    binding_id=binding.binding_id,
-                    collection_kind=binding.collection_kind,
-                    collection_ref=binding.collection_ref,
-                    trigger="poll",
-                    playlist_item_id=item.playlist_item_id,
-                ),
-                priority=binding.priority,
-                policy_snapshot=policy,
-                trace_id=run_id,
-            )
+            guard()
+            with commit_guard() as conn:
+                requests.enqueue(
+                    source_kind="youtube_url",
+                    item_ref=item.video_id,
+                    source_ref=f"https://www.youtube.com/watch?v={item.video_id}",
+                    trigger=DiscoveryTrigger(
+                        binding_id=binding.binding_id,
+                        collection_kind=binding.collection_kind,
+                        collection_ref=binding.collection_ref,
+                        trigger="poll",
+                        playlist_item_id=item.playlist_item_id,
+                    ),
+                    priority=binding.priority,
+                    policy_snapshot=policy,
+                    trace_id=run_id,
+                    **({"transaction_conn": conn} if conn is not None else {}),
+                )
+        except SyncLeaseLostError:
+            raise
         except Exception:
             persistence_failed = True
             break
@@ -445,7 +492,7 @@ def poll_source(
 
     if persistence_failed:
         try:
-            _degraded_result(
+            degraded(
                 binding,
                 registry=registry,
                 run_id=run_id,
@@ -453,6 +500,8 @@ def poll_source(
                 reason_code="network_error",
                 detail="Durable request storage was unavailable; the cursor was not advanced.",
             )
+        except SyncLeaseLostError:
+            raise
         except Exception:
             # The durable-store/outbox boundary may itself be the failed
             # dependency. Never replace the stable public failure with a raw
@@ -461,7 +510,7 @@ def poll_source(
         _raise_persistence_error()
 
     cursor = _next_cursor(prior_cursor, page, outcomes)
-    return _successful_result(
+    return successful(
         binding,
         registry=registry,
         run_id=run_id,
@@ -487,12 +536,14 @@ class YouTubeInboxSyncV1:
         requests: Any,
         api_client: Any,
         oauth_status: Callable[[str], dict[str, Any]],
+        sync_state: SyncStateStore | None = None,
     ) -> None:
         self._account_binding_id = account_binding_id
         self._registry = registry
         self._requests = requests
         self._api_client = api_client
         self._oauth_status = oauth_status
+        self._sync_state = sync_state
 
     def select_inbox(
         self,
@@ -557,12 +608,37 @@ class YouTubeInboxSyncV1:
         """Run one synchronous production poll and return a secret-free receipt."""
 
         binding = self._enabled_inbox()
-        result = poll_source(
-            binding,
-            api_client=self._api_client,
-            requests=self._requests,
+        from app.knowledge_acquisition.sync_state import for_runtime
+
+        results: list[SourcePollResult] = []
+        failures: list[Exception] = []
+
+        def poll(current: SourceBinding, **kwargs: Any) -> SourcePollResult:
+            try:
+                result = poll_source(current, **kwargs)
+            except Exception as exc:
+                failures.append(exc)
+                raise
+            results.append(result)
+            return result
+
+        scheduler = SyncScheduler(
             registry=self._registry,
+            requests=self._requests,
+            state=self._sync_state if self._sync_state is not None else for_runtime(),
+            api_client=self._api_client,
+            poll_fn=poll,
+            reconciled=True,
         )
+        outcome = scheduler.sync_now(binding.binding_id)
+        if failures:
+            raise failures[0]
+        if not results:
+            return {
+                "status": "degraded", "discovered": 0, "enqueued": 0,
+                "deduped": 0, "not_modified": False, "reason_code": outcome.reason,
+            }
+        result = results[0]
         return {
             "status": "degraded" if result.degraded else "connected",
             "discovered": result.discovered,

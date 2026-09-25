@@ -199,6 +199,14 @@ ALLOW_FILES = (
     # self-contained dual memory/pg backend, direct DSN connection, no ORM
     # layer to route through.
     'app/knowledge_acquisition/acquisition_requests.py',
+    # YouTube Source Sync scheduler state and single-runner lease (YSS-06, #3921).
+    # Same bounded pattern as app/episodes/engine_state.py above: one dedicated
+    # key/value table (`youtube_sync_state`: lease, per-source backoff, tick
+    # heartbeat -- every row rebuildable from the registry and the queue),
+    # direct connection, no ORM layer to route through. The lease in particular
+    # must be decided by a single SQL statement, so routing it through a store
+    # abstraction would weaken the exclusion it exists to provide.
+    'app/knowledge_acquisition/sync_state.py',
 )
 
 def _allowed(p: Path) -> bool:

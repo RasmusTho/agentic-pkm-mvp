@@ -13,8 +13,10 @@ V1 provides core application routes, not a broad command family:
 - select one Inbox, sync once, inspect status: `YouTubeInboxSyncV1` in
   `app/knowledge_acquisition/playlist_discovery.py`.
 
-There is no automatic scheduler, next-sync promise, UI setup wizard, multi-playlist
-configuration, Takeout/RSS import, backfill command, analytics view, or full-media route.
+The bounded [YSS-06 continuation](SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) adds discovery-only
+scheduling when both accepted runtime gates are enabled; it does not automatically drain requests.
+There is no end-to-end next-sync promise, UI setup wizard, multi-playlist configuration,
+Takeout/RSS import, backfill command, analytics view, or full-media route.
 
 ## Dev command
 
@@ -97,9 +99,10 @@ material drains successfully, the result is a `youtube_source_note` candidate wi
 The Inbox route never calls knowledge promotion. Human review remains the only path to higher
 knowledge standing.
 
-Each `drain` invocation is one bounded pass and nothing more: it holds no lease, keeps no schedule,
-and leaves no process running. Unattended continuous sync remains deferred to YSS-06 (#3921), so a
-queue only advances when an operator runs the command.
+Each `drain` invocation is one bounded pass and nothing more: it holds no scheduler lease, keeps
+no schedule, and leaves no process running. YSS-06 (#3921) schedules discovery and enqueue only;
+queued requests are acquired only when an operator runs the drain command. Background acquisition
+remains a separate deferred slice.
 
 ## Troubleshooting
 

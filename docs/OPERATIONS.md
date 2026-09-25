@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-09-17 (only BuilderOps Issue-delivery repository support for #5587; other sections retain their 2026-09-13 review)
+Last reviewed: 2026-09-24 (only YouTube discovery scheduling for #3921 / PR #5616; BuilderOps Issue-delivery retains its 2026-09-17 review and other sections their 2026-09-13 review)
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
 Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, Issue #5442 / PR #5450, Issue #5511 / PR #5513, merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-13
 # Operations Playbook
@@ -578,6 +578,16 @@ are evidence only and provide no reactivation or fallback authority.
 - Scope note: this ships the deployment manifest/runbook and the fetch-readiness gate only. The live
   acquisition pipeline (Heimdal fetch → published evidence → Mimer candidates) is not accepted as
   shipped until the parent Karakeep acquisition feature (#3367) completes its acceptance slice.
+
+### YouTube Inbox discovery scheduling (YSS-06)
+
+The existing watcher loop can schedule discovery for the supported one-account Inbox when both
+accepted YouTube runtime gates are enabled. Manual Inbox sync shares its scheduler lease;
+acquisition remains the separate operator-invoked drain, and no background media worker is added.
+Use the [operator runbook](YOUTUBE_SOURCE_SYNC/OPERATOR_RUNBOOK.md) for setup and commands, and the
+[YSS-06 contract](YOUTUBE_SOURCE_SYNC/SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) for pause, lease,
+backoff, recovery, and cooperative deadline limits. This repository support is not live-provider
+acceptance and does not reopen the deferred subscription, backfill, or broad CLI/UI slices.
 
 Detailed startup, local topology, and recovery procedures live in `docs/INFRASTRUCTURE.md`.
 Task-specific operator walkthroughs live in `docs/runbooks/`.
