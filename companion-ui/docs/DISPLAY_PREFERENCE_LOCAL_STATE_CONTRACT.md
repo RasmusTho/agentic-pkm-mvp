@@ -26,7 +26,7 @@ Display and listening preferences are Local UI state. They re-render identical c
 Local re-rendering of identical content in the read-only Companion projection may affect:
 
 - Note/source body rendering: font, size, line length, spacing, contrast, and theme.
-- Workspace theme: Yggdrasil Dark (canonical) or Yggdrasil Light "Shell" (per-user trial, YDS-03 #5629). It is the `theme` key (`"dark"` | `"light"`) of the shipped `companion.displayPreferences.v1` display state, applied as `data-theme` on the root element; tokens come from the generated `yggdrasil-tokens.css`. Choosing Light shows the local-only indicator, and reset-to-canonical returns to Dark.
+- Workspace theme: Yggdrasil Dark (canonical) or Yggdrasil Light "Shell" (a per-user choice added by YDS-03 #5629; graduated from trial on 2026-09-25, #5631). It is the `theme` key (`"dark"` | `"light"`) of the shipped `companion.displayPreferences.v1` display state, applied as `data-theme` on the root element; tokens come from the generated `yggdrasil-tokens.css`. Choosing Light shows the local-only indicator, and reset-to-canonical returns to Dark.
 - Proposal and card text typography/spacing/visual separation, but never option text, option count, default selection, or consequence labelling.
 - Resurfaced card rendering within server-declared content.
 - Listening modality and pacing: read, listen, sequential, bimodal, and speed.

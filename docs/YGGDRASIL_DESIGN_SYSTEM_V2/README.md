@@ -1,7 +1,7 @@
 State: Owner doc for the Yggdrasil Design System v2 (promoted by YDS-06, #5631, on 2026-09-25).
 Slices S1–S6 and the Shell follow-ups (#5652, #5657, #5662) are delivered and recorded in
 `:: Rollout`. Binding token truth is the generated `companion-ui/companion-app/colors_and_type.css`
-(design-system `VERSION`, currently 2.2.0) under `docs/DESIGN_PRINCIPLES.md :: 11. Shared Visual
+(the current version is `design-system/yggdrasil/VERSION`) under `docs/DESIGN_PRINCIPLES.md :: 11. Shared Visual
 Language`; where this document and the generated sheet disagree, the sheet wins.
 Doc role: Owner doc for the Yggdrasil Design System v2 (token source, themes, density, effects, rollout record).
 Owner: Yggdrasil visual language (DP-11)
