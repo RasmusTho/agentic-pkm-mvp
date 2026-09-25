@@ -5,8 +5,8 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-09-24
-Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`
+Last reviewed: 2026-09-25
+Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`
 
 # Test Strategy for the Hot Path
 
@@ -24,6 +24,11 @@ Unknown paths, executable files, fixtures, mixed changes and runtime configurati
 conservative and enable those gates. This classification does not turn a required check into a
 bare skipped success or remove exact AC coverage. Broad contract target sets remain until a narrower
 owner mapping is demonstrated; a Markdown suffix outside these roots is not documentation proof.
+
+The merge path stays distinct from post-merge runtime feedback. The proposed automatic exact-image
+`dev` → `test` path and its failure policy are target state in
+[`FAST_PR_TO_DEV_TEST_AUTOMATION`](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md); they are not current
+PR checks or shipped deployment automation.
 
 ## Current Protection Surface
 
