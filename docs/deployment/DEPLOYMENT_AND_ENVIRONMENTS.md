@@ -5,9 +5,10 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-09-11
+Last reviewed: 2026-09-25
 Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`. This is not fresh host qualification, residency, deployment, health, or SSH evidence from this workstation.
+Verification update (2026-09-25): also checked `.github/workflows/app-image-build.yml`, `.github/workflows/integration-nightly.yaml`, `scripts/deploy_channel.sh`, and `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`; the repository workflow set has no caller of the deploy script. This remains repository inspection, not fresh host qualification or deployment evidence.
 
 ## Why this document exists
 
@@ -110,6 +111,16 @@ projects or the local Compose matrix below as evidence for the new-host runtime.
 remains exact candidate identity → dev verification → test deployment and verification → prod promotion
 and verification.
 
+### CI deployment automation posture
+
+The repository builds and verifies SHA-identified application images, and `scripts/deploy_channel.sh`
+provides channel deployment mechanics. In the verified workflow set, no GitHub Actions workflow calls
+that deploy script; post-merge automatic `dev` → `test` delivery is therefore not shipped. The
+[fast PR-to-dev/test plan](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) proposes a separate post-merge
+path that keeps nightly and live deployment out of the PR merge gate. It requires fresh channel and
+executor qualification, exact SHA/digest receipts, per-channel serialization, and a recovery contract
+before enablement. Production authority and promotion remain separate.
+
 RCA on 2026-06-29 (BuilderOps LearningSignal `lrn_20260629093241_59713bc1`) found that the system had **no deployment source-of-truth**. The observed reality:
 
 - All three docker API stacks bind-mount a single shared host checkout (`./:/app`) — there is **no code isolation between channels**; every channel runs whatever is checked out in that one tree.
@@ -153,7 +164,7 @@ Anchors for the values above: ports/DBs in `docker-compose.{dev,test,prod}.yml`;
 
 Notes on the current model:
 - The repo app bind mount is opt-in through `docker-compose.app-bind.yml`; the standard dev, test, and prod Compose/deploy paths omit it. When explicitly enabled for a local hot-reload or exact-worktree UAT session, it mounts the selected checkout at `/app` and therefore is not code-isolated from changes in that checkout. `dev` otherwise runs the baked local `pkm-app:dev-local` image, while test and prod use their channel image pins.
-- Companion UI gateways are now declared as managed compose units in the repo, but the running fleet has not yet adopted the pinned-image model. The cutover guard therefore checks gateway-unit participation in the recreate set before #2698 can treat a channel as ready.
+- Companion UI gateways are declared as managed Compose units in the repo. The final #2698 public receipt records a production pinned-image deployment; this document has no fresh equivalent `dev`/`test` receipts and does not infer their current runtime state. The cutover guard checks gateway-unit participation in the recreate set on the configured deployment path.
 - Production Compose fixes Companion's publish to `127.0.0.1:8113` and passes the matching explicit
   declaration `COMPANION_UI_BIND_HOST=127.0.0.1` into the gateway as one canonical producer pair;
   ambient shell configuration cannot widen or silently disable it. The production deploy wrapper
@@ -728,9 +739,9 @@ inside-container peer-loopback inference enters that exception.
 
 This document does **not** supersede `docs/RELEASE_CHANNELS/README.md` (channel identity, per-channel DB, promotion-plan/rollback/migration-classification contracts) — it implements the physical deploy beneath those contracts and references them rather than restating them.
 
-## Implementation slices
+## Historical implementation slices
 
-The epic (#2655) is delivered as the slices below. S1 is this document. S2–S7 map to concrete targets so `feature-breakdown` can derive child issues. **S7 (cutover) is operator-gated (`agent:needs-human`)** because it authorizes full-environment downtime and may apply forward-only migrations.
+The epic (#2655) was delivered as the slices below. S1 is this document. The original task descriptions are retained for provenance; they no longer represent open work. The terminal S7 cutover was operator-gated because it authorized full-environment downtime and could apply forward-only migrations.
 
 - **S1 — Canonical deployment spec (this slice).** `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` + `docs/ENVIRONMENTS.md §Deployment` pointer. Docs-only. *Done in this PR.*
 - **S2 — CI builds SHA-tagged image.** CI workflow builds the app image from the repo `Dockerfile`, injects `VCS_REF`/`BUILT_AT`, tags it `ghcr.io/<owner>/pkm-app:<sha>`. Target: `.github/workflows/**` (new build job), reuse the existing `Dockerfile` and the `Makefile` `VCS_REF`/`BUILT_AT` computation.
@@ -740,7 +751,7 @@ The epic (#2655) is delivered as the slices below. S1 is this document. S2–S7 
 - **S6 — Verify/formalize auth↔topology.** Verify and lock the configured trusted-proxy (`X-Forwarded-For` only when peer is loopback or explicitly allowed) topology; add/confirm tests that exercise the proxied path and assert untrusted non-loopback callers and unconfigured bridge peers are still rejected (#2223, #2706). Target: `app/auth.py` (formalize/comment), `tests/**` covering `require_loopback_or_api_key` + `_effective_client_host` on the runtime path.
 - **S7 — Cutover (OPERATOR-GATED, `agent:needs-human`).** Cut all three channels over from the shared-checkout bind-mount to pinned images, recreate API + managed gateways, run the migration gate (forward-only ack) and the health + UI smoke gates. **Authorizes full-environment downtime and may apply forward-only migrations — requires operator acknowledgement before execution.** Target: the live host; run S5's deploy script per channel under operator supervision; record receipts in `ops/promotions/`.
 
-Delivery status (2026-07-07): S1–S6 are delivered (#2668, #2693–#2697); the running fleet has **not** adopted the delivered tooling, and the promotion skill chain that landed after these slices is still checkout-based. The remaining work — reconciling the promotion workflow with pinned images, per-channel cutover readiness, a live fleet-model fitness guard, and the operator-gated cutover itself (#2698) — is specified in [`docs/deployment/PINNED_IMAGE_CUTOVER/`](PINNED_IMAGE_CUTOVER/README.md).
+Delivery status (2026-09-25): S1–S6 were delivered (#2668, #2693–#2697); the pinned-image reconcile, readiness preflight, and fleet-model guard were delivered in PRs #3206, #3205, and #3207. Issue #2698 is closed; its final public receipt records the production deployment at SHA `311631b08efdf08809a5677d20e3612f80a0022c`. That receipt does not establish fresh equivalent `dev` and `test` evidence here. See the [historical cutover receipt index](PINNED_IMAGE_CUTOVER/README.md). The separate proposed post-merge `dev` → `test` workflow is not shipped; see [FAST_PR_TO_DEV_TEST_AUTOMATION](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md).
 
 ## Suggested validation
 
