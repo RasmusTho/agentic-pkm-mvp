@@ -22,13 +22,13 @@ from: the Companion product UI, the Builder System UIs, and the Bifrost native c
 
 Owner decisions recorded 2026-09-22:
 
-- **Themes:** *Yggdrasil Dark* (today's look) stays the default. *Yggdrasil Light "Shell"* is
-  approved **for trial**. It is inspired by the Ghost in the Shell (2017) posters: porcelain work
+- **Themes:** *Yggdrasil Dark* (today's look) stays the default. *Yggdrasil Light "Shell"* was
+  approved for trial on 2026-09-22 and **graduated on 2026-09-25** (see below). It is inspired by the Ghost in the Shell (2017) posters: porcelain work
   surfaces floating on a glitching neon city. Four earlier light directions were reviewed and
   rejected the same day because they felt generic, "90s", or "too My Little Pony": a plain cool
   light, a frost / Tron-grid / neon-signage trio, a prismatic rainbow-bridge look, and a muted porcelain Shell.
   The review page is kept at [`exploration/2026-09-22-shell-light-theme.html`](exploration/2026-09-22-shell-light-theme.html).
-  Shell graduates from trial only after the owner uses it in the Companion (S3).
+  The trial rule was that Shell graduates only after the owner uses it in the Companion (S3).
   **Graduated 2026-09-25:** after using Shell (frosted glass and night city, v2.2.0) the owner
   chose to keep it (#5626, #5631). Shell is a supported theme; Dark stays the default.
 - **App feel:** one shared core (colour, type, meaning) with per-surface **density profiles**;
@@ -63,7 +63,7 @@ design-system/yggdrasil/
   tokens/primitives.json      # raw ramps, type scale, spacing, radius, motion
   tokens/semantic.json        # roles that reference primitives
   tokens/themes/dark.json     # role -> primitive bindings (Yggdrasil Dark, default)
-  tokens/themes/shell.json    # role -> primitive bindings (Yggdrasil Light "Shell", trial)
+  tokens/themes/shell.json    # role -> primitive bindings (Yggdrasil Light "Shell")
   tokens/css-values.json      # CSS-native values DTCG cannot express (shadow stacks,
                               # gradients/materials, em letter-spacing, keyword easing)
   tokens/density/comfortable.json
@@ -264,7 +264,7 @@ the ecosystem authority Bifrost already declares (ADR-0050). This spec does not 
 |---|---|---|---|
 | **S1** Token source and generator | **Delivered (#5627).** `design-system/yggdrasil/` holds the DTCG source (primitives, semantic aliases, Dark and Shell themes, density; structured values and `{alias}` syntax, checked by `test_token_source_is_valid_dtcg`), `css-values.json` for CSS-native values DTCG cannot express (shadows, materials, em tracking, keyword easing), the contrast pairs, `VERSION` 2.0.0, and the stdlib `build.py` (`--check` for freshness). It generates both CSS copies, `dist/YggdrasilTokens.swift`, and `dist/tokens.json`. Every v1 token and rule is unchanged (checked against `tests/design_system/fixtures/colors_and_type.v1.css`). Shell, compact density, the v2 focus ring (`data-focus="v2"`), and `.fx-*` effects are opt-in only. JetBrains Mono now loads from Google Fonts. `prefers-reduced-motion` zeroes the duration tokens. `dist/tokens.json` resolves every alias to a concrete value. | — | The live Claude Design gate fails closed until S2 re-syncs the new sheet bytes. |
 | **S2** Live system reconciliation | **Delivered (#5628).** The owner confirmed on 2026-09-25 that the live project no longer shows as Legacy (#5626). The owner-started `/design-sync` run (finalized plan: 11 named paths plus the recompile marker, no deletes) uploaded the generated `colors_and_type.css`, rewrote the live `README.md` and `SKILL.md` from the tokens (Dark and Shell, density, ink/mark tones, effects rule; closes DS-1), added three Shell cards plus density and focus/effects cards, corrected two drifted card labels, and replaced the stale Signboard stylesheet that had overridden the live `--accent` index with Signboard green. **Live-parity evidence:** the live `colors_and_type.css` read back on 2026-09-23 hashes to SHA-256 `99120ff9bb29dc0b497cd09802cc2e6ea87dcd9814a1afdf22690126fa837243` (17,439 bytes), equal to both repo copies; the gate records it with version 2.0.0. DS-2 keeps its limitation with a reason. Authored sources and the sync pin live in `design-system/yggdrasil/claude-design/` and `.design-sync/`. | S1 | Re-reconciled per token version (2.1.0 #5652, 2.2.0 #5662); the gate records the current hash. |
-| **S3** Companion migration | **Delivered (#5629).** The workspace and orientation pages link the generated tokens-only sheet (served at `/static/yggdrasil-tokens.css`) and opt in to the v2 focus ring; 50 inlined token copies and 210 `var(--x, #hex)` fallbacks are gone, and the remaining free hex literals map to tokens except four justified exceptions (help-guide error page, two authority-state colours). 171 readable `fg-3` uses moved to `fg-2` across the Companion modules and pages. Theme is a `companion.displayPreferences.v1` preference (Dark canonical; Light "Shell" as a per-user trial in the settings drawer, applied before first paint), and under Light the workspace renders porcelain sheets with rim light on the city backdrop. Since the #5652 follow-up the orientation door applies the same stored theme and surface tokens (it previously stayed Dark). | S1 | **Trial gate:** the owner uses Shell in the Companion and records the decision on #5626. |
+| **S3** Companion migration | **Delivered (#5629).** The workspace and orientation pages link the generated tokens-only sheet (served at `/static/yggdrasil-tokens.css`) and opt in to the v2 focus ring; 50 inlined token copies and 210 `var(--x, #hex)` fallbacks are gone, and the remaining free hex literals map to tokens except four justified exceptions (help-guide error page, two authority-state colours). 171 readable `fg-3` uses moved to `fg-2` across the Companion modules and pages. Theme is a `companion.displayPreferences.v1` preference (Dark canonical; Light "Shell" as a per-user choice in the settings drawer, applied before first paint), and under Light the workspace renders porcelain sheets with rim light on the city backdrop. Since the #5652 follow-up the orientation door applies the same stored theme and surface tokens (it previously stayed Dark). | S1 | **Trial gate closed:** the owner used Shell and chose to keep it on 2026-09-25 (#5626). |
 | **S4** Builder UI migration | **Delivered (#5630).** Signboard and the legacy dashboard load the tokens-only sheet and drop their local palettes; the CKM overview embeds the generated tokens at render time (standalone file, no web-font `@import`); readable `fg-3` moved to `fg-2` in Signboard, dashboard, CKM, and Cockpit; every page opts in to compact density and the v2 focus ring. No hex literals remain outside print styles. The managed DevUI was split to #5637 (it already renders Yggdrasil Dark; its change needs a new constrained-reuse revision, browser proof, and VM102 receipts). | S1 | Ran in parallel with S3. The managed DevUI migration (#5637) was moved out of v2 scope by the owner on 2026-09-25 (option B): the DevUI already renders Dark with 41/44 identical tokens. |
 | **S5** Bifrost adoption | **Delivered (`RasmusTho/bifrost#70`).** `YggTheme` is backed by the generated Swift tokens with a version pin and CI parity check. Bifrost ships Dark. | S1 | Bifrost stays pinned to 2.0.0 until it needs later tokens. |
 | **S6** Governance promotion | **Delivered (#5631).** DP-11, `DESIGN_HANDOFF_GOVERNANCE.md`, and the `yggdrasil-design-handoff` skill point at the token source, `VERSION`, themes, and effects rule; the owner's Shell outcome (keep) is recorded; this document is the owner doc. | S1, S2 | Parent #5626 handed to `verification-and-closure`. |
@@ -309,10 +309,10 @@ These invariants hold across the tasks, which all read or write the same token o
 
 ## Relationship to GitHub Issues
 
-The parent feature issue is the live validation hub. Child Issues are filed from the task files
-above: YDS-01 as ready, and the others as blocked on their prerequisites. YDS-05 is filed in the
-Bifrost repository once a token version exists to pin. Issue numbers are written back into each
-task file's `github_issue:` frontmatter and into the table above when filed.
+Parent #5626 was the validation hub. Its children were YDS-01–04 (#5627–#5630), YDS-05
+(`RasmusTho/bifrost#70`) and YDS-06 (#5631), all delivered; each task file's `github_issue:`
+frontmatter holds its number. #5637 (managed DevUI) left the v2 scope by owner decision. Later
+changes to this system are ordinary issues that cite this owner doc.
 
 ## Out of scope
 

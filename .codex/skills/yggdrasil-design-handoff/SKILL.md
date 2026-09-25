@@ -157,6 +157,7 @@ Yggdrasil Design Handoff Receipt:
 - Design system ID:
 - Selection/attachment mechanism:
 - Repo token source:
+- Token VERSION:
 - Token SHA-256:
 - Token parity: pass|fail
 - Output/project:

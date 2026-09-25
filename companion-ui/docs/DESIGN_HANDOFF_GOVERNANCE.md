@@ -237,7 +237,7 @@ B when all of the following are true:
 
 - [ ] The package README names the surface it covers and declares its authority status ("Visual guidance only" or equivalent).
 - [ ] The package README contains a passing Yggdrasil design-system receipt: exact live name and ID,
-      selection/attachment mechanism, binding repo token path, matching token SHA-256, and relevant
+      selection/attachment mechanism, binding repo token path, token `VERSION`, matching token SHA-256, and relevant
       component/preview inputs.
 - [ ] `authority-boundaries.md` is present and distinguishes: design guidance / normalized spec / architecture contract / runtime truth.
 - [ ] `implementation-contracts.md` is present and lists the state enum, allowed transitions, and data attributes.

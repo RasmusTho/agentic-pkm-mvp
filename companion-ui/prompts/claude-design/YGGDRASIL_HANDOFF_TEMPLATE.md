@@ -15,6 +15,7 @@ Design-system receipt for this run:
 - live design-system ID: `[ID returned by list_design_systems]`
 - selection/attachment mechanism: `[selected at project creation | attached under design-system/]`
 - binding repo token source: `companion-ui/companion-app/colors_and_type.css`
+- token VERSION: `[design-system/yggdrasil/VERSION]`
 - verified token SHA-256: `[matching live and repo hash]`
 - reusable components/previews read: `[paths]`
 
