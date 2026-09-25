@@ -8,7 +8,7 @@ Last reviewed: 2026-09-25
 
 Issue #5667 is the live validation hub. The specification directory and child task files define repository work; the issue tracks the child ledger, merge receipts, integrated verification, owner-doc promotion, and the separate live operator qualification gate.
 
-The owner decision on production Heimdal data-key rotation is open in the issue thread. Do not create or ready a task that changes the active raw-store-key or archive-pass until that answer is recorded and the task contract names the approved behavior.
+The owner decision on production Heimdal data-key rotation is open in the issue thread. Do not create or ready a task that changes the active raw-store-key or archive-pass until that answer is recorded and the task contract names the approved behavior. A separate live qualification receipt is required for shared BWS parity: the local operation lock only coordinates cooperating calls on one host, so the owner must approve the sole admin writer and show its credential is restricted to that controller, or select a shared fencing mechanism. Keep deploy admission blocked until that gate passes.
 
 ## Specification delivery
 
@@ -23,4 +23,4 @@ All four issues are filed with agent:blocked / action:wait-dependency while the 
 3. BWS-03 Install VM secret tokens — #5679; depends on #5677
 4. BWS-04 Deploy PostgreSQL with Compose secrets — #5680; depends on #5677 and #5678
 
-See docs/CLOUD_SECRET_PROVISIONING/README.md for task order and cross-task invariants.
+See docs/CLOUD_SECRET_PROVISIONING/README.md for task order, unknown-provider-outcome behavior, durable remote token receipts, supervised deploy recovery and quiescence, the sole-writer qualification gate, and cross-task invariants.

@@ -20,7 +20,7 @@ The BWS Linux target spans host lookup, secret administration, token installatio
 
 Publish the capability specification, four independently verifiable implementation task specs, parent validation-hub map, and canonical document-index entries. Create the child GitHub issues from the task specs while this specification PR is open, record each child issue number in its task frontmatter, and leave implementation issues dependency-blocked until the spec PR merges.
 
-The specification records the accepted BWS topology, preserves the Mac Keychain path, and defines the shared-secret parity, protected-key hold, no-value-disclosure, deployment preflight, file-backed Compose secret, and live-qualification boundaries. It does not claim runtime delivery.
+The specification records the accepted BWS topology, preserves the Mac Keychain path, and defines durable shared-import history with fail-closed indeterminate provider outcomes, one host-local coordination lock whose sole-writer boundary requires owner qualification or shared fencing, the locked empty-database bootstrap transition, atomic systemd-token generation identity with durable remote terminal receipts, and a VM-supervised deploy worker with durable remote stages, quiescent SSH-loss recovery, and terminal receipts. It also defines the closed PostgreSQL file-consumer map, no-value-disclosure, and live-qualification boundaries without claiming runtime delivery.
 
 ## Concretely
 
