@@ -1,9 +1,9 @@
 /* ============================================================
-   Yggdrasil Design System v2.2.0 — Tokens only (no element defaults)
+   Yggdrasil Design System v2.2.1 — Tokens only (no element defaults)
    ============================================================
    GENERATED from design-system/yggdrasil/ by build.py. Do not edit;
    change the token source and run: python3 design-system/yggdrasil/build.py
-   Themes: Yggdrasil Dark (default) and Yggdrasil Light "Shell" (trial,
+   Themes: Yggdrasil Dark (default) and Yggdrasil Light "Shell" (opt-in,
    data-theme="light" or "system"). Density: data-density="compact".
    ============================================================ */
 
@@ -148,7 +148,7 @@
 }
 
 /* ============================================================
-   THEME — Yggdrasil Light "Shell" (trial, opt-in)
+   THEME — Yggdrasil Light "Shell" (opt-in)
    ============================================================ */
 :root[data-theme="light"] {
   color-scheme: light;

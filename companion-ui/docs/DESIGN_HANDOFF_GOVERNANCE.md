@@ -203,11 +203,11 @@ a Crossing-B cleanup task.
 
 - Resolve the live Claude Design system by exact name through `list_design_systems`; the currently
   verified ID is `f2b13410-af14-4875-8029-445352123f57`.
-- Current reconciled state (#5662, after YDS-02 #5628 and #5652): system version `2.2.0`
+- Current reconciled state (#5673, after YDS-02 #5628, #5652 and #5662): system version `2.2.1`
   (`design-system/yggdrasil/VERSION`), token SHA-256
-  `207a2a97b30abb919b9280f0123a97699fab39e547488f228bda39c97d71b97b`, reconciled 2026-09-24 by
-  reading the live `colors_and_type.css` back after a targeted upload of the Shell night-city
-  change. The owner confirmed on 2026-09-25 that the live project no longer shows as Legacy. A live
+  `edbc81c77209b5274b26b5e827191f95595f20d6bc5a97a17f7dd8751a774ba2`, reconciled 2026-09-25 by
+  reading the live `colors_and_type.css` back after a targeted upload of the Shell "(trial)" label
+  removal. The owner confirmed on 2026-09-25 that the live project no longer shows as Legacy. A live
   or repo sheet with any other hash fails this gate until the next reconciliation records it here.
 - Select it at project creation. For an existing project that cannot express selection, attach its
   `SKILL.md`, `README.md`, exact `colors_and_type.css`, and relevant component/reference previews

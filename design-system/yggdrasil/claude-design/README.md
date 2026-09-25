@@ -1,6 +1,6 @@
 # Yggdrasil Design System
 
-Version 2.2.0. Token sheet: `colors_and_type.css`, generated from the repo token source
+Version 2.2.1. Token sheet: `colors_and_type.css`, generated from the repo token source
 `design-system/yggdrasil/` in `RasmusTho/agentic-pkm-mvp`. The repo sheet
 `companion-ui/companion-app/colors_and_type.css` is the binding authority. This project's copy must
 match it byte for byte. If this README and the sheet ever disagree, the sheet wins.
@@ -105,7 +105,7 @@ theme or density: both are pure token swaps.
 | `data-density` | `comfortable`, `compact` | missing means `comfortable` |
 | `data-focus` | `v2` opts in to the 2px solid focus ring | missing keeps the v1 glow ring |
 
-Yggdrasil Dark is the default for every surface. Shell is a per-user trial choice. Never make Shell
+Yggdrasil Dark is the default for every surface. Shell is a per-user choice. Never make Shell
 the default of a design unless the brief asks for it.
 
 ### Themes
@@ -115,7 +115,7 @@ Norse gold is the primary accent. Electric cyan is the signal colour. Vault gree
 amber, and red carry domain meaning. The only material is a faint cyan grid, available through
 `.fx-grid`.
 
-**Yggdrasil Light "Shell" (trial).** The suit against the city. People read and write on calm
+**Yggdrasil Light "Shell".** The suit against the city. People read and write on calm
 porcelain sheets. The frame around them is a saturated neon city that the porcelain catches as rim
 light.
 

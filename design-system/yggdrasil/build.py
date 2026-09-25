@@ -128,7 +128,7 @@ def render_css(src: dict[str, object], *, include_base: bool = True) -> str:
         "   ============================================================\n"
         "   GENERATED from design-system/yggdrasil/ by build.py. Do not edit;\n"
         "   change the token source and run: python3 design-system/yggdrasil/build.py\n"
-        "   Themes: Yggdrasil Dark (default) and Yggdrasil Light \"Shell\" (trial,\n"
+        "   Themes: Yggdrasil Dark (default) and Yggdrasil Light \"Shell\" (opt-in,\n"
         "   data-theme=\"light\" or \"system\"). Density: data-density=\"compact\".\n"
         "   ============================================================ */\n"
     )
@@ -144,7 +144,7 @@ def render_css(src: dict[str, object], *, include_base: bool = True) -> str:
             if include_base
             else []
         ),
-        "/* ============================================================\n   THEME — Yggdrasil Light \"Shell\" (trial, opt-in)\n   ============================================================ */",
+        "/* ============================================================\n   THEME — Yggdrasil Light \"Shell\" (opt-in)\n   ============================================================ */",
         _block(':root[data-theme="light"]', shell_tokens, properties=("color-scheme: light",)),
         "",
         "@media (prefers-color-scheme: light) {\n"
