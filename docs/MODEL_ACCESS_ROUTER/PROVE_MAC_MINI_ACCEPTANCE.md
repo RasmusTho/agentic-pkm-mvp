@@ -1,6 +1,6 @@
 ---
-name: Prove configured Mac mini executor paths and Luna acceptance
-description: Validate VLAN-primary and Tailscale-fallback Product access to the Mac mini Codex executor and produce a provider-neutral, sanitized acceptance receipt.
+name: Prove configured macOS executor paths and Luna acceptance
+description: Validate VLAN-primary and Tailscale-fallback Product access to the designated macOS Codex executor and produce a provider-neutral, sanitized acceptance receipt.
 task_id: MARR-06
 github_issue: 5624
 source_anchor: docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: Delivery gates
@@ -14,7 +14,7 @@ can_parallelize_with: []
 
 ## Purpose
 
-Prove that the Product runtime reaches the Mac mini Codex CLI executor over the shared VLAN first,
+Prove that the Product runtime reaches the designated macOS Codex CLI executor over the shared VLAN first,
 uses configured private Tailscale only after a typed, recoverable VLAN path failure before
 completion, and
 reports required Product capabilities through provider-neutral health. Produce a sanitized receipt
@@ -89,7 +89,7 @@ secret-redaction result.
 ## How to Verify (Pre-Merge)
 
 - Run `pytest -q tests/model_access/test_macos_executor_acceptance_receipt.py` after implementation.
-- From the Product Linux runtime and designated Mac mini executor, follow the checked-in
+- From the Product Linux runtime and designated macOS executor, follow the checked-in
   cross-host acceptance procedure and attach only the sanitized v3 receipt. Do not include raw
   stdout, environment, keychain output, capability claims, concrete machine identity, endpoint
   values, or session files.

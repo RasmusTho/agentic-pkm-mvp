@@ -12,7 +12,7 @@ depends_on: [MARR-01, MARR-02, MARR-05, MARR-08]
 ## Purpose
 
 Separate how Product reaches a remote model executor from which model/provider the executor uses.
-For the Ygg deployment, select the Mac mini executor over the shared VLAN first and use the
+For the Ygg deployment, select the designated macOS executor over the shared VLAN first and use the
 configured private Tailscale path only when a no-inference connectivity or preflight check shows
 that the VLAN path is unavailable.
 

@@ -39,7 +39,7 @@ This remains a target-state decision for provider execution and caller adoption.
 The Product runtime remains on its designated Linux hosts. It does not start a Codex process on
 those hosts and does not depend on SSH into the macOS host. Product Codex requests reach a
 single-purpose executor on the designated macOS host; that executor invokes the host's
-already-authenticated Codex CLI subscription session. Ygg Product VMs and the Mac mini share a
+already-authenticated Codex CLI subscription session. Ygg Product VMs and the designated macOS executor share a
 VLAN, so the VLAN path is primary. A configured private Tailscale path may be used as fallback when
 the VLAN path fails its no-inference connectivity/preflight check. This remains target state until
 host acceptance is complete. The executor is not a Product API, Product gateway, or general-purpose

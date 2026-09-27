@@ -114,7 +114,7 @@ transport before the pure latest-compatible selector can use it.
 6. [Migrate Product LLM callers to the shared facade](MIGRATE_PRODUCT_LLM_CALLERS.md) — MARR-05; depends on MARR-01–04 and MARR-08
 7. [Configure VLAN-primary and Tailscale-fallback executor paths](CONFIGURE_EXECUTOR_NETWORK_PATHS.md) — MARR-09; specifies path configuration and no-inference failover independently of model/provider selection
 8. [Report provider-neutral capability health](REPORT_CAPABILITY_HEALTH.md) — MARR-10; specifies health through logical capability contracts, independent of provider identity
-9. [Prove configured Mac mini executor paths and Luna acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06; depends on MARR-01–05, MARR-08, MARR-09, and MARR-10. Live Issue #5624 must be reconciled with the amended acceptance contract before pickup.
+9. [Prove configured macOS executor paths and Luna acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06; depends on MARR-01–05, MARR-08, MARR-09, and MARR-10. Live Issue #5624 must be reconciled with the amended acceptance contract before pickup.
 10. [Roll out through release channels with config rollback](ROLLOUT_WITH_CONFIG_ROLLBACK.md) — MARR-07; depends on MARR-06 and explicit release-channel operator acknowledgment
 
 ## Capability Acceptance
