@@ -297,3 +297,38 @@ def test_selected_ollama_route_is_probed_independent_of_legacy_provider(monkeypa
     assert set(result["routes"]) == {"qa"}
     assert result["routes"]["qa"]["provider"] == "ollama"
     assert calls == ["http://ollama.local:11434/api/tags"]
+
+
+def test_skipped_eval_ollama_route_is_not_probed(monkeypatch) -> None:
+    monkeypatch.setenv("EVAL_LLM_MODE", "skip")
+
+    def _unexpected_ollama_probe(**_kwargs):
+        raise AssertionError("a skipped eval route must not probe Ollama")
+
+    monkeypatch.setattr(health_module, "_check_ollama", _unexpected_ollama_probe)
+
+    result = health_module._check_llm_access(
+        {
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "mock",
+                        "model": "deterministic",
+                        "transport_id": "mock",
+                    },
+                    "intent": {},
+                },
+                "eval": {
+                    "effective": {
+                        "provider": "ollama",
+                        "model": "qwen-local",
+                        "transport_id": "ollama_http",
+                    },
+                    "intent": {},
+                },
+            }
+        }
+    )
+
+    assert result["ok"] is True
+    assert result["routes"]["eval"]["status"] == "skipped"

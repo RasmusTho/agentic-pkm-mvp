@@ -397,12 +397,24 @@ def _check_llm_access(router_check: Dict[str, Any]) -> Dict[str, Any]:
             "routes": {},
         }
 
+    eval_mode = (
+        (os.getenv("EVAL_LLM_MODE") or DEFAULT_EVAL_MODE).strip().lower()
+        or DEFAULT_EVAL_MODE
+    )
+    active_text_policies = (
+        policy
+        for task_kind, policy in text_policies.items()
+        if not (
+            str(task_kind).strip().lower() == "eval"
+            and eval_mode == "skip"
+        )
+    )
     local_ollama_selected = any(
         str((policy.get("effective") or {}).get("provider") or "").strip().lower()
         == "ollama"
         and str((policy.get("effective") or {}).get("transport_id") or "").strip()
         not in _REMOTE_OLLAMA_TRANSPORTS
-        for policy in text_policies.values()
+        for policy in active_text_policies
     )
     ollama_probe = (
         _check_ollama(selected_by_route=True) if local_ollama_selected else None

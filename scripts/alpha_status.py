@@ -98,7 +98,12 @@ def _format_providers(providers: list[dict] | None) -> str:
             continue
         name = entry.get("name") or "?"
         ok = entry.get("ok")
-        status = "ok" if ok else "fail"
+        if isinstance(ok, bool):
+            status = "ok" if ok else "fail"
+        elif entry.get("declared") is True:
+            status = "declared"
+        else:
+            status = "unknown"
         parts.append(f"{name}={status}")
     return " ".join(parts) if parts else "(missing)"
 
