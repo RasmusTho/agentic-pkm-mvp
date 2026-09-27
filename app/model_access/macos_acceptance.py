@@ -307,23 +307,6 @@ def _is_sensitive_identifier(value: str) -> bool:
     return True
 
 
-def _reject_sensitive_json_strings(value: object) -> None:
-    if isinstance(value, str):
-        if _is_sensitive_identifier(value):
-            raise ValueError("sensitive identifier is not allowed")
-        return
-    if isinstance(value, BaseModel):
-        _reject_sensitive_json_strings(value.model_dump(mode="python"))
-        return
-    if isinstance(value, dict):
-        for item in value.values():
-            _reject_sensitive_json_strings(item)
-        return
-    if isinstance(value, (list, tuple)):
-        for item in value:
-            _reject_sensitive_json_strings(item)
-
-
 def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     """Reject ambiguous JSON objects before schema validation can discard keys."""
 
@@ -340,10 +323,8 @@ def _parse_model(model: type[BaseModel], value: object, *, error_code: str) -> B
         if isinstance(value, BaseModel):
             value = value.model_dump(mode="python")
         if isinstance(value, (str, bytes, bytearray)):
-            decoded = json.loads(value, object_pairs_hook=_reject_duplicate_json_keys)
-            _reject_sensitive_json_strings(decoded)
+            json.loads(value, object_pairs_hook=_reject_duplicate_json_keys)
             return model.model_validate_json(value)
-        _reject_sensitive_json_strings(value)
         serialized = json.dumps(value, allow_nan=False)
         return model.model_validate_json(serialized)
     except (TypeError, ValueError, ValidationError, RecursionError):
