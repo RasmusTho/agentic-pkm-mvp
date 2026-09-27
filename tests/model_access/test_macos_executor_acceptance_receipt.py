@@ -204,6 +204,28 @@ def test_duplicate_json_keys_cannot_hide_unsafe_receipt_or_route_fields(
     assert "private.example" not in output
 
 
+def test_cli_argument_errors_do_not_echo_supplied_values(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary_secret = "CANARY_SECRET_DO_NOT_LOG"
+    with pytest.raises(SystemExit) as error:
+        main(
+            [
+                f"--api-key={canary_secret}",
+                "--input",
+                "receipt.json",
+                "--expected-route",
+                "expected-route.json",
+            ]
+        )
+
+    assert error.value.code == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == "arguments_invalid\n"
+    assert canary_secret not in captured.err
+
+
 def test_missing_host_prerequisite_is_reported_without_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

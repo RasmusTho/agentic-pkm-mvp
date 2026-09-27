@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-from typing import Sequence
+from typing import NoReturn, Sequence
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -21,6 +21,13 @@ _MAX_RECEIPT_BYTES = 128_000
 _MAX_EXPECTED_ROUTE_BYTES = 16_000
 
 
+class _SafeArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        del message
+        print("arguments_invalid", file=sys.stderr)
+        raise SystemExit(2)
+
+
 def _read_bounded(path: Path, limit: int) -> bytes | None:
     try:
         with path.open("rb") as source:
@@ -31,7 +38,7 @@ def _read_bounded(path: Path, limit: int) -> bytes | None:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = _SafeArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path, help="sanitized receipt JSON")
     parser.add_argument(
         "--expected-route",
