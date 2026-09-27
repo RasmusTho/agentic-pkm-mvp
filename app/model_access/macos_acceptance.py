@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import re
 from typing import Literal
 
@@ -282,9 +283,21 @@ class ReceiptValidationError(RuntimeError):
         super().__init__(code)
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """Reject ambiguous JSON objects before schema validation can discard keys."""
+
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
 def _parse_model(model: type[BaseModel], value: object, *, error_code: str) -> BaseModel:
     try:
         if isinstance(value, (str, bytes, bytearray)):
+            json.loads(value, object_pairs_hook=_reject_duplicate_json_keys)
             return model.model_validate_json(value)
         return model.model_validate(value)
     except (TypeError, ValueError, ValidationError, RecursionError):

@@ -13,7 +13,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.model_access.macos_acceptance import (  # noqa: E402
-    ExpectedAcceptanceRoute,
     ReceiptValidationError,
     validate_acceptance_receipt,
 )
@@ -54,14 +53,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if expected_payload is None:
         print("expected_route_invalid")
         return 2
-    try:
-        expected_route = ExpectedAcceptanceRoute.model_validate_json(expected_payload)
-    except (ValueError, RecursionError):
-        print("expected_route_invalid")
-        return 2
 
     try:
-        result = validate_acceptance_receipt(receipt_payload, expected_route)
+        result = validate_acceptance_receipt(receipt_payload, expected_payload)
     except ReceiptValidationError as exc:
         print(exc.code)
         return 2

@@ -155,6 +155,55 @@ def test_acceptance_receipt_is_route_bound_and_secret_free(
         validate_acceptance_receipt(json.dumps(endpoint_model), json.dumps(expected))
 
 
+def test_duplicate_json_keys_cannot_hide_unsafe_receipt_or_route_fields(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    expected = _expected_route()
+    valid_receipt = json.dumps(_passed_receipt())
+    unsafe_receipt = valid_receipt.replace(
+        '"codex_cli_version": "1.2.3"',
+        ('"codex_cli_version": "sk-ant-do-not-print-this-value", ' '"codex_cli_version": "1.2.3"'),
+        1,
+    )
+    assert unsafe_receipt != valid_receipt
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(unsafe_receipt, json.dumps(expected))
+
+    unsafe_nested_receipt = valid_receipt.replace(
+        '"model": "codex-model-fixture"',
+        '"model": "https://private.example/model", "model": "codex-model-fixture"',
+        1,
+    )
+    assert unsafe_nested_receipt != valid_receipt
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(unsafe_nested_receipt, json.dumps(expected))
+
+    unsafe_expected = json.dumps(expected).replace(
+        '"model": "codex-model-fixture"',
+        '"model": "https://private.example/model", "model": "codex-model-fixture"',
+        1,
+    )
+    with pytest.raises(ReceiptValidationError, match="expected_route_invalid"):
+        validate_acceptance_receipt(valid_receipt, unsafe_expected)
+
+    receipt_path = tmp_path / "duplicate-receipt.json"
+    expected_path = tmp_path / "expected-route.json"
+    receipt_path.write_text(unsafe_receipt, encoding="utf-8")
+    expected_path.write_text(json.dumps(expected), encoding="utf-8")
+
+    assert main(["--input", str(receipt_path), "--expected-route", str(expected_path)]) == 2
+    output = capsys.readouterr().out
+    assert output == "receipt_invalid\n"
+    assert "do-not-print-this-value" not in output
+
+    receipt_path.write_text(valid_receipt, encoding="utf-8")
+    expected_path.write_text(unsafe_expected, encoding="utf-8")
+    assert main(["--input", str(receipt_path), "--expected-route", str(expected_path)]) == 2
+    output = capsys.readouterr().out
+    assert output == "expected_route_invalid\n"
+    assert "private.example" not in output
+
+
 def test_missing_host_prerequisite_is_reported_without_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

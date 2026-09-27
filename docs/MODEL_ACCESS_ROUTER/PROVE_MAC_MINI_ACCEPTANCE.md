@@ -88,7 +88,8 @@ mapping id, ambiguous-completion no-retry evidence, and secret-redaction result.
 - [ ] An ambiguous completion outcome causes no second completion and no path/provider retry.
   - Verify: runtime receipt: model_access_router.macos_executor_acceptance.v3
 - [ ] Receipt validation rejects credentials, endpoint URLs, raw path identities/authorization
-  claims, full environment, prompts, and raw CLI output.
+  claims, full environment, prompts, raw CLI output, and duplicate JSON object keys at any nesting
+  level in either input file.
   - Verify: `tests/model_access/test_macos_executor_acceptance_receipt.py::test_acceptance_receipt_is_route_bound_and_secret_free`
 - [ ] Missing path, authorization, interactive CLI auth, or required capability leaves acceptance
   incomplete without changing host/network configuration or downloading a model.
@@ -99,7 +100,8 @@ mapping id, ambiguous-completion no-retry evidence, and secret-redaction result.
 - Run `pytest -q tests/model_access/test_macos_executor_acceptance_receipt.py`.
 - After the offline validator is delivered, validate the sanitized receipt against an independently
   prepared expected-route JSON containing the exact route, catalog snapshot hash, logical executor
-  profile, and ordered path profiles:
+  profile, and ordered path profiles. It rejects duplicate keys before schema validation so an
+  earlier unsafe value cannot be shadowed by a later valid value:
   `python3 scripts/validate_macos_executor_acceptance_receipt.py --input <receipt-path> --expected-route <expected-route-path>`.
   This command only reads those two local JSON files. It does not contact or inspect a host, network,
   service, Codex CLI, Ollama, or model; an `incomplete` result is not live acceptance.
