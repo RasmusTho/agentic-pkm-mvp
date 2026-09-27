@@ -14,15 +14,16 @@ from app.model_access.remote_contract import CompletionCapabilityIntent
 
 
 _MODEL_ID = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._+-]{0,126}[A-Za-z0-9])?$")
-_HOSTNAME_MODEL_ID = re.compile(
-    r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$",
+_HOSTNAME_IDENTIFIER = re.compile(
+    r"(?<![a-z0-9-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}",
     re.IGNORECASE,
 )
-_SENSITIVE_MODEL_ID = re.compile(
-    r"(?:[a-z][a-z0-9+.-]*://|@|\bsk-(?:ant-)?[a-z0-9_-]{8,}\b|"
-    r"\btskey-(?:auth|api|client|secret)-[a-z0-9_-]+\b|"
-    r"\bgh(?:p|o|u|s|r|i)_[a-z0-9_]+\b|\bgithub_pat_[a-z0-9_]+\b|"
-    r"\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{20,}\b|"
+_IPV4_IDENTIFIER = re.compile(r"(?<![0-9])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![0-9])")
+_SENSITIVE_IDENTIFIER = re.compile(
+    r"(?:[a-z][a-z0-9+.-]*://|@|sk-[a-z0-9_-]{8,}|"
+    r"tskey-(?:auth|api|client|secret)-[a-z0-9_-]+|"
+    r"gh(?:p|o|u|s|r|ri)_[a-z0-9_]{8,}|github_pat_[a-z0-9_]{8,}|"
+    r"(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Z0-9_-]{20,}|"
     r"\b(?:bearer|api[_-]?key|token|secret)\s*[:=])",
     re.IGNORECASE,
 )
@@ -77,18 +78,7 @@ class AcceptanceRouteIdentity(_StrictModel):
 
     @model_validator(mode="after")
     def _validate_model_id(self) -> "AcceptanceRouteIdentity":
-        try:
-            ipaddress.ip_address(self.model)
-        except ValueError:
-            is_ip_literal = False
-        else:
-            is_ip_literal = True
-        if (
-            not _MODEL_ID.fullmatch(self.model)
-            or _HOSTNAME_MODEL_ID.fullmatch(self.model)
-            or _SENSITIVE_MODEL_ID.search(self.model)
-            or is_ip_literal
-        ):
+        if not _MODEL_ID.fullmatch(self.model) or _is_sensitive_identifier(self.model):
             raise ValueError("model identifier is not a safe logical ID")
         return self
 
@@ -193,10 +183,11 @@ class MacOsExecutorAcceptanceReceipt(_StrictModel):
         if len(observed_ids) != len(set(observed_ids)):
             raise ValueError("capability observations must be unique")
 
-        if self.codex_cli_version is not None and not _CODEX_VERSION.fullmatch(
-            self.codex_cli_version
+        if self.codex_cli_version is not None and (
+            not _CODEX_VERSION.fullmatch(self.codex_cli_version)
+            or _is_sensitive_identifier(self.codex_cli_version)
         ):
-            raise ValueError("Codex CLI version must be a version token only")
+            raise ValueError("Codex CLI version must be a safe version token only")
 
         if self.status == "incomplete":
             if not self.missing_prerequisites or self.completion_dispatched:
@@ -302,6 +293,37 @@ class ReceiptValidationError(RuntimeError):
         super().__init__(code)
 
 
+def _is_sensitive_identifier(value: str) -> bool:
+    if (
+        _SENSITIVE_IDENTIFIER.search(value)
+        or _HOSTNAME_IDENTIFIER.search(value)
+        or _IPV4_IDENTIFIER.search(value)
+    ):
+        return True
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
+
+
+def _reject_sensitive_json_strings(value: object) -> None:
+    if isinstance(value, str):
+        if _is_sensitive_identifier(value):
+            raise ValueError("sensitive identifier is not allowed")
+        return
+    if isinstance(value, BaseModel):
+        _reject_sensitive_json_strings(value.model_dump(mode="python"))
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _reject_sensitive_json_strings(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _reject_sensitive_json_strings(item)
+
+
 def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     """Reject ambiguous JSON objects before schema validation can discard keys."""
 
@@ -315,10 +337,15 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, ob
 
 def _parse_model(model: type[BaseModel], value: object, *, error_code: str) -> BaseModel:
     try:
+        if isinstance(value, BaseModel):
+            value = value.model_dump(mode="python")
         if isinstance(value, (str, bytes, bytearray)):
-            json.loads(value, object_pairs_hook=_reject_duplicate_json_keys)
+            decoded = json.loads(value, object_pairs_hook=_reject_duplicate_json_keys)
+            _reject_sensitive_json_strings(decoded)
             return model.model_validate_json(value)
-        return model.model_validate(value)
+        _reject_sensitive_json_strings(value)
+        serialized = json.dumps(value, allow_nan=False)
+        return model.model_validate_json(serialized)
     except (TypeError, ValueError, ValidationError, RecursionError):
         raise ReceiptValidationError(error_code) from None  # type: ignore[arg-type]
 

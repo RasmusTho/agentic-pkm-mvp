@@ -209,6 +209,11 @@ def test_duplicate_json_keys_cannot_hide_unsafe_receipt_or_route_fields(
     [
         "tskey-auth-" + "a" * 20,
         "ghp_" + "a" * 36,
+        "fixture_tskey-auth-" + "a" * 20,
+        "fixture_ghp_" + "a" * 36,
+        "fixture_AKIA" + "A" * 16,
+        "fixture_ASIA" + "A" * 16,
+        "fixture_AIzA" + "A" * 35,
         "executor.example.ts.net:8443/model",
         "executor.example.ts.net",
         "192.0.2.10",
@@ -243,6 +248,38 @@ def test_model_identity_rejects_credentials_and_endpoint_hosts(
     output = capsys.readouterr().out
     assert output == "receipt_invalid\n"
     assert unsafe_model not in output
+
+
+@pytest.mark.parametrize(
+    "unsafe_version",
+    [
+        "1.2+AIza" + "A" * 35,
+        "1.2+AKIA" + "A" * 16,
+        "1.2+ASIA" + "A" * 16,
+        "1.2+executor.example.ts.net",
+        "192.0.2.10",
+    ],
+)
+def test_codex_cli_version_rejects_credentials_and_host_identities(
+    unsafe_version: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    expected = _expected_route()
+    receipt = _passed_receipt()
+    receipt["codex_cli_version"] = unsafe_version
+
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(receipt, expected)
+
+    receipt_path = tmp_path / "unsafe-version-receipt.json"
+    expected_path = tmp_path / "expected-route.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    expected_path.write_text(json.dumps(expected), encoding="utf-8")
+    assert main(["--input", str(receipt_path), "--expected-route", str(expected_path)]) == 2
+    output = capsys.readouterr().out
+    assert output == "receipt_invalid\n"
+    assert unsafe_version not in output
 
 
 def test_cli_argument_errors_do_not_echo_supplied_values(
