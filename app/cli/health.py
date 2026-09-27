@@ -61,6 +61,22 @@ def _safe_endpoint_origin(value: str) -> str:
         return "[configured]"
 
 
+def _ollama_model_matches(selected_model: str, installed_models: Any) -> bool:
+    """Match the selected local model, treating an omitted tag as `:latest`."""
+    if not isinstance(installed_models, list):
+        return False
+
+    def _without_latest_tag(value: str) -> str:
+        return value.removesuffix(":latest")
+
+    expected = _without_latest_tag(selected_model.strip())
+    return any(
+        isinstance(installed, str)
+        and _without_latest_tag(installed.strip()) == expected
+        for installed in installed_models
+    )
+
+
 def _health_probe_timeout() -> float:
     """Return the short health-only timeout without coupling to generation."""
     try:
@@ -80,11 +96,6 @@ def _watcher_required() -> bool:
     if not raw:
         return False
     return raw.strip().lower() in _TRUE_VALUES
-
-
-def _ollama_required() -> bool:
-    provider = (os.getenv("LLM_PROVIDER") or "").strip().lower()
-    return provider in {"ollama", "llm"}
 
 
 def _check_ffmpeg() -> Dict[str, Any]:
@@ -170,9 +181,9 @@ def _check_outbox_path() -> Dict[str, Any]:
     )
 
 
-def _check_ollama() -> Dict[str, Any]:
+def _check_ollama(*, selected_by_route: bool = False) -> Dict[str, Any]:
     provider = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
-    if provider == "llm":
+    if provider == "llm" or selected_by_route:
         provider = "ollama"
     base = (
         os.environ.get("OLLAMA_BASE_URL")
@@ -181,7 +192,7 @@ def _check_ollama() -> Dict[str, Any]:
         or os.environ.get("OPENAI_BASE_URL")
         or ""
     ).rstrip("/")
-    if provider != "ollama":
+    if provider != "ollama" and not selected_by_route:
         result = _result(True, "Hoppar över Ollama-koll (LLM_PROVIDER != ollama)", data={"skipped": True})
         result["provider"] = provider
         result["base_url"] = _safe_endpoint_origin(base)
@@ -259,6 +270,7 @@ def _provider_env_check(
                     transport_id=transport_id,
                     reasoning_effort=reasoning_effort,
                 ),
+                allow_fallback=False,
             )
             bound_route = client.model_access_route
             if bound_route is None:
@@ -290,11 +302,27 @@ def _provider_env_check(
     if normalized in {"", "mock", "deterministic"}:
         return {"ok": True, "detail": f"deterministic/local route ({resolved_model})", "status": "ok"}
     if normalized == "ollama":
-        result = ollama_probe if ollama_probe is not None else _check_ollama()
+        result = (
+            ollama_probe
+            if ollama_probe is not None
+            else _check_ollama(selected_by_route=True)
+        )
+        ok = bool(result.get("ok"))
+        detail = result.get("detail", "")
+        probe_data = result.get("data")
+        installed_models = (
+            probe_data.get("models") if isinstance(probe_data, dict) else None
+        )
+        if ok and not isinstance(installed_models, list):
+            ok = False
+            detail = "Ollama model inventory unavailable"
+        elif ok and not _ollama_model_matches(resolved_model, installed_models):
+            ok = False
+            detail = "selected Ollama model is not installed"
         return {
-            "ok": bool(result.get("ok")),
-            "detail": result.get("detail", ""),
-            "status": "ok" if result.get("ok") else "fail",
+            "ok": ok,
+            "detail": detail,
+            "status": "ok" if ok else "fail",
             "base_url": result.get("base_url"),
         }
     if normalized == "openai":
@@ -302,13 +330,23 @@ def _provider_env_check(
         api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         ok = bool(base and api_key)
         detail = "OpenAI route configured" if ok else "OPENAI_BASE_URL (or OPENAI_BASE) and OPENAI_API_KEY are required"
-        return {"ok": ok, "detail": detail, "status": "ok" if ok else "fail", "base_url": base}
+        return {
+            "ok": ok,
+            "detail": detail,
+            "status": "ok" if ok else "fail",
+            "base_url": _safe_endpoint_origin(base),
+        }
     if normalized == "deepseek":
         base = (os.getenv("DEEPSEEK_BASE") or "").strip()
         api_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
         ok = bool(base and api_key)
         detail = "DeepSeek route configured" if ok else "DEEPSEEK_BASE and DEEPSEEK_API_KEY are required"
-        return {"ok": ok, "detail": detail, "status": "ok" if ok else "fail", "base_url": base}
+        return {
+            "ok": ok,
+            "detail": detail,
+            "status": "ok" if ok else "fail",
+            "base_url": _safe_endpoint_origin(base),
+        }
     return {"ok": False, "detail": f"Unsupported provider for route verification: {normalized}", "status": "fail"}
 
 
@@ -368,6 +406,51 @@ def _check_llm_task_routes(
     return {"ok": overall, "detail": detail, "routes": route_statuses}
 
 
+_EMBEDDING_TASK_KINDS = {"embed", "embedding", "embeddings"}
+_REMOTE_OLLAMA_TRANSPORTS = {"codex_cli_tailscale", "ollama_http_tailscale"}
+
+
+def _check_llm_access(router_check: Dict[str, Any]) -> Dict[str, Any]:
+    """Preflight selected text-generation routes without dispatching inference."""
+    policies = router_check.get("route_policies") or {}
+    text_policies = {
+        task_kind: policy
+        for task_kind, policy in policies.items()
+        if str(task_kind).strip().lower() not in _EMBEDDING_TASK_KINDS
+    }
+    if not text_policies:
+        return {
+            "ok": False,
+            "detail": "no text-generation routes are configured",
+            "routes": {},
+        }
+
+    eval_mode = (
+        (os.getenv("EVAL_LLM_MODE") or DEFAULT_EVAL_MODE).strip().lower()
+        or DEFAULT_EVAL_MODE
+    )
+    active_text_policies = (
+        policy
+        for task_kind, policy in text_policies.items()
+        if not (
+            str(task_kind).strip().lower() == "eval"
+            and eval_mode == "skip"
+        )
+    )
+    local_ollama_selected = any(
+        str((policy.get("effective") or {}).get("provider") or "").strip().lower()
+        == "ollama"
+        and str((policy.get("effective") or {}).get("transport_id") or "").strip()
+        not in _REMOTE_OLLAMA_TRANSPORTS
+        for policy in active_text_policies
+    )
+    ollama_probe = (
+        _check_ollama(selected_by_route=True) if local_ollama_selected else None
+    )
+    text_router_check = {**router_check, "route_policies": text_policies}
+    return _check_llm_task_routes(text_router_check, ollama_probe=ollama_probe)
+
+
 def _check_embedding_index() -> Dict[str, Any]:
     try:
         from app.index.doctor import diagnose_index
@@ -418,44 +501,16 @@ def _check_embedding_index() -> Dict[str, Any]:
     }
 
 
-def _check_llm_providers(ollama_check: Dict[str, Any]) -> Dict[str, Any]:
-    provider = (os.getenv("LLM_PROVIDER") or "mock").strip().lower()
-    if provider == "llm":
-        provider = "ollama"
+def _check_llm_providers(_router_check: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    """Expose declared provider inventory; live readiness belongs to llm_access."""
     from app.components.settings.providers_loader import load_provider_census
 
     census = load_provider_census()
     declared = sorted(census.projection("app/services/llm.py::_DISPATCH_PROVIDERS"))
-    providers: list[dict[str, Any]] = []
-    for item in declared:
-        if item == "mock":
-            providers.append({"name": item, "ok": True, "detail": "deterministic"})
-        elif item == "ollama":
-            providers.append(
-                {
-                    "name": item,
-                    "ok": bool(ollama_check.get("ok")),
-                    "detail": ollama_check.get("detail", ""),
-                }
-            )
-        else:
-            providers.append(
-                {
-                    "name": item,
-                    "ok": True,
-                    "detail": "effective transport readiness is reported by task routes",
-                }
-            )
-    if provider not in declared:
-        providers.append({"name": provider, "ok": False, "detail": "unknown provider"})
-
-    overall = all(entry.get("ok") for entry in providers)
-    detail = "providers ready" if overall else "one or more providers unavailable"
     return {
-        "ok": overall,
-        "detail": detail,
-        "providers": providers,
-        "active_provider": provider or "mock",
+        "ok": True,
+        "detail": "provider declarations loaded; selected-route readiness is reported by llm_access",
+        "providers": [{"name": item, "declared": True} for item in declared],
     }
 
 
@@ -525,23 +580,19 @@ def _db_runtime_status() -> Dict[str, Any]:
 
 
 def _llm_runtime_status(check_result: Dict[str, Any]) -> Dict[str, Any]:
-    provider = check_result.get("provider") or os.getenv("LLM_PROVIDER", "ollama")
-    base_url = check_result.get("base_url")
-    detail = check_result.get("detail", "")
-    ok = bool(check_result.get("ok"))
-    if (provider or "").lower() != "ollama":
-        return {
-            "ok": True,
-            "detail": detail or f"LLM_PROVIDER != ollama ({provider})",
-            "provider": provider,
-            "base_url": base_url,
-            "status": "skipped",
+    routes = check_result.get("routes") or {}
+    providers = sorted(
+        {
+            str(route.get("provider") or "").strip().lower()
+            for route in routes.values()
+            if isinstance(route, dict) and route.get("provider")
         }
+    )
+    ok = bool(check_result.get("ok"))
     return {
         "ok": ok,
-        "detail": detail,
-        "provider": provider,
-        "base_url": base_url,
+        "detail": check_result.get("detail", ""),
+        "providers": providers,
         "status": "ok" if ok else "fail",
     }
 
@@ -590,15 +641,20 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
             }
         )
 
-    llm_providers = checks.get("llm_providers", {})
-    active_provider = (llm_providers.get("active_provider") or "").lower()
-    if active_provider == "mock":
+    llm_access = checks.get("llm_access", {})
+    selected_routes = llm_access.get("routes", {})
+    selected_providers = {
+        str(route.get("provider") or "").strip().lower()
+        for route in selected_routes.values()
+        if isinstance(route, dict)
+    }
+    if selected_providers and selected_providers <= {"mock", "deterministic"}:
         actions.append(
             {
                 "id": "llm_mock",
                 "severity": "optional",
-                "message": "LLM provider is mock; LLM features are deterministic only",
-                "command_hint": "LLM_PROVIDER=ollama",
+                "message": "Selected LLM task routes are deterministic/mock",
+                "command_hint": "Inspect checks.llm_router.route_policies to review effective task routes",
             }
         )
 
@@ -713,15 +769,18 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         # probe that drives container restarts, and never blocks writes.
         "dead_letters": _annotate_required(_check_dead_letters(), required=False),
         "panel_actions": _annotate_required(_check_panel_actions(), required=False),
-        "ollama": _annotate_required(_check_ollama(), required=_ollama_required()),
         "obsidian": _annotate_required(_check_obsidian_dependencies(), required=_obsidian_required()),
     }
     checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)
+    llm_access = _check_llm_access(checks["llm_router"])
+    checks["llm_access"] = _annotate_required(llm_access, required=True)
     checks["llm_task_routes"] = _annotate_required(
-        _check_llm_task_routes(checks["llm_router"], ollama_probe=checks["ollama"]),
+        {**llm_access, "routes": dict(llm_access.get("routes") or {})},
         required=True,
     )
-    checks["llm_providers"] = _annotate_required(_check_llm_providers(checks["ollama"]), required=False)
+    checks["llm_providers"] = _annotate_required(
+        _check_llm_providers(checks["llm_router"]), required=False
+    )
     checks["embedding_index"] = _annotate_required(_check_embedding_index(), required=True)
     checks["companion_diagnostics"] = _annotate_required(_check_companion_diagnostics(), required=False)
 
@@ -729,7 +788,7 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "watcher": _watcher_runtime_status(),
         "worker": _worker_runtime_status(),
         "db": _db_runtime_status(),
-        "llm": _llm_runtime_status(checks["ollama"]),
+        "llm": _llm_runtime_status(checks["llm_access"]),
     }
     checks_ok = _checks_ok(checks)
     runtime_ok = _runtime_ok(runtime)

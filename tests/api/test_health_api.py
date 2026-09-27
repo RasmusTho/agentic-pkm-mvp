@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import time
 import asyncio
+import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +17,8 @@ from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.settings.models import SettingsBundle
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.heartbeat import resolve_heartbeat_path
+
+health_module = importlib.import_module("app.cli.health")
 
 
 @pytest.fixture(autouse=True)
@@ -119,6 +123,9 @@ def _assert_check_metadata(payload: dict) -> None:
     assert "llm_router" in checks
     assert "selected_defaults" in checks["llm_router"]
     assert "route_policies" in checks["llm_router"]
+    assert "llm_access" in checks
+    assert checks["llm_access"]["required"] is True
+    assert "routes" in checks["llm_access"]
     assert "llm_task_routes" in checks
     assert "routes" in checks["llm_task_routes"]
     assert "embedding_index" in checks
@@ -306,6 +313,88 @@ def test_health_requires_task_route_configuration(monkeypatch, tmp_path) -> None
     assert data["checks"]["llm_task_routes"]["routes"]["decide"]["status"] == "fail"
 
 
+def test_health_luna_route_is_not_blocked_by_unselected_ollama(
+    monkeypatch, tmp_path
+) -> None:
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    route_policies = {
+        "qa": {
+            "effective": {
+                "provider": "openai",
+                "model": "gpt-6-luna",
+                "transport_id": "codex_cli_tailscale",
+                "reasoning_effort": "low",
+            },
+            "intent": {},
+        },
+        "embed": {
+            "effective": {
+                "provider": "ollama",
+                "model": "nomic-embed-text",
+                "transport_id": "ollama_http",
+            },
+            "intent": {},
+        },
+    }
+    monkeypatch.setattr(
+        health_module,
+        "_check_llm_router",
+        lambda: {"ok": True, "route_policies": route_policies},
+    )
+    monkeypatch.setattr(
+        health_module, "_check_embedding_index", lambda: {"ok": True}
+    )
+
+    def _unexpected_ollama_probe(**_kwargs):
+        raise AssertionError("unselected Ollama must not be probed")
+
+    monkeypatch.setattr(health_module, "_check_ollama", _unexpected_ollama_probe)
+
+    class _Client:
+        model_access_route = SimpleNamespace(
+            provider="openai",
+            model="gpt-6-luna",
+            transport_id="codex_cli_tailscale",
+            preflight_status="passed",
+        )
+
+        def chat(self, *_args, **_kwargs):
+            raise AssertionError("health must never dispatch a completion")
+
+    seen_intents = []
+
+    def _get_chat_client_for_route(intent, *, selected_route, allow_fallback):
+        assert selected_route.model == "gpt-6-luna"
+        assert allow_fallback is False
+        seen_intents.append(intent)
+        return _Client()
+
+    monkeypatch.setattr(
+        health_module, "get_chat_client_for_route", _get_chat_client_for_route
+    )
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    data = response.json()
+    checks = data["checks"]
+    assert data["required_ok"] is True
+    assert "ollama" not in checks
+    assert checks["llm_access"]["ok"] is True
+    assert checks["llm_access"]["required"] is True
+    assert set(checks["llm_access"]["routes"]) == {"qa"}
+    assert checks["llm_task_routes"]["routes"] == checks["llm_access"]["routes"]
+    assert data["runtime"]["llm"]["ok"] is True
+    assert data["runtime"]["llm"]["providers"] == ["openai"]
+    assert [intent.task_kind for intent in seen_intents] == ["health"]
+
+
 def test_health_includes_v6_0_seams_optional(monkeypatch, tmp_path) -> None:
     client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
     resp = client.get("/api/health")
@@ -419,7 +508,7 @@ def test_health_api_sanitizes_exception_details(monkeypatch) -> None:
     assert data["trace_id"] == "trace-health-redaction"
 
 
-def test_health_api_preserves_operator_base_urls(monkeypatch) -> None:
+def test_health_api_sanitizes_selected_route_base_urls(monkeypatch) -> None:
     client = TestClient(app)
 
     def fake_run_health() -> dict[str, object]:
@@ -427,16 +516,20 @@ def test_health_api_preserves_operator_base_urls(monkeypatch) -> None:
             "ok": True,
             "required_ok": True,
             "checks": {
-                "ollama": {
+                "llm_access": {
                     "ok": True,
-                    "status": "ok",
-                    "base_url": "http://127.0.0.1:11434",
+                    "routes": {
+                        "qa": {
+                            "status": "ok",
+                            "base_url": "https://operator:password@api.openai.com/private?token=secret#fragment",
+                        }
+                    },
                 }
             },
             "runtime": {
                 "llm": {
-                    "provider": "openai",
-                    "base_url": "https://api.openai.com/v1",
+                    "ok": True,
+                    "providers": ["openai"],
                 }
             },
             "suggested_actions": [],
@@ -448,8 +541,10 @@ def test_health_api_preserves_operator_base_urls(monkeypatch) -> None:
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["checks"]["ollama"]["base_url"] == "http://127.0.0.1:11434"
-    assert data["runtime"]["llm"]["base_url"] == "https://api.openai.com/v1"
+    assert data["checks"]["llm_access"]["routes"]["qa"]["base_url"] == "https://api.openai.com"
+    assert data["runtime"]["llm"]["providers"] == ["openai"]
+    for secret in ("operator", "password", "private", "token", "secret", "fragment"):
+        assert secret not in resp.text
 
 
 def test_health_api_exposes_bounded_authority_spine_status(tmp_path, monkeypatch) -> None:

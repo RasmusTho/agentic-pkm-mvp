@@ -15,6 +15,7 @@ from app.components.llm.fabric import (
     LLMTaskIntent,
     _resolve_product_access_route,
     get_chat_client,
+    get_chat_client_for_route,
     get_embeddings_client,
 )
 from app.components.llm.router import LLMRouteError
@@ -659,6 +660,67 @@ def test_product_remote_fallback_is_selected_before_one_completion(monkeypatch) 
         ("close", ""),
     ]
     assert len(remote.completion_requests) == 1
+
+
+def test_product_remote_preflight_can_forbid_fallback(monkeypatch) -> None:
+    primary = LLMRoute(
+        provider="openai",
+        model="gpt-6-luna",
+        mode="chat",
+        reason="settings",
+        transport_id="codex_cli_tailscale",
+        reasoning_effort="low",
+    )
+    fallback = LLMRoute(
+        provider="ollama",
+        model="llama3.1:8b",
+        mode="chat",
+        reason="fallback",
+        degraded=True,
+        transport_id="ollama_http_tailscale",
+    )
+
+    class _Router:
+        def candidate_routes(self, _intent: LLMTaskIntent) -> list[LLMRoute]:
+            return [primary, fallback]
+
+        def route(self, _intent: LLMTaskIntent) -> LLMRoute:
+            return primary
+
+    class _Remote:
+        def __init__(self) -> None:
+            self.preflight_routes: list[str] = []
+            self.completion_requests = []
+
+        def preflight(self, request):
+            self.preflight_routes.append(request.route.transport_id)
+            raise RemotePreflightError("session_expired")
+
+        def complete(self, request):
+            self.completion_requests.append(request)
+            raise AssertionError("a failed preflight must not dispatch a completion")
+
+        def close(self) -> None:
+            return None
+
+    remote = _Remote()
+    monkeypatch.setenv(
+        "MODEL_ACCESS_CODEX_REMOTE_ENDPOINT", "https://executor.example.ts.net"
+    )
+    monkeypatch.setattr(fabric, "LLMRouter", _Router)
+    monkeypatch.setattr(fabric, "CodexRemoteTransport", lambda **_kwargs: remote)
+
+    with pytest.raises(RemotePreflightError) as error:
+        get_chat_client_for_route(
+            LLMTaskIntent(task_kind="health"),
+            selected_route=primary,
+            allow_catalog_promotion=False,
+            allow_fallback=False,
+        )
+
+    assert error.value.code == "session_expired"
+    assert remote.preflight_routes == ["codex_cli"]
+    assert remote.completion_requests == []
 
 
 def test_product_remote_fallback_does_not_downgrade_strong_reasoning(monkeypatch) -> None:
