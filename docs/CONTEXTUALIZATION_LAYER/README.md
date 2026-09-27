@@ -28,6 +28,7 @@ These existing contracts under `docs/CONCEPTS/` remain authoritative for their o
 - `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md`
 - `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`
 - `docs/CONCEPTS/ARTIFACT_PROJECTION_AND_SOURCE_CONTRACT.md`
+- `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md`
 - `docs/CONCEPTS/ARTIFACT_MODEL_AND_LIFECYCLES.md`
 - `docs/CONCEPTS/TEMPORAL_VALIDITY_AND_STALENESS_CONTRACT.md`
 - `docs/CONCEPTS/MIRROR_RECEIPT_DECISION.md`
@@ -36,6 +37,6 @@ These existing contracts under `docs/CONCEPTS/` remain authoritative for their o
 
 ## What this folder is not
 
-- Not a v6.0 capability spec breakdown; see the v6.0 capability specifications section of `docs/DOCS_INDEX.md` for those.
+- Not a v6.0 feature/capability breakdown; see the legacy v6.0 specification catalog in `docs/DOCS_INDEX.md` for historical target specs.
 - Not a runtime implementation plan.
 - Not a final on-disk layout decision.

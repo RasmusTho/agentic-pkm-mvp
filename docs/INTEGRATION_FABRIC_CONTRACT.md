@@ -5,8 +5,8 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-02 (acquisition-source class added via #2794)
-Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/LLM.md, docs/LLM_ROUTING.md, docs/EMBEDDINGS.md, docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/AGENTS.md, parent initiative #877, prerequisite phase issue #878, governing slice issue #879.
+Last reviewed: 2026-09-27
+Last verified against: docs/MODULAR_ARCHITECTURE.md, docs/SYSTEM_BREAKDOWN_STRUCTURE.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md, docs/MEETING_CONTEXT_ASSISTANCE/README.md, docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/COMPONENTS.md, docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md, docs/contracts/A2A_CONTRACT_AND_TRACE.md, docs/LLM.md, docs/LLM_ROUTING.md, docs/EMBEDDINGS.md, docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md, docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/AGENTS.md, parent initiative #877, prerequisite phase issue #878, governing slice issue #879.
 
 # Integration Fabric Contract
 
@@ -38,7 +38,7 @@ The eleven integration classes are:
 1. **Human surface** — external editor, browser, terminal emulator, OS-level UI shell that the human uses to interact with the vault or with Mimer interaction surfaces (Obsidian, OS shell, browser hosting the HTTP API, future companion-UI host).
 2. **Model provider** — external chat/completion/reasoning model service or local model runtime (cloud LLM API, local model server, on-device model).
 3. **Embedding provider** — external or local embedding model service or runtime that produces vector embeddings consumed by indexing/retrieval.
-4. **Storage backend** — external durable store that holds runtime projections, not durable human meaning (Postgres/pgvector, future vector stores, future relation stores, future blob stores).
+4. **Storage backend** — external durable store that holds runtime projections and, when authorized by the shared retention policy, physical cold copies of managed artifacts (Postgres/pgvector, future vector stores, relation stores, and blob/archive stores). A backend does not own artifact identity or semantic authority.
 5. **Sync transport** — external mechanism that moves vault files or system-owned files between devices (iCloud, Dropbox, Git, future replication transports). Sync transports are operational plumbing only; they are never the semantic source of change.
 6. **Parser / OCR** — external content-extraction service or library that converts non-Markdown source material into text or structured content (PDF parser, OCR, HTML-to-text, future structured extractors).
 7. **Tool / MCP provider** — external tool surface invoked by agents through the descriptor registry and MCP adapter contract (built-in tools, governed real tools such as `mcp.vault.append_note`, remote MCP servers behind the flagged multiplex seam, future tool servers).
@@ -55,7 +55,7 @@ For each integration class (and for each concrete integration within a class), t
 
 - **Allowed role** — what this integration is permitted to do for Mimer. Phrased in terms of capability, transport, inference, or interface. Never in terms of "owns this meaning."
 - **Authority limits** — what this integration is explicitly not permitted to do. At minimum: it must not become semantic authority over the vault, it must not bypass governance/authority surfaces to mutate the durable surface, and it must not become a hidden source of truth.
-- **Persistence class** — what this integration is allowed to persist, where, and under what durability claim. Answers must distinguish: durable human meaning (vault Markdown — almost never written directly by an integration), system-owned continuity (companion notes — only through governed paths), runtime projection (rebuildable from vault + companion set), and external durability (lives outside Mimer, treated as opaque to the durable surface).
+- **Persistence class** — what this integration is allowed to persist, where, and under what durability claim. Answers must distinguish: durable human meaning (vault Markdown — almost never written directly by an integration), system-owned continuity (companion notes — only through governed paths), runtime projection (rebuildable from vault + companion set), and external durability. If a backend stores a managed cold copy under the shared retention contract, identify it as a governed physical copy of a Knowledge & Artifact-owned artifact, not as a runtime projection or an independent source of truth; specify its integrity, restore, movement, and deletion scope.
 - **Provenance requirement** — what provenance must accompany any output or side effect from this integration so the result can be traced back through the event envelope, receipts, and governance layer. Includes integration identity, model/version where applicable, and trace correlation.
 - **Event boundary** — how this integration crosses into the rest of Mimer. Side effects that affect runtime state or the durable surface must cross through the event envelope (`app/events/schema.py`, `docs/EVENTS.md`, `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`) or through an explicit typed capability contract. Bespoke side channels are not allowed.
 - **Health / observability expectation** — what the rest of the system must be able to see about this integration: liveness, error class, latency, failure mode, fallback posture, and provenance of fallback. Failures must degrade legibly per `docs/MODULAR_ARCHITECTURE.md` (`How kernel and extension fabric compose`).
@@ -72,7 +72,7 @@ The table below is a target-state summary. Where a class already has a shipped a
 | Human surface | Interface | Not semantic authority; never bypasses governance | Durable human meaning (vault); the human writes, not the surface | Through user-originated events and Panel/Chat/CLI/API actions | `docs/HUMAN-FLOWS.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md` |
 | Model provider | Inference | Not semantic authority; outputs are proposals under governance | None inside Mimer (external durability is opaque) | Through capability/agent contracts that wrap model calls; receipts on any APPLY | `docs/LLM.md`, `docs/LLM_ROUTING.md` |
 | Embedding provider | Inference (vector projection) | Not semantic authority; embeddings are derived and rebuildable | Runtime projection only (VectorIndex) | Through embedding-related events and rebuild commands | `docs/EMBEDDINGS.md` |
-| Storage backend | Transport / durability for runtime projections | Never owns durable human meaning; vault + companion set must remain sufficient for rebuild | Runtime projection (ObjectStore, VectorIndex, RelationIndex, outbox) | Through the DB outbox envelope; direct store reads are allowed for rebuildable projections | `docs/ARCHITECTURE.md` (`Component Catalog`, `Concurrency & Idempotency`), `docs/COMPONENTS.md` |
+| Storage backend | Physical storage for runtime projections and policy-governed cold artifact copies | Never owns artifact identity, meaning, retention priority, or deletion authority; Knowledge & Artifact and Governance retain those responsibilities | Runtime projections, plus optional managed cold copies whose identity, provenance, and policy remain governed by Mimer | Projection writes use the DB outbox envelope; copy movement/deletion passes through the retention and authority contracts | `docs/ARCHITECTURE.md` (`Component Catalog`, `Concurrency & Idempotency`), `docs/COMPONENTS.md`, `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md` |
 | Sync transport | Transport | Never semantic source of change; file-based eventual consistency is the architectural truth | None (moves files; persistence is the vault filesystem) | Through watcher/worker reactions to changed files | `docs/ARCHITECTURE.md` (`Operational topology`), `docs/CONCEPTS/CLOUD_CONNECTORS_DECISION.md` |
 | Parser / OCR | Capability (content extraction) | Not semantic authority; produces ingestible content with provenance | Runtime projection (external corpus plane) or staged input; durable human meaning only through governed promotion | Through ingestion events and provenance metadata | `docs/ARCHITECTURE.md` (`Current Runtime Surfaces` — external corpus ingest), `docs/COMPONENTS.md` (`Optional extension points`) |
 | Tool / MCP provider | Capability (effectors) | Not semantic authority; all tool calls under tool policy + governance | Depends on tool; vault-touching tools (e.g., `mcp.vault.append_note`) only via governed real tools | Through descriptor registry, tool policy, and event envelope; trace correlation required | `docs/contracts/TOOL_POLICY_AND_MCP_ADAPTER_CONTRACT.md` |
@@ -82,6 +82,23 @@ The table below is a target-state summary. Where a class already has a shipped a
 | Acquisition source | Capability (content acquisition: discovery + fetch of external source material) | Not semantic authority; produces immutable raw evidence with provenance; never writes durable human meaning directly (refinement candidates enter triage under review posture) | Runtime projection / staged input (raw + derived refinement records, rebuildable); durable human meaning only via governed writeback + human promotion | Through acquisition/refinement stage events on the outbox envelope; only source plugins contact acquisition sources (extractor model calls are Model-provider egress, governed by that class) | `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md`, `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md` |
 
 The table is a summary, not a substitute for the per-integration contract. Health/observability and replacement strategy details belong in the owner contract doc for each integration class.
+
+### Target-state meeting adapter roles
+
+Meeting-context assistance composes adapter roles without adding a subsystem or a cognitive
+capability for each provider:
+
+| Adapter role | Integration responsibility | Authority boundary |
+| --- | --- | --- |
+| Desktop audio capture | Read from a locally selected desktop audio input during an explicitly controlled session and provide timestamped audio to the session pipeline. | The adapter supplies bytes and device/source metadata; it does not infer participants, project meaning, or retention value. The Human Surface exposes capture state and controls. |
+| ASR / transcription | Convert audio to time-aligned text and speaker-attribution signals using a local model/parser or an explicitly configured remote provider. | Results carry provider/model provenance and uncertainty. They are derived content; Knowledge & Artifact governs canonical artifact identity and linkage. |
+| Calendar metadata | Read only the configured event fields needed to identify the meeting and expected attendees. Use a governed Tool/MCP provider or another existing integration class appropriate to the concrete boundary. | Provider event metadata is evidence, not canonical participant identity or project truth; the Capability subsystem resolves it against vault material. If no existing class fits a proposed provider, revise the class taxonomy explicitly before implementation. |
+| Storage inventory and tiering | Report used, available, and estimated reclaimable bytes by pool; copy or move managed artifacts to configured storage tiers when admitted. | The adapter cannot score value or choose deletion candidates. Knowledge & Artifact owns artifact semantics; Governance / Authority admits movement and deletion under the retention contract. |
+
+These are target-state roles, not claims of shipped adapters. A concrete adapter is classified by its
+actual boundary under the existing integration classes and must answer the standard contract
+fields. Runtime projections remain rebuildable; a managed cold copy remains a governed physical
+copy of its canonical artifact rather than an independent source of meaning.
 
 ## External helper-system ownership
 

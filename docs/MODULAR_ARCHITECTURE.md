@@ -5,8 +5,8 @@ Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-05-14
-Last verified against: docs/PROJECT_KERNEL.md, docs/HUMAN-FLOWS.md, docs/ARCHITECTURE.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/READING_PATHS.md, docs/COMPONENTS.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/FINDING_AND_REORIENTING/README.md, parent initiative #877, PR #883.
+Last reviewed: 2026-09-27
+Last verified against: docs/PROJECT_KERNEL.md, docs/HUMAN-FLOWS.md, docs/ARCHITECTURE.md, docs/COGNITIVE_PROSTHESIS_CHARTER.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/READING_PATHS.md, docs/COMPONENTS.md, docs/CAPABILITY_CONTRACT_MODEL.md, docs/INTEGRATION_FABRIC_CONTRACT.md, docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md, docs/SEPARATING_PERSISTENCE_SURFACES/README.md, docs/FINDING_AND_REORIENTING/README.md, parent initiative #877, PR #883, docs/MEETING_CONTEXT_ASSISTANCE/README.md, docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md; current repo baseline at 393ca4287a789ed5d9cdf2c10c9d0c9fd6a0b4b9 (2026-09-27).
 
 # System-of-Systems Architecture — Spine
 
@@ -87,7 +87,7 @@ Mimer's system-of-systems decomposition has eight subsystems. Each subsystem own
 
 - **Concern:** The durable human-meaning surface — vault notes, system-owned companion notes, and the artifact/lifecycle posture that keeps them portable, recoverable, and semantically primary.
 - **Kernel binding:** Vault-first durability; provenance and receipts; the companion-note contract for continuity and repair.
-- **Owner docs:** `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md`, `docs/CORE_CONTRACT.md`, `docs/SEPARATING_PERSISTENCE_SURFACES/README.md`, `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`.
+- **Owner docs:** `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `docs/plans/ARTIFACT_MODEL_AND_LIFECYCLES.md`, `docs/CORE_CONTRACT.md`, `docs/SEPARATING_PERSISTENCE_SURFACES/README.md`, `docs/CONCEPTS/COGNITIVE_ONTOLOGY.md`, and the target-state `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md` for shared physical retention semantics.
 - **Status:** Active reading model (human vault note + system companion note + rebuildable runtime projections). Vault topology and richer artifact taxonomy beyond the current allowlist remain phase-issue work.
 
 ### 3. Runtime Projection
@@ -101,21 +101,21 @@ Mimer's system-of-systems decomposition has eight subsystems. Each subsystem own
 
 - **Concern:** Reusable, composable, surface-independent functions that any interaction surface or agent can invoke — retrieval, reranking, orientation, resurfacing, summarization, planning support, and similar. Capabilities have explicit typed contracts; they are not agents and are not surface-specific.
 - **Kernel binding:** Authority separation (a capability returns information, it does not decide meaning or mutate the durable surface); event/outbox compatibility for any side effects that do cross into execution.
-- **Owner docs:** `docs/CAPABILITY_CONTRACT_MODEL.md` (capability definition, standard contract shape, canonical examples), `docs/ARCHITECTURE.md` (`Capability Model`), `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/FINDING_AND_REORIENTING/README.md`, `docs/RETRIEVAL.md`.
+- **Owner docs:** `docs/CAPABILITY_CONTRACT_MODEL.md` (capability definition, standard contract shape, canonical examples, including planned artifact-retention assessment), `docs/ARCHITECTURE.md` (`Capability Model`), `docs/INTERACTION_SURFACES_AND_AUTHORITY/README.md`, `docs/FINDING_AND_REORIENTING/README.md`, `docs/RETRIEVAL.md`, `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md` (assessment policy context).
 - **Status:** Capability contract model is docs-only authority (`docs/CAPABILITY_CONTRACT_MODEL.md`, delivered by #879). Retrieval is a shipped typed-capability seam consumed by ASK. Orientation and resurfacing exist as minimal read-only runtime seams. A runtime capability registry remains out of scope and is later phase-issue work.
 
 ### 5. Agent / Orchestration
 
 - **Concern:** Bounded agents and orchestration patterns that compose capabilities into multi-step work — PanelAgent, reviewer, planner, ASK runtime, Orchestrator V1/V2, future Deep Agent rollout, A2A in-process routing. Agents have narrow responsibilities and explicit state.
 - **Kernel binding:** Human-first authority (agents propose under governance); authority separation (cognition does not directly mutate notes); event/outbox compatibility; provenance on every action.
-- **Owner docs:** `docs/AGENTS.md`, `docs/PANEL_AGENT.md`, `docs/ARCHITECTURE.md` (`Architecture Statement: Bounded Agents on Shared Foundations`, `Agent Implementation Pattern`), `docs/LANGGRAPH_AGENT_ARCHITECTURE.md`, `docs/contracts/A2A_CONTRACT_AND_TRACE.md`.
+- **Owner docs:** `docs/AGENTS.md`, `docs/PANEL_AGENT.md`, `docs/ARCHITECTURE.md` (`Architecture Statement: Bounded Agents on Shared Foundations`, `Agent Implementation Pattern`), `docs/LANGGRAPH_AGENT_ARCHITECTURE.md`, `docs/contracts/A2A_CONTRACT_AND_TRACE.md`, `docs/MEETING_CONTEXT_ASSISTANCE/README.md` (planned feature orchestration), `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md` (scheduled retention-agent coordination).
 - **Status:** Active baseline. PanelAgent and ASK are LangGraph runtime paths; `ReasoningFacade` is the shared reasoning seam; Orchestrator V2 is flag-selected pilot work; Deep Agent rollout is read-only Chat cognition scaffold. Agent memory and context-bundle contracts are phase-issue work (#880).
 
 ### 6. Governance / Authority
 
 - **Concern:** The admissibility, approval, audit, and write-safety layer that enforces what may change, who may approve it, and how the change is recorded. Includes write guards, APPLY gates, policy profiles, panel action catalog, watcher safety gates, governance routing for canvas/Chat mutations, and the receipt model.
 - **Kernel binding:** Human-first authority; provenance, receipts, and write guards; authority separation (governance, not cognition or integration, owns admissibility).
-- **Owner docs:** `docs/ARCHITECTURE.md` (`Concurrency & Idempotency`, `Boundary Enforcement`, `Core Contract, State Axes, and Overlays`), `docs/PANEL_AGENT.md`, `docs/NOTE_KIND_POLICIES.md`, `docs/COMMITMENT_AS_FIRST_CLASS/README.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md`.
+- **Owner docs:** `docs/ARCHITECTURE.md` (`Concurrency & Idempotency`, `Boundary Enforcement`, `Core Contract, State Axes, and Overlays`), `docs/PANEL_AGENT.md`, `docs/NOTE_KIND_POLICIES.md`, `docs/COMMITMENT_AS_FIRST_CLASS/README.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_CHAT_AUTHORITY_BOUNDARY.md`, `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md` (retention holds, notice, deletion admission, and receipts).
 - **Status:** Active baseline. Optimistic write guards, `DEFAULT_WRITE_GUARD`, per-note opt-outs, watcher auto-run gates, panel action catalog, commitment APPLY gate, governance routing for canvas writes, and promotion-transition receipts are shipped.
 
 ### 7. Integration Fabric
@@ -138,6 +138,8 @@ Mimer's system-of-systems decomposition has eight subsystems. Each subsystem own
 - Cross-subsystem communication crosses through the event envelope, typed capability contracts, or explicit governance/authority surfaces — not through bespoke side channels.
 - A subsystem may grow new components in its extension fabric without ceremony. Reassigning a concern from one subsystem to another is an architecture-level change and must be reflected here and in the affected owner docs in the same change.
 - The Human Surface subsystem is the only one that may originate human intent. The Knowledge & Artifact subsystem is the only one that owns the durable surface. Runtime Projection, Capability, Agent/Orchestration, and Integration Fabric subsystems must not bypass Governance/Authority to mutate the durable surface.
+- `docs/MEETING_CONTEXT_ASSISTANCE/README.md` is one planned worked example of this composition: Agent/Orchestration coordinates reusable capabilities and integrations, while Knowledge & Artifact retains semantic ownership and Governance / Authority admits durable effects. It adds no subsystem and changes no kernel authority boundary.
+- `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md` is a cross-cutting target-state composition: Knowledge & Artifact owns retention-value semantics, Agent / Orchestration coordinates periodic assessment, Integration Fabric supplies deterministic storage measurements and tier adapters, Runtime Projection may expose rebuildable inventory views, and Governance / Authority admits pressure-triggered deletion and records receipts. The AI assessor cannot delete artifacts; this adds no subsystem or kernel authority boundary.
 
 ## Out of scope for this document
 

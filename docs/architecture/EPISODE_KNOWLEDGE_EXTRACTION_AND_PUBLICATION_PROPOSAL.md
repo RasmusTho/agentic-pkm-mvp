@@ -604,7 +604,7 @@ These are architectural workstreams, not backlog items created by this proposal:
 1. **Boundary decision** — ratify or refine the recommended decomposition against ADR-0049/0054.
 2. **CKM representation design** — add lossless composition/profile/implementation semantics while
    preserving CKM's projection-only authority boundary.
-3. **Capability contract** — answer all twelve fields in the Capability Contract Model for Episode
+3. **Capability contract** — answer all thirteen fields in the Capability Contract Model for Episode
    Knowledge Extraction and for the selected publication capability.
 4. **Domain-profile contract** — define versioning, compatibility, fallback, and ontology governance.
 5. **Publication contract** — define candidate routing, deduplication, correction, receipt, and
