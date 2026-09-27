@@ -45,8 +45,9 @@ def test_runtime_loop_run_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
         outbox_path=outbox_path,
     )
 
-    summary = run_once(vault_root / DEFAULT_TARGET_SUBDIR, cfg)
+    summary = run_once(vault_root, cfg)
 
+    assert summary.watcher.get("errors", 0) == 0
     assert summary.watcher.get("ingested", 0) >= 1
     assert summary.watcher.get("panel_promotions", 0) >= 1
     assert summary.watcher.get("panel_skipped_policy", 0) >= 1
