@@ -22,7 +22,8 @@ before any release-channel rollout.
 
 Issue #5624 now carries this VLAN-first, Luna, provider-neutral v3 acceptance scope. This document
 records the accepted target and does not itself authorize host/network activation or change GitHub
-state.
+state. The offline receipt validator is tracked separately in #5694; delivering that validator does
+not constitute live host acceptance.
 
 ## What This Task Does
 
@@ -38,7 +39,11 @@ completion does not retry.
 The receipt contains logical executor and path-profile IDs, path selection reason, capability IDs
 and statuses, Codex version/auth status, and route/catalog provenance. It contains no prompts,
 concrete endpoint or machine identity, raw authorization claims, credentials, environment, or raw
-CLI output. No Ollama installation, model, or fallback is required for Luna acceptance.
+CLI output. A passed receipt binds both a successful VLAN-primary completion and a successful
+Tailscale fallback preflight after a typed VLAN failure to the same exact route; the fallback
+preflight itself must not dispatch a completion. An incomplete receipt may report only the path
+profiles actually configured and must identify missing required paths. No Ollama installation,
+model, or fallback is required for Luna acceptance.
 
 ## Concretely
 
@@ -82,8 +87,11 @@ mapping id, ambiguous-completion no-retry evidence, and secret-redaction result.
   - Verify: runtime receipt: model_access_router.macos_executor_acceptance.v3
 - [ ] An ambiguous completion outcome causes no second completion and no path/provider retry.
   - Verify: runtime receipt: model_access_router.macos_executor_acceptance.v3
-- [ ] Receipt validation rejects credentials, endpoint URLs, raw path identities/authorization
-  claims, full environment, prompts, and raw CLI output.
+- [ ] Receipt validation rejects credential fields, recognized credential-shaped model/version
+  identifiers, endpoint URLs, host/IP identities, raw path identities/authorization claims, full
+  environment, prompts, raw CLI output, and duplicate JSON object keys at any nesting level in
+  either input file; invalid CLI arguments produce only a safe error identifier and do not echo
+  argument values.
   - Verify: `tests/model_access/test_macos_executor_acceptance_receipt.py::test_acceptance_receipt_is_route_bound_and_secret_free`
 - [ ] Missing path, authorization, interactive CLI auth, or required capability leaves acceptance
   incomplete without changing host/network configuration or downloading a model.
@@ -91,7 +99,17 @@ mapping id, ambiguous-completion no-retry evidence, and secret-redaction result.
 
 ## How to Verify (Pre-Merge)
 
-- Run `pytest -q tests/model_access/test_macos_executor_acceptance_receipt.py` after implementation.
+- Run `pytest -q tests/model_access/test_macos_executor_acceptance_receipt.py`.
+- After the offline validator is delivered, validate the sanitized receipt against an independently
+  prepared expected-route JSON from trusted Product route provenance, containing the exact route,
+  catalog snapshot hash, logical executor profile, and ordered path profiles. The validator binds
+  the receipt to that file but does not authenticate its producer and is not a general-purpose
+  secret scanner; callers remain responsible for sanitizing both inputs. It rejects declared
+  credential fields and recognized credential-shaped identifiers and rejects duplicate keys before
+  schema validation so an earlier unsafe value cannot be shadowed by a later valid value:
+  `python3 scripts/validate_macos_executor_acceptance_receipt.py --input <receipt-path> --expected-route <expected-route-path>`.
+  This command only reads those two local JSON files. It does not contact or inspect a host, network,
+  service, Codex CLI, Ollama, or model; an `incomplete` result is not live acceptance.
 - From the Product Linux runtime and designated macOS executor, follow the checked-in
   cross-host acceptance procedure and attach only the sanitized v3 receipt. Do not include raw
   stdout, environment, keychain output, capability claims, concrete machine identity, endpoint
