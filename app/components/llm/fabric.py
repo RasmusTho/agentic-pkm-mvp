@@ -555,6 +555,18 @@ def _with_preflight_passed(route: ModelAccessRoute) -> ModelAccessRoute:
     )
 
 
+def _preflight_transport_observation(receipt: Any) -> dict[str, str]:
+    """Reduce a private path receipt to provider- and path-neutral status."""
+    if receipt is None:
+        return {"status": "unknown", "reason_code": "transport_unknown"}
+    if getattr(receipt, "failure_before_selection", None):
+        return {
+            "status": "degraded",
+            "reason_code": "transport_fallback_used",
+        }
+    return {"status": "available", "reason_code": "transport_reachable"}
+
+
 def _product_fallback_provenance(
     selection_provenance: FallbackProvenance,
     *,
@@ -578,6 +590,9 @@ class ChatClient:
     route: LLMRoute
     model_access_route: ModelAccessRoute | None = None
     remote_transport: ExecutorNetworkPathRouter | CodexRemoteTransport | None = None
+    _preflight_transport_observation: dict[str, str] | None = field(
+        default=None, repr=False, compare=False
+    )
     _intent: LLMTaskIntent | None = field(default=None, repr=False, compare=False)
     _output_limit_route_resolved: bool = field(default=False, repr=False, compare=False)
     _adapter_runtime_config: AdapterRuntimeConfig | None = field(
@@ -587,6 +602,13 @@ class ChatClient:
         default=None, repr=False, compare=False
     )
     _fallback_route: LLMRoute | None = field(default=None, repr=False, compare=False)
+
+    @property
+    def preflight_transport_observation(self) -> dict[str, str] | None:
+        """Return path reachability status without exposing the selected path."""
+        if self._preflight_transport_observation is None:
+            return None
+        return dict(self._preflight_transport_observation)
 
     def _resolve_output_limit_route(self, max_tokens: int) -> None:
         """Preflight the caller's token cap without re-resolving its bound model."""
@@ -883,6 +905,9 @@ def get_chat_client_for_route(
                 policy_authority="profile.product_runtime",
                 transport=remote_transport,
             )
+            transport_observation = _preflight_transport_observation(
+                selection.executor_path_receipt
+            )
             discard_receipt = getattr(remote_transport, "discard_path_receipt", None)
             if callable(discard_receipt):
                 discard_receipt(selection.executor_path_receipt)
@@ -927,6 +952,9 @@ def get_chat_client_for_route(
         return ChatClient(
             route=route,
             model_access_route=model_access_route,
+            _preflight_transport_observation=(
+                transport_observation if remote_transport is not None else None
+            ),
             _intent=intent,
             _output_limit_route_resolved=max_output_tokens is not None,
             _adapter_runtime_config=adapter_runtime_config,

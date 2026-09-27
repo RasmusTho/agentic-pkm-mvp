@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from app.config import llm as llm_config
+from app.model_access.codex_remote_transport import RemotePreflightError
 from app.settings.models import LLMRoutingSettings, SettingsBundle
 
 health_module = importlib.import_module("app.cli.health")
@@ -136,10 +138,13 @@ def test_health_codex_transport_uses_remote_preflight_not_api_key(monkeypatch) -
         def chat(self, *_args, **_kwargs):
             raise AssertionError("health must never dispatch a completion")
 
-    def _get_chat_client_for_route(intent, *, selected_route, allow_fallback):
+    def _get_chat_client_for_route(
+        intent, *, selected_route, allow_fallback, allow_catalog_promotion
+    ):
         seen["intent"] = intent
         seen["route"] = selected_route
         seen["allow_fallback"] = allow_fallback
+        seen["allow_catalog_promotion"] = allow_catalog_promotion
         return _Client()
 
     monkeypatch.setattr(
@@ -172,6 +177,7 @@ def test_health_codex_transport_uses_remote_preflight_not_api_key(monkeypatch) -
     assert seen["route"].model == "gpt-6-luna"
     assert seen["route"].timeout_seconds == health_module._health_probe_timeout()
     assert seen["allow_fallback"] is False
+    assert seen["allow_catalog_promotion"] is False
     assert "endpoint" not in route
 
 
@@ -187,10 +193,13 @@ def test_llm_access_fails_closed_on_selected_route_preflight(monkeypatch) -> Non
         def chat(self, *_args, **_kwargs):
             raise AssertionError("health must never dispatch a completion")
 
-    def _get_chat_client_for_route(intent, *, selected_route, allow_fallback):
+    def _get_chat_client_for_route(
+        intent, *, selected_route, allow_fallback, allow_catalog_promotion
+    ):
         assert intent.task_kind == "health"
         assert selected_route.model == "gpt-6-luna"
         assert allow_fallback is False
+        assert allow_catalog_promotion is False
         return _Client()
 
     def _unexpected_ollama_probe(**_kwargs):
@@ -225,8 +234,102 @@ def test_llm_access_fails_closed_on_selected_route_preflight(monkeypatch) -> Non
     )
 
     assert result["ok"] is False
-    assert set(result["routes"]) == {"qa"}
-    assert result["routes"]["qa"]["status"] == "fail"
+    assert result["capabilities"]["text_generation"]["status"] == "unavailable"
+
+
+def test_unclassified_remote_path_failure_reports_unknown_capability(monkeypatch) -> None:
+    def _get_chat_client_for_route(*_args, **_kwargs):
+        raise RemotePreflightError("path_preflight_unclassified")
+
+    monkeypatch.setattr(
+        health_module, "get_chat_client_for_route", _get_chat_client_for_route
+    )
+
+    result = health_module._check_llm_access(
+        {
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "openai",
+                        "model": "gpt-6-luna",
+                        "transport_id": "codex_cli_tailscale",
+                    },
+                    "intent": {},
+                }
+            }
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["capabilities"]["text_generation"] == {
+        "status": "unknown",
+        "freshness": "fresh",
+        "reason_code": "readiness_unknown",
+    }
+    assert result["transport_observation"]["status"] == "unknown"
+    assert result["transport_observation"]["reason_code"] == "transport_unknown"
+
+
+def test_typed_remote_path_failure_keeps_capability_unavailable(monkeypatch) -> None:
+    def _get_chat_client_for_route(*_args, **_kwargs):
+        raise RemotePreflightError("PATH_UNAVAILABLE")
+
+    monkeypatch.setattr(
+        health_module, "get_chat_client_for_route", _get_chat_client_for_route
+    )
+
+    result = health_module._check_llm_access(
+        {
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "openai",
+                        "model": "gpt-6-luna",
+                        "transport_id": "codex_cli_tailscale",
+                    },
+                    "intent": {},
+                }
+            }
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["capabilities"]["text_generation"]["status"] == "unavailable"
+    assert result["transport_observation"]["status"] == "unavailable"
+
+
+def test_product_health_rejects_local_codex_cli_transport(monkeypatch) -> None:
+    provider_env_checks: list[tuple[str, str]] = []
+
+    def _provider_env_check(provider, model, **_kwargs):
+        provider_env_checks.append((provider, model))
+        return {"ok": True, "detail": "API credentials are configured"}
+
+    monkeypatch.setattr(health_module, "_provider_env_check", _provider_env_check)
+
+    result = health_module._check_llm_access(
+        {
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "openai",
+                        "model": "gpt-5.6-luna",
+                        "transport_id": "codex_cli",
+                    },
+                    "intent": {},
+                }
+            }
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["capabilities"]["text_generation"] == {
+        "status": "unavailable",
+        "freshness": "fresh",
+        "reason_code": "route_transport_unsupported",
+    }
+    assert result["transport_observation"]["status"] == "not_applicable"
+    assert provider_env_checks == []
 
 
 def test_provider_env_check_only_exposes_endpoint_origin(monkeypatch) -> None:
@@ -259,7 +362,7 @@ def test_selected_ollama_route_is_probed_independent_of_legacy_provider(monkeypa
             pass
 
         def json(self) -> dict[str, list[dict[str, str]]]:
-            return {"models": [{"name": "qwen-local:latest"}]}
+            return {"models": [{"name": "llama3.1:8b"}]}
 
     def _get(url: str, *, timeout: float) -> _Response:
         calls.append(url)
@@ -276,7 +379,7 @@ def test_selected_ollama_route_is_probed_independent_of_legacy_provider(monkeypa
                 "qa": {
                     "effective": {
                         "provider": "ollama",
-                        "model": "qwen-local",
+                        "model": "llama3.1:8b",
                         "transport_id": "ollama_http",
                     },
                     "intent": {},
@@ -294,8 +397,7 @@ def test_selected_ollama_route_is_probed_independent_of_legacy_provider(monkeypa
     )
 
     assert result["ok"] is True
-    assert set(result["routes"]) == {"qa"}
-    assert result["routes"]["qa"]["provider"] == "ollama"
+    assert set(result["capabilities"]) == {"text_generation"}
     assert calls == ["http://ollama.local:11434/api/tags"]
 
 
@@ -320,7 +422,7 @@ def test_selected_ollama_route_fails_when_its_model_is_not_installed(monkeypatch
                 "qa": {
                     "effective": {
                         "provider": "ollama",
-                        "model": "qwen-local",
+                        "model": "llama3.1:8b",
                         "transport_id": "ollama_http",
                     },
                     "intent": {},
@@ -330,17 +432,23 @@ def test_selected_ollama_route_fails_when_its_model_is_not_installed(monkeypatch
     )
 
     assert result["ok"] is False
-    assert result["routes"]["qa"]["status"] == "fail"
-    assert result["routes"]["qa"]["detail"] == "selected Ollama model is not installed"
+    assert result["capabilities"]["text_generation"]["status"] == "unavailable"
 
 
 def test_skipped_eval_ollama_route_is_not_probed(monkeypatch) -> None:
     monkeypatch.setenv("EVAL_LLM_MODE", "skip")
+    probed: list[str] = []
 
-    def _unexpected_ollama_probe(**_kwargs):
-        raise AssertionError("a skipped eval route must not probe Ollama")
+    def _probe_selected_route(task_kind, effective, intent, *, ollama_probe=None):
+        probed.append(task_kind)
+        return {
+            "status": "available",
+            "reason_code": "adapter_ready",
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+            "capabilities": {"structured_output": True},
+        }
 
-    monkeypatch.setattr(health_module, "_check_ollama", _unexpected_ollama_probe)
+    monkeypatch.setattr(health_module, "_probe_selected_route", _probe_selected_route)
 
     result = health_module._check_llm_access(
         {
@@ -366,4 +474,5 @@ def test_skipped_eval_ollama_route_is_not_probed(monkeypatch) -> None:
     )
 
     assert result["ok"] is True
-    assert result["routes"]["eval"]["status"] == "skipped"
+    assert probed == ["qa"]
+    assert set(result["capabilities"]) == {"text_generation"}

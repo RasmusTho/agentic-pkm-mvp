@@ -102,13 +102,19 @@ settings, gateway authorization, the designated-host acceptance receipt, and the
 rollout remain separate operational gates. The model route can use Luna through the Codex CLI once
 its Product policy selects that route and those gates pass.
 
-System health is intended to ask whether the configured workload's logical capabilities are
-available, not whether a named LLM provider is installed or reachable. Adapter implementations map
-their provider-specific readiness into the provider-neutral capability result. Health is a
-no-inference observer: it does not select a model or authorize fallback. `docs/HEALTH.md` and
-`docs/MODEL_ACCESS_ROUTER/REPORT_CAPABILITY_HEALTH.md` define this accepted target; the current
-`checks.llm_access` response still exposes selected-route/provider details until implementation is
-complete.
+System health reports whether the configured workload's logical capabilities are available, not
+whether an unselected provider is installed or reachable. Adapter readiness and declared
+capabilities map into `checks.llm_access.capabilities`; only fresh `available` observations satisfy
+a required capability. `checks.llm_access.transport_observation` separately reports configured
+executor-path reachability; a successful pre-completion path fallback is `degraded` transport while
+the same logical capability can remain available. The public `/api/health` response omits
+model-access provider, model, transport, endpoint, and selected-path identity. Local CLI output
+retains selected-route diagnostics in `checks.llm_router` and `checks.llm_providers` for operator
+troubleshooting. Health remains a
+no-inference observer: it checks the configured route and does not select a model or authorize
+provider/model fallback. `docs/HEALTH.md` and
+`docs/MODEL_ACCESS_ROUTER/REPORT_CAPABILITY_HEALTH.md` define the shipped contract. This code change
+does not activate a host route or change the Product model default.
 
 ## Supported environment variables
 

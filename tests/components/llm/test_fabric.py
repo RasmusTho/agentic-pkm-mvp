@@ -490,7 +490,7 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
                 response=PreflightResponse(
                     route=request.route, preflight_status="passed"
                 ),
-                receipt=object(),
+                receipt=SimpleNamespace(failure_before_selection="PATH_UNAVAILABLE"),
             )
 
         def complete_selected_path(self, request, *, receipt):
@@ -533,6 +533,10 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
     assert client.model_access_route.transport_id == "codex_cli_tailscale"
     assert client.model_access_route.catalog_snapshot_hash is None
     assert client.remote_transport is None
+    assert client.preflight_transport_observation == {
+        "status": "degraded",
+        "reason_code": "transport_fallback_used",
+    }
     assert state["catalog"] == 0
     assert len(state["preflight"]) == 1
     assert "private-eval-key" not in repr(client)
