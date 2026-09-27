@@ -18,6 +18,11 @@ from app.model_access.catalog import (
 )
 from app.llm.preflight_fallback import select_preflight_route
 from app.model_access.codex_remote_transport import CodexRemoteTransport
+from app.model_access.executor_network_policy import (
+    EXECUTOR_NETWORK_PROFILE,
+    ExecutorNetworkPathRouter,
+    ResolvedExecutorPath,
+)
 from app.model_access.remote_contract import (
     CatalogRequest,
     CompletionCapabilityIntent,
@@ -92,12 +97,45 @@ def _credential_ref(authentication_scheme: str, provider: str) -> str:
         return f"{provider}.api-key"
     if authentication_scheme == "local_subscription_session":
         return f"{provider}.subscription-session"
-    if authentication_scheme == "tailscale_app_capability":
-        return "tailscale.credential-ref"
+    if authentication_scheme in {
+        "executor_path_authentication",
+        "tailscale_app_capability",
+    }:
+        return "executor.credential-ref"
     return f"{provider}.session-ref"
 
 
 _PRODUCT_CATALOG_CACHE = CatalogCache()
+_REMOTE_EXECUTOR_ADAPTERS = frozenset(
+    {"codex_cli_tailscale", "ollama_http_tailscale"}
+)
+
+
+def _is_remote_executor_route(route: ModelAccessRoute) -> bool:
+    return (
+        route.execution_host_profile == EXECUTOR_NETWORK_PROFILE
+        and route.execution_boundary
+        in {"private_network_https", "private_tailnet_serve_https"}
+    )
+
+
+def _new_executor_path_router(
+    *, executor_profile: str, timeout_seconds: float
+) -> ExecutorNetworkPathRouter:
+    def create_transport(path: ResolvedExecutorPath) -> CodexRemoteTransport:
+        return CodexRemoteTransport(
+            endpoint=path.endpoint,
+            path_adapter=path.adapter,
+            tls_verify=path.tls_verify,
+            client_certificate=path.client_certificate,
+            timeout_seconds=timeout_seconds,
+        )
+
+    return ExecutorNetworkPathRouter(
+        executor_profile=executor_profile,
+        timeout_seconds=timeout_seconds,
+        transport_factory=create_transport,
+    )
 
 
 def _capability_intersection(
@@ -121,11 +159,11 @@ def _latest_product_catalog_target(
     *,
     adapter_id: str,
     intent: LLMTaskIntent,
-    remote_transport: CodexRemoteTransport | None,
+    remote_transport: ExecutorNetworkPathRouter | CodexRemoteTransport | None,
     catalog_cache: CatalogCache,
 ):
     """Select only within an explicitly registered Product model family."""
-    if adapter_id != "codex_cli_tailscale":
+    if adapter_id not in _REMOTE_EXECUTOR_ADAPTERS or selected.provider != "openai":
         return None
     models = load_models()
     pinned = next(
@@ -165,6 +203,13 @@ def _latest_product_catalog_target(
         except Exception as exc:
             code = getattr(exc, "code", None)
             if code == "catalog_unavailable":
+                catalog_code = "catalog_unavailable"
+            elif code in {
+                "PATH_UNAVAILABLE",
+                "CONNECT_TIMEOUT",
+                "PREFLIGHT_TIMEOUT",
+                "PATH_AUTHENTICATION_FAILED",
+            }:
                 catalog_code = "catalog_unavailable"
             elif code == "catalog_auth_failed":
                 catalog_code = "catalog_auth_failed"
@@ -270,7 +315,7 @@ def _resolve_product_access_route(
     selected: LLMRoute,
     *,
     adapter_factory: ModelAccessAdapterFactory | None = None,
-    remote_transport: CodexRemoteTransport | None = None,
+    remote_transport: ExecutorNetworkPathRouter | CodexRemoteTransport | None = None,
     catalog_cache: CatalogCache | None = None,
     fallback_requirement: FallbackRequirement = "fallback_forbidden",
     fallback_provenance: FallbackProvenance | None = None,
@@ -416,11 +461,13 @@ def _codex_remote_request(
         output_schema = {"type": "object"}
     else:
         output_schema = None
-    if route.transport_id == "codex_cli_tailscale":
+    if route.execution_host_profile != EXECUTOR_NETWORK_PROFILE:
+        raise ValueError("selected route is not bound to the remote executor")
+    if route.provider == "openai":
         provider = "openai"
         transport_id = "codex_cli"
         reasoning_effort = route.request.intent.reasoning_effort
-    elif route.transport_id == "ollama_http_tailscale":
+    elif route.provider == "ollama":
         provider = "ollama"
         transport_id = "ollama_http"
         reasoning_effort = None
@@ -530,7 +577,7 @@ def _product_fallback_provenance(
 class ChatClient:
     route: LLMRoute
     model_access_route: ModelAccessRoute | None = None
-    remote_transport: CodexRemoteTransport | None = None
+    remote_transport: ExecutorNetworkPathRouter | CodexRemoteTransport | None = None
     _intent: LLMTaskIntent | None = field(default=None, repr=False, compare=False)
     _output_limit_route_resolved: bool = field(default=False, repr=False, compare=False)
     _adapter_runtime_config: AdapterRuntimeConfig | None = field(
@@ -546,16 +593,11 @@ class ChatClient:
         route = self.model_access_route
         if route is None or self._intent is None:
             raise ValueError("a remote output-token limit needs its bound Product route")
-        endpoint = os.getenv("MODEL_ACCESS_CODEX_REMOTE_ENDPOINT", "").strip()
-        if not endpoint:
-            raise RuntimeError(
-                "MODEL_ACCESS_CODEX_REMOTE_ENDPOINT is required for the remote model route"
-            )
         transport = self.remote_transport
         owns_transport = transport is None
         if transport is None:
-            transport = CodexRemoteTransport(
-                endpoint=endpoint,
+            transport = _new_executor_path_router(
+                executor_profile=route.execution_host_profile,
                 timeout_seconds=self.route.timeout_seconds or 1_260.0,
             )
         request = _codex_remote_request(
@@ -592,6 +634,9 @@ class ChatClient:
                 policy_authority="profile.product_runtime",
                 transport=transport,
             )
+            discard_receipt = getattr(transport, "discard_path_receipt", None)
+            if callable(discard_receipt):
+                discard_receipt(selection.executor_path_receipt)
             if selection.fallback_provenance.used:
                 assert self._fallback_access_route is not None
                 assert self._fallback_route is not None
@@ -644,56 +689,59 @@ class ChatClient:
     ) -> str:
         if (
             self.model_access_route is not None
-            and self.model_access_route.transport_id
-            in {"codex_cli_tailscale", "ollama_http_tailscale"}
+            and _is_remote_executor_route(self.model_access_route)
             and max_tokens is not None
             and not self._output_limit_route_resolved
         ):
             self._resolve_output_limit_route(max_tokens)
 
-        if (
-            self.model_access_route is not None
-            and self.model_access_route.transport_id
-            in {"codex_cli_tailscale", "ollama_http_tailscale"}
+        if self.model_access_route is not None and _is_remote_executor_route(
+            self.model_access_route
         ):
             route = self.model_access_route
             transport = self.remote_transport
             owns_transport = transport is None
             if transport is None:
-                endpoint = os.getenv("MODEL_ACCESS_CODEX_REMOTE_ENDPOINT", "").strip()
-                if not endpoint:
-                    raise RuntimeError(
-                        "MODEL_ACCESS_CODEX_REMOTE_ENDPOINT is required for the remote model route"
-                    )
-                transport = CodexRemoteTransport(
-                    endpoint=endpoint,
+                transport = _new_executor_path_router(
+                    executor_profile=route.execution_host_profile,
                     timeout_seconds=self.route.timeout_seconds or 1_260.0,
                 )
-            request = _codex_remote_request(
-                route,
-                pack,
-                response_format=response_format,
-                max_output_tokens=max_tokens,
-            )
-            if (
-                route.request.requirements.structured_output
-                and request.output_schema is None
-            ):
-                raise ValueError("the selected route requires a structured-output schema")
-            if (
-                request.output_schema is not None
-                and not route.capabilities.structured_output
-            ):
-                raise ValueError("the selected route does not attest structured output")
             try:
-                if route.preflight_status != "passed":
-                    transport.preflight(
-                        PreflightRequest(
-                            route=request.route,
-                            reasoning_effort=request.reasoning_effort,
-                            capability_intent=request.capability_intent,
-                        )
+                request = _codex_remote_request(
+                    route,
+                    pack,
+                    response_format=response_format,
+                    max_output_tokens=max_tokens,
+                )
+                if (
+                    route.request.requirements.structured_output
+                    and request.output_schema is None
+                ):
+                    raise ValueError(
+                        "the selected route requires a structured-output schema"
                     )
+                if (
+                    request.output_schema is not None
+                    and not route.capabilities.structured_output
+                ):
+                    raise ValueError(
+                        "the selected route does not attest structured output"
+                    )
+                # Preflight the exact request intent immediately before dispatch.
+                # The resulting one-use receipt belongs to this transport instance.
+                preflight_result = transport.preflight(
+                    PreflightRequest(
+                        route=request.route,
+                        reasoning_effort=request.reasoning_effort,
+                        capability_intent=request.capability_intent,
+                    )
+                )
+                complete_selected = getattr(transport, "complete_selected_path", None)
+                if callable(complete_selected):
+                    return complete_selected(
+                        request,
+                        receipt=getattr(preflight_result, "receipt", None),
+                    ).content
                 return transport.complete(request).content
             finally:
                 if owns_transport:
@@ -780,17 +828,9 @@ def get_chat_client_for_route(
     )
     remote_transport = None
     owns_remote_transport = False
-    if selected.transport_id in {
-        "codex_cli_tailscale",
-        "ollama_http_tailscale",
-    }:
-        endpoint = os.getenv("MODEL_ACCESS_CODEX_REMOTE_ENDPOINT", "").strip()
-        if not endpoint:
-            raise RuntimeError(
-                "MODEL_ACCESS_CODEX_REMOTE_ENDPOINT is required for the remote model route"
-            )
-        remote_transport = CodexRemoteTransport(
-            endpoint=endpoint,
+    if selected.transport_id in _REMOTE_EXECUTOR_ADAPTERS:
+        remote_transport = _new_executor_path_router(
+            executor_profile=EXECUTOR_NETWORK_PROFILE,
             timeout_seconds=selected.timeout_seconds or 1_260.0,
         )
         owns_remote_transport = True
@@ -843,6 +883,9 @@ def get_chat_client_for_route(
                 policy_authority="profile.product_runtime",
                 transport=remote_transport,
             )
+            discard_receipt = getattr(remote_transport, "discard_path_receipt", None)
+            if callable(discard_receipt):
+                discard_receipt(selection.executor_path_receipt)
             if selection.fallback_provenance.used:
                 assert fallback is not None and fallback_access_route is not None
                 provenance = _product_fallback_provenance(
@@ -857,42 +900,45 @@ def get_chat_client_for_route(
                     }
                 )
             model_access_route = _with_preflight_passed(model_access_route)
+        route = LLMRoute.from_model_access_route(
+            model_access_route,
+            mode=(
+                fallback.mode
+                if model_access_route.fallback_provenance.used and fallback
+                else selected.mode
+            ),
+            reason=(
+                fallback.reason
+                if model_access_route.fallback_provenance.used and fallback
+                else selected.reason
+            ),
+            embedding_identity=selected.embedding_identity,
+            timeout_seconds=(
+                fallback.timeout_seconds
+                if model_access_route.fallback_provenance.used and fallback
+                else selected.timeout_seconds
+            ),
+            temperature=(
+                fallback.temperature
+                if model_access_route.fallback_provenance.used and fallback
+                else selected.temperature
+            ),
+        )
+        return ChatClient(
+            route=route,
+            model_access_route=model_access_route,
+            _intent=intent,
+            _output_limit_route_resolved=max_output_tokens is not None,
+            _adapter_runtime_config=adapter_runtime_config,
+            _fallback_access_route=fallback_access_route,
+            _fallback_route=fallback,
+        )
     finally:
-        if owns_remote_transport and remote_transport is not None:
+        if (
+            owns_remote_transport
+            and remote_transport is not None
+        ):
             remote_transport.close()
-    route = LLMRoute.from_model_access_route(
-        model_access_route,
-        mode=(
-            fallback.mode
-            if model_access_route.fallback_provenance.used and fallback
-            else selected.mode
-        ),
-        reason=(
-            fallback.reason
-            if model_access_route.fallback_provenance.used and fallback
-            else selected.reason
-        ),
-        embedding_identity=selected.embedding_identity,
-        timeout_seconds=(
-            fallback.timeout_seconds
-            if model_access_route.fallback_provenance.used and fallback
-            else selected.timeout_seconds
-        ),
-        temperature=(
-            fallback.temperature
-            if model_access_route.fallback_provenance.used and fallback
-            else selected.temperature
-        ),
-    )
-    return ChatClient(
-        route=route,
-        model_access_route=model_access_route,
-        _intent=intent,
-        _output_limit_route_resolved=max_output_tokens is not None,
-        _adapter_runtime_config=adapter_runtime_config,
-        _fallback_access_route=fallback_access_route,
-        _fallback_route=fallback,
-    )
 
 
 def get_embeddings_client(intent: LLMTaskIntent) -> EmbeddingClientProtocol:

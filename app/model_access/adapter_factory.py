@@ -90,12 +90,14 @@ class _AdapterDeclaration(_StrictConfig):
         "local_subprocess",
         "local_http",
         "provider_https",
+        "private_network_https",
         "private_tailnet_serve_https",
     ]
     authentication_scheme: Literal[
         "none",
         "provider_credential_ref",
         "local_subscription_session",
+        "executor_path_authentication",
         "tailscale_app_capability",
     ]
     instruction_mapping_ref: str = Field(pattern=r"^profile\.[a-z][a-z0-9_]*$")
@@ -190,8 +192,8 @@ class ModelAccessAdapterFactory:
                 declaration.provider != "openai"
                 or declaration.transport_id != "codex_cli_tailscale"
                 or declaration.execution_host_profile != "profile.codex_remote_host"
-                or declaration.execution_boundary != "private_tailnet_serve_https"
-                or declaration.authentication_scheme != "tailscale_app_capability"
+                or declaration.execution_boundary != "private_network_https"
+                or declaration.authentication_scheme != "executor_path_authentication"
                 or declaration.instruction_mapping_ref
                 != "profile.codex_developer_prompt_v1"
             ):
@@ -203,8 +205,8 @@ class ModelAccessAdapterFactory:
                 declaration.provider != "ollama"
                 or declaration.transport_id != "ollama_http_tailscale"
                 or declaration.execution_host_profile != "profile.codex_remote_host"
-                or declaration.execution_boundary != "private_tailnet_serve_https"
-                or declaration.authentication_scheme != "tailscale_app_capability"
+                or declaration.execution_boundary != "private_network_https"
+                or declaration.authentication_scheme != "executor_path_authentication"
                 or declaration.instruction_mapping_ref
                 != "profile.instructions_separate_v1"
             ):

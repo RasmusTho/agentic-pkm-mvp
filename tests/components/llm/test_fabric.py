@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
+from threading import Barrier
 from types import SimpleNamespace
 
 import pytest
@@ -29,8 +31,23 @@ from app.model_access.codex_remote_transport import (
     RemoteCatalogError,
     RemotePreflightError,
 )
-from app.model_access.remote_contract import PreflightResponse
+from app.model_access.remote_contract import CompletionResponse, PreflightResponse
 from llm_contract import ModelCapabilities
+
+
+@pytest.fixture(autouse=True)
+def _configured_executor_network_paths(monkeypatch, tmp_path):
+    monkeypatch.setenv(
+        "MODEL_ACCESS_CODEX_VLAN_ENDPOINT", "https://192.168.10.25:8443"
+    )
+    for variable, filename in (
+        ("MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE", "ca.pem"),
+        ("MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT", "client.pem"),
+        ("MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY", "client.key"),
+    ):
+        path = tmp_path / filename
+        path.write_text("test-only placeholder", encoding="utf-8")
+        monkeypatch.setenv(variable, str(path))
 
 
 def test_get_embeddings_client_uses_router_route_even_when_llm_provider_is_set(monkeypatch) -> None:
@@ -374,7 +391,7 @@ def test_bound_client_keeps_catalog_route_after_cache_refresh(monkeypatch) -> No
 
         def complete(self, request):
             state["completion"].append(request)
-            return SimpleNamespace(content="bound answer")
+            return CompletionResponse(route=request.route, content="bound answer")
 
         def close(self):
             pass
@@ -456,22 +473,32 @@ def test_eval_rejects_undeclared_exact_model_before_adapter_io(monkeypatch) -> N
 def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
     monkeypatch,
 ) -> None:
-    state = {"catalog": 0, "preflight": 0}
+    state = {"catalog": 0, "preflight": [], "completion": [], "closed": 0}
 
     class _Remote:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self):
+            self.preflight_requests = []
 
         def catalog(self, _request):
             state["catalog"] += 1
             raise AssertionError("exact eval model must not discover/promote")
 
         def preflight(self, request):
-            state["preflight"] += 1
-            return PreflightResponse(route=request.route, preflight_status="passed")
+            self.preflight_requests.append(request)
+            state["preflight"].append((self, request))
+            return SimpleNamespace(
+                response=PreflightResponse(
+                    route=request.route, preflight_status="passed"
+                ),
+                receipt=object(),
+            )
+
+        def complete_selected_path(self, request, *, receipt):
+            state["completion"].append((self, request, receipt))
+            return SimpleNamespace(content="remote eval")
 
         def close(self):
-            pass
+            state["closed"] += 1
 
     monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)
     monkeypatch.delenv("LLM_FORCE_MODEL", raising=False)
@@ -479,7 +506,18 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
     monkeypatch.setenv(
         "MODEL_ACCESS_CODEX_REMOTE_ENDPOINT", "https://executor.example.ts.net"
     )
-    monkeypatch.setattr(fabric, "CodexRemoteTransport", _Remote)
+    remotes = []
+
+    def create_remote(**_kwargs):
+        remote = _Remote()
+        remotes.append(remote)
+        return remote
+
+    monkeypatch.setattr(
+        fabric,
+        "_new_executor_path_router",
+        create_remote,
+    )
 
     client = get_chat_client(
         LLMTaskIntent(task_kind="eval"),
@@ -494,9 +532,28 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
     assert client.model_access_route is not None
     assert client.model_access_route.transport_id == "codex_cli_tailscale"
     assert client.model_access_route.catalog_snapshot_hash is None
-    assert state == {"catalog": 0, "preflight": 1}
+    assert client.remote_transport is None
+    assert state["catalog"] == 0
+    assert len(state["preflight"]) == 1
     assert "private-eval-key" not in repr(client)
     assert "private-eval-provider.example" not in repr(client)
+
+    assert client.chat(
+        "eval",
+        {"system": "trusted", "user": "evaluate this"},
+        response_format={"type": "object"},
+    ) == "remote eval"
+
+    preflight_remote, preflight_request = state["preflight"][-1]
+    completion_remote, request, receipt = state["completion"][0]
+    assert preflight_remote is completion_remote
+    assert preflight_request.route == request.route
+    assert preflight_request.reasoning_effort == request.reasoning_effort
+    assert preflight_request.capability_intent == request.capability_intent
+    assert preflight_request.capability_intent.structured_output is True
+    assert receipt is not None
+    assert len(remotes) == 2
+    assert state["closed"] == 2
 
 
 def test_product_trusted_and_user_messages_remain_separate_on_remote_route() -> None:
@@ -540,6 +597,72 @@ def test_product_trusted_and_user_messages_remain_separate_on_remote_route() -> 
     assert request.user_input == "untrusted question"
     assert request.route.transport_id == "codex_cli"
     assert remote.preflight_request.route == request.route
+
+
+def test_concurrent_remote_chats_have_exclusive_router_lifetimes(monkeypatch) -> None:
+    intent = LLMTaskIntent(task_kind="qa")
+    access_route = _resolve_product_access_route(
+        intent,
+        LLMRoute(
+            provider="openai",
+            model="gpt-5.4",
+            mode="chat",
+            reason="settings",
+            transport_id="codex_cli_tailscale",
+            reasoning_effort="low",
+        ),
+    )
+    barrier = Barrier(2)
+    remotes = []
+
+    class _Remote:
+        def __init__(self):
+            self.preflight_count = 0
+            self.completion_count = 0
+            self.closed = False
+
+        def preflight(self, _request):
+            self.preflight_count += 1
+            barrier.wait(timeout=5)
+            return SimpleNamespace(receipt=self)
+
+        def complete_selected_path(self, _request, *, receipt):
+            assert receipt is self
+            self.completion_count += 1
+            return SimpleNamespace(content="remote answer")
+
+        def close(self):
+            self.closed = True
+
+    def create_remote(**_kwargs):
+        remote = _Remote()
+        remotes.append(remote)
+        return remote
+
+    monkeypatch.setattr(fabric, "_new_executor_path_router", create_remote)
+    client = ChatClient(
+        route=LLMRoute.from_model_access_route(
+            access_route, mode="chat", reason="settings"
+        ),
+        model_access_route=access_route,
+        _intent=intent,
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        answers = list(
+            pool.map(
+                lambda user_text: client.chat(
+                    "qa", {"system": "trusted", "user": user_text}
+                ),
+                ("question one", "question two"),
+            )
+        )
+
+    assert answers == ["remote answer", "remote answer"]
+    assert len(remotes) == 2
+    assert all(remote.preflight_count == 1 for remote in remotes)
+    assert all(remote.completion_count == 1 for remote in remotes)
+    assert all(remote.closed for remote in remotes)
 
 
 def test_product_remote_fallback_is_selected_before_one_completion(monkeypatch) -> None:
@@ -617,7 +740,9 @@ def test_product_remote_fallback_is_selected_before_one_completion(monkeypatch) 
         def complete(self, request):
             self.events.append(("complete", request.route.transport_id))
             self.completion_requests.append(request)
-            return SimpleNamespace(content="remote fallback answer")
+            return CompletionResponse(
+                route=request.route, content="remote fallback answer"
+            )
 
         def close(self) -> None:
             self.events.append(("close", ""))
@@ -655,10 +780,8 @@ def test_product_remote_fallback_is_selected_before_one_completion(monkeypatch) 
     assert client.chat("qa", {"system": "trusted", "user": "question"}) == (
         "remote fallback answer"
     )
-    assert remote.events[-2:] == [
-        ("complete", "ollama_http"),
-        ("close", ""),
-    ]
+    assert remote.events.count(("complete", "ollama_http")) == 1
+    assert remote.events[-1:] == [("close", "")]
     assert len(remote.completion_requests) == 1
 
 
@@ -873,7 +996,7 @@ def test_product_output_limit_uses_preflight_approved_ollama_route(monkeypatch) 
                 ("complete", request.route.transport_id, request.max_output_tokens)
             )
             self.completion_requests.append(request)
-            return SimpleNamespace(content="bounded answer")
+            return CompletionResponse(route=request.route, content="bounded answer")
 
         def close(self) -> None:
             self.events.append(("close", "", None))

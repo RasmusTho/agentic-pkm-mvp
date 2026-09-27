@@ -91,12 +91,14 @@ ExecutionBoundary = Literal[
     "local_subprocess",
     "local_http",
     "provider_https",
+    "private_network_https",
     "private_tailnet_serve_https",
 ]
 AuthenticationScheme = Literal[
     "none",
     "provider_credential_ref",
     "local_subscription_session",
+    "executor_path_authentication",
     "tailscale_app_capability",
 ]
 PreflightStatus = Literal["not_run", "passed", "failed", "unavailable", "skipped"]

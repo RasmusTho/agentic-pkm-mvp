@@ -19,16 +19,12 @@ _FALLBACKABLE_PREFLIGHT_FAILURES = {
     "preflight_unavailable": "executor_unreachable",
     "preflight_response_invalid": "executor_unreachable",
     "preflight_response_too_large": "executor_unreachable",
-    "preflight_http_403": "executor_unreachable",
     "preflight_http_404": "executor_unreachable",
     "preflight_http_429": "executor_unreachable",
     "preflight_http_500": "executor_unreachable",
     "preflight_http_502": "executor_unreachable",
     "preflight_http_503": "executor_unreachable",
     "preflight_http_504": "executor_unreachable",
-    "serve_capability_required": "executor_unreachable",
-    "serve_capability_invalid": "executor_unreachable",
-    "loopback_only": "executor_unreachable",
     "executor_busy": "executor_unreachable",
     "command_timeout": "executor_unreachable",
     "cli_missing": "cli_missing",
@@ -55,6 +51,7 @@ class _PreflightCompletionTransport(Protocol):
 class PreflightRouteSelection:
     request: CompletionRequest
     fallback_provenance: FallbackProvenance
+    executor_path_receipt: object | None = None
 
 
 def _preflight_request(request: CompletionRequest) -> PreflightRequest:
@@ -115,8 +112,9 @@ def select_preflight_route(
 
     selected_request = request
     provenance = FallbackProvenance()
+    path_result = None
     try:
-        transport.preflight(_preflight_request(request))
+        path_result = transport.preflight(_preflight_request(request))
     except RemotePreflightError as primary_failure:
         reason_code = _FALLBACKABLE_PREFLIGHT_FAILURES.get(primary_failure.code)
         if not fallback_allowed or fallback_route is None or reason_code is None:
@@ -125,7 +123,7 @@ def select_preflight_route(
         selected_request = _request_for_route(request, fallback_route)
         # The selected route must independently prove it satisfies the exact same
         # capability intent. A failure here is terminal; there is no third target.
-        transport.preflight(_preflight_request(selected_request))
+        path_result = transport.preflight(_preflight_request(selected_request))
         provenance = FallbackProvenance(
             used=True,
             phase="preflight",
@@ -142,6 +140,7 @@ def select_preflight_route(
     return PreflightRouteSelection(
         request=selected_request,
         fallback_provenance=provenance,
+        executor_path_receipt=getattr(path_result, "receipt", None),
     )
 
 

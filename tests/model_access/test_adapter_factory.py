@@ -83,8 +83,8 @@ def test_product_codex_transport_is_remote_and_has_no_native_tools(
         "codex_cli_tailscale", provider="openai", model="gpt-6-luna"
     )
 
-    assert descriptor.execution_boundary == "private_tailnet_serve_https"
-    assert descriptor.authentication_scheme == "tailscale_app_capability"
+    assert descriptor.execution_boundary == "private_network_https"
+    assert descriptor.authentication_scheme == "executor_path_authentication"
     assert descriptor.supported_capabilities.native_tools is False
     assert factory.default_adapter_id("openai") == "openai_api"
     assert factory.default_adapter_id("ollama") == "ollama_http"
@@ -97,8 +97,8 @@ def test_product_ollama_fallback_transport_is_remote_and_constrained(
         "ollama_http_tailscale", provider="ollama", model="llama3.1:8b"
     )
 
-    assert descriptor.execution_boundary == "private_tailnet_serve_https"
-    assert descriptor.authentication_scheme == "tailscale_app_capability"
+    assert descriptor.execution_boundary == "private_network_https"
+    assert descriptor.authentication_scheme == "executor_path_authentication"
     assert descriptor.supported_capabilities.native_tools is False
 
 

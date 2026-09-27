@@ -6,8 +6,8 @@ adapters:
     transport_id: codex_cli_tailscale
     supported_capabilities: {structured_output: true, native_tools: false, system_prompt_channel: true, deterministic_execution: false}
     execution_host_profile: profile.codex_remote_host
-    execution_boundary: private_tailnet_serve_https
-    authentication_scheme: tailscale_app_capability
+    execution_boundary: private_network_https
+    authentication_scheme: executor_path_authentication
     instruction_mapping_ref: profile.codex_developer_prompt_v1
   - id: ollama_http_tailscale
     provider: ollama
@@ -15,8 +15,8 @@ adapters:
     transport_id: ollama_http_tailscale
     supported_capabilities: {structured_output: true, native_tools: false, system_prompt_channel: true, deterministic_execution: false}
     execution_host_profile: profile.codex_remote_host
-    execution_boundary: private_tailnet_serve_https
-    authentication_scheme: tailscale_app_capability
+    execution_boundary: private_network_https
+    authentication_scheme: executor_path_authentication
     instruction_mapping_ref: profile.instructions_separate_v1
   - id: codex_cli
     provider: openai
