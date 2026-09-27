@@ -1,6 +1,6 @@
-State: Accepted target-state decision (owner request, 2026-09-22; D2 amended by owner-selected option 1 on 2026-09-23). Architecture and delivery authority only; the described router, transports, discovery, Product migration, host profile, and rollout are not shipped by this ADR.
+State: Accepted target-state decision (owner request, 2026-09-22; D2 and D3 amended by owner direction on 2026-09-27). Architecture and delivery authority only; the described router, transports, discovery, Product migration, host profile, and rollout are not shipped by this ADR.
 Doc role: Decision record (ADR)
-Authority: Extends ADR-0063 and ADR-0064 for shared routing contracts, Codex CLI subscription access from Product, and preflight-only provider fallback. Does not merge Product and Builder policy, credential, registry, receipt, or execution authority.
+Authority: Extends ADR-0063 and ADR-0064 for shared routing contracts, Codex CLI subscription access from Product, configurable network-path selection, and provider-neutral capability health. Does not merge Product and Builder policy, credential, registry, receipt, or execution authority.
 Owner: Architecture spine / LLM boundary
 Temporal class: Durable architecture decision; supersede through a later ADR.
 Source of truth: This ADR plus the [capability specification](../MODEL_ACCESS_ROUTER/README.md). Current shipped behavior remains owned by docs/LLM_ROUTING.md, docs/LLM.md, and the Model Inquiry owner docs until acceptance.
@@ -8,7 +8,7 @@ Source of truth: This ADR plus the [capability specification](../MODEL_ACCESS_RO
 # ADR-0066: Shared model-access facade with separate policy authorities and governed catalog discovery
 
 **Date:** 2026-09-22
-**Status:** Accepted (owner-directed target state, 2026-09-22)
+**Status:** Accepted target state (owner-directed 2026-09-22; amended 2026-09-27)
 
 ## Context
 
@@ -34,29 +34,39 @@ The neutral contract preserves the five `FallbackRequirement` meanings from ADR-
 
 This remains a target-state decision for provider execution and caller adoption. MARR-01 delivers only the neutral route/provenance contracts and policy-agnostic composition seam; Product and Builder keep their current runtime paths until their separately gated adapter and migration slices land.
 
-### D2 — Product reaches Codex CLI through a Tailscale-only macOS executor
+### D2 — Product reaches the macOS Codex executor through configured network paths
 
-The Product runtime remains on its designated Linux/Tailscale hosts. It does not start a Codex
-process on those hosts and does not depend on SSH into the macOS host. Product Codex requests cross
-the tailnet to a separate, single-purpose executor on the designated macOS host; that executor
-invokes the host's already-authenticated Codex CLI subscription session. This is a deliberate
-exception to the current Ollama-only host profile, and remains target state until the host and
-tailnet acceptance gate is complete. It is not a Product API, Product gateway, or general-purpose
+The Product runtime remains on its designated Linux hosts. It does not start a Codex process on
+those hosts and does not depend on SSH into the macOS host. Product Codex requests reach a
+single-purpose executor on the designated macOS host; that executor invokes the host's
+already-authenticated Codex CLI subscription session. Ygg Product VMs and the designated macOS executor share a
+VLAN, so the VLAN path is primary. A configured private Tailscale path may be used as fallback when
+the VLAN path fails its no-inference connectivity/preflight check. This remains target state until
+host acceptance is complete. The executor is not a Product API, Product gateway, or general-purpose
 BuilderOps service.
 
-The Product workload reaches the executor only over private Tailscale Serve HTTPS. Serve proxies to
-a backend bound exclusively to loopback; Funnel, public listeners, and direct LAN listeners are
-forbidden. Tailnet grants limit the destination and port to the executor and the source to the
-authorized Product workload identities. Because Product callers may be tagged devices, authorization
-uses a narrowly scoped Tailscale application-capability grant forwarded by Serve, not user identity
-headers. The supported Serve version must include app-capability forwarding (currently documented
-for Tailscale v1.92+); Serve strips caller-supplied capability headers and injects only the granted
-capability selected for forwarding. The backend rejects a missing, malformed, or wrong-channel
-capability. The backend must bind only to loopback behind Serve; host-local processes remain inside
-the executor host's trust boundary and are not authenticated by this forwarded header. The tailnet
-policy, tag identities, Serve activation, service process, and endpoint binding are operator-owned
-host configuration and are not checked into Git. If this app-capability path is unavailable, the
-route fails closed; no shared bearer token or public endpoint is substituted.
+The model route and network path are separate configuration dimensions. Product policy selects the
+logical executor and exact model/capability intent; deployment configuration supplies an ordered
+set of named path profiles, for example `ygg_vlan_primary` followed by
+`tailscale_fallback`. Each profile resolves its endpoint and transport outside model policy and
+application code. Concrete addresses, machine identities, and credentials remain host-local and
+are not committed. Path selection must not silently change the model, provider, reasoning effort,
+or requested capability.
+
+Each path must authenticate the caller and authorize the same Product channel and operation-specific
+actions (`complete`, `preflight`, or `catalog`). The VLAN's presence on a private segment is not
+caller authorization. The VLAN ingress uses its configured authenticated identity mechanism and
+maps it to the common channel/action capability contract. The Tailscale fallback uses a narrowly
+scoped application-capability grant forwarded by Serve; Serve strips caller-supplied capability
+headers and injects only the granted capability selected for forwarding. The supported Serve
+version must include app-capability forwarding (currently documented for Tailscale v1.92+). Each
+ingress rejects missing, malformed, or wrong-channel/action authorization. Ingress proxies may
+expose their configured private listeners, but the executor backend remains bound exclusively to
+loopback. Funnel and public listeners are forbidden. Host-local processes remain inside the
+executor host's trust boundary. The network profiles, identity mapping, service activation, and
+endpoint bindings are operator-owned host configuration and are not checked into Git. If neither
+configured path can establish authorization, the route fails closed; no source-IP-only trust or
+unscoped shared bearer token is substituted.
 
 The executor exposes only bounded, versioned catalog, preflight, and model-execution operations. It
 does not accept arbitrary argv, shell commands, workspace paths, files, MCP servers, or caller-chosen
@@ -81,25 +91,35 @@ and declares `system_prompt_channel` only when this behavior is tested for the p
 
 The Codex app-server model/list catalog may be used for read-only, account-scoped availability and
 capability discovery. The executor returns only a validated, secret-free snapshot over its
-Tailscale-authorized catalog operation. Catalog discovery is not inference. Model list order alone
+path-authorized catalog operation. Catalog discovery is not inference. Model list order alone
 is not release chronology and may not auto-promote a target. A provider-supplied release timestamp
 or explicit provider replacement/upgrade relation is required for automatic latest-compatible
 selection; otherwise the Product policy's pinned model remains authoritative.
 
 The existing codex_subscription adapter name remains a compatibility alias for Model Inquiry. Model Inquiry keeps its current fallback_forbidden, single_target, and no-Ollama-fallback invariants; it does not inherit Product policy or Product fallback. Product's host-execution restrictions do not broaden or alter the existing Model Inquiry policy contract.
 
-### D3 — Ollama fallback is preflight-only and intent-preserving
+### D3 — Network-path failover is preflight-only and preserves the selected route
 
-Product may preflight the remote Codex executor/Luna route first and use configured Ollama only if
-the executor is unreachable or its Tailscale authorization, CLI executable, authentication, or
-selected-model preflight fails before any inference request is sent. The Ollama route must satisfy
-the entire declared capability intent, including the trusted-instruction/user-message separation.
-Once the execute request may have reached the executor, any timeout or lost response is an
-indeterminate/started execution and terminal: no Ollama call, retry, or provider switch is permitted.
+Before completion, the client may test configured network paths in order using no-inference
+connectivity and route preflight. A failed VLAN path may select the configured Tailscale path only
+for the same executor, model, and capability intent. The path change is recorded as transport
+provenance, not provider/model fallback. The Product acceptance profile uses Luna through the
+Codex CLI; Ollama health, installation, model download, or fallback is not a prerequisite for this
+route. Provider or model fallback is a separate owner policy and remains disabled unless explicitly
+configured and authorized.
 
-Ollama may assert only capabilities exposed by its live model metadata and the adapter's tested behavior. In particular, it may not claim native tool calling unless the selected model and transport actually provide it. A route that requires a missing capability fails closed instead of falling back.
+Path unavailability, connect/preflight timeout, and failure of the path-specific authentication
+mechanism may advance to the next configured profile before completion. A caller denied by the
+common channel/action policy, a malformed request, or a missing route capability is not a path
+outage and must fail closed without trying another path.
 
-This exception changes Product route policy only. Builder routes keep their own fallback decisions, and Model Inquiry remains no-fallback.
+Once a completion request may have reached the executor, any timeout or lost response is an
+indeterminate/started execution and terminal: no path retry, provider switch, or duplicate
+completion is permitted. A path outage after that point is reported against the request; it cannot
+authorize a second inference.
+
+This path policy changes Product connectivity only. Builder routes keep their own path and fallback
+decisions, and Model Inquiry remains single-target and fallback-forbidden.
 
 ### D4 — Dynamic catalogs are snapshots, not policy or credentials
 
@@ -119,23 +139,35 @@ discovery uses its configured endpoint. The existing Product DeepSeek provider r
 through its declared API transport and pinned model descriptor unless a separate reviewed change
 retires it; this ADR does not implicitly remove existing provider routes.
 
-### D5 — Adapter registry and provenance
+### D5 — Adapter registry, capability health, and provenance
 
-The shared adapter registry supports `codex_cli_tailscale` (Product remote transport), the local
-`codex_cli` executor, `ollama_http`, `openai_api`, `anthropic_api`, `deepseek_api`, and `mock`.
+Model adapters describe how an executor supplies a model; network-path adapters describe how an
+authorized Product client reaches that executor. The shared adapter registry keeps these axes
+separate. Its existing model adapters include `codex_cli`, `ollama_http`, `openai_api`,
+`anthropic_api`, `deepseek_api`, and `mock`; the legacy `codex_cli_tailscale` identifier remains a
+compatibility alias while the path abstraction is introduced. Network profiles are named in
+deployment configuration and resolve endpoint and authentication settings outside caller policy.
 `codex_subscription` remains the Model Inquiry compatibility alias for its existing local bridge.
-Provider-neutral resolution chooses a transport only from owner policy and provider declarations.
-Every route/receipt names exact provider, model, transport, snapshot hash/reference, requested and
-resolved capabilities, preflight result, logical execution-host profile, authorized caller profile,
-and any preflight fallback reason. It may record the auth scheme (`tailscale_app_capability`) and
-safe-profile/mapping reference, but never raw Tailscale identity/capability claims, hostname,
-endpoint URL, credential values, endpoint secrets, CODEX_HOME, prompts, or CLI environment.
+
+Health evaluates the configured workload's required logical capabilities through a provider-neutral
+capability/preflight contract. Its stable health result reports capability identity and status,
+without requiring or exposing a particular provider name. Adapter diagnostics may explain a failed
+capability internally, but provider identity is not the health contract. Requested/resolved
+capabilities are attested by the selected model adapter; path provenance is attested separately by
+the selected network-path adapter.
+
+Execution routes and receipts retain exact provider, model, adapter, selected path profile,
+snapshot hash/reference, requested and resolved capabilities, preflight result, logical
+execution-host profile, authorized caller profile, and any path-selection reason. They may record
+configured auth-scheme and safe-profile/mapping references, but never raw identity/capability
+claims, hostname, endpoint URL, credential values, endpoint secrets, CODEX_HOME, prompts, or CLI
+environment. The public health projection omits provider and concrete path identity.
 
 Capability failure, missing CLI, version mismatch, expired session, timeout, output/schema violation, and provider refusal remain distinguishable. Once inference starts, every such failure is terminal for that route.
 
 ### D6 — Product integration and embedding boundary
 
-Product chat, reasoning, constrained completion, evaluation, and health route through the shared facade and adapter registry, while LLMRoute remains a compatibility view until all in-scope call sites are migrated. Product model IDs and transport membership come from declared registry/provider configuration plus validated snapshots, not new hard-coded model branches.
+Product chat, reasoning, constrained completion, evaluation, and health route through the shared facade and adapter registry, while LLMRoute remains a compatibility view until all in-scope call sites are migrated. Product model IDs and transport membership come from declared registry/provider configuration plus validated snapshots, not new hard-coded model branches. Health reports which required capabilities are available through the configured workload, independently of provider selection; embedding identity and index compatibility remain separately reported by the embedding subsystem.
 
 Embedding identity remains in its existing subsystem and is not routed through this chat/completion migration.
 
@@ -145,15 +177,16 @@ Embedding identity remains in its existing subsystem and is not routed through t
 - The common facade shares mechanics and provenance, not Product/Builder authority.
 - Runtime discovery is available-account-aware only when its source is authorized. Dynamic discovery cannot imply API inference access.
 - No latest-model selection is inferred from array position, model-name spelling, local pull time, or a stale snapshot.
-- Preflight fallback is visible and bounded; post-start failures never fan out into a second provider call.
+- Configured network-path selection is visible and bounded; pre-completion path failover preserves the selected model route, and post-start failures never fan out into a second completion.
+- Product health is capability-oriented and provider-neutral; model adapters may vary without changing the health contract.
 - Owner docs may claim the new Product route as supported only after the capability acceptance receipt and the owner-doc promotion gate are satisfied.
 
 ## Delivery gates
 
 1. Amend this ADR only through the normal docs-authoring/PR path and publish the linked capability specifications.
-2. Implement contract, facade, local Codex executor, authenticated Tailscale transport, catalog, and Product migration slices in dependency order with fake-provider tests.
+2. Implement contract, facade, local Codex executor, configured network-path adapters, catalog, capability-oriented health, and Product migration slices in dependency order with fake-provider tests.
 3. Keep host paths and sessions out of Git; do not download Ollama models or provision API credentials as part of these slices.
-4. Under a separately authorized host/tailnet operation, produce a designated-host acceptance receipt covering the Serve/app-capability grant, Product-to-executor reachability, loopback-only backend, Codex version/auth in the interactive login session, Luna route, Ollama probe, compatible preflight fallback, trusted-instruction channel mapping, and rejected tool-capability fallback.
+4. Under a separately authorized host/network operation, produce a designated-host acceptance receipt covering VLAN-primary reachability, configured Tailscale fallback, equivalent channel/action authorization on both paths, loopback-only executor backend, Codex version/auth in the interactive login session, Luna route, capability-oriented health, trusted-instruction channel mapping, and rejected tool-capability requests. The receipt must show that typed, recoverable VLAN path failures select the Tailscale path for the same route before completion, terminal common-policy/request/capability failures do not fail over, and an ambiguous completion never retries.
 5. Plan and execute dev → test → prod only through the release-channel skills and their operator-acknowledged gates. A config rollback restores the last pinned route; this ADR authorizes no deployment by itself.
 
 ## Related decisions and owner docs

@@ -11,7 +11,7 @@ for high-level modules to talk to LLMs.
 Related docs:
 - `docs/LLM.md` for provider setup, environment configuration, and operational scenarios
 - `docs/SETTINGS.md` for the broader settings/registry model
-- `docs/HEALTH.md` for route/provider visibility in health output
+- `docs/HEALTH.md` for current route health and the provider-neutral capability-health target
 
 ## Concepts
 
@@ -30,8 +30,10 @@ Related docs:
   `provider` and `model` from that registry so users do not need to keep both in sync by hand.
 - **Embedding identity protection**: embed tasks may auto-repair transport/endpoints, but must not silently switch
   to an incompatible embedding identity when `require_compatible_identity=true`.
-- **Default route reporting**: The fabric exposes `describe_default_routes()` so health checks can report
-  the active defaults and `describe_default_route_policies()` so health checks can report preferred versus effective routes.
+- **Default route reporting**: The fabric exposes `describe_default_routes()` and
+  `describe_default_route_policies()` for current operator diagnostics. The accepted health target
+  reports logical capability status; route/provider diagnostics remain behind the routing and
+  adapter diagnostic surfaces.
 
 ## Configuration precedence
 
@@ -70,6 +72,30 @@ Current state:
 - The router never emits a route whose `model` belongs to a different provider than the one that will execute the call. `LLM_PROVIDER` binds the executing provider on the enforced path **and** on the no-explicit-policy default path: the env provider is bound only when `LLM_PROVIDER_ENFORCE=1` (enforce) or when the task has no explicit policy (`router.py`: `if enforce or not has_explicit_task_policy`). For a task that *does* carry an explicit policy (e.g. `tasks.qa` with a cloud primary) and `LLM_PROVIDER` set **without** enforce, the router falls through to the policy primary — so `LLM_PROVIDER` does not necessarily run that call. To force an explicit-policy task onto the env provider, set `LLM_PROVIDER_ENFORCE=1`; then the resolved route uses a candidate (primary or fallback) that provider actually serves — e.g. an `ollama`-enforced chat task with a cloud-primary policy resolves to the local `ollama` fallback model, not the cloud model. When `LLM_PROVIDER_ENFORCE=1` and no candidate is served by the enforced provider, the router fails loud (`LLMRouteError`) rather than guessing a cross-provider route. The model swap is surfaced via `LLMRoute.reason` (`enforced-provider:<provider>`).
 
 Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`, `tests/components/llm/test_router_enforced_provider.py`
+
+### Provider-neutral capability health and network paths (accepted target)
+
+Model choice and cross-host network path are separate configuration layers. Product policy resolves
+the logical executor, model, and required capabilities. Environment/deployment configuration maps
+that logical executor to ordered named path profiles. For Ygg, the intended order is VLAN first and
+private Tailscale as fallback. The profile identifiers and order belong in configuration; concrete
+addresses, host identities, and authentication material stay in host-local configuration. No model
+branch or health check may hard-code a VLAN address or Tailscale endpoint.
+
+The path adapter performs no-inference connectivity and route preflight before any completion. It
+may advance from VLAN to the configured Tailscale profile only when the current path cannot reach or
+preflight the executor. Both paths preserve the same logical route and enforce the same Product
+channel/action authorization contract. Once a completion may have reached the executor, an
+ambiguous outcome is terminal and cannot retry over another path or switch providers. Provider or
+model fallback remains a separate explicit policy decision.
+
+System health is intended to ask whether the configured workload's logical capabilities are
+available, not whether a named LLM provider is installed or reachable. Adapter implementations map
+their provider-specific readiness into the provider-neutral capability result. Health is a
+no-inference observer: it does not select a model or authorize fallback. `docs/HEALTH.md` and
+`docs/MODEL_ACCESS_ROUTER/REPORT_CAPABILITY_HEALTH.md` define this accepted target; the current
+`checks.llm_access` response still exposes selected-route/provider details until implementation is
+complete.
 
 ## Supported environment variables
 
