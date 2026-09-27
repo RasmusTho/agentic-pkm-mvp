@@ -75,19 +75,32 @@ Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`,
 
 ### Provider-neutral capability health and network paths (accepted target)
 
-Model choice and cross-host network path are separate configuration layers. Product policy resolves
-the logical executor, model, and required capabilities. Environment/deployment configuration maps
-that logical executor to ordered named path profiles. For Ygg, the intended order is VLAN first and
-private Tailscale as fallback. The profile identifiers and order belong in configuration; concrete
-addresses, host identities, and authentication material stay in host-local configuration. No model
-branch or health check may hard-code a VLAN address or Tailscale endpoint.
+Model choice and cross-host network path are separate configuration layers. The Product client now
+resolves `profile.codex_remote_host` through the ordered profiles in
+`config/model_access/executor_network_paths.yaml`: `ygg_vlan_primary`, then
+`tailscale_fallback`. The profile order and host-local environment-variable references are checked
+in; endpoint values, host identities, CA bundles, and client certificates remain on the host.
+Provider/model policy does not choose an endpoint or network adapter.
 
-The path adapter performs no-inference connectivity and route preflight before any completion. It
-may advance from VLAN to the configured Tailscale profile only when the current path cannot reach or
-preflight the executor. Both paths preserve the same logical route and enforce the same Product
-channel/action authorization contract. Once a completion may have reached the executor, an
-ambiguous outcome is terminal and cannot retry over another path or switch providers. Provider or
-model fallback remains a separate explicit policy decision.
+Before completion, the path router runs no-inference catalog and route-preflight requests. It may
+advance to the next configured path only for `PATH_UNAVAILABLE`, `CONNECT_TIMEOUT`,
+`PREFLIGHT_TIMEOUT`, or `PATH_AUTHENTICATION_FAILED`. Common Product authorization denial, malformed
+requests, route/capability mismatch, and missing path configuration fail closed. Once a non-200 HTTP
+status is received, a stalled, disconnected, or oversized error body preserves that status; only a
+fully decoded explicit path-local error code can authorize another path. The VLAN ingress
+uses mutually authenticated HTTPS to a host-local RFC1918 IPv4 or IPv6 unique-local address literal;
+DNS names are rejected so a public endpoint cannot receive completion content. Its gateway must map
+the authenticated caller to the same Product channel/action capability contract used by Tailscale
+Serve, strip caller-supplied capability headers, and inject the trusted claim. The executor backend
+remains loopback-bound.
+After preflight, exactly one completion uses the selected path. An ambiguous completion cannot retry
+over another path or switch providers. Provider/model fallback remains a separate explicit policy
+decision.
+
+This is code and configuration-schema support, not live TARS activation. Host-local VLAN/Tailscale
+settings, gateway authorization, the designated-host acceptance receipt, and the release-channel
+rollout remain separate operational gates. The model route can use Luna through the Codex CLI once
+its Product policy selects that route and those gates pass.
 
 System health is intended to ask whether the configured workload's logical capabilities are
 available, not whether a named LLM provider is installed or reachable. Adapter implementations map

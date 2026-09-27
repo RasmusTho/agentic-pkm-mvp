@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import ssl
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -24,6 +25,12 @@ MAX_REMOTE_REQUEST_BYTES = 256_000
 MAX_PREFLIGHT_RESPONSE_BYTES = 16_000
 MAX_CATALOG_REQUEST_BYTES = 4_096
 MAX_CATALOG_RESPONSE_BYTES = 2_100_000
+_PRIVATE_INGRESS_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
 _PREFLIGHT_ERROR_CODES = frozenset(
     {
         "serve_capability_required",
@@ -64,6 +71,10 @@ _PREFLIGHT_ERROR_CODES = frozenset(
         "catalog_invalid",
         "catalog_auth_failed",
         "catalog_response_too_large",
+        "PATH_UNAVAILABLE",
+        "CONNECT_TIMEOUT",
+        "PREFLIGHT_TIMEOUT",
+        "PATH_AUTHENTICATION_FAILED",
     }
 )
 
@@ -121,6 +132,78 @@ def _validate_private_https_endpoint(endpoint: str) -> str:
     return f"https://{host.lower()}/v1/complete"
 
 
+def _validate_private_ingress_endpoint(endpoint: str) -> str:
+    """Validate an HTTPS origin supplied by host-local VLAN configuration."""
+    try:
+        parsed = urlsplit(endpoint)
+        host = parsed.hostname
+        if (
+            parsed.scheme != "https"
+            or host is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or host.lower().endswith(".ts.net")
+        ):
+            raise ValueError("unsupported private ingress endpoint")
+        port = parsed.port
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError("unsupported private ingress port")
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError as exc:
+            raise ValueError(
+                "private ingress endpoint must use a private-network IP literal"
+            ) from exc
+        if not any(address in network for network in _PRIVATE_INGRESS_NETWORKS):
+            raise ValueError(
+                "private ingress endpoint must use a private-network IP literal"
+            )
+    except (TypeError, ValueError) as exc:
+        raise ValueError("endpoint must be a host-local private HTTPS origin") from exc
+    host_authority = f"[{host.lower()}]" if ":" in host else host.lower()
+    authority = host_authority if port is None else f"{host_authority}:{port}"
+    return f"https://{authority}/v1/complete"
+
+
+def _contains_ssl_error(error: BaseException) -> bool:
+    pending: list[BaseException] = [error]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ssl.SSLError):
+            return True
+        for nested in (
+            current.__cause__,
+            current.__context__,
+            getattr(current, "reason", None),
+        ):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+    return False
+
+
+def _private_ingress_ssl_context(
+    *, ca_bundle_path: str, client_certificate: tuple[str, str]
+) -> ssl.SSLContext:
+    """Build explicit mTLS state independently of HTTPX's legacy `cert` option."""
+    try:
+        context = ssl.create_default_context(cafile=ca_bundle_path)
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = True
+        context.load_cert_chain(
+            certfile=client_certificate[0], keyfile=client_certificate[1]
+        )
+    except (OSError, ssl.SSLError, TypeError, ValueError):
+        raise ValueError("private ingress TLS configuration is invalid") from None
+    return context
+
+
 def _strict_object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -134,8 +217,26 @@ def _reject_json_constant(value: str) -> None:
     raise ValueError(f"unsupported JSON constant: {value}")
 
 
+def _read_bounded_response_body(
+    response: httpx.Response, *, max_bytes: int
+) -> bytearray | None:
+    """Read a fully bounded response body, returning None when it is oversized."""
+    body = bytearray()
+    for chunk in response.iter_bytes():
+        if len(body) + len(chunk) > max_bytes:
+            return None
+        body.extend(chunk)
+    return body
+
+
+def _known_http_error(status_code: int | None, *, operation: str) -> str | None:
+    if status_code is None or status_code == 200:
+        return None
+    return f"{operation}_http_{status_code}"
+
+
 class CodexRemoteTransport:
-    """Post one exact route to Serve HTTPS; never retry or select a fallback."""
+    """Post one exact route to one configured HTTPS path; never retry it."""
 
     def __init__(
         self,
@@ -144,18 +245,38 @@ class CodexRemoteTransport:
         timeout_seconds: float = 1_260.0,
         max_request_bytes: int = MAX_REMOTE_REQUEST_BYTES,
         max_response_bytes: int = MAX_REMOTE_RESPONSE_BYTES,
+        path_adapter: str = "tailscale_serve_https",
+        tls_verify: bool | str = True,
+        client_certificate: tuple[str, str] | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         if timeout_seconds <= 0 or max_request_bytes <= 0 or max_response_bytes <= 0:
             raise ValueError("remote transport bounds must be positive")
-        self._url = _validate_private_https_endpoint(endpoint)
+        if path_adapter == "tailscale_serve_https":
+            self._url = _validate_private_https_endpoint(endpoint)
+            if tls_verify is not True or client_certificate is not None:
+                raise ValueError("Tailscale Serve path must use system TLS trust")
+            transport_verify: bool | ssl.SSLContext = True
+        elif path_adapter == "private_https_ingress":
+            self._url = _validate_private_ingress_endpoint(endpoint)
+            if not isinstance(tls_verify, str) or not tls_verify or client_certificate is None:
+                raise ValueError("private ingress path requires verified mutual TLS")
+            transport_verify = _private_ingress_ssl_context(
+                ca_bundle_path=tls_verify,
+                client_certificate=client_certificate,
+            )
+        else:
+            raise ValueError("unsupported executor path adapter")
         self._preflight_url = self._url.removesuffix("/v1/complete") + "/v1/preflight"
         self._catalog_url = self._url.removesuffix("/v1/complete") + "/v1/catalog"
         self._max_request_bytes = max_request_bytes
         self._max_response_bytes = max_response_bytes
         # HTTPX verifies TLS certificates by default; spell this out for the production
         # transport, disable environment proxies, and disable transport-level retries.
-        client_transport = transport or httpx.HTTPTransport(verify=True, retries=0)
+        client_transport = transport or httpx.HTTPTransport(
+            verify=transport_verify,
+            retries=0,
+        )
         self._client = httpx.Client(
             transport=client_transport,
             timeout=httpx.Timeout(timeout_seconds, connect=min(timeout_seconds, 10.0)),
@@ -178,6 +299,7 @@ class CodexRemoteTransport:
             raise RemoteCatalogError("catalog_request_too_large")
 
         body = bytearray()
+        response_status: int | None = None
         try:
             with self._client.stream(
                 "POST",
@@ -185,17 +307,63 @@ class CodexRemoteTransport:
                 content=request_body,
                 headers={"Content-Type": "application/json"},
             ) as response:
-                for chunk in response.iter_bytes():
-                    if len(body) + len(chunk) > MAX_CATALOG_RESPONSE_BYTES:
-                        raise RemoteCatalogError("catalog_response_too_large")
-                    body.extend(chunk)
+                response_status = response.status_code
+                try:
+                    response_body = _read_bounded_response_body(
+                        response, max_bytes=MAX_CATALOG_RESPONSE_BYTES
+                    )
+                except Exception:
+                    status_error = _known_http_error(
+                        response_status, operation="catalog"
+                    )
+                    if status_error is not None:
+                        raise RemoteCatalogError(status_error) from None
+                    raise
+                if response_body is None:
+                    status_error = _known_http_error(
+                        response_status, operation="catalog"
+                    )
+                    if status_error is not None:
+                        raise RemoteCatalogError(status_error)
+                    raise RemoteCatalogError("catalog_response_too_large")
+                body = response_body
                 if response.status_code != 200:
                     raise RemoteCatalogError(_catalog_error_code(response.status_code, bytes(body)))
         except RemoteCatalogError:
             raise
-        except (httpx.TimeoutException, httpx.TransportError):
-            raise RemoteCatalogError("catalog_unavailable") from None
+        except httpx.ConnectTimeout:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
+            raise RemoteCatalogError("CONNECT_TIMEOUT") from None
+        except httpx.ReadTimeout:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
+            raise RemoteCatalogError("PREFLIGHT_TIMEOUT") from None
+        except httpx.TimeoutException:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
+            raise RemoteCatalogError("PREFLIGHT_TIMEOUT") from None
+        except httpx.ConnectError as exc:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
+            if _contains_ssl_error(exc):
+                raise RemoteCatalogError("PATH_AUTHENTICATION_FAILED") from None
+            raise RemoteCatalogError("PATH_UNAVAILABLE") from None
+        except httpx.TransportError as exc:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
+            if _contains_ssl_error(exc):
+                raise RemoteCatalogError("PATH_AUTHENTICATION_FAILED") from None
+            raise RemoteCatalogError("PATH_UNAVAILABLE") from None
         except Exception:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
             # Only recognized network failures permit stale-cache service. Any
             # unexpected adapter failure is terminal for this catalog refresh.
             raise RemoteCatalogError("catalog_invalid") from None
@@ -223,6 +391,7 @@ class CodexRemoteTransport:
             raise RemotePreflightError("preflight_request_too_large")
 
         body = bytearray()
+        response_status: int | None = None
         try:
             with self._client.stream(
                 "POST",
@@ -230,21 +399,67 @@ class CodexRemoteTransport:
                 content=request_body,
                 headers={"Content-Type": "application/json"},
             ) as response:
-                for chunk in response.iter_bytes():
-                    if len(body) + len(chunk) > MAX_PREFLIGHT_RESPONSE_BYTES:
-                        raise RemotePreflightError("preflight_response_too_large")
-                    body.extend(chunk)
+                response_status = response.status_code
+                try:
+                    response_body = _read_bounded_response_body(
+                        response, max_bytes=MAX_PREFLIGHT_RESPONSE_BYTES
+                    )
+                except Exception:
+                    status_error = _known_http_error(
+                        response_status, operation="preflight"
+                    )
+                    if status_error is not None:
+                        raise RemotePreflightError(status_error) from None
+                    raise
+                if response_body is None:
+                    status_error = _known_http_error(
+                        response_status, operation="preflight"
+                    )
+                    if status_error is not None:
+                        raise RemotePreflightError(status_error)
+                    raise RemotePreflightError("preflight_response_too_large")
+                body = response_body
                 if response.status_code != 200:
                     raise RemotePreflightError(
                         _preflight_error_code(response.status_code, bytes(body))
                     )
         except RemotePreflightError:
             raise
-        except (httpx.TimeoutException, httpx.TransportError):
-            # This request targets a no-inference operation, so transport ambiguity
-            # cannot authorize or imply a completion attempt.
-            raise RemotePreflightError("preflight_unavailable") from None
+        except httpx.ConnectTimeout:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
+            raise RemotePreflightError("CONNECT_TIMEOUT") from None
+        except httpx.ReadTimeout:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
+            # Preflight never invokes inference, so a lost preflight response is
+            # safe to retry through another configured network path.
+            raise RemotePreflightError("PREFLIGHT_TIMEOUT") from None
+        except httpx.TimeoutException:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
+            raise RemotePreflightError("PREFLIGHT_TIMEOUT") from None
+        except httpx.ConnectError as exc:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
+            if _contains_ssl_error(exc):
+                raise RemotePreflightError("PATH_AUTHENTICATION_FAILED") from None
+            raise RemotePreflightError("PATH_UNAVAILABLE") from None
+        except httpx.TransportError as exc:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
+            if _contains_ssl_error(exc):
+                raise RemotePreflightError("PATH_AUTHENTICATION_FAILED") from None
+            raise RemotePreflightError("PATH_UNAVAILABLE") from None
         except Exception:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
             raise RemotePreflightError("preflight_unavailable") from None
 
         try:
