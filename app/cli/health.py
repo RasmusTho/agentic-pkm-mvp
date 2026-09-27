@@ -61,6 +61,22 @@ def _safe_endpoint_origin(value: str) -> str:
         return "[configured]"
 
 
+def _ollama_model_matches(selected_model: str, installed_models: Any) -> bool:
+    """Match the selected local model, treating an omitted tag as `:latest`."""
+    if not isinstance(installed_models, list):
+        return False
+
+    def _without_latest_tag(value: str) -> str:
+        return value.removesuffix(":latest")
+
+    expected = _without_latest_tag(selected_model.strip())
+    return any(
+        isinstance(installed, str)
+        and _without_latest_tag(installed.strip()) == expected
+        for installed in installed_models
+    )
+
+
 def _health_probe_timeout() -> float:
     """Return the short health-only timeout without coupling to generation."""
     try:
@@ -291,10 +307,22 @@ def _provider_env_check(
             if ollama_probe is not None
             else _check_ollama(selected_by_route=True)
         )
+        ok = bool(result.get("ok"))
+        detail = result.get("detail", "")
+        probe_data = result.get("data")
+        installed_models = (
+            probe_data.get("models") if isinstance(probe_data, dict) else None
+        )
+        if ok and not isinstance(installed_models, list):
+            ok = False
+            detail = "Ollama model inventory unavailable"
+        elif ok and not _ollama_model_matches(resolved_model, installed_models):
+            ok = False
+            detail = "selected Ollama model is not installed"
         return {
-            "ok": bool(result.get("ok")),
-            "detail": result.get("detail", ""),
-            "status": "ok" if result.get("ok") else "fail",
+            "ok": ok,
+            "detail": detail,
+            "status": "ok" if ok else "fail",
             "base_url": result.get("base_url"),
         }
     if normalized == "openai":

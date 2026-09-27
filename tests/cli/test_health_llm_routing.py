@@ -259,7 +259,7 @@ def test_selected_ollama_route_is_probed_independent_of_legacy_provider(monkeypa
             pass
 
         def json(self) -> dict[str, list[dict[str, str]]]:
-            return {"models": [{"name": "qwen-local"}]}
+            return {"models": [{"name": "qwen-local:latest"}]}
 
     def _get(url: str, *, timeout: float) -> _Response:
         calls.append(url)
@@ -297,6 +297,41 @@ def test_selected_ollama_route_is_probed_independent_of_legacy_provider(monkeypa
     assert set(result["routes"]) == {"qa"}
     assert result["routes"]["qa"]["provider"] == "ollama"
     assert calls == ["http://ollama.local:11434/api/tags"]
+
+
+def test_selected_ollama_route_fails_when_its_model_is_not_installed(monkeypatch) -> None:
+    class _Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, list[dict[str, str]]]:
+            return {"models": [{"name": "other-model:latest"}]}
+
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.local:11434")
+    monkeypatch.setattr(
+        health_module.httpx,
+        "get",
+        lambda *_args, **_kwargs: _Response(),
+    )
+
+    result = health_module._check_llm_access(
+        {
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "ollama",
+                        "model": "qwen-local",
+                        "transport_id": "ollama_http",
+                    },
+                    "intent": {},
+                }
+            }
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["routes"]["qa"]["status"] == "fail"
+    assert result["routes"]["qa"]["detail"] == "selected Ollama model is not installed"
 
 
 def test_skipped_eval_ollama_route_is_not_probed(monkeypatch) -> None:
