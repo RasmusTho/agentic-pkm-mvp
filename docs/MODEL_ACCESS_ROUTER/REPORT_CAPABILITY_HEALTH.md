@@ -30,6 +30,11 @@ require a provider-specific environment variable or installation just to report 
   capability that cannot be provided by the selected route is unavailable; a route using a
   transport the Product completion facade rejects is unavailable even if another transport for the
   same provider is configured. Health must not silently weaken the requirement.
+- The health route inventory carries the caller contract for schema-backed task kinds, including
+  `decide`, `plan`, `tool`, and registered extraction workloads, so required `structured_output` is
+  checked even though health never invokes inference. When remote preflight rejects one requested
+  capability, that capability is reported as unavailable; other capability results remain unknown
+  if preflight stopped before checking runtime readiness.
 - Aggregate semantics are deterministic: `available` is healthy; `degraded`, `unavailable`, and
   `unknown` are unhealthy for a required capability. A missing, malformed, or stale observation is
   treated as `unknown`. The required `llm_access` check is `ok` only when every required capability

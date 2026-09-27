@@ -1004,7 +1004,7 @@ def describe_default_routes() -> dict[str, dict[str, str]]:
 
 def describe_default_route_policies() -> dict[str, dict[str, object]]:
     router = LLMRouter()
-    policies = router.describe_routes(router.verification_intents())
+    policies = router.describe_routes(router.capability_health_intents())
     factory = _adapter_factory()
     for task_kind, policy in policies.items():
         if task_kind == "embed":

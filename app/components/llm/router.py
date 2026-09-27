@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 import os
 from functools import lru_cache
 from typing import Any, Iterable
@@ -77,6 +77,21 @@ def _normalize(value: str | None) -> str:
 
 
 _KNOWN_PROVIDERS = {"mock", "ollama", "openai", "deepseek"}
+
+# These task contracts have live callers that require schema-backed output.
+# Capability health uses the same workload contract when it builds its route
+# inventory; provider/model choice remains entirely separate.
+_STRUCTURED_OUTPUT_TASK_KINDS = frozenset(
+    {
+        "decide",
+        "plan",
+        "tool",
+        "extract.claims",
+        "extract.summary",
+        "extract.synthesis",
+        "heimdal.attribute.mentions",
+    }
+)
 
 
 def _normalize_provider(value: str | None) -> str:
@@ -609,6 +624,19 @@ class LLMRouter:
                 )
             )
         return intents
+
+    def capability_health_intents(self) -> list[LLMTaskIntent]:
+        """Describe active routes with their caller-required capabilities."""
+        return [
+            replace(
+                intent,
+                json_schema_required=(
+                    intent.json_schema_required
+                    or intent.task_kind in _STRUCTURED_OUTPUT_TASK_KINDS
+                ),
+            )
+            for intent in self.verification_intents()
+        ]
 
     def describe_intent(self, intent: LLMTaskIntent) -> dict[str, Any]:
         policy = self._task_policy(intent)

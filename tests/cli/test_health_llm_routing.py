@@ -46,6 +46,78 @@ def test_health_llm_router_includes_configured_task_routes(monkeypatch) -> None:
     assert result["route_policies"]["qa"]["effective"]["provider"] == "openai"
 
 
+def test_health_route_inventory_uses_caller_capability_contracts(monkeypatch) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "extract.summary": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="openai", model="gpt-5.6-luna"
+                    )
+                ),
+                "tool": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="openai", model="gpt-5.6-luna"
+                    )
+                ),
+                "custom_text": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="openai", model="gpt-5.6-luna"
+                    )
+                ),
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
+
+    policies = health_module._check_llm_router()["route_policies"]
+
+    assert policies["decide"]["intent"]["json_schema_required"] is True
+    assert policies["plan"]["intent"]["json_schema_required"] is True
+    assert policies["extract.summary"]["intent"]["json_schema_required"] is True
+    assert policies["tool"]["intent"]["json_schema_required"] is True
+    assert policies["custom_text"]["intent"]["json_schema_required"] is False
+
+
+def test_schema_backed_caller_cannot_report_text_only_health_as_green(monkeypatch) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "decide": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="openai",
+                        model="gpt-6-luna",
+                        transport_id="codex_cli_tailscale",
+                    )
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
+
+    def _raise_structured_output_failure(*_args, **_kwargs):
+        raise RemotePreflightError("structured_output_unavailable")
+
+    monkeypatch.setattr(
+        health_module,
+        "get_chat_client_for_route",
+        _raise_structured_output_failure,
+    )
+    policy = health_module._check_llm_router()["route_policies"]["decide"]
+
+    result = health_module._check_llm_access({"route_policies": {"decide": policy}})
+
+    assert policy["intent"]["json_schema_required"] is True
+    assert result["ok"] is False
+    assert result["capabilities"]["structured_output"] == {
+        "status": "unavailable",
+        "freshness": "fresh",
+        "reason_code": "capability_unsupported",
+    }
+
+
 def test_health_route_projection_preserves_reasoning_effort(monkeypatch) -> None:
     bundle = SettingsBundle(
         llm_routing=LLMRoutingSettings(
@@ -296,6 +368,48 @@ def test_typed_remote_path_failure_keeps_capability_unavailable(monkeypatch) -> 
     assert result["ok"] is False
     assert result["capabilities"]["text_generation"]["status"] == "unavailable"
     assert result["transport_observation"]["status"] == "unavailable"
+
+
+def test_remote_capability_preflight_failure_is_scoped(monkeypatch) -> None:
+    failures = (
+        ("structured_output_unavailable", "structured_output", "json_schema_required"),
+        ("native_tools_unavailable", "native_tools", "native_tools_required"),
+        (
+            "literal_system_role_unavailable",
+            "system_prompt_channel",
+            "literal_system_role_required",
+        ),
+        ("output_token_limit_unavailable", "max_output_tokens", "max_output_tokens_required"),
+    )
+
+    for error_code, capability_id, intent_field in failures:
+        def _raise_capability_failure(*_args, _code=error_code, **_kwargs):
+            raise RemotePreflightError(_code)
+
+        monkeypatch.setattr(
+            health_module, "get_chat_client_for_route", _raise_capability_failure
+        )
+        result = health_module._check_llm_access(
+            {
+                "route_policies": {
+                    "qa": {
+                        "effective": {
+                            "provider": "openai",
+                            "model": "gpt-6-luna",
+                            "transport_id": "codex_cli_tailscale",
+                        },
+                        "intent": {intent_field: True},
+                    }
+                }
+            }
+        )
+
+        assert result["ok"] is False
+        assert result["capabilities"][capability_id]["status"] == "unavailable"
+        assert result["capabilities"][capability_id]["reason_code"] == "capability_unsupported"
+        assert result["capabilities"]["text_generation"]["status"] == "unknown"
+        assert result["capabilities"]["text_generation"]["reason_code"] == "readiness_unknown"
+        assert result["transport_observation"]["status"] == "available"
 
 
 def test_product_health_rejects_local_codex_cli_transport(monkeypatch) -> None:

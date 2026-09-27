@@ -34,6 +34,11 @@ a safe reason code. The baseline capability is `text_generation`; additional req
 included only when requested by route intent. If multiple active task routes require the same
 capability, every observation must be fresh and available. An adapter maps its own diagnostics and
 declared capabilities into this contract; absence of an unselected adapter does not affect health.
+The route inventory carries the caller contract for schema-backed `decide`, `plan`, `tool`, and
+registered extraction routes, so those workloads require `structured_output` even though health
+never invokes inference. A typed remote preflight refusal for one capability is reported against
+that capability; other capabilities remain `unknown` when preflight stopped before checking runtime
+readiness.
 The Product health route also fails closed for a configured transport that the Product completion
 facade rejects; configuring credentials for a different transport does not make that route healthy.
 

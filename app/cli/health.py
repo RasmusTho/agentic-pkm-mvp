@@ -435,6 +435,12 @@ _CAPABILITY_INTENT_FIELDS = {
     "deterministic_execution": "determinism_required",
     "max_output_tokens": "max_output_tokens_required",
 }
+_REMOTE_PREFLIGHT_CAPABILITY_FAILURES = {
+    "structured_output_unavailable": "structured_output",
+    "native_tools_unavailable": "native_tools",
+    "literal_system_role_unavailable": "system_prompt_channel",
+    "output_token_limit_unavailable": "max_output_tokens",
+}
 
 
 def _transport_observation(
@@ -627,6 +633,21 @@ def _probe_selected_route(
         )
         capability_status = "unavailable"
         capability_reason = "adapter_unavailable"
+        capability_overrides: dict[str, dict[str, str]] = {}
+        if (
+            isinstance(exc, RemotePreflightError)
+            and exc.code in _REMOTE_PREFLIGHT_CAPABILITY_FAILURES
+        ):
+            # The executor rejected one requested capability before checking
+            # runtime readiness. Name that capability, and leave the rest
+            # unknown instead of marking the entire route unavailable.
+            capability_status = "unknown"
+            capability_reason = "readiness_unknown"
+            failed_capability = _REMOTE_PREFLIGHT_CAPABILITY_FAILURES[exc.code]
+            capability_overrides[failed_capability] = {
+                "status": "unavailable",
+                "reason_code": "capability_unsupported",
+            }
         if transport_id in _REMOTE_EXECUTOR_TRANSPORTS and (
             not isinstance(exc, RemotePreflightError)
             or exc.code in _LOCAL_PREFLIGHT_FAILURE_CODES
@@ -642,6 +663,7 @@ def _probe_selected_route(
             "reason_code": capability_reason,
             "observed_at": observed_at,
             "capabilities": {},
+            "capability_overrides": capability_overrides,
             "transport_observation": transport_observation,
         }
 
@@ -683,9 +705,24 @@ def _route_capability_observations(
     route_reason = probe.get("reason_code")
     observed_at = probe.get("observed_at")
     declared = probe.get("capabilities")
+    overrides = probe.get("capability_overrides")
     observations: list[dict[str, Any]] = []
     for capability_id in sorted(required):
-        if route_status != "available":
+        override = overrides.get(capability_id) if isinstance(overrides, dict) else None
+        if isinstance(override, dict):
+            override_status = override.get("status")
+            status = (
+                override_status
+                if isinstance(override_status, str)
+                and override_status in {"available", "degraded", "unavailable", "unknown"}
+                else "unknown"
+            )
+            reason_code = (
+                override.get("reason_code")
+                if isinstance(override.get("reason_code"), str)
+                else "readiness_unknown"
+            )
+        elif route_status != "available":
             status = route_status if route_status in {"degraded", "unavailable", "unknown"} else "unknown"
             reason_code = route_reason if isinstance(route_reason, str) else "readiness_unknown"
         elif capability_id == "text_generation":
