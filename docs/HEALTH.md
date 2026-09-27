@@ -19,11 +19,31 @@ python -m app.cli health --json
 | `ffmpeg` | `app/cli/health.py:20-28` | `shutil.which("ffmpeg")` | Install via a package manager (`brew install ffmpeg` or `apt`). |
 | `yt_dlp` | `app/cli/health.py:30-36` | Module import | `pip install -r requirements.txt`. |
 | `index_outbox` | `app/cli/health.py` | Existing `INDEX_OUTBOX_PATH` is a readable, writable regular file; missing paths are reported without creating them. | Start the producer/bootstrap path or fix permissions and adjust the env path. |
-| `llm_access` | `app/cli/health.py` | Required, no-inference preflight of active selected text-generation routes; health preflight does not fail over to another provider, skipped eval routes and embeddings are not probed, and embeddings remain separate under `embedding_index`. A selected local Ollama route must have its exact model installed; Ollama is probed only when an active text route uses its local transport. Any reported endpoint URL is reduced to its origin. | Inspect `checks.llm_access.routes` and the effective policy in `checks.llm_router.route_policies`; repair the selected route or its preflight. |
+| `llm_access` | `app/cli/health.py` | **Current implementation:** required, no-inference preflight of active selected text-generation routes; provider/route details are still part of the current payload. Health preflight does not switch providers, skipped eval routes and embeddings are not probed, and embeddings remain separate under `embedding_index`. A selected local model route is checked only when its transport is active. Any reported endpoint URL is reduced to its origin. **Target:** measure configured logical capabilities through a provider-neutral contract, independent of a named model provider. | Current: inspect `checks.llm_access.routes` and `checks.llm_router.route_policies`. Target capability schema and remediation are specified by MARR-10; not yet implemented. |
 | `obsidian` | `app/cli/health.py` + `app/knowledge/health.py` | Obsidian CLI in `PATH` and installer compatibility (`>=1.12.4`) when knowledge policy requires Obsidian adapter | Install/update Obsidian installer and ensure `obsidian` command is available. |
 | `companion_diagnostics` | `app/cli/health.py:586-635` + `app/services/companion_diagnostics.py` | Calls `companion_diagnostics_summary(vault_root)`; reports `duplicate_companion_count` (UUIDs present in both canonical `⚙️ System/companions/` and legacy `_system/companions/`). Optional check — does not affect the `ok` boolean; skipped when `vault_root` cannot be resolved. | Inspect `checks.companion_diagnostics.data.duplicate_companion_count` in the JSON output (`python -m app.cli health --json`). Non-zero counts indicate historical duplicates from a dual-write era; remove the legacy `_system/companions/<uuid>.md` files manually or wait for a future migration tool. |
 
 `checks.llm_access` is an `/api/health` dependency signal only. It does not change `/readyz`, whose readiness contract remains based on store/Postgres readiness; embedding identity remains separate under `checks.embedding_index`.
+
+## Provider-neutral capability health (accepted target)
+
+The current `llm_access` implementation inspects selected routes and includes route/provider details.
+The accepted target is a stable capability health contract: system health reports which capabilities
+required by the configured workload are available, degraded, unavailable, or unknown. It does not
+require a particular provider name to be configured and does not expose provider identity as the
+health contract. An adapter may use provider-specific checks internally, then map the result to the
+same logical capability status.
+
+The health evaluator reads configured capability requirements and asks the selected access
+abstraction for a no-inference readiness result. It does not choose a model, switch providers, or
+perform inference. Network path selection is a separate configured concern: a preflight may use the
+next configured path when the current path is unreachable, while preserving the same requested
+capabilities and logical route. Embedding identity/index compatibility stays under
+`checks.embedding_index`, and `/readyz` remains governed by store/Postgres readiness.
+
+This target is specified by `docs/MODEL_ACCESS_ROUTER/REPORT_CAPABILITY_HEALTH.md` and is not
+shipped yet. Until that slice lands, `checks.llm_access` remains the current provider/route-oriented
+implementation described in the table above.
 
 ## Health contract snapshot
 ```bash
