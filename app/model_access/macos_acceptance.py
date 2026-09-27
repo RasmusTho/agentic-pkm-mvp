@@ -23,6 +23,7 @@ _SENSITIVE_IDENTIFIER = re.compile(
     r"(?:[a-z][a-z0-9+.-]*://|@|sk-[a-z0-9_-]{8,}|"
     r"tskey-(?:auth|api|client|secret)-[a-z0-9_-]+|"
     r"gh(?:p|o|u|s|r|ri)_[a-z0-9_]{8,}|github_pat_[a-z0-9_]{8,}|"
+    r"glpat-[a-z0-9_-]{20,}|xox[baprs]-[a-z0-9-]{20,}|"
     r"(?:AKIA|ASIA)[A-Z0-9]{16}|AIza[A-Z0-9_-]{20,}|"
     r"\b(?:bearer|api[_-]?key|token|secret)\s*[:=])",
     re.IGNORECASE,
