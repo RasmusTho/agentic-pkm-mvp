@@ -127,7 +127,7 @@ This parent-level acceptance remains separate from merging the MARR-08 thin API 
 - [ ] A separate operator-owned host acceptance is required before claiming the Mac service or Tailscale Serve is live.
 - [ ] MARR-09 verifies VLAN-first path selection and Tailscale fallback using the same route and channel/action authorization contract.
 - [ ] MARR-10 verifies health reports only configured capability status and does not require provider-specific checks.
-- [ ] The designated-host receipt proves Luna through Codex CLI over VLAN, Tailscale fallback only for typed recoverable path-local failures before completion, provider-neutral capability health, and no retry after an ambiguous completion. Common policy, request, route, configuration, and capability failures remain terminal. Ollama is not required.
+- [ ] The designated-host receipt proves Luna through Codex CLI over VLAN, Tailscale fallback only for typed recoverable path-local failures before completion, provider-neutral capability health, refusal of unsupported capability intent before inference, and no retry after an ambiguous completion. Common policy, request, route, configuration, and capability failures remain terminal. Ollama is not required.
 - [ ] The parent validation issue remains open until its chosen broader acceptance scope is explicitly satisfied.
 
 ## Relationship to GitHub Issues

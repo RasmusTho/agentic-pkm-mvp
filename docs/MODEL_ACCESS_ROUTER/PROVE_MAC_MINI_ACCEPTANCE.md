@@ -47,8 +47,8 @@ The operator runs the acceptance command from the Product-to-executor path and r
 versioned `model_access_router.macos_executor_acceptance.v3` receipt with VLAN-primary reachability,
 Tailscale-fallback reachability, common channel/action authorization results, loopback-bind result,
 Codex CLI version and login-status enum, Luna model/effort, selected logical path, provider-neutral
-capability health, instruction-channel mapping id, ambiguous-completion no-retry evidence, and
-secret-redaction result.
+capability health, unsupported-capability refusal with no-completion evidence, instruction-channel
+mapping id, ambiguous-completion no-retry evidence, and secret-redaction result.
 
 ## Acceptance Criteria
 
@@ -72,7 +72,11 @@ secret-redaction result.
   - Verify: runtime receipt: model_access_router.macos_executor_acceptance.v3
 - [ ] Public health reports required capability IDs/statuses without requiring or exposing a named
   provider. It reports the Luna route's capabilities as available and any unsupported capability
-  as unavailable.
+  as unavailable; only fresh `available` satisfies a required capability and aggregate health.
+  - Verify: runtime receipt: model_access_router.macos_executor_acceptance.v3
+- [ ] A request requiring an unsupported capability (for example native tools on a route that does
+  not support them) is rejected during no-inference preflight; the receipt proves no completion was
+  dispatched and includes only a safe capability-level reason.
   - Verify: runtime receipt: model_access_router.macos_executor_acceptance.v3
 - [ ] The Product caller preserves trusted-instruction and user-input channels through the executor
   using the approved versioned mapping.

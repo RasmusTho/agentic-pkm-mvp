@@ -29,6 +29,13 @@ require a provider-specific environment variable or installation just to report 
   capabilities. An unselected provider being absent does not affect aggregate health. A required
   capability that cannot be provided by the selected route is unavailable; health must not silently
   weaken the requirement.
+- Aggregate semantics are deterministic: `available` is healthy; `degraded`, `unavailable`, and
+  `unknown` are unhealthy for a required capability. A missing, malformed, or stale observation is
+  treated as `unknown`. The required `llm_access` check is `ok` only when every required capability
+  is freshly `available`; any other status makes that check `ok: false`, and therefore makes both
+  top-level `/api/health.required_ok` and `/api/health.ok` false. Optional diagnostics do not change
+  required-capability aggregation. `/healthz`, `/readyz`, and embedding-index checks keep their
+  separate contracts.
 - Network-path reachability is reported as a separate transport observation. A configured
   pre-completion path fallback may preserve capability availability, but the health evaluator does
   not change the route or trigger inference.
@@ -52,9 +59,11 @@ available.
 - [ ] Removing an unselected provider does not degrade health when the selected route supplies every
   required capability.
   - Verify: `tests/model_access/test_capability_health.py::test_unselected_provider_absence_does_not_fail_health`
-- [ ] A required capability missing from the selected adapter degrades or fails health with a safe
-  capability-level reason and no provider identity in the public health result.
-  - Verify: `tests/model_access/test_capability_health.py::test_missing_required_capability_is_reported_without_provider_identity`
+- [ ] Every required status aggregates deterministically: only fresh `available` keeps `llm_access`
+  healthy; `degraded`, `unavailable`, `unknown`, missing, malformed, or stale observations make
+  `llm_access.ok`, top-level `/api/health.required_ok`, and `/api/health.ok` false with a safe
+  capability-level reason and no provider identity in the public result.
+  - Verify: `tests/model_access/test_capability_health.py::test_required_capability_status_controls_aggregate_health`
 - [ ] Replacing one compatible provider adapter with another leaves the health schema and logical
   capability identifiers unchanged.
   - Verify: `tests/model_access/test_capability_health.py::test_provider_substitution_preserves_health_schema`
