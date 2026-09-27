@@ -20,10 +20,9 @@ completion, and
 reports required Product capabilities through provider-neutral health. Produce a sanitized receipt
 before any release-channel rollout.
 
-The live GitHub issue #5624 still describes the earlier Tailscale-only and Ollama-fallback scope. It
-must be reconciled with this accepted target before the Issue can become pickup-ready. This document
-records the current target and does not itself change GitHub state or authorize host/network
-activation.
+Issue #5624 now carries this VLAN-first, Luna, provider-neutral v3 acceptance scope. This document
+records the accepted target and does not itself authorize host/network activation or change GitHub
+state.
 
 ## What This Task Does
 
