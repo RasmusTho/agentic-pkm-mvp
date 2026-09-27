@@ -213,6 +213,7 @@ def test_duplicate_json_keys_cannot_hide_unsafe_receipt_or_route_fields(
         "fixture_ghp_" + "a" * 36,
         "fixture_glpat-" + "A" * 20,
         "fixture_xoxb-" + "1" * 12 + "-" + "2" * 12 + "-" + "A" * 24,
+        "fixture_xapp-1-A0123456789-1234567890123-" + "a" * 64,
         "fixture_AKIA" + "A" * 16,
         "fixture_ASIA" + "A" * 16,
         "fixture_AIzA" + "A" * 35,
