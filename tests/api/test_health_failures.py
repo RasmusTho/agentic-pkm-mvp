@@ -37,8 +37,18 @@ def test_ollama_probe_bounded_timeout_single_call(monkeypatch) -> None:
         "_check_llm_router",
         lambda: {
             "route_policies": {
-                "qa": {"effective": {"provider": "ollama", "model": "q"}},
-                "embed": {"effective": {"provider": "ollama", "model": "e"}},
+                "qa": {
+                    "effective": {
+                        "provider": "ollama",
+                        "model": "llama3.1:8b",
+                    }
+                },
+                "embed": {
+                    "effective": {
+                        "provider": "ollama",
+                        "model": "nomic-embed-text:latest",
+                    }
+                },
             }
         },
     )
