@@ -1,4 +1,4 @@
-State: Open parent validation hub Issue #5618; lifecycle agent:blocked. It remains blocked until all child slices and integrated acceptance evidence are complete. The live parent Issue body still reflects the prior Tailscale-only/Ollama-acceptance target and must be reconciled before child pickup under the amended ADR-0066.
+State: Open parent validation hub Issue #5618; lifecycle agent:blocked. Its contract was reconciled on 2026-09-27 to the ten-slice ledger and amended ADR-0066. It remains blocked until child delivery, separately authorized host acceptance, and rollout evidence are complete.
 
 # Model Access Router Parent Feature Issue
 
@@ -22,4 +22,4 @@ Initial state: agent:blocked; the parent waits on child work and host acceptance
 
 ## Parent Closure Gate
 
-The parent closes only when the capability acceptance checklist in README.md is satisfied, every child receipt is linked, the cross-host designated-executor receipt proves VLAN-first access, configured Tailscale fallback, equivalent channel/action authorization, provider-neutral capability health, and a loopback-only service without leaking host identity or secrets, release-channel verification is complete for the authorized target, and owner-doc changes state only what is actually shipped. The live parent Issue body must be reconciled before implementation pickup because it still names the superseded network and Ollama acceptance conditions.
+The parent closes only when the capability acceptance checklist in README.md is satisfied, all ten child-slice receipts are linked, and the cross-host designated-executor v3 receipt proves VLAN-first access, configured Tailscale fallback for typed path-local failures, equivalent channel/action authorization, Luna through Codex CLI, provider-neutral capability health, unsupported-capability refusal before inference, and a loopback-only service without leaking host identity or secrets. Ollama is not a Luna acceptance prerequisite. Authorized release-channel verification must be complete, and owner-doc changes must state only what is actually shipped. The parent remains blocked until these gates pass.
