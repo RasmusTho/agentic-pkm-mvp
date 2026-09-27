@@ -121,17 +121,16 @@ def _assert_check_metadata(payload: dict) -> None:
     assert "required" in checks["ffmpeg"]
     assert "severity" in checks["ffmpeg"]
     assert "llm_router" in checks
-    assert "selected_defaults" in checks["llm_router"]
-    assert "route_policies" in checks["llm_router"]
+    assert checks["llm_router"]["detail"] == "route configuration loaded"
     assert "llm_access" in checks
     assert checks["llm_access"]["required"] is True
-    assert "routes" in checks["llm_access"]
+    assert "capabilities" in checks["llm_access"]
     assert "llm_task_routes" in checks
-    assert "routes" in checks["llm_task_routes"]
+    assert "capabilities" in checks["llm_task_routes"]
     assert "embedding_index" in checks
     assert "rebuild_required" in checks["embedding_index"]
     assert "llm_providers" in checks
-    assert "providers" in checks["llm_providers"]
+    assert checks["llm_providers"]["detail"] == "adapter declarations loaded"
     assert "obsidian" in checks
     assert "required" in checks["obsidian"]
 
@@ -172,7 +171,7 @@ def test_health_success(monkeypatch, tmp_path) -> None:
     _assert_check_metadata(data)
     actions = data.get("suggested_actions")
     assert isinstance(actions, list)
-    assert any(action.get("id") == "llm_mock" for action in actions if isinstance(action, dict))
+    assert all(action.get("id") != "llm_mock" for action in actions if isinstance(action, dict))
 
 
 def test_health_allows_stale(monkeypatch, tmp_path) -> None:
@@ -310,7 +309,7 @@ def test_health_requires_task_route_configuration(monkeypatch, tmp_path) -> None
     data = resp.json()
     assert data["required_ok"] is False
     assert data["checks"]["llm_task_routes"]["ok"] is False
-    assert data["checks"]["llm_task_routes"]["routes"]["decide"]["status"] == "fail"
+    assert data["checks"]["llm_task_routes"]["capabilities"]["text_generation"]["status"] != "available"
 
 
 def test_health_luna_route_is_not_blocked_by_unselected_ollama(
@@ -357,6 +356,10 @@ def test_health_luna_route_is_not_blocked_by_unselected_ollama(
     monkeypatch.setattr(health_module, "_check_ollama", _unexpected_ollama_probe)
 
     class _Client:
+        preflight_transport_observation = {
+            "status": "available",
+            "reason_code": "transport_reachable",
+        }
         model_access_route = SimpleNamespace(
             provider="openai",
             model="gpt-6-luna",
@@ -369,9 +372,12 @@ def test_health_luna_route_is_not_blocked_by_unselected_ollama(
 
     seen_intents = []
 
-    def _get_chat_client_for_route(intent, *, selected_route, allow_fallback):
+    def _get_chat_client_for_route(
+        intent, *, selected_route, allow_fallback, allow_catalog_promotion
+    ):
         assert selected_route.model == "gpt-6-luna"
         assert allow_fallback is False
+        assert allow_catalog_promotion is False
         seen_intents.append(intent)
         return _Client()
 
@@ -388,10 +394,17 @@ def test_health_luna_route_is_not_blocked_by_unselected_ollama(
     assert "ollama" not in checks
     assert checks["llm_access"]["ok"] is True
     assert checks["llm_access"]["required"] is True
-    assert set(checks["llm_access"]["routes"]) == {"qa"}
-    assert checks["llm_task_routes"]["routes"] == checks["llm_access"]["routes"]
+    assert set(checks["llm_access"]["capabilities"]) == {"text_generation"}
+    assert checks["llm_task_routes"]["capabilities"] == checks["llm_access"]["capabilities"]
     assert data["runtime"]["llm"]["ok"] is True
-    assert data["runtime"]["llm"]["providers"] == ["openai"]
+    assert data["runtime"]["llm"]["capabilities"] == checks["llm_access"]["capabilities"]
+    assert checks["llm_access"]["transport_observation"]["status"] == "available"
+    assert (
+        data["runtime"]["llm"]["transport_observation"]["status"]
+        == "available"
+    )
+    assert "provider" not in repr(checks["llm_access"])
+    assert "openai" not in repr(checks["llm_router"])
     assert [intent.task_kind for intent in seen_intents] == ["health"]
 
 
@@ -446,11 +459,18 @@ def test_health_skips_eval_route_by_default(monkeypatch, tmp_path) -> None:
     _write_worker_heartbeat(worker_hb, ts=time.time())
     client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_path=worker_hb, worker_enabled=True)
 
+    probed: list[str] = []
+    real_probe = health_module._probe_selected_route
+
+    def _record_probe(task_kind, effective, intent, *, ollama_probe=None):
+        probed.append(task_kind)
+        return real_probe(task_kind, effective, intent, ollama_probe=ollama_probe)
+
+    monkeypatch.setattr(health_module, "_probe_selected_route", _record_probe)
     resp = client.get("/api/health")
 
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["checks"]["llm_task_routes"]["routes"]["eval"]["status"] == "skipped"
+    assert "eval" not in probed
 
 
 # --- security: DSN must not appear in health response ---
@@ -508,7 +528,7 @@ def test_health_api_sanitizes_exception_details(monkeypatch) -> None:
     assert data["trace_id"] == "trace-health-redaction"
 
 
-def test_health_api_sanitizes_selected_route_base_urls(monkeypatch) -> None:
+def test_health_api_omits_selected_route_identity(monkeypatch) -> None:
     client = TestClient(app)
 
     def fake_run_health() -> dict[str, object]:
@@ -518,6 +538,12 @@ def test_health_api_sanitizes_selected_route_base_urls(monkeypatch) -> None:
             "checks": {
                 "llm_access": {
                     "ok": True,
+                    "transport_observation": {
+                        "status": "available",
+                        "freshness": "fresh",
+                        "reason_code": "transport_reachable",
+                        "selected_path_profile": "private_vlan",
+                    },
                     "routes": {
                         "qa": {
                             "status": "ok",
@@ -530,6 +556,12 @@ def test_health_api_sanitizes_selected_route_base_urls(monkeypatch) -> None:
                 "llm": {
                     "ok": True,
                     "providers": ["openai"],
+                    "transport_observation": {
+                        "status": "available",
+                        "freshness": "fresh",
+                        "reason_code": "transport_reachable",
+                        "selected_path_profile": "private_vlan",
+                    },
                 }
             },
             "suggested_actions": [],
@@ -541,10 +573,13 @@ def test_health_api_sanitizes_selected_route_base_urls(monkeypatch) -> None:
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["checks"]["llm_access"]["routes"]["qa"]["base_url"] == "https://api.openai.com"
-    assert data["runtime"]["llm"]["providers"] == ["openai"]
+    assert "routes" not in data["checks"]["llm_access"]
+    assert "providers" not in data["runtime"]["llm"]
+    assert "selected_path_profile" not in data["checks"]["llm_access"]["transport_observation"]
+    assert "private_vlan" not in resp.text
     for secret in ("operator", "password", "private", "token", "secret", "fragment"):
         assert secret not in resp.text
+    assert "openai" not in resp.text
 
 
 def test_health_api_exposes_bounded_authority_spine_status(tmp_path, monkeypatch) -> None:

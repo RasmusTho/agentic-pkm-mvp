@@ -4,6 +4,8 @@ import importlib
 import os
 import shutil
 import subprocess
+from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlsplit
@@ -24,6 +26,12 @@ from app.eval.llm_client import DEFAULT_MODE as DEFAULT_EVAL_MODE
 from app.knowledge.errors import KnowledgeConfigError
 from app.knowledge.health import obsidian_dependency_status
 from app.knowledge.settings import KnowledgeAdapter, load_knowledge_settings
+from app.model_access.adapter_factory import ModelAccessAdapterFactory
+from app.model_access.capability_health import (
+    aggregate_capability_health,
+    aggregate_transport_health,
+)
+from app.model_access.codex_remote_transport import RemotePreflightError
 from app.cli.settings_explain import mask_dsn
 from app.observability.log import span, with_trace_id
 from app.version import get_runtime_version
@@ -271,6 +279,7 @@ def _provider_env_check(
                     reasoning_effort=reasoning_effort,
                 ),
                 allow_fallback=False,
+                allow_catalog_promotion=False,
             )
             bound_route = client.model_access_route
             if bound_route is None:
@@ -407,11 +416,341 @@ def _check_llm_task_routes(
 
 
 _EMBEDDING_TASK_KINDS = {"embed", "embedding", "embeddings"}
-_REMOTE_OLLAMA_TRANSPORTS = {"codex_cli_tailscale", "ollama_http_tailscale"}
+_REMOTE_EXECUTOR_TRANSPORTS = {"codex_cli_tailscale", "ollama_http_tailscale"}
+_PRODUCT_UNSUPPORTED_TRANSPORTS = {"codex_cli"}
+_NETWORK_PATH_FAILURE_CODES = {
+    "PATH_UNAVAILABLE",
+    "CONNECT_TIMEOUT",
+    "PREFLIGHT_TIMEOUT",
+    "PATH_AUTHENTICATION_FAILED",
+}
+_LOCAL_PREFLIGHT_FAILURE_CODES = {
+    "preflight_request_invalid",
+    "preflight_request_too_large",
+}
+_CAPABILITY_INTENT_FIELDS = {
+    "structured_output": "json_schema_required",
+    "native_tools": "native_tools_required",
+    "system_prompt_channel": "literal_system_role_required",
+    "deterministic_execution": "determinism_required",
+    "max_output_tokens": "max_output_tokens_required",
+}
+_REMOTE_PREFLIGHT_CAPABILITY_FAILURES = {
+    "structured_output_unavailable": "structured_output",
+    "native_tools_unavailable": "native_tools",
+    "literal_system_role_unavailable": "system_prompt_channel",
+    "output_token_limit_unavailable": "max_output_tokens",
+}
+
+
+def _transport_observation(
+    status: str, reason_code: str, observed_at: str
+) -> Dict[str, str]:
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "observed_at": observed_at,
+    }
+
+
+def _transport_observation_for_failure(
+    transport_id: str | None, exc: Exception, observed_at: str
+) -> Dict[str, str]:
+    if transport_id not in _REMOTE_EXECUTOR_TRANSPORTS:
+        return _transport_observation(
+            "not_applicable", "transport_not_required", observed_at
+        )
+    if not isinstance(exc, RemotePreflightError):
+        return _transport_observation("unknown", "transport_unknown", observed_at)
+    if exc.code in _NETWORK_PATH_FAILURE_CODES:
+        return _transport_observation(
+            "unavailable", "transport_unavailable", observed_at
+        )
+    if (
+        exc.code in _LOCAL_PREFLIGHT_FAILURE_CODES
+        or exc.code == "path_preflight_unclassified"
+    ):
+        return _transport_observation("unknown", "transport_unknown", observed_at)
+    # A sanitized preflight response means a network path reached the executor,
+    # even when that executor reports an unavailable route or capability.
+    return _transport_observation("available", "transport_reachable", observed_at)
+
+
+def _client_transport_observation(
+    transport_id: str | None, client: Any, observed_at: str
+) -> Dict[str, str]:
+    if transport_id not in _REMOTE_EXECUTOR_TRANSPORTS:
+        return _transport_observation(
+            "not_applicable", "transport_not_required", observed_at
+        )
+    observation = getattr(client, "preflight_transport_observation", None)
+    if not isinstance(observation, dict):
+        return _transport_observation("unknown", "transport_unknown", observed_at)
+    status = observation.get("status")
+    reason_code = observation.get("reason_code")
+    if not isinstance(status, str) or status not in {
+        "available",
+        "degraded",
+        "unavailable",
+        "unknown",
+    }:
+        return _transport_observation("unknown", "transport_unknown", observed_at)
+    if not isinstance(reason_code, str):
+        reason_code = "transport_unknown"
+    return _transport_observation(status, reason_code, observed_at)
+
+
+@lru_cache(maxsize=1)
+def _health_adapter_factory() -> ModelAccessAdapterFactory:
+    return ModelAccessAdapterFactory.from_declared_sources()
+
+
+def _probe_selected_route(
+    task_kind: str,
+    effective: Dict[str, Any],
+    intent: Dict[str, Any],
+    *,
+    ollama_probe: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Ask the selected adapter for no-inference readiness and declared capabilities."""
+    provider = str(effective.get("provider") or "").strip().lower()
+    model = str(effective.get("model") or "").strip()
+    transport_id = str(effective.get("transport_id") or "").strip() or None
+    reasoning_effort = str(effective.get("reasoning_effort") or "").strip() or None
+    policy_degraded = effective.get("degraded") is True or str(
+        effective.get("degraded") or ""
+    ).strip().lower() == "true"
+    observed_at = datetime.now(timezone.utc).isoformat()
+    if not provider or not model:
+        return {
+            "status": "unavailable",
+            "reason_code": "route_not_configured",
+            "observed_at": observed_at,
+            "capabilities": {},
+            "transport_observation": _transport_observation(
+                "unknown" if transport_id in _REMOTE_EXECUTOR_TRANSPORTS else "not_applicable",
+                "transport_unknown" if transport_id in _REMOTE_EXECUTOR_TRANSPORTS else "transport_not_required",
+                observed_at,
+            ),
+        }
+    if transport_id in _PRODUCT_UNSUPPORTED_TRANSPORTS:
+        # The local Codex CLI adapter is registered for Model Inquiry/Builder
+        # callers, but the Product completion facade explicitly refuses it.
+        # Do not let an OpenAI API environment check stand in for this route.
+        return {
+            "status": "unavailable",
+            "reason_code": "route_transport_unsupported",
+            "observed_at": observed_at,
+            "capabilities": {},
+            "transport_observation": _transport_observation(
+                "not_applicable", "transport_not_required", observed_at
+            ),
+        }
+
+    structured_output = intent.get("json_schema_required") is True
+    native_tools = intent.get("native_tools_required") is True
+    literal_system_role = intent.get("literal_system_role_required") is True
+    determinism = intent.get("determinism_required") is True
+    transport_observation = _transport_observation(
+        "unknown" if transport_id in _REMOTE_EXECUTOR_TRANSPORTS else "not_applicable",
+        "transport_unknown" if transport_id in _REMOTE_EXECUTOR_TRANSPORTS else "transport_not_required",
+        observed_at,
+    )
+    try:
+        if transport_id in _REMOTE_EXECUTOR_TRANSPORTS:
+            client = get_chat_client_for_route(
+                LLMTaskIntent(
+                    task_kind="health",
+                    json_schema_required=structured_output,
+                    native_tools_required=native_tools,
+                    literal_system_role_required=literal_system_role,
+                    determinism_required=determinism,
+                ),
+                selected_route=LLMRoute(
+                    provider=provider,
+                    model=model,
+                    mode="chat",
+                    reason="health-preflight",
+                    degraded=policy_degraded,
+                    timeout_seconds=_health_probe_timeout(),
+                    transport_id=transport_id,
+                    reasoning_effort=reasoning_effort,
+                ),
+                allow_fallback=False,
+                allow_catalog_promotion=False,
+            )
+            transport_observation = _client_transport_observation(
+                transport_id, client, observed_at
+            )
+            bound_route = getattr(client, "model_access_route", None)
+            if bound_route is None:
+                return {
+                    "status": "unknown",
+                    "reason_code": "readiness_unknown",
+                    "observed_at": observed_at,
+                    "capabilities": {},
+                    "transport_observation": transport_observation,
+                }
+            preflight_status = getattr(bound_route, "preflight_status", None)
+            if preflight_status == "passed":
+                ready = True
+            elif preflight_status in {"failed", "unavailable"}:
+                ready = False
+            else:
+                return {
+                    "status": "unknown",
+                    "reason_code": "readiness_unknown",
+                    "observed_at": observed_at,
+                    "capabilities": {},
+                    "transport_observation": transport_observation,
+                }
+            declared = getattr(bound_route, "capabilities", None)
+            route_degraded = bool(getattr(bound_route, "degraded", False))
+        else:
+            factory = _health_adapter_factory()
+            adapter_id = transport_id or factory.default_adapter_id(provider)
+            descriptor = factory.describe(adapter_id, provider=provider, model=model)
+            # Legacy in-process adapters expose no shared preflight operation yet.
+            # Their adapter-specific checker is contained here; aggregation below
+            # consumes only a neutral status and declared adapter capabilities.
+            adapter_probe = _provider_env_check(
+                provider,
+                model,
+                transport_id=transport_id,
+                reasoning_effort=reasoning_effort,
+                structured_output_required=structured_output,
+                native_tools_required=native_tools,
+                literal_system_role_required=literal_system_role,
+                determinism_required=determinism,
+                ollama_probe=ollama_probe,
+            )
+            ready = adapter_probe.get("ok") is True
+            declared = descriptor.supported_capabilities
+            route_degraded = policy_degraded
+    except Exception as exc:
+        transport_observation = _transport_observation_for_failure(
+            transport_id, exc, observed_at
+        )
+        capability_status = "unavailable"
+        capability_reason = "adapter_unavailable"
+        capability_overrides: dict[str, dict[str, str]] = {}
+        if (
+            isinstance(exc, RemotePreflightError)
+            and exc.code in _REMOTE_PREFLIGHT_CAPABILITY_FAILURES
+        ):
+            # The executor rejected one requested capability before checking
+            # runtime readiness. Name that capability, and leave the rest
+            # unknown instead of marking the entire route unavailable.
+            capability_status = "unknown"
+            capability_reason = "readiness_unknown"
+            failed_capability = _REMOTE_PREFLIGHT_CAPABILITY_FAILURES[exc.code]
+            capability_overrides[failed_capability] = {
+                "status": "unavailable",
+                "reason_code": "capability_unsupported",
+            }
+        if transport_id in _REMOTE_EXECUTOR_TRANSPORTS and (
+            not isinstance(exc, RemotePreflightError)
+            or exc.code in _LOCAL_PREFLIGHT_FAILURE_CODES
+            or exc.code == "path_preflight_unclassified"
+        ):
+            # No adapter capability result exists when the executor path fails
+            # before classification. Preserve that uncertainty in capability
+            # health instead of claiming that the configured route rejected it.
+            capability_status = "unknown"
+            capability_reason = "readiness_unknown"
+        return {
+            "status": capability_status,
+            "reason_code": capability_reason,
+            "observed_at": observed_at,
+            "capabilities": {},
+            "capability_overrides": capability_overrides,
+            "transport_observation": transport_observation,
+        }
+
+    if not ready:
+        status, reason_code = "unavailable", "adapter_unavailable"
+    elif route_degraded:
+        status, reason_code = "degraded", "readiness_degraded"
+    else:
+        status, reason_code = "available", "adapter_ready"
+
+    capabilities = {
+        capability_id: getattr(declared, capability_id, None)
+        for capability_id in _CAPABILITY_INTENT_FIELDS
+        if capability_id != "max_output_tokens"
+    }
+    return {
+        "status": status,
+        "reason_code": reason_code,
+        "observed_at": observed_at,
+        "capabilities": capabilities,
+        "transport_observation": transport_observation,
+    }
+
+
+def _required_capabilities(intent: Dict[str, Any]) -> set[str]:
+    required = {"text_generation"}
+    required.update(
+        capability_id
+        for capability_id, intent_field in _CAPABILITY_INTENT_FIELDS.items()
+        if intent.get(intent_field) is True
+    )
+    return required
+
+
+def _route_capability_observations(
+    required: set[str], probe: Dict[str, Any]
+) -> list[dict[str, Any]]:
+    route_status = probe.get("status")
+    route_reason = probe.get("reason_code")
+    observed_at = probe.get("observed_at")
+    declared = probe.get("capabilities")
+    overrides = probe.get("capability_overrides")
+    observations: list[dict[str, Any]] = []
+    for capability_id in sorted(required):
+        override = overrides.get(capability_id) if isinstance(overrides, dict) else None
+        if isinstance(override, dict):
+            override_status = override.get("status")
+            status = (
+                override_status
+                if isinstance(override_status, str)
+                and override_status in {"available", "degraded", "unavailable", "unknown"}
+                else "unknown"
+            )
+            reason_code = (
+                override.get("reason_code")
+                if isinstance(override.get("reason_code"), str)
+                else "readiness_unknown"
+            )
+        elif route_status != "available":
+            status = route_status if route_status in {"degraded", "unavailable", "unknown"} else "unknown"
+            reason_code = route_reason if isinstance(route_reason, str) else "readiness_unknown"
+        elif capability_id == "text_generation":
+            status, reason_code = "available", "adapter_ready"
+        elif capability_id == "max_output_tokens":
+            status, reason_code = "unknown", "capability_not_observable"
+        else:
+            intent_field = _CAPABILITY_INTENT_FIELDS.get(capability_id)
+            capability_value = declared.get(capability_id) if isinstance(declared, dict) else None
+            if intent_field is None or not isinstance(capability_value, bool):
+                status, reason_code = "unknown", "capability_not_observable"
+            elif capability_value:
+                status, reason_code = "available", "adapter_ready"
+            else:
+                status, reason_code = "unavailable", "capability_unsupported"
+        observations.append(
+            {
+                "capability_id": capability_id,
+                "status": status,
+                "observed_at": observed_at,
+                "reason_code": reason_code,
+            }
+        )
+    return observations
 
 
 def _check_llm_access(router_check: Dict[str, Any]) -> Dict[str, Any]:
-    """Preflight selected text-generation routes without dispatching inference."""
+    """Aggregate configured text-route readiness as logical capabilities."""
     policies = router_check.get("route_policies") or {}
     text_policies = {
         task_kind: policy
@@ -419,36 +758,99 @@ def _check_llm_access(router_check: Dict[str, Any]) -> Dict[str, Any]:
         if str(task_kind).strip().lower() not in _EMBEDDING_TASK_KINDS
     }
     if not text_policies:
+        result = aggregate_capability_health(
+            {"text_generation"},
+            [
+                {
+                    "capability_id": "text_generation",
+                    "status": "unknown",
+                    "reason_code": "route_not_configured",
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ],
+        )
         return {
-            "ok": False,
+            **result,
+            "transport_observation": aggregate_transport_health([]),
             "detail": "no text-generation routes are configured",
-            "routes": {},
         }
 
     eval_mode = (
         (os.getenv("EVAL_LLM_MODE") or DEFAULT_EVAL_MODE).strip().lower()
         or DEFAULT_EVAL_MODE
     )
-    active_text_policies = (
-        policy
+    active_text_policies = [
+        (task_kind, policy)
         for task_kind, policy in text_policies.items()
-        if not (
-            str(task_kind).strip().lower() == "eval"
-            and eval_mode == "skip"
+        if not (str(task_kind).strip().lower() == "eval" and eval_mode == "skip")
+    ]
+    if not active_text_policies:
+        result = aggregate_capability_health(
+            {"text_generation"},
+            [
+                {
+                    "capability_id": "text_generation",
+                    "status": "unknown",
+                    "reason_code": "route_not_configured",
+                    "observed_at": datetime.now(timezone.utc).isoformat(),
+                }
+            ],
         )
-    )
-    local_ollama_selected = any(
-        str((policy.get("effective") or {}).get("provider") or "").strip().lower()
-        == "ollama"
-        and str((policy.get("effective") or {}).get("transport_id") or "").strip()
-        not in _REMOTE_OLLAMA_TRANSPORTS
-        for policy in active_text_policies
+        return {
+            **result,
+            "transport_observation": aggregate_transport_health([]),
+            "detail": "no active text-generation routes are configured",
+        }
+    local_metadata_probe_selected = any(
+        str((policy.get("effective") or {}).get("transport_id") or "").strip()
+        == "ollama_http"
+        for _task_kind, policy in active_text_policies
     )
     ollama_probe = (
-        _check_ollama(selected_by_route=True) if local_ollama_selected else None
+        _check_ollama(selected_by_route=True) if local_metadata_probe_selected else None
     )
-    text_router_check = {**router_check, "route_policies": text_policies}
-    return _check_llm_task_routes(text_router_check, ollama_probe=ollama_probe)
+    required: set[str] = set()
+    observations: list[dict[str, Any]] = []
+    transport_observations: list[dict[str, Any]] = []
+    for task_kind, policy in active_text_policies:
+        effective = policy.get("effective") or {}
+        intent = policy.get("intent") or {}
+        if not isinstance(intent, dict):
+            intent = {}
+        route_required = _required_capabilities(intent)
+        required.update(route_required)
+        probe = _probe_selected_route(
+            str(task_kind), effective if isinstance(effective, dict) else {}, intent,
+            ollama_probe=ollama_probe,
+        )
+        observations.extend(_route_capability_observations(route_required, probe))
+        transport_observation = probe.get("transport_observation")
+        if not isinstance(transport_observation, dict):
+            transport_id = (
+                str(effective.get("transport_id") or "").strip()
+                if isinstance(effective, dict)
+                else ""
+            )
+            remote = transport_id in _REMOTE_EXECUTOR_TRANSPORTS
+            transport_observation = _transport_observation(
+                "unknown" if remote else "not_applicable",
+                "transport_unknown" if remote else "transport_not_required",
+                str(probe.get("observed_at") or ""),
+            )
+        transport_observations.append(transport_observation)
+
+    result = aggregate_capability_health(required, observations)
+    transport_health = aggregate_transport_health(transport_observations)
+    detail = (
+        "required model capabilities available"
+        if result["ok"]
+        else "one or more required model capabilities are not freshly available"
+    )
+    return {
+        **result,
+        "transport_observation": transport_health,
+        "detail": detail,
+    }
 
 
 def _check_embedding_index() -> Dict[str, Any]:
@@ -580,19 +982,14 @@ def _db_runtime_status() -> Dict[str, Any]:
 
 
 def _llm_runtime_status(check_result: Dict[str, Any]) -> Dict[str, Any]:
-    routes = check_result.get("routes") or {}
-    providers = sorted(
-        {
-            str(route.get("provider") or "").strip().lower()
-            for route in routes.values()
-            if isinstance(route, dict) and route.get("provider")
-        }
-    )
     ok = bool(check_result.get("ok"))
     return {
         "ok": ok,
         "detail": check_result.get("detail", ""),
-        "providers": providers,
+        "capabilities": dict(check_result.get("capabilities") or {}),
+        "transport_observation": dict(
+            check_result.get("transport_observation") or {}
+        ),
         "status": "ok" if ok else "fail",
     }
 
@@ -642,19 +1039,20 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
         )
 
     llm_access = checks.get("llm_access", {})
-    selected_routes = llm_access.get("routes", {})
-    selected_providers = {
-        str(route.get("provider") or "").strip().lower()
-        for route in selected_routes.values()
-        if isinstance(route, dict)
-    }
-    if selected_providers and selected_providers <= {"mock", "deterministic"}:
+    capabilities = llm_access.get("capabilities", {})
+    unavailable_capabilities = sorted(
+        capability_id
+        for capability_id, observation in capabilities.items()
+        if isinstance(observation, dict)
+        and observation.get("status") != "available"
+    )
+    if unavailable_capabilities:
         actions.append(
             {
-                "id": "llm_mock",
-                "severity": "optional",
-                "message": "Selected LLM task routes are deterministic/mock",
-                "command_hint": "Inspect checks.llm_router.route_policies to review effective task routes",
+                "id": "model_capabilities_unavailable",
+                "severity": "required",
+                "message": "One or more required model capabilities are unavailable or stale",
+                "command_hint": "Inspect capability status and trace_id in the health result",
             }
         )
 
@@ -775,7 +1173,10 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
     llm_access = _check_llm_access(checks["llm_router"])
     checks["llm_access"] = _annotate_required(llm_access, required=True)
     checks["llm_task_routes"] = _annotate_required(
-        {**llm_access, "routes": dict(llm_access.get("routes") or {})},
+        {
+            **llm_access,
+            "capabilities": dict(llm_access.get("capabilities") or {}),
+        },
         required=True,
     )
     checks["llm_providers"] = _annotate_required(

@@ -27,8 +27,14 @@ require a provider-specific environment variable or installation just to report 
   provider identity, concrete endpoint, host identity, credentials, prompts, and raw adapter output.
 - Capability status is evaluated against the exact configured route/profile and adapter-declared
   capabilities. An unselected provider being absent does not affect aggregate health. A required
-  capability that cannot be provided by the selected route is unavailable; health must not silently
-  weaken the requirement.
+  capability that cannot be provided by the selected route is unavailable; a route using a
+  transport the Product completion facade rejects is unavailable even if another transport for the
+  same provider is configured. Health must not silently weaken the requirement.
+- The health route inventory carries the caller contract for schema-backed task kinds, including
+  `decide`, `plan`, `tool`, and registered extraction workloads, so required `structured_output` is
+  checked even though health never invokes inference. When remote preflight rejects one requested
+  capability, that capability is reported as unavailable; other capability results remain unknown
+  if preflight stopped before checking runtime readiness.
 - Aggregate semantics are deterministic: `available` is healthy; `degraded`, `unavailable`, and
   `unknown` are unhealthy for a required capability. A missing, malformed, or stale observation is
   treated as `unknown`. The required `llm_access` check is `ok` only when every required capability
@@ -37,8 +43,11 @@ require a provider-specific environment variable or installation just to report 
   required-capability aggregation. `/healthz`, `/readyz`, and embedding-index checks keep their
   separate contracts.
 - Network-path reachability is reported as a separate transport observation. A configured
-  pre-completion path fallback may preserve capability availability, but the health evaluator does
-  not change the route or trigger inference.
+  pre-completion path fallback may preserve capability availability and is reported as degraded
+  transport; route/path identity is excluded from the observation. A typed path outage makes the
+  required capability unavailable; an unclassified path failure or invalid local preflight request
+  leaves capability status unknown because no adapter capability result exists. The health evaluator
+  does not change the route, promote a catalog model, or trigger inference.
 - Embedding identity/index compatibility remains in the embedding subsystem. `/readyz` remains
   governed by store/Postgres readiness.
 - Internal, access-controlled diagnostics may retain adapter-specific detail for operator
@@ -53,22 +62,38 @@ available.
 
 ## Acceptance Criteria
 
-- [ ] Aggregate LLM health evaluates configured logical capabilities through adapter descriptors
+- [x] Aggregate LLM health evaluates configured logical capabilities through adapter descriptors
   and has no provider-name-specific readiness branches.
   - Verify: `tests/model_access/test_capability_health.py::test_health_uses_provider_neutral_capability_contract`
-- [ ] Removing an unselected provider does not degrade health when the selected route supplies every
+- [x] Removing an unselected provider does not degrade health when the selected route supplies every
   required capability.
   - Verify: `tests/model_access/test_capability_health.py::test_unselected_provider_absence_does_not_fail_health`
-- [ ] Every required status aggregates deterministically: only fresh `available` keeps `llm_access`
-  healthy; `degraded`, `unavailable`, `unknown`, missing, malformed, or stale observations make
-  `llm_access.ok`, top-level `/api/health.required_ok`, and `/api/health.ok` false with a safe
-  capability-level reason and no provider identity in the public result.
+- [x] Every required status aggregates deterministically: only fresh `available` keeps `llm_access`
+  healthy; `degraded`, `unavailable`, `unknown`, missing, malformed, stale, or future-dated
+  observations make `llm_access.ok`, top-level `/api/health.required_ok`, and `/api/health.ok` false
+  with a safe capability-level reason and no provider identity in the public result. Duplicate
+  observations reduce deterministically independent of input order.
   - Verify: `tests/model_access/test_capability_health.py::test_required_capability_status_controls_aggregate_health`
-- [ ] Replacing one compatible provider adapter with another leaves the health schema and logical
+  - Verify: `tests/model_access/test_capability_health.py::test_duplicate_capability_observations_are_order_independent`
+- [x] Network-path reachability is separate from logical capability status. Successful configured
+  path fallback is reported as degraded transport while available capabilities remain available;
+  typed path failures report capability unavailability, unclassified path failures report capability
+  uncertainty, and route/capability failures remain distinguishable. Public health omits path identity.
+  - Verify: `tests/model_access/test_capability_health.py::test_configured_path_fallback_preserves_capability_health`
+  - Verify: `tests/model_access/test_capability_health.py::test_transport_failure_is_separate_from_route_capability_failure`
+  - Verify: `tests/cli/test_health_llm_routing.py::test_unclassified_remote_path_failure_reports_unknown_capability`
+  - Verify: `tests/cli/test_health_llm_routing.py::test_typed_remote_path_failure_keeps_capability_unavailable`
+  - Verify: `tests/cli/test_health_llm_routing.py::test_product_health_rejects_local_codex_cli_transport`
+  - Verify: `tests/api/test_health_api.py::test_health_api_omits_selected_route_identity`
+- [x] Replacing one compatible provider adapter with another leaves the health schema and logical
   capability identifiers unchanged.
   - Verify: `tests/model_access/test_capability_health.py::test_provider_substitution_preserves_health_schema`
-- [ ] Health checks perform no inference, do not select a fallback, and keep embedding-index and
-  `/readyz` contracts separate.
+- [x] A required capability with no bounded observation, including a requested output-token limit,
+  remains `unknown` and keeps required capability health false.
+  - Verify: `tests/model_access/test_capability_health.py::test_unknown_output_limit_capability_fails_closed`
+- [x] Health checks perform no inference, do not select a fallback, and keep embedding-index and
+  `/readyz` contracts separate. Health also disables catalog promotion on the production route
+  facade so the probe checks the exact configured route without mutating catalog selection state.
   - Verify: `tests/model_access/test_capability_health.py::test_health_is_no_inference_and_preserves_readiness_boundaries`
 
 ## Out of Scope

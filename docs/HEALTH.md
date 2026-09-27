@@ -19,31 +19,52 @@ python -m app.cli health --json
 | `ffmpeg` | `app/cli/health.py:20-28` | `shutil.which("ffmpeg")` | Install via a package manager (`brew install ffmpeg` or `apt`). |
 | `yt_dlp` | `app/cli/health.py:30-36` | Module import | `pip install -r requirements.txt`. |
 | `index_outbox` | `app/cli/health.py` | Existing `INDEX_OUTBOX_PATH` is a readable, writable regular file; missing paths are reported without creating them. | Start the producer/bootstrap path or fix permissions and adjust the env path. |
-| `llm_access` | `app/cli/health.py` | **Current implementation:** required, no-inference preflight of active selected text-generation routes; provider/route details are still part of the current payload. Health preflight does not switch providers, skipped eval routes and embeddings are not probed, and embeddings remain separate under `embedding_index`. A selected local model route is checked only when its transport is active. Any reported endpoint URL is reduced to its origin. **Target:** measure configured logical capabilities through a provider-neutral contract, independent of a named model provider. | Current: inspect `checks.llm_access.routes` and `checks.llm_router.route_policies`. Target capability schema and remediation are specified by MARR-10; not yet implemented. |
+| `llm_access` | `app/cli/health.py` + `app/model_access/capability_health.py` | Required, no-inference health over logical capabilities required by active configured text routes. Only fresh `available` capability observations pass; degraded, unavailable, unknown, missing, malformed, and stale observations fail closed. `transport_observation` reports configured network-path reachability separately, including when a pre-completion path fallback was used. Skipped eval routes and embeddings are not probed; embedding identity stays separate under `embedding_index`. The public API omits provider, model, transport, endpoint, and selected-path identity from model-access health. | Inspect `checks.llm_access.capabilities`, `checks.llm_access.transport_observation`, and correlate `trace_id`. The local CLI retains route configuration under `checks.llm_router` for operator diagnosis. |
 | `obsidian` | `app/cli/health.py` + `app/knowledge/health.py` | Obsidian CLI in `PATH` and installer compatibility (`>=1.12.4`) when knowledge policy requires Obsidian adapter | Install/update Obsidian installer and ensure `obsidian` command is available. |
 | `companion_diagnostics` | `app/cli/health.py:586-635` + `app/services/companion_diagnostics.py` | Calls `companion_diagnostics_summary(vault_root)`; reports `duplicate_companion_count` (UUIDs present in both canonical `⚙️ System/companions/` and legacy `_system/companions/`). Optional check — does not affect the `ok` boolean; skipped when `vault_root` cannot be resolved. | Inspect `checks.companion_diagnostics.data.duplicate_companion_count` in the JSON output (`python -m app.cli health --json`). Non-zero counts indicate historical duplicates from a dual-write era; remove the legacy `_system/companions/<uuid>.md` files manually or wait for a future migration tool. |
 
 `checks.llm_access` is an `/api/health` dependency signal only. It does not change `/readyz`, whose readiness contract remains based on store/Postgres readiness; embedding identity remains separate under `checks.embedding_index`.
 
-## Provider-neutral capability health (accepted target)
+## Provider-neutral capability health
 
-The current `llm_access` implementation inspects selected routes and includes route/provider details.
-The accepted target is a stable capability health contract: system health reports which capabilities
-required by the configured workload are available, degraded, unavailable, or unknown. It does not
-require a particular provider name to be configured and does not expose provider identity as the
-health contract. An adapter may use provider-specific checks internally, then map the result to the
-same logical capability status.
+`checks.llm_access.capabilities` reports the logical requirements of active configured text routes.
+Each capability has a status (`available`, `degraded`, `unavailable`, or `unknown`), freshness, and
+a safe reason code. The baseline capability is `text_generation`; additional requirements such as
+`structured_output`, `native_tools`, `system_prompt_channel`, and `deterministic_execution` are
+included only when requested by route intent. If multiple active task routes require the same
+capability, every observation must be fresh and available. An adapter maps its own diagnostics and
+declared capabilities into this contract; absence of an unselected adapter does not affect health.
+The route inventory carries the caller contract for schema-backed `decide`, `plan`, `tool`, and
+registered extraction routes, so those workloads require `structured_output` even though health
+never invokes inference. A typed remote preflight refusal for one capability is reported against
+that capability; other capabilities remain `unknown` when preflight stopped before checking runtime
+readiness.
+The Product health route also fails closed for a configured transport that the Product completion
+facade rejects; configuring credentials for a different transport does not make that route healthy.
 
-The health evaluator reads configured capability requirements and asks the selected access
-abstraction for a no-inference readiness result. It does not choose a model, switch providers, or
-perform inference. Network path selection is a separate configured concern: a preflight may use the
-next configured path when the current path is unreachable, while preserving the same requested
-capabilities and logical route. Embedding identity/index compatibility stays under
-`checks.embedding_index`, and `/readyz` remains governed by store/Postgres readiness.
+`checks.llm_access.transport_observation` reports configured executor-path reachability separately
+with status, freshness, and a safe reason code. A successful configured path fallback is reported
+as `degraded` transport while required logical capabilities can remain `available`. The observation
+contains no selected path profile, endpoint, host, provider, or model identity; when no configured
+executor network path applies its status is `not_applicable`.
 
-This target is specified by `docs/MODEL_ACCESS_ROUTER/REPORT_CAPABILITY_HEALTH.md` and is not
-shipped yet. Until that slice lands, `checks.llm_access` remains the current provider/route-oriented
-implementation described in the table above.
+A typed executor-path outage reports the required capability as `unavailable`. If path failure is
+unclassified, or the local preflight request is invalid, capability status is `unknown` because no
+adapter capability result was received; transport health is independently reported as unknown.
+
+The public `/api/health` projection omits named provider, model, transport, and endpoint details from
+model-access checks. It also reduces route-router and provider-inventory diagnostics to neutral
+summaries. Local CLI output retains those diagnostics under `checks.llm_router` and
+`checks.llm_providers` for operator troubleshooting. The evaluator checks the exact selected route,
+does not choose a model, authorize provider/model fallback, or perform inference. A configured
+network-path fallback may be used during no-inference preflight while preserving the logical route
+and capability intent.
+
+Skipped eval routes and embedding routes do not contribute to this aggregate. Embedding identity and
+index compatibility remain under `checks.embedding_index`; `/readyz` remains governed by
+store/Postgres readiness. This implementation does not activate a Product route or change any
+provider/model default. The bounded capability contract is specified by
+`docs/MODEL_ACCESS_ROUTER/REPORT_CAPABILITY_HEALTH.md`.
 
 ## Health contract snapshot
 ```bash
