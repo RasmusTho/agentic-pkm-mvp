@@ -644,6 +644,25 @@ def test_private_ingress_rejects_unverified_or_system_only_tls(tls_verify: bool)
         )
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "https://mac-mini.lan:8443",
+        "https://public.example.org:8443",
+        "https://198.51.100.25:8443",
+        "https://203.0.113.25:8443",
+    ],
+)
+def test_private_ingress_rejects_dns_and_non_private_addresses(endpoint: str) -> None:
+    with pytest.raises(ValueError, match="host-local private HTTPS"):
+        CodexRemoteTransport(
+            endpoint=endpoint,
+            path_adapter="private_https_ingress",
+            tls_verify="/host-only/ca.pem",
+            client_certificate=("/host-only/client.pem", "/host-only/client.key"),
+        )
+
+
 def test_private_ingress_passes_explicit_mtls_context_to_httpx(monkeypatch) -> None:
     context = ssl.create_default_context()
     captured = {}

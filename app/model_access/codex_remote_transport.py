@@ -25,6 +25,12 @@ MAX_REMOTE_REQUEST_BYTES = 256_000
 MAX_PREFLIGHT_RESPONSE_BYTES = 16_000
 MAX_CATALOG_REQUEST_BYTES = 4_096
 MAX_CATALOG_RESPONSE_BYTES = 2_100_000
+_PRIVATE_INGRESS_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+)
 _PREFLIGHT_ERROR_CODES = frozenset(
     {
         "serve_capability_required",
@@ -147,11 +153,14 @@ def _validate_private_ingress_endpoint(endpoint: str) -> str:
             raise ValueError("unsupported private ingress port")
         try:
             address = ipaddress.ip_address(host)
-        except ValueError:
-            pass
-        else:
-            if not address.is_private:
-                raise ValueError("private ingress endpoint must use a private address")
+        except ValueError as exc:
+            raise ValueError(
+                "private ingress endpoint must use a private-network IP literal"
+            ) from exc
+        if not any(address in network for network in _PRIVATE_INGRESS_NETWORKS):
+            raise ValueError(
+                "private ingress endpoint must use a private-network IP literal"
+            )
     except (TypeError, ValueError) as exc:
         raise ValueError("endpoint must be a host-local private HTTPS origin") from exc
     host_authority = f"[{host.lower()}]" if ":" in host else host.lower()

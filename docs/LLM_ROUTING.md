@@ -88,9 +88,11 @@ advance to the next configured path only for `PATH_UNAVAILABLE`, `CONNECT_TIMEOU
 requests, route/capability mismatch, and missing path configuration fail closed. Once a non-200 HTTP
 status is received, a stalled, disconnected, or oversized error body preserves that status; only a
 fully decoded explicit path-local error code can authorize another path. The VLAN ingress
-uses mutually authenticated HTTPS; its host-local gateway must map the authenticated caller to the
-same Product channel/action capability contract used by Tailscale Serve, strip caller-supplied
-capability headers, and inject the trusted claim. The executor backend remains loopback-bound.
+uses mutually authenticated HTTPS to a host-local RFC1918 IPv4 or IPv6 unique-local address literal;
+DNS names are rejected so a public endpoint cannot receive completion content. Its gateway must map
+the authenticated caller to the same Product channel/action capability contract used by Tailscale
+Serve, strip caller-supplied capability headers, and inject the trusted claim. The executor backend
+remains loopback-bound.
 After preflight, exactly one completion uses the selected path. An ambiguous completion cannot retry
 over another path or switch providers. Provider/model fallback remains a separate explicit policy
 decision.

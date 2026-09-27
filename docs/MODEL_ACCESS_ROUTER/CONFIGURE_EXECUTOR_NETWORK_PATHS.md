@@ -38,6 +38,10 @@ that the VLAN path is unavailable.
   action. VLAN membership, source IP, or request-body claims alone do not authorize the request.
   The Tailscale adapter validates its configured Serve-forwarded application capability. The
   executor backend remains loopback-bound; Funnel and public ingress are forbidden.
+- The VLAN private-HTTPS adapter accepts only an HTTPS origin using a literal IPv4 address in
+  RFC1918 space or a literal IPv6 unique-local address. DNS names are rejected so a host-local
+  endpoint typo cannot send completion content to a public host. Tailscale Serve uses its separate
+  verified `.ts.net` adapter.
 - Once a completion may have reached the executor, a timeout or lost response is terminal. The
   client does not retry over another path, change provider, or send a second completion.
 - Network-path fallback does not imply provider/model fallback. Those decisions remain separately
