@@ -1,4 +1,4 @@
-State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-09-27 for VLAN-primary/Tailscale-fallback paths and provider-neutral capability health. MARR-01 through MARR-04, the base MARR-08 completion API, and the MARR-05 Product caller migration are delivered. Configured path selection, capability-oriented health, designated-host acceptance, and staged rollout remain unshipped. Parent validation Issue #5618 is open and blocked.
+State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-09-27 for VLAN-primary/Tailscale-fallback paths and provider-neutral capability health. MARR-01–05, the MARR-08 completion API, and MARR-09 configured path selection are delivered. MARR-10 provider-neutral capability health is in progress; designated-host acceptance and staged rollout remain pending. Parent validation Issue #5618 is open and blocked.
 Doc role: Capability specification
 Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, and ADR-0066 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
 Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its isolated compatibility path
@@ -6,7 +6,7 @@ Temporal class: strategic
 Review cadence: event-driven
 Source of truth: ADR-0066, child Issues, implementation, and acceptance receipts
 Last reviewed: 2026-09-27
-Last verified against: ADR-0066 and the checked-in MARR task specifications; GitHub child-issue reconciliation remains pending.
+Last verified against: ADR-0066, the checked-in MARR task specifications, and live Issues #5618, #5624, #5625, #5688, and #5689.
 Parent issue: #5618 (open, agent:blocked); validation hub, never a pickup task.
 
 # Model Access Router
@@ -26,7 +26,7 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 - MARR-05 preserves caller output-token limits explicitly. The current Codex CLI executor rejects a per-call output-token-limit requirement during no-inference preflight; a policy-approved low-reasoning Ollama fallback may run only if its own preflight passes. Ollama receives the limit as `options.num_predict`. If fallback is not allowed or capable, the call fails before inference; after completion starts there is no retry or provider switch.
 - Model Inquiry's `codex_subscription` remains a compatibility alias for the shared local Codex executor; its current single-target and no-fallback semantics do not change. Host activation still requires an exact-version no-tools profile outside Git.
 - Embeddings remain in the embedding identity subsystem and are outside the chat/completion migration.
-- Product runtime remains on Linux. The delivered Product client supports the executor API, but the designated Mac profile, VLAN-first network-path selection, Tailscale fallback, and Codex subscription session have not been activated or accepted.
+- Product runtime remains on Linux. The delivered Product client supports the executor API, and MARR-09 delivers configured VLAN-first/Tailscale-fallback path selection. The designated Mac profile, live network paths, and Codex subscription session have not been activated or accepted.
 - The accepted target keeps the model route and network path independent. Deployment configuration supplies ordered logical path-profile references; host-local configuration resolves the VLAN endpoint and Tailscale Serve endpoint. Neither path may be hard-coded into Product model policy or source code.
 - Both paths must authenticate and authorize the same Product channel and operation-specific action. VLAN membership alone is not authorization. The executor backend remains loopback-bound behind configured ingress; public listeners and Funnel are forbidden. Concrete endpoints and identity material remain outside Git.
 - Health is intended to report required logical capability status without requiring or exposing a named LLM provider. The current implementation still reports selected-route/provider details and has not yet met that target.
@@ -102,7 +102,7 @@ transport before the pure latest-compatible selector can use it.
 8. Catalog boundary: catalog responses are read-only, sanitized, and content-hash-bound. Only caller policy may accept a new descriptor; unordered, stale, deprecated, or capability-incomplete candidates cannot replace the pinned target. Model Inquiry never consumes the Product catalog.
 9. Provider compatibility: existing declared DeepSeek Product routing remains supported through an explicit `deepseek_api` adapter and pinned registry descriptor unless a separate reviewed change retires it. This migration cannot silently remove an existing provider.
 10. Partial Product migration: unmigrated Product callers continue through the legacy facade. Migrated callers go through one shared route and one adapter; no dual execution/shadow inference is permitted.
-11. Host and rollout gates: missing VLAN profile, unavailable configured fallback, missing required authorization, executor/login, or failed acceptance leaves the parent blocked. Ollama is not an acceptance prerequisite for Luna. No model download, API key creation, host credential change, or production deployment is used to make the receipt pass. Production remains behind the release-channel operator-acknowledgment gate.
+11. Host and rollout gates: missing VLAN profile, unavailable configured fallback, missing required authorization, executor/login, or failed acceptance leaves the parent blocked. Ollama health, installation, model, and fallback are not prerequisites for Luna acceptance. No model download, API key creation, host credential change, or production deployment is used to make the receipt pass. Production remains behind the release-channel operator-acknowledgment gate.
 
 ## Implementation Tasks
 
@@ -114,7 +114,7 @@ transport before the pure latest-compatible selector can use it.
 6. [Migrate Product LLM callers to the shared facade](MIGRATE_PRODUCT_LLM_CALLERS.md) — MARR-05; depends on MARR-01–04 and MARR-08
 7. [Configure VLAN-primary and Tailscale-fallback executor paths](CONFIGURE_EXECUTOR_NETWORK_PATHS.md) — MARR-09; specifies path configuration and no-inference failover independently of model/provider selection
 8. [Report provider-neutral capability health](REPORT_CAPABILITY_HEALTH.md) — MARR-10; specifies health through logical capability contracts, independent of provider identity
-9. [Prove configured macOS executor paths and Luna acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06; depends on MARR-01–05, MARR-08, MARR-09, and MARR-10. Live Issue #5624 must be reconciled with the amended acceptance contract before pickup.
+9. [Prove configured macOS executor paths and Luna acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06 / #5624; depends on MARR-01–05, MARR-08, MARR-09, and MARR-10. The live Issue now matches the v3 acceptance contract; separate operator authorization and host/network activation remain prerequisites.
 10. [Roll out through release channels with config rollback](ROLLOUT_WITH_CONFIG_ROLLBACK.md) — MARR-07; depends on MARR-06 and explicit release-channel operator acknowledgment
 
 ## Capability Acceptance
@@ -124,11 +124,11 @@ This parent-level acceptance remains separate from merging the MARR-08 thin API 
 - [ ] MARR-08 is verified by its slice tests and merged; this proves code exists, not live host activation.
 - [ ] Product caller migration is delivered by MARR-05 through the shared facade; this does not activate the designated host or change the checked-in default route.
 - [ ] MARR-04 delivers read-only catalog discovery and latest-compatible selection primitives; MARR-05 separately adopts them in Product callers. Catalog refresh never changes MARR-08's one-shot completion behavior.
-- [ ] A separate operator-owned host acceptance is required before claiming the Mac service or Tailscale Serve is live.
+- [ ] A separate operator-authorized host acceptance is required before claiming the Mac executor or either configured path is live.
 - [ ] MARR-09 verifies VLAN-first path selection and Tailscale fallback using the same route and channel/action authorization contract.
 - [ ] MARR-10 verifies health reports only configured capability status and does not require provider-specific checks.
 - [ ] The designated-host receipt proves Luna through Codex CLI over VLAN, Tailscale fallback only for typed recoverable path-local failures before completion, provider-neutral capability health, refusal of unsupported capability intent before inference, and no retry after an ambiguous completion. Common policy, request, route, configuration, and capability failures remain terminal. Ollama is not required.
-- [ ] The parent validation issue remains open until its chosen broader acceptance scope is explicitly satisfied.
+- [ ] The parent validation issue remains open until all child receipts, integrated host acceptance, authorized rollout evidence, and owner-doc reconciliation are complete.
 
 ## Relationship to GitHub Issues
 
