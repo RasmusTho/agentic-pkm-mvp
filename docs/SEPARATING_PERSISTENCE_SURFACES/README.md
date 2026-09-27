@@ -26,6 +26,13 @@ This directory contains the system specification for the v6.0 capability that ex
 - the **retention surface** — retained source-rich artifacts kept for citation, grounding, and later reuse;
 - the **system surface** — mirrors, indexes, receipts, traces, execution artifacts, and other runtime support structures.
 
+The shared `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md` governs relative retention priority,
+storage-pool accounting, hot/cold placement, and pressure-triggered deletion review across artifacts
+on these surfaces. It does not change
+which semantic surface an artifact belongs to, how long that surface exists, or the artifact's
+class-specific lifecycle. The retention-surface contract below remains about retained-source
+function and meaning, not a universal deletion schedule.
+
 Each task specification here is the source of truth for a bounded piece of that naming work. These are **not** issue templates. Task specifications can map to one or many GitHub issues at implementation time; this capability is a docs-authoring lane and does not create issues itself in the current phase.
 
 ## Human needs this serves

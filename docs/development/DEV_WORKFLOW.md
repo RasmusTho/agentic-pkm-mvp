@@ -13,7 +13,7 @@ For non-trivial changes:
 
 1. Identify the owning document via `docs/DOCS_INDEX.md`.
 2. Read the owner doc before changing code or neighboring docs.
-3. Confirm the planning chain for the work: docs/SoT/plan -> feature/capability issue -> slice/child issue -> code/PR -> slice verification -> merge -> feature validation -> acceptance -> owner-doc promotion.
+3. Confirm the planning chain for the work: human flow/scenario -> feature specification and capability contracts -> appropriately scoped parent or slice issue -> code/PR -> slice verification -> merge -> feature/capability/contract validation -> acceptance -> owner-doc promotion.
 4. Add or update tests for the intended change when the work is not docs-only.
 5. Implement the smallest change that fits the documented architecture.
 6. Update owner docs in the same change when behavior, contracts, or architecture changed.
@@ -24,28 +24,73 @@ minimal coordinator dispatches each bug to its own end-to-end Codex task/session
 worktree, with serial implementation as the default. This is Builder System transition guidance,
 not Product/Runtime behavior or evidence of a shipped deterministic orchestrator.
 
-## Lightweight breakdown model
+## Planning vocabulary and lightweight breakdown
 
-Use the following practical breakdown model across docs, GitHub, and implementation:
+Use these terms consistently across specifications, skills, and issues:
 
-- **Docs / SoT / plan docs** define direction, constraints, and feature intent. Task specifications in plan docs (such as `docs/LOCAL_TEST_BOOTSTRAP/`) function as system-specification documents that capture one feature intent but spawn multiple implementation issues (one-to-many mapping).
-- **Feature / capability issues** define the target outcome, child-slice map, verification path, and validation / acceptance path.
-- **Slice / child issues** define the bounded implementation steps that coding agents should pick up.
-- **PRs** should usually map to one slice / child issue, not to a vague roadmap heading.
-- **Slice verification** proves the implemented slice works at the intended layer.
-- **Feature validation** proves the overall feature works from the operator or product point of view, sometimes after merge.
-- **Acceptance** is the explicit decision to promote that feature into supported owner-doc truth.
+- **Use case / scenario** — an actor's goal in a real situation, with an intended outcome and
+  failure modes. Anchor the human need in `docs/HUMAN-FLOWS.md` and scenario-level acceptance in
+  `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md`. A use case is not an implementation unit.
+- **Feature** — a user-facing outcome that may compose multiple use cases, capabilities,
+  integrations, surfaces, and subsystems. A feature specification owns target scope and flow; a
+  parent feature issue, when needed, is the end-to-end validation hub.
+- **Capability** — a reusable, surface-independent function with a typed contract. Its primary
+  subsystem owner is the Capability subsystem; its contract and collaborating subsystem roles are
+  defined by `docs/CAPABILITY_CONTRACT_MODEL.md`. A capability is not a feature, agent, integration,
+  or UI. Do not create one for each step of a feature flow; reuse or extend the existing capability
+  set first.
+- **Contract** — a normative agreement about meaning, authority, inputs/outputs, or boundaries
+  across artifacts or subsystems. A contract is not itself a user outcome or executable capability;
+  it constrains the capabilities and subsystems that implement it. For example,
+  `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md` defines shared retention policy, while the
+  Capability subsystem assesses relative value and Governance / Authority admits deletion.
+- **System Breakdown Structure (SBS)** — the target system and subsystem decomposition and
+  change-impact model in `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. The current eight-subsystem
+  system-of-systems spine and subsystem responsibilities are described in
+  `docs/MODULAR_ARCHITECTURE.md`; use both at their appropriate horizons.
+- **System Requirements Document (SRD)** — Yggdrasil does not currently have one formal,
+  consolidated SRD. Feature specifications and subsystem/capability contracts are authoritative in
+  their own scope, while the Scenario Acceptance Matrix provides human-scenario validation. Do not
+  create a new global SRD by default; use these existing surfaces unless a human explicitly asks
+  for a formal SRD and defines its intended authority.
 
-Example: The local test bootstrap path is documented as a single system-specification contract in `docs/LOCAL_TEST_BOOTSTRAP/` (one specification), but implementation may span multiple feature and child issues (multiple implementation tasks), each proving one slice of the complete flow.
+Some older specification directories and issue references use *capability* as a broad historical
+label for a target area. Do not infer that such a document defines a reusable function owned by the
+Capability subsystem. Classify it by the outcome or contract it actually specifies, and use
+`docs/CAPABILITY_CONTRACT_MODEL.md` to determine Capability-subsystem ownership.
 
-Interpretation rule:
-- slices may be done at merge while the parent feature remains open
-- larger capabilities should define both a verification path and a validation / acceptance path before they are treated as complete
-- this is a lightweight delivery spine, not a heavyweight process rewrite
+The practical traceability chain is:
 
-Recommended planning chain:
+`Human flow -> scenario/use-case acceptance -> feature specification and cross-cutting owner contracts -> capability contracts and subsystem ownership -> parent or slice issue(s) -> code/PR -> slice verification -> feature/capability/contract validation -> acceptance -> owner-doc promotion`
 
-`Docs / SoT / plan -> Feature / capability issue -> Slice / child issues -> Code / PR -> Slice verification -> Merge -> Feature validation -> Acceptance -> Owner-doc promotion`
+Use different delivery hubs for different outcomes:
+
+- A **feature issue** tracks an end-to-end user outcome and its validation path.
+- A **capability issue**, when a reusable function needs multiple implementation slices, validates
+  that function's typed contract and named subsystem ownership; it does not replace feature-level
+  acceptance.
+- A **cross-cutting contract issue**, when a shared policy or boundary needs multiple slices,
+  validates that normative behavior and its subsystem-owner boundaries; it does not replace feature
+  or capability acceptance.
+- **Epic** is a tracker convention for grouping work, not a separate product or architecture
+  concept. A parent issue may serve that tracking role, but its source classification remains
+  feature, capability, or contract.
+- A **slice issue** defines one bounded implementation step for agent pickup.
+- A **PR** should usually map to one slice issue, not a vague roadmap heading.
+- **Slice verification** proves the implementation at the intended layer. Feature or capability
+  validation proves the larger outcome after its required slices merge.
+- **Acceptance** is the explicit decision to promote supported truth into owner docs.
+
+Example: `docs/LOCAL_TEST_BOOTSTRAP/` is a feature-level system specification for one target
+outcome. It can span multiple implementation issues without becoming either a capability or a
+formal SRD.
+
+Interpretation rules:
+
+- slices may be done at merge while the parent validation issue remains open;
+- a capability may support several features, and a feature may compose capabilities from the same
+  or different subsystem boundaries; and
+- this is a lightweight delivery spine, not a heavyweight process rewrite.
 
 ## Evidence surfaces
 

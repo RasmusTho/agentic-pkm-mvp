@@ -87,6 +87,26 @@ Do not treat Builder System records, projections, skills, prompts, or delivery l
 runtime/user memory or Human Knowledge Artifacts unless a Product/Runtime authority path explicitly
 promotes them.
 
+**Work level and subsystem owner** — classify the Issue as a bounded implementation slice or a
+parent validation hub. `issue-to-code` executes only bounded slices; do not pick up a feature,
+capability, or contract validation hub as implementation work. For Product/Runtime work, confirm
+the primary subsystem owner from `docs/MODULAR_ARCHITECTURE.md` and the target SBS in
+`docs/SYSTEM_BREAKDOWN_STRUCTURE.md`. For a capability, use the Capability subsystem as its
+primary owner per `docs/CAPABILITY_CONTRACT_MODEL.md`; list other subsystems as collaborators with
+their own responsibilities. For Builder System work, use the Builder System owner contract and
+artifact map; do not invent a Product subsystem owner. Boundary work names both sides and keeps
+their responsibilities distinct. A feature-level request spanning multiple slices is not a direct
+implementation task; route it through `feature-breakdown`. A task that invents a capability for one
+workflow step, duplicates an existing capability, or puts orchestration/integration/authority
+behavior inside a capability must be narrowed or returned for specification repair before coding.
+
+**Scenario and requirement source** — for Product/Runtime work, identify the linked human flow,
+use case / scenario, and applicable feature or capability specification; use
+`docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md` for user-outcome acceptance. For Builder System work,
+use the governing Builder System owner contract and task acceptance criteria; a Product scenario
+may be inapplicable. Boundary work links the relevant surfaces on both sides. This repository has
+no consolidated formal SRD; do not treat a plan or feature spec as shipped runtime truth.
+
 **Artifact class** — which class does this change produce or mutate?
 
 - Human Knowledge Artifact (vault notes, plans, research)
@@ -179,7 +199,7 @@ handoff changes still follow the explicit commands in this skill.
 
 ## Issue selection rule before implementation
 
-- Work from bounded slice issues, not from parent feature issues that still require decomposition or post-merge validation.
+- Work from bounded slice issues, not from parent feature, capability, or contract validation hubs that still require decomposition or post-merge validation.
 - Work only from GitHub Issues labeled `agent:ready` after strict issue-contract validation. Project Status is not a pickup precondition.
 - Among ready issues, pick one of the highest available priority:
   - `prio:high` before `prio:med` before `prio:low`

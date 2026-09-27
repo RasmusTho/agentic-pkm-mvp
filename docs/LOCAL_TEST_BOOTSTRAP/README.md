@@ -103,7 +103,7 @@ When creating GitHub issues:
 
 - **Parent capability plan:** `docs/plans/LOCAL_TEST_ENVIRONMENT_BOOTSTRAP.md`
 - **Testing strategy:** `docs/TESTING.md :: Bootstrap As A Verification Contract`
-- **Workflow model:** `docs/development/DEV_WORKFLOW.md :: Lightweight breakdown model`
+- **Workflow model:** `docs/development/DEV_WORKFLOW.md :: Planning vocabulary and lightweight breakdown`
 - **Environment contracts:** `docs/ENVIRONMENTS.md`
 
 ---

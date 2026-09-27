@@ -73,18 +73,47 @@ For every candidate doc item, determine exactly one state:
 - `blocked / needs-human`
 - `not actionable`
 
+## Source classification before issue creation
+
+Before sizing an item, classify its source-level meaning using
+`docs/development/DEV_WORKFLOW.md`:
+
+- **Use case / scenario** — human goal and acceptance situation. Keep its canonical statement in
+  `docs/HUMAN-FLOWS.md` and `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md`. Do not file an issue for a
+  scenario by itself unless it names a bounded implementation change.
+- **Feature** — end-to-end user outcome that may cross subsystems. Use a feature-level issue as the
+  validation hub when it spans slices; route decomposition to `feature-breakdown`.
+- **Capability** — reusable function with a typed contract. Confirm it belongs to the existing
+  capability set, identify the Capability subsystem as its primary owner, and name cooperating
+  subsystems separately. A capability issue validates its contract; it does not stand in for
+  scenario or feature acceptance.
+- **Cross-cutting contract** — normative rule across artifacts or subsystems. Keep the contract in
+  its canonical owner doc and derive implementation slices from the subsystem responsibilities it
+  defines. Do not rename a policy contract as a capability or a user-facing feature.
+- **System / subsystem structure** — use `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` for the target SBS
+  and `docs/MODULAR_ARCHITECTURE.md` for the current eight-subsystem system-of-systems spine. A
+  feature spanning subsystems does not justify a new subsystem.
+- **Specification / SRD** — Yggdrasil has no consolidated formal SRD. Use the relevant feature
+  specification, capability contract, and scenario acceptance surface as source anchors; do not
+  invent a second requirements catalog.
+
+Issue scope must say which level it implements and cite the most local owner docs. Prefer slices
+that stay within one subsystem; when a slice crosses boundaries, name each subsystem's role and
+preserve its owner contract. Do not translate every feature-flow step into a new capability or
+issue.
+
 ## Before creating any Issue
 
 1. Inspect active source docs.
 2. Inspect open Issues.
 3. Inspect recent open and merged PRs.
 4. Check whether the work is already tracked, already delivered, superseded, partially delivered, or blocked.
-5. **Pre-flight code existence check** — for spec files that name a target module path (e.g. `app/chat/session_log.py`), verify that path does not already exist in the repo before filing:
+5. **Pre-flight implementation evidence** — for spec files that name a target module path (e.g. `app/chat/session_log.py`), inspect existing code and tests against the scoped acceptance criteria before filing:
    ```bash
-   ls <target_module_path>   # if exists → mark candidate as `delivered`, do not file
+   ls <target_module_path>   # existence is a starting point for review, not proof of delivery
    ```
-   Also check whether the spec file's own `State:` line has already been promoted to "Implemented" — if so, classify as `delivered` and skip. If the code exists but `State:` still reads "Not yet implemented", treat the spec as stale, update the `State:` line (docs-authoring lane), and do not file a new issue.
-6. Decide whether the item should stay as one bounded issue or be turned into one parent feature issue plus child slices via `feature-breakdown`.
+   Code or module existence alone does not mean the requested outcome is delivered; a task may extend an existing module. Classify an item as `delivered` only when authoritative code/test/doc evidence satisfies its scoped acceptance criteria. If some criteria are satisfied, file only the missing bounded work. If all criteria are satisfied but the spec's `State:` line is stale, update that state through the docs-authoring lane and do not file duplicate work.
+6. Decide whether the item should stay as one bounded issue or be turned into the matching parent feature, capability, or cross-subsystem contract issue plus child slices via `feature-breakdown`.
 7. If the candidate would only create bookkeeping churn, keep it out of the backlog and route it to the maintenance path instead.
 8. **Live duplicate re-check — immediately before creation.** The step 2–4 inspection is an analysis-time snapshot and goes stale: a concurrent session can file the same backlog between your inspection and your `gh issue create` (seen 2026-07-29: hub #4286 + children #4287–#4292 duplicated by #4298–#4304; mirrors `.codex/skills/publish-pr/SKILL.md :: Publication preflight — live open-PR overlap re-check`, whose precedent was PR #2757 duplicating #2755). Immediately before the first `gh issue create`, re-check live open issues via REST:
    ```bash
@@ -157,7 +186,9 @@ For each created Issue, include:
 
 If no Issue should be created, say so explicitly and explain why.
 
-If the item should become a parent feature issue plus child slices, invoke `feature-breakdown` instead of creating a flat backlog shape. Parent feature issues are validation hubs, not direct pickup issues.
+If the item needs a parent feature, capability, or cross-subsystem contract issue plus child
+slices, say which kind explicitly and invoke `feature-breakdown` instead of creating a flat backlog
+shape. Parent issues are matching validation hubs, not direct pickup issues.
 
 ## Workflow continuation
 

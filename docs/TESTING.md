@@ -95,12 +95,14 @@ Use these terms distinctly in both docs and execution:
 
 - Testing = the commands, suites, and checks that run.
 - Slice verification = proof that one bounded slice / child issue implemented its intended contract correctly.
-- Feature validation = proof that the wider feature / capability works for the intended operator or product outcome, sometimes after merge.
-- Acceptance = the explicit decision that the repo can now claim and support that feature in owner docs.
+- Scenario acceptance = whether the human outcome and failure boundaries described in the Scenario Acceptance Matrix are met.
+- Feature validation = proof that the composed user-facing outcome works across its required capabilities, surfaces, integrations, and subsystems, sometimes after merge.
+- Capability validation = proof that a reusable function meets its typed contract and belongs coherently to its named subsystem; it does not replace scenario or feature acceptance.
+- Acceptance = the explicit decision that the repo can now claim and support the feature outcome or capability contract in owner docs.
 
 Real-life evidence rule:
 - PRs should carry slice verification evidence.
-- Parent feature / capability issues should carry post-merge validation evidence and the acceptance checklist, typically through the issue body and validation comments.
+- Parent feature issues should carry end-to-end user-outcome validation evidence; parent capability issues, when used, should carry contract-level evidence. Both keep the applicable acceptance checklist in the issue body and validation comments.
 - Owner docs should change when the accepted support claim changes, not for every rerun or post-merge observation.
 
 This keeps docs stable while still allowing truthful post-merge validation.

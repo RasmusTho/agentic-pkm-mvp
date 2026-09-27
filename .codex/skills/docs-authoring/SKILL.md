@@ -36,6 +36,15 @@ Use this skill when the task is a docs-only change that evolves or clarifies aut
 
 - Classify the PR explicitly as `Docs authoring lane`.
 - A governing GitHub Issue is not required for this lane.
+- Before authoring, classify the document as a human-flow/use-case scenario, user-facing feature
+  specification, reusable capability contract, subsystem/architecture definition, or other owner
+  contract. Use `docs/development/DEV_WORKFLOW.md` for the repository vocabulary and
+  `docs/MODULAR_ARCHITECTURE.md` plus `docs/SYSTEM_BREAKDOWN_STRUCTURE.md` for subsystem ownership.
+- Keep a feature spec's user outcome and subsystem composition distinct from the reusable
+  capability contracts it uses. Add or update scenario acceptance in the existing Scenario
+  Acceptance Matrix when appropriate; do not create a parallel use-case catalog.
+- Yggdrasil has no consolidated formal SRD. Do not create one by default; link the relevant feature
+  spec, capability contracts, and scenario acceptance surfaces.
 - Do not create backlog work outside the task scope. When backlog extraction is authorized, invoke `docs-to-issue` after the authored authority is committed.
 - Keep current-state docs honest. Do not write future-state intent as shipped reality.
 - Verify every factual claim you add (dates, PR/issue numbers, phase status, citations) directly against the named owning doc or GitHub object before commit — especially when the claim arrives from a sub-agent summary rather than the source itself. A sub-agent's assertion is a lead, not a citation; the coordinator who commits the sentence owns its truth (seen: PR #2756 committed a wrong canvas phase count/date from an unverified sub-agent claim; the review gate caught it pre-merge).

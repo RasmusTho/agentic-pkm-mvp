@@ -16,6 +16,8 @@ This is a Builder System workflow; Product/Runtime SBS impact routes via
   before structural guidance; keep Product/Runtime authority in its owner documents.
 - Prefer SoT docs over README. The README may be stale.
 - Use `docs/DOCS_INDEX.md` and `docs/PROJECT_KERNEL.md` as the entry points for current documentation.
+- For planning and spec work, use `docs/development/DEV_WORKFLOW.md` to distinguish use cases,
+  features, capabilities, subsystem structure, and the repository's lack of a consolidated SRD.
 
 ## SoT precedence (which source wins on conflict)
 
