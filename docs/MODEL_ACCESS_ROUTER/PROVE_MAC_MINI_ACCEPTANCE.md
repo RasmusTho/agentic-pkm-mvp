@@ -22,7 +22,8 @@ before any release-channel rollout.
 
 Issue #5624 now carries this VLAN-first, Luna, provider-neutral v3 acceptance scope. This document
 records the accepted target and does not itself authorize host/network activation or change GitHub
-state.
+state. The offline receipt validator is tracked separately in #5694; delivering that validator does
+not constitute live host acceptance.
 
 ## What This Task Does
 
@@ -91,7 +92,13 @@ mapping id, ambiguous-completion no-retry evidence, and secret-redaction result.
 
 ## How to Verify (Pre-Merge)
 
-- Run `pytest -q tests/model_access/test_macos_executor_acceptance_receipt.py` after implementation.
+- Run `pytest -q tests/model_access/test_macos_executor_acceptance_receipt.py`.
+- After the offline validator is delivered, validate the sanitized receipt against an independently
+  prepared expected-route JSON containing the exact route, catalog snapshot hash, logical executor
+  profile, and ordered path profiles:
+  `python3 scripts/validate_macos_executor_acceptance_receipt.py --input <receipt-path> --expected-route <expected-route-path>`.
+  This command only reads those two local JSON files. It does not contact or inspect a host, network,
+  service, Codex CLI, Ollama, or model; an `incomplete` result is not live acceptance.
 - From the Product Linux runtime and designated macOS executor, follow the checked-in
   cross-host acceptance procedure and attach only the sanitized v3 receipt. Do not include raw
   stdout, environment, keychain output, capability claims, concrete machine identity, endpoint
