@@ -72,23 +72,23 @@ The references above are logical placeholders, not checked-in endpoint or creden
 
 - [ ] Configuration can order multiple named path profiles for one logical executor without adding
   transport or endpoint branches to model/provider policy.
-  - Verify: `tests/model_access/test_executor_path_policy.py::test_path_order_is_configuration_driven`
+  - Verify: `tests/model_access/test_executor_network_policy.py::test_path_order_is_configuration_driven`
 - [ ] Typed VLAN `PATH_UNAVAILABLE`, `CONNECT_TIMEOUT`, `PREFLIGHT_TIMEOUT`, or
   `PATH_AUTHENTICATION_FAILED` selects the configured Tailscale path while preserving the exact
   executor, model, effort, and capability intent.
-  - Verify: `tests/model_access/test_executor_path_policy.py::test_only_typed_path_local_failures_use_next_path`
+  - Verify: `tests/model_access/test_executor_network_policy.py::test_only_typed_path_local_failures_use_next_path`
 - [ ] Common authorization denial, malformed request, route mismatch, missing path configuration,
   and capability mismatch fail closed without trying another path.
-  - Verify: `tests/model_access/test_executor_path_authorization.py::test_terminal_preflight_failures_do_not_use_another_path`
+  - Verify: `tests/model_access/test_executor_network_authorization.py::test_terminal_preflight_failures_do_not_use_another_path`
 - [ ] Both VLAN and Tailscale paths enforce the same Product channel/action authorization contract;
   source IP or VLAN membership alone is rejected.
-  - Verify: `tests/model_access/test_executor_path_authorization.py::test_paths_require_channel_and_action_authorization`
+  - Verify: `tests/model_access/test_executor_network_authorization.py::test_paths_require_channel_and_action_authorization`
 - [ ] An ambiguous completion result does not retry over another path or dispatch a second model
   completion.
-  - Verify: `tests/model_access/test_executor_path_policy.py::test_ambiguous_completion_does_not_fail_over`
+  - Verify: `tests/model_access/test_executor_network_policy.py::test_ambiguous_completion_does_not_fail_over`
 - [ ] Endpoint values, host identities, credentials, and raw authorization claims are absent from
   checked-in policy, user-facing health output, and receipts.
-  - Verify: `tests/model_access/test_executor_path_policy.py::test_path_receipts_are_logical_and_secret_free`
+  - Verify: `tests/model_access/test_executor_network_policy.py::test_path_receipts_are_logical_and_secret_free`
 
 ## Out of Scope
 
