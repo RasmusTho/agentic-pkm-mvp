@@ -204,6 +204,47 @@ def test_duplicate_json_keys_cannot_hide_unsafe_receipt_or_route_fields(
     assert "private.example" not in output
 
 
+@pytest.mark.parametrize(
+    "unsafe_model",
+    [
+        "tskey-auth-" + "a" * 20,
+        "ghp_" + "a" * 36,
+        "executor.example.ts.net:8443/model",
+        "executor.example.ts.net",
+        "192.0.2.10",
+    ],
+)
+def test_model_identity_rejects_credentials_and_endpoint_hosts(
+    unsafe_model: str,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    expected = _expected_route()
+    valid_expected = json.dumps(expected)
+    receipt = _passed_receipt()
+    receipt_route = {**_expected_route()["route"], "model": unsafe_model}  # type: ignore[arg-type]
+    receipt["route"] = receipt_route
+    receipt["fallback_preflight"] = {
+        **_passed_receipt()["fallback_preflight"],  # type: ignore[arg-type]
+        "route": receipt_route,
+    }
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(json.dumps(receipt), json.dumps(expected))
+
+    expected["route"] = {**expected["route"], "model": unsafe_model}  # type: ignore[arg-type]
+    with pytest.raises(ReceiptValidationError, match="expected_route_invalid"):
+        validate_acceptance_receipt(json.dumps(receipt), json.dumps(expected))
+
+    receipt_path = tmp_path / "unsafe-model-receipt.json"
+    expected_path = tmp_path / "expected-route.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    expected_path.write_text(valid_expected, encoding="utf-8")
+    assert main(["--input", str(receipt_path), "--expected-route", str(expected_path)]) == 2
+    output = capsys.readouterr().out
+    assert output == "receipt_invalid\n"
+    assert unsafe_model not in output
+
+
 def test_cli_argument_errors_do_not_echo_supplied_values(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

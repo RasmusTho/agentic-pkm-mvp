@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import json
 import re
 from typing import Literal
@@ -12,9 +13,16 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from app.model_access.remote_contract import CompletionCapabilityIntent
 
 
-_MODEL_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,127}$")
+_MODEL_ID = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._+-]{0,126}[A-Za-z0-9])?$")
+_HOSTNAME_MODEL_ID = re.compile(
+    r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$",
+    re.IGNORECASE,
+)
 _SENSITIVE_MODEL_ID = re.compile(
     r"(?:[a-z][a-z0-9+.-]*://|@|\bsk-(?:ant-)?[a-z0-9_-]{8,}\b|"
+    r"\btskey-(?:auth|api|client|secret)-[a-z0-9_-]+\b|"
+    r"\bgh(?:p|o|u|s|r|i)_[a-z0-9_]+\b|\bgithub_pat_[a-z0-9_]+\b|"
+    r"\bAKIA[0-9A-Z]{16}\b|\bAIza[0-9A-Za-z_-]{20,}\b|"
     r"\b(?:bearer|api[_-]?key|token|secret)\s*[:=])",
     re.IGNORECASE,
 )
@@ -69,7 +77,18 @@ class AcceptanceRouteIdentity(_StrictModel):
 
     @model_validator(mode="after")
     def _validate_model_id(self) -> "AcceptanceRouteIdentity":
-        if not _MODEL_ID.fullmatch(self.model) or _SENSITIVE_MODEL_ID.search(self.model):
+        try:
+            ipaddress.ip_address(self.model)
+        except ValueError:
+            is_ip_literal = False
+        else:
+            is_ip_literal = True
+        if (
+            not _MODEL_ID.fullmatch(self.model)
+            or _HOSTNAME_MODEL_ID.fullmatch(self.model)
+            or _SENSITIVE_MODEL_ID.search(self.model)
+            or is_ip_literal
+        ):
             raise ValueError("model identifier is not a safe logical ID")
         return self
 
