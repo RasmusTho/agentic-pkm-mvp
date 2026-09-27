@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import ssl
+from collections.abc import Iterator
 from datetime import datetime, timezone
 
 import httpx
@@ -26,6 +27,18 @@ from app.model_access.remote_contract import (
 
 
 ENDPOINT = "https://mac-mini.example-tailnet.ts.net"
+
+
+class _FailingResponseBody(httpx.SyncByteStream):
+    def __init__(self, failure: Exception) -> None:
+        self._failure = failure
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b'{"error":{"code":"PATH_UNAVAILABLE"}}'
+        raise self._failure
+
+    def close(self) -> None:
+        return None
 
 
 def _request() -> CompletionRequest:
@@ -145,6 +158,50 @@ def test_remote_catalog_rejects_wrong_transport_and_preserves_only_safe_errors()
     assert "private" not in str(error.value)
 
 
+def test_remote_catalog_preserves_received_status_when_error_body_read_fails() -> None:
+    request = CatalogRequest(transport_id="codex_cli")
+
+    def fail(_http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            stream=_FailingResponseBody(httpx.ReadError("response body was lost")),
+        )
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(fail),
+    )
+    try:
+        with pytest.raises(RemoteCatalogError) as error:
+            transport.catalog(request)
+    finally:
+        transport.close()
+
+    assert error.value.code == "catalog_http_403"
+
+
+def test_remote_catalog_preserves_received_status_for_oversized_error_body() -> None:
+    request = CatalogRequest(transport_id="codex_cli")
+
+    def oversized(_http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            content=b"x" * (remote_transport_module.MAX_CATALOG_RESPONSE_BYTES + 1),
+        )
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(oversized),
+    )
+    try:
+        with pytest.raises(RemoteCatalogError) as error:
+            transport.catalog(request)
+    finally:
+        transport.close()
+
+    assert error.value.code == "catalog_http_403"
+
+
 def test_remote_catalog_unexpected_transport_exception_is_invalid() -> None:
     request = CatalogRequest(transport_id="codex_cli")
 
@@ -197,13 +254,14 @@ def test_remote_preflight_is_route_bound_and_single_request() -> None:
     assert len(calls) == 1
 
 
-def test_remote_preflight_preserves_only_typed_failure_codes() -> None:
+@pytest.mark.parametrize("code", ["session_expired", "PATH_UNAVAILABLE"])
+def test_remote_preflight_preserves_only_typed_failure_codes(code: str) -> None:
     request = _preflight_request()
 
     def fail(_http_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             503,
-            json={"error": {"code": "session_expired", "detail": "secret data"}},
+            json={"error": {"code": code, "detail": "secret data"}},
         )
 
     transport = CodexRemoteTransport(
@@ -216,8 +274,58 @@ def test_remote_preflight_preserves_only_typed_failure_codes() -> None:
     finally:
         transport.close()
 
-    assert error.value.code == "session_expired"
+    assert error.value.code == code
     assert "secret" not in str(error.value).lower()
+
+
+@pytest.mark.parametrize(
+    ("status_code", "failure", "expected_code"),
+    [
+        (403, httpx.ReadTimeout("error body stalled"), "preflight_http_403"),
+        (400, httpx.ReadError("error body disconnected"), "preflight_http_400"),
+    ],
+)
+def test_remote_preflight_preserves_received_status_when_error_body_read_fails(
+    status_code: int, failure: Exception, expected_code: str
+) -> None:
+    request = _preflight_request()
+
+    def fail(_http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status_code, stream=_FailingResponseBody(failure))
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(fail),
+    )
+    try:
+        with pytest.raises(RemotePreflightError) as error:
+            transport.preflight(request)
+    finally:
+        transport.close()
+
+    assert error.value.code == expected_code
+
+
+def test_remote_preflight_preserves_received_status_for_oversized_error_body() -> None:
+    request = _preflight_request()
+
+    def oversized(_http_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            content=b"x" * (remote_transport_module.MAX_PREFLIGHT_RESPONSE_BYTES + 1),
+        )
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(oversized),
+    )
+    try:
+        with pytest.raises(RemotePreflightError) as error:
+            transport.preflight(request)
+    finally:
+        transport.close()
+
+    assert error.value.code == "preflight_http_403"
 
 
 def test_remote_preflight_transport_failure_is_safe_and_never_retried() -> None:

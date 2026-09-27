@@ -85,7 +85,9 @@ Provider/model policy does not choose an endpoint or network adapter.
 Before completion, the path router runs no-inference catalog and route-preflight requests. It may
 advance to the next configured path only for `PATH_UNAVAILABLE`, `CONNECT_TIMEOUT`,
 `PREFLIGHT_TIMEOUT`, or `PATH_AUTHENTICATION_FAILED`. Common Product authorization denial, malformed
-requests, route/capability mismatch, and missing path configuration fail closed. The VLAN ingress
+requests, route/capability mismatch, and missing path configuration fail closed. Once a non-200 HTTP
+status is received, a stalled, disconnected, or oversized error body preserves that status; only a
+fully decoded explicit path-local error code can authorize another path. The VLAN ingress
 uses mutually authenticated HTTPS; its host-local gateway must map the authenticated caller to the
 same Product channel/action capability contract used by Tailscale Serve, strip caller-supplied
 capability headers, and inject the trusted claim. The executor backend remains loopback-bound.

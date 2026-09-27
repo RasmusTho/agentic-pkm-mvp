@@ -220,6 +220,39 @@ def test_terminal_preflight_failures_do_not_use_another_path(
     assert transports["tailscale_fallback"].preflight_requests == []
 
 
+def test_received_http_denial_uses_no_other_path_provider_or_completion(
+    tmp_path: Path,
+) -> None:
+    request = CompletionRequest(
+        route=_request().route,
+        reasoning_effort="low",
+        capability_intent=CompletionCapabilityIntent(),
+        trusted_instructions="Use the configured executor.",
+        user_input="Say hello.",
+    )
+    fallback_route = CompletionRouteIdentity(
+        provider="ollama",
+        model="llama3.1:8b",
+        transport_id="ollama_http",
+    )
+    router, transports, _ = _router(tmp_path, first_error="preflight_http_403")
+    try:
+        with pytest.raises(RemotePreflightError, match="preflight_http_403"):
+            select_preflight_route(
+                request,
+                fallback_route=fallback_route,
+                fallback_requirement="fallback_policy_selected",
+                policy_authority="profile.product_runtime",
+                transport=router,
+            )
+    finally:
+        router.close()
+
+    assert len(transports["ygg_vlan_primary"].preflight_requests) == 1
+    assert transports["tailscale_fallback"].preflight_requests == []
+    assert all(not transport.completion_requests for transport in transports.values())
+
+
 def test_missing_path_configuration_fails_before_transport_creation(tmp_path: Path) -> None:
     environment = _host_environment(tmp_path)
     del environment["MODEL_ACCESS_CODEX_VLAN_ENDPOINT"]
@@ -328,6 +361,19 @@ def test_catalog_uses_next_path_only_for_typed_path_failure(tmp_path: Path) -> N
     assert response.snapshot.transport_id == "codex_cli"
     assert transports["ygg_vlan_primary"].catalog_requests == [request]
     assert transports["tailscale_fallback"].catalog_requests == [request]
+
+
+def test_catalog_http_denial_does_not_use_another_path(tmp_path: Path) -> None:
+    request = CatalogRequest(transport_id="codex_cli")
+    router, transports, _ = _router(tmp_path, first_error="catalog_http_403")
+    try:
+        with pytest.raises(RemoteCatalogError, match="catalog_http_403"):
+            router.catalog(request)
+    finally:
+        router.close()
+
+    assert transports["ygg_vlan_primary"].catalog_requests == [request]
+    assert transports["tailscale_fallback"].catalog_requests == []
 
 
 def test_path_receipts_are_logical_and_secret_free(tmp_path: Path) -> None:

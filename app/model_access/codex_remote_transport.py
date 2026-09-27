@@ -208,6 +208,24 @@ def _reject_json_constant(value: str) -> None:
     raise ValueError(f"unsupported JSON constant: {value}")
 
 
+def _read_bounded_response_body(
+    response: httpx.Response, *, max_bytes: int
+) -> bytearray | None:
+    """Read a fully bounded response body, returning None when it is oversized."""
+    body = bytearray()
+    for chunk in response.iter_bytes():
+        if len(body) + len(chunk) > max_bytes:
+            return None
+        body.extend(chunk)
+    return body
+
+
+def _known_http_error(status_code: int | None, *, operation: str) -> str | None:
+    if status_code is None or status_code == 200:
+        return None
+    return f"{operation}_http_{status_code}"
+
+
 class CodexRemoteTransport:
     """Post one exact route to one configured HTTPS path; never retry it."""
 
@@ -272,6 +290,7 @@ class CodexRemoteTransport:
             raise RemoteCatalogError("catalog_request_too_large")
 
         body = bytearray()
+        response_status: int | None = None
         try:
             with self._client.stream(
                 "POST",
@@ -279,29 +298,63 @@ class CodexRemoteTransport:
                 content=request_body,
                 headers={"Content-Type": "application/json"},
             ) as response:
-                for chunk in response.iter_bytes():
-                    if len(body) + len(chunk) > MAX_CATALOG_RESPONSE_BYTES:
-                        raise RemoteCatalogError("catalog_response_too_large")
-                    body.extend(chunk)
+                response_status = response.status_code
+                try:
+                    response_body = _read_bounded_response_body(
+                        response, max_bytes=MAX_CATALOG_RESPONSE_BYTES
+                    )
+                except Exception:
+                    status_error = _known_http_error(
+                        response_status, operation="catalog"
+                    )
+                    if status_error is not None:
+                        raise RemoteCatalogError(status_error) from None
+                    raise
+                if response_body is None:
+                    status_error = _known_http_error(
+                        response_status, operation="catalog"
+                    )
+                    if status_error is not None:
+                        raise RemoteCatalogError(status_error)
+                    raise RemoteCatalogError("catalog_response_too_large")
+                body = response_body
                 if response.status_code != 200:
                     raise RemoteCatalogError(_catalog_error_code(response.status_code, bytes(body)))
         except RemoteCatalogError:
             raise
         except httpx.ConnectTimeout:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
             raise RemoteCatalogError("CONNECT_TIMEOUT") from None
         except httpx.ReadTimeout:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
             raise RemoteCatalogError("PREFLIGHT_TIMEOUT") from None
         except httpx.TimeoutException:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
             raise RemoteCatalogError("PREFLIGHT_TIMEOUT") from None
         except httpx.ConnectError as exc:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
             if _contains_ssl_error(exc):
                 raise RemoteCatalogError("PATH_AUTHENTICATION_FAILED") from None
             raise RemoteCatalogError("PATH_UNAVAILABLE") from None
         except httpx.TransportError as exc:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
             if _contains_ssl_error(exc):
                 raise RemoteCatalogError("PATH_AUTHENTICATION_FAILED") from None
             raise RemoteCatalogError("PATH_UNAVAILABLE") from None
         except Exception:
+            status_error = _known_http_error(response_status, operation="catalog")
+            if status_error is not None:
+                raise RemoteCatalogError(status_error) from None
             # Only recognized network failures permit stale-cache service. Any
             # unexpected adapter failure is terminal for this catalog refresh.
             raise RemoteCatalogError("catalog_invalid") from None
@@ -329,6 +382,7 @@ class CodexRemoteTransport:
             raise RemotePreflightError("preflight_request_too_large")
 
         body = bytearray()
+        response_status: int | None = None
         try:
             with self._client.stream(
                 "POST",
@@ -336,10 +390,26 @@ class CodexRemoteTransport:
                 content=request_body,
                 headers={"Content-Type": "application/json"},
             ) as response:
-                for chunk in response.iter_bytes():
-                    if len(body) + len(chunk) > MAX_PREFLIGHT_RESPONSE_BYTES:
-                        raise RemotePreflightError("preflight_response_too_large")
-                    body.extend(chunk)
+                response_status = response.status_code
+                try:
+                    response_body = _read_bounded_response_body(
+                        response, max_bytes=MAX_PREFLIGHT_RESPONSE_BYTES
+                    )
+                except Exception:
+                    status_error = _known_http_error(
+                        response_status, operation="preflight"
+                    )
+                    if status_error is not None:
+                        raise RemotePreflightError(status_error) from None
+                    raise
+                if response_body is None:
+                    status_error = _known_http_error(
+                        response_status, operation="preflight"
+                    )
+                    if status_error is not None:
+                        raise RemotePreflightError(status_error)
+                    raise RemotePreflightError("preflight_response_too_large")
+                body = response_body
                 if response.status_code != 200:
                     raise RemotePreflightError(
                         _preflight_error_code(response.status_code, bytes(body))
@@ -347,22 +417,40 @@ class CodexRemoteTransport:
         except RemotePreflightError:
             raise
         except httpx.ConnectTimeout:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
             raise RemotePreflightError("CONNECT_TIMEOUT") from None
         except httpx.ReadTimeout:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
             # Preflight never invokes inference, so a lost preflight response is
             # safe to retry through another configured network path.
             raise RemotePreflightError("PREFLIGHT_TIMEOUT") from None
         except httpx.TimeoutException:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
             raise RemotePreflightError("PREFLIGHT_TIMEOUT") from None
         except httpx.ConnectError as exc:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
             if _contains_ssl_error(exc):
                 raise RemotePreflightError("PATH_AUTHENTICATION_FAILED") from None
             raise RemotePreflightError("PATH_UNAVAILABLE") from None
         except httpx.TransportError as exc:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
             if _contains_ssl_error(exc):
                 raise RemotePreflightError("PATH_AUTHENTICATION_FAILED") from None
             raise RemotePreflightError("PATH_UNAVAILABLE") from None
         except Exception:
+            status_error = _known_http_error(response_status, operation="preflight")
+            if status_error is not None:
+                raise RemotePreflightError(status_error) from None
             raise RemotePreflightError("preflight_unavailable") from None
 
         try:
