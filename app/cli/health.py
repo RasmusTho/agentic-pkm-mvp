@@ -254,6 +254,7 @@ def _provider_env_check(
                     transport_id=transport_id,
                     reasoning_effort=reasoning_effort,
                 ),
+                allow_fallback=False,
             )
             bound_route = client.model_access_route
             if bound_route is None:
@@ -301,13 +302,23 @@ def _provider_env_check(
         api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
         ok = bool(base and api_key)
         detail = "OpenAI route configured" if ok else "OPENAI_BASE_URL (or OPENAI_BASE) and OPENAI_API_KEY are required"
-        return {"ok": ok, "detail": detail, "status": "ok" if ok else "fail", "base_url": base}
+        return {
+            "ok": ok,
+            "detail": detail,
+            "status": "ok" if ok else "fail",
+            "base_url": _safe_endpoint_origin(base),
+        }
     if normalized == "deepseek":
         base = (os.getenv("DEEPSEEK_BASE") or "").strip()
         api_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
         ok = bool(base and api_key)
         detail = "DeepSeek route configured" if ok else "DEEPSEEK_BASE and DEEPSEEK_API_KEY are required"
-        return {"ok": ok, "detail": detail, "status": "ok" if ok else "fail", "base_url": base}
+        return {
+            "ok": ok,
+            "detail": detail,
+            "status": "ok" if ok else "fail",
+            "base_url": _safe_endpoint_origin(base),
+        }
     return {"ok": False, "detail": f"Unsupported provider for route verification: {normalized}", "status": "fail"}
 
 

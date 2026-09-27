@@ -752,6 +752,7 @@ def get_chat_client_for_route(
     max_output_tokens: int | None = None,
     adapter_runtime_config: AdapterRuntimeConfig | None = None,
     allow_catalog_promotion: bool = True,
+    allow_fallback: bool = True,
 ) -> ChatClient:
     """Bind one already-resolved Product policy route to the shared access facade."""
     router = LLMRouter()
@@ -774,7 +775,7 @@ def get_chat_client_for_route(
     factory = _adapter_factory()
     fallback = (
         _explicit_remote_ollama_fallback(candidates, factory=factory)
-        if selected.transport_id == "codex_cli_tailscale"
+        if allow_fallback and selected.transport_id == "codex_cli_tailscale"
         else None
     )
     remote_transport = None

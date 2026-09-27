@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter
 from starlette.concurrency import run_in_threadpool
 
-from app.cli.health import run_health
+from app.cli.health import _safe_endpoint_origin, run_health
 
 router = APIRouter()
 
@@ -15,17 +15,14 @@ _SENSITIVE_DETAIL_RE = re.compile(
     r"Traceback|File \"|/[^\\s:]+|[A-Za-z]:\\\\|secret|token|password|api[_-]?key",
     re.IGNORECASE,
 )
-_OPERATOR_VISIBLE_URL_KEYS = {"base_url"}
-
-
 def _sanitize_health_value(value: Any, *, parent_key: str | None = None) -> Any:
     if isinstance(value, dict):
         return {str(key): _sanitize_health_value(item, parent_key=str(key)) for key, item in value.items()}
     if isinstance(value, list):
         return [_sanitize_health_value(item, parent_key=parent_key) for item in value]
+    if isinstance(value, str) and parent_key == "base_url":
+        return _safe_endpoint_origin(value)
     if isinstance(value, str) and _SENSITIVE_DETAIL_RE.search(value):
-        if parent_key in _OPERATOR_VISIBLE_URL_KEYS:
-            return value
         if parent_key == "dsn" and "***" in value:
             return value
         if parent_key == "detail":

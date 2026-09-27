@@ -369,8 +369,9 @@ def test_health_luna_route_is_not_blocked_by_unselected_ollama(
 
     seen_intents = []
 
-    def _get_chat_client_for_route(intent, *, selected_route):
+    def _get_chat_client_for_route(intent, *, selected_route, allow_fallback):
         assert selected_route.model == "gpt-6-luna"
+        assert allow_fallback is False
         seen_intents.append(intent)
         return _Client()
 
@@ -507,7 +508,7 @@ def test_health_api_sanitizes_exception_details(monkeypatch) -> None:
     assert data["trace_id"] == "trace-health-redaction"
 
 
-def test_health_api_preserves_selected_route_base_urls(monkeypatch) -> None:
+def test_health_api_sanitizes_selected_route_base_urls(monkeypatch) -> None:
     client = TestClient(app)
 
     def fake_run_health() -> dict[str, object]:
@@ -520,7 +521,7 @@ def test_health_api_preserves_selected_route_base_urls(monkeypatch) -> None:
                     "routes": {
                         "qa": {
                             "status": "ok",
-                            "base_url": "https://api.openai.com/v1",
+                            "base_url": "https://operator:password@api.openai.com/private?token=secret#fragment",
                         }
                     },
                 }
@@ -540,8 +541,10 @@ def test_health_api_preserves_selected_route_base_urls(monkeypatch) -> None:
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["checks"]["llm_access"]["routes"]["qa"]["base_url"] == "https://api.openai.com/v1"
+    assert data["checks"]["llm_access"]["routes"]["qa"]["base_url"] == "https://api.openai.com"
     assert data["runtime"]["llm"]["providers"] == ["openai"]
+    for secret in ("operator", "password", "private", "token", "secret", "fragment"):
+        assert secret not in resp.text
 
 
 def test_health_api_exposes_bounded_authority_spine_status(tmp_path, monkeypatch) -> None:
