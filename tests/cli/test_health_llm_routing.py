@@ -171,3 +171,104 @@ def test_health_codex_transport_uses_remote_preflight_not_api_key(monkeypatch) -
     assert seen["route"].model == "gpt-6-luna"
     assert seen["route"].timeout_seconds == health_module._health_probe_timeout()
     assert "endpoint" not in route
+
+
+def test_llm_access_fails_closed_on_selected_route_preflight(monkeypatch) -> None:
+    class _Client:
+        model_access_route = SimpleNamespace(
+            provider="openai",
+            model="gpt-6-luna",
+            transport_id="codex_cli_tailscale",
+            preflight_status="failed",
+        )
+
+        def chat(self, *_args, **_kwargs):
+            raise AssertionError("health must never dispatch a completion")
+
+    def _get_chat_client_for_route(intent, *, selected_route):
+        assert intent.task_kind == "health"
+        assert selected_route.model == "gpt-6-luna"
+        return _Client()
+
+    def _unexpected_ollama_probe(**_kwargs):
+        raise AssertionError("an unselected embedding Ollama route must not be probed")
+
+    monkeypatch.setattr(
+        health_module, "get_chat_client_for_route", _get_chat_client_for_route
+    )
+    monkeypatch.setattr(health_module, "_check_ollama", _unexpected_ollama_probe)
+
+    result = health_module._check_llm_access(
+        {
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "openai",
+                        "model": "gpt-6-luna",
+                        "transport_id": "codex_cli_tailscale",
+                    },
+                    "intent": {},
+                },
+                "embed": {
+                    "effective": {
+                        "provider": "ollama",
+                        "model": "nomic-embed-text",
+                        "transport_id": "ollama_http",
+                    },
+                    "intent": {},
+                },
+            }
+        }
+    )
+
+    assert result["ok"] is False
+    assert set(result["routes"]) == {"qa"}
+    assert result["routes"]["qa"]["status"] == "fail"
+
+
+def test_selected_ollama_route_is_probed_independent_of_legacy_provider(monkeypatch) -> None:
+    calls: list[str] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            pass
+
+        def json(self) -> dict[str, list[dict[str, str]]]:
+            return {"models": [{"name": "qwen-local"}]}
+
+    def _get(url: str, *, timeout: float) -> _Response:
+        calls.append(url)
+        assert timeout == health_module._health_probe_timeout()
+        return _Response()
+
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.local:11434")
+    monkeypatch.setattr(health_module.httpx, "get", _get)
+
+    result = health_module._check_llm_access(
+        {
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "ollama",
+                        "model": "qwen-local",
+                        "transport_id": "ollama_http",
+                    },
+                    "intent": {},
+                },
+                "embed": {
+                    "effective": {
+                        "provider": "ollama",
+                        "model": "nomic-embed-text",
+                        "transport_id": "ollama_http",
+                    },
+                    "intent": {},
+                },
+            }
+        }
+    )
+
+    assert result["ok"] is True
+    assert set(result["routes"]) == {"qa"}
+    assert result["routes"]["qa"]["provider"] == "ollama"
+    assert calls == ["http://ollama.local:11434/api/tags"]
