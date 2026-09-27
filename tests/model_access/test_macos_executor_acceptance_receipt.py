@@ -63,6 +63,14 @@ def _passed_receipt() -> dict[str, object]:
             },
         ],
         "same_product_channel_action_contract": True,
+        "fallback_preflight": {
+            "route": _expected_route()["route"],
+            "attempted_path_profiles": ["ygg_vlan_primary", "tailscale_fallback"],
+            "selected_path_profile": "tailscale_fallback",
+            "failure_before_selection": "PATH_UNAVAILABLE",
+            "preflight_status": "passed",
+            "completion_dispatched": False,
+        },
         "codex_cli_version": "1.2.3",
         "codex_auth_status": "authenticated",
         "required_capability_ids": ["text_generation", "system_prompt_channel"],
@@ -104,12 +112,27 @@ def test_acceptance_receipt_is_route_bound_and_secret_free(
     assert result.missing_prerequisites == ()
 
     changed_route = _passed_receipt()
-    changed_route["route"] = {
+    changed_route_identity = {
         **_expected_route()["route"],  # type: ignore[arg-type]
         "model": "gpt-6-sol",
     }
+    changed_route["route"] = changed_route_identity
+    changed_route["fallback_preflight"] = {
+        **_passed_receipt()["fallback_preflight"],  # type: ignore[arg-type]
+        "route": changed_route_identity,
+    }
     with pytest.raises(ReceiptValidationError, match="route_mismatch"):
         validate_acceptance_receipt(json.dumps(changed_route), json.dumps(expected))
+
+    changed_catalog = _passed_receipt()
+    changed_catalog["catalog_snapshot_hash"] = "sha256:" + "1" * 64
+    with pytest.raises(ReceiptValidationError, match="route_mismatch"):
+        validate_acceptance_receipt(json.dumps(changed_catalog), json.dumps(expected))
+
+    missing_fallback_evidence = _passed_receipt()
+    missing_fallback_evidence.pop("fallback_preflight")
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(json.dumps(missing_fallback_evidence), json.dumps(expected))
 
     secret_field = _passed_receipt()
     secret_field["api_key"] = "sk-ant-do-not-print-this-value"
@@ -143,11 +166,15 @@ def test_missing_host_prerequisite_is_reported_without_mutation(
         "route": _expected_route()["route"],
         "catalog_snapshot_hash": None,
         "executor_profile": "product_codex_executor",
-        "configured_path_profiles": ["ygg_vlan_primary", "tailscale_fallback"],
+        "configured_path_profiles": ["ygg_vlan_primary"],
         "selected_path_profile": None,
         "path_selection_reason": "not_selected",
         "completion_dispatched": False,
-        "missing_prerequisites": ["codex_cli_unavailable", "vlan_path_unavailable"],
+        "missing_prerequisites": [
+            "codex_cli_unavailable",
+            "tailscale_path_unconfigured",
+            "catalog_snapshot_unavailable",
+        ],
     }
     receipt_path = tmp_path / "incomplete-receipt.json"
     expected_path = tmp_path / "expected-route.json"
@@ -165,7 +192,8 @@ def test_missing_host_prerequisite_is_reported_without_mutation(
 
     assert main(["--input", str(receipt_path), "--expected-route", str(expected_path)]) == 1
     assert capsys.readouterr().out == (
-        "incomplete missing=codex_cli_unavailable,vlan_path_unavailable\n"
+        "incomplete missing=codex_cli_unavailable,tailscale_path_unconfigured,"
+        "catalog_snapshot_unavailable\n"
     )
     assert receipt_path.read_bytes() == receipt_bytes
     assert expected_path.read_bytes() == expected_bytes

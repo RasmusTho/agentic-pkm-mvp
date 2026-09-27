@@ -103,6 +103,26 @@ class CapabilityObservation(_StrictModel):
     freshness: CapabilityFreshness
 
 
+class FallbackPreflightEvidence(_StrictModel):
+    """A successful Tailscale preflight for the same route after typed VLAN failure."""
+
+    route: AcceptanceRouteIdentity
+    attempted_path_profiles: tuple[PathProfile, ...] = Field(min_length=2, max_length=2)
+    selected_path_profile: Literal["tailscale_fallback"]
+    failure_before_selection: PathFailureCode
+    preflight_status: Literal["passed"]
+    completion_dispatched: Literal[False]
+
+    @model_validator(mode="after")
+    def _validate_fallback_order(self) -> "FallbackPreflightEvidence":
+        if self.attempted_path_profiles != (
+            "ygg_vlan_primary",
+            "tailscale_fallback",
+        ):
+            raise ValueError("fallback preflight must preserve VLAN-first path order")
+        return self
+
+
 class MacOsExecutorAcceptanceReceipt(_StrictModel):
     """Closed v3 receipt shape; no free-form prompt, endpoint, host, or CLI data."""
 
@@ -118,6 +138,7 @@ class MacOsExecutorAcceptanceReceipt(_StrictModel):
     backend_loopback_only: bool | None = None
     path_authorization: tuple[PathAuthorization, ...] = Field(default=(), max_length=2)
     same_product_channel_action_contract: bool | None = None
+    fallback_preflight: FallbackPreflightEvidence | None = None
     codex_cli_version: str | None = None
     codex_auth_status: Literal["authenticated", "unauthenticated", "unknown"] | None = None
     required_capability_ids: tuple[CapabilityId, ...] = Field(default=(), max_length=6)
@@ -175,17 +196,14 @@ class MacOsExecutorAcceptanceReceipt(_StrictModel):
             "tailscale_fallback",
         ):
             raise ValueError("passed acceptance requires VLAN-first configured paths")
-        if self.selected_path_profile == "ygg_vlan_primary":
-            if (
-                self.path_selection_reason != "primary_reachable"
-                or self.path_failure_code is not None
-            ):
-                raise ValueError("primary path selection provenance is inconsistent")
-        elif self.selected_path_profile == "tailscale_fallback":
-            if self.path_selection_reason != "typed_vlan_failure" or self.path_failure_code is None:
-                raise ValueError("fallback path requires a typed VLAN failure")
-        else:
-            raise ValueError("passed acceptance requires a selected path")
+        if (
+            self.selected_path_profile != "ygg_vlan_primary"
+            or self.path_selection_reason != "primary_reachable"
+            or self.path_failure_code is not None
+        ):
+            raise ValueError("passed acceptance requires a successful VLAN-primary completion")
+        if self.fallback_preflight is None or self.fallback_preflight.route != self.route:
+            raise ValueError("passed acceptance requires same-route fallback preflight evidence")
         if self.backend_loopback_only is not True:
             raise ValueError("passed acceptance requires a loopback-only backend")
         if self.same_product_channel_action_contract is not True:
@@ -292,9 +310,44 @@ def validate_acceptance_receipt(
 
     if candidate.route != expected.route:
         raise ReceiptValidationError("route_mismatch")
-    if candidate.executor_profile != expected.executor_profile:
+    if (
+        candidate.executor_profile is not None
+        and candidate.executor_profile != expected.executor_profile
+    ):
         raise ReceiptValidationError("route_mismatch")
-    if candidate.configured_path_profiles != expected.configured_path_profiles:
+    if candidate.status == "passed":
+        if candidate.configured_path_profiles != expected.configured_path_profiles:
+            raise ReceiptValidationError("route_mismatch")
+    else:
+        ordered_subset = tuple(
+            profile
+            for profile in expected.configured_path_profiles
+            if profile in candidate.configured_path_profiles
+        )
+        if candidate.configured_path_profiles != ordered_subset:
+            raise ReceiptValidationError("route_mismatch")
+        missing = set(candidate.missing_prerequisites)
+        if (
+            (
+                "ygg_vlan_primary" not in candidate.configured_path_profiles
+                and "vlan_path_unavailable" not in missing
+            )
+            or (
+                "tailscale_fallback" not in candidate.configured_path_profiles
+                and "tailscale_path_unconfigured" not in missing
+            )
+            or (
+                "tailscale_fallback" in candidate.configured_path_profiles
+                and "tailscale_path_unconfigured" in missing
+            )
+        ):
+            raise ReceiptValidationError("receipt_invalid")
+        if (candidate.catalog_snapshot_hash is None) != ("catalog_snapshot_unavailable" in missing):
+            raise ReceiptValidationError("receipt_invalid")
+    if (
+        candidate.fallback_preflight is not None
+        and candidate.fallback_preflight.route != expected.route
+    ):
         raise ReceiptValidationError("route_mismatch")
     if (
         candidate.catalog_snapshot_hash is not None

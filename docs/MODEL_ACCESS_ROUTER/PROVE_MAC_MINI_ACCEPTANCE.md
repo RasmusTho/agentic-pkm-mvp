@@ -39,7 +39,11 @@ completion does not retry.
 The receipt contains logical executor and path-profile IDs, path selection reason, capability IDs
 and statuses, Codex version/auth status, and route/catalog provenance. It contains no prompts,
 concrete endpoint or machine identity, raw authorization claims, credentials, environment, or raw
-CLI output. No Ollama installation, model, or fallback is required for Luna acceptance.
+CLI output. A passed receipt binds both a successful VLAN-primary completion and a successful
+Tailscale fallback preflight after a typed VLAN failure to the same exact route; the fallback
+preflight itself must not dispatch a completion. An incomplete receipt may report only the path
+profiles actually configured and must identify missing required paths. No Ollama installation,
+model, or fallback is required for Luna acceptance.
 
 ## Concretely
 
