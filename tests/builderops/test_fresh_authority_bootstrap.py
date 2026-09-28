@@ -206,6 +206,69 @@ def test_surviving_task_requires_matching_github_lifecycle(fresh_store, tmp_path
     assert_fenced(fresh_store)
 
 
+
+@pytest.mark.parametrize("task_state,label,drift,converges", (
+    ("claimed", "agent:in-progress", None, True),
+    ("in_progress", "agent:in-progress", None, True),
+    ("ready", "agent:in-progress", None, False),
+    ("claimed", "agent:ready", None, False),
+    ("claimed", "agent:in-progress", "body_sha256", False),
+    ("in_progress", "agent:in-progress", "source_version", False),
+))
+def test_upgrade_reconciles_active_task_without_reviving_lease(
+    fresh_store, tmp_path, task_state, label, drift, converges,
+):
+    import hashlib
+    from psycopg.types.json import Jsonb
+    from app.builderops.control_plane import StaleFencingToken
+    from tests.builderops.control_plane.test_migration_lineage import _initialize_schema_at_version
+
+    _initialize_schema_at_version(fresh_store, 4)
+    repo = REPOSITORIES[0]
+    task_id = f"github-{repo.replace('/', '--')}-issue-5712"
+    payload = {"repo": repo, "issue_number": 5712, "sync_state": {
+        "body_sha256": hashlib.sha256(b"Canonical fixture contract").hexdigest(),
+        "source_version": "2026-09-28T00:00:00Z"}}
+    if drift:
+        payload["sync_state"][drift] = "stale"
+    with fresh_store._connect() as conn:
+        conn.execute("INSERT INTO builderops_tasks(repository,task_id,state,payload,authority_envelope) "
+                     "VALUES (%s,%s,%s,%s,%s)",
+                     (repo, task_id, task_state, Jsonb(payload), Jsonb(envelope().as_json())))
+        old_lease = fresh_store._lease(conn.execute(
+            "INSERT INTO builderops_leases(repository,lease_kind,resource_id,holder,fencing_token,"
+            "expires_at,authority_envelope) VALUES (%s,'task',%s,'old-worker',7,"
+            "clock_timestamp()+interval '1 hour',%s) RETURNING *",
+            (repo, task_id, Jsonb(envelope().as_json())),
+        ).fetchone())
+    fresh_store.initialize()
+    assert_fenced(fresh_store)
+
+    def active_pages(*args, **kwargs):
+        items = github_pages(*args, **kwargs)
+        for item in items:
+            item["labels"] = [{"name": label}]
+        return items
+
+    with authenticated_github_fixture(), patch.object(bootstrap, "_paged_rest", side_effect=active_pages):
+        result = bootstrap.bootstrap_from_authority(fresh_store, **authority_files(tmp_path))
+    if converges:
+        assert result["status"] == "converged"
+        with pytest.raises(StaleFencingToken):
+            fresh_store.commit_transition(envelope=envelope(), task_id=task_id, to_state="completed",
+                                          idempotency_key="stale-completion", request=payload, lease=old_lease)
+    else:
+        assert result == {"status": "conflict", "reason": "surviving_task_lifecycle_mismatch"}
+        assert_fenced(fresh_store)
+    with fresh_store._connect() as conn:
+        task = conn.execute("SELECT state,payload FROM builderops_tasks WHERE task_id=%s", (task_id,)).fetchone()
+        retired = conn.execute("SELECT holder,fencing_token,expires_at <= clock_timestamp() AS expired "
+                               "FROM builderops_leases WHERE resource_id=%s", (task_id,)).fetchone()
+        assert conn.execute("SELECT count(*) AS count FROM builderops_outbox").fetchone()["count"] == 0
+    assert task == {"state": task_state, "payload": payload}
+    assert retired == {"holder": "bootstrap-fence", "fencing_token": 8, "expired": True}
+
+
 def test_crash_after_readback_retains_fence_and_restart_identity(fresh_store, tmp_path):
     fresh_store.initialize()
     before = fresh_store.bootstrap_status()["bootstrap_id"]

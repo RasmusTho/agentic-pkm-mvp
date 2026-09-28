@@ -169,11 +169,21 @@ def _reconcile_surviving_tasks(conn: Any, readback: Mapping[str, Any]) -> None:
         issue = readback["repositories"].get(repository, {}).get(str(number))
         if issue is None or issue["kind"] != "issue":
             raise BootstrapRefusal("unknown", "surviving_task_readback_missing")
-        expected = "completed" if issue["state"] == "closed" else (
-            "ready" if "agent:ready" in issue["labels"] else "blocked"
-            if set(issue["labels"]) & {"agent:blocked", "agent:needs-human"} else None)
+        labels = set(issue["labels"])
+        if issue["state"] == "closed":
+            expected = {"completed"}
+        elif "agent:ready" in labels:
+            expected = {"ready"}
+        elif labels & {"agent:blocked", "agent:needs-human"}:
+            expected = {"blocked"}
+        elif "agent:in-progress" in labels:
+            # The task kernel persists claimed; the GitHub projection uses
+            # in_progress. Neither lifecycle fact revives the retired lease.
+            expected = {"claimed", "in_progress"}
+        else:
+            expected = set()
         sync = payload.get("sync_state") or {}
-        if (expected is None or task["state"] != expected
+        if (task["state"] not in expected
                 or sync.get("body_sha256") != issue["body_digest"]
                 or sync.get("source_version") != issue["updated_at"]):
             raise BootstrapRefusal("conflict", "surviving_task_lifecycle_mismatch")

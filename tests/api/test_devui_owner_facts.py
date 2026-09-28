@@ -33,7 +33,7 @@ def test_production_reads_use_source_facts_without_label_or_model_inference(owne
     monkeypatch.setenv("BUILDEROPS_API_URL", "http://testserver")
     monkeypatch.setenv("BUILDEROPS_API_TOKEN", "owner-test-only-key")
     monkeypatch.setenv("DEVUI_REPOSITORY", REPO)
-    monkeypatch.setenv("DEVUI_BUILDEROPS_AUTHORITY_EPOCH", "1")
+    monkeypatch.setenv("DEVUI_BUILDEROPS_AUTHORITY_EPOCH", str(w.authority_epoch))
     monkeypatch.setattr(devui, "compose_owner_snapshot", lambda **kwargs: copy.deepcopy(_composition()))
     response = TestClient(app).get("/api/devui/overview")
     assert response.status_code == 200, response.text
@@ -65,7 +65,7 @@ def test_production_reads_use_source_facts_without_label_or_model_inference(owne
     monkeypatch.setenv("GH_CONFIG_DIR", str(graph_root))
     monkeypatch.setattr(devui_sources.cockpit_github_plane, "_run_gh", lambda args: copy.deepcopy(issue))
     preview = graph.preview(issue=issue)
-    published = graph.http.post("/v1/records", headers={**graph.headers(), "X-BuilderOps-Authority-Epoch": "1"},
+    published = graph.http.post("/v1/records", headers={**graph.headers(), "X-BuilderOps-Authority-Epoch": str(w.authority_epoch)},
         json={"record_type": "BuilderOpsReceipt", "owner_ask": {"proposal": preview["proposal"], "material": preview["material"]}})
     assert published.status_code == 200, published.text
     assert published.json()["action_effects"] == [] and graph.launches == 0
@@ -76,7 +76,7 @@ def test_production_reads_use_source_facts_without_label_or_model_inference(owne
     assert preview["proposal"]["proposal_hash"] in asks.text
     assert "Canonical owner ask: Start or Hold" in asks.text
     config = devui_sources.load_source_configuration({"DEVUI_REPOSITORY": REPO, "DEVUI_GITHUB_ENABLED": "true", "GH_CONFIG_DIR": str(graph_root),
-        "BUILDEROPS_API_URL": "http://127.0.0.1:8131", "BUILDEROPS_API_TOKEN": "owner-fixture", "DEVUI_BUILDEROPS_AUTHORITY_EPOCH": "1"},
+        "BUILDEROPS_API_URL": "http://127.0.0.1:8131", "BUILDEROPS_API_TOKEN": "owner-fixture", "DEVUI_BUILDEROPS_AUTHORITY_EPOCH": str(w.authority_epoch)},
         candidate_root=graph_root / "candidate", source_sha="1" * 40)
     managed = devui_sources.read_managed_focus(config, SUBJECT)
     assert any("Canonical owner ask" in row["claim"] for row in managed["evidence"])

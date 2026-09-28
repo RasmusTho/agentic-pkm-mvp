@@ -51,11 +51,12 @@ def test_bifrost_unconfigured_source_is_unavailable(monkeypatch):
 class OwnerWriter:
     def __init__(self, root, store, monkeypatch):
         self.root, self.store = root, store
+        self.authority_epoch = store.readiness()["authority_epoch"]
         self.profile = {
             "id": "profile:devui-trial", "version": "1", "repository": REPO,
             "subject_ref": SUBJECT, "source_owner": "builderops_vm102_receipt_source",
             "owner_actor": {"actor_type": "human", "id": "human:owner"},
-            "authorization_ref": {"ref": "policy:owner", "version": "1", "authority_epoch": 1},
+            "authorization_ref": {"ref": "policy:owner", "version": "1", "authority_epoch": self.authority_epoch},
             "criterion_refs": [{"id": "AC1", "sha256": "a" * 64}, {"id": "AC2", "sha256": "b" * 64}],
             "limitation_refs": [],
             "retention_policy_ref": {"ref": "BuilderOpsReceipt", "version": "1"},
@@ -92,7 +93,7 @@ class OwnerWriter:
         (self.root / "devui-runtime-prerequisites.json").write_text(json.dumps(self.bundle["prerequisites"]))
 
     def binding(self):
-        return read_owner_binding(REPO, SUBJECT, authority_epoch=1)
+        return read_owner_binding(REPO, SUBJECT, authority_epoch=self.authority_epoch)
 
     def request(self, kind="owner_trial", outcome="tried", **changes):
         binding = self.binding()
@@ -117,7 +118,7 @@ class OwnerWriter:
         payload.update(changes)
         return self.client.post("/v1/records", json={"record_type": "BuilderOpsReceipt",
                     "owner_outcome": payload, "idempotency_key": key},
-                    headers={"Authorization": "Bearer " + principal + "-test-only-key", "X-BuilderOps-Authority-Epoch": "1"})
+                    headers={"Authorization": "Bearer " + principal + "-test-only-key", "X-BuilderOps-Authority-Epoch": str(self.authority_epoch)})
 
     def read(self, key=None):
         params = {"repository": REPO, "subject_ref": SUBJECT}
@@ -153,6 +154,7 @@ class BifrostWriter(OwnerWriter):
         h = self.harness = build(bifrost=True, documentation_owner=True, issue_body=BODY,
             preview_observer=lambda value: previews.append(copy.deepcopy(value)))
         self.store, self.registry, self.manifest = h.store, h.registry, h.registry.manifest_path
+        self.authority_epoch = self.store.readiness()["authority_epoch"]
         self.repository = h.approval["repository"]
         self.profile = h.source_state["documents"][self.repository]["owner_documentation"]["profile"]
         self.subject = self.profile["subject_ref"]
@@ -288,7 +290,7 @@ class BifrostWriter(OwnerWriter):
         return self.git("commit-tree", tree, "-p", head, "-m", "external merge delta")
 
     def binding(self):
-        return read_owner_binding(self.repository, self.subject, authority_epoch=1, store=self.store)
+        return read_owner_binding(self.repository, self.subject, authority_epoch=self.authority_epoch, store=self.store)
 
     def submit(self, request, key="first", principal="facts-owner", **changes):
         return super().submit(request, key=key, principal=principal, **changes)
@@ -598,7 +600,7 @@ def test_bifrost_outcome_requires_human_and_current_exact_trial(bifrost_writer):
         "record_id": request["readiness_receipt_ref"]["id"], "record_type": "BuilderOpsReceipt", "state": "active",
         "payload": {}, "idempotency_key": "forged"}
     assert w.client.post("/v1/records", json=generic, headers={"Authorization": "Bearer facts-agent-test-only-key",
-        "X-BuilderOps-Authority-Epoch": "1"}).status_code == 403
+        "X-BuilderOps-Authority-Epoch": str(w.authority_epoch)}).status_code == 403
     from app.builderops.control_plane.models import AuthorityEnvelope
     from app.builderops.owner_fact_producers import OwnerFactRefusal
     with pytest.raises(OwnerFactRefusal, match="owner_readiness_source_required"):
@@ -721,7 +723,7 @@ def test_production_writer_is_authorized_version_bound_and_idempotent(owner_writ
     raw = json.dumps({"record_type": "BuilderOpsReceipt", "owner_outcome": {"contract": "builder_owner_outcome.v1", "request": request,
         "request_sha256": outcome_request_hash(request), "confirm": "confirm"}, "idempotency_key": "first"})
     raw = raw.replace('"confirm": "confirm"', '"confirm": "confirm", "confirm": "confirm"')
-    assert w.client.post("/v1/records", content=raw, headers={"Content-Type": "application/json", "Authorization": "Bearer owner-test-only-key", "X-BuilderOps-Authority-Epoch": "1"}).status_code == 400
+    assert w.client.post("/v1/records", content=raw, headers={"Content-Type": "application/json", "Authorization": "Bearer owner-test-only-key", "X-BuilderOps-Authority-Epoch": str(w.authority_epoch)}).status_code == 400
     for field, value in (("owner_actor", "human:owner"), ("outcome", {}), ("observed_at", "2030-01-01T00:00:00Z")):
         assert w.submit({**request, field: value}).status_code == 400
     original_now = w.store._database_now
@@ -741,16 +743,16 @@ def test_production_writer_is_authorized_version_bound_and_idempotent(owner_writ
     assert w.count("builderops_records") == w.count("builderops_receipts") == w.count("builderops_idempotency") == w.count("builderops_outbox") == 1
     generic = {"envelope": {"repository": REPO, "scope": "owner-outcome", "stack": "builderops", "source_refs": [SUBJECT]},
         "record_id": "ordinary-record", "record_type": "BuilderOpsReceipt", "state": "active", "payload": {}, "idempotency_key": "ordinary-record"}
-    assert w.client.post("/v1/records", json=generic, headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": "1"}).status_code == 403
+    assert w.client.post("/v1/records", json=generic, headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": str(w.authority_epoch)}).status_code == 403
     generic["envelope"]["scope"] = "ordinary"
     generic["idempotency_key"] = "owner-outcome:reserved"
-    assert w.client.post("/v1/records", json=generic, headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": "1"}).status_code == 403
+    assert w.client.post("/v1/records", json=generic, headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": str(w.authority_epoch)}).status_code == 403
     assert w.read("first").json()["receipt"] == receipt
     w.credentials[1]["scopes"].append("leases:write")
     w.write_credentials()
     lease = w.client.post("/v1/leases/claim", json={"envelope": generic["envelope"],
         "resource_id": receipt["id"], "idempotency_key": "ordinary-lease"},
-        headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": "1"})
+        headers={"Authorization": "Bearer agent-test-only-key", "X-BuilderOps-Authority-Epoch": str(w.authority_epoch)})
     assert lease.status_code == 200, lease.text
     readback = w.read("first")
     assert readback.status_code == 200, readback.text
