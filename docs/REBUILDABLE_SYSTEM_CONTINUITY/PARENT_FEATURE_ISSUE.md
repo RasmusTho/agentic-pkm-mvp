@@ -12,8 +12,7 @@ ledger and terminal acceptance writeback only.
 4. RSC-04 — `DIAGNOSE_MIRROR_CORRUPTION.md` — filed as #5292 (`agent:ready`) after RSC-02 and RSC-03.
 5. RSC-05 — `SPECIFY_MVR_NEW_BOOTSTRAP.md` — file after RSC-01 and reconcile with #2143.
 6. RSC-06 — `APPLY_MVR_NEW_BOOTSTRAP.md` — file only when the amended MVR prerequisites are live.
-7. RSC-07 — `BOOTSTRAP_BUILDEROPS_FROM_AUTHORITY.md` — file after RSC-01; link #5056 without
-   broadening its deployment scope.
+7. RSC-07 — `BOOTSTRAP_BUILDEROPS_FROM_AUTHORITY.md` — filed as #5712 (`agent:in-progress`) after RSC-01; coordinates with #5056 without broadening its deployment scope.
 8. RSC-08 — `VERIFY_CROSS_SYSTEM_TOTAL_LOSS.md` — file after RSC-04, RSC-06, and RSC-07.
 
 ## Verification Path

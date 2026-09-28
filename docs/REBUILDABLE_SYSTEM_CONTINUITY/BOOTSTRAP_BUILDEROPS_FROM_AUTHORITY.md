@@ -2,7 +2,7 @@
 name: Bootstrap BuilderOps From Authority
 description: Seed a fresh BuilderOps authority epoch, read GitHub truth, reconcile, and enable writers only after convergence.
 task_id: RSC-07
-github_issue:
+github_issue: 5712
 source_anchor: "docs/BUILDEROPS_CONTROL_PLANE/AUTHORITY_CUTOVER_PRODUCT_SEPARATION.md :: Builder-system authority activation"
 parent_capability: Rebuildable System Continuity
 prerequisites: [RSC-01]
