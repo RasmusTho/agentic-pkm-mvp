@@ -383,9 +383,11 @@ def test_effective_libpq_query_parameters_are_classified_as_production() -> None
 
     port_query = "postgresql:///app_test?host=127.0.0.1&port=15432"
     db_query = "postgresql:///safe?dbname=app"
-    # The shared restore classifier is explicitly out of scope for #4573.
-    assert not looks_like_prod_dsn(port_query)
-    assert not looks_like_prod_dsn(db_query)
+    # #5680 now emits file-resolved URLs with effective fields in the query.
+    # Both restore and test guards must recognize the same production target.
+    assert looks_like_prod_dsn(port_query)
+    assert looks_like_prod_dsn(db_query)
+    assert not looks_like_prod_dsn("postgresql:///safe?dbname=app_test&host=db&port=15434")
     assert _looks_like_prod_test_dsn(port_query)
     assert _looks_like_prod_test_dsn(db_query)
 

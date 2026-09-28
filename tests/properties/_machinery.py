@@ -1715,7 +1715,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "payload unchanged to put; the atomic-create facade caller constructs and classifies the "
         "payload before crossing this backing-store boundary (#4111)."
     ),
-    ("app/stores/postgres.py", 28): (
+    ("app/stores/postgres.py", 29): (
         "transport_passthrough: PgObjects.upsert forwards its caller-supplied payload arg to "
         "canonical_store.put (PgObjectStore.put) -> store_objects; the caller (vault_root:92/96) "
         "carries episode_ref in canonical_payload."

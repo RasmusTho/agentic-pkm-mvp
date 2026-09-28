@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from app.config.database import (
     RUNTIME_DATABASE_ENV_KEYS,
+    DatabaseCredentialError,
     explicit_runtime_database_url,
     resolve_runtime_database_url,
 )
@@ -112,6 +114,7 @@ def test_settings_resolved_dsn_is_not_treated_as_unconfigured(
 def test_skip_decision_never_contradicts_the_connection_resolver(
     monkeypatch: pytest.MonkeyPatch,
     naming_key: str,
+    tmp_path: Path,
 ) -> None:
     """Every key the connection's resolver reads must also make the write connect.
 
@@ -126,6 +129,10 @@ def test_skip_decision_never_contradicts_the_connection_resolver(
         naming_key,
         "postgresql://named.example/app" if naming_key in {"DATABASE_URL", "DB_DSN"} else "named",
     )
+    if naming_key == "DATABASE_PASSWORD_FILE":
+        password_file = tmp_path / "database-password"
+        password_file.write_text("fake-outbox-file-password", encoding="utf-8")
+        monkeypatch.setenv(naming_key, str(password_file))
     conn = _Connection(f"named-{naming_key}")
     monkeypatch.setattr(outbox_service, "conn_rw", lambda: conn)
 
@@ -136,6 +143,23 @@ def test_skip_decision_never_contradicts_the_connection_resolver(
     # The DSN the write would use is byte-identical to the one the connection
     # resolves, so the decision and the connection cannot disagree.
     assert explicit_runtime_database_url(os.environ) == resolve_runtime_database_url(os.environ)
+
+
+
+@pytest.mark.parametrize("file_state", ["missing", "empty"])
+def test_outbox_refuses_invalid_password_file_before_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, file_state: str,
+) -> None:
+    for key in RUNTIME_DATABASE_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("STORE_BACKEND", raising=False)
+    password_file = tmp_path / "database-password"
+    if file_state == "empty":
+        password_file.write_text("", encoding="utf-8")
+    monkeypatch.setenv("DATABASE_PASSWORD_FILE", str(password_file))
+    monkeypatch.setattr(outbox_service, "conn_rw", lambda: pytest.fail("must refuse before connection"))
+    with pytest.raises(DatabaseCredentialError, match="^database credential configuration refused$"):
+        outbox_service.write_outbox_event(_event(), idempotency_key="invalid-password-file")
 
 
 def test_write_outbox_event_skips_when_unconfigured(monkeypatch: pytest.MonkeyPatch) -> None:
