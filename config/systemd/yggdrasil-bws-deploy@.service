@@ -1,0 +1,26 @@
+[Unit]
+Description=Yggdrasil BWS deployment supervisor (%i)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current
+Environment=BWS_ACCESS_TOKEN_FILE=%d/bws-machine-account-token
+Environment=LLM_PROVIDER=mock
+Environment=LLM_PROVIDER_ENFORCE=0
+ExecStart=/usr/local/libexec/yggdrasil-bws-deploy serve %i
+ExecStopPost=/usr/local/libexec/yggdrasil-bws-deploy cleanup %i
+KillMode=control-group
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+StandardOutput=null
+StandardError=null
+
+[Install]
+WantedBy=multi-user.target

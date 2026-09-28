@@ -12,8 +12,35 @@ export PKM_EXPORT_OPERATOR_OLLAMA_HOST="${OLLAMA_HOST:-}"
 export PKM_EXPORT_OPERATOR_OPENAI_BASE_URL="${OPENAI_BASE_URL:-}"
 
 source "scripts/lib/load_env_defaults.sh"
-load_env_defaults_file ".env"
-load_env_defaults_file "config/runtime.defaults.env"
+if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+  # Validate explicit inputs before loading them or creating an output file.
+  # The shared resolver owns DSN grammar; this producer never reads a password.
+  LLM_PROVIDER=mock LLM_PROVIDER_ENFORCE=0 python3 - <<'BWS_PREFLIGHT'
+import os
+from pathlib import Path
+from app.ops.postgres_deploy_linux import validate_database_inputs
+try:
+    validate_database_inputs(os.environ, [Path('.env')])
+except Exception:
+    raise SystemExit('BWS database environment refused') from None
+BWS_PREFLIGHT
+  load_env_defaults_file ".env"
+  case "${PKM_ENVIRONMENT:-${COMPOSE_PROJECT_NAME:-}}" in
+    dev|pkm-dev) bws_database_name=app_dev ;;
+    test|pkm-test) bws_database_name=app_test ;;
+    prod|pkm-prod) bws_database_name=app ;;
+    *) echo "BWS runtime export requires an explicit channel" >&2; exit 78 ;;
+  esac
+  export DATABASE_URL="${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${bws_database_name}}}"
+  export DB_DSN="${DB_DSN:-${DATABASE_URL}}"
+  # Mask the legacy synthetic password default before it is loaded.
+  export POSTGRES_PASSWORD=""
+  load_env_defaults_file "config/runtime.defaults.env"
+  unset POSTGRES_PASSWORD PGPASSWORD
+else
+  load_env_defaults_file ".env"
+  load_env_defaults_file "config/runtime.defaults.env"
+fi
 
 # SIGNBOARD_ROOT is resolved by the launcher (start_full_system.sh) and only
 # forwarded here. This exporter deliberately runs no `app.*` import of its own:

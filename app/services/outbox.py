@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Literal, Mapping, Optional, Tuple
 
-from app.config.database import explicit_runtime_database_url
+from app.config.database import DatabaseCredentialError, explicit_runtime_database_url
 from app.db.errors import OutboxSchemaMissingError
 from app.events.models import Event, new_event
 from app.events.schema import OutboxEvent
@@ -129,6 +129,8 @@ def _open_conn():
     if conn_rw:
         try:
             conn = conn_rw()
+        except DatabaseCredentialError:
+            raise
         except Exception:
             pass
         else:
@@ -139,13 +141,9 @@ def _open_conn():
     url = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
     if not url:
         raise RuntimeError("DATABASE_URL or DB_DSN not set")
-    try:
-        from app.db.dsn import resolve_dsn
+    from app.db.dsn import resolve_dsn
 
-        url = resolve_dsn(url)
-    except Exception:
-        if url.startswith("postgresql+psycopg://"):
-            url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
+    url = resolve_dsn(url)
     return psycopg.connect(url, autocommit=True)
 
 

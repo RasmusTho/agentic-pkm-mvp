@@ -93,6 +93,17 @@ browser mode; presentation consumer #4836 must reuse this boundary unchanged.
 ## Secrets in CI
 - GitHub Actions workflow does not require secrets today. If future jobs do, add them through `secrets.*` and never hardcode fallbacks.
 - `requirements.txt` lists public packages; no private indexes are used.
+- BWS deployment tests use fake provider/transport adapters and synthetic canaries. CI does not
+  contact BWS, install VM tokens, start a database, or qualify a live channel. Compose checks render
+  configuration only; the PostgreSQL entrypoint fixture exercises upstream startup branches with
+  fake binaries and verifies both `POSTGRES_PASSWORD` and `PGPASSWORD` are absent from server
+  process environments. The upstream fixture requires Bash 4.2+; hosted Linux CI supplies that proof.
+- Governed Linux database DSNs are credential-free. The only PostgreSQL password source is the
+  authorized tmpfs Compose secret, read by the shared resolver in process memory. Raw provider or
+  driver failures are not output. Durable deployment journals and request bindings contain identifiers
+  and stages only. The admin credential stays on the designated agent host; VM readers use encrypted
+  systemd credentials through a file handle. See `docs/CLOUD_SECRET_PROVISIONING/README.md` for
+  the pending sole-writer, credential-restriction, and live qualification gates on #5667.
 
 ## Logs & PII
 - See `docs/PRIVACY.md` for masking policy. Default rule: no raw customer/note text in `extra`.

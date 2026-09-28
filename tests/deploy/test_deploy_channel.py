@@ -2882,3 +2882,330 @@ def test_test_channel_deploy_preflight_rejects_environment_override_clobbering_e
     assert "dev/test environment clobber preflight: blocked violation_count=1" in result.stdout
     assert not (root / "config/deploy/test.env").exists()
     assert not (tmp_path / "docker-called").exists()
+
+
+def _postgres_entrypoint_fixture(tmp_path, *, initialized=False, root_reexec=False):
+    """Execute the real upstream shell branches with fake init/client/server binaries."""
+    if subprocess.run(['bash', '-c', 'declare -g _bws_fixture=1'], capture_output=True).returncode:
+        pytest.skip('upstream PostgreSQL entrypoint requires Bash 4.2+; hosted Linux CI is the proof route')
+    data = tmp_path / 'data'
+    data.mkdir()
+    if initialized:
+        (data / 'PG_VERSION').write_text('16')
+    password = tmp_path / 'password'
+    password.write_text('fake-file-password-canary')
+    upstream = tmp_path / 'docker-entrypoint.sh'
+    upstream.write_text((REPO_ROOT / 'tests/fixtures/postgres_entrypoint/docker-entrypoint.sh').read_text() + '''
+# Fixture-only filesystem/initialization client seams; server starts stay real shell calls.
+docker_create_db_directories() { :; }
+docker_init_database_dir() { printf '%s' "$POSTGRES_PASSWORD" > "$PGDATA/role-password"; }
+docker_setup_db() { :; }
+docker_process_init_files() { :; }
+''')
+    wrapper = tmp_path / 'wrapper.sh'
+    wrapper.write_text((REPO_ROOT / 'scripts/postgres_entrypoint.sh').read_text()
+                       .replace('/usr/local/bin/docker-entrypoint.sh', str(upstream))
+                       .replace('/usr/local/bin/yggdrasil-postgres-entrypoint.sh', str(wrapper)))
+    wrapper.chmod(0o755)
+    binaries = tmp_path / 'bin'
+    binaries.mkdir()
+    for name in ('postgres', 'pg_ctl'):
+        program = binaries / name
+        program.write_text(f'''#!{sys.executable}
+import json,os,sys
+if '-C' in sys.argv:
+    print('scram-sha-256')
+else:
+    with open(os.environ['RECORD'], 'a') as f:
+        f.write(json.dumps({{'program': {name!r}, 'password': os.environ.get('POSTGRES_PASSWORD'), 'pgpassword': os.environ.get('PGPASSWORD')}})+'\\n')
+''')
+        program.chmod(0o755)
+    _write_executable(binaries / 'id', '#!/bin/bash\nprintf "%s\\n" "${FAKE_UID:-999}"\n')
+    _write_executable(binaries / 'ls', '#!/bin/bash\nexit 0\n')
+    _write_executable(binaries / 'gosu', '#!/bin/bash\nshift\nexport FAKE_UID=999\nexec "$@"\n')
+    record = tmp_path / 'server-env.jsonl'
+    env = {'PATH': str(binaries) + ':' + os.environ['PATH'], 'PGDATA': str(data),
+           'POSTGRES_PASSWORD_FILE': str(password), 'PGPASSWORD': 'fake-ambient-password-canary',
+           'RECORD': str(record), 'FAKE_UID': '0' if root_reexec else '999'}
+    return wrapper, data, password, record, env
+
+
+@pytest.mark.parametrize('root_reexec', [False, True])
+def test_postgres_initialization_server_process_environment_omits_password(tmp_path, root_reexec):
+    wrapper, data, password, record, env = _postgres_entrypoint_fixture(tmp_path, root_reexec=root_reexec)
+    result = subprocess.run(['bash', str(wrapper), 'postgres'], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    rows = [json.loads(line) for line in record.read_text().splitlines()]
+    assert any(row['program'] == 'pg_ctl' for row in rows)
+    assert all(row['password'] is None and row['pgpassword'] is None for row in rows)
+    assert (data / 'role-password').read_text() == password.read_text()
+    assert password.read_text() not in result.stdout + result.stderr
+    assert 'fake-ambient-password-canary' not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('initialized,root_reexec', [(False, False), (False, True), (True, False), (True, True)])
+def test_postgres_server_process_environment_omits_password(tmp_path, initialized, root_reexec):
+    wrapper, _, password, record, env = _postgres_entrypoint_fixture(tmp_path, initialized=initialized, root_reexec=root_reexec)
+    result = subprocess.run(['bash', str(wrapper), 'postgres'], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    rows = [json.loads(line) for line in record.read_text().splitlines()]
+    assert rows[-1] == {'program': 'postgres', 'password': None, 'pgpassword': None}
+    assert password.read_text() not in result.stdout + result.stderr
+
+
+def test_initialized_database_role_is_not_changed_by_password_file(tmp_path):
+    wrapper, data, password, _, env = _postgres_entrypoint_fixture(tmp_path, initialized=True)
+    (data / 'role-password').write_text('already-active-role-canary')
+    password.write_text('different-store-canary')
+    result = subprocess.run(['bash', str(wrapper), 'postgres'], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert (data / 'role-password').read_text() == 'already-active-role-canary'
+    assert 'different-store-canary' not in result.stdout + result.stderr
+
+
+def test_initialized_role_authentication_uses_password_file_and_password_auth(tmp_path):
+    from types import SimpleNamespace
+    from psycopg.conninfo import conninfo_to_dict
+    from app.ops.postgres_deploy import PostgresDeployError, password_authenticate
+    path = tmp_path / 'password'
+    path.write_text('fake-auth-canary')
+    env = {'DATABASE_URL': 'postgresql://app@db:5432/app_test', 'DATABASE_PASSWORD_FILE': str(path)}
+    calls = []
+
+    class Connection:
+        pgconn = SimpleNamespace(used_password=True)
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def cursor(self): return self
+        def execute(self, sql): calls.append(sql)
+        def fetchone(self): return (1,)
+
+    def connect(url, **kwargs):
+        assert conninfo_to_dict(url)['password'] == 'fake-auth-canary'
+        assert kwargs == {'connect_timeout': 5}
+        return Connection()
+
+    password_authenticate(env, connect=connect)
+    assert calls == ['SELECT 1']
+    Connection.pgconn.used_password = False
+    with pytest.raises(PostgresDeployError):
+        password_authenticate(env, connect=connect)
+    def wrong_password(*args, **kwargs):
+        raise RuntimeError('fake-auth-canary')
+    with pytest.raises(PostgresDeployError) as failure:
+        password_authenticate(env, connect=wrong_password)
+    assert 'fake-auth-canary' not in str(failure.value)
+    assert set(env) == {'DATABASE_URL', 'DATABASE_PASSWORD_FILE'}
+
+
+def _render_bws_compose(tmp_path, channel):
+    if shutil.which('docker') is None:
+        pytest.skip('Docker Compose config parser unavailable; hosted CI must render')
+    password = tmp_path / 'password'
+    password.write_text('fake-file-canary-not-in-compose')
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    env = {'PATH': os.environ['PATH'], 'HOME': os.environ['HOME'],
+           'WATCHER_RUNTIME_ENV_FILE': str(runtime),
+           'BWS_POSTGRES_PASSWORD_SOURCE': str(password),
+           'BWS_DATABASE_NAME': {'dev': 'app_dev', 'test': 'app_test', 'prod': 'app'}[channel],
+           'BWS_DATABASE_VOLUME': 'pkm-' + channel + '_fixture',
+           'LOCAL_UID': '1000', 'LOCAL_GID': '1000',
+           'INSTANCE_OWNERSHIP_HOST_STATE_DIR': str(tmp_path / 'ownership'),
+           'LLM_PROVIDER': 'mock'}
+    command = ['docker', 'compose', '--env-file', str(REPO_ROOT / 'config/deploy' / (channel + '.env')),
+               '-f', str(REPO_ROOT / 'docker-compose.yaml'), '-f', str(REPO_ROOT / ('docker-compose.' + channel + '.yml')),
+               '-f', str(REPO_ROOT / 'docker-compose.bws.yml'), '-p', 'pkm-' + channel, 'config', '--format', 'json']
+    result = subprocess.run(command, env=env, cwd=REPO_ROOT, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert password.read_text() not in result.stdout + result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
+def test_rendered_compose_uses_postgres_secret_file_without_value(tmp_path, channel):
+    rendered = _render_bws_compose(tmp_path, channel)
+    for service in rendered['services'].values():
+        environment = service.get('environment', {})
+        assert not environment.get('POSTGRES_PASSWORD')
+        assert not environment.get('PGPASSWORD')
+        for name in ('DATABASE_URL', 'DB_DSN'):
+            if environment.get(name):
+                from app.config.database import credential_free_database_fields
+                credential_free_database_fields(environment[name])
+    assert rendered['services']['db']['environment']['POSTGRES_PASSWORD_FILE'] == '/run/secrets/postgres_password'
+
+
+def test_postgres_secret_mount_is_limited_to_database_clients(tmp_path):
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    rendered = _render_bws_compose(tmp_path, 'test')
+    recipients = {name for name, service in rendered['services'].items()
+                  if any(item['source'] == 'postgres_password' for item in service.get('secrets', []))}
+    assert recipients == set(DATABASE_CONSUMERS.values())
+    for name in recipients:
+        assert rendered['services'][name]['restart'] == 'no'
+
+
+def test_database_services_map_to_declared_password_consumers():
+    import yaml
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS, load_host_secret_contract
+    overlay = yaml.safe_load((REPO_ROOT / 'docker-compose.bws.yml').read_text())
+    contract = load_host_secret_contract()
+    for channel in ('dev', 'test', 'prod'):
+        for consumer, service in DATABASE_CONSUMERS.items():
+            actual_service, variable = contract.file_binding(channel=channel, consumer=consumer, secret='postgres.password')
+            assert actual_service == service
+            assert overlay['services'][service]['environment'][variable] == '/run/secrets/postgres_password'
+
+
+def test_postgres_entrypoint_password_file_isolated_from_application_environment(tmp_path):
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    rendered = _render_bws_compose(tmp_path, 'dev')
+    for service in set(DATABASE_CONSUMERS.values()) - {'db'}:
+        environment = rendered['services'][service]['environment']
+        assert environment['DATABASE_PASSWORD_FILE'] == '/run/secrets/postgres_password'
+        assert 'POSTGRES_PASSWORD_FILE' not in environment
+        assert not environment.get('POSTGRES_PASSWORD')
+
+
+def _password_source_fixture(tmp_path, monkeypatch):
+    """Exercise actual file writes; model root metadata/UID switch without privilege."""
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    directory = tmp_path / 'tmpfs' / 'test'
+    cfg = SimpleNamespace(source_directory=directory, password_file=directory / 'password', uid=1011, gid=1012)
+    source = linux.PasswordSource(cfg)
+    events = []
+    def root_directory(path):
+        events.append(('root-directory', path))
+        path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    def command(argv, **kwargs):
+        events.append(('filesystem', argv))
+        return 'tmpfs\n'
+    actual_fstat = os.fstat
+    def fstat(fd):
+        info = actual_fstat(fd)
+        return SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_gid=cfg.gid, st_nlink=info.st_nlink)
+    actual_stat = Path.stat
+    def path_stat(path, *args, **kwargs):
+        info = actual_stat(path, *args, **kwargs)
+        if path == directory:
+            return SimpleNamespace(st_mode=info.st_mode, st_uid=0)
+        return info
+    def non_root_probe(argv, **kwargs):
+        events.append(('probe', kwargs))
+        assert os.read(kwargs['pass_fds'][0], 65537) == b'fake-file-canary'
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(linux, '_root_directory', root_directory)
+    monkeypatch.setattr(linux, '_command', command)
+    monkeypatch.setattr(os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(os, 'fchown', lambda fd, uid, gid: events.append(('chown', uid, gid)))
+    monkeypatch.setattr(os, 'fstat', fstat)
+    monkeypatch.setattr(Path, 'stat', path_stat)
+    monkeypatch.setattr(linux.subprocess, 'run', non_root_probe)
+    return source, cfg, events
+
+
+def test_postgres_secret_source_uses_root_only_tmpfs_and_service_gid(tmp_path, monkeypatch):
+    source, cfg, events = _password_source_fixture(tmp_path, monkeypatch)
+    source.materialize('fake-file-canary')
+    assert cfg.source_directory.stat().st_mode & 0o777 == 0o700
+    assert cfg.password_file.stat().st_mode & 0o777 == 0o440
+    assert ('chown', 0, cfg.gid) in events
+    assert any(event[0] == 'filesystem' for event in events)
+
+
+def test_postgres_secret_is_readable_by_configured_non_root_service_user(tmp_path, monkeypatch):
+    from app.ops.postgres_deploy import PostgresDeployError
+    source, cfg, events = _password_source_fixture(tmp_path, monkeypatch)
+    source.materialize('fake-file-canary')
+    probe = next(event[1] for event in events if event[0] == 'probe')
+    assert (probe['user'], probe['group'], probe['extra_groups']) == (cfg.uid, cfg.gid, [])
+    assert probe['capture_output'] is True
+    cfg.password_file.chmod(0o444)
+    with pytest.raises(PostgresDeployError):
+        source.verify()
+
+
+def test_postgres_secret_file_is_private_and_cleaned_after_consumers_stop(tmp_path, monkeypatch):
+    from app.ops.postgres_deploy import PostgresDeployError
+    source, cfg, _ = _password_source_fixture(tmp_path, monkeypatch)
+    source.materialize('fake-file-canary')
+    with pytest.raises(PostgresDeployError):
+        source.cleanup(all_consumers_stopped=False)
+    assert cfg.password_file.exists()
+    source.cleanup(all_consumers_stopped=True)
+    assert not cfg.password_file.exists()
+
+
+def test_postgres_secret_source_is_ephemeral_and_nonpersistent(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+    source, cfg, _ = _password_source_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(linux, '_command', lambda *args, **kwargs: 'ext4\n')
+    with pytest.raises(PostgresDeployError):
+        source.materialize('fake-file-canary')
+    assert not cfg.password_file.exists()
+    config = linux.LinuxConfig('test', tmp_path, tmp_path, 1000, 1000, '', '')
+    assert str(config.password_file) == '/run/yggdrasil/postgres/test/password'
+    assert str(config.journal.directory).startswith('/var/lib/')
+
+
+def test_compose_secret_source_lifecycle_covers_restart_recreate_and_boot(tmp_path, monkeypatch):
+    from app.ops.postgres_deploy import PostgresDeployError
+    source, cfg, _ = _password_source_fixture(tmp_path, monkeypatch)
+    source.materialize('fake-file-canary')
+    inode = cfg.password_file.stat().st_ino
+    source.materialize('fake-file-canary')
+    assert cfg.password_file.stat().st_ino == inode  # bind-mounted consumers retain their inode
+    with pytest.raises(PostgresDeployError):
+        source.materialize('different-password')
+    assert cfg.password_file.stat().st_ino == inode
+    source.cleanup(all_consumers_stopped=True)
+    source.materialize('fake-file-canary')  # a stopped/booted host rehydrates before activation
+    assert cfg.password_file.read_bytes() == b'fake-file-canary'
+    import yaml
+    overlay = yaml.safe_load((REPO_ROOT / 'docker-compose.bws.yml').read_text())
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    assert all(overlay['services'][name]['restart'] == 'no' for name in DATABASE_CONSUMERS.values())
+    unit = (REPO_ROOT / 'config/systemd/yggdrasil-bws-deploy@.service').read_text()
+    assert 'KillMode=control-group' in unit
+    assert 'ExecStopPost=/usr/local/libexec/yggdrasil-bws-deploy cleanup %i' in unit
+    assert 'LoadCredentialEncrypted=' in unit and 'BWS_ACCESS_TOKEN_FILE=%d/' in unit
+
+
+def _bws_runtime_export_fixture(tmp_path):
+    root = tmp_path / 'export'
+    for relative in ('scripts/export_runtime_env.sh', 'scripts/lib/load_env_defaults.sh', 'scripts/compose_env.py', 'config/runtime.defaults.env'):
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / relative, destination)
+    output = tmp_path / 'runtime.env'
+    env = {'PATH': os.environ['PATH'], 'HOME': os.environ['HOME'], 'PYTHONPATH': str(REPO_ROOT),
+           'HOST_SECRET_PROVIDER': 'bws', 'PKM_ENVIRONMENT': 'test', 'NO_VAULT_MODE': '1',
+           'RUNTIME_ENV_PATH': str(output), 'LLM_PROVIDER': 'mock', 'PYTEST_CURRENT_TEST': 'bws-producer'}
+    return root, output, env
+
+
+def test_bws_runtime_export_produces_only_credential_free_database_defaults(tmp_path):
+    root, output, env = _bws_runtime_export_fixture(tmp_path)
+    result = subprocess.run(['bash', 'scripts/export_runtime_env.sh'], cwd=root, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    text = output.read_text()
+    assert 'DATABASE_URL=postgresql+psycopg://app@db:5432/app_test' in text
+    assert 'DB_DSN=postgresql+psycopg://app@db:5432/app_test' in text
+    assert 'PASSWORD' not in text
+
+
+@pytest.mark.parametrize('location', ['ambient', 'dotenv'])
+def test_bws_runtime_export_rejects_password_dsn_before_output(tmp_path, location):
+    root, output, env = _bws_runtime_export_fixture(tmp_path)
+    forbidden = 'postgresql://app:fake-export-canary@db/app_test'
+    if location == 'ambient':
+        env['DATABASE_URL'] = forbidden
+    else:
+        (root / '.env').write_text('DATABASE_URL=' + forbidden + '\n')
+    result = subprocess.run(['bash', 'scripts/export_runtime_env.sh'], cwd=root, env=env, capture_output=True, text=True)
+    assert result.returncode != 0
+    assert 'fake-export-canary' not in result.stdout + result.stderr
+    assert not output.exists()

@@ -556,6 +556,14 @@ deploy_channel_compose() {
     compose_args+=(-f "${root}/docker-compose.scalar-rollback.yml")
   fi
 
+  if [ -f "/etc/yggdrasil/bws-deploy/${channel}.json" ]; then
+    export HOST_SECRET_PROVIDER=bws
+  fi
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+    (cd "${root}" && "${PYTHON:-python3}" -m app.ops.postgres_deploy_linux guard "${channel}" --compose-command "${1:-}") || return $?
+    compose_args+=(-f "${root}/docker-compose.bws.yml")
+  fi
+
   (
     cd "${root}" || exit 1
 
@@ -646,6 +654,13 @@ deploy_channel_compose() {
       unset DEVUI_VM102_RECEIPT_HOST_DIR
     fi
 
+    if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+      unset HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE
+      if _deploy_channel_needs_migration_secret "${channel}" "$@"; then
+        export HOST_SECRET_RUNTIME_ENV_FILE_MIGRATE="${BWS_MIGRATE_SECRET_ENV_FILE:?supervised migration secret handle required}"
+      fi
+    fi
+
     local -a compose_command
     compose_command=(
       docker compose
@@ -655,7 +670,7 @@ deploy_channel_compose() {
       "$@"
     )
 
-    if _deploy_channel_needs_capture_secret "${channel}" "$@"; then
+    if [ "${HOST_SECRET_PROVIDER:-}" != "bws" ] && _deploy_channel_needs_capture_secret "${channel}" "$@"; then
       compose_command=(
         "${PYTHON:-python3}" -m app.ops.host_secret_bootstrap
         --channel "${channel}"
@@ -664,7 +679,7 @@ deploy_channel_compose() {
       )
     fi
 
-    if _deploy_channel_needs_api_ingress_secret "${channel}" "$@" \
+    if [ "${HOST_SECRET_PROVIDER:-}" != "bws" ] && _deploy_channel_needs_api_ingress_secret "${channel}" "$@" \
         && _deploy_channel_api_ingress_bootstrap_available "${channel}" "${root}"; then
       # Outer wrap: materialize the api consumer's secret env file, then
       # re-export its handle under HOST_SECRET_RUNTIME_ENV_FILE_API before the
@@ -693,7 +708,7 @@ deploy_channel_compose() {
       )
     fi
 
-    if _deploy_channel_needs_migration_secret "${channel}" "$@"; then
+    if [ "${HOST_SECRET_PROVIDER:-}" != "bws" ] && _deploy_channel_needs_migration_secret "${channel}" "$@"; then
       # Outermost so any future nested consumer bootstrap may scrub the shared
       # handle without erasing this migrate-only alias. The alias is only an
       # env-file path; the bootstrap owns/removes the file and never exports a
