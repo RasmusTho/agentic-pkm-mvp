@@ -126,10 +126,11 @@ Authority and downstream boundaries:
   succeeds, the watcher persists non-empty executed IDs and then releases eligible effects. A staged conflict leaves the snapshot
   and acknowledgement effects untouched, and watcher telemetry classifies it as skipped/deferred.
   Receiptless/other write conflicts propagate as errors because the canonical write may already
-  have landed. The `panel-update` CLI follows the same prepare → write → commit ordering. Its
-  helper reads the exact note bytes and passes their `expected_version` through the filesystem
-  seam; this registered writer follow-up is delivered under #3570. It commits only after that
-  compare-and-swap write returns successfully.
+  have landed. The `panel-update` CLI follows the same prepare → write → commit ordering, but its
+  helper calls `write_note_from_absolute` without an `expected_version`, so a concurrent rewrite
+  can still resolve as last-write-wins. This absolute-path caller is outside #3570's registered
+  `write_note_relative` census and is not CAS-protected. It commits only after the canonical write
+  returns successfully.
   Post-write commit is not a filesystem transaction with the already-durable note: a later
   persistence or dispatch failure is surfaced as an update error and does not roll back the write.
 - Vault-watcher `--emit-only` is an explicit non-commit branch: it emits only
