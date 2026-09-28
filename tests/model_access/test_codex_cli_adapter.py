@@ -1510,6 +1510,39 @@ def test_current_cli_bundled_descriptor_schema_passes_no_inference_preflight(
     assert not trace.exists()
 
 
+def test_current_cli_bundled_catalog_legacy_upgrade_metadata_allows_exact_luna_preflight(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "trace.json"
+    catalog = _catalog("gpt-5.6-luna", "gpt-6-luna")
+    catalog["models"][0]["upgrade"] = {
+        "model": "gpt-6-astra",
+        "migration_markdown": None,
+    }
+    catalog_bytes = json.dumps(catalog).encode("utf-8")
+
+    binary = _fake_cli(
+        tmp_path / "codex-0.158.0",
+        trace_path=trace,
+        version="codex-cli 0.158.0",
+        catalog_output=catalog_bytes.decode("utf-8"),
+    )
+    profile = _profile_file(
+        tmp_path / "profile.json",
+        cli_version="codex-cli 0.158.0",
+    )
+    result = _executor(binary, home=home, profile=profile).preflight(
+        model="gpt-6-luna",
+        reasoning_effort="low",
+    )
+
+    assert result.cli_version == "codex-cli 0.158.0"
+    assert result.authentication_status == "chatgpt_subscription"
+    assert not trace.exists()
+
+
 def test_catalog_schema_drift_and_unknown_model_fail_before_model_execution(
     tmp_path: Path,
 ) -> None:
@@ -1592,6 +1625,72 @@ def test_catalog_schema_drift_and_unknown_model_fail_before_model_execution(
             )
         assert error.value.failure_code == "tool_surface_unknown"
         assert not trace.exists()
+
+
+def test_unreviewed_upgrade_shape_fails_before_model_execution(
+    tmp_path: Path,
+) -> None:
+    cases = (
+        (
+            "unknown_nested_key",
+            {"model": "gpt-6-astra", "migration_markdown": None, "extra": "nope"},
+        ),
+        (
+            "malformed_model_value",
+            {"model": 7, "migration_markdown": None},
+        ),
+        (
+            "malformed_migration_markdown_value",
+            {"model": "gpt-6-astra", "migration_markdown": []},
+        ),
+        (
+            "missing_model_key",
+            {"migration_markdown": None},
+        ),
+    )
+    for case, upgrade in cases:
+        home = tmp_path / case / "home"
+        home.mkdir(parents=True)
+        trace = tmp_path / case / "trace.json"
+        catalog = _catalog("gpt-5.6-luna")
+        catalog["models"][0]["upgrade"] = upgrade
+        binary = _fake_cli(
+            tmp_path / case / "codex",
+            trace_path=trace,
+            catalog_output=json.dumps(catalog),
+        )
+
+        with pytest.raises(CodexCliError) as error:
+            _executor(binary, home=home).execute(
+                model="gpt-5.6-luna",
+                reasoning_effort="low",
+                developer_instructions="developer",
+                user_prompt="user",
+            )
+
+        assert error.value.failure_code == "tool_surface_unknown"
+        assert not trace.exists()
+
+    duplicate_home = tmp_path / "duplicate" / "home"
+    duplicate_home.mkdir(parents=True)
+    duplicate_trace = tmp_path / "duplicate" / "trace.json"
+    duplicate_catalog = _catalog("gpt-5.6-luna", "gpt-5.6-luna")
+    duplicate_binary = _fake_cli(
+        tmp_path / "duplicate" / "codex",
+        trace_path=duplicate_trace,
+        catalog_output=json.dumps(duplicate_catalog),
+    )
+
+    with pytest.raises(CodexCliError) as error:
+        _executor(duplicate_binary, home=duplicate_home).execute(
+            model="gpt-5.6-luna",
+            reasoning_effort="low",
+            developer_instructions="developer",
+            user_prompt="user",
+        )
+
+    assert error.value.failure_code == "tool_surface_unknown"
+    assert not duplicate_trace.exists()
 
 
 def test_requested_reasoning_effort_must_be_declared_by_selected_model(
