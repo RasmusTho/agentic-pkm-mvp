@@ -222,6 +222,7 @@ class HostSecretController:
                         and record["source"] is None
                         and record["kind"] != "check"
                     ):
+                        pending = record
                         continue
                     if (
                         record["stage"] not in {"committed", "aborted"}
@@ -269,5 +270,30 @@ class HostSecretController:
             try:
                 evidence = readback(operation.operation_id, operation.kind, operation.target)
                 operation.finish(evidence)
+            finally:
+                operation._active = False
+
+    @contextmanager
+    def import_operation(self, target: str) -> Iterator[tuple[HostSecretOperation, bool]]:
+        """Admit or resume import under the same lock; the admin must prove terminality.
+
+        Resumption does not clear admission or attest a provider outcome. The import
+        implementation reads its durable per-send history before any new provider call.
+        All other callers continue to refuse the pending operation.
+        """
+        if target not in _TARGETS:
+            raise HostSecretAdmissionError()
+        with self._locked_journal() as descriptor:
+            pending = self._pending(descriptor)
+            if pending and (pending["kind"] != "import" or pending["target"] != target):
+                raise HostSecretAdmissionError()
+            operation = HostSecretOperation(
+                descriptor, str(pending["operation_id"]) if pending else str(uuid4()),
+                "import", target,
+            )
+            if not pending:
+                operation._record("prepared")
+            try:
+                yield operation, bool(pending and pending["stage"] == "sent")
             finally:
                 operation._active = False
