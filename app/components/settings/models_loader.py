@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
 DEFAULT_MODEL_REGISTRY_PATH = Path("docs/settings/models/registry.yaml")
@@ -50,14 +50,8 @@ class ModelDescriptor(BaseModel):
     notes: Optional[str] = None
     selection_group: Optional[str] = None
     allowed_transports: List[str] = Field(default_factory=list)
-    default_transport: str | None = None
+    explicit_eval_transports: List[str] = Field(default_factory=list)
     pricing: Optional[ModelPricing] = None
-
-    @model_validator(mode="after")
-    def validate_default_transport(self) -> "ModelDescriptor":
-        if self.default_transport is not None and self.default_transport not in self.allowed_transports:
-            raise ValueError("default transport must be admitted by allowed_transports")
-        return self
 
 
 def _read_yaml(path: Path) -> Dict[str, Any]:

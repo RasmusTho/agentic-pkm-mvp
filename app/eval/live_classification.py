@@ -130,7 +130,10 @@ def _billing_record(observed: list[dict[str, Any]], model: str) -> dict[str, Any
     ):
         return {"valid": False}
     # The bounded runner does not request cache writes/audio/tools or long context.
-    if any(details.get(k, 0) != 0 for k in ("audio_tokens", "cache_creation_tokens")):
+    if any(
+        details.get(k, 0) != 0
+        for k in ("audio_tokens", "cache_write_tokens", "cache_creation_tokens")
+    ):
         return {"valid": False}
     return {"valid": True, "served_model": served, **values}
 

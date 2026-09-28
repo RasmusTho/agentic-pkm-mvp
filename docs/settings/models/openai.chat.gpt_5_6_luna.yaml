@@ -4,8 +4,8 @@ kind: chat
 provider: openai
 model: gpt-5.6-luna
 selection_group: luna
-allowed_transports: [codex_cli_tailscale, openai_api]
-default_transport: codex_cli_tailscale
+allowed_transports: [codex_cli_tailscale]
+explicit_eval_transports: [openai_api]
 notes: Implicit Luna routing remains subscription-backed; evaluation may explicitly admit the API.
 pricing:
   standard_input_usd_per_million_tokens: 0.2

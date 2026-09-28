@@ -69,7 +69,7 @@ def test_gpt56_registry_has_unique_complete_descriptors() -> None:
         assert len(matches) == 1
         model = matches[0]
         assert (model.provider, model.kind, model.status) == ("openai", "chat", "active")
-        assert "openai_api" in model.allowed_transports
+        assert "openai_api" in model.allowed_transports + model.explicit_eval_transports
         pricing = model.pricing
         assert pricing is not None
         assert (pricing.standard_input_usd_per_million_tokens,

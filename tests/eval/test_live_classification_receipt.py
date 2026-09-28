@@ -121,13 +121,17 @@ def test_receipt_and_failures_are_secret_free(monkeypatch, capsys, caplog) -> No
     assert "secret-api-key" not in capsys.readouterr().out
 
 
-def test_real_api_seam_captures_usage_without_content_logging(monkeypatch) -> None:
+@pytest.mark.parametrize("cache_write_tokens", [0, 50])
+def test_real_api_seam_captures_usage_without_content_logging(
+    monkeypatch, cache_write_tokens
+) -> None:
     from app.components.llm import fabric
     from app.components.llm.router import LLMTaskIntent
     from app.services import llm
 
     calls = []
     client = Client()
+    client.metadata["usage"]["prompt_tokens_details"]["cache_write_tokens"] = cache_write_tokens
 
     class Response:
         status_code = 200
@@ -160,7 +164,9 @@ def test_real_api_seam_captures_usage_without_content_logging(monkeypatch) -> No
     receipt = live.run_live_classification(
         EvalLLMConfig(model="gpt-5.6-luna", mode="run", chat_client=real)
     )
-    assert receipt["complete"]
+    assert receipt["complete"] is (cache_write_tokens == 0)
+    if cache_write_tokens:
+        assert receipt["cost"] is None
     assert len(calls) == len(load_classification_cases())
     assert all(c["model"] == "gpt-5.6-luna" and c["service_tier"] == "default" for c in calls)
     assert all(c["reasoning_effort"] == "none" and "temperature" not in c for c in calls)
