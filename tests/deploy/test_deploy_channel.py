@@ -1312,6 +1312,8 @@ class _FakeCursor:
         self._rows = rows
 
     def execute(self, sql, params=None):
+        if os.environ.get("FAKE_OUTBOX_QUERY_UNAVAILABLE") == "1":
+            raise OperationalError("fake: initial schema unavailable")
         return self
 
     def fetchall(self):
@@ -1333,6 +1335,14 @@ class _FakeConnection:
 
 
 def connect(dsn, **kwargs):
+    expected = os.environ.get("FAKE_OUTBOX_EXPECTED_FIELDS")
+    if expected:
+        # Use the real libpq parser. The old permissive fake hid unsupported
+        # SQLAlchemy URLs, missing file passwords and untranslated query hosts.
+        from psycopg.conninfo import conninfo_to_dict
+        fields = conninfo_to_dict(dsn)
+        if fields != json.loads(expected):
+            raise OperationalError("fake: unexpected connection fields")
     # H3 (#3903 round 6): record the exact DSN every call actually received,
     # so a test can assert the real host:port rather than only "not the one
     # poison string" -- a hardcoded host-translation constant drifting from
@@ -1341,7 +1351,7 @@ def connect(dsn, **kwargs):
     log_path = os.environ.get("FAKE_OUTBOX_CONNECT_LOG")
     if log_path:
         with open(log_path, "a", encoding="utf-8") as handle:
-            handle.write(dsn + "\\n")
+            handle.write(("validated-file-connection" if expected else dsn) + "\\n")
     if os.environ.get("FAKE_OUTBOX_DB_UNREACHABLE") == "1":
         raise OperationalError("fake: db unreachable")
     # Regression guard for the ambient-env-contamination bug (#3903 round 3):
@@ -1464,6 +1474,42 @@ def _configure_prod_retry_preflight(
     else:
         env.pop("FAKE_OUTBOX_DB_UNREACHABLE", None)
         env["FAKE_OUTBOX_ROWS_JSON"] = json.dumps(list(rows or []))
+
+
+def _configure_bws_retry_driver(tmp_path: Path, env: dict[str, str], *, host: str = "db") -> None:
+    """Patch only connect; retain the real psycopg conninfo parser and resolver."""
+    import json
+    from urllib.parse import urlencode
+    pylib = tmp_path / "pylib"
+    (pylib / "psycopg.py").unlink()
+    # Avoid replacing the interpreter's sitecustomize hook. A tiny explicit
+    # launcher imports real psycopg then runs the unchanged preflight script.
+    (pylib / "fake_connection.py").write_text(_FAKE_PSYCOPG_MODULE)
+    launcher = tmp_path / "bws-python"
+    launcher.write_text(
+        "#!" + sys.executable + "\n"
+        "import os,runpy,sys\n"
+        "if not sys.argv[1].endswith('prod_deploy_retry_preflight.py'):\n"
+        f"    os.execv({env['PYTHON']!r},[{env['PYTHON']!r},*sys.argv[1:]])\n"
+        "import psycopg\n"
+        "from fake_connection import connect\n"
+        "psycopg.connect=connect\n"
+        "sys.argv=sys.argv[1:]\n"
+        "runpy.run_path(sys.argv[0],run_name='__main__')\n"
+    )
+    launcher.chmod(0o755)
+    env["PYTHON"] = str(launcher)
+    password = tmp_path / "postgres-password"
+    password.write_text("fake-preflight-canary")
+    password.chmod(0o600)
+    fields = {"host": host, "port": "5432", "user": "reporter", "dbname": "custom",
+              "sslmode": "require", "application_name": "bws-retry-check"}
+    env["DATABASE_URL"] = env["DB_DSN"] = "postgresql+psycopg:///?" + urlencode(fields)
+    env["BWS_POSTGRES_PASSWORD_SOURCE"] = str(password)
+    expected = dict(fields, password="fake-preflight-canary")
+    if host == "db":
+        expected.update(hostaddr="127.0.0.1", port="15432")
+    env["FAKE_OUTBOX_EXPECTED_FIELDS"] = json.dumps(expected)
 
 
 def test_deploy_preflights_companion_browser_before_pin_or_compose_mutation(
@@ -2998,7 +3044,7 @@ def test_initialized_role_authentication_uses_password_file_and_password_auth(tm
     assert set(env) == {'DATABASE_URL', 'DATABASE_PASSWORD_FILE'}
 
 
-def _render_bws_compose(tmp_path, channel):
+def _render_bws_compose(tmp_path, channel, overrides=None):
     if shutil.which('docker') is None:
         pytest.skip('Docker Compose config parser unavailable; hosted CI must render')
     password = tmp_path / 'password'
@@ -3013,6 +3059,7 @@ def _render_bws_compose(tmp_path, channel):
            'LOCAL_UID': '1000', 'LOCAL_GID': '1000',
            'INSTANCE_OWNERSHIP_HOST_STATE_DIR': str(tmp_path / 'ownership'),
            'LLM_PROVIDER': 'mock'}
+    env.update(overrides or {})
     command = ['docker', 'compose', '--env-file', str(REPO_ROOT / 'config/deploy' / (channel + '.env')),
                '-f', str(REPO_ROOT / 'docker-compose.yaml'), '-f', str(REPO_ROOT / ('docker-compose.' + channel + '.yml')),
                '-f', str(REPO_ROOT / 'docker-compose.bws.yml'), '-p', 'pkm-' + channel, 'config', '--format', 'json']
@@ -3209,3 +3256,24 @@ def test_bws_runtime_export_rejects_password_dsn_before_output(tmp_path, locatio
     assert result.returncode != 0
     assert 'fake-export-canary' not in result.stdout + result.stderr
     assert not output.exists()
+
+
+@pytest.mark.parametrize('overrides,expected', [
+    ({'DATABASE_URL': 'postgresql://url-user@url.example.invalid/url-db'}, 'postgresql://url-user@url.example.invalid/url-db'),
+    ({'DB_DSN': 'postgresql://dsn-user@dsn.example.invalid/dsn-db'}, 'postgresql://dsn-user@dsn.example.invalid/dsn-db'),
+    ({'DATABASE_URL': 'postgresql://url-user@url.example.invalid/url-db', 'DB_DSN': 'postgresql://dsn-user@dsn.example.invalid/dsn-db'}, 'postgresql://url-user@url.example.invalid/url-db'),
+])
+def test_bws_compose_preserves_database_alias_precedence(tmp_path, overrides, expected):
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    rendered = _render_bws_compose(tmp_path, 'test', overrides)
+    for service in set(DATABASE_CONSUMERS.values()) - {'db'}:
+        environment = rendered['services'][service]['environment']
+        assert environment['DATABASE_URL'] == environment['DB_DSN'] == expected
+
+
+@pytest.mark.parametrize('channel,database', [('dev', 'app_dev'), ('test', 'app_test'), ('prod', 'app')])
+def test_bws_compose_initialization_matches_empty_target_proof(tmp_path, channel, database):
+    rendered = _render_bws_compose(tmp_path, channel, {'POSTGRES_USER': 'foreign', 'POSTGRES_DB': 'foreign'})
+    environment = rendered['services']['db']['environment']
+    assert environment['POSTGRES_USER'] == 'app'
+    assert environment['POSTGRES_DB'] == database

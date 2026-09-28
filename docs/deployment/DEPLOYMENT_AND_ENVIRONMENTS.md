@@ -525,6 +525,9 @@ For failures before migration execution starts, the ordinary fail-closed recover
 
 ## Linux channel secret provisioning
 
+The empty-data exception is bound to the effective managed `db:5432` target and its default `app` role/channel database, without connection-option overrides. An empty local volume never proves an external or overridden target empty: these targets require real password authentication and cannot bootstrap a new BWS password. External-target authentication never starts or stops the unrelated local database. The governed BWS prod outbox-retry preflight uses the same file-aware resolver and host endpoint translation; invalid or missing file/connection configuration blocks deployment before pins or Compose mutation. After connection resolution, the existing #3903 policy for genuinely unavailable databases or queries remains in force, including first initialization; a successfully queried terminal-pending row blocks deployment. Legacy non-BWS behavior is unchanged.
+
+
 BWS-04 adds a governed Linux adapter around the existing channel deploy, migration, writer, and
 pin machinery. It does not authorize a live deploy or replace promotion/migration acknowledgement.
 Mac Keychain deployment remains unchanged. BWS-03 / #5679 still owns encrypted reader-token
@@ -557,7 +560,13 @@ worker loss, missing terminal/quiescence proof stays pending; a released kernel 
 and does not remove the channel admission directory.
 
 For initialized data, the candidate must authenticate to the active PostgreSQL role with real
-password authentication. After preflights, a stopped database may be started alone with `--no-deps`
+password authentication. The probe and Compose share one effective credential-free connection snapshot:
+process overrides precede deploy-pin values, then generated runtime values; within each source
+`DATABASE_URL` precedes `DB_DSN`. The selected role, database, host and connection options are
+preserved. Only Compose `db:5432` is translated to its channel's host-published TCP endpoint, with
+`hostaddr` retaining the original host for TLS identity checks. Ambiguous container-loopback
+endpoints cannot borrow a host-loopback proof and fail closed. A changed effective target during
+the operation invalidates admission; both runtime DSN aliases receive the same frozen value. After preflights, a stopped database may be started alone with `--no-deps`
 only after durable `authenticating`; its recovery/WAL writes count as deployment mutation. No new or
 recreated migration/application clients start before authentication succeeds. Wrong-password failure
 preserves a pre-existing running database, stops only a database started by the probe, and records
@@ -575,6 +584,9 @@ after host boot the supervisor waits for an authorized managed start, which rehy
 consumers start. `ExecStopPost` removes the source only after every consumer stops and Docker is
 quiescent; returning from Compose does not clean it. No persistent PostgreSQL password/env file is
 created. Other declared consumer environment handoffs are private tmpfs files removed after activation.
+
+A pending Heimdal raw-store migration rechecks its declared credential through the inherited
+supervised BWS guard; it never enters the Mac-only child-launch wrapper.
 
 The runtime exporter validates BWS direct DSNs before loading them and supplies credential-free
 channel defaults. `DATABASE_PASSWORD_FILE` is the sole application password source, resolved in

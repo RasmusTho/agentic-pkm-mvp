@@ -14,6 +14,7 @@ from tests.deploy.test_deploy_channel import (
     _HEIMDAL_FIXED_OVERLAY,
     _configure_dev_test_environment_clobber_preflight,
     _configure_prod_retry_preflight,
+    _configure_bws_retry_driver,
     _deploy_events,
     _deploy_harness,
     _run_deploy,
@@ -1876,6 +1877,9 @@ class _BwsVmEffects:
         assert password == 'fake-postgres-canary'
         self.events.append('materialized')
 
+    def local_database(self):
+        return True
+
     def database_running(self):
         return self.running
 
@@ -2299,3 +2303,305 @@ def test_bws_candidate_and_rollback_images_require_file_resolver_protocol(tmp_pa
         linux.require_file_protocol(tmp_path, '--unsafe')
     assert len(calls) == 2
     assert all(call[:4] == ['git', '-C', str(tmp_path), 'show'] for call in calls)
+
+
+@pytest.mark.parametrize('source', ['DATABASE_URL', 'DB_DSN', 'both', 'runtime', 'pin'])
+@pytest.mark.parametrize('host', ['db', 'database.example.invalid'])
+def test_linux_effects_authenticates_effective_compose_connection(tmp_path, monkeypatch, source, host):
+    from app.ops import postgres_deploy_linux as linux
+    from app.config.database import credential_free_database_fields
+    from app.ops.postgres_deploy import PostgresDeployError
+    cfg = linux.LinuxConfig('test', tmp_path, tmp_path / 'data', 1000, 1000, '', '')
+    (tmp_path / 'config/deploy').mkdir(parents=True)
+    pin = tmp_path / 'config/deploy/test.env'
+    pin.write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    for name in ('DATABASE_URL', 'DB_DSN', 'POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE'):
+        monkeypatch.delenv(name, raising=False)
+    override = f'postgresql://reporter@{host}:5432/custom?sslmode=verify-full&application_name=bound-probe'
+    if source == 'runtime':
+        (tmp_path / 'tmp-test').mkdir()
+        (tmp_path / 'tmp-test/runtime.env').write_text('DB_DSN=' + override + '\n')
+    elif source == 'pin':
+        with pin.open('a') as stream:
+            stream.write('DB_DSN=' + override + '\n')
+    else:
+        monkeypatch.setenv('DB_DSN' if source == 'DB_DSN' else 'DATABASE_URL', override)
+        if source == 'both':
+            monkeypatch.setenv('DB_DSN', 'postgresql://ignored@ignored.example.invalid/ignored')
+    proofs, compose_environments = [], []
+    monkeypatch.setattr(linux, 'password_authenticate', lambda env: proofs.append(env))
+    def command(argv, **kwargs):
+        compose_environments.append(kwargs['env'])
+        return ''
+    monkeypatch.setattr(linux, '_command', command)
+    effects = linux.LinuxEffects(cfg)
+    effects.authenticate()
+    effects.compose('config', '--format', 'json')
+    runtime = credential_free_database_fields(compose_environments[0]['DATABASE_URL'])
+    assert compose_environments[0]['DATABASE_URL'] == compose_environments[0]['DB_DSN']
+    assert runtime == {'user': 'reporter', 'dbname': 'custom', 'host': host, 'port': '5432',
+                       'sslmode': 'verify-full', 'application_name': 'bound-probe'}
+    authenticated = credential_free_database_fields(proofs[0]['DATABASE_URL'])
+    expected = dict(runtime)
+    if host == 'db':
+        expected.update(hostaddr='127.0.0.1', port='15434')
+    assert authenticated == expected
+    assert proofs[0]['DATABASE_PASSWORD_FILE'] == str(cfg.password_file)
+    # An effective-target change during the operation cannot borrow prior proof.
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://other@other.example.invalid/other')
+    with pytest.raises(PostgresDeployError):
+        effects.compose('up', '-d', 'api')
+    assert len(compose_environments) == 1
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
+@pytest.mark.parametrize('reject_recheck', [False, True])
+def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, channel, reject_recheck):
+    root, env, _ = _deploy_harness(tmp_path)
+    target = _commit_har_raw_migration(root, 'e7b4c9d2a6f1_heimdal_raw_representation.py')
+    env.update(FAKE_SHA=target, DEPLOY_ACK_FORWARD_ONLY='1', HOST_SECRET_PROVIDER='bws',
+               FAKE_SECURITY_EVENT_LOG=env['FAKE_DEPLOY_EVENT_LOG'])
+    _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
+    if channel == 'prod':
+        _configure_bws_retry_driver(tmp_path, env)
+    # Fake only the VM credential/FD adapter; run the actual deployment shell and
+    # its real pending-HAR classification, pin/migration and Compose branches.
+    (root / 'app/ops/postgres_deploy_linux.py').write_text('''
+import os,sys
+from pathlib import Path
+assert sys.argv[1] == 'guard'
+log = Path(os.environ['FAKE_DEPLOY_EVENT_LOG'])
+prior = log.read_text().count('bws-guard') if log.exists() else 0
+with log.open('a') as stream:
+    stream.write('bws-guard\\n')
+if os.environ.get('FAKE_BWS_REJECT_RECHECK') == '1' and prior == 1:
+    raise SystemExit(78)
+''')
+    handle = tmp_path / 'migration.env'
+    handle.write_text('HEIMDAL_RAW_STORE_KEY=' + 'a' * 64 + '\n')
+    handle.chmod(0o600)
+    env['BWS_MIGRATE_SECRET_ENV_FILE'] = str(handle)
+    if reject_recheck:
+        env['FAKE_BWS_REJECT_RECHECK'] = '1'
+    result = _run_deploy(root, env, target, channel=channel)
+    events = _deploy_events(env)
+    assert not any(event.startswith('security ') for event in events)
+    assert events.count('bws-guard') >= 2
+    if reject_recheck:
+        assert result.returncode == 78
+        assert not any(event.startswith('docker ') for event in events)
+        assert 'migration raw-key preflight failed' in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        second_guard = [i for i, event in enumerate(events) if event == 'bws-guard'][1]
+        first_docker = next(i for i, event in enumerate(events) if event.startswith('docker '))
+        assert second_guard < first_docker
+        assert any('exit-code-from migrate' in event for event in events)
+
+
+@pytest.mark.parametrize('host,empty,authenticated,blocked_key', [
+    ('db', False, False, None), ('db', True, False, None),
+    ('database.example.invalid', True, False, None), ('database.example.invalid', True, True, None),
+    ('127.0.0.2', True, True, 'host'), ('127.0.0.2', True, True, 'hostaddr'),
+    ('::ffff:127.0.0.2', True, True, 'host'), ('::ffff:127.0.0.2', True, True, 'hostaddr'),
+    ("host=@ygg-review dbname=app_test", True, True, 'dsn'),
+    ("host='' dbname=app_test", True, True, 'dsn'),
+    ("dbname=app_test", True, True, 'dsn'),
+    ("postgresql:///app_test", True, True, 'dsn'),
+    ("postgresql:///?host=", True, True, 'dsn'),
+    ("postgresql:///?host=%40ygg-review", True, True, 'dsn'),
+])
+def test_linux_effects_wrong_overridden_role_cannot_borrow_default_role_proof(tmp_path, monkeypatch, host, empty, authenticated, blocked_key):
+    from types import SimpleNamespace
+    from uuid import uuid4
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, DeployWorker
+    for key in ('DATABASE_URL', 'DB_DSN', 'POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE'):
+        monkeypatch.delenv(key, raising=False)
+    from urllib.parse import urlencode
+    fields = {'host': host, 'user': 'not-the-default-role', 'port': '5432', 'dbname': 'app_test', 'sslmode': 'require'}
+    if blocked_key == 'hostaddr':
+        fields.update(host='database.example.invalid', hostaddr=host)
+    monkeypatch.setenv('DB_DSN', host if blocked_key == 'dsn' else 'postgresql:///?' + urlencode(fields))
+    (tmp_path / 'config/deploy').mkdir(parents=True)
+    (tmp_path / 'config/deploy/test.env').write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    data = tmp_path / 'data'
+    data.mkdir()
+    if not empty:
+        (data / 'PG_VERSION').write_text('16')
+    source = tmp_path / 'tmpfs'
+    source.mkdir()
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    cfg = SimpleNamespace(channel='test', root=tmp_path, data_directory=data, uid=1000, gid=1000,
+                          password_file=source / 'password', source_directory=source, journal=journal,
+                          reader=lambda: None)
+    plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate'))
+    monkeypatch.setattr(linux, 'vm_selected_values', lambda selected, reader:
+                        {name: {'postgres.password': 'fake-role-canary'} if name in DATABASE_CONSUMERS else {}
+                         for name in selected.consumers})
+    commands, connections = [], []
+    def command(argv, **kwargs):
+        commands.append(argv)
+        if argv[0] == 'git':
+            return 'DATABASE_FILE_CREDENTIAL_PROTOCOL = 1\n'
+        if argv[1:3] == ['volume', 'inspect']:
+            return str(data)
+        return ''
+    monkeypatch.setattr(linux, '_command', command)
+    class Connection:
+        pgconn = SimpleNamespace(used_password=True)
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def cursor(self): return self
+        def execute(self, sql): assert sql == 'SELECT 1'
+        def fetchone(self): return (1,)
+    def connect(dsn, **kwargs):
+        fields = conninfo_to_dict(dsn)
+        connections.append(fields)
+        if fields['user'] != 'app' and not authenticated:
+            raise RuntimeError('fake-role-canary')
+        return Connection()
+    monkeypatch.setattr(psycopg, 'connect', connect)
+    effects = linux.LinuxEffects(cfg)
+    effects.lock_fd = 123
+    effects.source = SimpleNamespace(materialize=lambda value: cfg.password_file.write_text(value), verify=lambda: None)
+    activations = []
+    effects.activate = lambda selected: activations.append(selected)
+    # Actual production initialized() must not offer bootstrap for this target,
+    # even though the selected local volume may be genuinely empty.
+    assert effects.initialized() is True
+    receipt = DeployWorker(journal, effects).run(str(uuid4()), plan)
+    if blocked_key:
+        # A host-loopback server would accept this password, but that says
+        # nothing about the same address inside the workers' network namespace.
+        assert receipt.stage == 'aborted'
+        assert not connections and not activations
+        assert not any(command[-2:] in (['--no-deps', 'db'], ['stop', 'db']) for command in commands)
+        assert not any('deploy_channel.sh' in ' '.join(command) for command in commands)
+        assert not any(command[1:3] == ['volume', 'inspect'] for command in commands)
+        assert (tmp_path / 'config/deploy/test.env').read_text() == 'APP_IMAGE_TAG=' + 'a' * 40 + '\n'
+        return
+    assert receipt.stage == ('committed' if authenticated else 'aborted')
+    expected = {'user': 'not-the-default-role', 'password': 'fake-role-canary', 'dbname': 'app_test',
+                'host': host, 'port': '5432', 'sslmode': 'require'}
+    if host == 'db':
+        expected.update(hostaddr='127.0.0.1', port='15434')
+    assert connections == [expected]
+    assert bool(activations) is authenticated
+    if host == 'db':
+        assert any(command[-2:] == ['--no-deps', 'db'] for command in commands)
+        assert any(command[-2:] == ['stop', 'db'] for command in commands)
+    else:
+        assert not any(command[-2:] in (['--no-deps', 'db'], ['stop', 'db']) for command in commands)
+        assert not any(command[1:3] == ['volume', 'inspect'] for command in commands)
+    assert not any('deploy_channel.sh' in ' '.join(command) for command in commands)
+
+    # Exercise the real supervisor bootstrap admission, not a fake empty flag.
+    monkeypatch.setattr('app.ops.host_secret_bootstrap._resolve_bws_consumer_values', lambda *args: {})
+    operation = linux.SupervisedOperation(effects, str(uuid4()), plan, True)
+    with pytest.raises(linux.PostgresDeployError):
+        operation._run_locked()
+    assert not operation.ready.is_set()
+    assert operation.empty is False
+
+
+@pytest.mark.parametrize('host', ['db', 'database.example.invalid'])
+@pytest.mark.parametrize('failure', ['terminal_rows', 'password_file', 'unreachable', 'query_unavailable'])
+def test_bws_prod_retry_preflight_uses_file_connection_and_preserves_availability_policy(tmp_path, host, failure):
+    root, env, target = _deploy_harness(tmp_path)
+    env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _configure_prod_retry_preflight(root, env, tmp_path,
+        rows=[('panel.scan.requested', {'_worker_retry_count': 3}, 0)],
+        unreachable=failure == 'unreachable')
+    _configure_bws_retry_driver(tmp_path, env, host=host)
+    if failure == 'password_file':
+        Path(env['BWS_POSTGRES_PASSWORD_SOURCE']).unlink()
+    if failure == 'query_unavailable':
+        env['FAKE_OUTBOX_QUERY_UNAVAILABLE'] = '1'
+    # Only the external worker credential/lock seam is fake. The shell, real
+    # preflight/resolver, libpq parser and terminal-row classifier all run.
+    (root / 'app/ops/postgres_deploy_linux.py').write_text('import sys\nassert sys.argv[1] == "guard"\n')
+    pin = root / 'config/deploy/prod.env'
+    before = pin.read_bytes() if pin.exists() else None
+    result = _run_deploy(root, env, target, channel='prod')
+    if failure in {'unreachable', 'query_unavailable'}:
+        # #3903 intentionally allows a genuine outage/absent initial schema;
+        # malformed DSNs must never enter this driver-error policy by mistake.
+        assert result.returncode == 0, result.stdout + result.stderr
+        reason = 'db_unreachable' if failure == 'unreachable' else 'outbox_query_failed'
+        assert 'skipped:' + reason in result.stdout + result.stderr
+        assert Path(env['FAKE_OUTBOX_CONNECT_LOG']).read_text() == 'validated-file-connection\n'
+        return
+    assert result.returncode == 87, result.stdout + result.stderr
+    assert (pin.read_bytes() if pin.exists() else None) == before
+    assert not any(event.startswith('docker ') for event in _deploy_events(env))
+    assert 'fake-preflight-canary' not in result.stdout + result.stderr
+    assert 'skipped:' not in result.stdout + result.stderr
+    if failure == 'terminal_rows':
+        assert 'terminal_pending_count=1' in result.stdout + result.stderr
+        assert Path(env['FAKE_OUTBOX_CONNECT_LOG']).read_text() == 'validated-file-connection\n'
+    elif failure == 'password_file':
+        assert not Path(env['FAKE_OUTBOX_CONNECT_LOG']).exists()
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
+def test_linux_effects_empty_proof_is_bound_to_default_local_initialization(tmp_path, monkeypatch, channel):
+    from app.ops import postgres_deploy_linux as linux
+    for key in ('DATABASE_URL', 'DB_DSN', 'POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE'):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / 'config/deploy').mkdir(parents=True)
+    (tmp_path / 'config/deploy' / (channel + '.env')).write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    data = tmp_path / 'data'
+    data.mkdir()
+    cfg = linux.LinuxConfig(channel, tmp_path, data, 1000, 1000, '', '')
+    monkeypatch.setattr(linux, '_command', lambda argv, **kwargs:
+                        str(data) if argv[1:3] == ['volume', 'inspect'] else '')
+    effects = linux.LinuxEffects(cfg)
+    assert effects.local_database() is True
+    assert effects.initialized() is False
+    (data / 'PG_VERSION').write_text('16')
+    assert effects.initialized() is True
+
+
+@pytest.mark.parametrize('key', ['host', 'hostaddr'])
+@pytest.mark.parametrize('address', ['127.0.0.2', '::ffff:127.0.0.2'])
+def test_bws_prod_preflight_rejects_container_loopback_before_driver(tmp_path, key, address):
+    from urllib.parse import urlencode
+    root, env, target = _deploy_harness(tmp_path)
+    env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    _configure_bws_retry_driver(tmp_path, env)
+    fields = {'host': 'database.example.invalid', 'port': '5432', 'user': 'reporter', 'dbname': 'custom', key: address}
+    env['DATABASE_URL'] = env['DB_DSN'] = 'postgresql:///?' + urlencode(fields)
+    (root / 'app/ops/postgres_deploy_linux.py').write_text('import sys\nassert sys.argv[1] == "guard"\n')
+    result = _run_deploy(root, env, target, channel='prod')
+    assert result.returncode == 87, result.stdout + result.stderr
+    assert 'credential_configuration' in result.stderr
+    assert not Path(env['FAKE_OUTBOX_CONNECT_LOG']).exists()
+    assert not (root / 'config/deploy/prod.env').exists()
+    assert not any(event.startswith('docker ') for event in _deploy_events(env))
+    assert 'fake-preflight-canary' not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('dsn', [
+    "host=@ygg-review dbname=app_test", "host='' dbname=app_test", "dbname=app_test",
+    "postgresql:///app_test", "postgresql:///?host=", "postgresql:///?host=%40ygg-review",
+])
+def test_bws_prod_preflight_rejects_libpq_socket_and_default_targets_before_driver(tmp_path, dsn):
+    root, env, target = _deploy_harness(tmp_path)
+    env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    _configure_bws_retry_driver(tmp_path, env)
+    env['DATABASE_URL'] = env['DB_DSN'] = dsn
+    (root / 'app/ops/postgres_deploy_linux.py').write_text('import sys\nassert sys.argv[1] == "guard"\n')
+    result = _run_deploy(root, env, target, channel='prod')
+    assert result.returncode == 87, result.stdout + result.stderr
+    assert 'credential_configuration' in result.stderr
+    assert not Path(env['FAKE_OUTBOX_CONNECT_LOG']).exists()
+    assert not (root / 'config/deploy/prod.env').exists()
+    assert not any(event.startswith('docker ') for event in _deploy_events(env))
+    assert 'fake-preflight-canary' not in result.stdout + result.stderr

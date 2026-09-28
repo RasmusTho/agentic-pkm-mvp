@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 import os
 import stat
+from ipaddress import ip_address, IPv6Address
+from socket import inet_aton
 from urllib.parse import quote, urlencode
 
 from app.config.environment import ENV_DEV, ENV_PROD, ENV_TEST, active_environment
@@ -32,6 +34,41 @@ def credential_free_database_fields(value: str) -> dict[str, str]:
     if any(key in fields for key in ("password", "passfile", "service", "servicefile", "sslpassword")):
         raise DatabaseCredentialError()
     return fields
+
+
+def _namespace_local_address(value: str) -> bool:
+    name = value.casefold().rstrip(".")
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        address = ip_address(value)
+    except ValueError:
+        try:
+            # libpq's system resolver also accepts abbreviated, decimal, octal
+            # and hexadecimal IPv4 literals. Parse them without any DNS lookup.
+            address = ip_address(inet_aton(value))
+        except OSError:
+            return False
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_loopback or address.is_unspecified
+
+
+def host_database_fields(fields: Mapping[str, str], *, published_port: int) -> dict[str, str]:
+    """Bridge only the managed Compose endpoint, preserving TLS host identity."""
+    result = dict(fields)
+    if not result.get("host") or result["host"].startswith(("/", "@")) or any(
+        "," in result.get(key, "") for key in ("host", "hostaddr", "port")
+    ):
+        # Host/container socket namespaces and multi-endpoint fallback cannot
+        # be proven equivalent by this single managed-endpoint bridge.
+        raise DatabaseCredentialError()
+    if result.get("host") == "db" and result.get("port") == "5432" and not result.get("hostaddr"):
+        result.update(hostaddr="127.0.0.1", port=str(published_port))
+    elif any(_namespace_local_address(result.get(key, "")) for key in ("host", "hostaddr")):
+        # Container loopback and host loopback identify different endpoints.
+        raise DatabaseCredentialError()
+    return result
 
 
 def _file_password(path: str) -> str:

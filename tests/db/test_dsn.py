@@ -1,3 +1,5 @@
+import pytest
+
 from app.services import outbox as outbox_service
 from app.db.dsn import resolve_dsn, resolve_sqlalchemy_url
 
@@ -166,3 +168,42 @@ def test_direct_clients_and_outbox_cannot_bypass_file_resolver(monkeypatch, tmp_
     for resolver in (memory_dsn, store_dsn, backfill_dsn, outbox_service._open_conn):
         with pytest.raises(DatabaseCredentialError):
             resolver()
+
+
+@pytest.mark.parametrize("host", ["/var/run/postgresql", "db,external.example.invalid", "localhost", "127.0.0.1", "::1"])
+def test_host_database_probe_refuses_ambiguous_endpoint_translation(host):
+    from app.config.database import DatabaseCredentialError, host_database_fields
+    with pytest.raises(DatabaseCredentialError, match="database credential configuration refused"):
+        host_database_fields({"host": host, "port": "5432", "user": "app", "dbname": "app_test"}, published_port=15434)
+
+
+@pytest.mark.parametrize("key", ["host", "hostaddr"])
+@pytest.mark.parametrize("address", [
+    "127.0.0.2", "127.255.255.254", "::ffff:127.0.0.2", "::ffff:7f00:2",
+    "0:0:0:0:0:0:0:1", "127.1", "2130706434", "0x7f000002", "0177.0.0.2",
+    "LOCALHOST.", "0.0.0.0", "::",
+])
+def test_host_database_probe_rejects_semantic_loopback(key, address):
+    from app.config.database import DatabaseCredentialError, host_database_fields
+    fields = {"host": "database.example.invalid", "port": "5432", key: address}
+    with pytest.raises(DatabaseCredentialError):
+        host_database_fields(fields, published_port=15434)
+
+
+@pytest.mark.parametrize("address", ["192.0.2.8", "::ffff:192.0.2.8", "2001:db8::8", "database.example.invalid"])
+def test_host_database_probe_preserves_non_loopback_target(address):
+    from app.config.database import host_database_fields
+    fields = {"host": address, "port": "5432", "sslmode": "verify-full"}
+    assert host_database_fields(fields, published_port=15434) == fields
+
+
+@pytest.mark.parametrize("dsn", [
+    "host=@ygg-review dbname=app_test", "host='' dbname=app_test", "dbname=app_test",
+    "postgresql:///app_test", "postgresql:///?host=", "postgresql:///?host=%40ygg-review",
+    "postgresql://%40ygg-review/app_test", "postgresql:///?host=%2Fvar%2Frun%2Fpostgresql",
+])
+def test_host_database_probe_rejects_libpq_socket_and_default_targets(dsn):
+    from app.config.database import DatabaseCredentialError, credential_free_database_fields, host_database_fields
+    fields = credential_free_database_fields(dsn)
+    with pytest.raises(DatabaseCredentialError):
+        host_database_fields(fields, published_port=15434)

@@ -21,8 +21,9 @@ import sys
 import threading
 from typing import Any, Iterator
 from uuid import UUID
+from urllib.parse import urlencode, quote
 
-from app.config.database import credential_free_database_fields
+from app.config.database import credential_free_database_fields, host_database_fields
 from app.ops.bws_secret_reader import BwsReaderConfig, BwsSecretReader
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
 from app.ops.postgres_deploy import (
@@ -72,6 +73,42 @@ def database_input_files(cfg: LinuxConfig) -> list[Path]:
             runtime = compose_env_value(line.split('=', 1)[1])
     path = Path(runtime)
     return [pin, path if path.is_absolute() else cfg.root / path]
+
+
+def effective_database_fields(config: LinuxConfig, environment: Any) -> dict[str, str]:
+    """One alias/producer precedence for validation, authentication and Compose.
+
+    Explicit process overrides precede the pin and generated runtime file; within
+    each source DATABASE_URL precedes DB_DSN. Both aliases are validated first.
+    """
+    from scripts.compose_env import compose_env_value
+    paths = database_input_files(config)
+    validate_database_inputs(environment, paths)
+    sources = [dict(environment)]
+    for path in paths:
+        source = {}
+        if path.exists():
+            for line in path.read_text().splitlines():
+                match = re.match(r'^(?:export\s+)?(DATABASE_URL|DB_DSN)\s*=(.*)$', line.strip())
+                if match:
+                    source[match[1]] = compose_env_value(match[2])
+        sources.append(source)
+    explicit = next((source.get('DATABASE_URL') or source.get('DB_DSN')
+                     for source in sources if source.get('DATABASE_URL') or source.get('DB_DSN')), None)
+    fields = credential_free_database_fields(explicit) if explicit else {}
+    fields.setdefault('user', 'app')
+    # Only the no-override path owns the managed-db default. Explicit libpq
+    # DSNs without a host must reach the host-probe refusal, never gain proof
+    # for a silently substituted target. Empty hosts are preserved likewise.
+    if explicit is None:
+        fields.setdefault('host', 'db')
+    fields.setdefault('port', '5432')
+    fields.setdefault('dbname', {'dev': 'app_dev', 'test': 'app_test', 'prod': 'app'}[config.channel])
+    return fields
+
+
+def _database_url(fields: dict[str, str]) -> str:
+    return 'postgresql+psycopg:///?' + urlencode(fields, quote_via=quote)
 
 
 def require_file_protocol(root: Path, revision: str) -> None:
@@ -262,6 +299,7 @@ class LinuxEffects:
         self.consumer_values: dict[str, dict[str, str]] = {}
         self.lock_fd: int | None = None
         self.operation_id: str | None = None
+        self.database_fields: dict[str, str] | None = None
 
     def environment(self) -> dict[str, str]:
         cfg = self.config
@@ -278,6 +316,13 @@ class LinuxEffects:
                    BWS_DATABASE_VOLUME={'dev': 'pkm-dev_pgdata-dev', 'test': 'pkm-test_pgdata', 'prod': 'pkm-prod_pgdata'}[cfg.channel])
         # Reader credentials stay in the worker. Child programs get no token handle.
         env.pop('BWS_ACCESS_TOKEN', None)
+        fields = effective_database_fields(cfg, env)
+        if self.database_fields is not None and fields != self.database_fields:
+            raise PostgresDeployError()
+        self.database_fields = fields
+        # Pass the same immutable, value-free target through every Compose call;
+        # generated runtime values cannot override this environment snapshot.
+        env['DATABASE_URL'] = env['DB_DSN'] = _database_url(fields)
         return env
 
     def compose(self, *args: str) -> str:
@@ -309,8 +354,17 @@ class LinuxEffects:
         self.environment()
         return candidate
 
+    def local_database(self) -> bool:
+        self.environment()
+        fields = self.database_fields or {}
+        return fields.get('host') == 'db' and fields.get('port') == '5432' and not fields.get('hostaddr')
+
     def initialized(self) -> bool:
         cfg = self.config
+        if not self.local_database():
+            # Local PGDATA cannot prove an external target empty. Require actual
+            # auth, forbid bootstrap, and never start/stop the unrelated local DB.
+            return True
         # Inspect the actual existing named-volume source without creating one.
         volume = {'dev': 'pkm-dev_pgdata-dev', 'test': 'pkm-test_pgdata', 'prod': 'pkm-prod_pgdata'}[cfg.channel]
         observed = _command(['docker', 'volume', 'inspect', '--format', '{{.Mountpoint}}', volume]).strip()
@@ -327,7 +381,11 @@ class LinuxEffects:
                 raise PostgresDeployError()
         entries = list(cfg.data_directory.iterdir())
         if not entries:
-            return False
+            # The image initializes only this exact role/database. A different
+            # user, database, or connection option needs proof even on empty data.
+            expected = {'host': 'db', 'port': '5432', 'user': 'app',
+                        'dbname': {'dev': 'app_dev', 'test': 'app_test', 'prod': 'app'}[cfg.channel]}
+            return self.database_fields != expected
         if not (cfg.data_directory / 'PG_VERSION').is_file():
             raise PostgresDeployError()
         return True
@@ -347,11 +405,14 @@ class LinuxEffects:
 
     def authenticate(self) -> None:
         cfg = self.config
-        # Host-local TCP deliberately excludes trust/peer Unix-socket admission.
-        port = {'dev': 15433, 'test': 15434, 'prod': 15432}[cfg.channel]
-        name = {'dev': 'app_dev', 'test': 'app_test', 'prod': 'app'}[cfg.channel]
+        # Resolve through the same producer/alias boundary used by Compose, then
+        # translate only the known Compose-db endpoint to its host-published port.
+        # hostaddr preserves the original host for TLS identity verification.
+        self.environment()
+        fields = host_database_fields(self.database_fields or {},
+                                      published_port={'dev': 15433, 'test': 15434, 'prod': 15432}[cfg.channel])
         password_authenticate({'DATABASE_PASSWORD_FILE': str(cfg.password_file),
-            'DATABASE_URL': f'postgresql://app@127.0.0.1:{port}/{name}'})
+                               'DATABASE_URL': _database_url(fields)})
 
     def stop_database(self) -> None:
         self.compose('stop', 'db')

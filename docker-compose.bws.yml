@@ -3,6 +3,8 @@ services:
   db:
     restart: 'no'
     environment:
+      POSTGRES_USER: app
+      POSTGRES_DB: ${BWS_DATABASE_NAME:?channel database name required}
       POSTGRES_PASSWORD: null
       PGPASSWORD: null
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -35,10 +37,8 @@ services:
       POSTGRES_PASSWORD: null
       PGPASSWORD: null
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
-      DB_DSN: ${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
+      DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
+      DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
     - postgres_password
   api:
@@ -47,10 +47,8 @@ services:
       POSTGRES_PASSWORD: null
       PGPASSWORD: null
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
-      DB_DSN: ${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
+      DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
+      DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
     - postgres_password
   worker:
@@ -59,10 +57,8 @@ services:
       POSTGRES_PASSWORD: null
       PGPASSWORD: null
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
-      DB_DSN: ${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
+      DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
+      DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
     - postgres_password
   watcher:
@@ -71,10 +67,8 @@ services:
       POSTGRES_PASSWORD: null
       PGPASSWORD: null
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
-      DB_DSN: ${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
+      DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
+      DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
     - postgres_password
   heimdal-capture-watch:
@@ -83,10 +77,8 @@ services:
       POSTGRES_PASSWORD: null
       PGPASSWORD: null
       DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
-      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
-      DB_DSN: ${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel
-        database name required}}
+      DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
+      DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
     - postgres_password
 secrets:

@@ -699,6 +699,11 @@ heimdal_raw_migration_secret_preflight() {
   (
     cd "${ROOT}" || exit 1
     export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+    if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+      # The same-ID supervisor already owns admission and its project reader.
+      # Recheck through that inherited guard; the Mac child-launch path refuses BWS.
+      exec "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}"
+    fi
     exec "${PYTHON}" -m app.ops.host_secret_bootstrap \
       --channel "${channel}" \
       --consumer heimdal-raw-migrate \
