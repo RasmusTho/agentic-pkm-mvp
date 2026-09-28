@@ -1,15 +1,21 @@
 # Multi-vault runtime selection
 
-State: Active capability specification. Delivered: MVR-01A/01B/01C (#3853/#3854/#3855) mechanical
-substrate and authority cutover, MVR-02 (#3856) explicit instance default, and MVR-03 (#3857 plus #4524) the
-versioned request/session `ActiveContextSet` seam with its selection store, delegated-principal
-producer, fail-closed runtime floor, and explicit stopped-window deployment activation — and
-MVR-04 (#3858) non-authoritative dimension membership with all-or-nothing member resolution.
-Task 05 onward remains unstarted, so no global "multi-vault delivered"
-claim is allowed: production request-carrier propagation, binding-keyed persistence, and background
-lifecycle binding are still target state.
-Parent validation hub **#2143** remains blocked and must never be claimed as an implementation
-issue. The 17 executable children are filed as **#3853–#3869**.
+State: Active capability specification.
+Temporal class: strategic
+Review cadence: at each MVR child merge or stage-acceptance update
+Source of truth: this document for capability and stage decomposition; live Issues, PRs, and exact-SHA CI for delivery state
+Last reviewed: 2026-09-28
+Last verified against: main de4efaa3b6cce282ede722ed064b31b2e34200a7; Issues #3859, #3860, #4942; PR #4953
+
+Delivered: MVR-01A/01B/01C (#3853/#3854/#3855) mechanical substrate and authority cutover, MVR-02
+(#3856) explicit instance default, MVR-03 (#3857 plus #4524) the versioned request/session
+ActiveContextSet seam with its selection store, delegated-principal producer, fail-closed runtime
+floor, and explicit stopped-window deployment activation, and MVR-04 (#3858) non-authoritative
+dimension membership with all-or-nothing member resolution. All MVR-05A implementation children,
+including residual MVR-05A9 (#4942), are merged, but stage hub #3859 remains blocked on the aggregate
+isolation, classification, and non-skippable real-PostgreSQL evidence. Task 05 onward remains
+incomplete, so no global "multi-vault delivered" claim is allowed: production request-carrier
+propagation and background lifecycle binding are still target state.
 Doc role: Authoritative capability specification and feature-breakdown source of truth.
 Primary subsystem: WSP. Secondary boundaries: GOV, SFC, PDM, EBF, HKA, RCA, HIX, OEF.
 
@@ -326,7 +332,7 @@ hub. This allocation does not change #3854's exhausted repair ledger or claim pr
 | 02 | [RESOLVE_INSTANCE_DEFAULT_VAULT](RESOLVE_INSTANCE_DEFAULT_VAULT.md) | [#3856](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3856) | explicit default and fail-closed precedence | 01A–01C | Sol/high |
 | 03 | [VERSION_ACTIVE_CONTEXT_SELECTION](VERSION_ACTIVE_CONTEXT_SELECTION.md) | [#3857](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3857) | versioned request/session `ActiveContextSet` | 01A–01C, 02 | Sol/xhigh |
 | 04 | [GROUP_VAULT_BINDINGS_BY_DIMENSION](GROUP_VAULT_BINDINGS_BY_DIMENSION.md) | [#3858](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3858) | non-authoritative dimension membership and context resolution | 01A–01C, 03 | Sol/high design; Terra/high execution after contract freeze |
-| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3859](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3859) | binding-keyed persistence cutover — **stage hub**, delivered by the aggregate proof in 05A9 | 03, 04 | delivered |
+| 05A | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3859](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3859) | binding-keyed persistence cutover — **stage hub**; aggregate proof remains pending | 03, 04 | blocked — #3859 aggregate AC1–AC4 evidence pending |
 | 05A0 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4543](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4543) | `file_state` adoption and binding rekey | 03, 04 | delivered — PR #4550 |
 | 05A1 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4560](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4560) | `objects` / `agent_memories` adoption, runtime-DDL retirement | 05A0 | delivered — PR #4569 |
 | 05A2 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4576](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4576) | durable-table classification inventory and the revision-chain-derived architecture gate | 05A1 | Sol/high |
@@ -336,7 +342,7 @@ hub. This allocation does not change #3854's exhausted repair ledger or claim pr
 | 05A6 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4580](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4580) | per-binding shared/exclusive effect lease | 05A5 | Sol/xhigh |
 | 05A7 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4581](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4581) | outbox binding column and dual-key compatibility dedup | 05A6 | Sol/xhigh |
 | 05A8 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4582](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4582) | all-process fence, runtime floor, worker gate, owner-doc writebacks, stage closure | 05A7 | Sol/high |
-| 05A9 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4942](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4942) | measured residual: final live binding keys, dead-schema retirement, and exact aggregate proofs | 05A8, #4939 | delivered |
+| 05A9 | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#05a-child-decomposition) | [#4942](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4942) | measured residual: final live binding keys, dead-schema retirement, and aggregate test targets | 05A8, #4939 | delivered — child scope; stage evidence pending under 05A |
 | 05B | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3860](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3860) | request ingress, picker, reads, retrieval, and read-race fence | 05A, #3163 | Sol/high; Terra/high mechanical consumers |
 | 05C | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3861](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3861) | governed write target/token/receipt migration | 05B | Sol/xhigh |
 | 05D | [ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT](ROUTE_REQUESTS_THROUGH_ACTIVE_CONTEXT.md#bounded-implementation-issue-decomposition) | [#3862](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3862) | outbox producers, interim worker delivery, aggregate proof, owner docs | 05C | Sol/high; Terra/high mechanical consumers |
