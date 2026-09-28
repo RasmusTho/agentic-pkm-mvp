@@ -308,6 +308,15 @@ prior effect result by inference.
 
 ## Implementation tasks
 
+**Option 1 (#4035):** MVR-01B supplies the durable substrate and sealed entrypoints. Production
+coordination and engine-driven crash recovery proof are owned by transfer MVR-05C/#3861,
+removal/reactivation MVR-06B/#3864, and relocation MVR-06C/#3865. Each owner tests its actual
+coordinator and restart recovery after every durable phase and validates the owning registry,
+ledger, and consumer invariants; fixture-composed schema transactions do not prove engine delivery.
+No pre-01C engine is added. The three activation Issues retain the dependencies below and remain
+non-ready until their own contracts and prerequisites are satisfied; #2143 remains the validation
+hub. This allocation does not change #3854's exhausted repair ledger or claim protocol activation.
+
 | Order | Task | Issue | Adds | Dependency | Initial capability |
 | --- | --- | --- | --- | --- | --- |
 | 01A | [ESTABLISH_INSTANCE_VAULT_REGISTRY](ESTABLISH_INSTANCE_VAULT_REGISTRY.md#bounded-implementation-issue-decomposition) | [#3853](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3853) | registry identity/store, package relocation, recovery, and concurrency | none | Sol/high |

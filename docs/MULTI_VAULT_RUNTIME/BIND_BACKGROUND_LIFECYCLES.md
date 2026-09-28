@@ -285,6 +285,34 @@ dispatch only after the MVR-05 classification receipt and current
 binding/authority checks pass. A later stage never becomes observable before its producer,
 migration, preflight, and fail-loud gate merge together.
 
+### MVR-06B production protocol proof (Option 1)
+
+The activation slice owns the production removal/reactivation coordinator reached through
+`app/instance/runtime.py::InstanceRegistryRuntime.remove` and `reactivate_removed`, including its
+restart recovery. Inject process failure after every durable drain, reservation, final-scan,
+tombstone/reference-repair, lease-release, and reactivation/rebuild phase. Prove the source-owner
+registry/ledger, compatibility intent, historical lineage, and existing derived-state rebuild
+obligations converge without early access or a stranded lease. Hand-composed registry/ledger
+fixtures prove schema and mechanics only; they cannot satisfy this production-engine proof.
+
+Before this activation slice becomes ready, its extracted Issue must carry this coordinator,
+source-owner validation, and crash-phase requirement with its concrete Verify target. Its existing
+dependency floor remains binding; #4035 records the allocation without implementing the protocol.
+
+### MVR-06C production protocol proof (Option 1)
+
+The activation slice owns the production relocation coordinator reached through
+`app/instance/runtime.py::InstanceRegistryRuntime.relocate`, including its restart recovery.
+Inject process failure after every durable phase of identity validation, exclusive-lease
+coordination, locator/revision commit, and consumer reconciliation. Prove the source-owner
+registry/ledger and foreground/background consumers converge on one authorized root/revision,
+with no stale-root effect or mixed authority. Hand-composed registry/ledger fixtures prove schema
+and mechanics only; they cannot satisfy this production-engine proof.
+
+Before this activation slice becomes ready, its extracted Issue must carry this coordinator,
+source-owner validation, and crash-phase requirement with its concrete Verify target. Its existing
+dependency floor remains binding; #4035 records the allocation without implementing the protocol.
+
 ## Source Anchors
 
 - `docs/SETTINGS_SPINE/REBIND_ON_VAULT_SELECTION.md`
@@ -571,6 +599,24 @@ migration, preflight, and fail-loud gate merge together.
   at-least-once crash redelivery, and idempotency obligations in the same PR that activates them.
   - Verify: doc writeback at `docs/DB_SCHEMA.md :: DB Schema (Current Reality)` + doc writeback at
     `docs/EVENTS.md :: Outbox envelope (canonical)`
+
+- [ ] **MVR-06B:** The activation slice owns the production removal/reactivation coordinator reached through
+`app/instance/runtime.py::InstanceRegistryRuntime.remove` and `reactivate_removed`, including its
+restart recovery. Inject process failure after every durable drain, reservation, final-scan,
+tombstone/reference-repair, lease-release, and reactivation/rebuild phase. Prove the source-owner
+registry/ledger, compatibility intent, historical lineage, and existing derived-state rebuild
+obligations converge without early access or a stranded lease. Hand-composed registry/ledger
+fixtures prove schema and mechanics only; they cannot satisfy this production-engine proof.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_production_removal_and_reactivation_recover_after_every_durable_phase`
+
+- [ ] **MVR-06C:** The activation slice owns the production relocation coordinator reached through
+`app/instance/runtime.py::InstanceRegistryRuntime.relocate`, including its restart recovery.
+Inject process failure after every durable phase of identity validation, exclusive-lease
+coordination, locator/revision commit, and consumer reconciliation. Prove the source-owner
+registry/ledger and foreground/background consumers converge on one authorized root/revision,
+with no stale-root effect or mixed authority. Hand-composed registry/ledger fixtures prove schema
+and mechanics only; they cannot satisfy this production-engine proof.
+  - Verify: `tests/integration/test_multi_vault_background_lifecycle.py::test_production_relocation_recovers_after_every_durable_phase`
 
 ## Out of Scope
 

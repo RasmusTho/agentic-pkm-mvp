@@ -418,6 +418,20 @@ writes and their native envelope; 05D removes the translator only after every pr
 and proves no unscoped row appeared. No stage permits a legacy envelope, old scalar process, or
 un-revalidated read/write to cross its floor; independently safe explicit-global work may continue.
 
+### MVR-05C production protocol proof (Option 1)
+
+The activation slice owns the production transfer coordinator reached through
+`app/instance/runtime.py::InstanceRegistryRuntime.transfer_to` and `recover_transfer`.
+It must drive the source-owned drain, reference-repair, tombstone, destination-registration,
+lineage, and lease transitions through that coordinator and its restart recovery. Inject process
+failure after every durable phase and prove replay/compensation preserves one owner, the original
+source identity, destination lineage, and fail-closed access. Hand-composed registry/ledger
+fixtures prove schema and mechanics only; they cannot satisfy this production-engine proof.
+
+Before this activation slice becomes ready, its extracted Issue must carry this coordinator,
+source-owner validation, and crash-phase requirement with its concrete Verify target. Its existing
+dependency floor remains binding; #4035 records the allocation without implementing the protocol.
+
 ## Source Anchors
 
 - `docs/MULTI_VAULT_RUNTIME/README.md :: Active context and isolation`
@@ -772,6 +786,15 @@ pre-DecisionToken bridge as completion of full MVR-05C multi-binding governed wr
 - [ ] **MVR-05D:** The event owner contract describes the shipped binding/context envelope,
   routing class, binding-keyed idempotency, and producer/worker compatibility posture.
   - Verify: doc writeback at `docs/EVENTS.md :: Events`
+
+- [ ] **MVR-05C:** The activation slice owns the production transfer coordinator reached through
+`app/instance/runtime.py::InstanceRegistryRuntime.transfer_to` and `recover_transfer`.
+It must drive the source-owned drain, reference-repair, tombstone, destination-registration,
+lineage, and lease transitions through that coordinator and its restart recovery. Inject process
+failure after every durable phase and prove replay/compensation preserves one owner, the original
+source identity, destination lineage, and fail-closed access. Hand-composed registry/ledger
+fixtures prove schema and mechanics only; they cannot satisfy this production-engine proof.
+  - Verify: `tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_production_transfer_recovers_after_every_durable_phase`
 
 ## Out of Scope
 
