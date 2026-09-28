@@ -120,9 +120,9 @@ This stable heading is retained because parent Issue #4107 uses it as an accepta
 | 4 | `PERSIST_ANCHORED_TRANSCRIPT_AND_EXTRACTIONS` | [#4111](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4111) — implemented | durable transcript/extraction lineage, partial-failure policy, and D5 versioned companions; #4132 prerequisite delivered |
 | 5 | `PRODUCE_EVIDENCE_ANCHORED_SYNTHESIS_AND_CLAIMS` | [#4112](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4112) — governed implementation record | task 4; D6 resolved |
 | 6 | `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE` | [#4113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4113) — delivered by PR #4991 | task 4; D2/D3 resolved; D5 companion seam required |
-| 7 | `ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES` | [#4114](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4114) — `agent:blocked` | tasks 3/5 |
-| 8 | `EXTRACT_GATED_ONTOLOGY_PROPOSALS` | [#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — `agent:blocked` | task 5 |
-| 9 | `SELECT_TIMESTAMPED_KEY_MOMENTS` | [#4116](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4116) — `agent:blocked` | task 5 |
+| 7 | `ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES` | [#4114](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4114) — open / `agent:ready` | tasks 3/5 delivered; ready for pickup |
+| 8 | `EXTRACT_GATED_ONTOLOGY_PROPOSALS` | [#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — open / `agent:ready` | task 5 delivered; proposal-only |
+| 9 | `SELECT_TIMESTAMPED_KEY_MOMENTS` | [#4116](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4116) — open / `agent:ready` | task 5 delivered; timestamp-only, no media dependency |
 | 10 | `APPLY_GOVERNED_INTEREST_OVERLAY` | [#4117](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4117) — `agent:blocked` | task 5 + future vault-wide profile contract; D4 direction recorded |
 | 11 | `CAPTURE_OPT_IN_SOURCE_FRAMES` | [#4118](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4118) — `agent:blocked` | task 9; D1 resolved |
 | 12 | `EVALUATE_SOURCE_NOTE_QUALITY` | [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) — `agent:blocked` | final validation after tasks 1–11; therefore also blocked on task 10's future profile contract |
