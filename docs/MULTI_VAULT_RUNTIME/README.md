@@ -74,8 +74,9 @@ owner resumes; interrupted rotation recovers one complete generation and never c
 Registration uses a recoverable pending→registry-commit→active reservation protocol; lifecycle start proves the
 active reservation still matches its channel and root. The same physical content root cannot be
 active in two dev/test/prod/native ownership domains simultaneously, and nested roots cannot straddle
-those domains. Relocation is implemented but capability-gated until MVR-06C proves every foreground
-and background consumer uses the matching shared/exclusive effect-lease order. Explicit transfer
+those domains. Relocation is specified with a sealed entrypoint until MVR-06C implements its
+production engine and proves every foreground and background consumer uses the matching
+shared/exclusive effect-lease order. Explicit transfer
 remains capability-gated until MVR-05C activates foreground read/write ownership fencing. It then
 uses a production-derived source-channel inventory to close foreground ingress, drain and stop every
 vault-bound watcher, scalar worker, settings reload, outbox/ingest, Heimdal projection, API/CLI, and
@@ -425,16 +426,16 @@ Partial delivery remains fail-closed:
 - after issue 01C but before task 02, registrations exist but `last_active_vault_ref` remains the
   compatibility behavior; no registration is silently promoted to default;
 - after issue 01B and until issue 05C advances the foreground-ownership floor, cross-channel transfer
-  is implemented but production transfer requests fail capability-not-ready; the source lease cannot be
-  released while legacy foreground read/write paths remain unfenced. Once activated, a journaled
+  is specified with sealed entrypoints and production transfer requests fail capability-not-ready;
+  the source lease cannot be released while legacy foreground read/write paths remain unfenced. Once activated, a journaled
   transfer-only reservation excludes the root while source registration is retired to a tombstone and
   destination registration/lineage becomes durable, so ordinary duplicate-root admission is never
   bypassed and two live registrations/owners never coexist. MVR-06B upgrades the transfer journal
   before retiring the #3163 bridge so later transfers repair the then-authoritative background intent
   before source retirement and restart cannot resurrect a transferred binding;
 - after issue 01B and until issue 06B proves both foreground and background consumer floors, active
-  registration removal is implemented but production removal fails capability-not-ready without
-  changing registry/revision/ownership; only 06B may activate its drain/tombstone/release sequence.
+  registration removal is specified with sealed entrypoints and production removal fails
+  capability-not-ready without changing registry/revision/ownership; only 06B may activate its drain/tombstone/release sequence.
   Removal retains immutable binding/root/logical lineage, and later reactivation/rehome cannot mint
   around historical receipt/outbox provenance;
 - after task 02 but before task 03, default resolution is available only through explicit
