@@ -104,6 +104,18 @@ def test_luna_builder_binding_uses_gpt_6_luna_for_all_channels() -> None:
         )
         assert general_delivery.reasoning_effort == "xhigh"
 
+        legacy_approval = resolve_execution_target(
+            census,
+            channel=channel,
+            capability="luna",
+            model_id="gpt-5.6-luna",
+            selection_intent="general_delivery",
+        )
+        assert (legacy_approval.model, legacy_approval.reasoning_effort) == (
+            "gpt-5.6-luna",
+            "xhigh",
+        )
+
 
 def test_explicit_sol_fallback_keeps_model_specific_reasoning() -> None:
     target = resolve_execution_target(

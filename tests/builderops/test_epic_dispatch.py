@@ -1153,7 +1153,7 @@ def test_codex_tcd_route_resolves_explicit_gpt_6_astra(tmp_path: Path) -> None:
     assert default_command[default_command.index("--model") + 1] == "gpt-6-astra"
 
     invalid_runtime = dict(plan["context_packs"][0]["runtime"])
-    invalid_runtime["model"] = "gpt-5.6-luna"
+    invalid_runtime["model"] = "gpt-5.6-terra"
     invalid_pack = dict(plan["context_packs"][0])
     invalid_pack["runtime"] = invalid_runtime
     with pytest.raises(EpicDispatchError, match="not selectable"):
@@ -1276,7 +1276,7 @@ def test_legacy_low_cost_context_pack_uses_general_delivery_intent(
 
     launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
     assert launcher._tcd_route({"runtime": legacy_runtime}) == (
-        "gpt-5.6-luna",
+        "gpt-6-luna",
         "xhigh",
     )
 
@@ -1341,7 +1341,7 @@ def test_codex_launcher_rebinds_legacy_context_pack_to_current_intent_policy(
     launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
     model, reasoning = launcher._tcd_route({"runtime": legacy_runtime})
 
-    assert (model, reasoning) == ("gpt-5.6-luna", "xhigh")
+    assert (model, reasoning) == ("gpt-6-luna", "xhigh")
 
 
 def test_explicit_capability_override_can_select_terra_without_rewriting_intent(
@@ -1445,7 +1445,7 @@ def test_bounded_fast_shadow_preflight_uses_configured_route_and_preserves_launc
     assert pack["runtime"]["capability"] == "luna"
     launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
     command = launcher.command(pack)
-    assert command[command.index("--model") + 1] == "gpt-5.6-luna"
+    assert command[command.index("--model") + 1] == "gpt-6-luna"
     assert "_TCD_CODEX_ROUTE" not in inspect.getsource(epic_dispatch_module)
 
 
@@ -1858,7 +1858,7 @@ def test_phase2_canary_codex_launcher_normalizes_versioned_usage_limit() -> None
                 ]
             )
             return subprocess.CompletedProcess(args=command, returncode=1, stdout=stdout, stderr="")
-        assert model == "gpt-5.6-luna"
+        assert model == "gpt-6-luna"
         stdout = "\n".join(
             [
                 json.dumps({"type": "thread.started", "thread_id": "luna-5326"}),
@@ -1882,7 +1882,7 @@ def test_phase2_canary_codex_launcher_normalizes_versioned_usage_limit() -> None
 
     assert [command[command.index("--model") + 1] for command in commands] == [
         "gpt-5.3-codex-spark",
-        "gpt-5.6-luna",
+        "gpt-6-luna",
     ]
     assert receipt["stopped_reason"] == "worker-handoff"
     canary_receipt = receipt["sessions"][0]["execution_routing_canary_receipt"]

@@ -262,6 +262,7 @@ def test_builder_execution_profiles_use_tcd_default_ladder() -> None:
 
     for profiles in census.runtime_channels.builder_execution.values():
         assert profiles["luna"].model == "gpt-6-luna"
+        assert profiles["luna"].selectable_models == ["gpt-6-luna", "gpt-5.6-luna"]
         assert profiles["luna"].reasoning_effort == "xhigh"
         assert profiles["luna"].selection_intents == ["coordination", "general_delivery"]
         assert profiles["luna"].selection_intent_reasoning_efforts == {
