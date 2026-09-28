@@ -302,7 +302,9 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
             selected.import_stdin(args.channel, args.secret, stdin or sys.stdin)
         else:
             selected.generate(args.channel, args.secret)
-        print(json.dumps({'secret': args.secret, 'status': 'imported'}))
+        # A write receipt is constant: neither stdin nor caller arguments flow
+        # into output. Consumer checks separately report canonical logical IDs.
+        print(json.dumps({'status': 'imported'}))
         return 0
     except Exception:
         print('secret administration refused; operation may remain pending', file=sys.stderr)

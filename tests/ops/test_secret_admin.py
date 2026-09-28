@@ -91,6 +91,7 @@ def test_external_identity_imports_from_stdin_without_value_disclosure(setup, ca
     assert main(['import', 'dev', 'openai.api-key', '--stdin'], admin=admin, stdin=StringIO(CANARY)) == 0
     assert all(copy.value == CANARY for copy in provider.values.values())
     output = capsys.readouterr()
+    assert json.loads(output.out) == {'status': 'imported'}
     assert CANARY not in output.out + output.err
     assert main(['import', 'dev', 'openai.api-key', CANARY], admin=admin) == 1
     assert CANARY not in str(capsys.readouterr())
