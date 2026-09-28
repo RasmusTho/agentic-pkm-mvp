@@ -22,7 +22,7 @@ Add `secrets check <channel> --consumer <consumer>`, `secrets import <channel> <
 
 Import reads one value from stdin and updates only BWS; issuer-side credential creation/rotation remains external. Before any active update, append prior-value snapshots for present project copies and value-free `previous_state=absent` tombstones for absent copies. For paired imports, persist both project pre-states and a non-secret operation ID/prepared event before either BWS write. Include that operation ID in a machine-readable, non-secret item-note marker in the same request as each value update, preserving owner note text. The chosen protected local append-only history backend is implementation-defined, but an append counts as durable only after a flush/fsync-equivalent commit returns. A provider success response or matching operation marker is evidence that a target write committed. A typed rejection known to precede commit proves no target change. A lost acknowledgment or process interruption after a request was sent is indeterminate: readback without the marker does not prove that the request cannot still commit. In that state, do not compensate, retry, start a fresh import, check selected BWS values, or deploy; keep the journal pending. Resume only after every sent request has an authoritative terminal outcome. When all effects are known, compensate confirmed changed copies to their recorded pre-state (restoring a snapshot or deleting a formerly absent copy) under the same exclusive lock, or reconcile with a fresh stdin import and retain history.
 
-Admin writes use an authenticated request-body interface. The BWS CLI create/edit forms are not used to send values because they place values in command arguments; default CLI responses are not forwarded. The admin credential is resolved from the agent host Keychain and is never installed on a VM. Protected production data-encryption secrets remain refused until the owner decision is recorded in #5667 and a separate approved task defines their exact lifecycle.
+Admin writes use an authenticated request-body interface. The BWS CLI create/edit forms are not used to send values because they place values in command arguments; default CLI responses are not forwarded. The admin credential is resolved from the agent host Keychain and is never installed on a VM. Protected production data-encryption secrets remain refused under the owner-delegated deferral in #5667 until a safe rekey path and separately approved lifecycle task exist. Archive-pass retains its separate owner-policy gate.
 
 BWS-01 supplies the shared stable, owner-only agent-host operation lock and value-free pending-operation journal. Every supported secrets check/import/generate/rotate, token push, and deployment dispatch acquires that same exclusive lock. The lock is outside Git and iCloud and coordinates cooperating entrypoints on this host only; it cannot fence another host, direct BWS client, or an already-sent provider request. The parent owner/live-qualification gate must approve one designated BWS admin writer and prove its credential is restricted to that controller, or require shared fencing before deploy admission. BWS-02 holds the host lock from before reading either shared copy through durable pre-state history, writes, terminal provider outcomes, compensation, and terminal journal receipt. The deploy controller holds it from before preflight through VM recheck, secret materialization, and matching durable remote Compose receipt. Lock order is agent-host operation lock, then VM per-channel lock; BWS-02 never acquires a VM lock. Direct VM deploy/secret-resolution bypass and an unqualified second controller are unsupported.
 
@@ -65,8 +65,8 @@ A value-free tool can still leak credentials through process listings, exception
   - Verify: `tests/ops/test_secret_admin.py::test_shared_import_unknown_write_outcome_stays_pending_and_blocks_recovery`
   - Verify: `tests/ops/test_secret_admin.py::test_delayed_shared_write_cannot_land_after_recovery_import`
   - Verify: `tests/deploy/test_deploy_channel_script.py::test_deploy_waits_for_in_progress_shared_import_and_rechecks_parity`
-- [ ] Protected production raw-store-key and archive-pass writes remain refused while the owner decision is unresolved, and initialized PostgreSQL credentials cannot be rotated by BWS alone.
-  - Verify: `tests/ops/test_secret_admin.py::test_unresolved_protected_rotation_is_refused_without_value_disclosure`
+- [ ] Protected production raw-store-key and archive-pass writes remain refused under the deferred lifecycle policy in #5667, and initialized PostgreSQL credentials cannot be rotated by BWS alone.
+  - Verify: `tests/ops/test_secret_admin.py::test_deferred_protected_key_rotation_is_refused_without_value_disclosure`
   - Verify: `tests/ops/test_secret_admin.py::test_initialized_postgres_password_cannot_be_rotated`
 - [ ] Admin write calls keep secret values out of argv, stdout, stderr, and receipts.
   - Verify: `tests/ops/test_secret_admin.py::test_admin_write_value_never_enters_argv_or_output`
@@ -89,6 +89,51 @@ Run the named tests in tests/ops/test_secret_admin.py with fake BWS adapters and
 - docs/SECURITY.md
 - app/ops/host_secret_contract.py
 - app/ops/host_secret_bootstrap.py
+
+## Repository implementation boundary (BWS-02)
+
+The repository command is `scripts/secrets check <channel> --consumer <consumer>`
+(repeat `--consumer` to select multiple consumers) and
+`scripts/secrets import <channel> <logical-secret> --stdin`. Supply the exact value
+through stdin, without a trailing newline. No command accepts a value argument.
+`python -m app.ops.secret_admin` exposes the same command surface.
+
+The agent-host adapter uses the pinned Bitwarden Python SDK's in-process authenticated
+request bodies, with no SDK state cache. Non-secret project identifiers are supplied by
+`BWS_ORGANIZATION_ID`, `BWS_NON_PROD_PROJECT_ID` and `BWS_PROD_PROJECT_ID`. The existing
+admin token must be provisioned separately in the agent-host macOS Keychain under service
+`yggdrasil.bws-admin`, account `admin.token`. This command does not create accounts/tokens,
+install VM credentials, or qualify a live controller. The VM's project-only BWS reader
+remains separate and never receives the admin token.
+
+Prior values and owner notes are stored only in the controller's protected, mode-0600
+append-only `secret-history.jsonl`, under its fixed owner-only state directory outside
+Git/iCloud. They are not copied to the value-free `operations.jsonl`, output, diagnostic
+logs, or receipts. Every snapshot/tombstone and send outcome is flushed with `fsync`;
+a partial record or failed persistence refuses further administration. No automatic
+history cleanup or value export is provided. Operators must protect this durable history
+as credential material; the command does not claim host encryption or live qualification.
+
+Fresh imports can resume a pending import of the same logical identity only when every
+recorded send has a durable authoritative terminal result. They snapshot current copies
+and retain a link to the previous attempt; they never replay old compensation. The SDK
+has no authoritative request-terminality query exposed here, so an SDK exception or
+process loss between send and durable acknowledgment remains pending. Matching note
+markers, absent copies, and timeouts cannot clear it. The conservative adapter does not
+infer a pre-commit rejection from provider error strings. An operation-specific adapter
+may provide a typed pre-commit rejection; only then may confirmed copies be compensated.
+
+The current generation allowlist is empty: all declared identities are externally issued,
+protected Heimdal material, or `postgres.password`. Consequently `generate` and `rotate`
+refuse every current identity. Import can preserve an already-active database password;
+BWS-04 alone owns its separately guarded first initialization. Production raw-store-key
+writes and all archive-pass writes remain refused under the delegated deferral in #5667.
+
+`SecretAdmin.check_selected` is the lock-bound preflight seam for BWS-04. Tests exercise
+that seam and the real controller together; VM/Compose wiring and live deployment
+admission remain BWS-04 and parent #5667 responsibilities. This slice does not claim an
+integrated or live-qualified deployment path. The local lock refuses a concurrent caller;
+that caller must wait and retry admission, then recheck parity after the import finishes.
 
 ## Related GitHub Issues
 
