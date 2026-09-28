@@ -4,9 +4,9 @@ description: The operator control surface — pause/resume with always-visible s
 task_id: SCREEN-06
 source_anchor: docs/HEIMDAL_SCREEN_STREAM/README.md :: Owner ruling (pause + exclusion controls, derive-and-discard)
 parent_capability: Heimdal Screen Stream
-prerequisites: [SCREEN-01, SCREEN-03]
-depends_on: [DEFINE_SCREEN_OBSERVATION_CONTRACT.md, BUILD_MACOS_OBSERVER_CLIENT.md]
-can_parallelize_with: [PROJECT_TIME_SPEND_ANALYSIS]
+prerequisites: [SCREEN-01]
+depends_on: [DEFINE_SCREEN_OBSERVATION_CONTRACT.md]
+can_parallelize_with: [DERIVE_ACTIVITY_OBSERVATIONS.md]
 ---
 
 # Control Surface and Exclusions
@@ -110,4 +110,4 @@ control state is lost.
 
 ## Related GitHub Issues
 
-One issue: `[Heimdal Screen Stream] control-surface-and-exclusions: visible pause + app/scope exclusions + retention tunables, receipted`. Blocked until SCREEN-01 and SCREEN-03 merge (∥ SCREEN-05). **Sonnet-tier** (settings-governed control surface + receipts over the existing Settings Spine). The client-side half of pause/exclusion enforcement may transfer to Bifrost with SCREEN-03. See scratchpad draft.
+One issue: `[Heimdal Screen Stream] control-surface-and-exclusions: visible pause + app/scope exclusions + retention tunables, receipted` (#3342). It depends on SCREEN-01 (#3343) and can proceed before SCREEN-03. SCREEN-03 consumes these governed settings; its native implementation is tracked in [Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72), with #3341 retained as the Heimdal validation pointer. **Sonnet-tier** (settings-governed control surface + receipts over the existing Settings Spine). See scratchpad draft.

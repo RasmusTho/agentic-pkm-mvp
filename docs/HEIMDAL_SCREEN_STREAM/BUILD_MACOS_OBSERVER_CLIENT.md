@@ -4,8 +4,8 @@ description: The reference macOS desktop observer — screen-capture cadence, fr
 task_id: SCREEN-03
 source_anchor: docs/HEIMDAL_SCREEN_STREAM/README.md :: Topology (the observer is a native/local client)
 parent_capability: Heimdal Screen Stream
-prerequisites: [SCREEN-01]
-depends_on: [DEFINE_SCREEN_OBSERVATION_CONTRACT.md]
+prerequisites: [SCREEN-01, SCREEN-06]
+depends_on: [DEFINE_SCREEN_OBSERVATION_CONTRACT.md, CONTROL_SURFACE_AND_EXCLUSIONS.md]
 can_parallelize_with: [DERIVE_ACTIVITY_OBSERVATIONS]
 ---
 
@@ -20,11 +20,12 @@ widget (menu-bar app vs launchd daemon is an implementation choice for the Bifro
 
 **Client home = Bifrost (ADR-0050).** A native macOS client is a constituent-surface client; per
 ADR-0050 its home is the governed **Bifrost** repo (topology C), built by the Builder System under
-ecosystem governance in the Swift/iOS toolchain. **This issue may be transferred to the `bifrost`
-repo** and delivered there; it is specified here because the capability spec lives here and the client
-builds against this repo's SCREEN-01 host contract. If delivered in Bifrost, its verification runs in
-the Bifrost CI (Swift build + test + lint per ADR-0050 §1), and its validation receipt is still posted
-to this capability's parent feature issue (single tracking source until Bifrost has its own board).
+ecosystem governance in the Swift/iOS toolchain. The native implementation is tracked by
+[Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72); Heimdal #3341 remains its parent
+validation pointer. The client builds against this repo's SCREEN-01 host contract and consumes the
+governed pause/exclusion/retention settings from SCREEN-06. Verification runs in Bifrost CI (Swift
+build + test + lint per ADR-0050 §1), and its validation receipt is posted to #3341 and parent feature
+issue #3340.
 
 ## What This Task Does
 
@@ -128,4 +129,4 @@ Two durability-sensitive surfaces this task owns:
 
 ## Related GitHub Issues
 
-One issue: `[Heimdal Screen Stream] macos-observer-client: cadence + metadata + pause + exclusions + durable offline buffer`. Ready after SCREEN-01 merges (∥ SCREEN-02). **May transfer to the `bifrost` repo.** External-boundary/client work; likely **opus-tier** (durable buffer + pause fail-safe + capture-time exclusion are correctness-critical at an external boundary). See scratchpad draft.
+Heimdal #3341 is the validation pointer for the native implementation tracked by [Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72). Bifrost #72 depends on SCREEN-01 (#3343) and SCREEN-06 (#3342), and can proceed in parallel with SCREEN-02 after those contracts are delivered. External-boundary/client work; likely **opus-tier** (durable buffer + pause fail-safe + capture-time exclusion are correctness-critical at an external boundary). See scratchpad draft.
