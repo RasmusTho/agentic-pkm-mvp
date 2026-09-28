@@ -11,20 +11,20 @@ services:
       DATABASE_URL: null
       DB_DSN: null
     secrets:
-    - postgres_password
+      - postgres_password
     entrypoint:
-    - /bin/bash
-    - /usr/local/bin/yggdrasil-postgres-entrypoint.sh
+      - /bin/bash
+      - /usr/local/bin/yggdrasil-postgres-entrypoint.sh
     volumes:
-    - type: volume
-      source: bws_pgdata
-      target: /var/lib/postgresql/data
-    - type: bind
-      source: ./scripts/postgres_entrypoint.sh
-      target: /usr/local/bin/yggdrasil-postgres-entrypoint.sh
-      read_only: true
-      bind:
-        create_host_path: false
+      - type: volume
+        source: bws_pgdata
+        target: /var/lib/postgresql/data
+      - type: bind
+        source: ./scripts/postgres_entrypoint.sh
+        target: /usr/local/bin/yggdrasil-postgres-entrypoint.sh
+        read_only: true
+        bind:
+          create_host_path: false
   instance-state-init:
     environment:
       POSTGRES_PASSWORD: null
@@ -40,7 +40,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
       DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
-    - postgres_password
+      - postgres_password
   api:
     restart: 'no'
     environment:
@@ -50,7 +50,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
       DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
-    - postgres_password
+      - postgres_password
   worker:
     restart: 'no'
     environment:
@@ -60,7 +60,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
       DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
-    - postgres_password
+      - postgres_password
   watcher:
     restart: 'no'
     environment:
@@ -70,7 +70,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
       DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
-    - postgres_password
+      - postgres_password
   heimdal-capture-watch:
     restart: 'no'
     environment:
@@ -80,7 +80,7 @@ services:
       DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
       DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app@db:5432/${BWS_DATABASE_NAME:?channel database name required}}}
     secrets:
-    - postgres_password
+      - postgres_password
 secrets:
   postgres_password:
     file: ${BWS_POSTGRES_PASSWORD_SOURCE:?managed tmpfs source required}
