@@ -156,6 +156,8 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "app/release_channels/reversibility.py",
         "app/ops/__init__.py",
         "app/ops/host_secret_contract.py",
+        "app/ops/bws_secret_reader.py",
+        "app/ops/host_secret_controller.py",
         "app/ops/host_secret_bootstrap.py",
         "config/secrets/host_secret_contract.json",
         "scripts/deploy_channel.sh",
@@ -518,6 +520,7 @@ exec {sys.executable!s} "$@"
     env.update(
         {
             "PATH": f"{bin_dir}:{env['PATH']}",
+            "HOST_SECRET_PROVIDER": "keychain",
             "PYTHON": str(python_wrapper),
             "FAKE_SHA": sha,
             "FAKE_DEPLOY_EVENT_LOG": str(event_log),

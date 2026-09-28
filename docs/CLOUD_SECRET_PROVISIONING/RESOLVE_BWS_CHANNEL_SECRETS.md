@@ -73,6 +73,8 @@ those subsequent callers and their operation-specific terminal verifiers.
   `BWS_PROJECT_ID`, and `BWS_ORGANIZATION_ID` settings. The project name must be `non-prod` or
   `prod` as fixed by the requested channel. The pinned Bitwarden Python SDK authenticates in
   memory with no state file; it lists value-free identifiers and fetches only the selected item.
+  PostgreSQL password validation accepts the existing nonempty one-line printable UTF-8
+  value, including ordinary spaces, up to 512 bytes; it imposes no API-key minimum.
   Both identifier and response membership must match the selected project. An overprivileged
   multi-project reader is refused before fetching any value.
 - `BWS_ACCESS_TOKEN_FILE` must equal `$CREDENTIALS_DIRECTORY/bws-machine-account-token`.

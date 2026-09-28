@@ -240,7 +240,15 @@ def _validate_secret(kind: str, value: str) -> bool:
     # be a place for the two to drift apart rather than a real distinction. The
     # kind exists at all because the contract derives it from the logical id's
     # suffix, and `GITHUB_TOKEN` requires the logical id `github.token`.
-    if kind in {"api-key", "token", "password"}:
+    if kind == "password":
+        # Import must accept the initialized PostgreSQL role's existing value;
+        # imposing the API-key minimum would require an unauthorized rotation.
+        try:
+            encoded = value.encode("utf-8", errors="strict")
+        except UnicodeError:
+            return False
+        return 1 <= len(encoded) <= 512 and all(char.isprintable() for char in value)
+    if kind in {"api-key", "token"}:
         return (
             value == value.strip()
             and 20 <= len(value) <= 512

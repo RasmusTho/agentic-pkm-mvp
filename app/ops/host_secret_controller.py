@@ -117,8 +117,7 @@ class HostSecretController:
             for parent in (path, *path.parents):
                 if parent.is_symlink() or (parent / ".git").exists():
                     raise HostSecretAdmissionError()
-            path.mkdir(mode=0o700, parents=True, exist_ok=True)
-            directory_fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            directory_fd = self._durable_directory(path)
             info = os.fstat(directory_fd)
             if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
                 raise HostSecretAdmissionError()
@@ -138,6 +137,34 @@ class HostSecretController:
             for descriptor in (journal_fd, lock_fd, directory_fd):
                 if descriptor is not None:
                     os.close(descriptor)
+
+    @staticmethod
+    def _durable_directory(path: Path) -> int:
+        """Persist every directory entry before the journal can authorize a send.
+
+        Traversal uses directory descriptors and refuses symlinks. Fsync even
+        existing entries: another first-use caller may just have created them.
+        """
+        descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            for component in path.parts[1:]:
+                try:
+                    os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+                child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                try:
+                    os.fsync(child)
+                    os.fsync(descriptor)
+                except BaseException:
+                    os.close(child)
+                    raise
+                os.close(descriptor)
+                descriptor = child
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
 
     @staticmethod
     def _open_file(directory_fd: int, name: str) -> int:

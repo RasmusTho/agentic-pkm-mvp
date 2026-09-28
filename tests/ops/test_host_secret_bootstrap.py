@@ -1446,7 +1446,7 @@ def test_shared_domain_check_never_logs_key_material(
     monkeypatch.setattr(host_secret_bootstrap.subprocess, "run", fake_run)
 
     exit_code = host_secret_bootstrap.main(
-        ["--channel", "dev", "--consumer", "heimdal-capture-watch", "--", "never-start"]
+        ["--provider", "keychain", "--channel", "dev", "--consumer", "heimdal-capture-watch", "--", "never-start"]
     )
 
     assert exit_code == 78
@@ -1900,3 +1900,49 @@ def test_deployment_read_retains_host_admission_through_activation(tmp_path):
     with pytest.raises(HostSecretBootstrapError):
         resolve_host_secret_values(channel="dev", consumer="builderops-model-inquiry", provider="bws", bws_reader=reader, operation=operation)
     assert client.calls == calls
+
+
+@pytest.mark.parametrize("password", ["app", "a b", " existing ", "ö"])
+def test_bws_existing_postgres_password_does_not_require_rotation(tmp_path, password):
+    reader, client, controller = _bws_fixture(tmp_path, identity="dev/postgres.password", value=password)
+    assert resolve_host_secret_values(channel="dev", consumer="postgres-api", provider="bws", bws_reader=reader, controller=controller) == {"postgres.password": password}
+
+
+@pytest.mark.parametrize("password", ["", "a\nb", "a\rb", "a\x00b", "a\tb", "x" * 513, "ö" * 257, "\ud800"])
+def test_bws_malformed_postgres_password_is_refused(tmp_path, password):
+    reader, client, controller = _bws_fixture(tmp_path, identity="dev/postgres.password", value=password)
+    with pytest.raises(HostSecretBootstrapError):
+        resolve_host_secret_values(channel="dev", consumer="postgres-api", provider="bws", bws_reader=reader, controller=controller)
+
+
+def test_first_use_controller_directory_chain_is_durable_before_admission(tmp_path, monkeypatch):
+    path = tmp_path / "new-state" / "yggdrasil" / "secret-controller"
+    observed = set()
+    real_fsync = os.fsync
+    def record_fsync(descriptor):
+        details = os.fstat(descriptor)
+        observed.add((details.st_dev, details.st_ino))
+        real_fsync(descriptor)
+    monkeypatch.setattr(os, "fsync", record_fsync)
+    with HostSecretController(path).admit("deploy", "dev") as operation:
+        # Every new directory AND the existing parent of the new subtree is
+        # fsynced before a callback can perform any remote effect.
+        for directory in (tmp_path, tmp_path / "new-state", path.parent, path):
+            details = directory.stat()
+            assert (details.st_dev, details.st_ino) in observed
+        operation.finish(TerminalEvidence(operation.operation_id, "deploy", "dev", "aborted", "remote-terminal"))
+
+
+def test_first_use_parent_fsync_failure_prevents_admission(tmp_path, monkeypatch):
+    details = tmp_path.stat()
+    parent_identity = (details.st_dev, details.st_ino)
+    real_fsync = os.fsync
+    def fail_parent_fsync(descriptor):
+        item = os.fstat(descriptor)
+        if (item.st_dev, item.st_ino) == parent_identity:
+            raise OSError("fixture durability failure")
+        real_fsync(descriptor)
+    monkeypatch.setattr(os, "fsync", fail_parent_fsync)
+    with pytest.raises(HostSecretAdmissionError):
+        with HostSecretController(tmp_path / "new-state" / "controller").admit("deploy", "dev"):
+            pytest.fail("no effect may precede durable directory creation")
