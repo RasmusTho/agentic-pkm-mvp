@@ -1418,6 +1418,14 @@ def test_versioned_no_tools_profile_fails_closed_on_unknown_features(
         )
     assert error.value.failure_code == "unsupported_profile"
 
+    with pytest.raises(CodexCliError) as error:
+        CodexCliSafeProfile(
+            cli_version="codex-cli 0.158.0",
+            output_schema_supported=True,
+            model_catalog_schema_version="codex_cli_model_catalog.v1",
+        )
+    assert error.value.failure_code == "tool_surface_unknown"
+
     executor = CodexCliExecutor(environment={"PATH": "", "HOME": str(home)})
     with pytest.raises(CodexCliError) as error:
         executor.preflight(model="gpt-5.6-luna")
@@ -1453,6 +1461,53 @@ def test_versioned_no_tools_profile_fails_closed_on_unknown_features(
     assert disabled["tools.view_image"] == "false"
     assert disabled["tools.web_search"] == "false"
     assert disabled["web_search"] == '"disabled"'
+
+
+def test_current_cli_bundled_descriptor_schema_passes_no_inference_preflight(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    trace = tmp_path / "trace.json"
+    catalog = _catalog("gpt-6-luna", "gpt-5.6-luna")
+    descriptor = catalog["models"][0]
+    descriptor["default_service_tier"] = "priority"
+    descriptor["supports_reasoning_effort_updates"] = False
+    catalog_bytes = json.dumps(catalog).encode("utf-8")
+
+    safe_catalog = json.loads(
+        CodexCliExecutor._sanitize_model_catalog(
+            catalog_bytes,
+            model="gpt-6-luna",
+            reasoning_effort="low",
+        )
+    )
+    safe_descriptor = safe_catalog["models"][0]
+    assert safe_descriptor["default_service_tier"] == "priority"
+    assert safe_descriptor["supports_reasoning_effort_updates"] is False
+    assert safe_catalog["models"][1]["slug"] == "gpt-5.6-luna"
+    assert "default_service_tier" not in safe_catalog["models"][1]
+    assert safe_descriptor["shell_type"] == "disabled"
+    assert safe_descriptor["experimental_supported_tools"] == []
+    assert safe_descriptor["model_messages"] == {}
+
+    binary = _fake_cli(
+        tmp_path / "codex-0.158.0",
+        trace_path=trace,
+        version="codex-cli 0.158.0",
+        catalog_output=catalog_bytes.decode("utf-8"),
+    )
+    profile = _profile_file(
+        tmp_path / "profile.json",
+        cli_version="codex-cli 0.158.0",
+    )
+    result = _executor(binary, home=home, profile=profile).preflight(
+        model="gpt-6-luna",
+        reasoning_effort="low",
+    )
+    assert result.cli_version == "codex-cli 0.158.0"
+    assert result.authentication_status == "chatgpt_subscription"
+    assert not trace.exists()
 
 
 def test_catalog_schema_drift_and_unknown_model_fail_before_model_execution(
@@ -1500,6 +1555,8 @@ def test_catalog_schema_drift_and_unknown_model_fail_before_model_execution(
         "wrong_reasoning_preset",
         "wrong_truncation_policy",
         "wrong_service_tier",
+        "wrong_default_service_tier_type",
+        "wrong_reasoning_effort_updates_type",
     ):
         malformed = _catalog()
         descriptor = malformed["models"][0]
@@ -1515,6 +1572,10 @@ def test_catalog_schema_drift_and_unknown_model_fail_before_model_execution(
             ]
         elif case == "wrong_truncation_policy":
             descriptor["truncation_policy"] = {"mode": ["bytes"], "unknown": 1}
+        elif case == "wrong_default_service_tier_type":
+            descriptor["default_service_tier"] = 7
+        elif case == "wrong_reasoning_effort_updates_type":
+            descriptor["supports_reasoning_effort_updates"] = "true"
         else:
             descriptor["service_tiers"] = [{"id": "fast", "unknown_tool": True}]
         malformed_binary = _fake_cli(
