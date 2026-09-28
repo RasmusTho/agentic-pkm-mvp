@@ -57,8 +57,11 @@ def test_start_requires_authenticated_action_boundary(tmp_path, monkeypatch) -> 
     }
     assert (
         graph.http.post("/v1/records", headers=graph.headers("writer"), json=record).status_code
-        == 403
+        == 428
     )
+    headers = {**graph.headers("writer"),
+               "X-BuilderOps-Authority-Epoch": str(graph.store.readiness()["authority_epoch"])}
+    assert graph.http.post("/v1/records", headers=headers, json=record).status_code == 403
     assert graph.start(preview, decision="hold").json() == {"state": "held", "effects": []}
     assert not graph.store.records and graph.launches == 0
 
