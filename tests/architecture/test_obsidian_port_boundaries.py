@@ -269,7 +269,7 @@ def test_candidate_writer_topology_has_no_acquisition_long_lock() -> None:
         assert called_name in _call_names(function)
         return function
 
-    def assert_default_drain_route(source: str) -> ast.FunctionDef:
+    def assert_default_drain_routes(source: str) -> ast.FunctionDef:
         tree = ast.parse(source)
         function = next(
             node
@@ -282,14 +282,44 @@ def test_candidate_writer_topology_has_no_acquisition_long_lock() -> None:
             if isinstance(node, ast.Assign)
             and any(isinstance(target, ast.Name) and target.id == "fn" for target in node.targets)
         ]
-        assert len(route_assignments) == 1
-        route_value = route_assignments[0].value
-        assert isinstance(route_value, ast.BoolOp)
-        assert isinstance(route_value.op, ast.Or)
-        assert [value.id for value in route_value.values if isinstance(value, ast.Name)] == [
-            "acquire_fn",
-            "acquire_youtube",
-        ]
+
+        metadata_branch = next(
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.Compare)
+            and isinstance(node.test.left, ast.Name)
+            and node.test.left.id == "mode"
+            and len(node.test.ops) == 1
+            and isinstance(node.test.ops[0], ast.Eq)
+            and len(node.test.comparators) == 1
+            and isinstance(node.test.comparators[0], ast.Constant)
+            and node.test.comparators[0].value == "candidate_metadata_only"
+        )
+
+        def assert_route_assignment(statements: list[ast.stmt], producer: str) -> None:
+            assignments = [
+                node
+                for statement in statements
+                for node in ast.walk(statement)
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == "fn"
+                    for target in node.targets
+                )
+            ]
+            assert len(assignments) == 1
+            route_value = assignments[0].value
+            assert isinstance(route_value, ast.BoolOp)
+            assert isinstance(route_value.op, ast.Or)
+            assert [value.id for value in route_value.values if isinstance(value, ast.Name)] == [
+                "acquire_fn",
+                producer,
+            ]
+
+        assert_route_assignment(metadata_branch.body, "acquire_metadata_only")
+        assert_route_assignment(metadata_branch.orelse, "acquire_youtube")
+        assert len(route_assignments) == 2
         assert "fn" in _call_names(function)
         return function
 
@@ -301,8 +331,13 @@ def test_candidate_writer_topology_has_no_acquisition_long_lock() -> None:
         "acquire_youtube",
         "write_candidate_note",
     )
+    metadata_acquire = assert_function_calls(
+        acquire_source,
+        "acquire_metadata_only",
+        "write_candidate_note",
+    )
     replay = assert_function_calls(replay_source, "run_replay", "write_candidate_note")
-    drain = assert_default_drain_route(drain_source)
+    drain = assert_default_drain_routes(drain_source)
 
     forbidden_imports = {
         "fcntl",
@@ -313,6 +348,7 @@ def test_candidate_writer_topology_has_no_acquisition_long_lock() -> None:
     forbidden_calls = {"Lock", "RLock", "flock", "lockf", "Semaphore"}
     for function in (
         acquire,
+        metadata_acquire,
         replay,
         drain,
         _function_node(writeback_path, "write_candidate_note"),
@@ -341,7 +377,7 @@ def test_candidate_writer_topology_has_no_acquisition_long_lock() -> None:
         assert_function_calls(replay_mutant, "run_replay", "write_candidate_note")
 
     with pytest.raises(AssertionError):
-        assert_default_drain_route(
+        assert_default_drain_routes(
             drain_source.replace(
                 "fn = acquire_fn or acquire_youtube",
                 "fn = acquire_fn",
