@@ -1238,6 +1238,11 @@ def test_headless_entrypoints_do_not_require_subscription_session(
             env={
                 "PATH": str(bin_dir),
                 "HOME": str(tmp_path),
+                # CI runs this Linux fixture without Keychain. Keep the host
+                # provider explicit so the installed role exercises the
+                # credential-unavailable failure rather than provider
+                # configuration refusal.
+                "HOST_SECRET_PROVIDER": "keychain",
                 "BUILDEROPS_INQUIRY_ROLE_INTENT_JSON": intent,
             },
             capture_output=True,

@@ -58,6 +58,47 @@ Without an explicit project and consumer boundary, a non-prod deployment could r
 - [ ] BWS lookup consumes the token only from `BWS_ACCESS_TOKEN_FILE` at `$CREDENTIALS_DIRECTORY/bws-machine-account-token` and fails before provider access when the systemd credential is missing or unreadable.
   - Verify: `tests/ops/test_host_secret_bootstrap.py::test_missing_bws_access_token_file_fails_before_provider_request`
 
+## Repository interface
+
+BWS-01 supplies the repository lookup and admission boundaries. This does not qualify a live
+machine account, install a systemd unit, or activate BWS deployment. BWS-02, BWS-03 and BWS-04 own
+those subsequent callers and their operation-specific terminal verifiers.
+
+- `resolve_host_secret_values` in `app/ops/host_secret_bootstrap.py` requires an explicit
+  `keychain` or `bws` provider and returns only the selected consumer's logical identities in
+  memory. BWS uses the shared controller's `check` admission. Keychain retains its existing
+  per-consumer accounts and compatibility checks. BWS uses one active item per logical identity.
+- The value-free command `python -m app.ops.host_secret_bootstrap --provider bws --check
+  --channel dev --consumer <declared-consumer>` reads non-secret `BWS_READER_PROJECT`,
+  `BWS_PROJECT_ID`, and `BWS_ORGANIZATION_ID` settings. The project name must be `non-prod` or
+  `prod` as fixed by the requested channel. The pinned Bitwarden Python SDK authenticates in
+  memory with no state file; it lists value-free identifiers and fetches only the selected item.
+  PostgreSQL password validation accepts the existing nonempty one-line printable UTF-8
+  value, including ordinary spaces; it imposes no API-key length limits.
+  Both identifier and response membership must match the selected project. An overprivileged
+  multi-project reader is refused before fetching any value.
+- `BWS_ACCESS_TOKEN_FILE` must equal `$CREDENTIALS_DIRECTORY/bws-machine-account-token`.
+  The file must be an owner-readable regular file, private to root/the service owner, with no
+  symlink or hardlink. Token-valued environment variables are never consumed. Linux CLI calls
+  require explicit provider selection; the existing Mac launcher retains its Keychain path.
+  BWS command launching through that legacy materializer is refused; BWS-04 owns deployment.
+- `HostSecretController` uses the stable owner-only directory
+  `~/.local/state/yggdrasil/secret-controller`, one OS lock, and an append-only, fsynced
+  `operations.jsonl` journal. Acquire host admission before any VM lock. `admit` persists the
+  operation ID, kind, channel/target and prepared stage before yielding. Call `prepare_mutation`
+  before a send. Exceptions and process death do not clear pending state. `finish`/`reconcile`
+  require matching operation ID, kind, target, terminal result and operation-specific evidence
+  source; the downstream adapter must authenticate durable remote/provider terminal evidence.
+  There is no CLI for asserting a terminal result. Unknown, corrupt or mismatched evidence
+  keeps admission blocked. A completed read can close its own check because it has no mutation.
+  A pointer snapshot or released lock cannot close token-push or deploy operations.
+
+The controller serializes cooperating callers on one host only. Parent #5667 still owns the
+sole-admin-writer/credential-restriction qualification and any shared fencing requirement.
+The six PostgreSQL consumer mappings are file-only contract declarations; BWS-04 owns their
+Compose and database startup wiring. Protected production-key rotation/deletion has no entrypoint
+in this read-only slice and remains refused pending the separately governed owner policy.
+
 ## How to Verify (Pre-Merge)
 
 Run the named tests in tests/ops/test_host_secret_bootstrap.py and tests/ops/test_host_secret_contract.py. Verify provider/project scoping, existing Keychain compatibility, exact file delivery, and that deployment-selected VM reads occur only through the agent-host coordinated path. Do not access live BWS or a live VM.
@@ -78,4 +119,4 @@ Run the named tests in tests/ops/test_host_secret_bootstrap.py and tests/ops/tes
 
 ## Related GitHub Issues
 
-GitHub issue: #5677 (filed blocked while the specification PR is open).
+GitHub issue: #5677; parent #5667 retains integrated and live operator acceptance.
