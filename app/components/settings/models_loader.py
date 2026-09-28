@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 DEFAULT_MODEL_REGISTRY_PATH = Path("docs/settings/models/registry.yaml")
@@ -30,7 +30,8 @@ class ModelPricing(BaseModel):
 
     standard_input_usd_per_million_tokens: float = Field(..., gt=0)
     standard_output_usd_per_million_tokens: float = Field(..., gt=0)
-    fast_mode_multiplier: float = Field(..., gt=0)
+    standard_cached_input_usd_per_million_tokens: float | None = Field(None, ge=0)
+    fast_mode_multiplier: float | None = Field(None, gt=0)
     source_urls: List[str] = Field(..., min_length=1)
     retrieved_on: date
     artificial_analysis_cost_per_intelligence_index_task_usd: Dict[str, float] = Field(
@@ -49,7 +50,14 @@ class ModelDescriptor(BaseModel):
     notes: Optional[str] = None
     selection_group: Optional[str] = None
     allowed_transports: List[str] = Field(default_factory=list)
+    default_transport: str | None = None
     pricing: Optional[ModelPricing] = None
+
+    @model_validator(mode="after")
+    def validate_default_transport(self) -> "ModelDescriptor":
+        if self.default_transport is not None and self.default_transport not in self.allowed_transports:
+            raise ValueError("default transport must be admitted by allowed_transports")
+        return self
 
 
 def _read_yaml(path: Path) -> Dict[str, Any]:

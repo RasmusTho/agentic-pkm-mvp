@@ -1040,7 +1040,7 @@ Illustrative example/template content — not individually indexed. The followin
 ## Eval and Quality
 | Path | Scope | Review status | Last reviewed | Notes |
 | --- | --- | --- | --- | --- |
-| docs/eval.md | Eval stack | Aligned (forward line v5.x, with known debt) | 2026-02-05 | Opt-in DeepEval/Ragas eval stack; env vars reflect `app/eval/llm_client.py`. |
+| docs/eval.md | Eval stack | Aligned (forward line v5.x, with known debt) | 2026-09-28 | Opt-in exact model/transport classification evaluation with usage and dated price evidence; deterministic replay remains the default. |
 | docs/QUALITY_WAVE_IMPLEMENTATION.md | Quality Wave implementation summary | Aligned (forward line v5.x) | 2026-03-28 | Implementation summary of the Quality Wave phases, artifacts, and acceptance stack. |
 | docs/quality_wave/README.md | Quality Wave guide | Aligned (forward line v5.x) | 2026-03-28 | Developer/operator guide for running Quality Wave phases and the UAT harness. |
 

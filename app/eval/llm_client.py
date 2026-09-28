@@ -39,6 +39,7 @@ def configure_eval_openai_env() -> EvalLLMConfig:
     client = get_chat_client(
         LLMTaskIntent(task_kind="eval"),
         model_id=model,
+        transport_id=os.getenv("EVAL_LLM_TRANSPORT", "").strip() or None,
         adapter_runtime_config=AdapterRuntimeConfig(
             base_url=base_url if base_url_configured else None,
             api_key=api_key if api_key_configured else None,

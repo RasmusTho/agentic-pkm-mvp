@@ -1036,3 +1036,20 @@ def test_product_output_limit_uses_preflight_approved_ollama_route(monkeypatch) 
         True,
     ) in remote.events
     assert ("preflight", "ollama_http", True) in remote.events
+
+
+def test_gpt56_eval_api_admission_preserves_implicit_luna_transport(monkeypatch) -> None:
+    intent = LLMTaskIntent(task_kind="eval")
+    factory = fabric._adapter_factory()
+    implicit = fabric._exact_product_model_route(intent, "gpt-5.6-luna", factory=factory)
+    assert implicit.transport_id == "codex_cli_tailscale"
+    for tier in ("luna", "terra", "sol"):
+        client = get_chat_client(intent, model_id=f"gpt-5.6-{tier}", transport_id="openai_api")
+        assert client.route.model == f"gpt-5.6-{tier}"
+        assert client.route.transport_id == "openai_api"
+        assert client.model_access_route.request.intent.fallback_requirement == "fallback_forbidden"
+    from pydantic import ValidationError
+    from app.components.settings.models_loader import ModelDescriptor
+    with pytest.raises(ValidationError, match="default transport"):
+        ModelDescriptor(id="bad", kind="chat", provider="openai", model="gpt-5.6-luna",
+                        allowed_transports=["openai_api"], default_transport="codex_cli_tailscale")

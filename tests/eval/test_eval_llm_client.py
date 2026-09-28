@@ -198,3 +198,37 @@ def test_ragas_wrapper_uses_shared_chat_client() -> None:
 
     assert model.invoke("judge this") == "pass"
     assert model._identifying_params == {"model": "gpt-6-luna"}
+
+
+def test_exact_eval_route_refuses_unadmitted_or_conflicting_target(monkeypatch) -> None:
+    from app.components.llm import fabric
+    from app.components.llm.router import LLMTaskIntent
+    monkeypatch.setattr(fabric, "_new_executor_path_router",
+                        lambda **kw: pytest.fail("external preflight started"))
+    monkeypatch.setenv("EVAL_LLM_MODE", "run")
+    monkeypatch.setenv("EVAL_LLM_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("EVAL_LLM_TRANSPORT", "codex_cli_tailscale")
+    with pytest.raises(LLMRouteError, match="not allowed"):
+        configure_eval_openai_env()
+    monkeypatch.setenv("EVAL_LLM_TRANSPORT", "openai_api")
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_FORCE_MODEL", "gpt-5.4")
+    with pytest.raises(LLMRouteError, match="conflicts"):
+        configure_eval_openai_env()
+    with pytest.raises(LLMRouteError, match="exact evaluation model"):
+        fabric.get_chat_client(LLMTaskIntent(task_kind="eval"), transport_id="openai_api")
+    with pytest.raises(LLMRouteError, match="exact evaluation model"):
+        fabric.get_chat_client(LLMTaskIntent(task_kind="decide"), model_id="gpt-5.6-luna", transport_id="openai_api")
+
+
+def test_comparison_route_cannot_promote_or_fallback(monkeypatch) -> None:
+    from app.components.llm import fabric
+    from app.components.llm.router import LLMTaskIntent
+    monkeypatch.setattr(fabric, "_latest_product_catalog_target",
+                        lambda *a, **kw: pytest.fail("catalog promotion"))
+    monkeypatch.setattr(fabric, "_explicit_remote_ollama_fallback",
+                        lambda *a, **kw: pytest.fail("fallback selection"))
+    client = fabric.get_chat_client(LLMTaskIntent(task_kind="eval"), model_id="gpt-5.6-luna", transport_id="openai_api")
+    assert client.route.model == "gpt-5.6-luna"
+    assert client._fallback_access_route is None
+    assert client.model_access_route.request.intent.fallback_requirement == "fallback_forbidden"

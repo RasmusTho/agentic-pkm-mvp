@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 import os
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from app.components.embeddings import EmbeddingClientProtocol, get_embedding_client
@@ -246,7 +246,8 @@ def _latest_product_catalog_target(
 
 
 def _exact_product_model_route(
-    intent: LLMTaskIntent, model_id: str, *, factory: ModelAccessAdapterFactory
+    intent: LLMTaskIntent, model_id: str, *, factory: ModelAccessAdapterFactory,
+    transport_id: str | None = None
 ) -> LLMRoute:
     """Resolve one explicit model only through Product's declared registry."""
     matches = [
@@ -263,7 +264,13 @@ def _exact_product_model_route(
         factory.default_adapter_id(descriptor.provider),
     )
     default_adapter = factory.default_adapter_id(descriptor.provider)
-    if default_adapter in allowed:
+    if transport_id is not None:
+        if transport_id not in allowed:
+            raise LLMRouteError("explicit transport is not allowed for the Product model")
+        adapter_id = transport_id
+    elif descriptor.default_transport is not None:
+        adapter_id = descriptor.default_transport
+    elif default_adapter in allowed:
         adapter_id = default_adapter
     elif len(allowed) == 1:
         adapter_id = allowed[0]
@@ -708,6 +715,8 @@ class ChatClient:
         trace_id: str | None = None,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | str | None = None,
+        usage_observer: Callable[[dict[str, Any]], None] | None = None,
+        record_content: bool = True,
     ) -> str:
         if (
             self.model_access_route is not None
@@ -768,12 +777,16 @@ class ChatClient:
             finally:
                 if owns_transport:
                     transport.close()
+        evidence_options: dict[str, Any] = {}
+        if usage_observer is not None or not record_content:
+            evidence_options = {"usage_observer": usage_observer, "record_content": record_content}
         return call_llm(
             name,
             pack,
             agent=agent,
             kind=kind,
             trace_id=trace_id,
+            **evidence_options,
             provider_override=self.route.provider,
             model_override=self.route.model,
             timeout_seconds=self.route.timeout_seconds,
@@ -797,21 +810,25 @@ def get_chat_client(
     intent: LLMTaskIntent,
     *,
     model_id: str | None = None,
+    transport_id: str | None = None,
     adapter_runtime_config: AdapterRuntimeConfig | None = None,
 ) -> ChatClient:
     """Bind a Product intent to its temporary route behind one thin facade."""
+    if transport_id is not None and (model_id is None or intent.task_kind != "eval"):
+        raise LLMRouteError("explicit transport requires an exact evaluation model")
     if model_id is None:
         return get_chat_client_for_route(
             intent, adapter_runtime_config=adapter_runtime_config
         )
     selected = _exact_product_model_route(
-        intent, model_id, factory=_adapter_factory()
+        intent, model_id, factory=_adapter_factory(), transport_id=transport_id
     )
     return get_chat_client_for_route(
         intent,
         selected_route=selected,
         adapter_runtime_config=adapter_runtime_config,
         allow_catalog_promotion=False,
+        allow_fallback=intent.task_kind != "eval",
     )
 
 
