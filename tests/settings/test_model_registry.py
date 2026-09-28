@@ -58,3 +58,23 @@ def test_gpt_6_astra_pricing_provenance() -> None:
         "xhigh": 1.85,
         "max": 2.57,
     }
+
+
+def test_gpt56_registry_has_unique_complete_descriptors() -> None:
+    from datetime import date
+
+    models = load_models()
+    for tier, rates in {"luna": (0.2, 0.02, 1.2), "terra": (2, 0.2, 12), "sol": (4, 0.4, 20)}.items():
+        matches = [m for m in models.values() if m.model == f"gpt-5.6-{tier}"]
+        assert len(matches) == 1
+        model = matches[0]
+        assert (model.provider, model.kind, model.status) == ("openai", "chat", "active")
+        assert "openai_api" in model.allowed_transports + model.explicit_eval_transports
+        pricing = model.pricing
+        assert pricing is not None
+        assert (pricing.standard_input_usd_per_million_tokens,
+                pricing.standard_cached_input_usd_per_million_tokens,
+                pricing.standard_output_usd_per_million_tokens) == rates
+        assert pricing.retrieved_on == date(2026, 9, 28)
+        assert pricing.source_urls == [f"https://developers.openai.com/api/docs/models/gpt-5.6-{tier}"]
+    assert models["openai.chat.gpt_5_6_luna"].selection_group == "luna"

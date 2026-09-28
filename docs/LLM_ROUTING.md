@@ -21,6 +21,12 @@ Related docs:
 - **Fabric**: Runtime entrypoint that binds a route to an actual client. It exposes:
   - `get_chat_client(LLMTaskIntent)` → `ChatClient` with `.chat(...)`
   - `get_embeddings_client(LLMTaskIntent)` → embedding client with `.embed_text(...)`
+- **Explicit evaluation**: `get_chat_client(..., model_id=..., transport_id=...)`
+  admits an explicit transport only for an exact registered evaluation target and
+  disables catalog promotion and fallback. A model descriptor's
+  `explicit_eval_transports` adds admission only for that explicit eval request;
+  ordinary `allowed_transports` and their existing refusal/selection stay unchanged.
+  Measured classification invocation and usage/cost evidence are defined in `docs/eval.md`.
 - **Routes/Providers**: A route selects a provider + model. Providers are identified by string values
   (`mock`, `ollama`, `openai`, `deepseek`, etc.).
 - **Deterministic routing**: If `determinism_required=True`, the router prefers `mock` over non-deterministic providers.

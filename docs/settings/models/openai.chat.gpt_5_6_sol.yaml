@@ -1,0 +1,13 @@
+id: openai.chat.gpt_5_6_sol
+status: active
+kind: chat
+provider: openai
+model: gpt-5.6-sol
+allowed_transports: [openai_api]
+pricing:
+  standard_input_usd_per_million_tokens: 4
+  standard_cached_input_usd_per_million_tokens: 0.4
+  standard_output_usd_per_million_tokens: 20
+  source_urls:
+    - https://developers.openai.com/api/docs/models/gpt-5.6-sol
+  retrieved_on: 2026-09-28

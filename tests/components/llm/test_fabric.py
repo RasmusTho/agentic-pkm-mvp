@@ -1036,3 +1036,35 @@ def test_product_output_limit_uses_preflight_approved_ollama_route(monkeypatch) 
         True,
     ) in remote.events
     assert ("preflight", "ollama_http", True) in remote.events
+
+
+def test_gpt56_eval_api_admission_preserves_implicit_luna_transport(monkeypatch) -> None:
+    intent = LLMTaskIntent(task_kind="eval")
+    factory = fabric._adapter_factory()
+    implicit = fabric._exact_product_model_route(intent, "gpt-5.6-luna", factory=factory)
+    assert implicit.transport_id == "codex_cli_tailscale"
+    for tier in ("luna", "terra", "sol"):
+        client = get_chat_client(intent, model_id=f"gpt-5.6-{tier}", transport_id="openai_api")
+        assert client.route.model == f"gpt-5.6-{tier}"
+        assert client.route.transport_id == "openai_api"
+        assert client.model_access_route.request.intent.fallback_requirement == "fallback_forbidden"
+
+
+@pytest.mark.parametrize("task_kind", ["decide", "eval"])
+def test_settings_resolved_luna_without_explicit_eval_transport_retains_refusal(monkeypatch, task_kind) -> None:
+    from app.settings.models import LLMRoutingSettings, SettingsBundle
+    from app.components.llm import router
+    for name in ("LLM_FORCE_PROVIDER", "LLM_FORCE_MODEL", "LLM_PROVIDER_ENFORCE", "LLM_PROVIDER", "LLM_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    bundle = SettingsBundle(llm_routing=LLMRoutingSettings(tasks={
+        task_kind: LLMRoutingSettings.TaskPolicy(
+            primary=LLMRoutingSettings.RouteTarget(model_id="openai.chat.gpt_5_6_luna")
+        )
+    }))
+    monkeypatch.setattr(router, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(fabric, "call_llm", lambda *a, **kw: pytest.fail("inference started"))
+    selected = router.LLMRouter().route(LLMTaskIntent(task_kind=task_kind))
+    assert selected.model == "gpt-5.6-luna"
+    assert selected.transport_id is None
+    with pytest.raises(LLMRouteError, match="selected transport is not allowed"):
+        get_chat_client(LLMTaskIntent(task_kind=task_kind))

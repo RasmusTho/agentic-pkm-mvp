@@ -33,3 +33,9 @@ models:
   - id: mock.embed
     path: docs/settings/models/mock.embed.yaml
     status: active
+  - id: openai.chat.gpt_5_6_terra
+    path: docs/settings/models/openai.chat.gpt_5_6_terra.yaml
+    status: active
+  - id: openai.chat.gpt_5_6_sol
+    path: docs/settings/models/openai.chat.gpt_5_6_sol.yaml
+    status: active

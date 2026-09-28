@@ -5,7 +5,10 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-28 (bounded DevUI and Sources-zone runtime-boundary review; repository evidence only, no deployment or owner acceptance)
+Last reviewed: 2026-09-28 (bounded DevUI, Sources-zone, and classification-evaluation review; repository evidence only, no deployment or owner acceptance)
+Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
+`tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
+repository proof only. The opt-in model comparison remains separate acceptance under #3429.
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
@@ -372,6 +375,11 @@ promote public internet readiness.
 - **Sync-latency harness — partial acceptance (2026-04-12, updated 2026-04-23):** iCloud transport chain validated end-to-end (MacBook → Mac mini via CloudDocs); server-side watcher detection confirmed; clean numeric latency measurement not yet captured. The allowlist blocker is now resolved for harness/operator runs via measurement mode (`WATCHER_MEASUREMENT_MODE=1`), which temporarily admits `ingest.summary.create` while preserving the default production-safe allowlist posture. Remaining blocker: Mac mini headless infrastructure gaps (Screen Sharing, auto-login recovery) tracked in #432. Follow-up timing receipt tracked in #433. Root cause of iCloud upload-queue blockage (`.git` dir inside vault) fixed by `.git.nosync` + symlink (Issue #421 closed).
 
 ## CI & Test Markers
+- Classification evaluation is offline by default. The opt-in live golden-set runner binds an
+  exact registered model/transport and reports dataset coverage, mutation-side gate, captured
+  usage and dated cost provenance. Unsupported billing or incomplete evidence cannot produce
+  a complete cost receipt. Its GPT-5.6 API admission preserves ordinary Product routing;
+  invocation and evidence limits are owned by [the eval guide](eval.md#intent-classification-slice-classification_casev1-kernel-13).
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
 - `CI Smoke`'s push-lane `smoke-docker >> "CI gate: vaultwide panel verifier"` no longer false-positives on `main` (#4371): staged-backup verification (`_verify_staged_backup` -> `_global_live_owners`) validates the drained owner inventory by shape and ledger consistency instead of requiring every owner root to be a live directory in the verifying container, its top-level error names the failing inventory field, and the `vault` PR-test selection runs `tests/ops/test_instance_state_volume_contract.py` so this surface has pre-merge signal.
 - CI no longer treats absent model-provider credentials as a passing live-provider check: the optional
