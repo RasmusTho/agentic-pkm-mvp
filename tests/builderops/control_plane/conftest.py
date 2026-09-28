@@ -50,6 +50,9 @@ def control_plane_store() -> Iterator[PostgresBuilderOpsStore]:
     dsn = _schema_dsn(base_dsn, schema)
     store = PostgresBuilderOpsStore(dsn)
     store.initialize()
+    from tests.builderops.bootstrap_fixtures import accept_fixture_authority, admit_fixture_connections
+    accept_fixture_authority(store)
+    admit_fixture_connections(store)
     try:
         yield store
     finally:

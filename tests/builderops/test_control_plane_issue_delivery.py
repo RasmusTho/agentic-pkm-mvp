@@ -184,6 +184,9 @@ def store() -> PostgresBuilderOpsStore:
     dsn = _schema_dsn(base, schema)
     value = PostgresBuilderOpsStore(dsn)
     value.initialize()
+    from tests.builderops.bootstrap_fixtures import accept_fixture_authority, admit_fixture_connections
+    accept_fixture_authority(value)
+    admit_fixture_connections(value)
     try:
         yield value
     finally:
@@ -786,7 +789,7 @@ def test_bifrost_presented_owner_cannot_borrow_hub_scope(
             retained = {**harness.approval, "permission": permission}
             retained["approval_manifest_hash"] = issue_delivery_manifest_hash(retained)
             retained["approval_digest"] = approval_digest(retained)
-            with psycopg.connect(harness.store.dsn) as conn:
+            with harness.store._connect() as conn:
                 conn.execute(
                     "UPDATE builderops_records SET payload = %s::jsonb "
                     "WHERE repository = %s AND record_id = %s",
@@ -889,7 +892,7 @@ def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_p
     assert preview["state"] == "previewed"
     assert preview["manifest"]["operation_type"] == "deliver_ready_issue"
     assert preview["manifest"]["owner_principal"] == "owner:human"
-    assert preview["manifest"]["authority_epoch"] == 1
+    assert preview["manifest"]["authority_epoch"] == store.readiness()["authority_epoch"]
 
     case_variant_repository = deepcopy(preview["manifest"])
     case_variant_repository["repository"] = "RasmusTho/agentic-pkm-mvp"

@@ -155,10 +155,20 @@ class HealthService:
         expected_lineage = database["schema_version"] == SCHEMA_VERSION and bool(
             database["authority_epoch"] and database["authority_epoch"] > 0
         )
+        bootstrap: dict[str, Any] = {"status": "unknown", "writers_enabled": False}
+        bootstrap_reader = getattr(self.store, "bootstrap_status", None)
+        if callable(bootstrap_reader):
+            try:
+                observed = bootstrap_reader()
+                bootstrap = {"status": str(observed["status"]),
+                             "writers_enabled": observed["writers_enabled"] is True}
+            except Exception:
+                pass
         ready = bool(
             database["available"]
             and expected_lineage
             and not runtime.authority_threatening_outbox
+            and bootstrap["writers_enabled"]
         )
         rate_limit = (
             self.rate_limiter.status()
@@ -170,6 +180,7 @@ class HealthService:
         )
         return {
             "ready": ready,
+            "authority_bootstrap": bootstrap,
             "database": database,
             "lineage": {
                 "expected_schema_version": SCHEMA_VERSION,

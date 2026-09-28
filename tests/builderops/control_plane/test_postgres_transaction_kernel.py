@@ -56,6 +56,8 @@ def test_state_receipt_idempotency_and_outbox_commit_atomically(
     control_plane_store, envelope
 ) -> None:
     store = control_plane_store
+    seeded_epoch = store.readiness()["authority_epoch"]
+    assert seeded_epoch > 1
     lease = _claimed_task(store, envelope, task_id="task-3792", key="atomic")
     before = store.authority_counts(envelope.repository)
     for fault_at in ("after_state", "after_receipt", "after_idempotency", "after_outbox"):
@@ -66,7 +68,7 @@ def test_state_receipt_idempotency_and_outbox_commit_atomically(
     result = _commit(store, envelope, lease=lease)
     assert result.state == "effect_pending"
     assert store.readiness() == {
-        "authority_epoch": 1,
+        "authority_epoch": seeded_epoch,
         "schema_version": SCHEMA_VERSION,
     }
     assert store.authority_counts(envelope.repository) == {

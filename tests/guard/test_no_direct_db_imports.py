@@ -21,6 +21,10 @@ ALLOW_FILES = (
     # dedicated storage adapter behind the domain-neutral control-plane port;
     # callers do not import psycopg or Product app.db through this exception.
     'app/builderops/control_plane/store.py',
+    # Fresh-authority bootstrap (RSC-07, #5712) is the bounded reconciliation
+    # adapter for that same independent PostgreSQL authority. Its Jsonb import
+    # serializes the authenticated readback receipt while ordinary writers stay fenced.
+    'app/builderops/control_plane/bootstrap.py',
     'app/services/outbox.py',
     'app/services/audit.py',
     'app/services/decisions.py',

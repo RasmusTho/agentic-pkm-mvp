@@ -10,6 +10,9 @@ cannot silently reopen a worktree-local database or reach PostgreSQL directly.
 Only these control-plane modules are permitted store access:
 
 * ``store.py`` — the PostgreSQL data layer.
+* ``bootstrap.py`` — RSC-07's local, authenticated authority migration/bootstrap
+  adapter (#5712); fences writers before readback and can admit only the matching
+  epoch receipt. It is not an API client or a local fallback authority.
 * ``selection.py`` — the fail-closed production selector plus the explicit
   SQLite migration/test adapter seam.
 * ``legacy_migration.py`` — BCP-03's deterministic, read-only legacy-authority
@@ -43,6 +46,7 @@ BUILDEROPS_ROOT = REPO_ROOT / "app" / "builderops"
 DATA_LAYER_AND_MIGRATION_ALLOWLIST: frozenset[str] = frozenset(
     {
         "app/builderops/control_plane/store.py",  # PostgreSQL data layer
+        "app/builderops/control_plane/bootstrap.py",  # RSC-07 authenticated, fenced bootstrap adapter
         "app/builderops/control_plane/selection.py",  # selector + migration/test adapter
         "app/builderops/control_plane/legacy_migration.py",  # BCP-03 read-only import mechanism
     }

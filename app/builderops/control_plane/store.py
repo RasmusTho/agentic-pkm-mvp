@@ -15,7 +15,7 @@ from psycopg.types.json import Jsonb
 if TYPE_CHECKING:
     from app.builderops.owner_fact_producers import OwnerOutcomeAdmission
 
-from app.builderops.control_plane.migrations import AUTHORITY_EPOCH, MIGRATIONS, SCHEMA_VERSION
+from app.builderops.control_plane.migrations import MIGRATIONS, SCHEMA_VERSION
 from app.builderops.control_plane.models import (
     AuthorityEnvelope,
     AuthorityObjectResult,
@@ -198,6 +198,7 @@ class PostgresBuilderOpsStore:
     def __init__(self, dsn: str) -> None:
         if not dsn.startswith(("postgresql://", "postgres://", "postgresql+psycopg://")):
             raise RuntimeError("BuilderOps production authority requires PostgreSQL")
+        self._admitted_identity: tuple[str, int] | None = None
         self.dsn = dsn.replace("postgresql+psycopg://", "postgresql://", 1)
 
     def _connect(self) -> psycopg.Connection[dict[str, Any]]:
@@ -262,7 +263,13 @@ class PostgresBuilderOpsStore:
             "FROM pg_proc AS procedure "
             "JOIN pg_namespace AS namespace ON namespace.oid = procedure.pronamespace "
             "WHERE namespace.nspname = current_schema() "
-            "AND procedure.proname LIKE 'builderops_%'"
+            "AND procedure.proname LIKE 'builderops_%' "
+            "UNION ALL SELECT 'trigger', class.relname || '.' || trigger.tgname, "
+            "trigger.tgenabled::text || '|' || pg_get_triggerdef(trigger.oid, true) "
+            "FROM pg_trigger AS trigger JOIN pg_class AS class ON class.oid=trigger.tgrelid "
+            "JOIN pg_namespace AS namespace ON namespace.oid=class.relnamespace "
+            "WHERE namespace.nspname=current_schema() AND class.relname LIKE 'builderops_%' "
+            "AND NOT trigger.tgisinternal"
             ") AS catalog ORDER BY kind, identity, definition"
         ).fetchall()
         document = [
@@ -283,6 +290,8 @@ class PostgresBuilderOpsStore:
 
     def initialize(self) -> None:
         with self._connect() as conn:
+            # Serialize the empty-schema case as well as concurrent upgrades.
+            conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || 'builderops-initialize', 0))")
             migration_rows: dict[int, Mapping[str, Any]] = {}
             existing_relations = {
                 str(row["relname"])
@@ -386,6 +395,7 @@ class PostgresBuilderOpsStore:
                         "ON CONFLICT (version) DO NOTHING",
                         (version, path.name, checksum),
                     )
+            generation = self._bind_authority(conn)
             schema_fingerprint = self._schema_fingerprint(conn)
             metadata = conn.execute(
                 "INSERT INTO builderops_authority_metadata("
@@ -397,7 +407,7 @@ class PostgresBuilderOpsStore:
                 "updated_at = clock_timestamp() "
                 "WHERE builderops_authority_metadata.schema_version <= EXCLUDED.schema_version "
                 "RETURNING authority_epoch, schema_version",
-                (AUTHORITY_EPOCH, SCHEMA_VERSION, schema_fingerprint),
+                (generation[1], SCHEMA_VERSION, schema_fingerprint),
             ).fetchone()
             if metadata is None:
                 raise RuntimeError("BuilderOps authority metadata refused a downgrade")
@@ -411,6 +421,7 @@ class PostgresBuilderOpsStore:
             if row is None:
                 raise RuntimeError("BuilderOps schema is not initialized")
             self._assert_schema_fingerprint(conn, str(row["schema_fingerprint"]))
+            self._bind_authority(conn)
             return {
                 "authority_epoch": int(row["authority_epoch"]),
                 "schema_version": int(row["schema_version"]),
@@ -427,6 +438,36 @@ class PostgresBuilderOpsStore:
         if row is None:
             raise RuntimeError("BuilderOps recovery state is not initialized")
         return dict(row)
+
+    def _bind_authority(self, conn: Any) -> tuple[str, int]:
+        row = conn.execute("SELECT bootstrap_id, activated_authority_epoch FROM "
+                           "builderops_recovery_state WHERE singleton FOR SHARE").fetchone()
+        if row is None:
+            raise DurabilityPending("authority generation is unavailable")
+        identity = (str(row["bootstrap_id"]), int(row["activated_authority_epoch"]))
+        if self._admitted_identity is None:
+            self._admitted_identity = identity
+        elif self._admitted_identity != identity:
+            raise StaleFencingToken("store belongs to a superseded authority generation")
+        return identity
+
+    def _assert_reconciliation_admitted(self, conn: Any) -> None:
+        # Internal transaction admission for the existing authenticated recovery
+        # routes. It never admits ordinary tasks, leases, records, or effects.
+        identity = self._bind_authority(conn)
+        conn.execute("SELECT set_config('builderops.authority_epoch', %s, true)", (str(identity[1]),))
+        conn.execute("SELECT set_config('builderops.reconciliation', 'on', true)")
+
+    def bootstrap_status(self) -> dict[str, Any]:
+        from app.builderops.control_plane.bootstrap import receipt_matches
+
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM builderops_recovery_state WHERE singleton").fetchone()
+        if row is None:
+            return {"status": "unknown", "writers_enabled": False}
+        return {"status": row["bootstrap_status"], "reason": row["bootstrap_reason"],
+                "writers_enabled": receipt_matches(row), "bootstrap_id": str(row["bootstrap_id"]),
+                "authority_epoch": int(row["activated_authority_epoch"])}
 
     def write_service_heartbeat(self, *, service_name: str, state: str = "running") -> None:
         if not service_name.strip() or not state.strip():
@@ -482,6 +523,7 @@ class PostgresBuilderOpsStore:
                 "updated_at = clock_timestamp() WHERE singleton",
                 (next_epoch,),
             )
+            self._assert_reconciliation_admitted(conn)
             conn.execute(
                 "UPDATE builderops_leases SET holder = 'recovery-fence', "
                 "fencing_token = fencing_token + 1, expires_at = clock_timestamp(), "
@@ -497,7 +539,8 @@ class PostgresBuilderOpsStore:
                 "UPDATE builderops_recovery_state SET activated_authority_epoch = %s, "
                 "recovery_id = %s, restored_lsn = %s::pg_lsn, "
                 "reconciliation_required = true, executor_enabled = false, "
-                "activated_at = clock_timestamp(), reconciled_at = NULL WHERE singleton "
+                "activated_at = clock_timestamp(), reconciled_at = NULL, bootstrap_receipt = NULL, "
+                "bootstrap_status = 'unknown' WHERE singleton "
                 "RETURNING activated_authority_epoch",
                 (next_epoch, recovery_id, restored_lsn),
             ).fetchone()
@@ -517,6 +560,9 @@ class PostgresBuilderOpsStore:
                 "executor_enabled = true, reconciled_at = clock_timestamp() "
                 "WHERE singleton AND recovery_id = %s "
                 "AND activated_authority_epoch = %s AND reconciliation_required "
+                "AND bootstrap_status = 'converged' "
+                "AND bootstrap_receipt->>'bootstrap_id' = bootstrap_id::text "
+                "AND bootstrap_receipt->>'authority_epoch' = activated_authority_epoch::text "
                 "AND NOT EXISTS (SELECT 1 FROM builderops_outbox WHERE status = 'unknown') "
                 "RETURNING singleton",
                 (recovery_id, authority_epoch),
@@ -527,13 +573,19 @@ class PostgresBuilderOpsStore:
                     "or unknown-effect mismatch"
                 )
 
-    @staticmethod
-    def _assert_executor_enabled(conn: psycopg.Connection[dict[str, Any]]) -> None:
+    def _assert_executor_enabled(self, conn: psycopg.Connection[dict[str, Any]], repository: str | None = None) -> None:
+        # Shared locks remain held until the mutation commits. Reconciliation
+        # takes the exclusive row lock, so no writer crosses fence activation.
+        from app.builderops.control_plane.bootstrap import receipt_matches
+
         row = conn.execute(
-            "SELECT executor_enabled FROM builderops_recovery_state WHERE singleton"
+            "SELECT * FROM builderops_recovery_state WHERE singleton FOR SHARE"
         ).fetchone()
-        if row is None or not bool(row["executor_enabled"]):
-            raise DurabilityPending("executor is fenced pending post-restore reconciliation")
+        identity = self._bind_authority(conn)
+        if (row is None or not receipt_matches(row)
+                or (repository is not None and repository not in row["bootstrap_config"]["repositories"])):
+            raise DurabilityPending("writer is fenced pending authenticated authority reconciliation")
+        conn.execute("SELECT set_config('builderops.authority_epoch', %s, true)", (str(identity[1]),))
 
     def get_task(self, repository: str, task_id: str) -> Mapping[str, Any]:
         canonical = canonical_repository(repository)
@@ -713,6 +765,7 @@ class PostgresBuilderOpsStore:
         replayed = False
         lifecycle_lease = lease
         with self._connect() as conn:
+            self._assert_executor_enabled(conn, envelope.repository)
             conn.execute("SET LOCAL synchronous_commit = on")
             conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -880,6 +933,7 @@ class PostgresBuilderOpsStore:
         replayed: bool,
     ) -> TransactionResult:
         with self._connect() as conn:
+            self._assert_reconciliation_admitted(conn)
             conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"idempotency:{repository}:{idempotency_key}",),
@@ -1427,6 +1481,7 @@ class PostgresBuilderOpsStore:
         envelope_json = Jsonb(envelope.as_json())
         replayed = False
         with self._connect() as conn:
+            self._assert_executor_enabled(conn, envelope.repository)
             conn.execute("SET LOCAL synchronous_commit = on")
             conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -1998,6 +2053,7 @@ class PostgresBuilderOpsStore:
         replayed: bool,
     ) -> AuthorityObjectResult:
         with self._connect() as conn:
+            self._assert_executor_enabled(conn)
             conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"idempotency:{repository}:{idempotency_key}",),
@@ -2150,6 +2206,7 @@ class PostgresBuilderOpsStore:
     ) -> TransactionResult | AuthorityObjectResult | None:
         repository = canonical_repository(repository)
         with self._connect() as conn:
+            self._assert_executor_enabled(conn)
             row = conn.execute(
                 "SELECT result, recovery_lsn::text AS recovery_lsn FROM builderops_idempotency "
                 "WHERE repository = %s AND idempotency_key = %s",
@@ -2185,6 +2242,7 @@ class PostgresBuilderOpsStore:
     def _repair_outbox_bindings(self, repository: str, operation_key: str) -> None:
         """Finish local observability bindings left incomplete by a lost response."""
         with self._connect() as conn:
+            self._assert_reconciliation_admitted(conn)
             row = conn.execute(
                 "SELECT outbox.intent_lsn::text AS intent_lsn, "
                 "outbox.intent_receipt_sequence, receipt.idempotency_key, "
@@ -2426,6 +2484,7 @@ class PostgresBuilderOpsStore:
         envelope_json = Jsonb(envelope.as_json())
         replayed = False
         with self._connect() as conn:
+            self._assert_executor_enabled(conn, envelope.repository)
             conn.execute("SET LOCAL synchronous_commit = on")
             conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -2735,7 +2794,7 @@ class PostgresBuilderOpsStore:
         expired_attempt = False
         with self._connect() as conn:
             conn.execute("SET LOCAL synchronous_commit = on")
-            self._assert_executor_enabled(conn)
+            self._assert_executor_enabled(conn, envelope.repository)
             row = conn.execute(
                 "SELECT task_id, status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
                 "claim_fencing_token, claim_expires_at, post_effect_phase, reconciliation_receipt_sequence, "
@@ -2827,6 +2886,7 @@ class PostgresBuilderOpsStore:
         self._fault(fault_at, "after_claim_commit")
         claim_lsn = self._flushed_lsn()
         with self._connect() as conn:
+            self._assert_executor_enabled(conn, envelope.repository)
             finalized = conn.execute(
                 "UPDATE builderops_outbox SET claim_lsn = %s WHERE repository = %s AND operation_key = %s "
                 "AND worker_id = %s AND claim_fencing_token = %s RETURNING operation_key",
@@ -2880,6 +2940,7 @@ class PostgresBuilderOpsStore:
         """Persist dormant phase identity from a locked row, never request evidence."""
         repository = canonical_repository(repository)
         with self._connect() as conn:
+            self._assert_executor_enabled(conn)
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
                 "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at, authority_envelope, "
@@ -2941,6 +3002,7 @@ class PostgresBuilderOpsStore:
                 raise ValueError("readback evidence contradicts the requested outcome")
         repository = canonical_repository(repository)
         with self._connect() as conn:
+            self._assert_reconciliation_admitted(conn)
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
                 "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at, authority_envelope, "
@@ -3016,6 +3078,7 @@ class PostgresBuilderOpsStore:
                       "replayed": reconciled.replayed}
         race_retry = False
         with self._connect() as conn:
+            self._assert_reconciliation_admitted(conn)
             updated = conn.execute(
                 "UPDATE builderops_outbox SET post_effect_phase = 'reconciled', "
                 "post_effect_evidence = %s, post_effect_receipt_sequence = %s, "
@@ -3042,13 +3105,24 @@ class PostgresBuilderOpsStore:
     def _repair_outbox_claim_binding(self, repository: str, operation_key: str) -> None:
         """Bind a locally committed claim/receipt before recovery marks it unknown."""
         with self._connect() as conn:
+            self._assert_reconciliation_admitted(conn)
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, claim_receipt_sequence, "
-                "claim_lsn::text AS claim_lsn FROM builderops_outbox "
+                "claim_lsn::text AS claim_lsn, claim_expires_at, post_effect_phase, unknown_detail "
+                "FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s FOR UPDATE",
                 (repository, operation_key),
             ).fetchone()
             if row is None or row["status"] not in {"claimed", "unknown"}:
+                return
+            if (row["status"] == "unknown" and row["worker_id"] is None
+                    and row["claim_receipt_sequence"] is None and row["claim_lsn"] is None
+                    and row["claim_expires_at"] is None and row["post_effect_phase"] is None
+                    and int(row["claim_fencing_token"]) == 0
+                    and row["unknown_detail"] == "bootstrap requires authoritative effect readback"):
+                # Migration retained a durable intent that was never claimed.
+                # There is no historical claim to repair; outbox_claim creates
+                # its first reconciliation-only identity, without execution.
                 return
             if row["worker_id"] is None or row["claim_receipt_sequence"] is None:
                 raise DurabilityPending("outbox claim has no local receipt binding")
@@ -3114,7 +3188,7 @@ class PostgresBuilderOpsStore:
         self._repair_outbox_claim_binding(repository, operation_key)
         with self._connect() as conn:
             conn.execute("SET LOCAL synchronous_commit = on")
-            self._assert_executor_enabled(conn)
+            self._assert_reconciliation_admitted(conn)
             row = conn.execute(
                 "SELECT outbox.task_id, outbox.status, outbox.worker_id, "
                 "outbox.claim_fencing_token, "
@@ -3123,25 +3197,20 @@ class PostgresBuilderOpsStore:
                 "outbox.claim_receipt_sequence, outbox.claim_expires_at, outbox.post_effect_phase, "
                 "clock_timestamp() AS database_now, receipt.event_type AS claim_event_type "
                 "FROM builderops_outbox AS outbox "
-                "JOIN builderops_receipts AS receipt "
+                "LEFT JOIN builderops_receipts AS receipt "
                 "ON receipt.repository = outbox.repository "
                 "AND receipt.receipt_sequence = outbox.claim_receipt_sequence "
                 "WHERE outbox.repository = %s AND outbox.operation_key = %s "
-                "AND outbox.status IN ('claimed', 'unknown') "
+                "AND outbox.status IN ('pending', 'claimed', 'unknown') "
                 "FOR UPDATE OF outbox",
                 (repository, operation_key),
             ).fetchone()
-            if (
-                row is None
-                or row["worker_id"] is None
-                or row["claim_receipt_sequence"] is None
-                or row["claim_expires_at"] is None
-            ):
+            if row is None:
                 raise KeyError(operation_key)
             if row["intent_lsn"] is None:
                 raise DurabilityPending("outbox intent durability binding is incomplete")
             if (
-                row["claim_expires_at"] > row["database_now"]
+                row["claim_expires_at"] is not None and row["claim_expires_at"] > row["database_now"]
             ):
                 raise LeaseUnavailable(
                     "outbox operation still has an active claim"
@@ -3198,6 +3267,7 @@ class PostgresBuilderOpsStore:
                 )
         claim_lsn = self._flushed_lsn()
         with self._connect() as conn:
+            self._assert_reconciliation_admitted(conn)
             finalized = conn.execute(
                 "UPDATE builderops_outbox SET claim_lsn = %s "
                 "WHERE repository = %s AND operation_key = %s "
@@ -3238,6 +3308,10 @@ class PostgresBuilderOpsStore:
         claim: OutboxClaim,
     ) -> bool:
         with self._connect() as conn:
+            try:
+                self._assert_executor_enabled(conn, claim.repository)
+            except DurabilityPending:
+                return False
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, claim_expires_at, "
                 "intent_lsn::text AS intent_lsn, claim_lsn::text AS claim_lsn, "
@@ -3264,6 +3338,7 @@ class PostgresBuilderOpsStore:
         self, claim: OutboxClaim, *, detail: str
     ) -> dict[str, object]:
         with self._connect() as conn:
+            self._assert_reconciliation_admitted(conn)
             row = conn.execute(
                 "SELECT status, worker_id, claim_fencing_token, "
                 "intent_lsn::text AS intent_lsn, claim_lsn::text AS claim_lsn, "
@@ -3339,6 +3414,19 @@ class PostgresBuilderOpsStore:
         )
         replayed = False
         with self._connect() as conn:
+            self._assert_reconciliation_admitted(conn)
+            from app.builderops.control_plane.bootstrap import receipt_matches
+
+            recovery = conn.execute(
+                "SELECT * FROM builderops_recovery_state WHERE singleton FOR SHARE"
+            ).fetchone()
+            writers_admitted = bool(
+                recovery is not None and receipt_matches(recovery)
+                and claim.repository in recovery["bootstrap_config"]["repositories"]
+            )
+            if (not writers_admitted and not observed_applied and not terminal_unknown
+                    and evidence.get("readback") != "not-found"):
+                raise ValueError("fenced negative reconciliation requires explicit not-found readback")
             conn.execute("SET LOCAL synchronous_commit = on")
             conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -3496,6 +3584,7 @@ class PostgresBuilderOpsStore:
         replayed: bool,
     ) -> OutboxReconciliation:
         with self._connect() as conn:
+            self._assert_reconciliation_admitted(conn)
             conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                 (f"outbox-reconcile:{repository}:{operation_key}:{fencing_token}",),
@@ -3800,6 +3889,7 @@ def _commit_owner_outcome(
     key = "owner-outcome:" + idempotency_key
     replayed = False
     with store._connect() as conn:
+        store._assert_executor_enabled(conn, repository)
         conn.execute("SET LOCAL synchronous_commit = on")
         conn.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"idempotency:{repository}:{key}",))
         existing = conn.execute("SELECT request_hash, result FROM builderops_idempotency WHERE repository = %s AND idempotency_key = %s FOR UPDATE", (repository, key)).fetchone()
@@ -3875,6 +3965,7 @@ def _commit_owner_outcome(
     store._fault(fault_at, "after_owner_outcome_commit")
     result = store._finalize_authority_object(repository,key,receipt_sequence,store._flushed_lsn(),replayed=replayed)
     with store._connect() as conn:
+        store._assert_executor_enabled(conn, repository)
         conn.execute("UPDATE builderops_outbox SET intent_lsn=COALESCE(intent_lsn,%s) WHERE repository=%s AND intent_receipt_sequence=%s AND effect_type='owner_outcomes.project'", (result.recovery_lsn,repository,receipt_sequence))
     return result
 
