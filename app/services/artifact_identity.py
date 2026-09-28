@@ -7,10 +7,11 @@ from pathlib import Path, PurePosixPath
 
 from app.config.paths import VaultRootMisconfiguredError
 from app.knowledge.errors import KnowledgeWriteConflict
-from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note
+from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note_in_vault
 from app.rebuildability.product_total_loss import parse_bounded_frontmatter
 from app.services.companion_note import companion_path
 from app.services.note_uuid import ensure_note_uuid
+from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import WritesBlockedError
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -120,7 +121,21 @@ def _is_create_once(vault_root: Path, artifact_path: Path) -> bool:
     # Mirrors the filesystem knowledge adapter's write classification, which is
     # what refuses the expected-version uuid backfill for non-rewritten classes.
     relative = artifact_path.relative_to(vault_root).as_posix()
-    return classify_note(relative, WriteOperation.WRITE) is NoteClass.CREATE_ONCE
+    try:
+        sources_root_rel = get_vault_sources_dir_rel(vault_root)
+    except Exception as exc:  # noqa: BLE001 - identity healing cannot guess zone authority
+        raise KnowledgeWriteConflict(
+            f"cannot classify artifact identity without the selected vault Sources root: {exc}"
+        ) from exc
+    return (
+        classify_note_in_vault(
+            relative,
+            WriteOperation.WRITE,
+            vault_root=vault_root,
+            sources_root_rel=sources_root_rel,
+        )
+        is NoteClass.CREATE_ONCE
+    )
 
 
 def _recovery_identity(

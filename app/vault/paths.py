@@ -17,6 +17,7 @@ from app.settings.locations import (
 )
 from app.vault.layout import load_layout
 from app.vault.manager import VaultContext
+from app.path_utils import normalize_note_path
 from app.vault.settings_service import SettingsService
 
 
@@ -51,6 +52,7 @@ class NoVaultSelectedError(RuntimeError):
 
 
 DEFAULT_SOURCES_DIR_REL = "Sources"
+DEFAULT_CAPTURE_NOTE_NAME = "inbox.md"
 
 
 class VaultPathResolver:
@@ -352,6 +354,16 @@ def get_vault_inbox_dir_rel(vault_root: Path | None = None) -> str:
     return resolve_vault_inbox_dir_rel(root).value
 
 
+def get_vault_capture_note_rel(vault_root: Path | None = None) -> str:
+    """Resolve the effective capture note using the capture endpoint's precedence."""
+    override = (os.getenv("VAULT_CAPTURE_NOTE_REL") or "").strip()
+    if override:
+        return normalize_note_path(override)
+    root = _resolve_vault_root(vault_root)
+    inbox_rel = get_vault_inbox_dir_rel(root)
+    return normalize_note_path((Path(inbox_rel) / DEFAULT_CAPTURE_NOTE_NAME).as_posix())
+
+
 def get_vault_sources_dir_rel(vault_root: Path | None = None) -> str:
     root = _resolve_vault_root(vault_root)
     return resolve_vault_sources_dir_rel(root).value
@@ -425,6 +437,7 @@ __all__ = [
     "get_vault_system_dir_rel",
     "resolve_vault_inbox_dir_rel",
     "resolve_vault_sources_dir_rel",
+    "get_vault_capture_note_rel",
     "resolve_vault_runtime_dir_rel",
     "resolve_vault_system_dir_rel",
     "resolve_vault_system_dir_rel_or_default",

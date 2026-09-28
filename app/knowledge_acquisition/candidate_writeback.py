@@ -66,6 +66,10 @@ from app.knowledge_acquisition.note_renderer import (
 from app.knowledge_acquisition.normalize import has_usable_transcript, normalize
 from app.knowledge_acquisition.normalize import NormalizedTranscript
 from app.vault.manager import VaultContext
+from app.vault.path_overlap import (
+    VaultPathOverlapError,
+    assert_targets_do_not_overlap_capture_note,
+)
 from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
@@ -496,6 +500,10 @@ def write_candidate_note(
     if sources_dir is None:
         sources_dir = get_vault_sources_dir_rel(vault_root)
     artifact_path = candidate_note_path(candidate, sources_dir=sources_dir)
+    targets = [artifact_path]
+    if proposal_on_existing and candidate.extraction_artifact_ids:
+        targets.append(_versioned_proposal_path(candidate, artifact_path))
+    _assert_capture_note_disjoint(targets, vault_root=vault_root)
 
     try:
         target_exists = candidate_note_exists_durable(
@@ -581,13 +589,8 @@ def _write_versioned_proposal(
     """Atomically create one D5 proposal companion without touching predecessor bytes."""
     identity_material = "\n".join(candidate.extraction_artifact_ids)
     proposal_reference = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:20]
-    predecessor = PurePosixPath(predecessor_path)
-    max_version = max((item.extractor_version for item in candidate.extractions), default=0)
-    proposal_name = (
-        f"{predecessor.stem}-proposal-extracted-v{max_version}-"
-        f"{proposal_reference}.meta.md"
-    )
-    proposal_path = predecessor.with_name(proposal_name).as_posix()
+    proposal_path = _versioned_proposal_path(candidate, predecessor_path)
+    _assert_capture_note_disjoint([proposal_path], vault_root=vault_root)
     now = _iso(datetime.now(timezone.utc))
     content = render_review_required_note(
         frontmatter={
@@ -657,6 +660,25 @@ def _vault_root(context: VaultContext) -> Path:
     if not context.active_vault_path:
         raise CandidateWritebackError("vault_context.active_vault_path is required")
     return Path(context.active_vault_path).expanduser().resolve()
+
+
+def _versioned_proposal_path(candidate: Candidate, predecessor_path: str) -> str:
+    identity_material = "\n".join(candidate.extraction_artifact_ids)
+    proposal_reference = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:20]
+    predecessor = PurePosixPath(predecessor_path)
+    max_version = max((item.extractor_version for item in candidate.extractions), default=0)
+    proposal_name = (
+        f"{predecessor.stem}-proposal-extracted-v{max_version}-"
+        f"{proposal_reference}.meta.md"
+    )
+    return predecessor.with_name(proposal_name).as_posix()
+
+
+def _assert_capture_note_disjoint(targets: list[str], *, vault_root: Path) -> None:
+    try:
+        assert_targets_do_not_overlap_capture_note(targets, vault_root=vault_root)
+    except VaultPathOverlapError as exc:
+        raise CandidateWritebackError(str(exc)) from exc
 
 
 def _slug(value: str) -> str:

@@ -616,6 +616,64 @@ def test_reading_candidate_rejects_foreign_winner_of_create_race(
     assert "non-matching artifact" in (result.reason or "")
 
 
+def test_projection_writers_reject_capture_overlap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _publish("obs-capture-overlap", episode_id="ep-capture-overlap")
+    rows = candidate_projection.read_observations_for_consumer(CANDIDATE_CONSUMER_ID)
+    candidate = candidate_projection._plan_writes(rows)[0].candidate
+    projected_path = candidate_note_path(candidate, candidates_dir="Inbox")
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", projected_path)
+
+    projected = candidate_projection.write_candidate_note(
+        candidate,
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        candidates_dir="Inbox",
+    )
+    assert projected.status == "blocked"
+    assert "overlaps effective capture note" in (projected.reason or "")
+    projected_batch = project_pending_candidates(
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        candidates_dir="Inbox",
+    )
+    assert len(projected_batch) == 1
+    assert projected_batch[0].status == "blocked"
+    assert get_cursor(CANDIDATE_CONSUMER_ID) == 0
+
+    reading = ReadingSourceCandidate(
+        observation_id="karakeep:item-overlap:content-hash:profile-hash",
+        episode_id="karakeep:item-overlap",
+        item_id="item-overlap",
+        item_kind="link",
+        source_url="https://example.test/item-overlap",
+        tags=("test",),
+        content_identity="sha256:content-hash",
+        raw_ref="raw:item-overlap",
+        scope_hint="operator_private",
+        sequence=1,
+        supersedes=None,
+        revision_of=None,
+        tombstone=False,
+        evidence_text="observed evidence",
+    )
+    reading_path = candidate_projection.reading_candidate_note_path(
+        reading, candidates_dir="ReadingInbox"
+    )
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", reading_path)
+    reading_result = write_reading_candidate_note(
+        reading,
+        vault_context=vault,
+        write_guard=_allowing_guard(),
+        candidates_dir="ReadingInbox",
+    )
+    assert reading_result.status == "blocked"
+    assert "overlaps effective capture note" in (reading_result.reason or "")
+    assert not list(Path(vault.active_vault_path).rglob("*.md"))
+
+
 def test_projector_does_not_acknowledge_candidate_with_tampered_provenance(tmp_path: Path) -> None:
     _publish("obs-tampered", episode_id="ep-tampered", raw_ref="raw-original")
     vault = _vault(tmp_path / "vault")

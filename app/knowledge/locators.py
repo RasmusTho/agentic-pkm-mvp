@@ -5,10 +5,7 @@ from pathlib import Path
 
 from app.knowledge.contracts import NoteLocator
 from app.knowledge.vault_identity import resolve_obsidian_vault_name
-
-
-def normalize_note_path(path: str | Path) -> str:
-    return str(path).strip().replace("\\", "/")
+from app.path_utils import normalize_note_path
 
 
 def make_note_locator(path: str | Path, *, vault: str | None = None) -> NoteLocator:

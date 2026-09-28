@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import threading
+import unicodedata
 
 import pytest
 import yaml
@@ -143,6 +144,187 @@ def test_write_goes_through_writeguard_callsite(tmp_path: Path) -> None:
     # The production call site: the note only exists on disk because the guard was consulted
     # immediately before the write, not as an incidental side effect.
     assert (vault_root / result.artifact_path).exists()
+
+
+def test_candidate_and_proposal_writers_reject_capture_overlap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault = _vault(vault_root)
+    candidate = replace(
+        _assembled_candidate(),
+        extraction_artifact_ids=("extraction-capture-overlap",),
+    )
+    candidate_path = candidate_note_path(candidate)
+    proposal_path = candidate_writeback._versioned_proposal_path(
+        candidate, candidate_path
+    )
+    probes: list[str] = []
+    original_probe = candidate_writeback.candidate_note_exists_durable
+
+    def track_probe(note_path: str, **kwargs):  # type: ignore[no-untyped-def]
+        probes.append(note_path)
+        return original_probe(note_path, **kwargs)
+
+    monkeypatch.setattr(
+        candidate_writeback, "candidate_note_exists_durable", track_probe
+    )
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", candidate_path)
+    with pytest.raises(CandidateWritebackError, match="overlaps effective capture note"):
+        write_candidate_note(
+            candidate,
+            vault_context=vault,
+            write_guard=_allowing_guard(),
+            proposal_on_existing=True,
+        )
+    assert probes == []
+    assert not list(vault_root.rglob("*.md"))
+
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", proposal_path)
+    with pytest.raises(CandidateWritebackError, match="overlaps effective capture note"):
+        write_candidate_note(
+            candidate,
+            vault_context=vault,
+            write_guard=_allowing_guard(),
+            proposal_on_existing=True,
+        )
+    assert probes == []
+    assert not list(vault_root.rglob("*.md"))
+
+
+def test_candidate_writer_fails_closed_when_capture_inbox_is_unresolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault = _vault(vault_root)
+    monkeypatch.delenv("VAULT_CAPTURE_NOTE_REL", raising=False)
+    monkeypatch.delenv("VAULT_INBOX_DIR_REL", raising=False)
+    monkeypatch.delenv("VAULT_SOURCES_DIR_REL", raising=False)
+
+    with pytest.raises(CandidateWritebackError, match="could not be resolved"):
+        write_candidate_note(
+            _assembled_candidate(),
+            vault_context=vault,
+            write_guard=_allowing_guard(),
+        )
+
+    assert not list(vault_root.rglob("*.md"))
+
+
+@pytest.mark.parametrize("capture_path", ["../outside.md", "/outside.md"])
+def test_candidate_writer_fails_closed_when_capture_note_authority_is_malformed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capture_path: str,
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault = _vault(vault_root)
+    probes: list[str] = []
+    original_probe = candidate_writeback.candidate_note_exists_durable
+
+    def track_probe(note_path: str, **kwargs):  # type: ignore[no-untyped-def]
+        probes.append(note_path)
+        return original_probe(note_path, **kwargs)
+
+    monkeypatch.setattr(candidate_writeback, "candidate_note_exists_durable", track_probe)
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", capture_path)
+
+    with pytest.raises(CandidateWritebackError, match="could not be resolved"):
+        write_candidate_note(
+            _assembled_candidate(),
+            vault_context=vault,
+            write_guard=_allowing_guard(),
+        )
+
+    assert probes == []
+    assert not list(vault_root.rglob("*.md"))
+
+
+def test_candidate_writer_fails_closed_when_capture_note_resolves_outside_vault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault = _vault(vault_root)
+    outside_note = tmp_path / "outside" / "inbox.md"
+    outside_note.parent.mkdir()
+    outside_note.write_text("external capture", encoding="utf-8")
+    (vault_root / "CaptureAlias").symlink_to(outside_note)
+    probes: list[str] = []
+    original_probe = candidate_writeback.candidate_note_exists_durable
+
+    def track_probe(note_path: str, **kwargs):  # type: ignore[no-untyped-def]
+        probes.append(note_path)
+        return original_probe(note_path, **kwargs)
+
+    monkeypatch.setattr(candidate_writeback, "candidate_note_exists_durable", track_probe)
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", "CaptureAlias")
+
+    with pytest.raises(CandidateWritebackError, match="could not be resolved"):
+        write_candidate_note(
+            _assembled_candidate(),
+            vault_context=vault,
+            write_guard=_allowing_guard(),
+        )
+
+    assert probes == []
+    assert not list(vault_root.rglob("*.md"))
+
+
+def test_candidate_writer_rejects_unicode_normalization_alias_outside_vault(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.vault import path_overlap
+
+    vault_root = tmp_path / "Caf\u00e9"
+    external_alias = tmp_path / "Cafe\u0301"
+    vault = _vault(vault_root)
+    (vault_root / "CaptureAlias").symlink_to(Path("..") / external_alias.name / "inbox.md")
+    monkeypatch.setattr(
+        path_overlap,
+        "_filesystem_name_semantics",
+        lambda _path: (False, None, None),
+    )
+    original_samefile = path_overlap.os.path.samefile
+
+    def samefile_unavailable_for_unicode_alias(left: str | Path, right: str | Path) -> bool:
+        left_name = Path(left).name
+        right_name = Path(right).name
+        if left_name != right_name and unicodedata.normalize("NFD", left_name) == unicodedata.normalize(
+            "NFD", right_name
+        ):
+            raise FileNotFoundError("same-file evidence unavailable for dangling alias")
+        return original_samefile(left, right)
+
+    monkeypatch.setattr(
+        path_overlap.os.path,
+        "samefile",
+        samefile_unavailable_for_unicode_alias,
+    )
+    assert path_overlap._path_is_within(
+        (vault_root / "CaptureAlias").resolve(strict=False),
+        vault_root.resolve(strict=False),
+    )
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", "CaptureAlias")
+    probes: list[str] = []
+    original_probe = candidate_writeback.candidate_note_exists_durable
+
+    def track_probe(note_path: str, **kwargs):  # type: ignore[no-untyped-def]
+        probes.append(note_path)
+        return original_probe(note_path, **kwargs)
+
+    monkeypatch.setattr(candidate_writeback, "candidate_note_exists_durable", track_probe)
+
+    with pytest.raises(CandidateWritebackError, match="could not be resolved"):
+        write_candidate_note(
+            _assembled_candidate(),
+            vault_context=vault,
+            write_guard=_allowing_guard(),
+        )
+
+    assert probes == []
+    assert not list(vault_root.rglob("*.md"))
 
 
 def test_writeguard_denial_creates_no_candidate_parent(tmp_path: Path) -> None:

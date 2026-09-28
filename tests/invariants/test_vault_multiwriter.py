@@ -22,6 +22,8 @@ from app.knowledge.multiwriter import (
     conflict_artifact_path,
     is_conflict_artifact,
 )
+from app.knowledge.service import resolve_knowledge_port
+from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
 from app.knowledge.write_ops import write_note_from_absolute
 from app.knowledge.write_ops import write_note_relative
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
@@ -163,6 +165,55 @@ def test_runtime_note_classes_accept_settings_resolved_capture_and_sources_paths
         )
         is NoteClass.CREATE_ONCE
     )
+
+
+def test_adapter_classifies_configured_sources_root_as_create_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "Acquired")
+    settings = KnowledgeSettings(
+        primary_adapter=KnowledgeAdapter.FS_VAULT,
+        fallback_adapter=KnowledgeAdapter.OBSIDIAN_CLI,
+        allow_fallback=False,
+        strict_startup=True,
+    )
+    port = resolve_knowledge_port(vault_root=tmp_path, settings=settings)
+
+    receipt = port.write_note(
+        NoteLocator(vault="Vault", path="Acquired/source.md"),
+        "source artifact",
+    )
+
+    assert receipt.note_class is NoteClass.CREATE_ONCE
+
+
+@pytest.mark.parametrize(
+    ("sources_alias", "note_path"),
+    [
+        ("SourcesAlias", "Acquired/source.md"),
+        ("Cafe\u0301", "Caf\u00e9/source.md"),
+    ],
+)
+def test_adapter_classifies_filesystem_alias_of_sources_root_as_create_once(
+    tmp_path: Path,
+    sources_alias: str,
+    note_path: str,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    if sources_alias == "SourcesAlias":
+        (vault / "Acquired").mkdir()
+        (vault / sources_alias).symlink_to("Acquired", target_is_directory=True)
+    else:
+        (vault / "Caf\u00e9").mkdir()
+
+    adapter = FsVaultAdapter(vault, sources_root_rel=sources_alias)
+    receipt = adapter.write_note(
+        NoteLocator(vault="Vault", path=note_path),
+        "source artifact",
+    )
+
+    assert receipt.note_class is NoteClass.CREATE_ONCE
 
 
 def test_expected_version_write_rejects_create_once_note_before_mutation(

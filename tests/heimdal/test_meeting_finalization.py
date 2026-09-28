@@ -20,7 +20,7 @@ import yaml
 from fastapi.testclient import TestClient
 
 from app.api.app import app
-from app.heimdal import meeting_blocks, meeting_finalization
+from app.heimdal import meeting_blocks, meeting_finalization, meeting_ledger, meeting_projection
 from app.heimdal.consent_ledger import reset_memory_consent_ledger
 from app.heimdal.media_receipts import reset_memory_media_receipts
 from app.heimdal.raw_store import reset_memory_raw_store
@@ -119,6 +119,52 @@ def _write_note(client: TestClient, session_id: str, note_id: str, revision: int
             "editor_identity": "operator@ipad-1",
         },
     )
+
+
+@pytest.mark.parametrize("artifact_name", ["transcript", "analysis", "user_notes"])
+def test_finalization_rejects_capture_overlap_before_backend(
+    _memory_runtime: Path,
+    vault: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    artifact_name: str,
+) -> None:
+    session_id = f"mtg-overlap-{uuid4()}"
+    meeting_ledger.open_meeting_session(session_id=session_id, device_id="ipad-1")
+    meeting_ledger.close_meeting_session(session_id=session_id, final_seq_count=0)
+    projection = meeting_projection.build_projection(session_id)
+    report = meeting_ledger.build_gap_report(session_id)
+    state_hash = meeting_finalization._state_identity(report, projection)
+    artifact_filename = "user-notes" if artifact_name == "user_notes" else artifact_name
+    artifact_path = (
+        f"{meeting_finalization.meetings_dir_rel(vault)}"
+        f"/{meeting_finalization._session_path_component(session_id)}"
+        f"/{artifact_filename}-{state_hash[:8]}.md"
+    )
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", artifact_path)
+    backend_calls: list[bool] = []
+    event_calls: list[bool] = []
+
+    def fail_backend():
+        backend_calls.append(True)
+        raise AssertionError("receipt backend initialized before path preflight")
+
+    def fail_event(*_args, **_kwargs):
+        event_calls.append(True)
+        return False
+
+    monkeypatch.setattr(meeting_finalization, "_backend", fail_backend)
+    monkeypatch.setattr(meeting_finalization, "_emit_finalized_event", fail_event)
+
+    with pytest.raises(
+        meeting_finalization.MeetingFinalizationError,
+        match="overlap the capture note",
+    ):
+        meeting_finalization.finalize_session(session_id)
+
+    assert backend_calls == []
+    assert event_calls == []
+    assert not (_memory_runtime / "finalization.sqlite3").exists()
+    assert not list(vault.rglob("*.md"))
 
 
 def _frontmatter(path: Path) -> dict[str, Any]:
