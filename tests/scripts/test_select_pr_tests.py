@@ -179,6 +179,27 @@ def test_ci_smoke_workflow_change_selects_full_shared_suite() -> None:
     assert selection.unowned_paths == ()
 
 
+def test_shared_note_path_normalization_has_exact_vault_ownership() -> None:
+    selection = select_tests(
+        [
+            "app/path_utils.py",
+            "app/vault/paths.py",
+            "app/vault/path_overlap.py",
+            "app/knowledge/locators.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("vault",)
+    assert selection.unowned_paths == ()
+    assert "tests/vault" in selection.targets
+    assert "tests/knowledge" in selection.targets
+
+    same_prefix_sibling = select_tests(["app/path_utils_extra.py"])
+    assert same_prefix_sibling.subsystems == ("unowned",)
+    assert same_prefix_sibling.unowned_paths == ("app/path_utils_extra.py",)
+
+
 def test_governance_docs_change_selects_governance_tests() -> None:
     selection = select_tests(["docs/development/TEST_STRATEGY_HOT_PATH.md"])
 

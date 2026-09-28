@@ -1130,6 +1130,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 
 EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
     "llm_eval": frozenset({"app/components/reasoning/facade.py"}),
+    # Separator-only note-path normalization is shared by the vault and
+    # knowledge modules, both covered by the vault owner's target set. Keep
+    # this exact so a similarly named, unowned runtime module still fails closed.
+    "vault": frozenset({"app/path_utils.py"}),
 }
 
 
