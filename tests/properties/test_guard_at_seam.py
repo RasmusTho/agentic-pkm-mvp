@@ -194,7 +194,7 @@ def test_every_write_note_relative_seam_has_port_coverage(tmp_path) -> None:
 
 
 def test_vault_multiwriter_relative_intent_census_is_closed() -> None:
-    """Every #5140 producer has one explicit create-once/append-only intent."""
+    """Every registered producer has one explicit create-once/append-only intent."""
     expected = {
         ("app/agent_memory/materialization.py", "materialize_promoted_memory", 1),
         ("app/agent_memory/provisional_write.py", "write_provisional_memory", 1),
@@ -205,6 +205,7 @@ def test_vault_multiwriter_relative_intent_census_is_closed() -> None:
         ("app/heimdal/candidate_projection.py", "write_reading_candidate_note", 1),
         ("app/heimdal/capture_note.py", "write_capture_note", 1),
         ("app/heimdal/settings_notes.py", "_write_settings_note", 1),
+        ("app/services/commitment_persistence.py", "persist_commitment", 2),
         ("app/mcp/vault_tools.py", "append_note", 1),
     }
     live = set(find_write_note_relative_call_sites())

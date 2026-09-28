@@ -1035,11 +1035,14 @@ def test_expected_version_producers_hash_the_exact_filesystem_bytes() -> None:
         "app/promotion/queue.py": 1,
         "app/services/note_update.py": 2,
         "app/services/note_uuid.py": 1,
+        # Ordinal 1 in this module is the existing-target CAS read; ordinal 2
+        # is separately classified below as a create-once first-persist site.
+        "app/services/commitment_persistence.py": 1,
         "app/watcher/registry.py": 1,
         "app/watcher/vault_watcher.py": 1,
     }
 
-    assert sum(text_producers.values()) == 13
+    assert sum(text_producers.values()) == 14
     for relative_path, expected_reads in text_producers.items():
         source = (repo_root / relative_path).read_text(encoding="utf-8")
         assert source.count("read_note_text_with_version(") >= expected_reads, relative_path
@@ -1075,6 +1078,10 @@ def test_expected_version_producers_hash_the_exact_filesystem_bytes() -> None:
             "write_reading_candidate_note",
             "create-once",
         ),
+        "app/services/commitment_persistence.py": (
+            "persist_commitment",
+            "create-once",
+        ),
         "app/mcp/vault_tools.py": ("append_note", "append-only"),
     }
     for relative_path, (symbol, classification) in intent_producers.items():
@@ -1086,6 +1093,12 @@ def test_expected_version_producers_hash_the_exact_filesystem_bytes() -> None:
             assert "create_once=True" in source, relative_path
         else:
             assert "create_once=True" not in source, relative_path
+
+    commitment_source = (repo_root / "app/services/commitment_persistence.py").read_text(
+        encoding="utf-8"
+    )
+    assert commitment_source.count("expected_version=expected_version") == 1
+    assert commitment_source.count("create_once=True") == 1
 
     worker_source = (repo_root / "app/workers/outbox_worker.py").read_text(
         encoding="utf-8"
