@@ -200,6 +200,11 @@ def test_shared_secret_partial_update_is_compensated_or_reported_divergent(setup
         admin.import_stdin('dev', 'openai.api-key', StringIO(CANARY))
     assert all(c.value == PRIOR for c in provider.values.values())
     assert history(controller)[-1]['result'] == 'aborted'
+    operation_id = history(controller)[-1]['operation_id']
+    assert provider.values['non-prod', IDENTITY].note == (
+        f'owner text\n[yggdrasil-secret-operation:{operation_id}]'
+    )
+    assert provider.values['prod', IDENTITY].note == 'owner text'
     assert admin.check('dev', ['builderops-model-inquiry'])[0]['status'] == 'ok'
 
 

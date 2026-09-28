@@ -225,7 +225,7 @@ class SecretAdmin:
                                 self._send_delete(history, operation, common, project, identity, current)
                             else:
                                 self._send_put(history, operation, common, project, identity, current,
-                                               copy.value, copy.note)
+                                               copy.value, _note(copy.note, operation.operation_id))
                         history.append(**common, event='terminal', result='aborted')
                         operation.finish(_evidence(operation, 'aborted'))
                         raise SecretAdminError() from None
