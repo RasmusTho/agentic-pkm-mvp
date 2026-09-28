@@ -67,7 +67,7 @@ from app.api.compatibility_mutation import (
 from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.events.models import new_trace_id
 from app.events.schema import make_outbox_event
-from app.knowledge.locators import normalize_note_path
+from app.knowledge import normalize_note_path
 from app.governance.governed_write import (
     AuthorityReceipt,
     GovernedWriteAdapter,
