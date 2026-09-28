@@ -164,7 +164,7 @@ class SecretAdmin:
             absent = sum(copy is None for copy in copies)
             status = 'ok'
             if absent:
-                status = 'skipped' if absent == len(copies) and self.contract.is_optional(secret) else 'missing'
+                status = 'skipped' if absent == len(copies) and secret != 'postgres.password' and self.contract.is_optional(secret) else 'missing'
             if any(copy is not None and not validate_secret_value(self._kind(secret), copy.value)
                    for copy in copies):
                 status = 'invalid'

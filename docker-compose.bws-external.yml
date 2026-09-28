@@ -1,0 +1,21 @@
+---
+# External-target BWS deployment: retain every non-database dependency.
+# A local db is never part of the selected migration/application start graph.
+services:
+  db:
+    profiles: [bws-local-database-disabled]
+  migrate:
+    depends_on:
+      db: !reset null
+  api:
+    depends_on:
+      db: !reset null
+  worker:
+    depends_on:
+      db: !reset null
+  watcher:
+    depends_on:
+      db: !reset null
+  heimdal-capture-watch:
+    depends_on:
+      db: !reset null

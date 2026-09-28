@@ -686,3 +686,24 @@ def test_append_only_enforced_pg_read_receipt(
         assert "append-only" in str(excinfo_del.value).lower() or "HEIM-1" in str(excinfo_del.value)
     finally:
         conn.close()
+
+
+def test_pg_connect_uses_file_aware_database_resolver(tmp_path, monkeypatch):
+    from psycopg.conninfo import conninfo_to_dict
+    from app.config.database import DatabaseCredentialError
+    import psycopg
+    password = tmp_path / 'password'
+    password.write_text('fake-raw-store-file-canary')
+    for name in ('POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE', 'DB_DSN'):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv('DATABASE_PASSWORD_FILE', str(password))
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://app@db:5432/app_test')
+    calls = []
+    monkeypatch.setattr(psycopg, 'connect', lambda dsn, **kwargs: calls.append((conninfo_to_dict(dsn), kwargs)))
+    raw_store._pg_connect()
+    assert calls == [({'user': 'app', 'password': password.read_text(), 'dbname': 'app_test', 'host': 'db', 'port': '5432'}, {'autocommit': True})]
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://app:fake-raw-store-file-canary@db/app_test')
+    with pytest.raises(DatabaseCredentialError) as failure:
+        raw_store._pg_connect()
+    assert 'fake-raw-store-file-canary' not in str(failure.value)
+    assert len(calls) == 1

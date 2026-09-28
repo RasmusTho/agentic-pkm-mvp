@@ -80,8 +80,12 @@ Exit codes:
   0  no terminal-boundary pending rows found (this includes every "cannot
      tell" case -- no DSN resolvable, the DB unreachable, or the query
      itself failing -- which fails OPEN: DB/outbox availability is a
-     separate, already-gated concern, not this check's job).
-  1  terminal-boundary pending rows found; the caller (scripts/deploy_channel.sh)
+     separate, already-gated concern, not this check's job). The governed BWS
+     path blocks on invalid/missing credential configuration before calling the
+     driver. It joins the password file through the central resolver and
+     preserves target options while translating the managed endpoint. Genuine
+     connection/query unavailability retains #3903's first-initialization policy.
+  1  terminal-boundary rows or invalid BWS credential configuration; the caller (scripts/deploy_channel.sh)
      must not proceed to pin write or Compose mutation.
 
 Usage: ``python scripts/prod_deploy_retry_preflight.py`` (no arguments).
@@ -99,7 +103,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 
 # Mirrors app/workers/outbox_worker.py::_MAX_TRANSIENT_RETRY_ATTEMPTS. Kept as
 # a literal (not imported) so this preflight stays import-light and does not
@@ -427,35 +431,62 @@ def evaluate(conn: Any, *, max_dispatch_attempts: int) -> dict[str, Any]:
     }
 
 
+def _unavailable(reason: str) -> dict[str, Any]:
+    result = _skip(reason)
+    if os.environ.get("HOST_SECRET_PROVIDER") == "bws" and reason in {"no_dsn", "credential_configuration"}:
+        # Configuration errors cannot masquerade as #3903's legitimate
+        # unavailable-DB/query case during first initialization or an outage.
+        result["status"] = "blocked"
+    return result
+
+
+def _bws_connection_dsn(dsn: str) -> str:
+    from app.config.database import (
+        credential_free_database_fields, host_database_fields,
+        normalize_database_url, resolve_database_url,
+    )
+    fields = host_database_fields(credential_free_database_fields(dsn),
+                                 published_port=int(_PROD_DB_HOST_PUBLISHED_PORT))
+    environment = dict(os.environ)
+    environment["DATABASE_PASSWORD_FILE"] = environment.get("BWS_POSTGRES_PASSWORD_SOURCE", "")
+    target = "postgresql:///?" + urlencode(fields, quote_via=quote)
+    return normalize_database_url(resolve_database_url(environment, target), sqlalchemy=False)
+
+
 def main(argv: list[str]) -> int:
     del argv  # no arguments accepted; env-driven like the rest of deploy_channel.sh's gates
 
     dsn = _resolve_prod_dsn()
     if not dsn:
-        result = _skip("no_dsn")
+        result = _unavailable("no_dsn")
         print(json.dumps(result, sort_keys=True))
-        return 0
-    dsn = _host_reachable_dsn(dsn)
+        return 1 if result.get("status") == "blocked" else 0
+    try:
+        dsn = (_bws_connection_dsn(dsn) if os.environ.get("HOST_SECRET_PROVIDER") == "bws"
+               else _host_reachable_dsn(dsn))
+    except Exception:
+        print(json.dumps(_unavailable("credential_configuration"), sort_keys=True))
+        return 1
 
     try:
         import psycopg
     except Exception:
-        result = _skip("psycopg_unavailable")
+        result = _unavailable("psycopg_unavailable")
         print(json.dumps(result, sort_keys=True))
-        return 0
+        return 1 if result.get("status") == "blocked" else 0
 
     try:
         conn = psycopg.connect(dsn, connect_timeout=5)
     except Exception:
-        result = _skip("db_unreachable")
+        result = _unavailable("db_unreachable")
         print(json.dumps(result, sort_keys=True))
-        return 0
+        return 1 if result.get("status") == "blocked" else 0
 
     try:
         try:
             result = evaluate(conn, max_dispatch_attempts=_resolve_max_dispatch_attempts())
         except Exception:
-            result = _skip("outbox_query_failed")
+            result = _unavailable("outbox_query_failed")
     finally:
         try:
             conn.close()

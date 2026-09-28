@@ -523,6 +523,81 @@ Before migration execution begins, a pending marker makes interruption recovery 
 
 For failures before migration execution starts, the ordinary fail-closed recovery path preserves the failing gate's original non-zero status and diagnostics, restores the previous pin, and attempts to recreate the prior service set before returning. The instance-state fence remains in place if its finalization fails, so consumer preflight refuses restart.
 
+## Linux channel secret provisioning
+
+The empty-data exception is bound to the effective managed `db:5432` target and its default `app` role/channel database, without connection-option overrides. An empty local volume never proves an external or overridden target empty: these targets require real password authentication and cannot bootstrap a new BWS password. External-target authentication and activation never start or stop the unrelated local database. The supervisor binds the Compose topology to the same effective target. For external targets, the dedicated overlay removes only local `db` dependency edges and excludes its service/volume from the selected graph, while preserving migration, instance-state, and provider dependencies. Ambient profiles cannot re-enable the excluded database; the inherited worker guard refuses a missing or mismatched topology selector before provider access. The governed BWS prod outbox-retry preflight uses the same file-aware resolver and host endpoint translation; invalid or missing file/connection configuration blocks deployment before pins or Compose mutation. After connection resolution, the existing #3903 policy for genuinely unavailable databases or queries remains in force, including first initialization; a successfully queried terminal-pending row blocks deployment. Legacy non-BWS behavior is unchanged.
+
+
+BWS-04 adds a governed Linux adapter around the existing channel deploy, migration, writer, and
+pin machinery. It does not authorize a live deploy or replace promotion/migration acknowledgement.
+Mac Keychain deployment remains unchanged. BWS-03 / #5679 still owns encrypted reader-token
+installation; parent #5667 stays open for that slice and owner live qualification.
+
+The designated agent-host entrypoint is `python3 -m app.ops.postgres_deploy_host <channel> <revision>`.
+It uses the same BWS controller lock as import/check before selected-consumer parity checks, then
+contacts only `ygg-<channel>` with value-free requests. An owner-installed `qualification.json` in
+the controller directory must be owner-only (`0600`) and record the exact `controller` path,
+`sole_writer_approved: true`, `credentials_restricted: true`, and a `live_receipt` comment on #5667.
+No CLI flag creates this approval. The admin token remains on the agent host.
+
+The root-owned `config/systemd/yggdrasil-bws-deploy@.service` and installed
+`scripts/postgres_deploy_service.py` launcher supervise VM work independently of SSH. Operator setup
+places the launcher at `/usr/local/libexec/yggdrasil-bws-deploy` and an owner-only (`root:root`, `0600`)
+`/etc/yggdrasil/bws-deploy/<channel>.json` containing the root-owned, non-writable checkout `root`,
+actual existing named-volume `data_directory`, non-root service `uid`/`gid`, `organization_id`, and
+channel-project `project_id`. The service consumes only the project reader credential at the BWS-03
+stable encrypted source `/var/lib/yggdrasil/bws-tokens/<channel>/current`. The config must name the
+actual channel volume; a missing volume, foreign/anonymous existing mount, or unproved data directory
+is refused. This task neither provisions volumes nor migrates retained plaintext/anonymous data.
+
+Host and VM selected-secret preflights precede deployment mutation. Under the host lock followed by
+the existing VM channel lock, the worker writes an owner-only persistent journal in
+`/var/lib/yggdrasil/bws-deploy`, outside Git and tmpfs. Stages are `prepared`, `preflighted`,
+`materialized`, optional `authenticating`, `activating`, then `committed` or `aborted`. Atomic file
+and parent-directory fsyncs make each stage durable; a separate value-free request binding prevents
+same-ID retries from changing revision or consumer scope. Reconnect joins the same worker. After
+worker loss, missing terminal/quiescence proof stays pending; a released kernel lock is not success
+and does not remove the channel admission directory.
+
+For initialized data, the candidate must authenticate to the active PostgreSQL role with real
+password authentication. The probe and Compose share one effective credential-free connection snapshot:
+process overrides precede deploy-pin values, then generated runtime values; within each source
+`DATABASE_URL` precedes `DB_DSN`. The selected role, database, host and connection options are
+preserved. Only Compose `db:5432` is translated to its channel's host-published TCP endpoint, with
+`hostaddr` retaining the original host for TLS identity checks. Ambiguous container-loopback
+endpoints cannot borrow a host-loopback proof and fail closed. A changed effective target during
+the operation invalidates admission; both runtime DSN aliases receive the same frozen value. After preflights, a stopped database may be started alone with `--no-deps`
+only after durable `authenticating`; its recovery/WAL writes count as deployment mutation. No new or
+recreated migration/application clients start before authentication succeeds. Wrong-password failure
+preserves a pre-existing running database, stops only a database started by the probe, and records
+`aborted` only after quiescence. Unknown outcomes stay pending. First initialization alone permits
+an absent BWS password, after locked empty-directory proof and durable absence/prepared history;
+an ambiguous sent create cannot be retried merely because its readback is missing.
+
+`docker-compose.bws.yml` is appended only on this managed path. It mounts
+`/run/yggdrasil/postgres/<channel>/password` solely into `db`, `migrate`, `api`, `worker`, `watcher`,
+and `heimdal-capture-watch`. The root-only tmpfs directory is `0700`; the file is root-owned `0440`
+with the configured service GID, verified through a non-root read probe. Compose bind-mount mode
+attributes are not relied on. Repeated materialization keeps the same inode and refuses a changed
+value while consumers could retain an old mount. Docker auto-restart is disabled for these services:
+after host boot the supervisor waits for an authorized managed start, which rehydrates before
+consumers start. `ExecStopPost` removes the source only after every consumer stops and Docker is
+quiescent; returning from Compose does not clean it. No persistent PostgreSQL password/env file is
+created. Other declared consumer environment handoffs are private tmpfs files removed after activation.
+
+A pending Heimdal raw-store migration rechecks its declared credential through the inherited
+supervised BWS guard; it never enters the Mac-only child-launch wrapper.
+
+The runtime exporter validates BWS direct DSNs before loading them and supplies credential-free
+channel defaults. `DATABASE_PASSWORD_FILE` is the sole application password source, resolved in
+memory by the shared app/config/DSN/Alembic/direct-client path. Candidate images must declare the
+file-credential protocol before admission; every client start/recreate, including automatic rollback,
+rechecks the effective pin and refuses a legacy image that lacks that protocol. Such a refused
+rollback leaves the deployment pending for compatible-image recovery. The PostgreSQL
+wrapper preserves upstream initialization but scrubs both password environment variables from
+`pg_ctl` and the final server exec. Repository evidence uses fake values/adapters and static Compose
+rendering. It does not establish installation, runtime operation, or live qualification.
+
 ## Promotion workflow binding
 
 The governed executor skills for this deploy procedure are `.codex/skills/prepare-promotion/SKILL.md`,

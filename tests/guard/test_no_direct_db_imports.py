@@ -17,6 +17,11 @@ ALLOW_DIRS = (
 )
 
 ALLOW_FILES = (
+    # BWS-04 (#5680): config uses libpq's conninfo parser only, never connects.
+    # The ops probe is the bounded read-only password-authentication adapter
+    # required before supervised channel activation; no Product data writes.
+    'app/config/database.py',
+    'app/ops/postgres_deploy.py',
     # BuilderOps independent PostgreSQL authority (BCP-01, #3792). This is the
     # dedicated storage adapter behind the domain-neutral control-plane port;
     # callers do not import psycopg or Product app.db through this exception.

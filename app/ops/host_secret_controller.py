@@ -53,6 +53,7 @@ class HostSecretOperation:
         self.target = target
         self._finished = False
         self._active = True
+        self._deferred_prepared = False
 
     def _record(self, stage: str, source: str | None = None) -> None:
         if not self._active or self._finished:
@@ -79,6 +80,9 @@ class HostSecretOperation:
         """Persist before the first remote effect; caller already holds the host lock."""
         if self.kind == "check":
             raise HostSecretAdmissionError()
+        if self._deferred_prepared:
+            self._record("prepared")
+            self._deferred_prepared = False
         self._record("sent")
 
     def finish(self, evidence: TerminalEvidence) -> None:
@@ -105,7 +109,7 @@ class HostSecretController:
         self.directory = directory or Path.home() / ".local/state/yggdrasil/secret-controller"
 
     @contextmanager
-    def _locked_journal(self) -> Iterator[int]:
+    def _locked_journal(self, *, wait: bool = False) -> Iterator[int]:
         directory_fd = lock_fd = journal_fd = None
         try:
             path = self.directory
@@ -123,7 +127,7 @@ class HostSecretController:
                 raise HostSecretAdmissionError()
             lock_fd = self._open_file(directory_fd, "operation.lock")
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
             except BlockingIOError:
                 raise HostSecretAdmissionError() from None
             journal_fd = self._open_file(directory_fd, "operations.jsonl")
@@ -295,5 +299,26 @@ class HostSecretController:
                 operation._record("prepared")
             try:
                 yield operation, bool(pending and pending["stage"] == "sent")
+            finally:
+                operation._active = False
+
+
+    @contextmanager
+    def deploy_operation(self, target: str) -> Iterator[tuple[HostSecretOperation, bool]]:
+        """Resume only the same channel/ID; the remote receipt remains authority."""
+        if target not in _TARGETS - {"shared"}:
+            raise HostSecretAdmissionError()
+        with self._locked_journal(wait=True) as descriptor:
+            pending = self._pending(descriptor)
+            if pending and (pending["kind"] != "deploy" or pending["target"] != target):
+                raise HostSecretAdmissionError()
+            operation = HostSecretOperation(descriptor,
+                str(pending["operation_id"]) if pending else str(uuid4()), "deploy", target)
+            # Read-only host preflight holds the same lock but does not leave a
+            # pending mutation that would prevent importing a missing value.
+            # prepare_mutation persists prepared + sent before the first RPC.
+            operation._deferred_prepared = not bool(pending)
+            try:
+                yield operation, bool(pending)
             finally:
                 operation._active = False

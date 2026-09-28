@@ -31,7 +31,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
+from psycopg.conninfo import conninfo_to_dict
 
 from app.release_channels.cutover_readiness import (
     _load_migrations,
@@ -55,20 +55,20 @@ target_identity = os.environ.get("MIGRATION_TARGET_IDENTITY") or TARGET_IDENTITY
 if target_identity != TARGET_IDENTITY:
     fail(f"unexpected migration target identity {target_identity!r}")
 
-dsn = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
+from app.db.dsn import resolve_dsn
+
+dsn = resolve_dsn()
 if not dsn:
     fail("target database is unavailable")
-if dsn.startswith("postgresql+psycopg://"):
-    dsn = "postgresql://" + dsn.split("postgresql+psycopg://", 1)[1]
 try:
-    parsed_dsn = urlsplit(dsn)
-    database_name = parsed_dsn.path.lstrip("/").split("?", 1)[0]
-    database_endpoint = f"{parsed_dsn.hostname or ''}:{parsed_dsn.port or 5432}"
-except ValueError:
-    parsed_dsn = urlsplit("")
+    parsed_dsn = conninfo_to_dict(dsn)
+    database_name = parsed_dsn.get("dbname", "")
+    database_endpoint = f"{parsed_dsn.get('host', '')}:{parsed_dsn.get('port', '5432')}"
+except Exception:
+    parsed_dsn = {}
     database_name = ""
     database_endpoint = ""
-if database_name != "app" or not parsed_dsn.hostname:
+if database_name != "app" or not parsed_dsn.get("host"):
     fail("target database is not the canonical pkm-prod/app database")
 
 current = subprocess.run(
@@ -173,11 +173,11 @@ import os
 import sys
 import psycopg
 
-dsn = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
+from app.db.dsn import resolve_dsn
+
+dsn = resolve_dsn()
 if not dsn:
     sys.exit(0)
-if dsn.startswith("postgresql+psycopg://"):
-    dsn = "postgresql://" + dsn.split("postgresql+psycopg://", 1)[1]
 try:
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
@@ -215,11 +215,11 @@ if [[ -n "${DATABASE_URL:-${DB_DSN:-}}" ]]; then
 import os
 import psycopg
 
-dsn = os.environ.get("DATABASE_URL") or os.environ.get("DB_DSN")
+from app.db.dsn import resolve_dsn
+
+dsn = resolve_dsn()
 if not dsn:
     raise SystemExit()
-if dsn.startswith("postgresql+psycopg://"):
-    dsn = "postgresql://" + dsn.split("postgresql+psycopg://", 1)[1]
 with psycopg.connect(dsn, autocommit=True) as conn:
     with conn.cursor() as cur:
         cur.execute("create extension if not exists vector")

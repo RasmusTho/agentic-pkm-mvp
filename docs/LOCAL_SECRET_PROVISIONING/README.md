@@ -13,7 +13,7 @@ Last reviewed: 2026-09-13
 
 Provide one small, host-local provisioning boundary for development and runtime processes without
 placing credentials in Git, iCloud, BuilderOps records, Mimer content, or ordinary deploy files.
-The current Mac-hosted implementation uses **macOS Keychain** as its secret source of truth. The accepted Linux BWS target is specified in docs/CLOUD_SECRET_PROVISIONING/README.md and is not claimed as live-qualified here. Heimdal owns the
+The current Mac-hosted implementation uses **macOS Keychain** as its secret source of truth. Linux BWS repository support is described below and in docs/CLOUD_SECRET_PROVISIONING/README.md; live qualification remains pending. Heimdal owns the
 lifecycle of external-helper credentials, while a narrowly scoped
 bootstrap resolves only the secrets a channel/process needs through a temporary owner-readable
 runtime surface, cleans it up, and redacts all values from logs and receipts.
@@ -26,7 +26,7 @@ authority, retention, or product memory.
 
 For external helper systems, Builder Vault records the non-secret credential reference and Heimdal
 ownership metadata. The Mac-hosted path uses macOS Keychain; Linux channel VMs use the accepted BWS
-target defined in docs/CLOUD_SECRET_PROVISIONING/README.md, subject to repository delivery and later live qualification.
+contract defined in docs/CLOUD_SECRET_PROVISIONING/README.md, subject to encrypted-token installation and live qualification.
 External provider identities, including the Discord webhook identity, remain owned and provisioned
 outside this design; the value-free binding is declared below and is not a value stored in the Vault
 or repository.
@@ -34,6 +34,32 @@ or repository.
 The canonical v1 capture ingress is
 `~/Library/Mobile Documents/com~apple~CloudDocs/Yggdrasil/Heimdal/Capture/Inbox`. iCloud is an
 ingress transport only; it is never a secret store or raw-audio archive.
+
+## Linux Bitwarden Secrets Manager
+
+Linux explicitly selects `HOST_SECRET_PROVIDER=bws`; failed or missing BWS access never falls back
+to Keychain. The project-scoped reader resolves only code-declared consumer bindings. Dev/test
+use non-prod and prod uses prod. BWS administration stays on the designated agent host with its
+Keychain-backed admin identity; a VM receives only its reader's encrypted systemd credential.
+BWS-03 / #5679 owns installation of that encrypted source and remains a separate delivery gate.
+
+The BWS-04 supervisor unit uses
+`LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current`
+and `BWS_ACCESS_TOKEN_FILE=%d/bws-machine-account-token`. It admits a value-free request only after
+the host controller's selected-consumer parity check. Same-ID retries join the existing worker;
+a missing durable terminal receipt leaves admission pending. The owner-approved sole-admin-writer
+and credential-restriction receipt on #5667 is required before any live deployment.
+
+PostgreSQL alone uses file delivery: a root-owned `0440` source, group `LOCAL_GID`, under root-only
+`0700` tmpfs is mounted into the six authorized database services. Direct DSNs must be credential-free;
+one database resolver reads `DATABASE_PASSWORD_FILE` in process memory for app config, migrations,
+and direct DB clients. Missing files and password-bearing overrides fail closed. Initialized roles
+require real password authentication; updating BWS or its file does not rotate a database role.
+The deployment owner document describes the DB-only cold-start probe, lifecycle, and pending recovery.
+
+Mac Keychain consumers retain their existing bindings and cleanup behavior. These are repository
+contracts: no test or code-delivery receipt claims BWS accounts, VM installation, credential cleanup,
+or live channel qualification. Parent #5667 remains open until those owner gates are satisfied.
 
 ## Fixed constraints
 

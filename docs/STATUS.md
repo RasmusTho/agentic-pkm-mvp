@@ -5,10 +5,14 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-28 (bounded DevUI, Sources-zone, and classification-evaluation review; repository evidence only, no deployment or owner acceptance)
+Last reviewed: 2026-09-28 (bounded DevUI, Sources-zone, classification-evaluation, and BWS PostgreSQL review; repository evidence only, no deployment or owner acceptance)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
+Last verified against (BWS PostgreSQL): Issue #5680, `app/ops/postgres_deploy.py`,
+`app/ops/postgres_deploy_linux.py`, `app/config/database.py`, and the focused deploy/DSN tests;
+repository implementation only. The Bash-dependent entrypoint proof belongs to hosted Linux CI;
+BWS-03 token installation and parent #5667 live qualification remain separate gates.
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
@@ -42,6 +46,16 @@ liveness but failing functional health (stale watcher/no worker heartbeat; Compa
 Both new-host APIs report unknown build identity. The promotion chain is therefore not yet executable;
 the missing test host, immutable artifact identity, and authoritative deployment handoff are explicit
 follow-up gates rather than implied by local Compose or old Mac mini state.
+
+The BWS-04 implementation (#5680) adds a supervised Linux database deployment path with selected
+host/VM secret checks, durable same-ID receipts, file-only PostgreSQL credentials, and real
+password authentication bound to the effective runtime DSN before client activation. A stopped
+initialized database may be started alone by the journaled authentication probe. This is repository
+support only: BWS-03 (#5679) encrypted reader-token installation, existing-host credential/data
+migration, the designated-writer/credential-restriction gate, and live channel qualification remain
+unfulfilled. Neither the implementation nor its fake-adapter/static-render proof changes the live
+runtime posture. The detailed contract remains in `docs/CLOUD_SECRET_PROVISIONING/README.md` and
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Linux channel secret provisioning`.
 
 The MARR-08 implementation (#5635) adds a bounded Product client and one host-side completion
 operation that dispatches an exact Product-selected route to Codex CLI or Ollama. This is repository

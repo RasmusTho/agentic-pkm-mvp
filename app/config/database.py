@@ -1,9 +1,136 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from urllib.parse import quote
+import os
+import stat
+from ipaddress import ip_address, IPv6Address
+from socket import inet_aton
+from urllib.parse import quote, urlencode
 
 from app.config.environment import ENV_DEV, ENV_PROD, ENV_TEST, active_environment
+
+
+# Image/producer compatibility marker for governed Linux channel deployment.
+DATABASE_FILE_CREDENTIAL_PROTOCOL = 1
+
+
+class DatabaseCredentialError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("database credential configuration refused")
+
+
+class _FileResolvedURL(str):
+    """In-process resolver result; environment strings never carry this provenance."""
+
+
+def credential_free_database_fields(value: str) -> dict[str, str]:
+    """Validate external conninfo without returning a provider/parser exception."""
+    from psycopg.conninfo import conninfo_to_dict
+
+    try:
+        fields = conninfo_to_dict(value.replace("postgresql+psycopg://", "postgresql://", 1))
+    except Exception:
+        raise DatabaseCredentialError() from None
+    if any(key in fields for key in ("password", "passfile", "service", "servicefile", "sslpassword")):
+        raise DatabaseCredentialError()
+    return fields
+
+
+def _namespace_local_address(value: str) -> bool:
+    name = value.casefold().rstrip(".")
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        address = ip_address(value)
+    except ValueError:
+        try:
+            # libpq's system resolver also accepts abbreviated, decimal, octal
+            # and hexadecimal IPv4 literals. Parse them without any DNS lookup.
+            address = ip_address(inet_aton(value))
+        except OSError:
+            return False
+    if isinstance(address, IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_loopback or address.is_unspecified
+
+
+def host_database_fields(fields: Mapping[str, str], *, published_port: int) -> dict[str, str]:
+    """Bridge only the managed Compose endpoint, preserving TLS host identity."""
+    result = dict(fields)
+    if not result.get("host") or result["host"].startswith(("/", "@")) or any(
+        "," in result.get(key, "") for key in ("host", "hostaddr", "port")
+    ):
+        # Host/container socket namespaces and multi-endpoint fallback cannot
+        # be proven equivalent by this single managed-endpoint bridge.
+        raise DatabaseCredentialError()
+    if result.get("host") == "db" and result.get("port") == "5432" and not result.get("hostaddr"):
+        result.update(hostaddr="127.0.0.1", port=str(published_port))
+    elif any(_namespace_local_address(result.get(key, "")) for key in ("host", "hostaddr")):
+        # Container loopback and host loopback identify different endpoints.
+        raise DatabaseCredentialError()
+    return result
+
+
+def _file_password(path: str) -> str:
+    descriptor = None
+    try:
+        if not path or not os.path.isabs(path):
+            raise DatabaseCredentialError()
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 65536:
+            raise DatabaseCredentialError()
+        value = os.read(descriptor, 65537).decode("utf-8", errors="strict")
+        if not value or not all(char.isprintable() for char in value):
+            raise DatabaseCredentialError()
+        return value
+    except Exception:
+        raise DatabaseCredentialError() from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def resolve_database_url(env: Mapping[str, str], conninfo: str | None = None, *, default: bool = True) -> str:
+    """The single file-aware boundary for runtime, SQLAlchemy and direct clients.
+
+    Only a resolver-produced object is idempotent. Converting it to a plain string
+    (e.g. an environment roundtrip) deliberately loses its trusted provenance.
+    """
+    if isinstance(conninfo, _FileResolvedURL):
+        return conninfo
+    if "DATABASE_PASSWORD_FILE" not in env:
+        if conninfo:
+            return conninfo.strip()
+        if not default and not (_clean(env, "DATABASE_URL") or _clean(env, "DB_DSN")):
+            return ""
+        return _legacy_runtime_database_url(env)
+    if any(_clean(env, key) for key in ("POSTGRES_PASSWORD", "PGPASSWORD", "PGPASSFILE", "PGSERVICE", "PGSERVICEFILE")):
+        raise DatabaseCredentialError()
+    # Reject both overrides, even when precedence would hide one of them.
+    for key in ("DATABASE_URL", "DB_DSN"):
+        if _clean(env, key):
+            credential_free_database_fields(_clean(env, key))
+    explicit = conninfo or _clean(env, "DATABASE_URL") or _clean(env, "DB_DSN")
+    fields = credential_free_database_fields(explicit) if explicit else {}
+    env_name = active_environment(env)
+    name_key = {ENV_DEV: "PKM_DB_NAME_DEV", ENV_TEST: "PKM_DB_NAME_TEST"}.get(env_name, "PKM_DB_NAME_PROD")
+    fields.setdefault("dbname", _clean(env, name_key) or default_database_name(env_name))
+    fields.setdefault("user", _clean(env, "POSTGRES_USER") or "app")
+    fields.setdefault("host", _clean(env, "PKM_DB_HOST") or "db")
+    fields.setdefault("port", _clean(env, "PKM_DB_PORT") or "5432")
+    password = _file_password(_clean(env, "DATABASE_PASSWORD_FILE"))
+    # Put connection fields in the query to preserve sockets, multi-host values,
+    # escaped database names, TLS and other libpq options without a second parser.
+    fields["password"] = password
+    return _FileResolvedURL("postgresql+psycopg:///?" + urlencode(fields, quote_via=quote))
+
+
+def normalize_database_url(value: str, *, sqlalchemy: bool) -> str:
+    normalized = value.replace("postgresql+psycopg://", "postgresql://", 1)
+    if sqlalchemy:
+        normalized = normalized.replace("postgresql://", "postgresql+psycopg://", 1)
+    return _FileResolvedURL(normalized) if isinstance(value, _FileResolvedURL) else normalized
 
 
 def _clean(env: Mapping[str, str], key: str) -> str:
@@ -33,6 +160,7 @@ RUNTIME_DATABASE_ENV_KEYS: tuple[str, ...] = (
     "PKM_DB_NAME_PROD",
     "POSTGRES_USER",
     "POSTGRES_PASSWORD",
+    "DATABASE_PASSWORD_FILE",
     "PKM_DB_HOST",
     "PKM_DB_PORT",
 )
@@ -46,10 +174,14 @@ def runtime_database_is_named(env: Mapping[str, str]) -> bool:
     (``postgresql+psycopg://app:app@db:5432/app``) nobody asked for — not an
     operator-named database.
     """
-    return any(_clean(env, key) for key in RUNTIME_DATABASE_ENV_KEYS)
+    return "DATABASE_PASSWORD_FILE" in env or any(_clean(env, key) for key in RUNTIME_DATABASE_ENV_KEYS)
 
 
 def resolve_runtime_database_url(env: Mapping[str, str]) -> str:
+    return resolve_database_url(env)
+
+
+def _legacy_runtime_database_url(env: Mapping[str, str]) -> str:
     explicit = _clean(env, "DATABASE_URL") or _clean(env, "DB_DSN")
     if explicit:
         return explicit
