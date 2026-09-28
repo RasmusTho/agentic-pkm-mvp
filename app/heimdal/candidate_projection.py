@@ -72,6 +72,10 @@ from app.heimdal.quarantine import (
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.write_ops import read_create_once_winner_relative, write_note_relative
 from app.vault.manager import VaultContext
+from app.vault.path_overlap import (
+    VaultPathOverlapError,
+    assert_targets_do_not_overlap_capture_note,
+)
 from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
@@ -375,6 +379,14 @@ def write_candidate_note(
     if candidates_dir is None:
         candidates_dir = f"{get_vault_sources_dir_rel(vault_root)}/Heimdal"
     artifact_path = candidate_note_path(candidate, candidates_dir=candidates_dir)
+    overlap_reason = _capture_note_disjoint_reason([artifact_path], vault_root=vault_root)
+    if overlap_reason is not None:
+        return CandidateWriteResult(
+            status="blocked",
+            artifact_path=None,
+            observation_id=candidate.observation_id,
+            reason=overlap_reason,
+        )
 
     candidate_path = vault_root / artifact_path
     if candidate_path.exists() or candidate_path.is_symlink():
@@ -697,6 +709,14 @@ def write_reading_candidate_note(
     if candidates_dir is None:
         candidates_dir = f"{get_vault_sources_dir_rel(vault_root)}/Reading/Karakeep"
     artifact_path = reading_candidate_note_path(candidate, candidates_dir=candidates_dir)
+    overlap_reason = _capture_note_disjoint_reason([artifact_path], vault_root=vault_root)
+    if overlap_reason is not None:
+        return CandidateWriteResult(
+            status="blocked",
+            artifact_path=None,
+            observation_id=candidate.observation_id,
+            reason=overlap_reason,
+        )
     candidate_path = vault_root / artifact_path
 
     if candidate_path.exists() or candidate_path.is_symlink():
@@ -924,6 +944,16 @@ def _vault_root(context: VaultContext) -> Path:
     if not root.is_dir():
         raise CandidateProjectionError("candidate projection requires an existing vault directory")
     return root
+
+
+def _capture_note_disjoint_reason(
+    targets: list[str], *, vault_root: Path
+) -> str | None:
+    try:
+        assert_targets_do_not_overlap_capture_note(targets, vault_root=vault_root)
+    except VaultPathOverlapError as exc:
+        return str(exc)
+    return None
 
 
 def _is_durable_candidate(

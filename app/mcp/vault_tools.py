@@ -21,6 +21,8 @@ from app.knowledge.write_ops import (
     _same_file_identity,
     write_note_relative,
 )
+from app.vault.path_overlap import vault_path_is_within, vault_paths_overlap
+from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD
 
 
@@ -88,6 +90,8 @@ def _publish_append_note(
     *,
     stage: _RelativeStage,
     slug: str,
+    first_counter: int,
+    sources_root_rel: str,
 ) -> Path:
     """Publish one MCP append at the first atomically available suffix."""
 
@@ -113,9 +117,24 @@ def _publish_append_note(
     ):
         raise KnowledgeWriteConflict("MCP append stage identity changed")
 
-    counter = 1
+    counter = first_counter
     while True:
-        candidate_name = f"{slug}.md" if counter == 1 else f"{slug}-{counter}.md"
+        candidate_name = _append_candidate_name(slug, counter)
+        candidate_rel = (stage.directory / candidate_name).as_posix()
+        try:
+            overlaps_sources = vault_paths_overlap(
+                candidate_rel,
+                sources_root_rel,
+                vault_root=stage.vault_root,
+            )
+        except Exception as exc:  # noqa: BLE001 - Sources authority must fail closed
+            raise VaultToolError(
+                f"selected vault Sources zone could not be checked; refusing MCP append: {exc}"
+            ) from exc
+        if overlaps_sources:
+            raise VaultToolError(
+                "MCP append destination overlaps the selected vault Sources zone"
+            )
         try:
             _atomic_rename_noreplace_at(
                 parent_fd,
@@ -180,6 +199,32 @@ def _publish_append_note(
     return stage.vault_root / relative_path
 
 
+def _append_candidate_name(slug: str, counter: int) -> str:
+    return f"{slug}.md" if counter == 1 else f"{slug}-{counter}.md"
+
+
+def _first_available_append_counter(
+    *,
+    vault_root: Path,
+    directory: PurePosixPath,
+    slug: str,
+) -> int:
+    """Choose the current suffix without creating the stage that carries it."""
+
+    counter = 1
+    while True:
+        candidate = vault_root.joinpath(*directory.parts, _append_candidate_name(slug, counter))
+        try:
+            candidate.lstat()
+        except FileNotFoundError:
+            return counter
+        except OSError as exc:
+            raise VaultToolError(
+                f"MCP append destination could not be inspected: {exc}"
+            ) from exc
+        counter += 1
+
+
 def append_note(
     *,
     title: str,
@@ -219,12 +264,56 @@ def append_note(
         or any(part in {"", ".", ".."} for part in directory.parts)
     ):
         raise VaultToolError("relative_dir must be a normalized vault-relative path")
+    try:
+        sources_dir_rel = get_vault_sources_dir_rel(root)
+        if vault_path_is_within(
+            directory.as_posix(),
+            sources_dir_rel,
+            vault_root=root,
+        ):
+            raise VaultToolError(
+                "MCP append destination is inside the selected vault Sources zone"
+            )
+    except VaultToolError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - Sources authority must fail closed
+        raise VaultToolError(
+            f"selected vault Sources zone could not be resolved; refusing MCP append: {exc}"
+        ) from exc
+    first_counter = _first_available_append_counter(
+        vault_root=root,
+        directory=directory,
+        slug=slug,
+    )
+    initial_target_rel = (
+        directory / _append_candidate_name(slug, first_counter)
+    ).as_posix()
+    try:
+        if vault_paths_overlap(
+            initial_target_rel,
+            sources_dir_rel,
+            vault_root=root,
+        ):
+            raise VaultToolError(
+                "MCP append destination overlaps the selected vault Sources zone"
+            )
+    except VaultToolError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - Sources authority must fail closed
+        raise VaultToolError(
+            f"selected vault Sources zone could not be checked; refusing MCP append: {exc}"
+        ) from exc
     stage_name = f".mcp-append-stage-{uuid4().hex}.md"
     published_path: Path | None = None
 
     def publish(stage: _RelativeStage) -> None:
         nonlocal published_path
-        published_path = _publish_append_note(stage=stage, slug=slug)
+        published_path = _publish_append_note(
+            stage=stage,
+            slug=slug,
+            first_counter=first_counter,
+            sources_root_rel=sources_dir_rel,
+        )
 
     write_note_relative(
         (directory / stage_name).as_posix(),

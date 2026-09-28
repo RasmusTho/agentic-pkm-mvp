@@ -22,6 +22,10 @@ from app.knowledge.write_ops import create_candidate_note_once
 from app.knowledge_acquisition.candidate_writeback import Candidate
 from app.knowledge_acquisition.extraction_persistence import PersistedTranscript
 from app.vault.manager import VaultContext
+from app.vault.path_overlap import (
+    VaultPathOverlapError,
+    assert_targets_do_not_overlap_capture_note,
+)
 from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
@@ -75,6 +79,13 @@ def materialize_youtube_source_bundle(
     bundle_folder = (PurePosixPath(source_folder) / version_key).as_posix()
     transcript_path = (PurePosixPath(bundle_folder) / "transcript.md").as_posix()
     manifest_path = (PurePosixPath(bundle_folder) / "source.json").as_posix()
+    try:
+        assert_targets_do_not_overlap_capture_note(
+            [transcript_path, manifest_path],
+            vault_root=vault_root,
+        )
+    except VaultPathOverlapError as exc:
+        raise SourceBundleError(str(exc)) from exc
     manifest = _manifest(candidate, transcript, source_folder, bundle_folder, transcript_path)
     with _bundle_lock(vault_root, bundle_folder):
         transcript_status: str | None = None

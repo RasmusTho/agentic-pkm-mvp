@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from app.knowledge.errors import (
     KnowledgeTransportError,
     KnowledgeWriteConflict,
 )
+from app.knowledge.multiwriter import NoteClass
 from app.knowledge.service import HybridKnowledgePort, resolve_knowledge_port
 from app.knowledge.settings import KnowledgeAdapter, KnowledgeSettings
 
@@ -65,6 +67,139 @@ def test_resolve_knowledge_port_preserves_obsidian_primary_when_root_hint_is_giv
     )
     port = resolve_knowledge_port(vault_root=tmp_path, settings=settings)
     assert isinstance(port, ObsidianCliAdapter)
+
+
+def test_obsidian_adapter_uses_configured_sources_root(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "Acquired")
+    monkeypatch.setattr(
+        "app.knowledge.service.obsidian_dependency_status",
+        lambda: type("S", (), {"ok": True, "details": {}})(),
+    )
+    settings = KnowledgeSettings(
+        primary_adapter=KnowledgeAdapter.OBSIDIAN_CLI,
+        fallback_adapter=KnowledgeAdapter.FS_VAULT,
+        allow_fallback=False,
+        strict_startup=True,
+    )
+    port = resolve_knowledge_port(vault_root=tmp_path, settings=settings)
+    assert isinstance(port, ObsidianCliAdapter)
+    port.runner = lambda cmd, check, capture_output, text: subprocess.CompletedProcess(
+        cmd, 0, stdout="", stderr=""
+    )
+
+    receipt = port.write_note(
+        NoteLocator(vault="Vault", path="Acquired/source.md"),
+        "source artifact",
+    )
+
+    assert receipt.note_class is NoteClass.CREATE_ONCE
+
+
+def test_obsidian_adapter_classifies_symlink_alias_of_sources_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "Acquired").mkdir()
+    (vault / "SourcesAlias").symlink_to("Acquired", target_is_directory=True)
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "SourcesAlias")
+    settings = KnowledgeSettings(
+        primary_adapter=KnowledgeAdapter.OBSIDIAN_CLI,
+        fallback_adapter=KnowledgeAdapter.FS_VAULT,
+        allow_fallback=False,
+        strict_startup=True,
+    )
+    monkeypatch.setattr(
+        "app.knowledge.service.obsidian_dependency_status",
+        lambda: type("S", (), {"ok": True, "details": {}})(),
+    )
+    port = resolve_knowledge_port(vault_root=vault, settings=settings)
+    assert isinstance(port, ObsidianCliAdapter)
+    port.runner = lambda cmd, check, capture_output, text: subprocess.CompletedProcess(
+        cmd, 0, stdout="", stderr=""
+    )
+
+    receipt = port.write_note(
+        NoteLocator(vault="Vault", path="Acquired/source.md"),
+        "source artifact",
+    )
+
+    assert receipt.note_class is NoteClass.CREATE_ONCE
+
+
+def test_obsidian_adapter_classifies_unicode_alias_of_sources_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.vault import path_overlap
+
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    (vault / "Caf\u00e9").mkdir()
+    # Model a filesystem that treats composed/decomposed names as equivalent;
+    # Linux ext4 without the casefold flag treats them as distinct names.
+    monkeypatch.setattr(
+        path_overlap,
+        "_filesystem_name_semantics",
+        lambda _path: (False, True, False),
+    )
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "Cafe\u0301")
+    settings = KnowledgeSettings(
+        primary_adapter=KnowledgeAdapter.OBSIDIAN_CLI,
+        fallback_adapter=KnowledgeAdapter.FS_VAULT,
+        allow_fallback=False,
+        strict_startup=True,
+    )
+    monkeypatch.setattr(
+        "app.knowledge.service.obsidian_dependency_status",
+        lambda: type("S", (), {"ok": True, "details": {}})(),
+    )
+    port = resolve_knowledge_port(vault_root=vault, settings=settings)
+    assert isinstance(port, ObsidianCliAdapter)
+    port.runner = lambda cmd, check, capture_output, text: subprocess.CompletedProcess(
+        cmd, 0, stdout="", stderr=""
+    )
+
+    receipt = port.write_note(
+        NoteLocator(vault="Vault", path="Caf\u00e9/source.md"),
+        "source artifact",
+    )
+
+    assert receipt.note_class is NoteClass.CREATE_ONCE
+
+
+def test_obsidian_classification_failure_precedes_external_create(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.vault import path_overlap
+
+    calls: list[list[str]] = []
+
+    def runner(cmd, check, capture_output, text):  # type: ignore[no-untyped-def]
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    def fail_classification(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("cannot verify selected Sources aliases")
+
+    monkeypatch.setattr(path_overlap, "vault_path_is_within", fail_classification)
+    adapter = ObsidianCliAdapter(
+        runner=runner,
+        sources_root_rel="SourcesAlias",
+        vault_root=tmp_path,
+    )
+
+    with pytest.raises(RuntimeError, match="cannot verify selected Sources aliases"):
+        adapter.write_note(
+            NoteLocator(vault="Vault", path="Acquired/source.md"),
+            "source artifact",
+        )
+
+    assert calls == []
 
 
 def test_fallback_fs_port_supports_search_and_open_in_non_strict_mode(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:

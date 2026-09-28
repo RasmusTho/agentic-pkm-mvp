@@ -47,6 +47,154 @@ def test_append_note_sequential_names(tmp_path: Path) -> None:
     assert second.name == "test-2.md"
 
 
+@pytest.mark.parametrize(
+    ("sources_root", "relative_dir"),
+    [("_mcp", "_mcp"), ("Configured", "Configured/Notes")],
+)
+def test_append_note_rejects_effective_sources_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    sources_root: str,
+    relative_dir: str,
+) -> None:
+    from app.mcp import vault_tools as vault_tools_module
+
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", sources_root)
+    calls: list[str] = []
+
+    def track_write(note_rel_path: str, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append(note_rel_path)
+        raise AssertionError("Sources destination reached staging writer")
+
+    monkeypatch.setattr(vault_tools_module, "write_note_relative", track_write)
+    with pytest.raises(VaultToolError, match="inside the selected vault Sources zone"):
+        append_note(
+            title="Reserved source",
+            body="should not be staged",
+            vault_root=tmp_path,
+            relative_dir=relative_dir,
+        )
+
+    assert calls == []
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_append_note_rejects_exact_sources_file_before_staging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.mcp import vault_tools as vault_tools_module
+
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "_mcp/reserved.md")
+    calls: list[str] = []
+
+    def track_write(note_rel_path: str, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append(note_rel_path)
+        raise AssertionError("Sources destination reached staging writer")
+
+    monkeypatch.setattr(vault_tools_module, "write_note_relative", track_write)
+    with pytest.raises(VaultToolError, match="overlaps the selected vault Sources zone"):
+        append_note(
+            title="Reserved",
+            body="must not be staged",
+            vault_root=tmp_path,
+            relative_dir="_mcp",
+        )
+
+    assert calls == []
+    assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
+
+
+def test_append_note_rejects_sources_file_selected_by_suffix_before_staging(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.mcp import vault_tools as vault_tools_module
+
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "_mcp/same-2.md")
+    mcp_dir = tmp_path / "_mcp"
+    mcp_dir.mkdir()
+    occupied = mcp_dir / "same.md"
+    occupied.write_text("existing note", encoding="utf-8")
+    calls: list[str] = []
+
+    def track_write(note_rel_path: str, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append(note_rel_path)
+        raise AssertionError("Sources destination reached staging writer")
+
+    monkeypatch.setattr(vault_tools_module, "write_note_relative", track_write)
+    with pytest.raises(VaultToolError, match="overlaps the selected vault Sources zone"):
+        append_note(
+            title="Same",
+            body="must not be staged",
+            vault_root=tmp_path,
+            relative_dir="_mcp",
+        )
+
+    assert calls == []
+    assert sorted(path.name for path in mcp_dir.iterdir()) == ["same.md"]
+
+
+def test_append_note_allows_sibling_of_deeper_sources_file(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "_mcp/reserved.md")
+
+    path = append_note(
+        title="Allowed",
+        body="sibling destination",
+        vault_root=tmp_path,
+        relative_dir="_mcp",
+    )
+
+    assert path == tmp_path / "_mcp" / "allowed.md"
+    assert path.read_text(encoding="utf-8").endswith("sibling destination\n")
+
+
+def test_append_note_rechecks_sources_for_race_driven_suffix(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from app.mcp import vault_tools as vault_tools_module
+
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "_mcp/same-2.md")
+    real_publish = vault_tools_module._atomic_rename_noreplace_at
+    occupied_by_racer = tmp_path / "_mcp" / "same.md"
+    injected = False
+
+    def occupy_first_candidate(
+        source_fd: int,
+        source_name: str,
+        destination_fd: int,
+        destination_name: str,
+    ) -> None:
+        nonlocal injected
+        if destination_name == "same.md" and not injected:
+            occupied_by_racer.write_text("concurrent writer", encoding="utf-8")
+            injected = True
+        real_publish(source_fd, source_name, destination_fd, destination_name)
+
+    monkeypatch.setattr(
+        vault_tools_module,
+        "_atomic_rename_noreplace_at",
+        occupy_first_candidate,
+    )
+
+    with pytest.raises(VaultToolError, match="overlaps the selected vault Sources zone"):
+        append_note(
+            title="Same",
+            body="must not enter Sources",
+            vault_root=tmp_path,
+            relative_dir="_mcp",
+        )
+
+    assert injected
+    assert occupied_by_racer.read_text(encoding="utf-8") == "concurrent writer"
+    assert not (tmp_path / "_mcp" / "same-2.md").exists()
+    assert list((tmp_path / "_mcp").glob(".mcp-append-stage-*.md")) == []
+
+
 def test_append_note_concurrent_same_title_preserves_both_bodies(tmp_path: Path) -> None:
     ready = threading.Barrier(2)
 

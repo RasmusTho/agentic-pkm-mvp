@@ -50,6 +50,25 @@ def test_tool_call_creates_vault_file(tmp_path: Path) -> None:
     assert frontmatter["tags"] == ["ask"]
 
 
+def test_executor_mcp_append_uses_guarded_default_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "_mcp")
+    orchestrator = Orchestrator(
+        tool_settings={"mcp_vault_enable": True, "vault_root": tmp_path}
+    )
+
+    results = orchestrator.run_plan(
+        _simple_plan(step_args={"title": "Reserved", "body": "must not land in Sources"})
+    )
+
+    assert results[0]["status"] == "error"
+    assert results[0]["error_type"] == "mcp_tool_error"
+    assert "inside the selected vault Sources zone" in results[0]["error"]
+    assert not (tmp_path / "_mcp").exists()
+    assert not any(tmp_path.rglob(".mcp-append-stage-*.md"))
+
+
 def test_tool_call_missing_body_surfaces_error(tmp_path: Path) -> None:
     orchestrator = Orchestrator(tool_settings={"mcp_vault_enable": True, "vault_root": tmp_path})
     plan = _simple_plan(step_args={"title": "Broken"})
@@ -77,4 +96,3 @@ def test_tool_call_accepts_content_alias(tmp_path: Path) -> None:
     assert note_path.is_file()
     text = note_path.read_text(encoding="utf-8")
     assert "Hello world" in text
-

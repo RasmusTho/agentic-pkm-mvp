@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 from enum import StrEnum
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 
 class NoteClass(StrEnum):
@@ -61,6 +61,39 @@ def classify_note(
     return NoteClass.REWRITTEN
 
 
+def classify_note_in_vault(
+    path: str | Path | PurePosixPath,
+    operation: WriteOperation,
+    *,
+    vault_root: Path | str | None,
+    capture_note_rel: str | PurePosixPath | None = None,
+    sources_root_rel: str | PurePosixPath | None = None,
+) -> NoteClass:
+    """Classify a note while honoring filesystem aliases of the Sources root."""
+
+    note_class = classify_note(
+        str(path),
+        operation,
+        capture_note_rel=capture_note_rel,
+        sources_root_rel=sources_root_rel or "Sources",
+    )
+    if (
+        note_class is NoteClass.CREATE_ONCE
+        or vault_root is None
+        or sources_root_rel is None
+    ):
+        return note_class
+
+    # The published classifier is intentionally lexical and filesystem-agnostic.
+    # Runtime adapters also know the selected vault and must preserve create-once
+    # behavior when either side is addressed through a symlink or Unicode alias.
+    from app.vault.path_overlap import vault_path_is_within
+
+    if vault_path_is_within(path, sources_root_rel, vault_root=Path(vault_root)):
+        return NoteClass.CREATE_ONCE
+    return note_class
+
+
 def conflict_artifact_path(
     canonical_path: str | PurePosixPath,
     *,
@@ -87,6 +120,7 @@ __all__ = [
     "NoteClass",
     "WriteOperation",
     "classify_note",
+    "classify_note_in_vault",
     "conflict_artifact_path",
     "is_conflict_artifact",
 ]

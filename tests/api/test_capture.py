@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import app.api.routes.capture as capture_route
+from app.vault import path_overlap
 from app.api.app import app
 from tests.api._vault_test_helpers import bind_initialized_vault
 
@@ -196,7 +197,7 @@ def test_capture_rejects_unicode_normalization_alias_on_apfs(
 ) -> None:
     vault = _setup_vault(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        capture_route,
+        path_overlap,
         "_filesystem_name_semantics",
         lambda _path: (False, True, False),
     )
@@ -257,15 +258,15 @@ def test_linux_ext4_uses_exact_lookup_directory_flags(
     vault = tmp_path / "vault"
     lookup_dir = vault / "Archive"
     lookup_dir.mkdir(parents=True)
-    monkeypatch.setattr(capture_route.sys, "platform", "linux")
+    monkeypatch.setattr(path_overlap.sys, "platform", "linux")
     inspected: list[Path] = []
 
     def ext4_flag(path: Path) -> bool:
         inspected.append(path)
         return casefolded
 
-    monkeypatch.setattr(capture_route, "_linux_ext4_casefolded", ext4_flag)
-    monkeypatch.setattr(capture_route, "_probe_case_insensitive_directory", pytest.fail)
+    monkeypatch.setattr(path_overlap, "_linux_ext4_casefolded", ext4_flag)
+    monkeypatch.setattr(path_overlap, "_probe_case_insensitive_directory", pytest.fail)
 
     assert capture_route._filesystem_name_semantics(lookup_dir) == expected_semantics
     assert inspected == [lookup_dir.resolve()]
@@ -283,14 +284,14 @@ def test_linux_ext4_does_not_infer_casefold_from_parent(
     casefolded_parent = vault / "Archive"
     lookup_dir = casefolded_parent / "Nested"
     lookup_dir.mkdir(parents=True)
-    monkeypatch.setattr(capture_route.sys, "platform", "linux")
+    monkeypatch.setattr(path_overlap.sys, "platform", "linux")
     inspected: list[Path] = []
 
     def ext4_flag(path: Path) -> bool:
         inspected.append(path)
         return path == casefolded_parent.resolve()
 
-    monkeypatch.setattr(capture_route, "_linux_ext4_casefolded", ext4_flag)
+    monkeypatch.setattr(path_overlap, "_linux_ext4_casefolded", ext4_flag)
 
     assert capture_route._filesystem_name_semantics(lookup_dir) == (False, False, False)
     assert inspected == [lookup_dir.resolve()]
@@ -314,14 +315,14 @@ def test_linux_ext4_missing_lookup_directory_inherits_nearest_existing_flags(
     vault = tmp_path / "vault"
     vault.mkdir()
     lookup_dir = vault / "Archive"
-    monkeypatch.setattr(capture_route.sys, "platform", "linux")
+    monkeypatch.setattr(path_overlap.sys, "platform", "linux")
     inspected: list[Path] = []
 
     def ext4_flag(path: Path) -> bool:
         inspected.append(path)
         return casefolded
 
-    monkeypatch.setattr(capture_route, "_linux_ext4_casefolded", ext4_flag)
+    monkeypatch.setattr(path_overlap, "_linux_ext4_casefolded", ext4_flag)
     assert capture_route._filesystem_name_semantics(lookup_dir) == expected_semantics
     assert inspected == [vault.resolve()]
 
@@ -373,7 +374,7 @@ def test_capture_rejects_default_ignorable_alias_before_write(
 ) -> None:
     vault = _setup_vault(tmp_path, monkeypatch)
     monkeypatch.setattr(
-        capture_route,
+        path_overlap,
         "_filesystem_name_semantics",
         lambda _path: (True, True, True),
     )
