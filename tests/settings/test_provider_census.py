@@ -261,7 +261,7 @@ def test_builder_execution_profiles_use_tcd_default_ladder() -> None:
     census = _census()
 
     for profiles in census.runtime_channels.builder_execution.values():
-        assert profiles["luna"].model == "gpt-5.6-luna"
+        assert profiles["luna"].model == "gpt-6-luna"
         assert profiles["luna"].reasoning_effort == "xhigh"
         assert profiles["luna"].selection_intents == ["coordination", "general_delivery"]
         assert profiles["luna"].selection_intent_reasoning_efforts == {
@@ -327,15 +327,15 @@ def test_builder_selection_intents_prefer_astra_for_strong_reasoning() -> None:
         for tier, profile in profiles.items()
     } == {
         ("dev", "spark", "gpt-5.3-codex-spark"),
-        ("dev", "luna", "gpt-5.6-luna"),
+        ("dev", "luna", "gpt-6-luna"),
         ("dev", "terra", "gpt-5.6-terra"),
         ("dev", "sol", "gpt-5.6-sol"),
         ("test", "spark", "gpt-5.3-codex-spark"),
-        ("test", "luna", "gpt-5.6-luna"),
+        ("test", "luna", "gpt-6-luna"),
         ("test", "terra", "gpt-5.6-terra"),
         ("test", "sol", "gpt-5.6-sol"),
         ("prod", "spark", "gpt-5.3-codex-spark"),
-        ("prod", "luna", "gpt-5.6-luna"),
+        ("prod", "luna", "gpt-6-luna"),
         ("prod", "terra", "gpt-5.6-terra"),
         ("prod", "sol", "gpt-5.6-sol"),
     }

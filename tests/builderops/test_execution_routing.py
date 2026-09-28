@@ -54,11 +54,11 @@ def test_selection_intent_resolves_through_codex_and_claude_carrier_adapters() -
     )
 
     assert (coordination.model, coordination.reasoning_effort) == (
-        "gpt-5.6-luna",
+        "gpt-6-luna",
         "low",
     )
     assert (general_delivery.model, general_delivery.reasoning_effort) == (
-        "gpt-5.6-luna",
+        "gpt-6-luna",
         "xhigh",
     )
     assert (strong_reasoning.model, strong_reasoning.reasoning_effort) == (
@@ -80,6 +80,31 @@ def test_selection_intent_resolves_through_codex_and_claude_carrier_adapters() -
     assert claude.model is None
 
 
+def test_luna_builder_binding_uses_gpt_6_luna_for_all_channels() -> None:
+    census = load_provider_census()
+
+    for channel in ("dev", "test", "prod"):
+        coordination = resolve_execution_target_for_intent(
+            census, channel=channel, selection_intent="coordination"
+        )
+        general_delivery = resolve_execution_target_for_intent(
+            census, channel=channel, selection_intent="general_delivery"
+        )
+
+        assert (coordination.capability, coordination.provider, coordination.model) == (
+            "luna",
+            "openai",
+            "gpt-6-luna",
+        )
+        assert coordination.reasoning_effort == "low"
+        assert (general_delivery.capability, general_delivery.provider, general_delivery.model) == (
+            "luna",
+            "openai",
+            "gpt-6-luna",
+        )
+        assert general_delivery.reasoning_effort == "xhigh"
+
+
 def test_explicit_sol_fallback_keeps_model_specific_reasoning() -> None:
     target = resolve_execution_target(
         load_provider_census(),
@@ -97,7 +122,7 @@ def test_declared_model_aliases_remain_provider_neutral_in_receipts() -> None:
 
     assert aliases["gpt-6-astra"] == "sol"
     assert aliases["gpt-5.6-sol"] == "sol"
-    assert aliases["gpt-5.6-luna"] == "luna"
+    assert aliases["gpt-6-luna"] == "luna"
 
 
 def _request(**overrides: object) -> ExecutionRouteRequest:
@@ -122,7 +147,7 @@ def _request(**overrides: object) -> ExecutionRouteRequest:
 def _target(capability: str) -> ResolvedExecutionTarget:
     model = {
         "spark": "gpt-5.3-codex-spark",
-        "luna": "gpt-5.6-luna",
+        "luna": "gpt-6-luna",
         "terra": "gpt-5.6-terra",
         "sol": "gpt-5.6-sol",
     }[capability]
