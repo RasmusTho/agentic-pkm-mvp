@@ -21,6 +21,9 @@ class _Store:
     def __init__(self, *, available: bool = True) -> None:
         self.available = available
 
+    def bootstrap_status(self):
+        return {"status": "converged", "writers_enabled": True}
+
     def readiness(self) -> dict[str, int]:
         if not self.available:
             raise RuntimeError("postgresql://user:raw-database-secret@db/builderops")

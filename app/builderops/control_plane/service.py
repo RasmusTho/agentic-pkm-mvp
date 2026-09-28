@@ -1730,12 +1730,11 @@ def create_app(
     ) -> None:
         """Fence a client pinned to a superseded authority epoch (fail closed).
 
-        The header is optional so read-only probes and legacy callers still
-        work, but a client that pins an epoch is rejected when a recovery epoch
-        has advanced past it, rather than silently mutating the new authority.
+        Mutations require an explicit current generation. Read-only probes do
+        not use this dependency; absence never authorizes a fresh database.
         """
         if x_builderops_authority_epoch is None:
-            return
+            raise HTTPException(status_code=428, detail="authority epoch header required")
         try:
             pinned = int(x_builderops_authority_epoch)
         except (TypeError, ValueError) as exc:

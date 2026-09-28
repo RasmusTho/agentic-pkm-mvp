@@ -993,7 +993,7 @@ def test_api_binds_task_lease_to_principal_and_restricts_public_lifecycle(
         "/v1/executor/outbox/unknown",
         headers={
             "Authorization": "Bearer executor-a-token",
-            "X-BuilderOps-Authority-Epoch": "1",
+            "X-BuilderOps-Authority-Epoch": str(control_plane_store.readiness()["authority_epoch"]),
         },
         json={
             "envelope": envelope,

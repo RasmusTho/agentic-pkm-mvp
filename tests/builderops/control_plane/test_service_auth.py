@@ -148,7 +148,7 @@ def test_scoped_api_auth_fails_closed(tmp_path: Path) -> None:
     store = _Store()
     registry = _registry(tmp_path)
     health = HealthService(store, registry, _Operational())  # type: ignore[arg-type]
-    client = TestClient(create_app(store=store, credentials=registry, health=health))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry, health=health), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
 
     assert client.get("/healthz").status_code == 401
     assert client.get("/healthz", headers={"Authorization": "Bearer wrong"}).status_code == 401
@@ -318,7 +318,7 @@ def test_verifier_only_registered_bearer_cannot_be_embedded_in_durable_text(
         encoding="utf-8",
     )
     store = _Store()
-    client = TestClient(create_app(store=store, credentials=CredentialRegistry(manifest)))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=CredentialRegistry(manifest)), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
 
     response = client.post(
         "/v1/records",
@@ -355,7 +355,7 @@ def test_verifier_only_registered_bearer_cannot_be_a_nested_mapping_key(
     )
     registry = CredentialRegistry(manifest)
     store = _Store()
-    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
     headers = {"Authorization": f"Bearer {secret}"}
 
     record = client.post(
@@ -380,7 +380,7 @@ def test_durable_text_scanning_has_per_field_and_request_work_bounds(
 ) -> None:
     registry = _registry(tmp_path)
     store = _Store()
-    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
     headers = {"Authorization": "Bearer client-token"}
 
     oversized_field = client.post(
@@ -426,7 +426,7 @@ def test_raw_credentials_are_rejected_from_every_client_controlled_durable_field
     )
     registry.manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     health = HealthService(store, registry, _Operational())  # type: ignore[arg-type]
-    client = TestClient(create_app(store=store, credentials=registry, health=health))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry, health=health), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
     headers = {"Authorization": "Bearer client-token"}
 
     # The `repository` mutation is a distinct case: the credential is scoped to
@@ -503,7 +503,7 @@ def test_normal_client_cannot_use_executor_or_cross_repo_scope(tmp_path: Path) -
     store = _Store()
     registry = _scoped_registry(tmp_path)
     health = HealthService(store, registry, _Operational())  # type: ignore[arg-type]
-    client = TestClient(create_app(store=store, credentials=registry, health=health))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry, health=health), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
     headers = {"Authorization": "Bearer normal-token"}
 
     # Positive control: the credential works for its own repository.
@@ -573,7 +573,7 @@ def test_credential_with_no_repositories_key_cannot_address_any_repository(
     listing repos previously had unrestricted cross-repo authority)."""
     store = _Store()
     registry = _unscoped_registry(tmp_path)
-    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
     headers = {"Authorization": "Bearer unscoped-token"}
 
     for repository in (
@@ -620,7 +620,7 @@ def test_all_repositories_opt_in_is_explicit_and_distinct_from_empty_list(
         encoding="utf-8",
     )
     store = _Store()
-    client = TestClient(create_app(store=store, credentials=CredentialRegistry(manifest)))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=CredentialRegistry(manifest)), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
     headers = {"Authorization": "Bearer executor-token"}
 
     for repository in ("RasmusTho/agentic-pkm-mvp", "RasmusTho/example-second-repo"):
@@ -666,7 +666,7 @@ def test_fencing_token_key_in_free_form_payload_is_not_exempt(tmp_path: Path) ->
     key-name-anywhere loophole (issue #3791 review finding C2) is closed."""
     store = _Store()
     registry = _registry(tmp_path)
-    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
     headers = {"Authorization": "Bearer client-token"}
 
     plausible_but_unregistered = "foreign-service-opaque-credential-9f8e7d6c5b4a3210"
@@ -737,7 +737,7 @@ def test_fencing_token_nested_at_any_depth_with_int_value_is_still_rejected(
     # Same check through the real HTTP route, confirming the API never
     # persists it either.
     store = _Store()
-    client = TestClient(create_app(store=store, credentials=registry))  # type: ignore[arg-type]
+    client = TestClient(create_app(store=store, credentials=registry), headers={"X-BuilderOps-Authority-Epoch": str(store.readiness()["authority_epoch"])})  # type: ignore[arg-type]
     headers = {"Authorization": "Bearer client-token"}
     response = client.post(
         "/v1/records",
