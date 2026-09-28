@@ -244,10 +244,10 @@ def _validate_secret(kind: str, value: str) -> bool:
         # Import must accept the initialized PostgreSQL role's existing value;
         # imposing the API-key minimum would require an unauthorized rotation.
         try:
-            encoded = value.encode("utf-8", errors="strict")
+            value.encode("utf-8", errors="strict")
         except UnicodeError:
             return False
-        return 1 <= len(encoded) <= 512 and all(char.isprintable() for char in value)
+        return bool(value) and all(char.isprintable() for char in value)
     if kind in {"api-key", "token"}:
         return (
             value == value.strip()

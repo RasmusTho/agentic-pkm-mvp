@@ -1902,13 +1902,13 @@ def test_deployment_read_retains_host_admission_through_activation(tmp_path):
     assert client.calls == calls
 
 
-@pytest.mark.parametrize("password", ["app", "a b", " existing ", "ö"])
+@pytest.mark.parametrize("password", ["app", "a b", " existing ", "ö", "x" * 2048, "ö" * 1024])
 def test_bws_existing_postgres_password_does_not_require_rotation(tmp_path, password):
     reader, client, controller = _bws_fixture(tmp_path, identity="dev/postgres.password", value=password)
     assert resolve_host_secret_values(channel="dev", consumer="postgres-api", provider="bws", bws_reader=reader, controller=controller) == {"postgres.password": password}
 
 
-@pytest.mark.parametrize("password", ["", "a\nb", "a\rb", "a\x00b", "a\tb", "x" * 513, "ö" * 257, "\ud800"])
+@pytest.mark.parametrize("password", ["", "a\nb", "a\rb", "a\x00b", "a\tb", "\ud800"])
 def test_bws_malformed_postgres_password_is_refused(tmp_path, password):
     reader, client, controller = _bws_fixture(tmp_path, identity="dev/postgres.password", value=password)
     with pytest.raises(HostSecretBootstrapError):
