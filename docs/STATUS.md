@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-24 (bounded DevUI work/result readback; repository and local-checkout evidence only, no deployment or owner acceptance)
+Last reviewed: 2026-09-28 (bounded DevUI and Sources-zone runtime-boundary review; repository evidence only, no deployment or owner acceptance)
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
@@ -15,6 +15,7 @@ Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `app/dispatcher/sync_github.py`, `app/builderops/cockpit_registry.py`,
 `scripts/reconcile_blocker_actions.py`, and current-head CI on 2026-08-30. The bounded action-label
 migration remains report-only by default and requires its own fresh targeted authority before apply.
+Last verified against (Sources-zone runtime boundary): Issue #5700, PR #5701, `tests/knowledge_acquisition`, `tests/invariants/test_vault_multiwriter.py`, `tests/knowledge/test_service.py`, `tests/services/test_artifact_identity_service.py`, and `tests/mcp/test_vault_tools.py`.
 
 Last verified against (SQ-04 candidate): PR #5174, `app/standing_questions/evidence_matching.py`,
 `app/standing_questions/answer_refresh.py`, and focused Standing Questions tests on 2026-08-29;
@@ -212,6 +213,7 @@ promote public internet readiness.
 - The Heimdal time-spend projection's vault writes (#4609, repairing PR #4586 P1 residuals) quarantine observed bucket labels through the HEIM-9 path before materialization, replace owned notes only by expected-version compare-and-swap, create absent targets atomically no-clobber, and clear owned weekly notes the rebuild fold no longer targets — a racing human edit or creation always wins with a loud, item-scoped `blocked` receipt entry (`docs/HEIMDAL_SCREEN_STREAM/PROJECT_TIME_SPEND_ANALYSIS.md`).
 
 ## Runtime verification
+- Sources-zone runtime boundaries are shipped (#5700, PR #5701): acquisition candidate and proposal writes, source-bundle outputs, Heimdal projections, and meeting finalization check the effective capture note before side effects; internal MCP append refuses destinations inside the configured Sources zone. Knowledge adapters and artifact identity classify the selected-vault Sources root across filesystem aliases. The Sources writer set and owner contract are unchanged; #3414’s separate writer census and fitness check remain outstanding.
 - `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
 - `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `watcher.run` audit rows plus `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.
 - The worker heartbeat probe in `scripts/start_full_system.sh` reads the worker's heartbeat file through the container boundary (`docker compose exec`, `scripts/lib/worker_heartbeat_probe.sh`), matching the pre-existing watcher heartbeat probe. `/app/tmp` (and `/app/tmp-test`) is always the `runtime-tmp` Docker-managed named volume in every channel, never a host bind mount, so a host-path read could never observe a healthy worker's heartbeat — this previously failed `make prod-start-full` against a fully healthy pinned-image prod stack (#4361). The same startup path now never silently builds over an `APP_IMAGE_TAG` pin: pinned-image mode (`COMPOSE_FILE` without the `docker-compose.app-bind.yml` overlay) pulls the pin and fails loud on a pull miss unless `APP_BUILD_OVERRIDE=1` is explicitly set (`scripts/lib/pinned_image_guard.sh`), mirroring the existing `scripts/deploy_channel.sh` pull-only contract.
