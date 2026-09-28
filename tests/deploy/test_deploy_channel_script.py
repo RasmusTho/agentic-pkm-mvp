@@ -1435,6 +1435,8 @@ def test_raw_migration_production_wrapper_bootstraps_before_compose(
             "DEPLOY_TTS_CONFIG_GOVERNED": "1",
             "DEPLOY_TTS_ENABLED": "false",
             "DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING": "1",
+            # Use the fixture's fake keychain provider explicitly on Linux.
+            "HOST_SECRET_PROVIDER": "keychain",
         }
     )
     env.pop("HOST_SECRET_RUNTIME_ENV_FILE", None)
@@ -1515,6 +1517,8 @@ def test_raw_migration_production_wrapper_fails_before_compose_and_redacts(
             "DEPLOY_TTS_CONFIG_GOVERNED": "1",
             "DEPLOY_TTS_ENABLED": "false",
             "DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING": "1",
+            # Use the fixture's fake keychain provider explicitly on Linux.
+            "HOST_SECRET_PROVIDER": "keychain",
         }
     )
     lib_path = REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh"
