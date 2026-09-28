@@ -1,12 +1,16 @@
-State: Canonical Mimer CrossScopeFlow model. Docs-only architecture/policy contract for the foundation backlog (#2533–#2552); defines governed cross-scope knowledge movement/use and retires global `general_knowledge` bypass semantics. Does not claim shipped runtime behavior.
+State: Canonical Mimer CrossScopeFlow model for the foundation backlog (#2533–#2552). It defines governed cross-scope knowledge movement/use and retires global `general_knowledge` bypass semantics; it also records the limited same-scope promoted-memory recall behavior delivered by #5019 / PR #5032. It does not claim a general CrossScopeFlow evaluator or all modeled operations are shipped.
 Doc role: Architecture / policy contract
 Authority: Owns the model for moving or using knowledge across scope boundaries. Establishes that cross-scope use is a typed, directional, operation-specific governed grant — never a boolean and never a consequence of similarity. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md`, `docs/architecture/functional-ontology.md`, and `docs/architecture/semantic-dimensions.md`; later schema/policy work is owned by the contract issues (#2544–#2548).
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (CrossScopeFlow model); subordinate to doctrine, ontology, semantic dimensions
-Last reviewed: 2026-07-13
-Last verified against: schemas/_defs.schema.json, app/episodes/cross_scope_fusion.py, docs/EPISODE_RESOLUTION_ENGINE/GATE_CROSS_SCOPE_FUSION.md
+Last reviewed: 2026-09-28
+Last verified against: schemas/_defs.schema.json, app/episodes/cross_scope_fusion.py,
+docs/EPISODE_RESOLUTION_ENGINE/GATE_CROSS_SCOPE_FUSION.md; Issue #5019; PR #5032 / merge commit
+`305f62581316ff50fac640b2e6891f0e4af3c18b`; `app/agent_memory/recall_retrieval.py`,
+`app/agents/ask/graph.py`, `tests/agent_memory/test_recall_retrieval.py`,
+`tests/agents/ask/test_recall_scope_enforcement.py`
 
 # Mimer CrossScopeFlow
 
@@ -75,6 +79,13 @@ Cross-scope use is **not** one permission. Each operation is separately granted.
 
 Because the operations are independent, a flow that allows `retrieve` + `surface` as `background`
 does **not** permit `cite`, `import`, `remember`, `mutate`, `execute`, `export`, or `episode_fuse`.
+
+Promoted-memory recall has a narrower delivered runtime path (#5019 / PR #5032): a scope-bound ASK
+retrieves only a promoted memory whose persisted `scope_id` matches the active scope. This ordinary
+same-scope recall does not need a `CrossScopeFlow`. The unbound/default ASK path retains its existing
+recall behavior and has no explicit target scope. The shipped promoted-memory path does not evaluate
+`CrossScopeFlow` to admit a different-scope memory; it excludes a non-matching binding. Any future
+cross-scope use remains subject to the explicit, directional, operation-specific flow rules here.
 
 ## 3. The general_knowledge anti-bypass rule
 
