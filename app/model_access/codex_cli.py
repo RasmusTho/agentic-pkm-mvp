@@ -356,6 +356,7 @@ def _valid_model_descriptor(descriptor: Mapping[str, Any]) -> bool:
     upgrade = descriptor.get("upgrade")
     if upgrade is not None:
         upgrade_shapes = (
+            {"model", "migration_markdown"},
             {"model", "migration_markdown", "retirement_at"},
             {
                 "id",
