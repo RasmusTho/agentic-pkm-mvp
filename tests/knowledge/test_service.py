@@ -134,9 +134,18 @@ def test_obsidian_adapter_classifies_unicode_alias_of_sources_root(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    from app.vault import path_overlap
+
     vault = tmp_path / "vault"
     vault.mkdir()
     (vault / "Caf\u00e9").mkdir()
+    # Model a filesystem that treats composed/decomposed names as equivalent;
+    # Linux ext4 without the casefold flag treats them as distinct names.
+    monkeypatch.setattr(
+        path_overlap,
+        "_filesystem_name_semantics",
+        lambda _path: (False, True, False),
+    )
     monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "Cafe\u0301")
     settings = KnowledgeSettings(
         primary_adapter=KnowledgeAdapter.OBSIDIAN_CLI,

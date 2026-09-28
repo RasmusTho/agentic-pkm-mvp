@@ -649,7 +649,12 @@ def test_rerun_existing_candidate_returns_before_render_and_creates_no_recovery_
                     sources_dir=sources_dir,
                 )
             if fault != "nonregular_target":
-                assert fired == 1
+                if fault == "root_open":
+                    # Path-authority resolution may open the vault root before
+                    # the durable existing-target probe; both must fail closed.
+                    assert fired >= 1
+                else:
+                    assert fired == 1
 
     if expected_bytes is not None:
         assert target.read_bytes() == expected_bytes

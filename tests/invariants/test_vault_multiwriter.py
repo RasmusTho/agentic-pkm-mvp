@@ -196,6 +196,7 @@ def test_adapter_classifies_configured_sources_root_as_create_once(
 )
 def test_adapter_classifies_filesystem_alias_of_sources_root_as_create_once(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     sources_alias: str,
     note_path: str,
 ) -> None:
@@ -206,6 +207,15 @@ def test_adapter_classifies_filesystem_alias_of_sources_root_as_create_once(
         (vault / sources_alias).symlink_to("Acquired", target_is_directory=True)
     else:
         (vault / "Caf\u00e9").mkdir()
+        from app.vault import path_overlap
+
+        # Model a filesystem where Unicode-normalized names alias. Linux ext4
+        # without its casefold flag keeps these as distinct directory entries.
+        monkeypatch.setattr(
+            path_overlap,
+            "_filesystem_name_semantics",
+            lambda _path: (False, True, False),
+        )
 
     adapter = FsVaultAdapter(vault, sources_root_rel=sources_alias)
     receipt = adapter.write_note(

@@ -65,6 +65,8 @@ def test_sources_alias_note_is_not_uuid_healed(
     sources_alias: str,
     note_path: str,
 ) -> None:
+    from app.vault import path_overlap
+
     vault = tmp_path / "vault"
     vault.mkdir()
     if sources_alias == "SourcesAlias":
@@ -72,6 +74,13 @@ def test_sources_alias_note_is_not_uuid_healed(
         (vault / sources_alias).symlink_to("Acquired", target_is_directory=True)
     else:
         (vault / "Caf\u00e9").mkdir()
+        # Model a filesystem where Unicode-normalized names alias. Keep this
+        # test deterministic on Linux ext4, which is normalization-sensitive.
+        monkeypatch.setattr(
+            path_overlap,
+            "_filesystem_name_semantics",
+            lambda _path: (False, True, False),
+        )
     note = vault / note_path
     body = "---\nartifact_class: source\n---\n\nSource\n"
     note.write_text(body, encoding="utf-8")
