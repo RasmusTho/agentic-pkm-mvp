@@ -2359,7 +2359,7 @@ def test_linux_effects_authenticates_effective_compose_connection(tmp_path, monk
 def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, channel, reject_recheck):
     root, env, _ = _deploy_harness(tmp_path)
     target = _commit_har_raw_migration(root, 'e7b4c9d2a6f1_heimdal_raw_representation.py')
-    env.update(FAKE_SHA=target, DEPLOY_ACK_FORWARD_ONLY='1', HOST_SECRET_PROVIDER='bws',
+    env.update(FAKE_SHA=target, DEPLOY_ACK_FORWARD_ONLY='1', HOST_SECRET_PROVIDER='bws', BWS_DATABASE_TARGET='local',
                FAKE_SECURITY_EVENT_LOG=env['FAKE_DEPLOY_EVENT_LOG'])
     _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
     if channel == 'prod':
@@ -2565,6 +2565,45 @@ def test_linux_effects_empty_proof_is_bound_to_default_local_initialization(tmp_
     assert effects.initialized() is False
     (data / 'PG_VERSION').write_text('16')
     assert effects.initialized() is True
+
+
+@pytest.mark.parametrize('host,target,profiles,accepted', [
+    ('db', 'local', '', True), ('database.example.invalid', 'external', '', True),
+    ('db', 'external', '', False), ('database.example.invalid', 'local', '', False),
+    ('database.example.invalid', '', '', False),
+    ('database.example.invalid', 'external', 'bws-local-database-disabled', False),
+])
+def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, monkeypatch, host, target, profiles, accepted):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+    directory = tmp_path / 'config/deploy'
+    directory.mkdir(parents=True)
+    (directory / 'test.env').write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    lock = directory / 'test.env.lock'
+    lock.mkdir()
+    password = tmp_path / 'password'
+    password.write_text('fake-target-binding-password')
+    cfg = SimpleNamespace(root=tmp_path, channel='test', password_file=password,
+                          reader=lambda: object(), journal=SimpleNamespace(read=lambda:
+                          SimpleNamespace(stage='activating', operation_id='operation')))
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda channel: cfg)
+    reads = []
+    monkeypatch.setattr(linux.PasswordSource, 'verify', lambda self: reads.append('source'))
+    monkeypatch.setattr(linux, 'vm_selected_values', lambda *args:
+                        {'postgres-db': {'postgres.password': password.read_text()}})
+    monkeypatch.setattr(linux, 'require_file_protocol', lambda *args: None)
+    with (lock / 'bws-owner').open('w+') as owner:
+        monkeypatch.setattr(os, 'environ', {'DATABASE_URL': 'postgresql://app@' + host + ':5432/app_test',
+            'BWS_DEPLOY_LOCK_FD': str(owner.fileno()), 'BWS_DEPLOY_OPERATION_ID': 'operation',
+            'BWS_DATABASE_TARGET': target, 'COMPOSE_PROFILES': profiles})
+        if accepted:
+            linux.inherited_worker_guard('test', 'up')
+            assert reads == ['source']
+        else:
+            with pytest.raises(PostgresDeployError):
+                linux.inherited_worker_guard('test', 'up')
+            assert not reads
 
 
 @pytest.mark.parametrize('key', ['host', 'hostaddr'])

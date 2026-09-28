@@ -1506,6 +1506,8 @@ def _configure_bws_retry_driver(tmp_path: Path, env: dict[str, str], *, host: st
               "sslmode": "require", "application_name": "bws-retry-check"}
     env["DATABASE_URL"] = env["DB_DSN"] = "postgresql+psycopg:///?" + urlencode(fields)
     env["BWS_POSTGRES_PASSWORD_SOURCE"] = str(password)
+    env["BWS_DATABASE_TARGET"] = "local" if host == "db" else "external"
+    env["COMPOSE_PROFILES"] = ""
     expected = dict(fields, password="fake-preflight-canary")
     if host == "db":
         expected.update(hostaddr="127.0.0.1", port="15432")
@@ -3067,6 +3069,96 @@ def _render_bws_compose(tmp_path, channel, overrides=None):
     assert result.returncode == 0, result.stderr
     assert password.read_text() not in result.stdout + result.stderr
     return json.loads(result.stdout)
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
+@pytest.mark.parametrize('host', ['db', 'database.example.invalid'])
+def test_bws_effective_target_controls_generated_compose_dependency_graph(tmp_path, monkeypatch, channel, host):
+    """Run real effect selection and shell-generated up commands through Compose's parser.
+
+    Only the credential/lock guard and Docker mutation are fake. The Docker shim
+    converts each actual generated up invocation to config using the exact same
+    files/environment; it never starts a container or contacts a Docker engine.
+    """
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    real_docker = shutil.which('docker')
+    if real_docker is None:
+        pytest.skip('Docker Compose config parser unavailable; hosted CI must render')
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    shutil.copyfile(REPO_ROOT / 'config/runtime.defaults.env', root / 'config/runtime.defaults.env')
+    for name in ('docker-compose.yaml', 'docker-compose.' + channel + '.yml',
+                 'docker-compose.bws.yml', 'docker-compose.bws-external.yml'):
+        shutil.copyfile(REPO_ROOT / name, root / name)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    pin = root / 'config/deploy' / (channel + '.env')
+    pin.write_text('WATCHER_RUNTIME_ENV_FILE=' + str(runtime) + '\nAPP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\nAPP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    password = tmp_path / 'password'
+    password.write_text('fake-external-graph-password')
+    env = {'PATH': os.environ['PATH'], 'HOME': os.environ['HOME'], 'LLM_PROVIDER': 'mock',
+           'WATCHER_RUNTIME_ENV_FILE': str(runtime), 'DATABASE_URL': 'postgresql://app@' + host + ':5432/custom',
+           'INSTANCE_OWNERSHIP_HOST_STATE_DIR': str(tmp_path / 'ownership'),
+           'COMPOSE_PROFILES': 'bws-local-database-disabled' if host != 'db' else ''}
+    monkeypatch.setattr(os, 'environ', env)
+    cfg = SimpleNamespace(root=root, channel=channel, uid=1000, gid=1000, password_file=password)
+    effects = linux.LinuxEffects(cfg)
+    produced = effects.environment()
+    assert produced['BWS_DATABASE_TARGET'] == ('local' if host == 'db' else 'external')
+    assert produced['COMPOSE_PROFILES'] == ''
+    direct_graph = json.loads(effects.compose('config', '--format', 'json'))
+
+    bin_dir = tmp_path / 'bin'
+    bin_dir.mkdir()
+    graph_log = tmp_path / 'graphs.jsonl'
+    _write_executable(bin_dir / 'docker', '#!' + sys.executable + '\n' + '''
+import json,os,subprocess,sys
+from pathlib import Path
+args=sys.argv[1:]
+assert args[0] == 'compose' and 'up' in args
+index=args.index('up')
+result=subprocess.run([os.environ['REAL_DOCKER'],*args[:index],'config','--format','json'],
+                      text=True,capture_output=True,check=True)
+with Path(os.environ['GRAPH_LOG']).open('a') as stream:
+    stream.write(json.dumps({'argv':args,'graph':json.loads(result.stdout)})+'\\n')
+''')
+    python_guard = bin_dir / 'guard-python'
+    _write_executable(python_guard, '#!' + sys.executable + '\n' + '''
+import os,sys
+if sys.argv[1:3] == ['-m','app.ops.postgres_deploy_linux']:
+    assert sys.argv[3] == 'guard'
+else:
+    os.execv(sys.executable,[sys.executable,*sys.argv[1:]])
+''')
+    produced.update(PATH=str(bin_dir) + ':' + env['PATH'], PYTHON=str(python_guard),
+                    REAL_DOCKER=real_docker, GRAPH_LOG=str(graph_log))
+    script = '''
+set -euo pipefail
+source "$1/scripts/lib/deploy_channel_compose.sh"
+deploy_channel_compose "$2" "$3" "docker-compose.$3.yml" "pkm-$3" "$4" up --abort-on-container-exit --exit-code-from migrate --force-recreate migrate
+deploy_channel_compose "$2" "$3" "docker-compose.$3.yml" "pkm-$3" "$4" up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
+'''
+    result = subprocess.run(['bash', '-c', script, '--', str(REPO_ROOT), str(root), channel, str(pin)],
+                            env=produced, text=True, capture_output=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    records = [json.loads(line) for line in graph_log.read_text().splitlines()]
+    assert len(records) == 2
+    for graph in (direct_graph, *(record['graph'] for record in records)):
+        services = graph['services']
+        for name in ('migrate', 'api', 'worker', 'watcher', 'heimdal-capture-watch'):
+            assert ('db' in services[name].get('depends_on', {})) == (host == 'db')
+        for name in ('api', 'worker', 'watcher', 'heimdal-capture-watch'):
+            assert services[name]['depends_on']['migrate']['condition'] == 'service_completed_successfully'
+            assert services[name]['depends_on']['instance-state-init']['condition'] == 'service_completed_successfully'
+        if channel == 'prod':
+            assert services['api']['depends_on']['ollama']['condition'] == 'service_healthy'
+        if host != 'db':
+            assert 'db' not in services
+            assert 'bws_pgdata' not in graph.get('volumes', {})
+        assert password.read_text() not in json.dumps(graph)
+    for record in records:
+        assert ('docker-compose.bws-external.yml' in ' '.join(record['argv'])) == (host != 'db')
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])

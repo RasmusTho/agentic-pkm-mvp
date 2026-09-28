@@ -107,6 +107,10 @@ def effective_database_fields(config: LinuxConfig, environment: Any) -> dict[str
     return fields
 
 
+def database_target(fields: dict[str, str]) -> str:
+    return 'local' if fields.get('host') == 'db' and fields.get('port') == '5432' and not fields.get('hostaddr') else 'external'
+
+
 def _database_url(fields: dict[str, str]) -> str:
     return 'postgresql+psycopg:///?' + urlencode(fields, quote_via=quote)
 
@@ -145,6 +149,9 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
         if len(revisions) != 1:
             raise PostgresDeployError()
         require_file_protocol(cfg.root, revisions[0])
+    target = database_target(effective_database_fields(cfg, os.environ))
+    if os.environ.get('BWS_DATABASE_TARGET') != target or (target == 'external' and os.environ.get('COMPOSE_PROFILES')):
+        raise PostgresDeployError()
     PasswordSource(cfg).verify()
     validate_database_inputs(os.environ, database_input_files(cfg))
     # Recheck the same selected scope before every Compose call, including
@@ -323,14 +330,21 @@ class LinuxEffects:
         # Pass the same immutable, value-free target through every Compose call;
         # generated runtime values cannot override this environment snapshot.
         env['DATABASE_URL'] = env['DB_DSN'] = _database_url(fields)
+        env['BWS_DATABASE_TARGET'] = database_target(fields)
+        if env['BWS_DATABASE_TARGET'] == 'external':
+            # No ambient profile can reintroduce the unrelated local DB/volume.
+            env['COMPOSE_PROFILES'] = ''
         return env
 
     def compose(self, *args: str) -> str:
         cfg = self.config
+        env = self.environment()
+        overlays = ['-f', str(cfg.root / 'docker-compose.bws.yml')]
+        if env['BWS_DATABASE_TARGET'] == 'external':
+            overlays += ['-f', str(cfg.root / 'docker-compose.bws-external.yml')]
         return _command(['docker', 'compose', '--env-file', str(cfg.root / 'config/deploy' / (cfg.channel + '.env')),
             '-f', str(cfg.root / 'docker-compose.yaml'), '-f', str(cfg.root / ('docker-compose.' + cfg.channel + '.yml')),
-            '-f', str(cfg.root / 'docker-compose.bws.yml'), '-p', 'pkm-' + cfg.channel, *args],
-            cwd=cfg.root, env=self.environment())
+            *overlays, '-p', 'pkm-' + cfg.channel, *args], cwd=cfg.root, env=env)
 
     def validate_plan(self, plan: DeployPlan) -> None:
         plan.validate()
@@ -357,7 +371,7 @@ class LinuxEffects:
     def local_database(self) -> bool:
         self.environment()
         fields = self.database_fields or {}
-        return fields.get('host') == 'db' and fields.get('port') == '5432' and not fields.get('hostaddr')
+        return database_target(fields) == 'local'
 
     def initialized(self) -> bool:
         cfg = self.config

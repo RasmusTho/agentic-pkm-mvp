@@ -562,6 +562,11 @@ deploy_channel_compose() {
   if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
     (cd "${root}" && "${PYTHON:-python3}" -m app.ops.postgres_deploy_linux guard "${channel}" --compose-command "${1:-}") || return $?
     compose_args+=(-f "${root}/docker-compose.bws.yml")
+    case "${BWS_DATABASE_TARGET:-}" in
+      local) ;;
+      external) compose_args+=(-f "${root}/docker-compose.bws-external.yml") ;;
+      *) echo "database deployment refused; missing supervised database target" >&2; return 78 ;;
+    esac
   fi
 
   (
