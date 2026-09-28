@@ -152,8 +152,10 @@ list. These invariants hold *across* tasks; each names its partial-failure walk.
   client does **not sample** the screen (not "sample then drop"), the offline buffer does **not grow**,
   and **nothing ships**. Pause state is **durable**: a client that crashes or restarts while paused
   comes back **paused** — it never silently resumes capture. **Trust consequence:** if pause reset to
-  "on" at restart, the owner would be observed without knowing; visible pause state (SCREEN-06) is the
-  guarantee the owner can always see at a glance whether observation is on.
+  "on" at restart, the owner would be observed without knowing. SCREEN-06 supplies the durable governed
+  pause setting; SCREEN-03 renders status from the actual capture loop and must never show `observing`
+  merely because the setting requests resume. The capability acceptance criterion verifies the
+  operator-visible status and capture behavior together.
 - **INV-SCREEN-D — exclusion is honored at CAPTURE time, not derivation time.** An excluded app's (or
   excluded scope's) pixels **never leave the client** — the frontmost app / active scope is checked
   **before** a frame is sampled; an excluded target is never captured, never buffered, never shipped.
@@ -200,7 +202,7 @@ declared once and settings-governed (SETTINGS_SPINE posture, SCREEN-06), tuned a
       accumulating. Verify: `tests/heimdal/test_screen_frame_retention.py::test_frames_age_out_bounded_and_receipted` (SCREEN-01/02)
 - [ ] Exclusion is capture-time: an excluded app's pixels never reach the host (asserted at the client
       capture entrypoint). Verify: `tests/heimdal/test_screen_exclusion.py::test_excluded_app_never_captured` (SCREEN-03/06)
-- [ ] Pause is durable and PAUSED means no capture/buffer/ship, visibly. Verify: `tests/heimdal/test_screen_pause.py::test_pause_is_durable_and_total` (SCREEN-03/06)
+- [ ] Pause is durable and PAUSED means no capture/buffer/ship; the visible status reflects the actual capture loop and never reports observing from a resume setting alone. Verify: `tests/heimdal/test_screen_pause.py::test_visible_status_matches_capture_loop` (SCREEN-03/06)
 - [ ] `screen` is registered in the ERE stream registry as `live` and consumed only via the registry;
       coalesced span boundaries survive into the segmenter's signal shape. Verify: `tests/episodes/test_stream_registry.py::test_screen_stream_registered_live` + `tests/heimdal/test_screen_coalescing.py::test_span_boundaries_survive_on_dimension_shift` (SCREEN-02/04)
 - [ ] A rebuildable time-spend projection reconstructs by app/project/scope/day/week from observations

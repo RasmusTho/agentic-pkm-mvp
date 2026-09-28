@@ -1,6 +1,6 @@
 ---
 name: Control Surface and Exclusions
-description: The operator control surface — pause/resume with always-visible state, per-app and per-scope exclusions, and retention tunables — settings-governed per the Settings Spine, with a durable receipt for every control change
+description: The operator control surface — governed pause/resume state consumed by the native client's visible capture status, per-app and per-scope exclusions, and retention tunables — settings-governed per the Settings Spine, with a durable receipt for every control change
 task_id: SCREEN-06
 source_anchor: docs/HEIMDAL_SCREEN_STREAM/README.md :: Owner ruling (pause + exclusion controls, derive-and-discard)
 parent_capability: Heimdal Screen Stream
@@ -15,18 +15,19 @@ can_parallelize_with: [DERIVE_ACTIVITY_OBSERVATIONS.md]
 
 The owner ruling that approved always-on desktop screen observation came **with** conditions: pause and
 app/scope exclusion controls, and a derive-and-discard raw posture. This task builds the operator
-control surface that makes those conditions real and legible: pause/resume with **always-visible
-state**, per-app and per-scope exclusions, and the retention tunables — all **settings-governed** per
-the Settings Spine, with a **durable receipt for every control change**. It is the governed settings +
-receipt half behind the capture-loop behavior SCREEN-03 enforces.
+control surface that makes those conditions real and legible: durable pause/resume state, per-app and
+per-scope exclusions, and retention tunables — all **settings-governed** per the Settings Spine, with a
+**durable receipt for every control change**. This task provides the governed settings + receipt half
+behind the capture-loop behavior SCREEN-03 enforces; SCREEN-03 renders the client's actual capture
+status for the operator.
 
 ## What This Task Does
 
-1. **Pause/resume with visible state (INV-SCREEN-C).** A control to pause and resume observation, whose
-   current state (**observing / paused**) is **always visible at a glance** — the owner must never have
-   to wonder whether they are being observed. Pause is durable (SCREEN-03 Restart posture); this task
-   owns the state as a governed setting and its visible surface. Pause is the standing-grant revocation
-   in miniature: paused = the `screen_always_on` consent is not active.
+1. **Governed pause/resume state (INV-SCREEN-C).** A durable, queryable control to pause and resume
+   observation. SCREEN-03 owns the operator-visible status of the actual capture loop; this task owns
+   the governed setting and must not claim that a resumed setting means an external client is
+   observing. Pause is the standing-grant revocation in miniature: paused = the `screen_always_on`
+   consent is not active.
 2. **Per-app and per-scope exclusions (INV-SCREEN-D).** An editable exclusion list: exclude by app
    (bundle id) and by scope. The list is honored **at capture** (SCREEN-03) — this task owns the
    list as a governed setting; the client reads it. A **scope→app mapping** lets the owner declare, e.g.,
@@ -48,9 +49,9 @@ receipt half behind the capture-loop behavior SCREEN-03 enforces.
 
 ```
 $ python -m app.cli heimdal screen-control status
-observing: on   paused_since: -   excluded_apps: [com.apple.Passwords, com.bank.app]   excluded_scopes: [private]
+pause_setting: resumed   capture_state: unknown_external_client   excluded_apps: [com.apple.Passwords, com.bank.app]   excluded_scopes: [private]
 $ python -m app.cli heimdal screen-control pause
-paused. receipt: heimdal_screen_control_receipt/2026-07-07T14:22Z (actor=operator, pause on->PAUSED)
+pause setting changed to paused. receipt: heimdal_screen_control_receipt/2026-07-07T14:22Z (actor=operator, pause resumed->paused)
 $ python -m app.cli heimdal screen-control exclude-app com.some.app
 excluded com.some.app. receipt: ... (actor=operator, exclusions +com.some.app)
 ```
@@ -69,8 +70,12 @@ audit trail. Receipting every change is what makes the always-on posture account
       site, not on a receipt helper in isolation. Verify: `tests/heimdal/test_screen_control_receipts.py::test_every_control_change_receipted` (asserts the receipt is written from the pause/exclusion/tunable write paths)
 - [ ] AC2: the exclusion list and pause state are governed settings the client reads; a markdown edit
       takes effect without a manual CLI step (rides SET-1 ingestion) or reports degraded state. Verify: `tests/heimdal/test_screen_control_settings.py::test_control_settings_ingested_live`
-- [ ] AC3: pause/observing state is queryable and always reflects the true capture state (no drift
-      between the visible state and the client's actual behavior). Verify: `tests/heimdal/test_screen_control_settings.py::test_visible_state_matches_capture_behavior`
+- [ ] AC3: the host status surface exposes the durably accepted pause/exclusion/tunable settings
+      supplied to SCREEN-03, including visible degradation. It distinguishes requested/allowed
+      observation from actual external-client capture state and never reports `observing` solely from a
+      resume setting. Actual capture-loop and visible-indicator agreement is SCREEN-03/Bifrost #72 and
+      the parent #3340 capability acceptance. Verify:
+      `tests/heimdal/test_screen_control_settings.py::test_visible_state_matches_governed_controls`
 - [ ] AC4: an invalid retention/cadence value degrades loudly to last-valid with a visible degraded
       state, never silently to a code default. Verify: `tests/heimdal/test_screen_control_settings.py::test_invalid_tunable_degrades_loud_not_silent`
 - [ ] AC5 (non-behavioral): the screen-stream tunables are declared once in the single default registry
@@ -110,4 +115,4 @@ control state is lost.
 
 ## Related GitHub Issues
 
-One issue: `[Heimdal Screen Stream] control-surface-and-exclusions: visible pause + app/scope exclusions + retention tunables, receipted` (#3342). It depends on SCREEN-01 (#3343) and can proceed before SCREEN-03. SCREEN-03 consumes these governed settings; its native implementation is tracked in [Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72), with #3341 retained as the Heimdal validation pointer. **Sonnet-tier** (settings-governed control surface + receipts over the existing Settings Spine). See scratchpad draft.
+One issue: `[Heimdal Screen Stream] control-surface-and-exclusions: visible pause + app/scope exclusions + retention tunables, receipted` (#3342). It depends on SCREEN-01 (#3343) and can proceed before SCREEN-03. SCREEN-06 exposes the governed controls and reports external capture state as unknown on its own; SCREEN-03's native implementation in [Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72), with #3341 as the Heimdal validation pointer, renders actual capture status and enforces those controls. **Sonnet-tier** (settings-governed control surface + receipts over the existing Settings Spine). See scratchpad draft.

@@ -37,9 +37,10 @@ issue #3340.
    provider #1 (SCREEN-02 consumes it).
 3. **Pause control (INV-SCREEN-C).** A visible pause/resume. **Paused = no sampling, no buffering, no
    shipping** — the client does not capture at all while paused. Pause state is **durable** (survives
-   restart, see Restart posture). The current state (observing / paused) is always visible at a glance
-   (the SCREEN-06 control surface owns the visible-state guarantee; this task honors it in the capture
-   loop).
+   restart, see Restart posture). The client renders the actual capture-loop state at a glance; it
+   shows `observing` only while capture is active and shows paused or degraded when capture is stopped
+   or its governed state is unavailable. SCREEN-06 supplies the governed setting but does not claim the
+   external client's actual capture state.
 4. **Per-app exclusion list (INV-SCREEN-D).** Before sampling, check the frontmost app (and its scope,
    SCREEN-06) against the exclusion list. **An excluded app's pixels are never captured** — not
    sampled, not buffered, not shipped. Exclusion is enforced **at capture**, upstream of everything;
@@ -78,8 +79,11 @@ day of observations.
       screensavered. Verify: `tests/heimdal/test_screen_client_capture.py::test_no_sample_when_idle_or_locked` (Bifrost: `ScreenObserverCaptureTests.testNoSampleWhenIdle`)
 - [ ] AC2 (enforcement): an excluded app being frontmost means **no capture** — asserted at the capture
       entrypoint, before any buffer write or network call. Verify: `tests/heimdal/test_screen_exclusion.py::test_excluded_app_never_captured` (asserts the exclusion check gates the capture call site, not a host-side filter)
-- [ ] AC3 (enforcement): pause stops sampling, buffering, and shipping entirely; resume restores
-      capture. Verify: `tests/heimdal/test_screen_pause.py::test_pause_is_durable_and_total` (asserts the capture loop no-ops while paused and the buffer does not grow)
+- [ ] AC3 (enforcement): the status indicator is derived from actual capture-loop state and never
+      reports `observing` while paused, idle/locked, or when governed settings are missing or invalid;
+      pause stops sampling, buffering, and shipping, and valid resume restores capture. Verify:
+      `tests/heimdal/test_screen_pause.py::test_visible_status_matches_capture_loop` (asserts visible status
+      agrees with the capture loop, the loop no-ops while paused, and the buffer does not grow)
 - [ ] AC4: the offline buffer is bounded and durable; a full buffer ages out oldest bundles with a
       local count, never grows unbounded. Verify: `tests/heimdal/test_screen_client_buffer.py::test_buffer_bounded_and_durable`
 - [ ] AC5: backfill after reconnect does not duplicate observations (re-shipped bundle dedups on
