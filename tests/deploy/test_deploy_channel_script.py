@@ -1810,3 +1810,35 @@ def test_heimdal_capture_watch_host_secret_layer_lives_in_base_compose() -> None
     ]
     assert len(host_secret_layers) == 1
     assert host_secret_layers[0].get("required") is False
+
+
+def test_deploy_waits_for_in_progress_shared_import_and_rechecks_parity(tmp_path: Path) -> None:
+    """BWS-02 admission seam; BWS-04 owns the actual VM/Compose integration."""
+    from io import StringIO
+    from app.ops.host_secret_controller import HostSecretAdmissionError, HostSecretController, TerminalEvidence
+    from app.ops.secret_admin import SecretAdmin
+    from tests.ops.test_secret_admin import FakeProvider, CANARY, IDENTITY
+
+    provider = FakeProvider()
+    controller = HostSecretController(tmp_path / 'controller')
+    admin = SecretAdmin(provider, controller=controller)
+    events = []
+
+    def deployment_attempt():
+        with controller.admit('deploy', 'dev') as operation:
+            statuses = admin.check_selected(operation, 'dev', ['builderops-model-inquiry'])
+            assert all(s['status'] == 'ok' for s in statuses)
+            events.extend(['parity-rechecked', 'compose-seam'])
+            operation.finish(TerminalEvidence(operation.operation_id, 'deploy', 'dev', 'committed', 'remote-terminal'))
+
+    def during_import():
+        with pytest.raises(HostSecretAdmissionError):
+            deployment_attempt()
+        assert events == []
+
+    provider.on_put = during_import
+    admin.import_stdin('dev', 'openai.api-key', StringIO(CANARY))
+    provider.calls.clear()
+    deployment_attempt()
+    assert events == ['parity-rechecked', 'compose-seam']
+    assert provider.calls == [('read', 'non-prod', IDENTITY), ('read', 'prod', IDENTITY)]
