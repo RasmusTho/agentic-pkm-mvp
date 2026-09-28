@@ -75,7 +75,7 @@ def resolver_for_targets(
 
     return BuilderModelAccessResolver.from_declared_sources(
         census_path=census_with_role_targets(directory, targets),
-        contract_path=contract_with_role_targets(directory, targets),
+        contract_path=CONTRACT_PATH,
     )
 
 
@@ -99,11 +99,6 @@ def census_with_role_targets(
     directory.mkdir(parents=True, exist_ok=True)
     payload = yaml.safe_load(CENSUS_PATH.read_text(encoding="utf-8"))
     provider_id, model = next(iter(targets.values()))
-    providers = {provider["id"]: provider for provider in payload["providers"]}
-    provider = providers[provider_id]
-    credential = _credential_for(provider_id)
-    if credential not in (provider.get("credential_identifiers") or []):
-        provider.setdefault("credential_identifiers", []).append(credential)
     for profiles in payload["runtime_channels"]["builder_execution"].values():
         profiles["sol"].update(
             {
@@ -121,48 +116,3 @@ def census_with_role_targets(
     path = directory / "providers.yaml"
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return path
-
-
-def contract_with_role_targets(
-    directory: Path,
-    targets: dict[str, tuple[str, str]],
-) -> Path:
-    """Write a host secret contract whose role requirements match *targets*."""
-    directory.mkdir(parents=True, exist_ok=True)
-    payload = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
-    declared = {secret["logical_id"] for secret in payload["secrets"]}
-    provider_id, _model = next(iter(targets.values()))
-    for consumer in payload["consumers"]:
-        if consumer["consumer"] != "builderops-model-inquiry":
-            continue
-        requirements = {"model_inquiry": [_credential_for(provider_id)]}
-        for secrets in requirements.values():
-            for secret in secrets:
-                if secret not in declared:
-                    payload["secrets"].append(
-                        {
-                            "logical_id": secret,
-                            "child_binding": secret.replace(".", "_")
-                            .replace("-", "_")
-                            .upper(),
-                            "kind": secret.rsplit(".", maxsplit=1)[1],
-                            # Model-provider credentials are required: a role
-                            # cannot resolve without its declared key (#4489).
-                            "optional": False,
-                            # Model-provider credentials resolve independently
-                            # per consumer, never shared-domain (#4512).
-                            "shared_key_domain": False,
-                        }
-                    )
-                    declared.add(secret)
-        consumer["role_requirements"] = requirements
-        consumer["secrets"] = sorted(
-            {secret for secrets in requirements.values() for secret in secrets}
-        )
-    path = directory / "host_secret_contract.json"
-    path.write_text(json.dumps(payload), encoding="utf-8")
-    return path
-
-
-def _credential_for(provider_id: str) -> str:
-    return f"{provider_id}.api-key"

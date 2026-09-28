@@ -927,6 +927,7 @@ deploy_channel_compose \\
 """
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
+    env["HOST_SECRET_PROVIDER"] = "keychain"
     env["HEIMDAL_RAW_STORE_KEY"] = "ambient-value-must-not-win"
     result = subprocess.run(
         ["bash", "-c", command],

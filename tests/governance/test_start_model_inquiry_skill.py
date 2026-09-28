@@ -251,6 +251,7 @@ else:
         env={
             "PATH": f"{fake_bin}:/usr/bin:/bin",
             "HOME": str(tmp_path),
+            "HOST_SECRET_PROVIDER": "keychain",
             "PYTHONPATH": str(instrumentation),
             "PROVIDER_CALL_MARKER": str(provider_call_marker),
             "SUBSCRIPTION_CALL_MARKER": str(subscription_call_marker),
