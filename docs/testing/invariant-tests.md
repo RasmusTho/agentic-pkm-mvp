@@ -1088,9 +1088,10 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
   `tests/invariants/test_vault_multiwriter.py`.
 - **Expected failure mode:** an opted-in writer races another writer and either silently replaces the
   newer canonical bytes, loses its own proposal, or acknowledges a non-canonical outcome as success.
-- **Current enforcement:** `runtime_test` — enforcement is intentionally opt-in during the progressive
-  migration decided on 2026-07-13. A versionless rewritten write still writes and reports its
-  `note_class`; #3570 tracks migration of those remaining callers. When `expected_version` is supplied,
+- **Current enforcement:** `runtime_test` — enforcement is intentionally opt-in under the owner decision
+  from 2026-07-13. A versionless rewritten write still writes and reports its `note_class`; #3570
+  delivered the bounded migration for registered in-repository existing-target rewrite producers.
+  Versionless callers outside that registered scope remain possible. When `expected_version` is supplied,
   a matching write uses the atomic rewritten-note seam, while an initially stale proposal leaves the
   canonical note unchanged and is durably staged with writer provenance. Receiptless post-linearization
   races fail without a success acknowledgement and retain scanner-inert recovery evidence.
@@ -1099,7 +1100,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
   `tests/invariants/test_vault_multiwriter.py::test_rewritten_write_uses_atomic_replace_at_filesystem_seam`,
   `tests/invariants/test_vault_multiwriter.py::test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam`.
 - **Related docs / contracts / ADRs:** ADR-0055, ADR-0053 (superseded); `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7 (INV-VW1).
-- **Related issues:** #3132, #3450, #3451; progressive caller migration #3570 remains open.
+- **Related issues:** #3132, #3450, #3451; registered in-repository writer follow-ups delivered under #3570.
 
 ### write_guard_asserted_at_every_write_seam
 

@@ -2,7 +2,7 @@ State: Implemented through VMW-01..04 by issue #3453 / PR #4148. GitHub parent #
 
 # Vault Multiwriter Enactment
 
-This capability enacts ADR-0055's local-file safety posture without changing its authority model: rewritten-note callers that supply `expected_version` detect an initially stale version and preserve the proposal, append-only operations stay append-only, and iCloud conflict copies never enter ordinary ingest. Remaining versionless rewritten writers retain the explicit #3570 migration posture.
+This capability enacts ADR-0055's local-file safety posture without changing its authority model: rewritten-note callers that supply `expected_version` detect an initially stale version and preserve the proposal, append-only operations stay append-only, and iCloud conflict copies never enter ordinary ingest. The bounded registered in-repository writer follow-ups in #3570 are delivered. The shared seam remains opt-in, so this does not promise expected-version enforcement for unregistered or future callers, direct-filesystem clients, or every absent-target creation race.
 
 ## Execution order
 
@@ -20,7 +20,7 @@ This capability enacts ADR-0055's local-file safety posture without changing its
 
 ## Capability acceptance
 
-- [x] Every ADR-0055 rewritten/append-only class is covered by the runtime classifier and parity tests. Verify: VMW-01/02 child receipts and `tests/invariants/test_vault_multiwriter.py`. Rewritten-note stale enforcement is opt-in for callers that supply `expected_version`; #3570 tracks progressive migration of remaining versionless writers.
+- [x] Every ADR-0055 rewritten/append-only class is covered by the runtime classifier and parity tests. Verify: VMW-01/02 child receipts and `tests/invariants/test_vault_multiwriter.py`. Rewritten-note stale enforcement remains opt-in for callers that supply `expected_version`; #3570 delivered the bounded registered in-repository existing-note rewrite follow-ups and specified create-intent dispositions. It does not establish universal CAS or absent-target no-clobber behavior.
 - [x] An initially stale opted-in rewritten write stages the losing content and provenance instead of silently overwriting or dropping it. Verify: VMW-02 production-path tests in `tests/invariants/test_vault_multiwriter.py`.
 - [x] Both iCloud copies and VMW-02-staged artifacts are excluded before ordinary ingestion. Verify: VMW-03 tests in `tests/watcher/test_vault_conflict_quarantine.py`.
 - [x] INV-VW1 and INV-VW3 describe shipped enforcement after the two behavior slices merged. Verify: VMW-04 doc writeback.

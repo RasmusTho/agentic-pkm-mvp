@@ -873,7 +873,7 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
     ),
 }
 
-# VMW-#5140 intent census. This is deliberately separate from the existing
+# VMW create-intent census. This is deliberately separate from the existing
 # WriteGuard census above: create-once is a producer contract, while the
 # guard classification proves only that the shared seam is protected.
 WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
@@ -903,6 +903,9 @@ WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
     ),
     ("app/heimdal/settings_notes.py", "_write_settings_note", 1): (
         "create_once: deterministic settings note preserves a concurrent first writer."
+    ),
+    ("app/services/commitment_persistence.py", "persist_commitment", 2): (
+        "create_once: first persistence is first-writer-wins; existing targets use the separate CAS site."
     ),
     ("app/mcp/vault_tools.py", "append_note", 1): (
         "append_only: next-available note allocation preserves every earlier MCP artifact."
@@ -977,9 +980,9 @@ def find_create_once_write_note_relative_call_sites(
 
     A producer may select create-once conditionally when an exact version
     snapshot is absent; the keyword itself is still the explicit producer
-    contract even when its value is not a literal ``True``. Only producers in
-    the published VMW intent registry are returned; mixed CAS/create-once
-    writers are covered by the complete write-site census above.
+    contract even when its value is not a literal ``True``. Return every
+    discovered producer so the closed-census comparison can fail when a
+    create-once site has not been registered.
     """
     sites: list[tuple[str, str, int]] = []
     for path in sorted(root.rglob("*.py")):
@@ -1022,10 +1025,7 @@ def find_create_once_write_note_relative_call_sites(
                     ordinal = self.call_counts.get(qualname, 0) + 1
                     self.call_counts[qualname] = ordinal
                     site = (rel, qualname, ordinal)
-                    if (
-                        any(keyword.arg == "create_once" for keyword in node.keywords)
-                        and site in WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION
-                    ):
+                    if any(keyword.arg == "create_once" for keyword in node.keywords):
                         sites.append(site)
                 self.generic_visit(node)
 
