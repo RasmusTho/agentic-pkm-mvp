@@ -1,12 +1,18 @@
-State: Canonical Mimer semantic dimensions. Docs-only architecture contract for the foundation backlog (#2533–#2552); defines the orthogonal metadata that preserves meaning across storage, indexing, retrieval, memory, projection, and agent use. Does not claim shipped runtime behavior.
+State: Canonical Mimer semantic dimensions. The architecture model remains normative for the foundation backlog (#2533–#2552); this document also records the limited promoted-memory scope-binding behavior delivered by #5019 / PR #5032. It does not claim that all dimensions or cross-scope runtime policy are implemented.
 Doc role: Architecture / semantic model
 Authority: Owns the orthogonal semantic dimensions (metadata fields) that every Mimer object carries and that must not be collapsed. Its central commitment: `source_role`, `authority_state`, and `evidence_role` are independent and answer different questions. Subordinate to `docs/foundation/00-yggdrasil-doctrine.md` and `docs/architecture/functional-ontology.md`; the physical field bundle is owned by the metadata bundle schema (#2544).
 Owner: Architecture spine
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: canonical (dimension definitions); subordinate to doctrine and ontology
-Last reviewed: 2026-06-27
-Last verified against: docs/foundation/00-yggdrasil-doctrine.md, docs/architecture/functional-ontology.md, docs/foundation/yggdrasil-architecture-context-packet.md, docs/architecture/memory-model.md, schemas/memory-item.schema.json
+Last reviewed: 2026-09-28
+Last verified against: docs/foundation/00-yggdrasil-doctrine.md,
+docs/architecture/functional-ontology.md, docs/foundation/yggdrasil-architecture-context-packet.md,
+docs/architecture/memory-model.md, schemas/memory-item.schema.json; Issue #5019; PR #5032 /
+merge commit `305f62581316ff50fac640b2e6891f0e4af3c18b`; `app/agent_memory/candidate.py`,
+`app/agent_memory/materialization.py`, `app/agent_memory/recall_retrieval.py`,
+`app/agents/ask/graph.py`; `tests/agent_memory/test_recall_retrieval.py`,
+`tests/api/test_memory_review_queue_api.py`, `tests/agents/ask/test_recall_scope_enforcement.py`
 
 # Mimer Semantic Dimensions
 
@@ -115,6 +121,12 @@ boundaries are defined in the [System Breakdown Structure](../SYSTEM_BREAKDOWN_S
   not cross-scope rights; crossing requires a `CrossScopeFlow`.
 - **Invariant:** TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) —
   scope_binding propagated through segment/projection/retrieval.
+- **Delivered runtime alignment (#5019 / PR #5032):** the promoted-memory runtime uses
+  `candidate.scope_id` to realize `scope_binding`. A scope-bound ASK admits a promoted memory only
+  when its persisted `scope_id` matches the active scope; missing or invalid bindings fail closed.
+  Unbound/default ASK retains its existing recall behavior and has no target scope to cross. The
+  memory-review API refuses acceptance of a semantic candidate without a valid `scope_id` before
+  recording a durable promote decision, and materialization independently requires the binding.
 
 ### `episode_ref`
 

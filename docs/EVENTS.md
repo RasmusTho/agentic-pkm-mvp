@@ -1393,6 +1393,14 @@ produced together but are never interchangeable:
 - `ConfirmResponse.events_emitted` is a list of event trace names (strings); it is the
   operational trace summary. `ConfirmResponse.receipt` is the accountability record.
 
+Semantic-memory promotion has an additional scope-ordering rule (#5019 / PR #5032). The
+review API refuses an `accept` for a semantic candidate without a valid `scope_id` with HTTP 409
+(`promotion_refused`) before changing the pending queue state or persisting the durable promote
+decision. The candidate remains pending and no applied promotion event/receipt is created for this
+refusal. Materialization independently validates the persisted scope before writing, and its
+receipt-supporting `PROMOTION_TRANSITION_APPLIED` record binds `scope_id` in the basis alongside
+the promoted artifact. Scope binding records membership; it does not grant a `CrossScopeFlow`.
+
 For read-only projection paths (orientation, resurfacing, vault browser reads), only
 operational traces are emitted; no receipt is returned. Read-only responses must not carry
 a top-level `receipt` field.
