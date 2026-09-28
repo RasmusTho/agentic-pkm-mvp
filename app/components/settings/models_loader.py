@@ -30,7 +30,8 @@ class ModelPricing(BaseModel):
 
     standard_input_usd_per_million_tokens: float = Field(..., gt=0)
     standard_output_usd_per_million_tokens: float = Field(..., gt=0)
-    fast_mode_multiplier: float = Field(..., gt=0)
+    standard_cached_input_usd_per_million_tokens: float | None = Field(None, ge=0)
+    fast_mode_multiplier: float | None = Field(None, gt=0)
     source_urls: List[str] = Field(..., min_length=1)
     retrieved_on: date
     artificial_analysis_cost_per_intelligence_index_task_usd: Dict[str, float] = Field(
@@ -49,6 +50,7 @@ class ModelDescriptor(BaseModel):
     notes: Optional[str] = None
     selection_group: Optional[str] = None
     allowed_transports: List[str] = Field(default_factory=list)
+    explicit_eval_transports: List[str] = Field(default_factory=list)
     pricing: Optional[ModelPricing] = None
 
 

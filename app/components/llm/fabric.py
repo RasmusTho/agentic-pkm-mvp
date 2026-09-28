@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 import os
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from app.components.embeddings import EmbeddingClientProtocol, get_embedding_client
@@ -246,7 +246,8 @@ def _latest_product_catalog_target(
 
 
 def _exact_product_model_route(
-    intent: LLMTaskIntent, model_id: str, *, factory: ModelAccessAdapterFactory
+    intent: LLMTaskIntent, model_id: str, *, factory: ModelAccessAdapterFactory,
+    transport_id: str | None = None
 ) -> LLMRoute:
     """Resolve one explicit model only through Product's declared registry."""
     matches = [
@@ -263,7 +264,12 @@ def _exact_product_model_route(
         factory.default_adapter_id(descriptor.provider),
     )
     default_adapter = factory.default_adapter_id(descriptor.provider)
-    if default_adapter in allowed:
+    if transport_id is not None:
+        admitted = allowed + tuple(descriptor.explicit_eval_transports) if intent.task_kind == "eval" else allowed
+        if transport_id not in admitted:
+            raise LLMRouteError("explicit transport is not allowed for the Product model")
+        adapter_id = transport_id
+    elif default_adapter in allowed:
         adapter_id = default_adapter
     elif len(allowed) == 1:
         adapter_id = allowed[0]
@@ -320,6 +326,7 @@ def _resolve_product_access_route(
     fallback_requirement: FallbackRequirement = "fallback_forbidden",
     fallback_provenance: FallbackProvenance | None = None,
     allow_catalog_promotion: bool = True,
+    allow_explicit_eval_transport: bool = False,
 ) -> ModelAccessRoute:
     factory = adapter_factory or _adapter_factory()
     adapter_id = selected.transport_id or factory.default_adapter_id(selected.provider)
@@ -341,6 +348,11 @@ def _resolve_product_access_route(
         product_descriptor is not None
         and product_descriptor.allowed_transports
         and adapter_id not in product_descriptor.allowed_transports
+        and not (
+            allow_explicit_eval_transport
+            and intent.task_kind == "eval"
+            and adapter_id in product_descriptor.explicit_eval_transports
+        )
     ):
         raise LLMRouteError("selected transport is not allowed for the Product model")
     # Validate the pinned target before any catalog discovery. A catalog adapter
@@ -708,6 +720,8 @@ class ChatClient:
         trace_id: str | None = None,
         max_tokens: int | None = None,
         response_format: dict[str, Any] | str | None = None,
+        usage_observer: Callable[[dict[str, Any]], None] | None = None,
+        record_content: bool = True,
     ) -> str:
         if (
             self.model_access_route is not None
@@ -768,12 +782,16 @@ class ChatClient:
             finally:
                 if owns_transport:
                     transport.close()
+        evidence_options: dict[str, Any] = {}
+        if usage_observer is not None or not record_content:
+            evidence_options = {"usage_observer": usage_observer, "record_content": record_content}
         return call_llm(
             name,
             pack,
             agent=agent,
             kind=kind,
             trace_id=trace_id,
+            **evidence_options,
             provider_override=self.route.provider,
             model_override=self.route.model,
             timeout_seconds=self.route.timeout_seconds,
@@ -797,21 +815,26 @@ def get_chat_client(
     intent: LLMTaskIntent,
     *,
     model_id: str | None = None,
+    transport_id: str | None = None,
     adapter_runtime_config: AdapterRuntimeConfig | None = None,
 ) -> ChatClient:
     """Bind a Product intent to its temporary route behind one thin facade."""
+    if transport_id is not None and (model_id is None or intent.task_kind != "eval"):
+        raise LLMRouteError("explicit transport requires an exact evaluation model")
     if model_id is None:
         return get_chat_client_for_route(
             intent, adapter_runtime_config=adapter_runtime_config
         )
     selected = _exact_product_model_route(
-        intent, model_id, factory=_adapter_factory()
+        intent, model_id, factory=_adapter_factory(), transport_id=transport_id
     )
     return get_chat_client_for_route(
         intent,
         selected_route=selected,
         adapter_runtime_config=adapter_runtime_config,
         allow_catalog_promotion=False,
+        allow_fallback=intent.task_kind != "eval",
+        allow_explicit_eval_transport=transport_id is not None,
     )
 
 
@@ -823,8 +846,11 @@ def get_chat_client_for_route(
     adapter_runtime_config: AdapterRuntimeConfig | None = None,
     allow_catalog_promotion: bool = True,
     allow_fallback: bool = True,
+    allow_explicit_eval_transport: bool = False,
 ) -> ChatClient:
     """Bind one already-resolved Product policy route to the shared access facade."""
+    if allow_explicit_eval_transport and (intent.task_kind != "eval" or selected_route is None):
+        raise LLMRouteError("evaluation-only admission requires an explicit eval route")
     router = LLMRouter()
     route_candidates = getattr(router, "candidate_routes", None)
     candidates = route_candidates(intent) if route_candidates is not None else []
@@ -867,6 +893,7 @@ def get_chat_client_for_route(
                 "fallback_policy_selected" if fallback is not None else "fallback_forbidden"
             ),
             allow_catalog_promotion=allow_catalog_promotion,
+            allow_explicit_eval_transport=allow_explicit_eval_transport,
         )
         if remote_transport is not None:
             request = _codex_remote_request(

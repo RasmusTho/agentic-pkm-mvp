@@ -15,9 +15,9 @@ Two modes:
   so schema validation, the explicit-``UNKNOWN`` degrade, and governance
   action mapping are all exercised for real — only the network call is
   replayed.
-- **Live mode** (opt-in, never in the PR gate): no injected completion; the
-  cognition talks to the configured provider. See
-  `tests/eval/test_classification_golden.py` (`@pytest.mark.eval`).
+- **Live mode** (opt-in, never in the PR gate): the injected completion binds
+  one exact evaluation model and transport through the Product facade. See
+  `app.eval.live_classification` and the opt-in `@pytest.mark.eval` test.
 
 Scoring semantics (from the dataset header, binding):
 
@@ -42,6 +42,7 @@ from typing import Dict, List, Mapping
 import yaml
 
 from app.components.llm.intent_classifier import IntentClass, IntentClassifierCognition
+from app.components.llm.constrained import CompletionFn
 
 CLASSIFICATION_GOLDEN_PATH = Path("docs") / "eval" / "classification_golden.yaml"
 CLASSIFICATION_REPLAY_PATH = Path("docs") / "eval" / "classification_replay.yaml"
@@ -207,13 +208,14 @@ def _replay_completion_fn(raw: str):
 def classify_cases(
     cases: List[ClassificationCase],
     completions: Mapping[str, str] | None,
+    *,
+    live_completion: CompletionFn | None = None,
 ) -> Dict[str, str]:
     """Run every case through the real classifier path; return case_id -> predicted class.
 
     ``completions`` maps case ids to recorded raw model output (deterministic
-    replay). ``None`` means live mode: the cognition uses the configured
-    provider. A case missing from the replay fixture fails loud — a partially
-    covered dataset is a false-green (cross-task invariant #6).
+    replay). ``None`` requires an explicitly bound ``live_completion``. A case
+    missing from the replay fixture fails loud — a partially covered dataset is a false-green (cross-task invariant #6).
     """
     if completions is not None:
         # Reverse coverage (review finding on #2851): an orphan replay entry —
@@ -226,10 +228,12 @@ def classify_cases(
                 f"replay fixture has orphan completions with no golden case: {orphans}; "
                 "remove them or restore the matching golden cases"
             )
+    if completions is None and live_completion is None:
+        raise ClassificationGoldenSetError("live classification requires a bound eval client")
     predictions: Dict[str, str] = {}
     for case in cases:
         if completions is None:
-            cognition = IntentClassifierCognition()
+            cognition = IntentClassifierCognition(completion=live_completion)
         else:
             raw = completions.get(case.id)
             if raw is None:
@@ -341,6 +345,7 @@ def evaluate_classification_golden_set(
     replay_path: Path = CLASSIFICATION_REPLAY_PATH,
     completions: Mapping[str, str] | None = None,
     live: bool = False,
+    live_completion: CompletionFn | None = None,
 ) -> Dict:
     """Load, classify, and score the golden set.
 
@@ -349,10 +354,16 @@ def evaluate_classification_golden_set(
     """
     cases = load_classification_cases(cases_path)
     if live:
+        if cases_path.resolve() != CLASSIFICATION_GOLDEN_PATH.resolve():
+            raise ClassificationGoldenSetError("live evaluation only accepts the checked-in golden set")
+        if live_completion is None:
+            from app.eval.live_classification import configure_classification_eval, ClassificationCompletion
+
+            live_completion = ClassificationCompletion(configure_classification_eval())
         resolved: Mapping[str, str] | None = None
     else:
         resolved = completions if completions is not None else load_replay_completions(replay_path)
-    predictions = classify_cases(cases, resolved)
+    predictions = classify_cases(cases, resolved, live_completion=live_completion)
     result = evaluate_classification(cases, predictions)
     result["dataset"] = str(cases_path)
     result["replay"] = None if live else str(replay_path)

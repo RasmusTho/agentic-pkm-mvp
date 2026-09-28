@@ -284,10 +284,16 @@ def _http_chat(
     temperature: float = 0.0,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
+    evaluation_request: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     payload: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
+    if evaluation_request:
+        # Opt-in measured eval uses Standard text billing and GPT-5-compatible limits.
+        payload.pop("temperature")
+        payload["service_tier"] = "default"
+        payload["reasoning_effort"] = "none"
     if max_tokens is not None:
-        payload["max_tokens"] = int(max_tokens)
+        payload["max_completion_tokens" if evaluation_request else "max_tokens"] = int(max_tokens)
     if response_format is not None:
         # OpenAI-compatible JSON mode. NOTE: the caller's JSON Schema is NOT
         # transmitted on this path — a dict response_format degrades to generic
@@ -333,6 +339,8 @@ def call_llm(
     response_format: dict[str, Any] | str | None = None,
     base_url_override: str | None = None,
     api_key_override: str | None = None,
+    usage_observer: Callable[[dict[str, Any]], None] | None = None,
+    record_content: bool = True,
 ) -> str:
     def _deterministic_response_for_kind() -> str:
         if kind and "ranking" in str(kind):
@@ -476,6 +484,7 @@ def call_llm(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format,
+                **({"evaluation_request": True} if usage_observer is not None else {}),
             )
         except Exception as exc:
             raise LLMError(
@@ -503,16 +512,24 @@ def call_llm(
                 f"deepseek provider call failed (model={model}); refusing to substitute a "
                 f"deterministic response: {exc}"
             ) from exc
-    log_llm_call(
-        provider=provider or "unknown",
-        model=str(model),
-        agent=agent or name or "unknown",
-        kind=kind or name or "unknown",
-        messages=messages,
-        response=response_payload,
-        response_text=response_text,
-        trace_id=trace_id,
-    )
+    if usage_observer is not None:
+        # Evidence consumers receive only billing metadata, never message content.
+        usage_observer({
+            "model": response_payload.get("model"),
+            "usage": response_payload.get("usage"),
+            "service_tier": response_payload.get("service_tier"),
+        })
+    if record_content:
+        log_llm_call(
+            provider=provider or "unknown",
+            model=str(model),
+            agent=agent or name or "unknown",
+            kind=kind or name or "unknown",
+            messages=messages,
+            response=response_payload,
+            response_text=response_text,
+            trace_id=trace_id,
+        )
 
     return response_text
 

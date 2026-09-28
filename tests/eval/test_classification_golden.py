@@ -244,13 +244,61 @@ def test_unknown_is_safe_fail_not_wrong_class() -> None:
     reason="live classification eval is opt-in (EVAL_LLM_MODE=run)",
 )
 def test_live_classification_golden_set() -> None:
-    from app.eval.llm_client import configure_eval_openai_env
+    from app.eval.live_classification import run_live_classification
 
-    configure_eval_openai_env()
-    result = evaluate_classification_golden_set(live=True)
+    receipt = run_live_classification()
+    assert receipt["complete"]
+    result = receipt["metrics"]
 
     assert result["mode"] == "live"
     assert result["n_cases"] >= 40
     # The hard gate holds against the live model too: no expected
     # exploratory/unknown case may reach an action-capable class.
     assert result["mutation_side_confusions"] == []
+
+
+def test_live_classification_uses_exact_eval_client_for_every_case(monkeypatch) -> None:
+    import json
+    from types import SimpleNamespace
+    from app.eval.llm_client import EvalLLMConfig
+    from app.eval.live_classification import ClassificationCompletion
+    from app.components.llm import constrained
+    calls = []
+    monkeypatch.setenv("LLM_MODEL", "different-product-model")
+    monkeypatch.setattr(constrained, "_default_complete", lambda **kw: pytest.fail("Product default resolved"))
+    class Client:
+        route = SimpleNamespace(provider="openai", model="gpt-5.6-terra", transport_id="openai_api")
+        def chat(self, name, pack, **kw):
+            calls.append((name, pack, kw))
+            return json.dumps({"intent_class": "exploratory", "action_type": None})
+    completion = ClassificationCompletion(EvalLLMConfig(model="gpt-5.6-terra", mode="run", chat_client=Client()))
+    result = evaluate_classification_golden_set(live=True, live_completion=completion)
+    assert len(calls) == result["n_cases"] == len(load_classification_cases())
+    assert all(call[2]["record_content"] is False for call in calls)
+    assert all(call[2]["response_format"]["properties"]["intent_class"] for call in calls)
+
+
+def test_live_eval_preserves_schema_unknown_and_mutation_hard_gate() -> None:
+    from types import SimpleNamespace
+    from app.eval.llm_client import EvalLLMConfig
+    from app.eval.live_classification import ClassificationCompletion
+    class Client:
+        route = SimpleNamespace(provider="openai", model="gpt-5.6-luna", transport_id="openai_api")
+        raw = '{"intent_class":"co_authoring","action_type":null}'
+        def chat(self, *args, **kw):
+            return self.raw
+    client = Client()
+    cfg = EvalLLMConfig(model="gpt-5.6-luna", mode="run", chat_client=client)
+    result = evaluate_classification_golden_set(live=True, live_completion=ClassificationCompletion(cfg))
+    assert result["mutation_side_confusions"]
+    client.raw = '{"intent_class":"not-an-intent","action_type":null}'
+    result = evaluate_classification_golden_set(live=True, live_completion=ClassificationCompletion(cfg))
+    assert result["safe_fail"]["count"] > 0
+    assert result["mutation_side_confusions"] == []
+
+
+def test_default_eval_remains_offline(monkeypatch) -> None:
+    from app.eval import live_classification
+    monkeypatch.setattr(live_classification, "configure_classification_eval", lambda: pytest.fail("live config"))
+    result = evaluate_classification_golden_set()
+    assert result["mode"] == "replay"

@@ -5,4 +5,12 @@ provider: openai
 model: gpt-5.6-luna
 selection_group: luna
 allowed_transports: [codex_cli_tailscale]
-notes: Pinned-compatible Luna route for subscription-backed Codex CLI execution.
+explicit_eval_transports: [openai_api]
+notes: Implicit Luna routing remains subscription-backed; evaluation may explicitly admit the API.
+pricing:
+  standard_input_usd_per_million_tokens: 0.2
+  standard_cached_input_usd_per_million_tokens: 0.02
+  standard_output_usd_per_million_tokens: 1.2
+  source_urls:
+    - https://developers.openai.com/api/docs/models/gpt-5.6-luna
+  retrieved_on: 2026-09-28
