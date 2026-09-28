@@ -7,7 +7,7 @@
   "additionalProperties": true,
   "required": ["stage", "stage_version", "content_identity", "reason", "error"],
   "properties": {
-    "stage": { "type": "string", "enum": ["normalize", "extracted", "candidate"] },
+    "stage": { "type": "string", "enum": ["normalize", "normalize_metadata", "extracted", "candidate"] },
     "stage_version": { "type": "integer" },
     "content_identity": { "type": "string", "minLength": 1 },
     "reason": { "type": "string", "minLength": 1 },

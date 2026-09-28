@@ -58,6 +58,7 @@ from app.knowledge_acquisition.candidate_writeback import (
 from app.knowledge_acquisition.extraction_persistence import (
     ExtractionPersistenceError,
     persist_normalized_transcript,
+    persist_normalized_metadata,
 )
 from app.knowledge_acquisition.extraction_registry import (
     UnknownExtractorError,
@@ -65,12 +66,13 @@ from app.knowledge_acquisition.extraction_registry import (
 )
 from app.knowledge_acquisition.normalize import STAGE_NAME as NORMALIZE_STAGE
 from app.knowledge_acquisition.normalize import STAGE_VERSION as NORMALIZE_STAGE_VERSION
-from app.knowledge_acquisition.normalize import NormalizeError, normalize
+from app.knowledge_acquisition.normalize import NormalizeError, normalize, normalize_metadata
 from app.knowledge_acquisition.pipeline_defaults import (
     DEFAULT_EXTRACTOR_IDS,
     resolve_extractor_ids,
 )
 from app.knowledge_acquisition.replay import CANDIDATE_STAGE, CANDIDATE_STAGE_VERSION
+from app.knowledge_acquisition.raw_record import RawRecordIntegrityError
 from app.knowledge_acquisition.source_bundle import (
     SourceBundleError,
     materialize_youtube_source_bundle,
@@ -564,6 +566,174 @@ def acquire_youtube(
     )
 
 
+def acquire_metadata_only(
+    url_or_id: str,
+    *,
+    vault_context: VaultContext,
+    extractor_ids: Sequence[str] = (),
+    extractor_requirements: Mapping[str, str] | None = None,
+    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    trace_id: str | None = None,
+    conn: Any = None,
+    env: Mapping[str, str] | None = None,
+    fetch_fn: Callable[[str], youtube_plugin.FetchOutcome] | None = None,
+) -> AcquisitionReceipt:
+    """Acquire and materialize YouTube metadata without transcript processing.
+
+    The producer has no extractor inputs by construction.  It persists immutable raw metadata,
+    a versioned normalized metadata artifact, and a review-required candidate through the same
+    WriteGuard and stage-event seams used by transcript acquisition.
+    """
+    if extractor_ids:
+        raise TerminalAcquisitionError(
+            "metadata-only acquisition cannot select transcript extractors"
+        )
+    if extractor_requirements not in (None, {}):
+        raise TerminalAcquisitionError(
+            "metadata-only acquisition cannot carry extractor_requirements"
+        )
+    require_configured_database_url(env)
+    video_id = youtube_plugin.extract_video_id(url_or_id)
+    fetch = fetch_fn or youtube_plugin.fetch_metadata
+    try:
+        outcome = fetch(url_or_id)
+    except RawRecordIntegrityError as exc:
+        raise TerminalAcquisitionError(
+            "metadata raw persistence rejected an inconsistent immutable identity"
+        ) from exc
+    except youtube_plugin.MetadataAcquisitionError as exc:
+        detail = str(exc).casefold()
+        reason_code = (
+            "source_gone"
+            if any(marker in detail for marker in ("private", "not found", "removed", "404"))
+            else "network_error"
+        )
+        raise RetryableSourceAcquisitionError(
+            reason_code=reason_code,
+            message="YouTube metadata source fetch failed",
+        ) from exc
+    if not outcome.ok:
+        raise RetryableSourceAcquisitionError(
+            reason_code="network_error",
+            message="YouTube metadata source fetch failed",
+        )
+
+    raw_record = dict(outcome.record) if outcome.record else _reload_raw(
+        source_kind=YOUTUBE_SOURCE_KIND,
+        item_ref=video_id,
+        content_identity=outcome.content_identity,
+    )
+    stages: list[AcquireStageReceipt] = [
+        AcquireStageReceipt(
+            stage="raw",
+            status="persisted" if outcome.is_new else "dedup_noop",
+            idempotent=not outcome.is_new,
+        )
+    ]
+    try:
+        normalized = normalize_metadata(raw_record)
+        normalized_artifact = persist_normalized_metadata(
+            raw_record_id=str(outcome.object_id),
+            raw_record=raw_record,
+            normalized=normalized,
+        )
+    except (NormalizeError, ExtractionPersistenceError) as exc:
+        emit_stage_dead_letter(
+            stage=normalized.stage if "normalized" in locals() else "normalize_metadata",
+            stage_version=normalized.stage_version if "normalized" in locals() else 1,
+            content_identity=outcome.content_identity,
+            reason="persistence_failed" if isinstance(exc, ExtractionPersistenceError) else "normalize_failed",
+            error=str(exc),
+            trace_id=trace_id,
+            conn=conn,
+        )
+        raise TerminalAcquisitionError(
+            f"metadata acquisition dead-lettered at normalize_metadata for "
+            f"content_identity={outcome.content_identity!r}: {exc}"
+        ) from exc
+    normalize_event_row = emit_stage_completed(
+        stage=normalized.stage,
+        stage_version=normalized.stage_version,
+        content_identity=normalized.source_content_identity,
+        trace_id=trace_id,
+        conn=conn,
+    )
+    stages.append(
+        AcquireStageReceipt(
+            stage=normalized.stage,
+            status="ok",
+            idempotent=normalize_event_row == "",
+        )
+    )
+
+    try:
+        candidate = assemble_candidate(
+            raw_record,
+            extractor_ids=(),
+            extraction_results=(),
+            normalized=normalized,
+            raw_record_id=str(outcome.object_id),
+            normalized_artifact_id=normalized_artifact.object_id,
+        )
+        write_result = write_candidate_note(
+            candidate,
+            vault_context=vault_context,
+            write_guard=write_guard,
+            proposal_on_existing=False,
+        )
+    except (CandidateAssemblyError, CandidateWritebackError) as exc:
+        emit_stage_dead_letter(
+            stage=CANDIDATE_STAGE,
+            stage_version=CANDIDATE_STAGE_VERSION,
+            content_identity=outcome.content_identity,
+            reason="assembly_failed" if isinstance(exc, CandidateAssemblyError) else "writeback_failed",
+            error=str(exc),
+            trace_id=trace_id,
+            conn=conn,
+        )
+        raise TerminalAcquisitionError(
+            f"metadata acquisition dead-lettered at candidate for "
+            f"content_identity={outcome.content_identity!r}: {exc}"
+        ) from exc
+
+    candidate_blocked = write_result.status == "blocked"
+    if candidate_blocked:
+        stages.append(
+            AcquireStageReceipt(
+                stage=CANDIDATE_STAGE,
+                status="blocked",
+                detail=write_result.reason,
+            )
+        )
+    else:
+        candidate_event_row = emit_stage_completed(
+            stage=CANDIDATE_STAGE,
+            stage_version=CANDIDATE_STAGE_VERSION,
+            content_identity=outcome.content_identity,
+            extra_payload={"artifact_path": write_result.artifact_path},
+            trace_id=trace_id,
+            conn=conn,
+        )
+        stages.append(
+            AcquireStageReceipt(
+                stage=CANDIDATE_STAGE,
+                status=write_result.status,
+                idempotent=candidate_event_row == "",
+                artifact_path=write_result.artifact_path,
+            )
+        )
+    return AcquisitionReceipt(
+        source_kind=YOUTUBE_SOURCE_KIND,
+        item_ref=video_id,
+        raw_record_id=str(outcome.object_id),
+        content_identity=outcome.content_identity,
+        is_new_raw=outcome.is_new,
+        acquisition_method="metadata_only",
+        stages=tuple(stages),
+        blocked=candidate_blocked,
+    )
+
+
 def _reload_raw(*, source_kind: str, item_ref: str, content_identity: str) -> dict[str, Any]:
     """Fallback raw-record reload for a dedup-hit `FetchOutcome` with an empty `record` field.
 
@@ -594,4 +764,5 @@ __all__ = [
     "AcquisitionReceipt",
     "require_configured_database_url",
     "acquire_youtube",
+    "acquire_metadata_only",
 ]
