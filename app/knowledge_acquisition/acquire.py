@@ -72,6 +72,7 @@ from app.knowledge_acquisition.pipeline_defaults import (
     resolve_extractor_ids,
 )
 from app.knowledge_acquisition.replay import CANDIDATE_STAGE, CANDIDATE_STAGE_VERSION
+from app.knowledge_acquisition.raw_record import RawRecordIntegrityError
 from app.knowledge_acquisition.source_bundle import (
     SourceBundleError,
     materialize_youtube_source_bundle,
@@ -583,12 +584,23 @@ def acquire_metadata_only(
     a versioned normalized metadata artifact, and a review-required candidate through the same
     WriteGuard and stage-event seams used by transcript acquisition.
     """
-    del extractor_ids, extractor_requirements
+    if extractor_ids:
+        raise TerminalAcquisitionError(
+            "metadata-only acquisition cannot select transcript extractors"
+        )
+    if extractor_requirements not in (None, {}):
+        raise TerminalAcquisitionError(
+            "metadata-only acquisition cannot carry extractor_requirements"
+        )
     require_configured_database_url(env)
     video_id = youtube_plugin.extract_video_id(url_or_id)
     fetch = fetch_fn or youtube_plugin.fetch_metadata
     try:
         outcome = fetch(url_or_id)
+    except RawRecordIntegrityError as exc:
+        raise TerminalAcquisitionError(
+            "metadata raw persistence rejected an inconsistent immutable identity"
+        ) from exc
     except youtube_plugin.MetadataAcquisitionError as exc:
         detail = str(exc).casefold()
         reason_code = (

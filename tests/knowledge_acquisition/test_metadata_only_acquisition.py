@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 from typing import Any
 import uuid
 
 import pytest
 
 from app import objects as object_store_module
+from app.knowledge_acquisition import candidate_writeback
 from app.knowledge_acquisition import youtube_plugin as plugin
 from app.knowledge_acquisition.acquisition_requests import (
+    ACQUISITION_FAILED_TOPIC,
     AcquisitionRequests,
     DiscoveryTrigger,
     drain_one,
@@ -158,6 +163,11 @@ def test_drain_materializes_metadata_only_without_transcript_or_extractors(
     monkeypatch.setattr(plugin, "yt_dlp_extract_info", lambda _url: (_ for _ in ()).throw(AssertionError("transcript metadata seam called")))
     monkeypatch.setattr(plugin, "fetch_caption_body", lambda _url: (_ for _ in ()).throw(AssertionError("caption seam called")))
     monkeypatch.setattr(plugin, "transcribe_source", lambda _url: (_ for _ in ()).throw(AssertionError("ASR seam called")))
+    monkeypatch.setattr(
+        candidate_writeback,
+        "run_extractor",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("extractor seam called")),
+    )
 
     conn = FakeOutboxConn()
     queue = _queue()
@@ -230,6 +240,42 @@ def test_metadata_identity_and_first_write_wins(
     )
     assert transcript.content_identity != first.content_identity
     assert first_path.read_bytes() == first_bytes + b"\nOwner edit.\n"
+
+    other_url = "https://www.youtube.com/watch?v=lmnopqrstuv"
+    other = acquire_metadata_only(
+        other_url, vault_context=_vault(tmp_path / "vault"), conn=conn
+    )
+    assert other.content_identity != first.content_identity
+    assert other.raw_record_id != changed.raw_record_id
+    assert other.content_identity != changed.content_identity
+    assert len(list((tmp_path / "vault").rglob("*.md"))) == 5
+
+
+def test_metadata_candidate_path_uses_final_digest_component() -> None:
+    def make_candidate(identity: str) -> Any:
+        return candidate_writeback.Candidate(
+            content_identity=identity,
+            source_kind="youtube_url",
+            item_ref=VIDEO_ID,
+            url=VIDEO_URL,
+            title="Metadata Test Video",
+            creator="Metadata Channel",
+            published="20260928",
+            acquisition_method="metadata_only",
+            transcript_available=False,
+            extractions=(),
+        )
+
+    prefix = "youtube-metadata-v1:sha256:"
+    path_a = candidate_writeback.candidate_note_path(
+        make_candidate(prefix + "a" * 15 + "1" + "0" * 48)
+    )
+    path_b = candidate_writeback.candidate_note_path(
+        make_candidate(prefix + "a" * 15 + "2" + "0" * 48)
+    )
+
+    assert path_a != path_b
+    assert "youtube-metadata" not in path_a.rsplit("/", 1)[-1]
 
 
 def test_metadata_candidate_truth_and_lineage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -321,6 +367,95 @@ def test_metadata_drain_failure_retry_and_writeguard(
     assert failure.completed_at is None
     assert failure.last_failure["reason_code"] == "network_error"
 
+    from app.knowledge_acquisition.raw_record import RawRecordIntegrityError
+
+    integrity = _enqueue(queue, conn, item_ref="zyxwvutsrqp")
+    claimed_integrity = queue.claim_batch(
+        20, now=datetime.now(timezone.utc) + timedelta(hours=7), conn=conn
+    )
+
+    def fail_raw_fetch(_url: str) -> Any:
+        raise RawRecordIntegrityError("occupied raw identity")
+
+    monkeypatch.setattr(plugin, "fetch_metadata", fail_raw_fetch)
+    integrity_result = drain_one(
+        next(item for item in claimed_integrity if item.request_id == integrity.request_id),
+        vault_context=_vault(tmp_path / "vault"),
+        queue=queue,
+        conn=conn,
+    )
+    assert integrity_result.status == "dead_lettered"
+    assert integrity_result.last_failure["reason_code"] == "pipeline_configuration_or_persistence"
+
+
+def test_writeguard_block_remains_retryable_after_attempt_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(plugin, "yt_dlp_extract_metadata", lambda _url: _info())
+    conn = FakeOutboxConn()
+    queue = AcquisitionRequests.for_runtime(max_attempts=1)
+    row = _enqueue(queue, conn)
+
+    blocked = drain_one(
+        queue.claim_batch(1, conn=conn)[0],
+        vault_context=_vault(tmp_path / "vault"),
+        queue=queue,
+        write_guard=WriteGuard(lambda: {"state": "safe_mode", "reason": "test"}),
+        conn=conn,
+    )
+    assert blocked.status == "pending"
+    assert blocked.attempts == 1
+    assert blocked.last_failure["reason_code"] == "writeguard_blocked"
+    failure_event = json.loads(conn.payloads_for(ACQUISITION_FAILED_TOPIC)[-1])
+    failure_payload = failure_event["payload"]
+    assert failure_payload["terminal"] is False
+
+    retry = queue.claim_batch(
+        1, now=datetime.now(timezone.utc) + timedelta(hours=7), conn=conn
+    )
+    assert len(retry) == 1 and retry[0].request_id == row.request_id
+    assert retry[0].attempts == 2
+    completed = drain_one(
+        retry[0],
+        vault_context=_vault(tmp_path / "vault"),
+        queue=queue,
+        write_guard=_allowing_guard(),
+        conn=conn,
+    )
+    assert completed.status == "completed"
+
+
+def test_ytdlp_metadata_fetch_disables_captions_and_media_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+    expected = _info()
+
+    class FakeYoutubeDL:
+        def __init__(self, options: dict[str, Any]) -> None:
+            captured["options"] = options
+
+        def __enter__(self) -> "FakeYoutubeDL":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def extract_info(self, url: str, *, download: bool) -> dict[str, Any]:
+            captured["url"] = url
+            captured["download"] = download
+            return expected
+
+    monkeypatch.setattr(plugin, "assert_source_egress_allowed", lambda _boundary: None)
+    monkeypatch.setitem(sys.modules, "yt_dlp", SimpleNamespace(YoutubeDL=FakeYoutubeDL))
+
+    assert plugin.yt_dlp_extract_metadata(VIDEO_URL) == expected
+    assert captured["options"]["skip_download"] is True
+    assert captured["options"]["writesubtitles"] is False
+    assert captured["options"]["writeautomaticsub"] is False
+    assert captured["download"] is False
+    assert captured["url"] == VIDEO_URL
+
 
 def test_metadata_policy_validation_and_unsupported_mode_guards(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -376,6 +511,30 @@ def test_metadata_policy_validation_and_unsupported_mode_guards(
     assert done.request_id == valid.request_id
     assert done.status == "completed"
 
+    from app.knowledge_acquisition.acquire import (
+        TerminalAcquisitionError,
+        acquire_metadata_only,
+    )
+
+    with pytest.raises(TerminalAcquisitionError, match="cannot select transcript extractors"):
+
+        acquire_metadata_only(
+            VIDEO_URL,
+            vault_context=None,
+            extractor_ids=("summary",),
+            env={"DATABASE_URL": "postgresql://fixture:fixture@localhost/fixture"},
+            fetch_fn=lambda _url: (_ for _ in ()).throw(AssertionError("egress before guard")),
+        )
+
+    with pytest.raises(TerminalAcquisitionError, match="cannot carry extractor_requirements"):
+        acquire_metadata_only(
+            VIDEO_URL,
+            vault_context=None,
+            extractor_requirements={"summary": "optional"},
+            env={"DATABASE_URL": "postgresql://fixture:fixture@localhost/fixture"},
+            fetch_fn=lambda _url: (_ for _ in ()).throw(AssertionError("egress before guard")),
+        )
+
     refused_policies = (
         (
             "mnopqrstuvw",
@@ -414,3 +573,33 @@ def test_metadata_policy_validation_and_unsupported_mode_guards(
         assert refused.request_id == request.request_id
         assert refused.status == "dead_lettered"
         assert refused.last_failure["reason_code"] == reason_code
+
+
+def test_explicit_empty_metadata_extractor_policy_does_not_expand_defaults(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(plugin, "yt_dlp_extract_metadata", lambda _url: _info())
+    conn = FakeOutboxConn()
+    queue = _queue()
+    row = _enqueue(
+        queue,
+        conn,
+        policy_snapshot={
+            "policy_version": 1,
+            "mode": "candidate_metadata_only",
+            "captions": True,
+            "extractor_ids": [],
+            "extractor_requirements": {},
+        },
+    )
+
+    assert row.policy_snapshot["extractor_ids"] == []
+    assert row.policy_snapshot["extractor_requirements"] == {}
+    result = drain_one(
+        queue.claim_batch(1, conn=conn)[0],
+        vault_context=_vault(tmp_path / "vault"),
+        queue=queue,
+        conn=conn,
+    )
+    assert result.request_id == row.request_id
+    assert result.status == "completed"

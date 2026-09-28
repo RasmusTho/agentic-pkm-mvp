@@ -1001,6 +1001,7 @@ class AcquisitionRequests:
         # Normalize: the stored snapshot always mirrors the authoritative
         # policy_version column, so no later reader can see the two disagree.
         snapshot["policy_version"] = policy_version
+        metadata_only = snapshot.get("mode") == "candidate_metadata_only"
         extractor_ids = snapshot.get("extractor_ids")
         if extractor_ids is not None:
             if not isinstance(extractor_ids, list) or not all(
@@ -1027,9 +1028,12 @@ class AcquisitionRequests:
                     "policy_snapshot.extractor_requirements must map non-empty extractor ids "
                     "to a required/optional materialization classification"
                 )
-            selected = resolve_extractor_ids(
-                tuple(extractor_ids or DEFAULT_EXTRACTOR_IDS), extractor_requirements
+            selected_ids = (
+                tuple(extractor_ids or ())
+                if metadata_only
+                else tuple(extractor_ids or DEFAULT_EXTRACTOR_IDS)
             )
+            selected = resolve_extractor_ids(selected_ids, extractor_requirements)
             if set(extractor_requirements) != set(selected):
                 raise AcquisitionRequestValidationError(
                     "policy_snapshot.extractor_requirements must classify every selected "
@@ -1187,7 +1191,8 @@ class AcquisitionRequests:
 
         Retryable: back to ``pending`` with a contract backoff gate. Attempts
         exhausted (``>= max_attempts``): explicit item-scoped ``dead_lettered``
-        with ``terminal: true``. Applies only to a claimed (``in_progress``)
+        with ``terminal: true``, except a WriteGuard refusal, which remains retryable
+        because the write has not been authorized. Applies only to a claimed (``in_progress``)
         request generation: a late fail from a stale drainer on an already-terminal row is
         an idempotent no-op (INV-YSS-3 — terminal is terminal), and failing a
         never-claimed row is a loud caller error.
@@ -1215,7 +1220,7 @@ class AcquisitionRequests:
             "error": sanitize_error(error),
             "at": _iso(moment),
         }
-        if attempt >= self._max_attempts:
+        if attempt >= self._max_attempts and reason_code != "writeguard_blocked":
             row = self._backend.set_dead_lettered(
                 request_id,
                 last_failure=last_failure,

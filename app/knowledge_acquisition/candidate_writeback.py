@@ -275,7 +275,7 @@ def candidate_note_path(candidate: Candidate, *, sources_dir: str = DEFAULT_SOUR
     """
     safe_dir = _safe_rel_path(sources_dir)
     slug = _slug(candidate.title)
-    identity_payload = candidate.content_identity.split(":", 1)[-1]
+    identity_payload = candidate.content_identity.rsplit(":", 1)[-1]
     short_identity = _slug(identity_payload)[:16] or "item"
     return (PurePosixPath(safe_dir) / f"{slug}-{short_identity}.md").as_posix()
 

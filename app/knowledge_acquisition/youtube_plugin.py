@@ -328,7 +328,7 @@ def compute_content_identity(
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
-def compute_metadata_content_identity(*, metadata: dict[str, Any]) -> str:
+def compute_metadata_content_identity(*, item_ref: str, metadata: dict[str, Any]) -> str:
     """Return a versioned identity for stable metadata evidence.
 
     The scheme prefix keeps metadata-only identities distinct from transcript and ASR
@@ -336,6 +336,7 @@ def compute_metadata_content_identity(*, metadata: dict[str, Any]) -> str:
     """
     fingerprint = {
         "identity_version": "youtube-metadata-v1",
+        "item_ref": item_ref,
         "metadata": {key: metadata.get(key) for key in sorted(metadata)},
     }
     encoded = json.dumps(
@@ -379,7 +380,7 @@ def _metadata_payload(*, info: dict[str, Any], item_ref_or_url: str, video_id: s
         "language": info.get("language"),
         "thumbnail": info.get("thumbnail"),
     }
-    content_identity = compute_metadata_content_identity(metadata=metadata)
+    content_identity = compute_metadata_content_identity(item_ref=video_id, metadata=metadata)
     return {
         "source_kind": SOURCE_KIND,
         "item_ref": video_id,
