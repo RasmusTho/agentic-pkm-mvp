@@ -63,8 +63,13 @@ from app.knowledge_acquisition.note_renderer import (
     ProposalSection,
     render_review_required_note,
 )
-from app.knowledge_acquisition.normalize import has_usable_transcript, normalize
-from app.knowledge_acquisition.normalize import NormalizedTranscript
+from app.knowledge_acquisition.normalize import (
+    NormalizedMetadata,
+    NormalizedTranscript,
+    has_usable_transcript,
+    normalize,
+    normalize_metadata,
+)
 from app.vault.manager import VaultContext
 from app.vault.path_overlap import (
     VaultPathOverlapError,
@@ -163,7 +168,7 @@ def assemble_candidate(
     raw_record: Mapping[str, Any],
     *,
     extractor_ids: Sequence[str] = ("summary",),
-    normalized: NormalizedTranscript | None = None,
+    normalized: NormalizedTranscript | NormalizedMetadata | None = None,
     extraction_results: Sequence[ExtractionResult] | None = None,
     raw_record_id: str | None = None,
     normalized_artifact_id: str | None = None,
@@ -189,17 +194,31 @@ def assemble_candidate(
     provenance = raw_record.get("provenance") or {}
 
     try:
-        normalized_result = normalized or normalize(dict(raw_record))
+        if normalized is not None:
+            normalized_result = normalized
+        elif raw_record.get("acquisition_method") == "metadata_only":
+            normalized_result = normalize_metadata(dict(raw_record))
+        else:
+            normalized_result = normalize(dict(raw_record))
     except Exception as exc:  # noqa: BLE001 - re-raised as the assembly-scoped error below
         raise CandidateAssemblyError(
             f"normalize() failed for content_identity={content_identity!r}: {exc}"
         ) from exc
 
     normalized_dict = normalized_result.as_dict()
-    transcript_segment_count = len(normalized_result.segments)
-    transcript_available = has_usable_transcript(normalized_result)
+    is_metadata_only = isinstance(normalized_result, NormalizedMetadata)
+    if isinstance(normalized_result, NormalizedMetadata):
+        transcript_segment_count = 0
+        transcript_available = False
+    else:
+        transcript_segment_count = len(normalized_result.segments)
+        transcript_available = has_usable_transcript(normalized_result)
     extractions: list[ExtractionResult] = []
     if extraction_results is not None:
+        if is_metadata_only and extraction_results:
+            raise CandidateAssemblyError(
+                "metadata-only candidates cannot carry transcript extractor outputs"
+            )
         extractions.extend(extraction_results)
     elif transcript_available:
         for extractor_id in extractor_ids:
@@ -211,7 +230,7 @@ def assemble_candidate(
                     f"content_identity={content_identity!r}: {exc}"
                 ) from exc
 
-    rendered_evidence = _render_anchored_evidence(
+    rendered_evidence = None if is_metadata_only else _render_anchored_evidence(
         normalized=normalized_dict,
         extractions=extractions,
     )

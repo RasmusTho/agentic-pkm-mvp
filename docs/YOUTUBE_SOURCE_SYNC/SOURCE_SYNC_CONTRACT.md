@@ -66,7 +66,7 @@ constraints where expressible):
 | Mode | Effect on a discovered item |
 | --- | --- |
 | `discover_only` | record discovery (registry/events only); no request, no vault note |
-| `candidate_metadata_only` | durable request; pipeline runs metadata-only candidate (no transcript fetch) |
+| `candidate_metadata_only` | durable request; pipeline runs the `metadata_only` producer: one metadata-only yt-dlp request, immutable raw + `normalize_metadata@1` evidence, and a review-required candidate with no transcript fetch or extractor |
 | `acquire_transcript` | durable request; full existing pipeline (metadata + captions/ASR + extractors + candidate) |
 | `acquire_if_filter_matches` | as `acquire_transcript` when the declared filter (language/duration/channel allowlist) matches; otherwise a traced `discover_only` rejection |
 
@@ -76,8 +76,12 @@ Defaults: playlist-shaped sources (`inbox_playlist`, `owned_playlist`, `liked_vi
 stamped into requests; a policy change bumps it, which changes request identity for *future*
 discoveries only (no retroactive re-acquisition without explicit backfill).
 
-Only `acquire_transcript` is reachable through the shipped V1 Inbox operator route. The other
-stored modes remain future-facing registry vocabulary and do not expand the V1 product contract.
+Only `acquire_transcript` is reachable through the shipped V1 Inbox operator route. The metadata-only
+producer is available to durable requests from future discovery consumers; subscription discovery
+and its operator surfaces remain separate delivery work. Metadata-only ignores inherited `captions`
+settings, accepts `captions: false`, and rejects explicit transcript extractor selections before
+source egress. Transcript-mode `captions: false`, media archival, and unknown modes remain
+fail-closed.
 
 When `extractor_requirements` is present, it must classify every selected `extractor_id` exactly
 once as `required_for_materialization` or `optional_for_materialization`. Registry validation,

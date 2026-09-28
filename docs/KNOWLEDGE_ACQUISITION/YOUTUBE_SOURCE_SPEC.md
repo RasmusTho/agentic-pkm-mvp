@@ -46,10 +46,17 @@ consumers can weigh quality (manual > ASR > auto-captions, per the research memo
 
 ## Metadata
 
-Fetched with (not before) captions via the same yt-dlp call: title, channel + channel ID, publish
-date, duration, description, chapters, tags, language, thumbnail reference. Metadata lands in the
-`raw` record and drives the early rejection filters (language, duration, duplicate, ignored
-channel) defined in the pipeline contract.
+The `candidate_metadata_only` policy fetches title, channel + channel ID, publish date, duration,
+description, chapters, tags, language, and thumbnail reference with one logged-out yt-dlp metadata
+request. It does not request caption tracks, download media, run ASR, or invoke an extractor. The
+raw payload declares `acquisition_method: metadata_only` and uses the versioned
+`youtube-metadata-v1:sha256:<digest>` identity. The deterministic `normalize_metadata@1` artifact
+retains raw lineage and the same stable metadata projection. Unchanged metadata is a traced
+deduplication no-op; changed acquired metadata creates a new raw and normalized identity.
+
+The existing transcript path fetches this metadata with captions in its existing yt-dlp call.
+Metadata lands in the `raw` record and drives the early rejection filters (language, duration,
+duplicate, ignored channel) defined in the pipeline contract.
 
 ## Discovery (Inbox V1 shipped; broader Phase 4 target state)
 
@@ -85,6 +92,10 @@ template (`docs/examples/vault-templates/youtube-source-note.md`). Metadata, pro
 owner-authored takeaways/open threads, one `Proposals (non-authoritative)` wrapper for registered
 extraction output, and deterministic evidence/lineage. Production acquisition renders anchored
 `synthesis@1` and `claims@1` modules; explicit legacy `summary@2` policies remain supported.
+Metadata-only candidates render no proposal modules and no derived transcript attachment. They
+retain source URL/title/creator/published metadata, raw and normalized metadata lineage,
+`transcript_available: false`, `authority.requires_review: true`, `review_state: draft`, and
+`triage_state: captured`. The existing candidate WriteGuard and first-write-wins rules apply.
 Generated content never enters
 the owner band, and first-write-wins replay leaves every byte of an existing note unchanged.
 

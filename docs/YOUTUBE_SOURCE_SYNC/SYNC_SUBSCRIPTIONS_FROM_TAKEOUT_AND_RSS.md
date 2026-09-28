@@ -18,6 +18,15 @@ per-channel RSS feeds discover incrementally with zero auth and zero quota, and 
 (YSS-08) repairs gaps. This task turns the existing metadata-only Takeout bootstrap into live,
 policy-governed subscription discovery.
 
+## Producer prerequisite
+
+The bounded metadata-only acquisition producer delivered by Issue #5722 is now available to this
+task's future `candidate_metadata_only` policy path. It provides immutable raw and normalized
+metadata lineage, a distinct metadata identity, replay without source egress, and a
+review-required candidate without transcript or extractor work. This prerequisite does not
+activate YSS-07: Takeout import, RSS discovery, cursor management, scheduling, and policy-mode
+selection remain the separate scope of this task and its Verify targets.
+
 ## What This Task Does
 
 1. **Adopt the operator's Takeout baseline verbatim first:** land the existing

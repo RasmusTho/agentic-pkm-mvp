@@ -1401,13 +1401,11 @@ def drain_one(
       converge to ``dead_lettered`` through attempts exhaustion).
 
     A queue row carries the effective acquisition policy at enqueue time, so
-    the drain is its enforcement boundary.  The current ``acquire_youtube``
-    entrypoint is a full transcript/caption pipeline: it cannot truthfully
-    service ``candidate_metadata_only``, ``captions: false``, or enabled media
-    archival. Those modes therefore produce an explicit terminal policy
-    disposition before any external acquisition occurs; a future metadata-only
-    or media pipeline must replace the corresponding guarded branch rather
-    than bypass it.
+    the drain is its enforcement boundary.  ``candidate_metadata_only`` selects
+    the metadata producer and rejects transcript extractor inputs before egress.
+    ``captions: false`` remains unsupported for the full transcript producer,
+    and enabled media archival remains terminal because its engine is not
+    delivered.
 
     The scheduler slice (YSS-06) owns *when* this runs; unexpected exceptions
     (config errors such as ``DatabaseNotConfiguredError`` included) propagate
@@ -1418,6 +1416,7 @@ def drain_one(
         RetryableSourceAcquisitionError,
         TerminalAcquisitionError,
         acquire_youtube,
+        acquire_metadata_only,
     )
     from app.write_guard import DEFAULT_WRITE_GUARD
 
@@ -1451,10 +1450,19 @@ def drain_one(
             conn=conn,
         )
     elif mode == "candidate_metadata_only":
-        unsupported_policy = (
-            "policy mode 'candidate_metadata_only' requires a metadata-only candidate "
-            "pipeline, which is not available at this drain boundary"
-        )
+        # Metadata-only accepts either captions setting because the producer never requests
+        # captions.  Transcript extractor selections are incompatible and must be rejected
+        # before source egress below.
+        raw_metadata_extractors = policy.get("extractor_ids")
+        raw_metadata_requirements = policy.get("extractor_requirements")
+        if raw_metadata_extractors not in (None, (), []):
+            unsupported_policy = (
+                "metadata-only policy cannot select transcript extractors"
+            )
+        elif raw_metadata_requirements not in (None, {}):
+            unsupported_policy = (
+                "metadata-only policy cannot carry extractor_requirements"
+            )
     elif captions is False:
         unsupported_policy = (
             "policy captions=false cannot be honored by the current full transcript "
@@ -1502,7 +1510,15 @@ def drain_one(
         else None
     )
     guard = write_guard if write_guard is not None else DEFAULT_WRITE_GUARD
-    fn = acquire_fn or acquire_youtube
+    if mode == "candidate_metadata_only":
+        # A valid metadata-only snapshot has no extractor inputs and therefore cannot enter the
+        # transcript producer.  Keep an injected function usable for production-seam tests while
+        # selecting the real metadata producer by default.
+        fn = acquire_fn or acquire_metadata_only
+        extractor_ids = ()
+        extractor_requirements = None
+    else:
+        fn = acquire_fn or acquire_youtube
 
     try:
         receipt = fn(
