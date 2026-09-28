@@ -4,8 +4,8 @@ description: The reference macOS desktop observer — screen-capture cadence, fr
 task_id: SCREEN-03
 source_anchor: docs/HEIMDAL_SCREEN_STREAM/README.md :: Topology (the observer is a native/local client)
 parent_capability: Heimdal Screen Stream
-prerequisites: [SCREEN-01]
-depends_on: [DEFINE_SCREEN_OBSERVATION_CONTRACT.md]
+prerequisites: [SCREEN-01, SCREEN-06]
+depends_on: [DEFINE_SCREEN_OBSERVATION_CONTRACT.md, CONTROL_SURFACE_AND_EXCLUSIONS.md]
 can_parallelize_with: [DERIVE_ACTIVITY_OBSERVATIONS]
 ---
 
@@ -20,11 +20,12 @@ widget (menu-bar app vs launchd daemon is an implementation choice for the Bifro
 
 **Client home = Bifrost (ADR-0050).** A native macOS client is a constituent-surface client; per
 ADR-0050 its home is the governed **Bifrost** repo (topology C), built by the Builder System under
-ecosystem governance in the Swift/iOS toolchain. **This issue may be transferred to the `bifrost`
-repo** and delivered there; it is specified here because the capability spec lives here and the client
-builds against this repo's SCREEN-01 host contract. If delivered in Bifrost, its verification runs in
-the Bifrost CI (Swift build + test + lint per ADR-0050 §1), and its validation receipt is still posted
-to this capability's parent feature issue (single tracking source until Bifrost has its own board).
+ecosystem governance in the Swift/iOS toolchain. The native implementation is tracked by
+[Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72); Heimdal #3341 remains its parent
+validation pointer. The client builds against this repo's SCREEN-01 host contract and consumes the
+governed pause/exclusion/retention settings from SCREEN-06. Verification runs in Bifrost CI (Swift
+build + test + lint per ADR-0050 §1), and its validation receipt is posted to #3341 and parent feature
+issue #3340.
 
 ## What This Task Does
 
@@ -36,9 +37,10 @@ to this capability's parent feature issue (single tracking source until Bifrost 
    provider #1 (SCREEN-02 consumes it).
 3. **Pause control (INV-SCREEN-C).** A visible pause/resume. **Paused = no sampling, no buffering, no
    shipping** — the client does not capture at all while paused. Pause state is **durable** (survives
-   restart, see Restart posture). The current state (observing / paused) is always visible at a glance
-   (the SCREEN-06 control surface owns the visible-state guarantee; this task honors it in the capture
-   loop).
+   restart, see Restart posture). The client renders the actual capture-loop state at a glance; it
+   shows `observing` only while capture is active and shows paused or degraded when capture is stopped
+   or its governed state is unavailable. SCREEN-06 supplies the governed setting but does not claim the
+   external client's actual capture state.
 4. **Per-app exclusion list (INV-SCREEN-D).** Before sampling, check the frontmost app (and its scope,
    SCREEN-06) against the exclusion list. **An excluded app's pixels are never captured** — not
    sampled, not buffered, not shipped. Exclusion is enforced **at capture**, upstream of everything;
@@ -77,8 +79,11 @@ day of observations.
       screensavered. Verify: `tests/heimdal/test_screen_client_capture.py::test_no_sample_when_idle_or_locked` (Bifrost: `ScreenObserverCaptureTests.testNoSampleWhenIdle`)
 - [ ] AC2 (enforcement): an excluded app being frontmost means **no capture** — asserted at the capture
       entrypoint, before any buffer write or network call. Verify: `tests/heimdal/test_screen_exclusion.py::test_excluded_app_never_captured` (asserts the exclusion check gates the capture call site, not a host-side filter)
-- [ ] AC3 (enforcement): pause stops sampling, buffering, and shipping entirely; resume restores
-      capture. Verify: `tests/heimdal/test_screen_pause.py::test_pause_is_durable_and_total` (asserts the capture loop no-ops while paused and the buffer does not grow)
+- [ ] AC3 (enforcement): the status indicator is derived from actual capture-loop state and never
+      reports `observing` while paused, idle/locked, or when governed settings are missing or invalid;
+      pause stops sampling, buffering, and shipping, and valid resume restores capture. Verify:
+      `tests/heimdal/test_screen_pause.py::test_visible_status_matches_capture_loop` (asserts visible status
+      agrees with the capture loop, the loop no-ops while paused, and the buffer does not grow)
 - [ ] AC4: the offline buffer is bounded and durable; a full buffer ages out oldest bundles with a
       local count, never grows unbounded. Verify: `tests/heimdal/test_screen_client_buffer.py::test_buffer_bounded_and_durable`
 - [ ] AC5: backfill after reconnect does not duplicate observations (re-shipped bundle dedups on
@@ -128,4 +133,4 @@ Two durability-sensitive surfaces this task owns:
 
 ## Related GitHub Issues
 
-One issue: `[Heimdal Screen Stream] macos-observer-client: cadence + metadata + pause + exclusions + durable offline buffer`. Ready after SCREEN-01 merges (∥ SCREEN-02). **May transfer to the `bifrost` repo.** External-boundary/client work; likely **opus-tier** (durable buffer + pause fail-safe + capture-time exclusion are correctness-critical at an external boundary). See scratchpad draft.
+Heimdal #3341 is the validation pointer for the native implementation tracked by [Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72). Bifrost #72 depends on SCREEN-01 (#3343) and SCREEN-06 (#3342), and can proceed in parallel with SCREEN-02 after those contracts are delivered. External-boundary/client work; likely **opus-tier** (durable buffer + pause fail-safe + capture-time exclusion are correctness-critical at an external boundary). See scratchpad draft.
