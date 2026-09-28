@@ -42,6 +42,12 @@ podcast source would declare its own, such as `publisher_transcript` / `asr`), a
 (consumers may weigh acquisition methods differently). Normalization is deterministic: same
 `raw` in, same `normalized` out. No LLM calls at this level.
 
+For YouTube `metadata_only`, `normalize_metadata@1` is the parallel metadata normalized shape. It
+contains the declared source metadata, `acquisition_method: metadata_only`, the raw
+`content_identity`, and no transcript segments. It is persisted as a rebuildable
+`knowledge_acquisition.normalized_metadata` projection and is the only normalized input to the
+metadata-only candidate branch; transcript extractors are never selected for it.
+
 ### `extracted` — structured evidence, still source-bound
 
 Extractor outputs (see §Extraction registry): structured statements about what the source
@@ -129,6 +135,9 @@ Every derived artifact records: the `raw` record's `content_identity` it descend
   `already_exists` no-op.
 - Normalized and extracted payloads are schema-valid MetadataBundles classified as derived
   projections. Replay may persist them but never reads them as source authority.
+- For YouTube `metadata_only`, replay rebuilds the immutable `normalize_metadata@1` projection
+  from the raw metadata payload and materializes the same review-required candidate identity with
+  source egress blocked; an existing candidate remains byte-for-byte unchanged.
 - Deleting every derived level and replaying from `raw` reproduces an equivalent result
   (rebuildable, consistent with the machine-mirror posture in
   `docs/CONCEPTS/MACHINE_MIRROR_AND_DB_AUTHORITY_CONTRACT.md`).

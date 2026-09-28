@@ -22,10 +22,11 @@ from typing import Any, Mapping, Sequence
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from app.knowledge_acquisition.extraction_registry import ExtractionResult
-from app.knowledge_acquisition.normalize import NormalizedTranscript
+from app.knowledge_acquisition.normalize import NormalizedMetadata, NormalizedTranscript
 from app.objects import DomainObject, ObjectStore
 
 NORMALIZED_ARTIFACT_KIND = "knowledge_acquisition.normalized_transcript"
+NORMALIZED_METADATA_ARTIFACT_KIND = "knowledge_acquisition.normalized_metadata"
 EXTRACTION_ARTIFACT_KIND = "knowledge_acquisition.extraction"
 _DEFAULT_SCOPE_ID = "scope:external/unresolved"
 _SENSITIVITY_VALUES = frozenset({"public", "internal", "private", "secret"})
@@ -55,6 +56,17 @@ class PersistedTranscript:
 
 
 @dataclass(frozen=True)
+class PersistedMetadata:
+    object_id: str
+    raw_record_id: str
+    content_identity: str
+    stage_version: int
+    derived_from: tuple[str, ...]
+    extensions: dict[str, Any]
+    metadata_bundle: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class PersistedExtraction:
     object_id: str
     raw_record_id: str
@@ -71,6 +83,18 @@ def transcript_artifact_id(
         uuid5(
             NAMESPACE_URL,
             "urn:knowledge-acquisition:normalized:"
+            f"{raw_record_id}:{content_identity}:{stage_version}",
+        )
+    )
+
+
+def metadata_artifact_id(
+    *, raw_record_id: str, content_identity: str, stage_version: int
+) -> str:
+    return str(
+        uuid5(
+            NAMESPACE_URL,
+            "urn:knowledge-acquisition:normalized-metadata:"
             f"{raw_record_id}:{content_identity}:{stage_version}",
         )
     )
@@ -181,6 +205,87 @@ def load_persisted_transcript(
             f"normalized transcript {object_id} resolved to the wrong raw ancestor"
         )
     return transcript
+
+
+def persist_normalized_metadata(
+    *,
+    raw_record_id: str,
+    raw_record: Mapping[str, Any],
+    normalized: NormalizedMetadata,
+) -> PersistedMetadata:
+    """Persist the deterministic metadata projection with immutable raw lineage."""
+    content_identity = normalized.source_content_identity
+    object_id = metadata_artifact_id(
+        raw_record_id=raw_record_id,
+        content_identity=content_identity,
+        stage_version=normalized.stage_version,
+    )
+    created_at = _raw_created_at(raw_record)
+    extensions: dict[str, Any] = {
+        "artifact_kind": "normalized_metadata",
+        "raw_record_id": raw_record_id,
+        "content_identity": content_identity,
+        "stage": normalized.stage,
+        "stage_version": normalized.stage_version,
+        "acquisition_method": normalized.acquisition_method,
+        "metadata": dict(normalized.metadata),
+    }
+    payload = _metadata_bundle(
+        object_id=object_id,
+        raw_record=raw_record,
+        created_by="app:knowledge_acquisition.normalize_metadata",
+        created_at=created_at,
+        derived_from=(raw_record_id,),
+        provenance_event_ids=(
+            f"raw:{raw_record_id}",
+            f"normalize_metadata:{normalized.stage_version}:{content_identity}",
+        ),
+        extensions=extensions,
+    )
+    stored_payload, _created = _create_immutable(
+        object_id=object_id,
+        kind=NORMALIZED_METADATA_ARTIFACT_KIND,
+        payload=payload,
+        source_ref=f"raw:{raw_record_id}",
+        created_at=created_at,
+    )
+    metadata = _metadata_from_payload(stored_payload)
+    if (
+        metadata.raw_record_id != raw_record_id
+        or metadata.content_identity != content_identity
+        or metadata.stage_version != normalized.stage_version
+    ):
+        raise ExtractionPersistenceError(
+            f"normalized metadata {object_id} resolved to the wrong raw ancestor"
+        )
+    return metadata
+
+
+def load_persisted_metadata(
+    *, raw_record_id: str, content_identity: str, stage_version: int
+) -> PersistedMetadata | None:
+    object_id = metadata_artifact_id(
+        raw_record_id=raw_record_id,
+        content_identity=content_identity,
+        stage_version=stage_version,
+    )
+    stored = ObjectStore().get_object(object_id)
+    if stored is None:
+        return None
+    if stored.kind != NORMALIZED_METADATA_ARTIFACT_KIND:
+        raise ExtractionPersistenceError(
+            f"normalized metadata identity {object_id} is occupied by kind {stored.kind!r}"
+        )
+    metadata = _metadata_from_payload(dict(stored.payload))
+    if (
+        metadata.raw_record_id != raw_record_id
+        or metadata.content_identity != content_identity
+        or metadata.stage_version != stage_version
+    ):
+        raise ExtractionPersistenceError(
+            f"normalized metadata {object_id} resolved to the wrong raw ancestor"
+        )
+    return metadata
 
 
 def persist_extraction_result(
@@ -383,6 +488,24 @@ def _transcript_from_payload(payload: dict[str, Any]) -> PersistedTranscript:
     )
 
 
+def _metadata_from_payload(payload: dict[str, Any]) -> PersistedMetadata:
+    ext = payload.get("extensions")
+    if not isinstance(ext, dict) or ext.get("artifact_kind") != "normalized_metadata":
+        raise ExtractionPersistenceError("stored normalized metadata has malformed extensions")
+    metadata = ext.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ExtractionPersistenceError("stored normalized metadata has no metadata object")
+    return PersistedMetadata(
+        object_id=str(payload["object_id"]),
+        raw_record_id=str(ext["raw_record_id"]),
+        content_identity=str(ext["content_identity"]),
+        stage_version=int(ext["stage_version"]),
+        derived_from=tuple(str(item) for item in payload.get("derived_from") or ()),
+        extensions=dict(ext),
+        metadata_bundle=dict(payload),
+    )
+
+
 def _extraction_from_payload(
     payload: dict[str, Any], *, replayed: bool
 ) -> PersistedExtraction:
@@ -457,14 +580,19 @@ def _parse_iso(value: str) -> datetime:
 
 __all__ = [
     "EXTRACTION_ARTIFACT_KIND",
+    "NORMALIZED_METADATA_ARTIFACT_KIND",
     "NORMALIZED_ARTIFACT_KIND",
     "ExtractionPersistenceError",
     "PersistedExtraction",
     "PersistedTranscript",
+    "PersistedMetadata",
     "load_latest_extraction",
     "load_persisted_transcript",
+    "load_persisted_metadata",
     "persist_extraction_result",
     "persist_normalized_transcript",
+    "persist_normalized_metadata",
     "segment_anchor",
     "transcript_artifact_id",
+    "metadata_artifact_id",
 ]
