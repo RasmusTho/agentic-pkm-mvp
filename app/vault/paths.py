@@ -174,6 +174,24 @@ def _paths_data(vault_root: Path) -> Dict[str, str]:
     return _extract_paths(_read_system_settings(settings_path))
 
 
+def _read_sources_settings_mapping(settings_path: Path) -> Dict[str, Any]:
+    """Read the Sources authority document without masking falsey YAML roots."""
+    raw = settings_path.read_text(encoding="utf-8")
+    if settings_path.suffix.lower() == ".md":
+        if not raw.startswith("---"):
+            raise ValueError(f"settings Markdown must start with YAML frontmatter: {settings_path}")
+        parts = raw.split("---", 2)
+        if len(parts) < 3:
+            raise ValueError(f"settings Markdown frontmatter is not closed: {settings_path}")
+        raw = parts[1]
+    payload = yaml.safe_load(raw)
+    if payload is None and not raw.strip():
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"settings document must decode into a mapping: {settings_path}")
+    return payload
+
+
 def _configured_sources_dir_rel(vault_root: Path) -> str | None:
     """Read the Sources setting strictly so malformed authority cannot fall back."""
     settings_path = resolve_settings_file(
@@ -184,11 +202,13 @@ def _configured_sources_dir_rel(vault_root: Path) -> str | None:
     if not settings_path.exists():
         return None
     try:
-        settings = read_settings_mapping(settings_path)
+        settings = _read_sources_settings_mapping(settings_path)
     except Exception as exc:  # noqa: BLE001 - malformed authority must fail loud
         raise ValueError(f"unable to read Sources path setting from {settings_path}") from exc
 
     raw_paths = settings.get("paths")
+    if "paths" in settings and not isinstance(raw_paths, dict):
+        raise ValueError("paths must be a mapping to resolve paths.sources_dir_rel")
     if isinstance(raw_paths, dict) and "sources_dir_rel" in raw_paths:
         value = raw_paths["sources_dir_rel"]
         if not isinstance(value, str):
