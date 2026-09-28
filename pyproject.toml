@@ -68,6 +68,7 @@ dependencies = [
     "websockets>=13.0",
     # HTTP / serialization utilities
     "requests>=2.31",
+    "bitwarden-sdk==2.1.0",
 ]
 
 [project.optional-dependencies]

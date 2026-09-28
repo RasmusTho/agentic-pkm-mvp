@@ -537,6 +537,8 @@ printf '%s\\n' '{_RAW_KEY}'
             sys.executable,
             "-m",
             "app.ops.host_secret_bootstrap",
+            "--provider",
+            "keychain",
             "--channel",
             "dev",
             "--consumer",
@@ -828,6 +830,8 @@ printf '%s\\n' '{_RAW_KEY}'
             sys.executable,
             "-m",
             "app.ops.host_secret_bootstrap",
+            "--provider",
+            "keychain",
             "--channel",
             "dev",
             "--consumer",
@@ -1454,3 +1458,445 @@ def test_shared_domain_check_never_logs_key_material(
         assert "heimdal-api-ingress:heimdal.raw-store-key" not in stream
         assert "heimdal-raw-migrate:heimdal.raw-store-key" not in stream
     assert "heimdal.raw-store-key" in captured.err
+
+
+# BWS fake transport reaches the real SDK-shaped reader and shared controller.
+from types import SimpleNamespace
+from app.ops.bws_secret_reader import BwsReaderConfig, BwsSecretReader
+from app.ops.host_secret_controller import (
+    HostSecretAdmissionError,
+    HostSecretController,
+    TerminalEvidence,
+)
+from app.ops.host_secret_bootstrap import resolve_host_secret_values
+
+_BWS_PROJECT = "00000000-0000-4000-8000-000000000001"
+_BWS_ORG = "00000000-0000-4000-8000-000000000002"
+_BWS_ITEM = "00000000-0000-4000-8000-000000000003"
+
+
+class _BwsClient:
+    def __init__(
+        self,
+        project: str = "non-prod",
+        identity: str = "shared/openai.api-key",
+        value: str = _OPENAI_KEY,
+    ) -> None:
+        self.project, self.identity, self.value = project, identity, value
+        self.calls: list[tuple[str, str | None]] = []
+        self.missing = False
+        self.wrong_response_project = False
+        self.failure = False
+
+    def auth(self):
+        return self
+
+    def login_access_token(self, token, state_file):
+        assert token == "fixture-machine-token"
+        assert state_file is None
+        self.calls.append(("login", None))
+        if self.failure:
+            raise RuntimeError(self.value)
+        return SimpleNamespace(success=True, data=SimpleNamespace(authenticated=True))
+
+    def projects(self):
+        return SimpleNamespace(list=self.list_projects)
+
+    def list_projects(self, organization_id):
+        self.calls.append(("projects", organization_id))
+        return SimpleNamespace(
+            success=True,
+            data=SimpleNamespace(
+                data=[SimpleNamespace(id=_BWS_PROJECT, name=self.project, organization_id=_BWS_ORG)]
+            ),
+        )
+
+    def secrets(self):
+        return SimpleNamespace(list=self.list_secrets, get=self.get)
+
+    def list_secrets(self, organization_id):
+        self.calls.append(("list", organization_id))
+        return SimpleNamespace(
+            success=True,
+            data=SimpleNamespace(
+                data=[]
+                if self.missing
+                else [
+                    SimpleNamespace(
+                        id=_BWS_ITEM,
+                        key=self.identity,
+                        organization_id=_BWS_ORG,
+                        project_ids=[_BWS_PROJECT],
+                    )
+                ]
+            ),
+        )
+
+    def get(self, identity):
+        self.calls.append(("get", identity))
+        return SimpleNamespace(
+            success=True,
+            data=SimpleNamespace(
+                id=_BWS_ITEM,
+                key=self.identity,
+                organization_id=_BWS_ORG,
+                project_id="wrong" if self.wrong_response_project else _BWS_PROJECT,
+                value=self.value,
+            ),
+        )
+
+
+def _bws_fixture(
+    tmp_path, *, project="non-prod", identity="shared/openai.api-key", value=_OPENAI_KEY
+):
+    credentials = tmp_path / "credentials"
+    credentials.mkdir()
+    token = credentials / "bws-machine-account-token"
+    token.write_text("fixture-machine-token")
+    token.chmod(0o400)
+    client = _BwsClient(project, identity, value)
+    reader = BwsSecretReader(
+        BwsReaderConfig(project, _BWS_PROJECT, _BWS_ORG, credentials, token),
+        client_factory=lambda: client,
+    )
+    return reader, client, HostSecretController(tmp_path / "controller")
+
+
+@pytest.mark.parametrize(
+    "channel,consumer,project,identity,value",
+    [
+        ("dev", "builderops-model-inquiry", "non-prod", "shared/openai.api-key", _OPENAI_KEY),
+        ("test", "builderops-model-inquiry", "non-prod", "shared/openai.api-key", _OPENAI_KEY),
+        ("prod", "heimdal-capture-watch", "prod", "prod/heimdal.raw-store-key", _RAW_KEY),
+        ("dev", "postgres-api", "non-prod", "dev/postgres.password", "fixture-postgres-password"),
+    ],
+)
+def test_bws_lookup_uses_scoped_active_identity(
+    tmp_path, capsys, caplog, channel, consumer, project, identity, value
+):
+    reader, client, controller = _bws_fixture(
+        tmp_path, project=project, identity=identity, value=value
+    )
+    resolved = resolve_host_secret_values(
+        channel=channel, consumer=consumer, provider="bws", bws_reader=reader, controller=controller
+    )
+    assert resolved == {identity.split("/", 1)[1]: value}
+    assert client.calls == [
+        ("login", None),
+        ("projects", _BWS_ORG),
+        ("list", _BWS_ORG),
+        ("get", _BWS_ITEM),
+    ]
+    assert value not in capsys.readouterr().out + caplog.text
+    assert value not in (controller.directory / "operations.jsonl").read_text()
+    assert "fixture-machine-token" not in (controller.directory / "operations.jsonl").read_text()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "provider",
+        "scope",
+        "missing",
+        "malformed",
+        "failure",
+        "response-project",
+        "undeclared",
+        "bad-channel",
+    ],
+)
+def test_bws_backend_failure_is_redacted_and_fail_closed(tmp_path, capsys, caplog, fault):
+    canary = "canary-value-never-in-diagnostics"
+    reader, client, controller = _bws_fixture(tmp_path, value=canary)
+    client.missing = fault == "missing"
+    client.failure = fault == "failure"
+    client.wrong_response_project = fault == "response-project"
+    if fault == "malformed":
+        client.value = "malformed\n" + canary
+    with pytest.raises(HostSecretBootstrapError) as error:
+        resolve_host_secret_values(
+            channel="prod" if fault == "scope" else "other" if fault == "bad-channel" else "dev",
+            consumer="heimdal-capture-watch"
+            if fault == "undeclared"
+            else "builderops-model-inquiry",
+            provider="wrong" if fault == "provider" else "bws",
+            bws_reader=reader,
+            controller=controller,
+        )
+    import traceback
+
+    assert (
+        canary
+        not in "".join(traceback.format_exception(error.value))
+        + capsys.readouterr().out
+        + caplog.text
+    )
+    if fault in {"provider", "scope", "bad-channel"}:
+        assert client.calls == []
+
+
+def test_keychain_backend_remains_available_and_backend_failure_is_redacted():
+    calls = []
+
+    def lookup(service, account):
+        calls.append((service, account))
+        return _OPENAI_KEY
+
+    assert resolve_host_secret_values(
+        channel="dev",
+        consumer="builderops-model-inquiry",
+        provider="keychain",
+        keychain_lookup=lookup,
+    ) == {"openai.api-key": _OPENAI_KEY}
+    assert calls == [("yggdrasil.host-secrets", "dev:builderops-model-inquiry:openai.api-key")]
+
+    def failure(*args):
+        raise RuntimeError("canary-provider-secret")
+
+    with pytest.raises(HostSecretBootstrapError) as error:
+        resolve_host_secret_values(
+            channel="dev",
+            consumer="builderops-model-inquiry",
+            provider="keychain",
+            keychain_lookup=failure,
+        )
+    import traceback
+
+    assert "canary-provider-secret" not in "".join(traceback.format_exception(error.value))
+
+
+@pytest.mark.parametrize("fault", ["missing", "unreadable", "symlink", "wrong-path", "directory"])
+def test_missing_bws_access_token_file_fails_before_provider_request(tmp_path, monkeypatch, fault):
+    reader, client, controller = _bws_fixture(tmp_path)
+    token = reader.config.token_file
+    if fault == "unreadable":
+        token.chmod(0)
+    else:
+        token.unlink()
+        if fault == "symlink":
+            (tmp_path / "token").write_text("fixture-machine-token")
+            token.symlink_to(tmp_path / "token")
+        elif fault == "directory":
+            token.mkdir()
+        elif fault == "wrong-path":
+            reader.config = BwsReaderConfig("non-prod", _BWS_PROJECT, _BWS_ORG, tmp_path, token)
+    monkeypatch.setenv("BWS_ACCESS_TOKEN", "fixture-token-env-is-never-read")
+    with pytest.raises(HostSecretBootstrapError):
+        resolve_host_secret_values(
+            channel="dev",
+            consumer="builderops-model-inquiry",
+            provider="bws",
+            bws_reader=reader,
+            controller=controller,
+        )
+    assert client.calls == []
+
+
+def test_agent_host_operation_lock_serializes_bws_and_deploy_entrypoints(tmp_path):
+    reader, client, controller = _bws_fixture(tmp_path)
+    for kind in ("import", "token-push", "deploy", "bootstrap"):
+        with controller.admit(kind, "dev") as operation:
+            with pytest.raises(HostSecretBootstrapError):
+                resolve_host_secret_values(
+                    channel="dev",
+                    consumer="builderops-model-inquiry",
+                    provider="bws",
+                    bws_reader=reader,
+                    controller=HostSecretController(controller.directory),
+                )
+            assert client.calls == []
+            source = "provider-terminal" if kind in {"import", "bootstrap"} else "remote-terminal"
+            operation.finish(
+                TerminalEvidence(operation.operation_id, kind, "dev", "aborted", source)
+            )
+    assert stat.S_IMODE(controller.directory.stat().st_mode) == 0o700
+    assert all(
+        stat.S_IMODE(path.stat().st_mode) == 0o600 for path in controller.directory.iterdir()
+    )
+
+
+def test_pending_operation_journal_blocks_after_process_interruption(tmp_path):
+    directory = tmp_path / "controller"
+    script = """from pathlib import Path
+import os, sys
+from app.ops.host_secret_controller import HostSecretController
+with HostSecretController(Path(sys.argv[1])).admit("deploy", "dev") as operation:
+    operation.prepare_mutation()
+    os._exit(19)
+"""
+    result = subprocess.run([sys.executable, "-c", script, str(directory)], capture_output=True)
+    assert result.returncode == 19
+    journal = (directory / "operations.jsonl").read_text()
+    assert '"stage": "sent"' in journal
+    for kind in ("check", "import", "token-push", "deploy", "bootstrap"):
+        with pytest.raises(HostSecretAdmissionError):
+            with HostSecretController(directory).admit(kind, "dev"):
+                pytest.fail("pending work must block admission")
+
+
+def test_pending_operation_requires_matching_operation_id_readback(tmp_path):
+    controller = HostSecretController(tmp_path / "controller")
+    with controller.admit("token-push", "dev") as operation:
+        operation.prepare_mutation()
+    for evidence in [
+        TerminalEvidence("wrong", "token-push", "dev", "committed", "remote-terminal"),
+        TerminalEvidence(
+            operation.operation_id, "token-push", "prod", "committed", "remote-terminal"
+        ),
+        TerminalEvidence(
+            operation.operation_id, "token-push", "dev", "committed", "pointer-snapshot"
+        ),
+        TerminalEvidence(operation.operation_id, "token-push", "dev", "unknown", "remote-terminal"),
+    ]:
+        with pytest.raises(HostSecretAdmissionError):
+            controller.reconcile(lambda *args: evidence)
+    controller.reconcile(
+        lambda operation_id, kind, target: TerminalEvidence(
+            operation_id, kind, target, "committed", "remote-terminal"
+        )
+    )
+    with controller.admit("check", "dev") as new:
+        new.finish(TerminalEvidence(new.operation_id, "check", "dev", "committed", "read-complete"))
+
+
+def test_linux_cli_requires_explicit_provider_and_never_falls_back(monkeypatch, capsys):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
+    monkeypatch.delenv("HOST_SECRET_PROVIDER", raising=False)
+    monkeypatch.setattr(
+        host_secret_bootstrap,
+        "run_with_host_secrets",
+        lambda **kwargs: pytest.fail("implicit Keychain fallback"),
+    )
+    assert (
+        host_secret_bootstrap.main(
+            ["--channel", "dev", "--consumer", "heimdal-capture-watch", "--", "never-run"]
+        )
+        == 78
+    )
+    assert "explicit host secret provider required" in capsys.readouterr().err
+
+
+def test_bws_cli_check_uses_file_token_and_memory_only_reader(tmp_path, monkeypatch, capsys):
+    reader, client, controller = _bws_fixture(tmp_path)
+    monkeypatch.setattr(
+        host_secret_bootstrap.BwsReaderConfig, "from_environment", lambda env: reader.config
+    )
+    monkeypatch.setattr(host_secret_bootstrap, "BwsSecretReader", lambda config: reader)
+    monkeypatch.setattr(host_secret_bootstrap, "HostSecretController", lambda: controller)
+    assert (
+        host_secret_bootstrap.main(
+            [
+                "--provider",
+                "bws",
+                "--check",
+                "--channel",
+                "dev",
+                "--consumer",
+                "builderops-model-inquiry",
+            ]
+        )
+        == 0
+    )
+    assert client.calls[-1] == ("get", _BWS_ITEM)
+    assert capsys.readouterr() == ("", "")
+    assert set(tmp_path.iterdir()) == {reader.config.credentials_directory, controller.directory}
+
+
+def test_bws_real_sdk_schema_is_used_without_live_network(tmp_path):
+    """Exercise pinned SDK decoding through the real adapter; transport alone is fake."""
+    from bitwarden_sdk import BitwardenClient
+
+    reader, fixture, controller = _bws_fixture(tmp_path)
+    client = BitwardenClient()
+
+    class Transport:
+        def run_command(self, command):
+            request = json.loads(command)
+            date = "2026-09-28T00:00:00Z"
+            if request.get("loginAccessToken"):
+                data = {
+                    "authenticated": True,
+                    "forcePasswordReset": False,
+                    "resetMasterPassword": False,
+                }
+            elif request.get("projects", {}).get("list"):
+                data = {
+                    "data": [
+                        {
+                            "id": _BWS_PROJECT,
+                            "name": "non-prod",
+                            "organizationId": _BWS_ORG,
+                            "creationDate": date,
+                            "revisionDate": date,
+                        }
+                    ]
+                }
+            elif request.get("secrets", {}).get("list"):
+                data = {
+                    "data": [
+                        {
+                            "id": _BWS_ITEM,
+                            "key": "shared/openai.api-key",
+                            "organizationId": _BWS_ORG,
+                            "projectIds": [_BWS_PROJECT],
+                        }
+                    ]
+                }
+            else:
+                assert request["secrets"]["get"]["id"] == _BWS_ITEM
+                data = {
+                    "id": _BWS_ITEM,
+                    "key": "shared/openai.api-key",
+                    "organizationId": _BWS_ORG,
+                    "projectId": _BWS_PROJECT,
+                    "value": _OPENAI_KEY,
+                    "note": "",
+                    "creationDate": date,
+                    "revisionDate": date,
+                }
+            return json.dumps({"success": True, "data": data})
+
+    client.inner = Transport()
+    reader = BwsSecretReader(reader.config, client_factory=lambda: client)
+    assert resolve_host_secret_values(
+        channel="dev",
+        consumer="builderops-model-inquiry",
+        provider="bws",
+        bws_reader=reader,
+        controller=controller,
+    ) == {"openai.api-key": _OPENAI_KEY}
+
+
+def test_legacy_child_does_not_inherit_bws_credentials(monkeypatch):
+    for name in ("BWS_ACCESS_TOKEN", "BWS_ACCESS_TOKEN_FILE", "CREDENTIALS_DIRECTORY"):
+        monkeypatch.setenv(name, "fixture-sensitive-surface")
+    env = host_secret_bootstrap._clean_child_environment(host_secret_bootstrap.load_host_secret_contract())
+    assert all(name not in env for name in ("BWS_ACCESS_TOKEN", "BWS_ACCESS_TOKEN_FILE", "CREDENTIALS_DIRECTORY"))
+
+
+def test_malformed_journal_never_reopens_admission(tmp_path):
+    controller = HostSecretController(tmp_path / "controller")
+    with controller.admit("deploy", "dev"):
+        pass
+    journal = controller.directory / "operations.jsonl"
+    with journal.open("a") as stream:
+        stream.write('{"operation_id":')
+    with pytest.raises(HostSecretAdmissionError):
+        with controller.admit("check", "dev"):
+            pytest.fail("partial journal cannot mean no pending operation")
+
+
+def test_deployment_read_retains_host_admission_through_activation(tmp_path):
+    reader, client, controller = _bws_fixture(tmp_path)
+    with controller.admit("deploy", "dev") as operation:
+        result = resolve_host_secret_values(channel="dev", consumer="builderops-model-inquiry", provider="bws", bws_reader=reader, operation=operation)
+        assert result == {"openai.api-key": _OPENAI_KEY}
+        with pytest.raises(HostSecretAdmissionError):
+            with HostSecretController(controller.directory).admit("import", "shared"):
+                pytest.fail("writer must not enter between deployment preflight and activation")
+        operation.prepare_mutation()
+        operation.finish(TerminalEvidence(operation.operation_id, "deploy", "dev", "committed", "remote-terminal"))
+    calls = list(client.calls)
+    with pytest.raises(HostSecretBootstrapError):
+        resolve_host_secret_values(channel="dev", consumer="builderops-model-inquiry", provider="bws", bws_reader=reader, operation=operation)
+    assert client.calls == calls
