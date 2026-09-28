@@ -69,6 +69,7 @@ from app.knowledge_acquisition.candidate_writeback import (
 )
 from app.knowledge_acquisition.extraction_persistence import (
     ExtractionPersistenceError,
+    persist_normalized_metadata,
     persist_normalized_transcript,
 )
 from app.knowledge_acquisition.extraction_registry import (
@@ -78,7 +79,7 @@ from app.knowledge_acquisition.extraction_registry import (
 )
 from app.knowledge_acquisition.normalize import STAGE_NAME as NORMALIZE_STAGE
 from app.knowledge_acquisition.normalize import STAGE_VERSION as NORMALIZE_STAGE_VERSION
-from app.knowledge_acquisition.normalize import NormalizeError, normalize
+from app.knowledge_acquisition.normalize import NormalizeError, normalize, normalize_metadata
 from app.knowledge_acquisition.pipeline_defaults import (
     DEFAULT_EXTRACTOR_IDS,
     resolve_extractor_ids,
@@ -288,6 +289,17 @@ def run_replay(
     if not isinstance(content_identity, str) or not content_identity:
         raise ReplayError(
             f"raw record {object_id} has no string content_identity — malformed record"
+        )
+
+    if record.get("acquisition_method") == "metadata_only":
+        return _run_metadata_replay(
+            object_id=object_id,
+            record=record,
+            vault_context=vault_context,
+            write_guard=write_guard,
+            assert_no_source_egress=assert_no_source_egress,
+            trace_id=trace_id,
+            conn=conn,
         )
 
     egress_seen = 0
@@ -555,6 +567,131 @@ def run_replay(
         dead_lettered=dead_lettered,
         required_dead_lettered=required_dead_lettered,
         optional_dead_lettered=optional_dead_lettered,
+    )
+
+
+def _run_metadata_replay(
+    *,
+    object_id: UUID,
+    record: dict[str, Any],
+    vault_context: VaultContext,
+    write_guard: WriteGuard,
+    assert_no_source_egress: bool,
+    trace_id: str | None,
+    conn: Any,
+) -> ReplayReceipt:
+    """Rebuild metadata normalization and candidate materialization from raw only."""
+    content_identity = str(record["content_identity"])
+    stages: list[StageReplayReceipt] = []
+    with block_source_egress():
+        try:
+            normalized = normalize_metadata(dict(record))
+            normalized_artifact = persist_normalized_metadata(
+                raw_record_id=str(object_id),
+                raw_record=record,
+                normalized=normalized,
+            )
+        except (NormalizeError, ExtractionPersistenceError) as exc:
+            emit_stage_dead_letter(
+                stage="normalize_metadata",
+                stage_version=1,
+                content_identity=content_identity,
+                reason=(
+                    "persistence_failed"
+                    if isinstance(exc, ExtractionPersistenceError)
+                    else "normalize_failed"
+                ),
+                error=str(exc),
+                trace_id=trace_id,
+                conn=conn,
+            )
+            raise ReplayError(
+                f"metadata replay dead-lettered at normalize_metadata for "
+                f"content_identity={content_identity!r}: {exc}"
+            ) from exc
+        normalize_event_row = emit_stage_completed(
+            stage=normalized.stage,
+            stage_version=normalized.stage_version,
+            content_identity=content_identity,
+            trace_id=trace_id,
+            conn=conn,
+        )
+        stages.append(
+            StageReplayReceipt(
+                stage=normalized.stage,
+                status="ok",
+                equivalence="byte_identical",
+                idempotent=normalize_event_row == "",
+            )
+        )
+        try:
+            candidate = assemble_candidate(
+                dict(record),
+                extractor_ids=(),
+                extraction_results=(),
+                normalized=normalized,
+                raw_record_id=str(object_id),
+                normalized_artifact_id=normalized_artifact.object_id,
+            )
+            write_result = write_candidate_note(
+                candidate,
+                vault_context=vault_context,
+                write_guard=write_guard,
+                proposal_on_existing=False,
+            )
+        except (CandidateAssemblyError, CandidateWritebackError, SourceBundleError) as exc:
+            emit_stage_dead_letter(
+                stage=CANDIDATE_STAGE,
+                stage_version=CANDIDATE_STAGE_VERSION,
+                content_identity=content_identity,
+                reason=(
+                    "assembly_failed"
+                    if isinstance(exc, CandidateAssemblyError)
+                    else "writeback_failed"
+                ),
+                error=str(exc),
+                trace_id=trace_id,
+                conn=conn,
+            )
+            raise ReplayError(
+                f"metadata replay dead-lettered at candidate for "
+                f"content_identity={content_identity!r}: {exc}"
+            ) from exc
+        if write_result.status == "blocked":
+            stages.append(
+                StageReplayReceipt(
+                    stage=CANDIDATE_STAGE,
+                    status="blocked",
+                    equivalence="none",
+                    detail=write_result.reason,
+                )
+            )
+            candidate_equivalent = False
+        else:
+            candidate_event_row = emit_stage_completed(
+                stage=CANDIDATE_STAGE,
+                stage_version=CANDIDATE_STAGE_VERSION,
+                content_identity=content_identity,
+                extra_payload={"artifact_path": write_result.artifact_path},
+                trace_id=trace_id,
+                conn=conn,
+            )
+            candidate_equivalent, equivalence = _candidate_equivalence(write_result)
+            stages.append(
+                StageReplayReceipt(
+                    stage=CANDIDATE_STAGE,
+                    status=write_result.status,
+                    equivalence=equivalence,
+                    idempotent=candidate_event_row == "",
+                    artifact_path=write_result.artifact_path,
+                )
+            )
+    return ReplayReceipt(
+        raw_record_id=str(object_id),
+        content_identity=content_identity,
+        source_egress=0,
+        stages=tuple(stages),
+        equivalent=candidate_equivalent,
     )
 
 
