@@ -418,6 +418,20 @@ writes and their native envelope; 05D removes the translator only after every pr
 and proves no unscoped row appeared. No stage permits a legacy envelope, old scalar process, or
 un-revalidated read/write to cross its floor; independently safe explicit-global work may continue.
 
+### MVR-05C production protocol proof (Option 1)
+
+The activation slice owns the production transfer coordinator reached through
+`app/instance/runtime.py::InstanceRegistryRuntime.transfer_to` and `recover_transfer`.
+It must drive the source-owned drain, reference-repair, tombstone, destination-registration,
+lineage, and lease transitions through that coordinator and its restart recovery. Inject process
+failure after every durable phase and prove replay/compensation preserves one owner, the original
+source identity, destination lineage, and fail-closed access. Hand-composed registry/ledger
+fixtures prove schema and mechanics only; they cannot satisfy this production-engine proof.
+
+Before this activation slice becomes ready, its extracted Issue must carry this coordinator,
+source-owner validation, and crash-phase requirement with its concrete Verify target. Its existing
+dependency floor remains binding; #4035 records the allocation without implementing the protocol.
+
 ## Source Anchors
 
 - `docs/MULTI_VAULT_RUNTIME/README.md :: Active context and isolation`
@@ -773,6 +787,15 @@ pre-DecisionToken bridge as completion of full MVR-05C multi-binding governed wr
   routing class, binding-keyed idempotency, and producer/worker compatibility posture.
   - Verify: doc writeback at `docs/EVENTS.md :: Events`
 
+- [ ] **MVR-05C:** The activation slice owns the production transfer coordinator reached through
+`app/instance/runtime.py::InstanceRegistryRuntime.transfer_to` and `recover_transfer`.
+It must drive the source-owned drain, reference-repair, tombstone, destination-registration,
+lineage, and lease transitions through that coordinator and its restart recovery. Inject process
+failure after every durable phase and prove replay/compensation preserves one owner, the original
+source identity, destination lineage, and fail-closed access. Hand-composed registry/ledger
+fixtures prove schema and mechanics only; they cannot satisfy this production-engine proof.
+  - Verify: `tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_production_transfer_recovers_after_every_durable_phase`
+
 ## Out of Scope
 
 - Multi-binding watcher/worker lifecycle supervision (MVR-06), except MVR-05C's bounded
@@ -812,6 +835,7 @@ nightly `pg-contracts` invocation, and both the paths filter and the pytest bloc
 
 ### MVR-05C validation
 
+- `pytest -q tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_production_transfer_recovers_after_every_durable_phase`
 - `pytest -q tests/api/test_multi_vault_governed_writes.py::test_capture_uses_explicit_authorized_target_and_receipt tests/api/test_multi_vault_governed_writes.py::test_write_target_must_belong_to_active_context_set tests/api/test_multi_vault_governed_writes.py::test_authority_change_blocks_inflight_write_before_commit tests/api/test_multi_vault_governed_writes.py::test_capture_token_binds_exact_active_context_and_target_membership tests/integration/test_multi_vault_write_effect_fence.py::test_authority_change_cannot_cross_validation_write_window tests/integration/test_multi_vault_nested_effect_boundary.py::test_parent_authority_cannot_write_registered_child_vault tests/integration/test_multi_vault_channel_transfer_foreground.py::test_source_restart_cannot_write_after_channel_lease_transfer tests/integration/test_multi_vault_channel_transfer_foreground.py::test_destination_uses_minted_binding_and_transfer_lineage tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_transfer_drains_and_restart_fences_every_source_lifecycle_before_ownership_move tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_transfer_source_inventory_covers_every_enabled_vault_bound_producer tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_transfer_repairs_compatibility_binding_before_source_retirement tests/integration/test_multi_vault_channel_transfer_lifecycle.py::test_transfer_preserves_enabled_watcher_as_idle_without_replacement tests/integration/test_vault_registry_channel_isolation.py::test_transfer_repairs_source_default_and_dimensions_before_retirement tests/integration/test_vault_registry_channel_isolation.py::test_transfer_drains_source_bound_rows_before_destination_id_activation tests/integration/test_multi_vault_picker_context.py::test_scoped_picker_governed_write_targets_selected_binding`
 - Verify the 05C PR diff contains its mapped `docs/contracts/GOVERNED_WRITE_PROTOCOL.md` writeback.
 

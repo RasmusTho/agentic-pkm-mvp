@@ -19,6 +19,17 @@ This slice promotes the existing seed without changing content-vault authority.
 
 ## What This Task Does
 
+**Option 1 — production engines belong to their activation slices (#4035).** MVR-01B
+provides the durable registry/ownership substrate, protocol schemas, and sealed entrypoints.
+Its fixture-composed transactions establish schema/mechanics evidence only. The production
+transfer coordinator and engine-driven crash proof belong to MVR-05C/#3861; removal/reactivation
+to MVR-06B/#3864; relocation to MVR-06C/#3865. Each activation owner must exercise its production
+coordinator and restart recovery after every durable phase, validating the source-owner state and
+its existing invariants. Until the matching floor is delivered, `transfer_to`, `recover_transfer`,
+`remove`, `reactivate_removed`, and `relocate` remain sealed with `capability_not_ready`.
+These future protocol requirements do not add a pre-01C engine or change #3854's exhausted repair
+ledger. The task decomposition below retains its existing dependency order.
+
 - Introduce `app/instance/vault_registry.py` with versioned mechanical-durable registry models and
   store operations for add/update/remove/list/lookup.
 - Relocate `KnownVaultRef`, `AppLocalSettings`, and their store behind the new package; keep
@@ -77,11 +88,11 @@ This slice promotes the existing seed without changing content-vault authority.
   scalar rollback target/gateway, native guard, latest export, and roll-forward lineage. Existing
   multi-registration state at first upgrade likewise keeps production cutover dormant until that
   01C floor is present.
-  Relocation is implemented behind a separate
+  Relocation is specified behind a separate
   `capability_not_ready` floor: it cannot mutate the active root until MVR-06C proves every
   foreground and background consumer holds the shared per-binding effect lease and the production
   relocation path takes its matching exclusive lease. Registration of a new, inactive binding does
-  not move an existing consumer. Explicit cross-channel transfer is implemented but
+  not move an existing consumer. Explicit cross-channel transfer is specified but
   remains capability-gated until MVR-05C proves production foreground read and write lease fencing;
   before that floor every transfer request fails `capability_not_ready`. The dormant protocol defines
   one recoverable global-fence transaction. Its activation owner must provide a production-derived
@@ -124,7 +135,7 @@ This slice promotes the existing seed without changing content-vault authority.
   lease validation uses the destination ID after activation; source receipts remain attributable to
   the source ID through the lineage mapping. Once enabled, transfer executes that transaction;
   recovery never guesses an ID or permits two active owners.
-- Registration removal is wired to a crash-safe `draining_removal` ledger transition under the
+- Registration removal specifies a crash-safe `draining_removal` ledger transition under the
   global fence, but every production removal request remains `capability_not_ready` and leaves
   registry/lease state unchanged until MVR-06B proves both the MVR-05 foreground and MVR-06
   background consumer floors. Once activated there, it rejects new request/lifecycle acquisition,
