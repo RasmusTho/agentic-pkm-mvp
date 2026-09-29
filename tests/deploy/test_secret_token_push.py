@@ -583,6 +583,41 @@ def test_prepared_attempt_reclaims_own_stale_lock_and_retries_same_id(tmp_path):
     assert committed.attempt_id == next_attempt
 
 
+def test_prepared_status_will_not_reclaim_a_matching_lock_while_flock_is_held(tmp_path):
+    store, app_root, operation_id, attempt_id, _prior_generation, _prior_pointer = _remote_state(
+        tmp_path
+    )
+    held = VmChannelMutationLock(app_root, "dev", operation_id, attempt_id)
+    held.__enter__()
+    assert held.acquired
+
+    def inactive_systemd(argv, *, input, capture_output, check):
+        return subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
+
+    with pytest.raises(TokenPushError):
+        vm_token_push_status(
+            app_root=app_root,
+            state_root=store.state_root,
+            channel="dev",
+            operation_id=operation_id,
+            runner=inactive_systemd,
+        )
+    assert store.read().stage == "prepared"
+    lock_path = app_root / "config" / "deploy" / "dev.env.lock"
+    assert lock_path.is_dir()
+
+    held.__exit__()  # Simulate worker death only after proving the live lock was retained.
+    aborted = vm_token_push_status(
+        app_root=app_root,
+        state_root=store.state_root,
+        channel="dev",
+        operation_id=operation_id,
+        runner=inactive_systemd,
+    )
+    assert aborted.stage == "aborted"
+    assert not lock_path.exists()
+
+
 @pytest.mark.parametrize("owner_state", ["missing", "deploy-empty", "foreign"])
 def test_prepared_status_refuses_unknown_or_foreign_channel_lock(tmp_path, owner_state):
     store, app_root, operation_id, _attempt_id, _prior_generation, _prior_pointer = _remote_state(
