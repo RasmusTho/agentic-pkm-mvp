@@ -155,7 +155,7 @@ def test_bug_delivery_transition_policy_is_linked_across_workflows() -> None:
     assert "Known Defects registry Issue #4172" in " ".join(verification.split())
 
     coordinator = _read(".codex/agents/issue-set-coordinator.toml")
-    assert 'model = "gpt-5.6-luna"' in coordinator
+    assert 'model = "gpt-6-luna"' in coordinator
     assert 'model_reasoning_effort = "low"' in coordinator
     assert canonical in coordinator
 
