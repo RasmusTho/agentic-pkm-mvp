@@ -6,7 +6,6 @@ import re
 
 import yaml
 
-from app.agents.panel_agent.parser import find_panels
 from app.knowledge.profile_authority import (
     ProfileAuthorityConflict,
     ProfileAuthorityContractError,
@@ -68,14 +67,14 @@ def profile_note_parts(note_text: str) -> tuple[str, str, str]:
     """Return header, managed proposal panel, and approved body."""
 
     header, remainder = split_profile_note_header(note_text)
-    panels = find_panels(note_text)
-    managed = [block for block in panels if "<!--mimer:profile-proposal-start id=" in block.raw_block]
+    panels = _find_panels(note_text)
+    managed = [block for block in panels if "<!--mimer:profile-proposal-start id=" in block]
     if len(managed) > 1 or len(panels) != len(managed):
         raise ProfileAuthorityConflict("Profile Note contains an unrelated or ambiguous Panel")
     panel = ""
     body = remainder
     if managed:
-        proposal_ids = PROFILE_PROPOSAL_MARKER_RE.findall(managed[0].raw_block)
+        proposal_ids = PROFILE_PROPOSAL_MARKER_RE.findall(managed[0])
         starts = [proposal_id for kind, proposal_id in proposal_ids if kind == "start"]
         ends = [proposal_id for kind, proposal_id in proposal_ids if kind == "end"]
         if len(starts) != 1 or len(ends) != 1 or starts[0] != ends[0]:
@@ -122,6 +121,30 @@ def _extract_panel_span(remainder: str, proposal_id: str) -> tuple[str, str]:
 def _is_panel_fence(line: str) -> bool:
     stripped = line.strip()
     return stripped.startswith("%%") and "ai" in stripped.strip("%").lower()
+
+
+def _find_panels(markdown: str) -> list[str]:
+    """Recognize profile proposal panels without importing an agent runtime."""
+
+    lines = markdown.splitlines()
+    panels: list[str] = []
+    open_index: int | None = None
+    for index, line in enumerate(lines):
+        if not _is_panel_fence(line):
+            continue
+        if open_index is None:
+            open_index = index
+        else:
+            panels.append("\n".join(lines[open_index : index + 1]))
+            open_index = None
+    if panels:
+        return panels
+    lowered = [line.strip().lower() for line in lines]
+    if any(line.startswith(("## ai-instruktion", "### ai-instruktion")) for line in lowered) and any(
+        line.startswith(("## ai-åtgärder", "### ai-åtgärder")) for line in lowered
+    ):
+        return [markdown]
+    return []
 
 
 __all__ = [
