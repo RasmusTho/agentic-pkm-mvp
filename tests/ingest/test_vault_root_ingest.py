@@ -101,8 +101,15 @@ def test_ingest_vault_root_reuses_stable_product_identity_on_repeat(
         def put(self, object_id, **_kwargs):  # type: ignore[no-untyped-def]
             stored_ids.append(object_id)
 
-    def fake_normalize(_path, *, trace_id, persist):  # type: ignore[no-untyped-def]
+    def fake_normalize(
+        _path: str,
+        *,
+        trace_id: str,
+        persist: bool,
+        vault_root: Path,
+    ) -> dict[str, object]:
         assert persist is False
+        assert vault_root == vault_root_path
         fresh_id = str(uuid.uuid4())
         return {
             "object_id": fresh_id,
