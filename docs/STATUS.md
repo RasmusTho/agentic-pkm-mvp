@@ -13,10 +13,10 @@ Last verified against (BWS PostgreSQL): Issue #5680, `app/ops/postgres_deploy.py
 `app/ops/postgres_deploy_linux.py`, `app/config/database.py`, and the focused deploy/DSN tests;
 repository implementation only. The Bash-dependent entrypoint proof belongs to hosted Linux CI;
 BWS-03 token installation and parent #5667 live qualification remain separate gates.
-Last verified against (BWS-03 candidate): Issue #5679 and unmerged candidate commit
-`5f0ccc4397d2310a381c279ea88b0669abcd163d`; focused token-push/secret-bootstrap tests (177 passed),
-Ruff, and `mypy app` (1,020 source files). This is repository evidence only; no live TARS VM,
-Keychain, systemd-creds host key, BWS account, or channel qualification was accessed.
+Last verified against (BWS-03 candidate): Issue #5679 and unmerged code/test commit
+`f18d2cd4c`; focused token-push/secret-bootstrap tests (182 passed), Ruff, and `mypy app`
+(1,020 source files). This is repository evidence only; no live TARS VM, Keychain,
+systemd-creds host key, BWS account, or channel qualification was accessed.
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
