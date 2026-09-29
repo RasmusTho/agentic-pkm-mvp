@@ -1,13 +1,11 @@
-"""Executable, dormant schema and replay contract for governed vault profiles.
+"""Versioned records and replay validation for governed vault profiles.
 
-This module defines dormant durable record shapes and validates their ordered
-joins. It does not access a vault, admit candidates, confirm a proposal, write
-Profile Note content, or commit records to storage. Direct-owner corrections and
-reconciliation of uncertain ProfileAgent writes are separate records. A future
-adapter must compare ``ValidatedTransition.expected_revision`` atomically with
-the current record revision, persist the encoded next state before acknowledging
-it, and use the existing expected-version Knowledge write path for Profile Note
-updates.
+The ProfileAgent runtime uses these records to bind candidate payloads,
+proposals, confirmations, writes, and terminal receipts. This module does not
+access the vault or commit records; the vault-local adapter performs atomic
+compare-and-commit, while ProfileAgent uses the expected-version Knowledge
+write path. Direct-owner corrections and reconciliation of uncertain writes
+remain separate authority records.
 
 Replay validates structure only. The canonical store and confirmation/write
 adapters remain responsible for proving that evidence references are authentic;
@@ -16,9 +14,10 @@ deserialization never grants authority or recreates a capability.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Annotated, Iterable, Literal, TypeAlias, cast
 
 from pydantic import (
@@ -28,6 +27,7 @@ from pydantic import (
     StringConstraints,
     TypeAdapter,
     field_validator,
+    model_validator,
 )
 
 from app.knowledge._profile_authority_boundary import (
@@ -88,15 +88,23 @@ class ProfileIdentityRecord(_Record):
     @field_validator("note_path")
     @classmethod
     def _validate_note_path(cls, value: str) -> str:
+        raw_parts = value.split("/")
         path = PurePosixPath(value)
+        windows_path = PureWindowsPath(value)
         if (
             not value
+            or value != path.as_posix()
             or path.is_absolute()
-            or any(part in {"", ".", ".."} for part in path.parts)
+            or windows_path.is_absolute()
+            or bool(windows_path.drive)
+            or "\x00" in value
+            or any(part in {"", ".", ".."} for part in raw_parts)
             or "\\" in value
             or path.suffix.lower() != ".md"
         ):
-            raise ValueError("Profile Note path must be a vault-relative Markdown path")
+            raise ValueError(
+                "Profile Note path must be a canonical vault-relative Markdown file path"
+            )
         return value
 
 
@@ -106,6 +114,44 @@ class CandidateRecord(_Record):
     candidate_id: Identifier
     provenance_ref: Identifier
     candidate_digest: Sha256Digest
+    # Keep the inspectable proposal material in the same durable authority
+    # stream as its digest so a restart can recover a pending proposal without
+    # relying on an in-memory handoff or the mutable presentation panel.
+    candidate_payload: dict[str, str] | None = None
+
+    @model_validator(mode="after")
+    def _validate_candidate_payload(self) -> CandidateRecord:
+        if self.candidate_payload is None:
+            return self
+        required = {
+            "candidate_id",
+            "vault_id",
+            "profile_note_id",
+            "provenance_ref",
+            "proposed_change",
+            "provenance",
+            "uncertainty",
+            "proposed_content",
+        }
+        if set(self.candidate_payload) != required:
+            raise ValueError("candidate payload fields are incomplete or unknown")
+        if (
+            self.candidate_payload["candidate_id"] != self.candidate_id
+            or self.candidate_payload["vault_id"] != self.vault_id
+            or self.candidate_payload["profile_note_id"] != self.profile_note_id
+            or self.candidate_payload["provenance_ref"] != self.provenance_ref
+        ):
+            raise ValueError("candidate payload identity does not match its record")
+        canonical = json.dumps(
+            self.candidate_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        payload_digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        if payload_digest != self.candidate_digest:
+            raise ValueError("candidate payload digest does not match its record")
+        return self
 
 
 class ProposalRecord(_Record):
@@ -656,7 +702,10 @@ def decode_profile_records(raw: bytes) -> tuple[ProfileAuthorityRecord, ...]:
     except UnicodeDecodeError as exc:
         raise ProfileAuthorityContractError("profile authority record stream is not UTF-8") from exc
     try:
-        lines = text.splitlines()
+        # JSONL records are delimited only by LF.  ``str.splitlines`` also
+        # treats U+0085, U+2028, and U+2029 inside valid JSON string values as
+        # record boundaries, which makes an encoded path unreplayable.
+        lines = text[:-1].split("\n")
         if any(not line for line in lines):
             raise ValueError("blank record line")
         records = tuple(_RECORD_ADAPTER.validate_json(line) for line in lines)

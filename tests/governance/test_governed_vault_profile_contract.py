@@ -1039,3 +1039,30 @@ def test_profile_authority_replay_fails_closed_on_unknown_or_branched_records() 
             stale,
             expected_revision=branch_state.revision - 1,
         )
+
+
+def test_profile_authority_jsonl_round_trips_unicode_line_separators() -> None:
+    for separator in ("\u0085", "\u2028", "\u2029"):
+        identity = _identity().model_copy(
+            update={"note_path": f"System/Profile{separator}Note.md"}
+        )
+        encoded = encode_profile_records((identity,))
+        decoded = decode_profile_records(encoded)
+        assert decoded == (identity,)
+
+
+def test_profile_identity_requires_a_canonical_relative_markdown_file_path() -> None:
+    for note_path in (
+        "System/./Profile.md",
+        "System//Profile.md",
+        "System/Profile.md/",
+        "../System/Profile.md",
+        "/System/Profile.md",
+        "C:/System/Profile.md",
+        "System/Pro\x00file.md",
+        "System/Profile.txt",
+    ):
+        with pytest.raises(ValidationError):
+            ProfileIdentityRecord.model_validate(
+                {**_identity().model_dump(), "note_path": note_path}
+            )

@@ -346,7 +346,7 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
 
 
 def test_profile_authority_capability_import_contract_is_sealed() -> None:
-    """Only the profile contract may inspect its dormant private capabilities."""
+    """Only the contract and its designated ProfileAgent issuer inspect capabilities."""
 
     section = _profile_authority_capability_contract_section()
     assert section["type"] == "protected"
@@ -356,6 +356,7 @@ def test_profile_authority_capability_import_contract_is_sealed() -> None:
     }
     assert _module_list(section["allowed_importers"]) == {
         "app.knowledge.profile_authority",
+        "app.agents.profile_agent.runtime",
     }
     public_contract = importlib.import_module("app.knowledge.profile_authority")
     for capability_name in (

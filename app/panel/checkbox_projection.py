@@ -507,6 +507,12 @@ class CheckboxProjectionService:
                 block_reason=f"runtime_execution_failed:{type(exc).__name__}",
             )
 
+        try:
+            final_note = note_path.read_text(encoding="utf-8")
+            final_content_hash = _content_hash(final_note)
+        except OSError:
+            final_content_hash = content_hash_after
+
         # Do not report execution without response-level receipt evidence.
         # The current runtime invocation may write its own durable callout, but
         # this endpoint does not observe or return that evidence.
@@ -515,7 +521,7 @@ class CheckboxProjectionService:
             status="projected",
             note_path=safe_note_path,
             before=content_hash_before,
-            after=content_hash_after,
+            after=final_content_hash,
         )
 
     @staticmethod
