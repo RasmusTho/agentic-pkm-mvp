@@ -5,18 +5,21 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-29 (bounded DevUI, Sources-zone, classification-evaluation, BWS PostgreSQL, and BWS-03 candidate review; repository evidence only, no deployment or owner acceptance)
+Last reviewed: 2026-09-29 (bounded DevUI, Sources-zone, classification-evaluation, BWS PostgreSQL, and BWS-03 repository implementation review; repository evidence only, no deployment or owner acceptance)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
 Last verified against (BWS PostgreSQL): Issue #5680, `app/ops/postgres_deploy.py`,
 `app/ops/postgres_deploy_linux.py`, `app/config/database.py`, and the focused deploy/DSN tests;
 repository implementation only. The Bash-dependent entrypoint proof belongs to hosted Linux CI;
-BWS-03 token installation and parent #5667 live qualification remain separate gates.
-Last verified against (BWS-03 candidate): Issue #5679 and unmerged code/test commit
-`f18d2cd4c`; focused token-push/secret-bootstrap tests (182 passed), Ruff, and `mypy app`
-(1,020 source files). This is repository evidence only; no live TARS VM, Keychain,
-systemd-creds host key, BWS account, or channel qualification was accessed.
+BWS-03 repository token-push support is delivered by PR #5732, while live VM installation and
+parent #5667 qualification remain separate gates.
+Last verified against (BWS-03 repository implementation): Issue #5679 and PR #5732
+(merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`; reviewed candidate
+`1f9b2ff4e2a35ccd9c2fea5df01a233b6893f0e6`); focused token-push/secret-bootstrap tests
+(182 passed), Ruff, `mypy app` (1,020 source files), docs guard, and current-head CI passed.
+This is repository evidence only; no live TARS VM, Keychain, systemd-creds host key, BWS account,
+or channel qualification was accessed.
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
@@ -55,10 +58,11 @@ The BWS-04 implementation (#5680) adds a supervised Linux database deployment pa
 host/VM secret checks, durable same-ID receipts, file-only PostgreSQL credentials, and real
 password authentication bound to the effective runtime DSN before client activation. A stopped
 initialized database may be started alone by the journaled authentication probe. This is repository
-support only: BWS-03 (#5679) encrypted reader-token installation, existing-host credential/data
-migration, the designated-writer/credential-restriction gate, and live channel qualification remain
-unfulfilled. Neither the implementation nor its fake-adapter/static-render proof changes the live
-runtime posture. The detailed contract remains in `docs/CLOUD_SECRET_PROVISIONING/README.md` and
+support only: BWS-03/#5679's encrypted reader-token push command is delivered by PR #5732; actual
+live VM token installation, existing-host credential/data migration, the designated-writer/
+credential-restriction or shared-fencing gate, and live channel qualification remain unfulfilled.
+Neither the implementation nor its fake-adapter/static-render proof changes the live runtime
+posture. The detailed contract remains in `docs/CLOUD_SECRET_PROVISIONING/README.md` and
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Linux channel secret provisioning`.
 
 The MARR-08 implementation (#5635) adds a bounded Product client and one host-side completion
