@@ -137,8 +137,9 @@ change only through the bounded YouTube Source Note v2 child contracts. Those co
 immutable raw evidence, first-write-wins candidate notes, and the rule that a candidate is terminal
 only after its note has materialized. Re-extraction or upgrade must create a versioned proposal
 companion rather than overwrite the original candidate or human-authored content. These bounded
-deliveries do not ship the later v2 modules, change title-bearing paths or persistence, alter
-D1–D6, or introduce ProfileAgent behavior.
+YouTube deliveries do not ship the later v2 modules, change title-bearing paths or persistence, or
+alter D1–D6. ProfileAgent behavior was delivered separately as GOVPROF-01–03 under parent #4944;
+that profile capability does not ship the separate YouTube overlay renderer, which remains Issue #4117.
 
 The portable-source-bundle delivery adds a derived, rebuildable vault transcript and `source.json`
 under the YouTube attachment root (`Sources/YouTube/_attachments` by default). The stable
