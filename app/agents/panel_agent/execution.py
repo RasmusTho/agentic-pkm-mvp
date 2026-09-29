@@ -49,7 +49,7 @@ def refresh_panel_note_object(
     expanded_path = os.path.expanduser(os.fspath(note_path))
     resolved_path = os.path.realpath(expanded_path, strict=True)
     root_prefix = resolved_root if resolved_root.endswith(os.sep) else resolved_root + os.sep
-    if resolved_path != resolved_root and not resolved_path.startswith(root_prefix):
+    if resolved_path == resolved_root or not resolved_path.startswith(root_prefix):
         raise ValueError("Profile Note path is outside its vault")
     frontmatter, _ = load_frontmatter(raw_text)
     source_uuid = (
