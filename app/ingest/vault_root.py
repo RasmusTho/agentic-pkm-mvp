@@ -93,8 +93,9 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     note_identity = resolve_vault_note_identity(
         path, vault_root=root, frontmatter=frontmatter, body=_body
     )
+    resolved_path = path.expanduser().resolve(strict=True)
     assert_profile_note_ingestible(
-        root, path.relative_to(root).as_posix(), note_identity.note_uuid
+        root, resolved_path.relative_to(root).as_posix(), note_identity.note_uuid
     )
     if store_backend == "pg":
         if not frontmatter.get("uuid"):

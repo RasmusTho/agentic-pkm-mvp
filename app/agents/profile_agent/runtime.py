@@ -1006,23 +1006,31 @@ def _write_failure_record(
         observed_digest = _digest(current_content)
     except Exception:
         observed_digest = ""
-    no_effect = observed_digest == base_digest
-    known_rejection = type(exc).__name__ in {"WritesBlockedError", "KnowledgeWriteConflict"}
-    content_effect: Literal["none", "indeterminate"] = (
-        "none" if no_effect or known_rejection else "indeterminate"
-    )
     failure_code: Literal[
         "write_rejected", "write_failed", "stale_owner_revision", "receipt_unavailable", "indeterminate"
     ]
-    if type(exc).__name__ == "WritesBlockedError":
-        failure_code = "write_rejected"
-    elif type(exc).__name__ == "KnowledgeWriteConflict":
-        failure_code = "stale_owner_revision"
-    elif observed_digest == intended_digest:
+    if observed_digest == intended_digest:
+        # A writer may report a conflict after its atomic replacement took
+        # effect. Without the terminal receipt, the intended bytes remain
+        # uncommitted authority and must stay blocked pending reconciliation.
         failure_code = "receipt_unavailable"
-        content_effect = "indeterminate"
+        content_effect: Literal["none", "indeterminate"] = "indeterminate"
+    elif type(exc).__name__ == "WritesBlockedError":
+        failure_code = "write_rejected"
+        content_effect = "none"
+    elif type(exc).__name__ == "KnowledgeWriteConflict":
+        if observed_digest == base_digest:
+            failure_code = "stale_owner_revision"
+            content_effect = "none"
+        else:
+            failure_code = "indeterminate"
+            content_effect = "indeterminate"
+    elif observed_digest == base_digest:
+        failure_code = "write_failed"
+        content_effect = "none"
     else:
-        failure_code = "indeterminate" if content_effect == "indeterminate" else "write_failed"
+        failure_code = "indeterminate"
+        content_effect = "indeterminate"
     return WriteFailedRecord(
         sequence=state.revision + 1,
         event_id=_stable_id("event-write-failed", attempt.write_id),

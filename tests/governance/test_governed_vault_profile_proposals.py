@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace as dataclass_replace
 import html
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -26,6 +27,7 @@ from app.knowledge.profile_authority import (
     CompletedWriteReceiptRecord,
     ProfileAuthorityConflict,
 )
+from app.knowledge.errors import KnowledgeWriteConflict
 from app.panel.checkbox_projection import (
     CheckboxProjectionHTTPError,
     CheckboxProjectionIdempotencyStore,
@@ -620,14 +622,18 @@ def test_terminal_receipt_failure_keeps_checked_proposal_and_blocks_retry(
         )
 
     moved_note = root / "Profile.md"
-    moved_note.write_text(after_first, encoding="utf-8")
+    moved_text = after_first.replace(
+        f"uuid: {note_uuid}", f"uuid: {UUID(note_uuid).hex}"
+    )
+    moved_note.write_text(moved_text, encoding="utf-8")
     from app.ingest.vault_root import _ingest_file
 
+    monkeypatch.chdir(root.parent)
     with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
         _ingest_file(
-            moved_note,
+            Path(root.name) / moved_note.name,
             trace_id="profile-pending-write-root-ingest-check",
-            vault_root=root,
+            vault_root=Path(root.name),
         )
 
     from app.agents.panel_agent.execution import run_panel_note_execution
@@ -644,3 +650,160 @@ def test_terminal_receipt_failure_keeps_checked_proposal_and_blocks_retry(
     assert retry_state is not None
     assert len(retry_state.pending_writes) == 1
     assert not retry_state.completed_receipts
+
+
+def test_post_exchange_write_conflict_stays_indeterminate_and_blocks_ingestion(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+    checked = note_path.read_text(encoding="utf-8").replace(
+        "- [ ] Review ProfileAgent proposal",
+        "- [x] Review ProfileAgent proposal",
+    )
+    note_path.write_text(checked, encoding="utf-8")
+    intent = _intent_from_note(checked, note_uuid)
+
+    from app.agents.profile_agent import runtime as profile_runtime
+
+    write_note = profile_runtime.write_note_from_absolute
+
+    def write_then_raise_conflict(path: Path, content: str, **kwargs):
+        receipt = write_note(path, content, **kwargs)
+        if kwargs.get("action") == "profile.write":
+            raise KnowledgeWriteConflict(
+                "simulated conflict after successful atomic replacement",
+                receipt=receipt,
+            )
+        return receipt
+
+    monkeypatch.setattr(
+        profile_runtime, "write_note_from_absolute", write_then_raise_conflict
+    )
+
+    result = execute_panel_intent(intent, vault_root=root)
+
+    assert result.actions[0].status == "logged"
+    assert result.actions[0].details["reason"] == "profile_write_failed:KnowledgeWriteConflict"
+    state = agent.store.load_state()
+    assert state is not None
+    assert not state.pending_writes
+    assert len(state.failed_writes) == 1
+    failure = state.failed_writes[0]
+    assert failure.failure_code == "receipt_unavailable"
+    assert failure.content_effect == "indeterminate"
+    assert state.unresolved_indeterminate_write_ids == (failure.write_id,)
+    assert not state.completed_receipts
+    assert not state.versions
+    assert state.receipt_bound_version is None
+    assert _PROPOSED_CONTENT in note_path.read_text(encoding="utf-8")
+
+    from app.ingest.vault_alpha import _ingest_single
+    from app.ingest.vault_root import _ingest_file
+
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        _ingest_single(
+            note_path,
+            vault_root=root,
+            trace_id="profile-post-exchange-alpha-ingest-check",
+        )
+    moved_note = root / "Profile.md"
+    moved_text = note_path.read_text(encoding="utf-8").replace(
+        f"uuid: {note_uuid}", f"uuid: {UUID(note_uuid).hex}"
+    )
+    moved_note.write_text(moved_text, encoding="utf-8")
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        _ingest_file(
+            moved_note,
+            trace_id="profile-post-exchange-root-ingest-check",
+            vault_root=root,
+        )
+
+    from app.knowledge.profile_authority_store import (
+        ProfileAuthorityStore,
+        assert_profile_note_ingestible,
+    )
+
+    malformed_state = dataclass_replace(
+        state,
+        identity=state.identity.model_copy(
+            update={"profile_note_id": "legacy-profile-id"}
+        ),
+    )
+    monkeypatch.setattr(
+        ProfileAuthorityStore,
+        "load_state",
+        lambda _self: malformed_state,
+    )
+    with pytest.raises(ProfileAuthorityConflict, match="identity is invalid"):
+        assert_profile_note_ingestible(root, "Moved/Profile.md", note_uuid)
+
+
+def test_receipt_directory_fsync_failure_is_not_read_as_committed(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+    checked = note_path.read_text(encoding="utf-8").replace(
+        "- [ ] Review ProfileAgent proposal",
+        "- [x] Review ProfileAgent proposal",
+    )
+    note_path.write_text(checked, encoding="utf-8")
+    intent = _intent_from_note(checked, note_uuid)
+
+    from app.agents.profile_agent.store import ProfileAuthorityStore
+    from app.knowledge import profile_authority_store
+    from app.knowledge.profile_authority import decode_profile_records
+
+    real_fsync_directory = profile_authority_store._fsync_directory
+    real_append = ProfileAuthorityStore.append
+    fsync_count = 0
+    armed = False
+
+    def fail_receipt_directory_fsync(path: Path) -> None:
+        nonlocal fsync_count
+        if armed and path.resolve() == agent.store.directory.resolve():
+            fsync_count += 1
+            if fsync_count >= 2:
+                raise OSError("simulated authority directory fsync failure")
+        real_fsync_directory(path)
+
+    def arm_at_receipt(self, record, *, expected_revision, authority=None):
+        nonlocal armed
+        if isinstance(record, CompletedWriteReceiptRecord):
+            armed = True
+        return real_append(
+            self,
+            record,
+            expected_revision=expected_revision,
+            authority=authority,
+        )
+
+    monkeypatch.setattr(
+        profile_authority_store, "_fsync_directory", fail_receipt_directory_fsync
+    )
+    monkeypatch.setattr(ProfileAuthorityStore, "append", arm_at_receipt)
+
+    result = execute_panel_intent(intent, vault_root=root)
+
+    assert result.actions[0].status == "logged"
+    assert result.actions[0].details["reason"] == "terminal_receipt_not_persisted:OSError"
+    assert fsync_count == 2
+    raw_records = decode_profile_records(agent.store.path.read_bytes())
+    assert any(isinstance(record, CompletedWriteReceiptRecord) for record in raw_records)
+    with pytest.raises(OSError, match="simulated authority directory fsync failure"):
+        agent.store.load_state()
+    from app.knowledge.profile_authority_store import assert_profile_note_ingestible
+
+    with pytest.raises(OSError, match="simulated authority directory fsync failure"):
+        assert_profile_note_ingestible(root, _RELATIVE_PATH, note_uuid)
+
+    armed = False
+    durable_state = agent.store.load_state()
+    assert durable_state is not None
+    assert not durable_state.pending_writes
+    assert len(durable_state.completed_receipts) == 1

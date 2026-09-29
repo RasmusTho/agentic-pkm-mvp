@@ -7,6 +7,7 @@ import hashlib
 import os
 import stat
 import tempfile
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -47,28 +48,10 @@ class ProfileAuthorityStore:
         self.lock_path = self.directory / f"{vault_key}.lock"
 
     def load_records(self) -> tuple[ProfileAuthorityRecord, ...]:
-        try:
-            descriptor = os.open(
-                self.path,
-                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-            )
-        except FileNotFoundError:
+        if not self.path.exists() and not self.path.is_symlink():
             return ()
-        except OSError as exc:
-            raise ProfileAuthorityContractError(
-                "profile authority stream cannot be opened safely"
-            ) from exc
-        try:
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode):
-                raise ProfileAuthorityContractError(
-                    "profile authority stream must be a regular file"
-                )
-            with os.fdopen(descriptor, "rb", closefd=False) as handle:
-                raw = handle.read()
-        finally:
-            os.close(descriptor)
-        return decode_profile_records(raw)
+        with self._locked():
+            return self._load_records_locked()
 
     def load_state(self) -> ProfileAuthorityState | None:
         records = self.load_records()
@@ -163,6 +146,9 @@ class ProfileAuthorityStore:
         os.chmod(self.directory, 0o700)
 
     def _load_records_locked(self) -> tuple[ProfileAuthorityRecord, ...]:
+        # Re-establish directory-entry durability before any reader can
+        # observe an atomic replacement that may have outlived a failed fsync.
+        _fsync_directory(self.directory)
         try:
             descriptor = os.open(
                 self.path,
@@ -200,14 +186,7 @@ class ProfileAuthorityStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary_path, self.path)
-            directory_fd = os.open(
-                self.directory,
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
-            )
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            _fsync_directory(self.directory)
         except Exception:
             try:
                 temporary_path.unlink(missing_ok=True)
@@ -217,7 +196,7 @@ class ProfileAuthorityStore:
 
 
 def _fsync_directory(path: Path) -> None:
-    """Persist a newly created authority directory entry in its parent."""
+    """Persist directory-entry changes made beneath this directory."""
 
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
@@ -234,12 +213,32 @@ def assert_profile_note_ingestible(
     """Fail closed while the Profile Note has an unresolved ProfileAgent write."""
 
     state = ProfileAuthorityStore(vault_root, profile_note_id=None).load_state()
-    if state is None or (
-        state.identity.note_path != note_path
-        and (not note_uuid or state.identity.profile_note_id != note_uuid)
+    if state is None or not (
+        state.pending_writes or state.unresolved_indeterminate_write_ids
     ):
         return
-    if state.pending_writes or state.unresolved_indeterminate_write_ids:
+    stored_uuid = _canonical_uuid(state.identity.profile_note_id)
+    incoming_uuid = _canonical_uuid(note_uuid)
+    if stored_uuid is None:
+        # Without a valid durable identity, a moved Profile Note cannot be
+        # distinguished from unrelated retained sources. Quarantine ingestion
+        # until its active write outcome is reconciled.
+        raise ProfileAuthorityConflict(
+            "Profile Note identity is invalid while a ProfileAgent write is unresolved; "
+            "vault ingestion is blocked"
+        )
+    if state.identity.note_path == note_path or (
+        incoming_uuid is not None and stored_uuid == incoming_uuid
+    ):
         raise ProfileAuthorityConflict(
             "Profile Note has an unresolved ProfileAgent write; vault ingestion is blocked"
         )
+
+
+def _canonical_uuid(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return str(uuid.UUID(value))
+    except (ValueError, AttributeError, TypeError):
+        return None
