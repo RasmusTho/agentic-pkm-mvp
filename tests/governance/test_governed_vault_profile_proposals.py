@@ -721,6 +721,32 @@ def test_post_exchange_write_conflict_stays_indeterminate_and_blocks_ingestion(
             vault_root=root,
         )
 
+    from app.workers import outbox_worker
+
+    def unexpected_ingest_effect(*args, **kwargs):
+        pytest.fail("unresolved Profile Note reached a watcher/store/index effect")
+
+    monkeypatch.setattr(outbox_worker, "_maybe_heal_uuid", unexpected_ingest_effect)
+    monkeypatch.setattr(outbox_worker, "write_companion", unexpected_ingest_effect)
+    monkeypatch.setattr(
+        outbox_worker, "handle_ingest_object_created", unexpected_ingest_effect
+    )
+    monkeypatch.setattr(
+        outbox_worker, "refresh_panel_note_object", unexpected_ingest_effect
+    )
+    monkeypatch.setattr(
+        outbox_worker, "run_panel_note_execution", unexpected_ingest_effect
+    )
+    moved_relative = moved_note.relative_to(root).as_posix()
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        outbox_worker.handle_ingest_vault_changed(
+            {"relative_path": moved_relative}, vault_root=root
+        )
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        outbox_worker.handle_panel_scan_requested(
+            {"relative_path": moved_relative}, vault_root=root
+        )
+
     from app.knowledge.profile_authority_store import (
         ProfileAuthorityStore,
         assert_profile_note_ingestible,

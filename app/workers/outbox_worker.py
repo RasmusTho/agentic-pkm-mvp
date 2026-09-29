@@ -37,6 +37,7 @@ from app.events.topic_schema_registry import (
 from app.indexer.consumer import process_event as process_indexer_event
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
+from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.knowledge.write_ops import read_note_text_with_version
 from app.objects import resolve_canonical_object_id
 from app.outbox.events import INDEX_EMBEDDING_REQUESTED
@@ -898,6 +899,21 @@ def _note_path_from_payload(payload: Mapping[str, Any], *, vault_root: Path) -> 
     return note_path.expanduser().resolve()
 
 
+def _assert_profile_ingestible(
+    note_path: Path,
+    *,
+    vault_root: Path,
+    note_uuid: str | None,
+) -> None:
+    resolved_root = vault_root.expanduser().resolve(strict=True)
+    resolved_note_path = note_path.expanduser().resolve(strict=True)
+    assert_profile_note_ingestible(
+        resolved_root,
+        resolved_note_path.relative_to(resolved_root).as_posix(),
+        _normalize_uuid_value(note_uuid),
+    )
+
+
 def _normalize_uuid_value(raw: str | None) -> str:
     if raw is None:
         return ""
@@ -1544,6 +1560,13 @@ def handle_panel_scan_requested(
 
     frontmatter, _ = load_frontmatter(raw_text)
     note_uuid = _normalize_uuid_value(frontmatter.get("uuid") if isinstance(frontmatter, dict) else None)
+    _assert_profile_ingestible(
+        note_path,
+        vault_root=resolved_root,
+        note_uuid=(frontmatter.get("uuid") or frontmatter.get("id"))
+        if isinstance(frontmatter, dict)
+        else None,
+    )
     healed_uuid = ""
     if not note_uuid:
         healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
@@ -1674,8 +1697,6 @@ def handle_ingest_vault_changed(
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
 
-    healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
-
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
         if not _queue_transient_retry(
@@ -1694,6 +1715,12 @@ def handle_ingest_vault_changed(
         return WorkerIngestSummary(ingested=0)
 
     frontmatter, body = load_frontmatter(raw_text)
+    _assert_profile_ingestible(
+        note_path,
+        vault_root=resolved_root,
+        note_uuid=frontmatter.get("uuid") or frontmatter.get("id"),
+    )
+    healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
     # Canonicalize on the AI-panel-stripped body (KERNEL-06, #2768 fix): the panel
     # agent writes both the `%% AI:Start/End %%` fence contents and a separate
     # `> [!info]- AI status` receipt callout back into the note body on disk (see
