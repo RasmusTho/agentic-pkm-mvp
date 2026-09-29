@@ -54,8 +54,19 @@ class ProfileAuthorityStore:
             return self._load_records_locked()
 
     def load_state(self) -> ProfileAuthorityState | None:
-        records = self.load_records()
-        return replay_profile_records(records) if records else None
+        with self.locked_state() as state:
+            return state
+
+    @contextmanager
+    def locked_state(self) -> Iterator[ProfileAuthorityState | None]:
+        """Yield one replayed state while holding the authority-stream lock."""
+
+        if not self.path.exists() and not self.path.is_symlink():
+            yield None
+            return
+        with self._locked():
+            records = self._load_records_locked()
+            yield replay_profile_records(records) if records else None
 
     def initialize(self, identity: ProfileIdentityRecord) -> ProfileAuthorityState:
         if self.profile_note_id is None or identity.profile_note_id != self.profile_note_id:
@@ -215,43 +226,44 @@ def assert_profile_note_ingestible(
     """Reject unresolved writes and stale snapshots of the authority-bound note."""
 
     root = Path(vault_root).expanduser().resolve(strict=True)
-    state = ProfileAuthorityStore(root, profile_note_id=None).load_state()
-    if state is None:
-        return
-    matches_profile = _matches_profile_identity(
-        state.identity, note_path=note_path, note_uuid=note_uuid
-    )
-    if state.pending_writes or state.unresolved_indeterminate_write_ids:
-        stored_uuid = _canonical_uuid(state.identity.profile_note_id)
-        if stored_uuid is None:
-            # Without a valid durable identity, a moved Profile Note cannot be
-            # distinguished from unrelated retained sources. Quarantine ingestion
-            # until its active write outcome is reconciled.
-            raise ProfileAuthorityConflict(
-                "Profile Note identity is invalid while a ProfileAgent write is unresolved; "
-                "vault ingestion is blocked"
-            )
-        if matches_profile or _canonical_uuid(note_uuid) is None:
-            raise ProfileAuthorityConflict(
-                "Profile Note or unidentified source has an unresolved ProfileAgent write; "
-                "vault ingestion is blocked"
-            )
-        return
-    if not matches_profile or source_text is None:
-        return
-
-    try:
-        source_path = (root / note_path).resolve(strict=True)
-        source_path.relative_to(root)
-        current_text = source_path.read_text(encoding="utf-8")
-    except (OSError, ValueError) as exc:
-        raise ProfileAuthorityConflict(
-            "Profile Note source snapshot cannot be verified; vault ingestion is blocked"
-        ) from exc
-    if current_text != source_text:
-        raise ProfileAuthorityConflict(
-            "Profile Note changed during ingestion; stale source snapshot is blocked"
+    store = ProfileAuthorityStore(root, profile_note_id=None)
+    with store.locked_state() as state:
+        if state is None:
+            return
+        matches_profile = _matches_profile_identity(
+            state.identity, note_path=note_path, note_uuid=note_uuid
         )
+        if state.pending_writes or state.unresolved_indeterminate_write_ids:
+            stored_uuid = _canonical_uuid(state.identity.profile_note_id)
+            if stored_uuid is None:
+                # Without a valid durable identity, a moved Profile Note cannot be
+                # distinguished from unrelated retained sources. Quarantine ingestion
+                # until its active write outcome is reconciled.
+                raise ProfileAuthorityConflict(
+                    "Profile Note identity is invalid while a ProfileAgent write is unresolved; "
+                    "vault ingestion is blocked"
+                )
+            if matches_profile or _canonical_uuid(note_uuid) is None:
+                raise ProfileAuthorityConflict(
+                    "Profile Note or unidentified source has an unresolved ProfileAgent write; "
+                    "vault ingestion is blocked"
+                )
+            return
+        if not matches_profile or source_text is None:
+            return
+
+        try:
+            source_path = (root / note_path).resolve(strict=True)
+            source_path.relative_to(root)
+            current_text = source_path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeError, ValueError) as exc:
+            raise ProfileAuthorityConflict(
+                "Profile Note source snapshot cannot be verified; vault ingestion is blocked"
+            ) from exc
+        if _normalize_newlines(current_text) != _normalize_newlines(source_text):
+            raise ProfileAuthorityConflict(
+                "Profile Note changed during ingestion; stale source snapshot is blocked"
+            )
 
 
 def is_profile_note_source(
@@ -277,9 +289,18 @@ def _matches_profile_identity(
 ) -> bool:
     stored_uuid = _canonical_uuid(identity.profile_note_id)
     incoming_uuid = _canonical_uuid(note_uuid)
-    return identity.note_path == note_path or (
-        incoming_uuid is not None and stored_uuid == incoming_uuid
+    same_note_id = (
+        stored_uuid == incoming_uuid
+        if stored_uuid is not None and incoming_uuid is not None
+        else note_uuid is not None and identity.profile_note_id == note_uuid
     )
+    return identity.note_path == note_path or same_note_id
+
+
+def _normalize_newlines(value: str) -> str:
+    """Compare decoded snapshots independent of the file's newline convention."""
+
+    return value.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _canonical_uuid(value: str | None) -> str | None:

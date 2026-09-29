@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import replace as dataclass_replace
 import html
 from pathlib import Path
+import threading
 from uuid import UUID, uuid4
 
 import pytest
@@ -221,6 +223,113 @@ def test_pending_profile_proposal_is_excluded_from_standing_question_context(
     replay_candidates, replay_sources = _standing_question_tick_inputs(root, [])
     assert replay_candidates == []
     assert replay_sources == {}
+
+
+def test_moved_profile_note_with_legacy_identity_stays_out_of_standing_questions(
+    profile_note: tuple[Path, Path, str],
+) -> None:
+    root, note_path, note_uuid = profile_note
+    note_path.write_text(
+        note_path.read_text(encoding="utf-8").replace(
+            f"uuid: {note_uuid}", "uuid: legacy-profile-id\nscope: work"
+        ),
+        encoding="utf-8",
+    )
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, "legacy-profile-id"))
+
+    moved_note = root / "Moved" / "Profile.md"
+    moved_note.parent.mkdir(parents=True)
+    note_path.replace(moved_note)
+
+    from app.knowledge.profile_authority_store import is_profile_note_source
+    from app.watcher.vault_watcher import _standing_question_tick_inputs
+
+    assert is_profile_note_source(
+        root, "Moved/Profile.md", "legacy-profile-id"
+    )
+    candidates, sources = _standing_question_tick_inputs(root, [moved_note])
+
+    assert candidates == []
+    assert sources == {}
+
+
+def test_profile_note_source_snapshot_accepts_crlf_and_lf_views(
+    profile_note: tuple[Path, Path, str],
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+    normalized_text = note_path.read_text(encoding="utf-8")
+    crlf_text = normalized_text.replace("\n", "\r\n")
+    note_path.write_bytes(crlf_text.encode("utf-8"))
+
+    from app.knowledge.profile_authority_store import assert_profile_note_ingestible
+
+    assert_profile_note_ingestible(
+        root,
+        _RELATIVE_PATH,
+        note_uuid,
+        source_text=crlf_text,
+    )
+    assert_profile_note_ingestible(
+        root,
+        _RELATIVE_PATH,
+        note_uuid,
+        source_text=normalized_text,
+    )
+
+
+def test_profile_note_snapshot_validation_holds_authority_lock(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+    source_text = note_path.read_text(encoding="utf-8")
+
+    from app.knowledge import profile_authority_store
+    from app.knowledge.profile_authority_store import assert_profile_note_ingestible
+
+    contender_attempted = threading.Event()
+    contender_acquired = threading.Event()
+    contender_finished = threading.Event()
+    current_thread = threading.get_ident()
+    real_flock = profile_authority_store.fcntl.flock
+    real_read_bytes = Path.read_bytes
+
+    def observed_flock(descriptor: int, operation: int) -> None:
+        if threading.get_ident() != current_thread and operation == profile_authority_store.fcntl.LOCK_EX:
+            contender_attempted.set()
+            real_flock(descriptor, operation)
+            contender_acquired.set()
+            return
+        real_flock(descriptor, operation)
+
+    def observed_source_read(path: Path) -> bytes:
+        if path.resolve() == note_path.resolve():
+            def load_state() -> None:
+                agent.store.load_state()
+                contender_finished.set()
+
+            contender = threading.Thread(target=load_state, daemon=True)
+            contender.start()
+            assert contender_attempted.wait(timeout=2)
+            assert not contender_acquired.wait(timeout=0.05)
+        return real_read_bytes(path)
+
+    monkeypatch.setattr(profile_authority_store.fcntl, "flock", observed_flock)
+    monkeypatch.setattr(Path, "read_bytes", observed_source_read)
+
+    assert_profile_note_ingestible(
+        root,
+        _RELATIVE_PATH,
+        note_uuid,
+        source_text=source_text,
+    )
+
+    assert contender_finished.wait(timeout=2)
 
 
 def test_candidate_line_separators_cannot_escape_the_review_panel(
@@ -839,8 +948,8 @@ def test_post_exchange_write_conflict_stays_indeterminate_and_blocks_ingestion(
     )
     monkeypatch.setattr(
         ProfileAuthorityStore,
-        "load_state",
-        lambda _self: resolved_as_no_effect,
+        "locked_state",
+        lambda _self: nullcontext(resolved_as_no_effect),
     )
     with pytest.raises(ProfileAuthorityConflict, match="stale source snapshot"):
         assert_profile_note_ingestible(
@@ -858,8 +967,8 @@ def test_post_exchange_write_conflict_stays_indeterminate_and_blocks_ingestion(
     )
     monkeypatch.setattr(
         ProfileAuthorityStore,
-        "load_state",
-        lambda _self: malformed_state,
+        "locked_state",
+        lambda _self: nullcontext(malformed_state),
     )
     with pytest.raises(ProfileAuthorityConflict, match="identity is invalid"):
         assert_profile_note_ingestible(root, "Moved/Profile.md", note_uuid)
