@@ -702,12 +702,47 @@ def _wait_for_unit(channel: str, receipt: TokenPushReceipt, runner: CommandRunne
     unit = _token_push_unit(channel, receipt.operation_id, receipt.attempt_id)
     while True:
         result = _command(
-            ["systemctl", "show", unit, "--property=ActiveState", "--value"],
+            ["systemctl", "show", unit, "--property=LoadState,ActiveState"],
             runner=runner,
         )
-        state = result.stdout.decode("utf-8", errors="strict").strip()
+        try:
+            properties: dict[str, str] = {}
+            for line in result.stdout.decode("utf-8", errors="strict").splitlines():
+                key, separator, value = line.partition("=")
+                if (
+                    not separator
+                    or key not in {"LoadState", "ActiveState"}
+                    or key in properties
+                ):
+                    raise TokenPushError()
+                properties[key] = value
+            stderr = result.stderr.decode("utf-8", errors="strict").strip()
+        except TokenPushError:
+            raise
+        except Exception:
+            raise TokenPushError() from None
+
+        unit_not_found = properties == {
+            "LoadState": "not-found",
+            "ActiveState": "inactive",
+        }
         if result.returncode != 0:
+            not_found_diagnostics = {
+                f"Unit {unit} could not be found.",
+                f"Failed to get properties: Unit {unit} not found.",
+                f"Failed to get properties: Unit {unit} could not be found.",
+            }
+            if stderr in not_found_diagnostics:
+                return
             raise TokenPushError()
+        if unit_not_found:
+            # --collect unloads completed transient units. The exact not-found
+            # state proves this worker is no longer active; other systemctl
+            # failures remain indeterminate and fail closed.
+            return
+        if properties.get("LoadState") != "loaded":
+            raise TokenPushError()
+        state = properties.get("ActiveState")
         if state in {"inactive", "failed"}:
             return
         if state not in _ACTIVE_SYSTEMD_STATES:

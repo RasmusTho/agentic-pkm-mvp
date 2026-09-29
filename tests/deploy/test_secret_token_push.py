@@ -471,10 +471,15 @@ def test_terminal_remote_receipt_reconciles_without_transient_unit(tmp_path):
 
 def test_prepared_remote_receipt_aborts_only_after_inactive_unit_and_unchanged_pointer(tmp_path):
     store, app_root, operation_id, _attempt_id, prior_generation, _prior_pointer = _remote_state(tmp_path)
+    unit = f"yggdrasil-bws-token-push-dev-{operation_id}-{_attempt_id}.service"
 
     def inactive_systemd(argv, *, input, capture_output, check):
-        assert argv[0:2] == ["systemctl", "show"]
-        return subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
+        assert argv == [
+            "systemctl", "show", unit, "--property=LoadState,ActiveState"
+        ]
+        return subprocess.CompletedProcess(
+            argv, 0, b"LoadState=loaded\nActiveState=inactive\n", b""
+        )
 
     receipt = vm_token_push_status(
         app_root=app_root,
@@ -487,6 +492,95 @@ def test_prepared_remote_receipt_aborts_only_after_inactive_unit_and_unchanged_p
     assert receipt.prior_generation == prior_generation
     assert store.current() is not None
     assert store.current().generation_id == prior_generation
+
+
+def test_prepared_remote_receipt_aborts_when_collected_unit_is_not_found(tmp_path):
+    store, app_root, operation_id, attempt_id, prior_generation, _prior_pointer = _remote_state(tmp_path)
+    unit = f"yggdrasil-bws-token-push-dev-{operation_id}-{attempt_id}.service"
+
+    def collected_systemd(argv, *, input, capture_output, check):
+        assert argv == [
+            "systemctl", "show", unit, "--property=LoadState,ActiveState"
+        ]
+        return subprocess.CompletedProcess(
+            argv, 0, b"LoadState=not-found\nActiveState=inactive\n", b""
+        )
+
+    receipt = vm_token_push_status(
+        app_root=app_root,
+        state_root=store.state_root,
+        channel="dev",
+        operation_id=operation_id,
+        runner=collected_systemd,
+    )
+
+    assert receipt.stage == "aborted"
+    assert receipt.prior_generation == prior_generation
+    assert store.current() is not None
+    assert store.current().generation_id == prior_generation
+    assert not (app_root / "config" / "deploy" / "dev.env.lock").exists()
+
+
+@pytest.mark.parametrize(
+    "error_template",
+    [
+        "Unit {unit} could not be found.\n",
+        "Failed to get properties: Unit {unit} not found.\n",
+        "Failed to get properties: Unit {unit} could not be found.\n",
+    ],
+)
+def test_prepared_remote_receipt_aborts_on_exact_collected_unit_error(tmp_path, error_template):
+    store, app_root, operation_id, attempt_id, prior_generation, _prior_pointer = _remote_state(tmp_path)
+    unit = f"yggdrasil-bws-token-push-dev-{operation_id}-{attempt_id}.service"
+
+    def collected_systemd(argv, *, input, capture_output, check):
+        assert argv == [
+            "systemctl", "show", unit, "--property=LoadState,ActiveState"
+        ]
+        return subprocess.CompletedProcess(
+            argv, 1, b"", error_template.format(unit=unit).encode()
+        )
+
+    receipt = vm_token_push_status(
+        app_root=app_root,
+        state_root=store.state_root,
+        channel="dev",
+        operation_id=operation_id,
+        runner=collected_systemd,
+    )
+
+    assert receipt.stage == "aborted"
+    assert receipt.prior_generation == prior_generation
+    assert store.current() is not None
+    assert store.current().generation_id == prior_generation
+    assert not (app_root / "config" / "deploy" / "dev.env.lock").exists()
+
+
+def test_prepared_remote_receipt_stays_pending_on_systemd_manager_error(tmp_path):
+    store, app_root, operation_id, attempt_id, _prior_generation, _prior_pointer = _remote_state(tmp_path)
+
+    def unavailable_systemd(argv, *, input, capture_output, check):
+        assert argv == [
+            "systemctl", "show",
+            f"yggdrasil-bws-token-push-dev-{operation_id}-{attempt_id}.service",
+            "--property=LoadState,ActiveState",
+        ]
+        return subprocess.CompletedProcess(
+            argv, 1, b"", b"Failed to connect to bus: No medium found\n"
+        )
+
+    with pytest.raises(TokenPushError):
+        vm_token_push_status(
+            app_root=app_root,
+            state_root=store.state_root,
+            channel="dev",
+            operation_id=operation_id,
+            runner=unavailable_systemd,
+        )
+
+    assert store.read() is not None
+    assert store.read().stage == "prepared"
+    assert not (app_root / "config" / "deploy" / "dev.env.lock").exists()
 
 
 def test_token_push_start_uses_supervised_worker_and_sends_token_only_on_stdin(tmp_path):
@@ -635,7 +729,9 @@ def test_unresolved_compensation_retains_owned_lock_and_applying_receipt(
     assert store.current() == prior_pointer
 
     def inactive_systemd(argv, *, input, capture_output, check):
-        return subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
+        return subprocess.CompletedProcess(
+            argv, 0, b"LoadState=loaded\nActiveState=inactive\n", b""
+        )
 
     with pytest.raises(TokenPushError):
         vm_token_push_status(
@@ -661,7 +757,9 @@ def test_prepared_attempt_reclaims_own_stale_lock_and_retries_same_id(tmp_path):
 
     def inactive_systemd(argv, *, input, capture_output, check):
         assert argv[0:2] == ["systemctl", "show"]
-        return subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
+        return subprocess.CompletedProcess(
+            argv, 0, b"LoadState=loaded\nActiveState=inactive\n", b""
+        )
 
     aborted = vm_token_push_status(
         app_root=app_root,
@@ -712,7 +810,9 @@ def test_prepared_status_will_not_reclaim_a_matching_lock_while_flock_is_held(tm
     assert held.acquired
 
     def inactive_systemd(argv, *, input, capture_output, check):
-        return subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
+        return subprocess.CompletedProcess(
+            argv, 0, b"LoadState=loaded\nActiveState=inactive\n", b""
+        )
 
     with pytest.raises(TokenPushError):
         vm_token_push_status(
@@ -762,7 +862,9 @@ def test_prepared_status_refuses_unknown_or_foreign_channel_lock(tmp_path, owner
         owner_path.chmod(0o600)
 
     def inactive_systemd(argv, *, input, capture_output, check):
-        return subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
+        return subprocess.CompletedProcess(
+            argv, 0, b"LoadState=loaded\nActiveState=inactive\n", b""
+        )
 
     with pytest.raises(TokenPushError):
         vm_token_push_status(
@@ -805,7 +907,9 @@ def test_worker_contention_preserves_foreign_deploy_lock_until_it_can_abort(tmp_
     assert owner_path.read_bytes() == b""
 
     def inactive_systemd(argv, *, input, capture_output, check):
-        return subprocess.CompletedProcess(argv, 0, b"inactive\n", b"")
+        return subprocess.CompletedProcess(
+            argv, 0, b"LoadState=loaded\nActiveState=inactive\n", b""
+        )
 
     with pytest.raises(TokenPushError):
         vm_token_push_status(
