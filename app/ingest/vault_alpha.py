@@ -602,7 +602,10 @@ def _ingest_single(
         path, vault_root=vault_root, frontmatter=frontmatter, body=body
     )
     assert_profile_note_ingestible(
-        vault_root, rel_path.as_posix(), identity.note_uuid
+        vault_root,
+        rel_path.as_posix(),
+        identity.note_uuid,
+        source_text=raw_text,
     )
     companion = identity.companion
 

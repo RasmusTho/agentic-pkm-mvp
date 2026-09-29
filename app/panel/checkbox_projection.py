@@ -578,6 +578,7 @@ class CheckboxProjectionService:
                 note_path=note_path,
                 raw_text=raw_text,
                 trace_id=request.idempotency_key,
+                vault_root=vault_root,
             )
             run_panel_note_execution(
                 canonical_artifact_id,

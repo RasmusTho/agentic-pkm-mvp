@@ -214,7 +214,7 @@ def execute_panel_intent(
         )
         if any(result.status == "triggered" for result in profile_action_results):
             note_file = _resolve_note_file(source_intent_event.payload.note.path, vault_root)
-            if note_file is not None:
+            if note_file is not None and vault_root is not None:
                 try:
                     from app.agents.panel_agent.execution import refresh_panel_note_object
 
@@ -223,6 +223,7 @@ def execute_panel_intent(
                         note_path=note_file,
                         raw_text=note_file.read_text(encoding="utf-8"),
                         trace_id=source_intent_event.trace_id,
+                        vault_root=vault_root,
                     )
                 except Exception:
                     # A successful profile write must not trigger checkbox

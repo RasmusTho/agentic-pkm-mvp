@@ -35,10 +35,33 @@ def use_db_outbox() -> bool:
     return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
 
-def refresh_panel_note_object(*, note_uuid: str, note_path: Path, raw_text: str, trace_id: str) -> None:
+def refresh_panel_note_object(
+    *,
+    note_uuid: str,
+    note_path: Path,
+    raw_text: str,
+    trace_id: str,
+    vault_root: Path,
+) -> None:
+    from app.knowledge.profile_authority_store import assert_profile_note_ingestible
+
+    resolved_root = vault_root.expanduser().resolve(strict=True)
+    resolved_path = note_path.expanduser().resolve(strict=True)
+    frontmatter, _ = load_frontmatter(raw_text)
+    source_uuid = (
+        frontmatter.get("uuid") or frontmatter.get("id")
+        if isinstance(frontmatter, dict)
+        else None
+    )
+    assert_profile_note_ingestible(
+        resolved_root,
+        resolved_path.relative_to(resolved_root).as_posix(),
+        str(source_uuid) if source_uuid else None,
+        source_text=raw_text,
+    )
+
     store = ObjectStore()
     existing = store.get_object(note_uuid)
-    frontmatter, _ = load_frontmatter(raw_text)
     payload = dict(existing.payload or {}) if existing is not None else {}
     payload.update(
         {

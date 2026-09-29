@@ -209,30 +209,77 @@ def assert_profile_note_ingestible(
     vault_root: Path | str,
     note_path: str,
     note_uuid: str | None = None,
+    *,
+    source_text: str | None = None,
 ) -> None:
-    """Fail closed while the Profile Note has an unresolved ProfileAgent write."""
+    """Reject unresolved writes and stale snapshots of the authority-bound note."""
+
+    root = Path(vault_root).expanduser().resolve(strict=True)
+    state = ProfileAuthorityStore(root, profile_note_id=None).load_state()
+    if state is None:
+        return
+    matches_profile = _matches_profile_identity(
+        state.identity, note_path=note_path, note_uuid=note_uuid
+    )
+    if state.pending_writes or state.unresolved_indeterminate_write_ids:
+        stored_uuid = _canonical_uuid(state.identity.profile_note_id)
+        if stored_uuid is None:
+            # Without a valid durable identity, a moved Profile Note cannot be
+            # distinguished from unrelated retained sources. Quarantine ingestion
+            # until its active write outcome is reconciled.
+            raise ProfileAuthorityConflict(
+                "Profile Note identity is invalid while a ProfileAgent write is unresolved; "
+                "vault ingestion is blocked"
+            )
+        if matches_profile or _canonical_uuid(note_uuid) is None:
+            raise ProfileAuthorityConflict(
+                "Profile Note or unidentified source has an unresolved ProfileAgent write; "
+                "vault ingestion is blocked"
+            )
+        return
+    if not matches_profile or source_text is None:
+        return
+
+    try:
+        source_path = (root / note_path).resolve(strict=True)
+        source_path.relative_to(root)
+        current_text = source_path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        raise ProfileAuthorityConflict(
+            "Profile Note source snapshot cannot be verified; vault ingestion is blocked"
+        ) from exc
+    if current_text != source_text:
+        raise ProfileAuthorityConflict(
+            "Profile Note changed during ingestion; stale source snapshot is blocked"
+        )
+
+
+def is_profile_note_source(
+    vault_root: Path | str,
+    note_path: str,
+    note_uuid: str | None = None,
+) -> bool:
+    """Return whether a source path or UUID is bound to this vault's Profile Note."""
 
     state = ProfileAuthorityStore(vault_root, profile_note_id=None).load_state()
-    if state is None or not (
-        state.pending_writes or state.unresolved_indeterminate_write_ids
-    ):
-        return
-    stored_uuid = _canonical_uuid(state.identity.profile_note_id)
+    if state is None:
+        return False
+    return _matches_profile_identity(
+        state.identity, note_path=note_path, note_uuid=note_uuid
+    )
+
+
+def _matches_profile_identity(
+    identity: ProfileIdentityRecord,
+    *,
+    note_path: str,
+    note_uuid: str | None,
+) -> bool:
+    stored_uuid = _canonical_uuid(identity.profile_note_id)
     incoming_uuid = _canonical_uuid(note_uuid)
-    if stored_uuid is None:
-        # Without a valid durable identity, a moved Profile Note cannot be
-        # distinguished from unrelated retained sources. Quarantine ingestion
-        # until its active write outcome is reconciled.
-        raise ProfileAuthorityConflict(
-            "Profile Note identity is invalid while a ProfileAgent write is unresolved; "
-            "vault ingestion is blocked"
-        )
-    if state.identity.note_path == note_path or (
+    return identity.note_path == note_path or (
         incoming_uuid is not None and stored_uuid == incoming_uuid
-    ):
-        raise ProfileAuthorityConflict(
-            "Profile Note has an unresolved ProfileAgent write; vault ingestion is blocked"
-        )
+    )
 
 
 def _canonical_uuid(value: str | None) -> str | None:

@@ -180,6 +180,49 @@ def test_candidate_admission_never_authorizes_profile_or_consumer_context(
         )
 
 
+def test_pending_profile_proposal_is_excluded_from_standing_question_context(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+    note_text = note_path.read_text(encoding="utf-8").replace(
+        f"uuid: {note_uuid}", f"uuid: {note_uuid}\nscope: work"
+    )
+    note_path.write_text(note_text, encoding="utf-8")
+
+    from app.watcher.vault_watcher import _standing_question_tick_inputs
+
+    candidates, sources = _standing_question_tick_inputs(root, [note_path])
+
+    assert candidates == []
+    assert sources == {}
+
+    from app.standing_questions import projection
+
+    monkeypatch.setattr(
+        projection,
+        "iter_question_notes",
+        lambda _root: [
+            (
+                "questions/sq-profile.md",
+                {
+                    "evidence": [
+                        {
+                            "artifact_ref": f"vault://{_RELATIVE_PATH}",
+                            "provenance_ref": "outbox://ingest.vault.changed/profile",
+                        }
+                    ]
+                },
+            )
+        ],
+    )
+    replay_candidates, replay_sources = _standing_question_tick_inputs(root, [])
+    assert replay_candidates == []
+    assert replay_sources == {}
+
+
 def test_candidate_line_separators_cannot_escape_the_review_panel(
     profile_note: tuple[Path, Path, str],
 ) -> None:
@@ -403,6 +446,7 @@ def test_confirmed_write_is_separate_and_receipt_bound(
         note_path=note_path,
         raw_text=note_text,
         trace_id="profile-proposal-visible",
+        vault_root=root,
     )
     service = CheckboxProjectionService(
         idempotency_store=CheckboxProjectionIdempotencyStore()
@@ -577,6 +621,7 @@ def test_terminal_receipt_failure_keeps_checked_proposal_and_blocks_retry(
         note_path=note_path,
         raw_text=note_text,
         trace_id="profile-proposal-receipt-failure",
+        vault_root=root,
     )
     service = CheckboxProjectionService(
         idempotency_store=CheckboxProjectionIdempotencyStore()
@@ -721,6 +766,39 @@ def test_post_exchange_write_conflict_stays_indeterminate_and_blocks_ingestion(
             vault_root=root,
         )
 
+    from app.agents.panel_agent.execution import refresh_panel_note_object
+
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        refresh_panel_note_object(
+            note_uuid=note_uuid,
+            note_path=moved_note,
+            raw_text=moved_text,
+            trace_id="profile-post-exchange-checkbox-refresh-check",
+            vault_root=root,
+        )
+
+    monkeypatch.setenv("VAULT_ROOT", str(root))
+    from app.agents.normalizer import agent as normalizer
+
+    monkeypatch.setattr(
+        normalizer.ObjectStore,
+        "save_object",
+        lambda *_args, **_kwargs: pytest.fail(
+            "unresolved Profile Note reached normalizer ObjectStore persistence"
+        ),
+    )
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        normalizer.run(
+            str(moved_note), trace_id="profile-post-exchange-normalizer-check"
+        )
+
+    from app.watcher import vault_watcher
+
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        vault_watcher._hydrate_store_with_markdown(
+            note_uuid, moved_note, vault_root=root
+        )
+
     from app.workers import outbox_worker
 
     def unexpected_ingest_effect(*args, **kwargs):
@@ -751,6 +829,26 @@ def test_post_exchange_write_conflict_stays_indeterminate_and_blocks_ingestion(
         ProfileAuthorityStore,
         assert_profile_note_ingestible,
     )
+
+    resolved_as_no_effect = dataclass_replace(
+        state,
+        failed_writes=tuple(
+            failure.model_copy(update={"content_effect": "none"})
+            for failure in state.failed_writes
+        ),
+    )
+    monkeypatch.setattr(
+        ProfileAuthorityStore,
+        "load_state",
+        lambda _self: resolved_as_no_effect,
+    )
+    with pytest.raises(ProfileAuthorityConflict, match="stale source snapshot"):
+        assert_profile_note_ingestible(
+            root,
+            moved_note.relative_to(root).as_posix(),
+            note_uuid,
+            source_text=moved_text + "\n",
+        )
 
     malformed_state = dataclass_replace(
         state,

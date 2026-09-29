@@ -8,8 +8,10 @@ from typing import Any
 
 import yaml
 
+from app.config.paths import resolve_optional_vault_root
 from app.events.types import INGEST_NORMALIZE_DONE
 from app.ingest.episode_ref import episode_ref_from_frontmatter
+from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.objects import ObjectStore
 from app.services.audit import audit_event
 
@@ -160,6 +162,23 @@ def run(
     dom = normalize_file(path, trace_id=trace_id, artifact_kind=artifact_kind)
 
     if persist:
+        source_path = Path(path).expanduser().resolve(strict=True)
+        vault_root = resolve_optional_vault_root()
+        if vault_root is not None:
+            resolved_root = vault_root.expanduser().resolve(strict=True)
+            try:
+                relative_path = source_path.relative_to(resolved_root).as_posix()
+            except ValueError:
+                relative_path = ""
+            if relative_path:
+                frontmatter, _ = _split_frontmatter(dom["payload"]["raw_text"])
+                source_uuid = frontmatter.get("uuid") or frontmatter.get("id")
+                assert_profile_note_ingestible(
+                    resolved_root,
+                    relative_path,
+                    str(source_uuid) if source_uuid else None,
+                    source_text=dom["payload"]["raw_text"],
+                )
         store = ObjectStore()
         shim = _DomainObjectShim(
             uuid=dom["uuid"],

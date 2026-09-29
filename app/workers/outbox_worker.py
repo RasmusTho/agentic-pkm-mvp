@@ -904,6 +904,7 @@ def _assert_profile_ingestible(
     *,
     vault_root: Path,
     note_uuid: str | None,
+    source_text: str | None = None,
 ) -> None:
     resolved_root = vault_root.expanduser().resolve(strict=True)
     resolved_note_path = note_path.expanduser().resolve(strict=True)
@@ -911,6 +912,7 @@ def _assert_profile_ingestible(
         resolved_root,
         resolved_note_path.relative_to(resolved_root).as_posix(),
         _normalize_uuid_value(note_uuid),
+        source_text=source_text,
     )
 
 
@@ -1566,6 +1568,7 @@ def handle_panel_scan_requested(
         note_uuid=(frontmatter.get("uuid") or frontmatter.get("id"))
         if isinstance(frontmatter, dict)
         else None,
+        source_text=raw_text,
     )
     healed_uuid = ""
     if not note_uuid:
@@ -1605,6 +1608,7 @@ def handle_panel_scan_requested(
         note_path=note_path,
         raw_text=raw_text,
         trace_id=trace_id or "",
+        vault_root=resolved_root,
     )
 
     execution = run_panel_note_execution(
@@ -1719,6 +1723,7 @@ def handle_ingest_vault_changed(
         note_path,
         vault_root=resolved_root,
         note_uuid=frontmatter.get("uuid") or frontmatter.get("id"),
+        source_text=raw_text,
     )
     healed_uuid = _maybe_heal_uuid(note_path, resolved_root)
     # Canonicalize on the AI-panel-stripped body (KERNEL-06, #2768 fix): the panel
