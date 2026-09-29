@@ -49,9 +49,6 @@ _PROFILE_PROPOSAL_MARKER_RE = re.compile(
     r"<!--mimer:profile-proposal-(start|end) id=([A-Za-z0-9][A-Za-z0-9._:-]*)-->"
 )
 _MAX_TEXT = 24_000
-_LINE_SEPARATOR_TRANSLATION = str.maketrans(
-    {char: "\n" for char in "\v\f\x1c\x1d\x1e\u0085\u2028\u2029"}
-)
 
 
 def vault_profile_id(vault_root: Path | str) -> str:
@@ -65,12 +62,7 @@ def vault_profile_id(vault_root: Path | str) -> str:
 def _normalize_candidate_text(value: Any) -> Any:
     if not isinstance(value, str):
         return value
-    return (
-        value.replace("\r\n", "\n")
-        .replace("\r", "\n")
-        .translate(_LINE_SEPARATOR_TRANSLATION)
-        .strip("\n")
-    )
+    return "\n".join(value.splitlines()).strip("\n")
 
 
 class ProfileUpdateCandidate(BaseModel):

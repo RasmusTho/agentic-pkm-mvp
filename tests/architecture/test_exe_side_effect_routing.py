@@ -254,6 +254,30 @@ ALLOWED_DIRECT_SIDE_EFFECTS: dict[SideEffectCall, AllowedSideEffect] = {
         1,
         "Legacy pipeline audit hook for set evaluation.",
     ),
+    SideEffectCall(
+        "app/agents/profile_agent/runtime.py",
+        "ProfileAgent.propose_candidate",
+        "write_note_from_absolute",
+    ): AllowedSideEffect(
+        1,
+        "#4946 proposal projection writes an unchecked review block through Knowledge CAS with the profile writer identity.",
+    ),
+    SideEffectCall(
+        "app/agents/profile_agent/runtime.py",
+        "_execute_checked_profile_action",
+        "write_note_from_absolute",
+    ): AllowedSideEffect(
+        1,
+        "#4946 confirmed profile application uses the guarded Knowledge CAS writer after durable confirmation and write-attempt records.",
+    ),
+    SideEffectCall(
+        "app/agents/profile_agent/runtime.py",
+        "_best_effort_remove_completed_panel",
+        "write_note_from_absolute",
+    ): AllowedSideEffect(
+        1,
+        "#4946 removes only the completed proposal presentation under the written version's CAS; failure preserves the durable completion.",
+    ),
 }
 
 

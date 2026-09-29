@@ -57,7 +57,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "promote.done / promotion.transition.applied after this call on the same "
         "trace_id; the mirror write and the event are one logical transition (T-promote)."
     ),
-    ("app/agents/panel_agent/execution.py", 86): (
+    ("app/agents/panel_agent/execution.py", 87): (
         "refresh_panel_note_object: panel note refresh is a read-model refresh inside "
         "run_panel_note_execution, which emits panel.action.logged/blocked via the "
         "runtime's own outbox path (app/agents/panel_agent/runtime.py) for the same turn."
@@ -1669,7 +1669,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         " -> store_objects; a stamped episode_ref survives (new-object branch has no prior row to "
         "drop)."
     ),
-    ("app/agents/panel_agent/execution.py", 86): (
+    ("app/agents/panel_agent/execution.py", 87): (
         "preserves_existing_payload: panel execution updates from dict(existing.payload or {}); "
         "save_object -> store_objects."
     ),
