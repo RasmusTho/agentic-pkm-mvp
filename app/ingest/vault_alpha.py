@@ -601,7 +601,9 @@ def _ingest_single(
     identity = resolve_vault_note_identity(
         path, vault_root=vault_root, frontmatter=frontmatter, body=body
     )
-    assert_profile_note_ingestible(vault_root, rel_path.as_posix())
+    assert_profile_note_ingestible(
+        vault_root, rel_path.as_posix(), identity.note_uuid
+    )
     companion = identity.companion
 
     title = _frontmatter_title(frontmatter) or _derive_title(body, path)

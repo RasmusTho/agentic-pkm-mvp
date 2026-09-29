@@ -335,7 +335,7 @@ def test_pending_proposal_recovers_after_panel_projection_failure(
     assert candidate.proposed_change in note_path.read_text(encoding="utf-8")
 
 
-def test_profile_authority_directory_creation_fsyncs_each_parent(
+def test_profile_authority_directory_fsync_retries_after_failure(
     profile_note: tuple[Path, Path, str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -344,9 +344,14 @@ def test_profile_authority_directory_creation_fsyncs_each_parent(
 
     real_fsync_directory = profile_authority_store._fsync_directory
     synced: list[Path] = []
+    failed_once = False
 
     def record_fsync_directory(path: Path) -> None:
+        nonlocal failed_once
         synced.append(path)
+        if path.resolve() == root.resolve() and not failed_once:
+            failed_once = True
+            raise OSError("simulated parent directory fsync failure")
         real_fsync_directory(path)
 
     monkeypatch.setattr(
@@ -355,9 +360,20 @@ def test_profile_authority_directory_creation_fsyncs_each_parent(
         record_fsync_directory,
     )
     agent = ProfileAgent(root, _RELATIVE_PATH)
-    agent.propose_candidate(_candidate(root, note_uuid))
+    candidate = _candidate(root, note_uuid)
+    with pytest.raises(OSError, match="simulated parent directory fsync failure"):
+        agent.propose_candidate(candidate)
+    assert (root / ".mimer").is_dir()
 
-    assert synced == [root.resolve(), (root / ".mimer").resolve()]
+    proposal = agent.propose_candidate(candidate)
+
+    assert proposal.candidate_id == candidate.candidate_id
+    assert synced[:3] == [
+        root.resolve(),
+        root.resolve(),
+        (root / ".mimer").resolve(),
+    ]
+    assert agent.store.load_state() is not None
 
 
 def test_confirmed_write_is_separate_and_receipt_bound(
@@ -601,6 +617,17 @@ def test_terminal_receipt_failure_keeps_checked_proposal_and_blocks_retry(
             vault_root=root,
             trace_id="profile-pending-write-ingest-check",
             raw_text=after_first,
+        )
+
+    moved_note = root / "Profile.md"
+    moved_note.write_text(after_first, encoding="utf-8")
+    from app.ingest.vault_root import _ingest_file
+
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        _ingest_file(
+            moved_note,
+            trace_id="profile-pending-write-root-ingest-check",
+            vault_root=root,
         )
 
     from app.agents.panel_agent.execution import run_panel_note_execution

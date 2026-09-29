@@ -146,15 +146,15 @@ class ProfileAuthorityStore:
                 raise ProfileAuthorityContractError(
                     "profile authority storage does not follow symlink directories"
                 )
-            created = not directory.exists()
             try:
                 directory.mkdir(mode=0o700, exist_ok=True)
             except OSError as exc:
                 raise ProfileAuthorityContractError(
                     "profile authority storage directory is unavailable"
                 ) from exc
-            if created:
-                _fsync_directory(directory.parent)
+            # Retry parent-directory durability even when mkdir succeeded in a
+            # previous call whose fsync was interrupted or failed.
+            _fsync_directory(directory.parent)
             resolved = directory.resolve(strict=True)
             if not resolved.is_relative_to(self.vault_root):
                 raise ProfileAuthorityContractError(
@@ -226,11 +226,18 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def assert_profile_note_ingestible(vault_root: Path | str, note_path: str) -> None:
+def assert_profile_note_ingestible(
+    vault_root: Path | str,
+    note_path: str,
+    note_uuid: str | None = None,
+) -> None:
     """Fail closed while the Profile Note has an unresolved ProfileAgent write."""
 
     state = ProfileAuthorityStore(vault_root, profile_note_id=None).load_state()
-    if state is None or state.identity.note_path != note_path:
+    if state is None or (
+        state.identity.note_path != note_path
+        and (not note_uuid or state.identity.profile_note_id != note_uuid)
+    ):
         return
     if state.pending_writes or state.unresolved_indeterminate_write_ids:
         raise ProfileAuthorityConflict(
