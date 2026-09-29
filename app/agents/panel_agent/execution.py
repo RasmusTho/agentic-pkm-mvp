@@ -46,7 +46,8 @@ def refresh_panel_note_object(
     from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 
     resolved_root = vault_root.expanduser().resolve(strict=True)
-    # codeql[py/path-injection] Path.resolve follows symlinks; relative_to below rejects escapes before file I/O.
+    # Path.resolve follows symlinks; relative_to below rejects escapes before file I/O.
+    # codeql[py/path-injection]
     resolved_path = note_path.expanduser().resolve(strict=True)
     frontmatter, _ = load_frontmatter(raw_text)
     source_uuid = (
