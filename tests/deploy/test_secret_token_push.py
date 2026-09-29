@@ -95,19 +95,25 @@ def _host_admin(tmp_path: Path, remote, *, token_source=None) -> TokenPushAdmin:
     )
 
 
-def _remote_state(tmp_path: Path, *, stage: str = "prepared"):
+def _remote_state(
+    tmp_path: Path,
+    *,
+    stage: str = "prepared",
+    with_prior_generation: bool = True,
+):
     state_root = tmp_path / "state"
     store = TokenPushStore(state_root, "dev")
     operation_id = str(uuid4())
     attempt_id = str(uuid4())
     prior_operation_id = str(uuid4())
-    prior_generation = str(uuid4())
+    prior_generation = str(uuid4()) if with_prior_generation else None
     prior_pointer = None
     with store.locked():
-        prior_pointer = store.install_generation(
-            prior_operation_id, prior_generation, b"encrypted-old-reader-token"
-        )
-        store.activate(prior_pointer)
+        if prior_generation is not None:
+            prior_pointer = store.install_generation(
+                prior_operation_id, prior_generation, b"encrypted-old-reader-token"
+            )
+            store.activate(prior_pointer)
         store.write(TokenPushReceipt(
             operation_id,
             "dev",
@@ -366,6 +372,79 @@ def test_remote_worker_installs_encrypted_generation_and_value_free_receipt(tmp_
     assert not (app_root / "config" / "deploy" / "dev.env.lock").exists()
 
 
+def test_first_install_orders_durable_applying_and_terminal_before_unlock(
+    tmp_path, monkeypatch
+):
+    store, app_root, operation_id, attempt_id, _prior_generation, _prior_pointer = (
+        _remote_state(tmp_path, with_prior_generation=False)
+    )
+    assert store.current() is None
+    events = []
+    original_write = TokenPushStore.write
+    original_activate = TokenPushStore.activate
+    original_confirm = TokenPushStore.confirm_durable
+    original_release = VmChannelMutationLock.release
+
+    def record_durable_write(self, receipt):
+        original_write(self, receipt)
+        if receipt.stage == "applying":
+            events.append(("durable-applying", receipt))
+
+    def require_applying_before_activation(self, pointer):
+        assert events and events[-1][0] == "durable-applying"
+        assert self.read().stage == "applying"
+        assert self.current() is None
+        events.append(("activate", pointer))
+        original_activate(self, pointer)
+
+    def record_terminal_confirmation(self, receipt):
+        confirmed = original_confirm(self, receipt)
+        events.append(("confirmed", confirmed))
+        return confirmed
+
+    def require_confirmation_before_release(self, receipt):
+        assert receipt.stage == "committed"
+        assert events and events[-1] == ("confirmed", receipt)
+        pointer = store.current()
+        assert pointer is not None
+        assert pointer.generation_id == receipt.generation_id
+        assert pointer.operation_id == receipt.operation_id
+        events.append(("released", receipt))
+        original_release(self, receipt)
+
+    monkeypatch.setattr(TokenPushStore, "write", record_durable_write)
+    monkeypatch.setattr(
+        TokenPushStore, "activate", require_applying_before_activation
+    )
+    monkeypatch.setattr(
+        TokenPushStore, "confirm_durable", record_terminal_confirmation
+    )
+    monkeypatch.setattr(
+        VmChannelMutationLock, "release", require_confirmation_before_release
+    )
+
+    committed = vm_token_push_worker(
+        app_root=app_root,
+        state_root=store.state_root,
+        channel="dev",
+        operation_id=operation_id,
+        attempt_id=attempt_id,
+        source=_CANARY,
+        runner=_creds_runner([]),
+    )
+
+    assert committed.stage == "committed"
+    assert [event[0] for event in events] == [
+        "durable-applying",
+        "activate",
+        "confirmed",
+        "released",
+    ]
+    assert store.current() is not None
+    assert store.current().generation_id == committed.generation_id
+    assert not (app_root / "config" / "deploy" / "dev.env.lock").exists()
+
+
 def test_terminal_remote_receipt_reconciles_without_transient_unit(tmp_path):
     store, app_root, operation_id, attempt_id, _prior_generation, _prior_pointer = _remote_state(tmp_path)
     committed = vm_token_push_worker(
@@ -449,20 +528,55 @@ def test_token_push_start_uses_supervised_worker_and_sends_token_only_on_stdin(t
     assert credential_calls[0][1] == _CANARY.encode()
 
 
-def test_failed_terminal_commit_restores_prior_generation_before_aborted_receipt(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "with_prior_generation", [True, False], ids=["retained", "first-install"]
+)
+def test_failed_terminal_commit_restores_prior_state_before_durable_abort_and_unlock(
+    tmp_path, monkeypatch, with_prior_generation
 ):
     store, app_root, operation_id, attempt_id, _prior_generation, prior_pointer = _remote_state(
-        tmp_path
+        tmp_path, with_prior_generation=with_prior_generation
     )
     original_write = TokenPushStore.write
+    original_restore = TokenPushStore.restore
+    original_confirm = TokenPushStore.confirm_durable
+    original_release = VmChannelMutationLock.release
+    events = []
+
+    def restore_prior_state(self, pointer):
+        original_restore(self, pointer)
+        assert self.current() == pointer
+        events.append(("restored", pointer))
 
     def fail_committed(self, receipt):
         if receipt.stage == "committed":
             raise TokenPushError()
+        if receipt.stage == "aborted":
+            assert events and events[-1] == ("restored", prior_pointer)
+            assert self.current() == prior_pointer
+            events.append(("abort-write", receipt))
         original_write(self, receipt)
 
+    def record_terminal_confirmation(self, receipt):
+        confirmed = original_confirm(self, receipt)
+        events.append(("confirmed", confirmed))
+        return confirmed
+
+    def require_abort_confirmation_before_release(self, receipt):
+        assert receipt.stage == "aborted"
+        assert events and events[-1] == ("confirmed", receipt)
+        assert store.current() == prior_pointer
+        events.append(("released", receipt))
+        original_release(self, receipt)
+
     monkeypatch.setattr(TokenPushStore, "write", fail_committed)
+    monkeypatch.setattr(TokenPushStore, "restore", restore_prior_state)
+    monkeypatch.setattr(
+        TokenPushStore, "confirm_durable", record_terminal_confirmation
+    )
+    monkeypatch.setattr(
+        VmChannelMutationLock, "release", require_abort_confirmation_before_release
+    )
     receipt = vm_token_push_worker(
         app_root=app_root,
         state_root=store.state_root,
@@ -475,6 +589,12 @@ def test_failed_terminal_commit_restores_prior_generation_before_aborted_receipt
     assert receipt.stage == "aborted"
     assert receipt.terminal_result == "aborted"
     assert store.current() == prior_pointer
+    assert [event[0] for event in events] == [
+        "restored",
+        "abort-write",
+        "confirmed",
+        "released",
+    ]
     assert not (app_root / "config" / "deploy" / "dev.env.lock").exists()
 
 
@@ -750,6 +870,66 @@ def test_terminal_receipt_read_requires_directory_sync_and_can_retry(tmp_path, m
         channel="dev",
         operation_id=operation_id,
     ) == committed
+
+
+def test_terminal_replace_sync_failure_retains_lock_until_status_confirms(
+    tmp_path, monkeypatch
+):
+    store, app_root, operation_id, attempt_id, _prior_generation, _prior_pointer = (
+        _remote_state(tmp_path)
+    )
+    journal_info = store.journal_directory.stat()
+    real_fsync = os.fsync
+    failed_syncs = []
+
+    def fail_visible_terminal_sync(descriptor):
+        info = os.fstat(descriptor)
+        if stat.S_ISDIR(info.st_mode) and (info.st_dev, info.st_ino) == (
+            journal_info.st_dev,
+            journal_info.st_ino,
+        ):
+            visible = store.read()
+            if visible is not None and visible.terminal_result == "committed":
+                failed_syncs.append(visible)
+                raise OSError("injected terminal journal-directory sync failure")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(bws_token_push.os, "fsync", fail_visible_terminal_sync)
+    with pytest.raises(TokenPushError):
+        vm_token_push_worker(
+            app_root=app_root,
+            state_root=store.state_root,
+            channel="dev",
+            operation_id=operation_id,
+            attempt_id=attempt_id,
+            source=_CANARY,
+            runner=_creds_runner([]),
+        )
+
+    lock_path = app_root / "config" / "deploy" / "dev.env.lock"
+    visible_terminal = store.read()
+    assert visible_terminal is not None
+    assert visible_terminal.stage == "committed"
+    assert len(failed_syncs) >= 2
+    assert lock_path.is_dir()
+
+    with pytest.raises(TokenPushError):
+        vm_token_push_status(
+            app_root=app_root,
+            state_root=store.state_root,
+            channel="dev",
+            operation_id=operation_id,
+        )
+    assert lock_path.is_dir()
+
+    monkeypatch.setattr(bws_token_push.os, "fsync", real_fsync)
+    assert vm_token_push_status(
+        app_root=app_root,
+        state_root=store.state_root,
+        channel="dev",
+        operation_id=operation_id,
+    ) == visible_terminal
+    assert not lock_path.exists()
 
 
 def test_terminal_receipt_reclaims_its_stale_lock_after_durable_confirmation(
