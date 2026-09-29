@@ -1,4 +1,4 @@
-State: Active target-state capability specification with parent Issue #4107 and child Issues #4108–#4119. YSNV2-01 through YSNV2-06 are delivered or implemented; later slices remain outstanding. The separate Governed Vault Profile capability is accepted and delivered through parent #4944, while the YouTube overlay renderer #4117 remains unshipped; the complete v2 runtime is not claimed shipped.
+State: YSNV2-06 is delivered. This remains the active target-state capability specification with parent Issue #4107 and child Issues #4108–#4119. YSNV2-01 through YSNV2-06 are delivered or implemented; later slices remain outstanding. The separate Governed Vault Profile capability is accepted and delivered through parent #4944, while the YouTube overlay renderer #4117 remains unshipped; the complete v2 runtime is not claimed shipped.
 Doc role: Capability specification directory
 Authority: Defines the YouTube Source Note v2 target boundary, task graph, cross-task invariants, and acceptance path. Current behavior remains owned by `docs/KNOWLEDGE_ACQUISITION/*` and implementation evidence.
 

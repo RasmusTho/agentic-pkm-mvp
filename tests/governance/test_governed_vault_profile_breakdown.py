@@ -63,9 +63,8 @@ def test_profile_task_frontmatter_records_filed_issue_joins() -> None:
         assert metadata["source_anchor"]
 
 
-def test_profile_breakdown_makes_no_shipped_runtime_claim() -> None:
+def test_profile_breakdown_records_delivery_without_claiming_youtube_renderer() -> None:
     readme = _document("README.md")
 
-    assert "defines no shipped ProfileAgent" in readme
-    assert "makes no runtime delivery claim" in readme
-    assert "target-state contract" in readme
+    assert "GOVPROF-01 through GOVPROF-03 were delivered by PRs #5731, #5733, and #5735" in readme
+    assert "separate YouTube overlay renderer remains in Issue #4117 and is not claimed as shipped here" in readme
