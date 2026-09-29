@@ -36,12 +36,10 @@ from app.knowledge.profile_authority import (
     WriteAttemptRecord,
     WriteFailedRecord,
 )
+from app.knowledge.profile_authority_store import ProfileAuthorityStore
 from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import load_frontmatter
-
-from .store import ProfileAuthorityStore
-
 
 PROFILE_APPLY_ACTION_ID = "profile.apply_proposal"
 _PROFILE_PROPOSAL_ACTION_PREFIX = "Review ProfileAgent proposal "
@@ -51,6 +49,9 @@ _PROFILE_PROPOSAL_MARKER_RE = re.compile(
     r"<!--mimer:profile-proposal-(start|end) id=([A-Za-z0-9][A-Za-z0-9._:-]*)-->"
 )
 _MAX_TEXT = 24_000
+_LINE_SEPARATOR_TRANSLATION = str.maketrans(
+    {char: "\n" for char in "\v\f\x1c\x1d\x1e\u0085\u2028\u2029"}
+)
 
 
 def vault_profile_id(vault_root: Path | str) -> str:
@@ -67,9 +68,7 @@ def _normalize_candidate_text(value: Any) -> Any:
     return (
         value.replace("\r\n", "\n")
         .replace("\r", "\n")
-        .replace("\u0085", "\n")
-        .replace("\u2028", "\n")
-        .replace("\u2029", "\n")
+        .translate(_LINE_SEPARATOR_TRANSLATION)
         .strip("\n")
     )
 
@@ -332,7 +331,6 @@ class ProfileAgent:
 def execute_profile_panel_actions(
     actions: Sequence[Any],
     *,
-    note_uuid: str,
     note_path: str | None,
     vault_root: Path | None,
 ) -> list[PanelRuntimeActionResult]:
@@ -370,7 +368,6 @@ def execute_profile_panel_actions(
         try:
             result = _execute_checked_profile_action(
                 action,
-                note_uuid=note_uuid,
                 note_path=note_path,
                 vault_root=vault_root,
             )
@@ -394,17 +391,16 @@ def execute_profile_panel_actions(
 def _execute_checked_profile_action(
     action: Any,
     *,
-    note_uuid: str,
     note_path: str | None,
     vault_root: Path,
 ) -> ProfileWriteResult:
-    store = ProfileAuthorityStore(vault_root, note_uuid)
+    # The Panel event UUID may be an ObjectStore UUID; authority follows the
+    # vault-local source path and frontmatter UUID in the durable identity.
+    store = ProfileAuthorityStore(vault_root, profile_note_id=None)
     state = store.load_state()
     if state is None:
         return ProfileWriteResult(status="blocked", reason="profile_not_initialized")
     identity = state.identity
-    if identity.profile_note_id != note_uuid:
-        return ProfileWriteResult(status="blocked", reason="profile_note_identity_mismatch")
     note_file = _resolve_note_path(Path(vault_root).resolve(strict=True), identity.note_path)
     if not _source_path_matches(note_path, note_file, identity.note_path):
         return ProfileWriteResult(status="blocked", reason="panel_source_path_mismatch")

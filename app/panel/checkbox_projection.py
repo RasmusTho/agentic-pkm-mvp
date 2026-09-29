@@ -22,7 +22,8 @@ from app.agents.panel.writeback import parse_action_line, stable_action_id
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.text.helpers import content_hash as _content_hash
-from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.objects import resolve_canonical_object_id
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
@@ -338,7 +339,7 @@ class CheckboxProjectionService:
             )
             raise CheckboxProjectionHTTPError(404, response)
 
-        current = note_path.read_text(encoding="utf-8")
+        current, expected_version = read_note_text_with_version(note_path)
         content_hash_before = _content_hash(current)
         if content_hash_before != request.expected_content_hash:
             response = self._response(
@@ -451,8 +452,44 @@ class CheckboxProjectionService:
             )
             raise CheckboxProjectionHTTPError(409, response)
 
-        write_note_from_absolute(note_path, projected, vault_root=vault_root)
-        written = note_path.read_text(encoding="utf-8")
+        try:
+            write_note_from_absolute(
+                note_path,
+                projected,
+                vault_root=vault_root,
+                expected_version=expected_version,
+            )
+        except KnowledgeWriteConflict as exc:
+            try:
+                latest, _ = read_note_text_with_version(note_path)
+                latest_hash = _content_hash(latest)
+            except OSError:
+                latest_hash = content_hash_before
+            response = self._response(
+                request,
+                status="stale",
+                note_path=safe_note_path,
+                before=content_hash_before,
+                after=latest_hash,
+                block_reason="note_changed_during_projection",
+            )
+            raise CheckboxProjectionHTTPError(409, response) from exc
+        written_version = hashlib.sha256(projected.encode("utf-8")).hexdigest()
+        try:
+            written, observed_version = read_note_text_with_version(note_path)
+        except OSError:
+            written = projected
+            observed_version = written_version
+        if observed_version != written_version or written != projected:
+            response = self._response(
+                request,
+                status="stale",
+                note_path=safe_note_path,
+                before=content_hash_before,
+                after=_content_hash(written),
+                block_reason="note_changed_after_projection",
+            )
+            raise CheckboxProjectionHTTPError(409, response)
         content_hash_after = _content_hash(written)
 
         response = self._execute_or_projected(
@@ -463,6 +500,7 @@ class CheckboxProjectionService:
             raw_text=written,
             content_hash_before=content_hash_before,
             content_hash_after=content_hash_after,
+            projected_version=written_version,
             vault_root=vault_root,
         )
         self._idempotency.set(request.idempotency_key, response)
@@ -478,6 +516,7 @@ class CheckboxProjectionService:
         raw_text: str,
         content_hash_before: str,
         content_hash_after: str,
+        projected_version: str,
         vault_root: Path,
     ) -> CheckboxProjectionResponse:
         try:
@@ -496,8 +535,45 @@ class CheckboxProjectionService:
                 trigger="companion",
             )
         except Exception as exc:
-            write_note_from_absolute(note_path, rollback_text, vault_root=vault_root)
-            rolled_back = note_path.read_text(encoding="utf-8")
+            try:
+                write_note_from_absolute(
+                    note_path,
+                    rollback_text,
+                    vault_root=vault_root,
+                    expected_version=projected_version,
+                )
+                rolled_back, _ = read_note_text_with_version(note_path)
+            except KnowledgeWriteConflict:
+                try:
+                    current_note, _ = read_note_text_with_version(note_path)
+                    current_hash = _content_hash(current_note)
+                except OSError:
+                    current_hash = content_hash_after
+                return self._response(
+                    request,
+                    status="stale",
+                    note_path=safe_note_path,
+                    before=content_hash_before,
+                    after=current_hash,
+                    block_reason="note_changed_before_projection_rollback",
+                )
+            except Exception as rollback_exc:
+                try:
+                    current_note, _ = read_note_text_with_version(note_path)
+                    current_hash = _content_hash(current_note)
+                except OSError:
+                    current_hash = content_hash_after
+                return self._response(
+                    request,
+                    status="failed",
+                    note_path=safe_note_path,
+                    before=content_hash_before,
+                    after=current_hash,
+                    block_reason=(
+                        f"runtime_execution_failed:{type(exc).__name__};"
+                        f"rollback_failed:{type(rollback_exc).__name__}"
+                    ),
+                )
             return self._response(
                 request,
                 status="failed",

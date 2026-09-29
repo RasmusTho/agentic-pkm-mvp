@@ -209,7 +209,6 @@ def execute_panel_intent(
 
         profile_action_results = execute_profile_panel_actions(
             source_actions,
-            note_uuid=source_intent_event.payload.note.uuid,
             note_path=source_intent_event.payload.note.path,
             vault_root=vault_root,
         )

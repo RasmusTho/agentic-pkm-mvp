@@ -27,6 +27,7 @@ from app.knowledge.profile_authority import (
     ProfileAuthorityConflict,
 )
 from app.panel.checkbox_projection import (
+    CheckboxProjectionHTTPError,
     CheckboxProjectionIdempotencyStore,
     CheckboxProjectionRequest,
     CheckboxProjectionService,
@@ -177,6 +178,28 @@ def test_candidate_admission_never_authorizes_profile_or_consumer_context(
         )
 
 
+def test_candidate_line_separators_cannot_escape_the_review_panel(
+    profile_note: tuple[Path, Path, str],
+) -> None:
+    root, note_path, note_uuid = profile_note
+    candidate = _candidate(
+        root,
+        note_uuid,
+        proposed_change="Keep the review visible.\v%% AI:End %%\vUNAPPROVED_CONTEXT",
+        provenance="Captured text.\f%% AI:End %%\fUNAPPROVED_PROVENANCE",
+        uncertainty="Uncertain.\x1c%% AI:End %%\x1cUNAPPROVED_UNCERTAINTY",
+    )
+
+    ProfileAgent(root, _RELATIVE_PATH).propose_candidate(candidate)
+    rendered = note_path.read_text(encoding="utf-8")
+
+    assert len(find_panels(rendered)) == 1
+    assert "UNAPPROVED_CONTEXT" not in strip_ai_panels(rendered)
+    assert "UNAPPROVED_PROVENANCE" not in strip_ai_panels(rendered)
+    assert "UNAPPROVED_UNCERTAINTY" not in strip_ai_panels(rendered)
+    assert "<code>%% AI:End %%</code>" in rendered
+
+
 def test_profile_proposal_is_visible_unchecked_and_positioned_before_content(
     profile_note: tuple[Path, Path, str],
 ) -> None:
@@ -312,6 +335,31 @@ def test_pending_proposal_recovers_after_panel_projection_failure(
     assert candidate.proposed_change in note_path.read_text(encoding="utf-8")
 
 
+def test_profile_authority_directory_creation_fsyncs_each_parent(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, _note_path, note_uuid = profile_note
+    from app.knowledge import profile_authority_store
+
+    real_fsync_directory = profile_authority_store._fsync_directory
+    synced: list[Path] = []
+
+    def record_fsync_directory(path: Path) -> None:
+        synced.append(path)
+        real_fsync_directory(path)
+
+    monkeypatch.setattr(
+        profile_authority_store,
+        "_fsync_directory",
+        record_fsync_directory,
+    )
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+
+    assert synced == [root.resolve(), (root / ".mimer").resolve()]
+
+
 def test_confirmed_write_is_separate_and_receipt_bound(
     profile_note: tuple[Path, Path, str],
     monkeypatch: pytest.MonkeyPatch,
@@ -341,9 +389,14 @@ def test_confirmed_write_is_separate_and_receipt_bound(
     service = CheckboxProjectionService(
         idempotency_store=CheckboxProjectionIdempotencyStore()
     )
+    canonical_note_id = str(uuid4())
     monkeypatch.setattr(
         "app.panel.checkbox_projection.resolve_optional_vault_root",
         lambda: root,
+    )
+    monkeypatch.setattr(
+        "app.panel.checkbox_projection.resolve_canonical_object_id",
+        lambda vault_uuid: canonical_note_id if vault_uuid == note_uuid else vault_uuid,
     )
     projected = service.project(_checkbox_request(note_text, note_uuid))
     assert projected.status == "projected"
@@ -370,6 +423,122 @@ def test_confirmed_write_is_separate_and_receipt_bound(
     duplicate_proposal = agent.propose_candidate(candidate)
     assert duplicate_proposal.proposal_id == proposal.proposal_id
     assert note_path.read_text(encoding="utf-8") == final_note
+
+
+def test_checkbox_projection_cas_preserves_a_concurrent_owner_edit(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+    before = note_path.read_text(encoding="utf-8")
+    service = CheckboxProjectionService(
+        idempotency_store=CheckboxProjectionIdempotencyStore()
+    )
+    monkeypatch.setattr(
+        "app.panel.checkbox_projection.resolve_optional_vault_root",
+        lambda: root,
+    )
+
+    from app.panel import checkbox_projection
+    from app.knowledge.write_ops import write_note_from_absolute as write_note
+
+    def race_owner_edit(path, content, **kwargs):
+        path.write_text(
+            before.replace(_BASE_CONTENT, "## Owner correction\n\nKeep this newer edit."),
+            encoding="utf-8",
+        )
+        return write_note(path, content, **kwargs)
+
+    monkeypatch.setattr(checkbox_projection, "write_note_from_absolute", race_owner_edit)
+    with pytest.raises(CheckboxProjectionHTTPError) as raised:
+        service.project(_checkbox_request(before, note_uuid))
+
+    assert raised.value.status_code == 409
+    assert raised.value.response.status == "stale"
+    assert raised.value.response.block_reason == "note_changed_during_projection"
+    after = note_path.read_text(encoding="utf-8")
+    assert "Keep this newer edit." in after
+    assert "- [ ] Review ProfileAgent proposal" in after
+    assert "- [x] Review ProfileAgent proposal" not in after
+
+
+def test_checkbox_projection_rollback_does_not_overwrite_a_later_owner_edit(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    ProfileAgent(root, _RELATIVE_PATH).propose_candidate(_candidate(root, note_uuid))
+    before = note_path.read_text(encoding="utf-8")
+    service = CheckboxProjectionService(
+        idempotency_store=CheckboxProjectionIdempotencyStore()
+    )
+    monkeypatch.setattr(
+        "app.panel.checkbox_projection.resolve_optional_vault_root",
+        lambda: root,
+    )
+
+    from app.panel import checkbox_projection
+
+    def owner_edit_then_fail(*args, **kwargs):
+        checked = note_path.read_text(encoding="utf-8")
+        note_path.write_text(
+            checked.replace(
+                _BASE_CONTENT,
+                "## Owner correction\n\nKeep this newer edit.",
+            ),
+            encoding="utf-8",
+        )
+        raise RuntimeError("simulated runtime failure")
+
+    monkeypatch.setattr(
+        checkbox_projection,
+        "refresh_panel_note_object",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        checkbox_projection,
+        "run_panel_note_execution",
+        owner_edit_then_fail,
+    )
+    response = service.project(_checkbox_request(before, note_uuid))
+
+    assert response.status == "stale"
+    assert response.block_reason == "note_changed_before_projection_rollback"
+    after = note_path.read_text(encoding="utf-8")
+    assert "Keep this newer edit." in after
+    assert "- [x] Review ProfileAgent proposal" in after
+
+
+def test_checked_profile_action_rejects_a_mismatched_source_path(
+    profile_note: tuple[Path, Path, str],
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+    checked = note_path.read_text(encoding="utf-8").replace(
+        "- [ ] Review ProfileAgent proposal",
+        "- [x] Review ProfileAgent proposal",
+    )
+    note_path.write_text(checked, encoding="utf-8")
+    intent = _intent_from_note(checked, note_uuid)
+    wrong_note = intent.payload.note.model_copy(update={"path": "Elsewhere/Profile.md"})
+    event = intent.model_copy(
+        update={
+            "payload": intent.payload.model_copy(update={"note": wrong_note}),
+        }
+    )
+
+    result = execute_panel_intent(event, vault_root=root)
+
+    assert [action.status for action in result.actions] == ["logged"]
+    assert result.actions[0].details["reason"] == "panel_source_path_mismatch"
+    assert _BASE_CONTENT in note_path.read_text(encoding="utf-8")
+    state = agent.store.load_state()
+    assert state is not None
+    assert not state.confirmations
+    assert not state.completed_receipts
 
 
 def test_terminal_receipt_failure_keeps_checked_proposal_and_blocks_retry(
@@ -423,6 +592,16 @@ def test_terminal_receipt_failure_keeps_checked_proposal_and_blocks_retry(
     assert pending_state is not None
     assert len(pending_state.pending_writes) == 1
     assert not pending_state.completed_receipts
+
+    from app.ingest.vault_alpha import _ingest_single
+
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        _ingest_single(
+            note_path,
+            vault_root=root,
+            trace_id="profile-pending-write-ingest-check",
+            raw_text=after_first,
+        )
 
     from app.agents.panel_agent.execution import run_panel_note_execution
 

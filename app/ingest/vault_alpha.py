@@ -35,6 +35,7 @@ from app.services.companion_note import (
 )
 from app.services.note_uuid import VAULT_NOTE_UUID_NAMESPACE, ensure_note_uuid
 from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
+from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.rebuildability import (
     canonical_product_source_text,
     parse_bounded_frontmatter,
@@ -600,6 +601,7 @@ def _ingest_single(
     identity = resolve_vault_note_identity(
         path, vault_root=vault_root, frontmatter=frontmatter, body=body
     )
+    assert_profile_note_ingestible(vault_root, rel_path.as_posix())
     companion = identity.companion
 
     title = _frontmatter_title(frontmatter) or _derive_title(body, path)
