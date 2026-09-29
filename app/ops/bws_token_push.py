@@ -540,6 +540,29 @@ class TokenPushStore:
             except FileNotFoundError:
                 pass
 
+    def confirm_durable(self, receipt: TokenPushReceipt) -> TokenPushReceipt:
+        """Re-establish journal-directory durability before trusting a terminal receipt."""
+        receipt.validate()
+        if receipt.channel != self.channel or receipt.terminal_result is None:
+            raise TokenPushError()
+        try:
+            directory_fd = os.open(
+                self.journal_directory,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            durable = self.read()
+            if durable != receipt:
+                raise TokenPushError()
+            return durable
+        except TokenPushError:
+            raise
+        except Exception:
+            raise TokenPushError() from None
+
     def current(self) -> _Pointer | None:
         path = self.credential_directory / "current"
         try:
@@ -693,12 +716,73 @@ def _wait_for_unit(channel: str, receipt: TokenPushReceipt, runner: CommandRunne
 
 
 class VmChannelMutationLock:
-    """Reuse the deployment channel mkdir/flock admission on the VM."""
+    """Reuse the deploy mkdir/flock admission and retain it through a durable receipt."""
 
-    def __init__(self, app_root: Path, channel: str) -> None:
+    def __init__(
+        self, app_root: Path, channel: str, operation_id: str, attempt_id: str
+    ) -> None:
+        if channel not in {"dev", "test", "prod"}:
+            raise TokenPushError()
+        for value in (operation_id, attempt_id):
+            if str(UUID(value)) != value:
+                raise TokenPushError()
         self.path = app_root / "config" / "deploy" / f"{channel}.env.lock"
+        self.channel = channel
+        self.operation_id = operation_id
+        self.attempt_id = attempt_id
         self.descriptor: int | None = None
         self.acquired = False
+
+    @property
+    def _owner_path(self) -> Path:
+        return self.path / "bws-owner"
+
+    @property
+    def _owner_bytes(self) -> bytes:
+        return (
+            json.dumps(
+                {
+                    "kind": "token-push",
+                    "operation_id": self.operation_id,
+                    "attempt_id": self.attempt_id,
+                },
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+
+    @staticmethod
+    def _sync_directory(path: Path) -> None:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _valid_file(descriptor: int) -> os.stat_result:
+        info = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o600
+            or info.st_nlink != 1
+            or info.st_size > 4096
+        ):
+            raise TokenPushError()
+        return info
+
+    def _matches_owner(self, descriptor: int) -> bool:
+        self._valid_file(descriptor)
+        try:
+            payload = json.loads(os.pread(descriptor, 4097, 0))
+            return payload == {
+                "kind": "token-push",
+                "operation_id": self.operation_id,
+                "attempt_id": self.attempt_id,
+            }
+        except Exception:
+            return False
 
     def __enter__(self) -> VmChannelMutationLock:
         try:
@@ -708,37 +792,150 @@ class VmChannelMutationLock:
         except Exception:
             raise TokenPushError() from None
         try:
+            self._sync_directory(self.path.parent)
             self.descriptor = os.open(
-                self.path / "bws-owner",
-                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                self._owner_path,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK,
                 0o600,
             )
+            if os.write(self.descriptor, self._owner_bytes) != len(self._owner_bytes):
+                raise TokenPushError()
+            os.fsync(self.descriptor)
             fcntl.flock(self.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._sync_directory(self.path)
             self.acquired = True
             return self
         except Exception:
             if self.descriptor is not None:
                 os.close(self.descriptor)
                 self.descriptor = None
-            try:
-                (self.path / "bws-owner").unlink()
-                self.path.rmdir()
-            except Exception:
-                pass
+            # Keep any partially-created directory as a fail-closed recovery marker.
             raise TokenPushError() from None
+
+    @classmethod
+    def acquire_for_recovery(
+        cls,
+        app_root: Path,
+        receipt: TokenPushReceipt,
+    ) -> VmChannelMutationLock:
+        """Acquire an absent lock or adopt only this receipt's proven stale lock."""
+        lock = cls(
+            app_root, receipt.channel, receipt.operation_id, receipt.attempt_id
+        )
+        try:
+            lock.path.lstat()
+        except FileNotFoundError:
+            lock.__enter__()
+            if not lock.acquired:
+                lock.__exit__()
+                raise TokenPushError()
+            return lock
+        except Exception:
+            raise TokenPushError() from None
+
+        try:
+            directory_info = lock.path.lstat()
+            if (
+                not stat.S_ISDIR(directory_info.st_mode)
+                or directory_info.st_uid != os.geteuid()
+                or stat.S_IMODE(directory_info.st_mode) != 0o700
+            ):
+                raise TokenPushError()
+            lock.descriptor = os.open(
+                lock._owner_path,
+                os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+            )
+            owner_info = lock._valid_file(lock.descriptor)
+            if not lock._matches_owner(lock.descriptor):
+                raise TokenPushError()
+            fcntl.flock(lock.descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            current_info = lock._owner_path.lstat()
+            if (current_info.st_dev, current_info.st_ino) != (
+                owner_info.st_dev,
+                owner_info.st_ino,
+            ):
+                raise TokenPushError()
+            os.fsync(lock.descriptor)
+            lock._sync_directory(lock.path)
+            lock._sync_directory(lock.path.parent)
+            lock.acquired = True
+            return lock
+        except Exception:
+            lock.__exit__()
+            raise TokenPushError() from None
+
+    @classmethod
+    def release_matching_terminal(
+        cls, app_root: Path, receipt: TokenPushReceipt
+    ) -> None:
+        """Reclaim only a free lock with the exact terminal receipt's owner marker."""
+        try:
+            lock = cls(
+                app_root, receipt.channel, receipt.operation_id, receipt.attempt_id
+            )
+            lock.path.lstat()
+            if not stat.S_ISDIR(lock.path.lstat().st_mode):
+                return
+            descriptor = os.open(
+                lock._owner_path,
+                os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK,
+            )
+            try:
+                if not lock._matches_owner(descriptor):
+                    return
+            finally:
+                os.close(descriptor)
+            lock = cls.acquire_for_recovery(app_root, receipt)
+            try:
+                lock.release(receipt)
+            finally:
+                lock.__exit__()
+        except Exception:
+            # A terminal receipt remains usable; unknown or busy lock state is untouched.
+            return
+
+    def release(self, receipt: TokenPushReceipt) -> None:
+        """Retire the canonical lock name only after its matching terminal receipt."""
+        receipt.validate()
+        if (
+            not self.acquired
+            or self.descriptor is None
+            or receipt.channel != self.channel
+            or receipt.operation_id != self.operation_id
+            or receipt.attempt_id != self.attempt_id
+            or receipt.terminal_result is None
+            or not self._matches_owner(self.descriptor)
+        ):
+            raise TokenPushError()
+        try:
+            owner_info = os.fstat(self.descriptor)
+            path_info = self._owner_path.lstat()
+            if (owner_info.st_dev, owner_info.st_ino) != (path_info.st_dev, path_info.st_ino):
+                raise TokenPushError()
+            retired = self.path.parent / (
+                f".{self.path.name}.released-{self.operation_id}-{self.attempt_id}"
+            )
+            os.rename(self.path, retired)
+            self.acquired = False
+            self._sync_directory(self.path.parent)
+        except TokenPushError:
+            raise
+        except Exception:
+            raise TokenPushError() from None
+        try:
+            (retired / "bws-owner").unlink()
+            retired.rmdir()
+            self._sync_directory(self.path.parent)
+        except Exception:
+            # The renamed tombstone is outside the shared admission path.
+            pass
 
     def __exit__(self, *_: object) -> None:
         if self.descriptor is not None:
             os.close(self.descriptor)
             self.descriptor = None
-        if self.acquired:
-            try:
-                (self.path / "bws-owner").unlink()
-                self.path.rmdir()
-            except Exception:
-                # Retaining a stale lock is safer than admitting another writer.
-                pass
-            self.acquired = False
+        # The lock directory deliberately survives unless release() was authorized.
+        self.acquired = False
 
 
 def _systemd_encrypt(token: str, runner: CommandRunner) -> bytes:
@@ -751,11 +948,11 @@ def _systemd_encrypt(token: str, runner: CommandRunner) -> bytes:
     if encrypted.returncode != 0 or not encrypted.stdout:
         raise TokenPushError()
     decrypted = _command(
-        ["systemd-creds", "decrypt", f"--name={_CREDENTIAL_NAME}", "-", "-"],
+        ["systemd-creds", "decrypt", f"--name={_CREDENTIAL_NAME}", "-", "/dev/null"],
         input_bytes=encrypted.stdout,
         runner=runner,
     )
-    if decrypted.returncode != 0 or decrypted.stdout != token_bytes:
+    if decrypted.returncode != 0 or decrypted.stdout:
         raise TokenPushError()
     return encrypted.stdout
 
@@ -796,6 +993,13 @@ def _terminal_pointer_matches(store: TokenPushStore, receipt: TokenPushReceipt) 
     return False
 
 
+def _confirm_terminal(store: TokenPushStore, receipt: TokenPushReceipt) -> TokenPushReceipt:
+    confirmed = store.confirm_durable(receipt)
+    if not _terminal_pointer_matches(store, confirmed):
+        raise TokenPushError()
+    return confirmed
+
+
 def vm_token_push_worker(
     *,
     app_root: Path,
@@ -823,14 +1027,15 @@ def vm_token_push_worker(
             prior_pointer = store.current()
             if (prior_pointer.generation_id if prior_pointer else None) != receipt.prior_generation:
                 raise TokenPushError()
-            channel_lock = VmChannelMutationLock(app_root, channel)
+            channel_lock = VmChannelMutationLock(
+                app_root, channel, operation_id, attempt_id
+            )
             with channel_lock:
                 if not channel_lock.acquired:
-                    _write_stage(store, receipt, "aborted", terminal_result="aborted")
-                    aborted = store.read()
-                    if aborted is None or not _terminal_pointer_matches(store, aborted):
-                        raise TokenPushError()
-                    return aborted
+                    # A deploy or another mutation owns the shared channel lock.
+                    # Keep this attempt prepared until status can close it while
+                    # holding that lock.
+                    raise TokenPushError()
 
                 applying: TokenPushReceipt | None = None
                 generation_id: str | None = None
@@ -860,8 +1065,8 @@ def vm_token_push_worker(
                         generation_id=generation_id,
                         terminal_result="committed",
                     )
-                    if not _terminal_pointer_matches(store, committed):
-                        raise TokenPushError()
+                    committed = _confirm_terminal(store, committed)
+                    channel_lock.release(committed)
                     return committed
                 except Exception:
                     # Only close an attempt after proving the prior pointer is
@@ -875,6 +1080,10 @@ def vm_token_push_worker(
                             or latest.attempt_id != attempt_id
                         ):
                             raise TokenPushError()
+                        if latest.terminal_result is not None:
+                            latest = _confirm_terminal(store, latest)
+                            channel_lock.release(latest)
+                            return latest
                         if latest.stage == "prepared":
                             current = store.current()
                             if (current.generation_id if current else None) != latest.prior_generation:
@@ -882,8 +1091,8 @@ def vm_token_push_worker(
                             aborted = _write_stage(
                                 store, latest, "aborted", terminal_result="aborted"
                             )
-                            if not _terminal_pointer_matches(store, aborted):
-                                raise TokenPushError()
+                            aborted = _confirm_terminal(store, aborted)
+                            channel_lock.release(aborted)
                             return aborted
                         if latest.stage != "applying":
                             raise TokenPushError()
@@ -911,8 +1120,8 @@ def vm_token_push_worker(
                             "aborted",
                             terminal_result="aborted",
                         )
-                        if not _terminal_pointer_matches(store, aborted):
-                            raise TokenPushError()
+                        aborted = _confirm_terminal(store, aborted)
+                        channel_lock.release(aborted)
                         return aborted
                     except Exception:
                         raise TokenPushError() from None
@@ -928,14 +1137,19 @@ def _encode_receipt(receipt: TokenPushReceipt) -> str:
 
 
 def vm_token_push_inspect(
-    *, state_root: Path = Path("/var/lib/yggdrasil"), channel: str
+    *,
+    app_root: Path,
+    state_root: Path = Path("/var/lib/yggdrasil"),
+    channel: str,
 ) -> dict[str, str | None]:
     store = TokenPushStore(state_root, channel)
     with store.locked():
         receipt = store.read()
         if receipt is not None:
-            if receipt.terminal_result is None or not _terminal_pointer_matches(store, receipt):
+            if receipt.terminal_result is None:
                 raise TokenPushError()
+            receipt = _confirm_terminal(store, receipt)
+            VmChannelMutationLock.release_matching_terminal(app_root, receipt)
         pointer = store.current()
         return {"generation_id": pointer.generation_id if pointer else None}
 
@@ -993,8 +1207,8 @@ def vm_token_push_start(
             if previous is not None:
                 if previous.terminal_result is None:
                     raise TokenPushError()
-                if not _terminal_pointer_matches(store, previous):
-                    raise TokenPushError()
+                previous = _confirm_terminal(store, previous)
+                VmChannelMutationLock.release_matching_terminal(app_root, previous)
                 if previous.operation_id == operation_id and previous.stage == "committed":
                     return previous
                 if previous.operation_id == operation_id and previous.stage != "aborted":
@@ -1027,7 +1241,9 @@ def vm_token_push_start(
                 or receipt.attempt_id != attempt_id
             ):
                 raise TokenPushError()
-            if receipt.terminal_result is not None and _terminal_pointer_matches(store, receipt):
+            if receipt.terminal_result is not None:
+                receipt = _confirm_terminal(store, receipt)
+                VmChannelMutationLock.release_matching_terminal(app_root, receipt)
                 return receipt
             raise TokenPushError()
     except TokenPushError:
@@ -1038,6 +1254,7 @@ def vm_token_push_start(
 
 def vm_token_push_status(
     *,
+    app_root: Path,
     state_root: Path = Path("/var/lib/yggdrasil"),
     channel: str,
     operation_id: str,
@@ -1052,26 +1269,37 @@ def vm_token_push_status(
                 # Absence or another operation's receipt is explicitly indeterminate.
                 raise TokenPushError()
             if observed.terminal_result is not None:
-                if not _terminal_pointer_matches(store, observed):
-                    raise TokenPushError()
+                observed = _confirm_terminal(store, observed)
+                VmChannelMutationLock.release_matching_terminal(app_root, observed)
                 return observed
         _wait_for_unit(channel, observed, runner)
         with store.locked():
             receipt = store.read()
-            if receipt is None or receipt.operation_id != operation_id:
+            if (
+                receipt is None
+                or receipt.operation_id != operation_id
+                or receipt.attempt_id != observed.attempt_id
+            ):
                 raise TokenPushError()
+            if receipt.terminal_result is not None:
+                receipt = _confirm_terminal(store, receipt)
+                VmChannelMutationLock.release_matching_terminal(app_root, receipt)
+                return receipt
             if receipt.stage == "prepared":
-                # The same-ID worker verifies attempt_id and stage while holding
-                # this lock, so a late unit cannot act after this durable abort.
-                current = store.current()
-                if (current.generation_id if current else None) != receipt.prior_generation:
-                    raise TokenPushError()
-                receipt = _write_stage(
-                    store, receipt, "aborted", terminal_result="aborted"
+                channel_lock = VmChannelMutationLock.acquire_for_recovery(
+                    app_root, receipt
                 )
-            if receipt.terminal_result is None or not _terminal_pointer_matches(store, receipt):
-                raise TokenPushError()
-            return receipt
+                with channel_lock:
+                    current = store.current()
+                    if (current.generation_id if current else None) != receipt.prior_generation:
+                        raise TokenPushError()
+                    aborted = _write_stage(
+                        store, receipt, "aborted", terminal_result="aborted"
+                    )
+                    aborted = _confirm_terminal(store, aborted)
+                    channel_lock.release(aborted)
+                    return aborted
+            raise TokenPushError()
     except TokenPushError:
         raise
     except Exception:
@@ -1115,11 +1343,14 @@ def remote_main(
         args = parser.parse_args(argv)
         source = input_stream if input_stream is not None else sys.stdin
         if args.action == "token-push-inspect" and args.operation_id is None:
-            result = vm_token_push_inspect(channel=args.channel)
+            result = vm_token_push_inspect(app_root=app_root, channel=args.channel)
             print(json.dumps(result, sort_keys=True))
         elif args.action == "token-push-status" and args.operation_id and not args.attempt_id:
             receipt = vm_token_push_status(
-                channel=args.channel, operation_id=args.operation_id, runner=runner
+                app_root=app_root,
+                channel=args.channel,
+                operation_id=args.operation_id,
+                runner=runner,
             )
             print(_encode_receipt(receipt))
         elif args.action == "token-push" and args.operation_id and args.attempt_id and args.prior_generation:
