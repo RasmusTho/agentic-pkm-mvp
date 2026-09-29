@@ -724,11 +724,29 @@ class SshDeployRemote:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('serve', 'rpc', 'guard', 'cleanup'))
+    parser.add_argument('action', choices=(
+        'serve', 'rpc', 'guard', 'cleanup', 'token-push', 'token-push-worker',
+        'token-push-status', 'token-push-inspect',
+    ))
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
+    parser.add_argument('operation_id', nargs='?')
+    parser.add_argument('attempt_id', nargs='?')
+    parser.add_argument('prior_generation', nargs='?')
     parser.add_argument('--compose-command')
     args = parser.parse_args(argv)
     try:
+        if args.action.startswith('token-push'):
+            from app.ops.bws_token_push import remote_main
+
+            selected = [args.action, args.channel]
+            selected.extend(
+                value for value in (args.operation_id, args.attempt_id, args.prior_generation)
+                if value is not None
+            )
+            return remote_main(
+                selected,
+                app_root=LinuxConfig.load(args.channel).root,
+            )
         if args.action == 'serve':
             serve(LinuxConfig.load(args.channel))
         elif args.action == 'guard':

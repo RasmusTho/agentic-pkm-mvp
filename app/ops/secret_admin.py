@@ -19,6 +19,7 @@ from uuid import UUID, uuid4
 from app.ops.bws_secret_admin import (
     PrecommitRejection, SecretAdminError, SecretAdminProvider, SecretCopy, configured_admin,
 )
+from app.ops.bws_token_push import TokenPushAdmin, load_token_push_targets
 from app.ops.host_secret_bootstrap import validate_secret_value
 from app.ops.host_secret_contract import (
     BWS_IDENTITIES, CHANNEL_PROJECTS, DATABASE_CONSUMERS, HostSecretContract,
@@ -279,13 +280,16 @@ class _ValueFreeParser(argparse.ArgumentParser):
 
 
 def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
-         stdin: TextIO | None = None) -> int:
+         stdin: TextIO | None = None,
+         token_push_admin: TokenPushAdmin | None = None) -> int:
     try:
         parser = _ValueFreeParser(prog='secrets')
         sub = parser.add_subparsers(dest='command', required=True)
         check = sub.add_parser('check')
         check.add_argument('channel', choices=tuple(CHANNEL_PROJECTS))
         check.add_argument('--consumer', action='append', required=True)
+        token_push = sub.add_parser('push-token')
+        token_push.add_argument('vm')
         for command in ('import', 'generate', 'rotate'):
             cmd = sub.add_parser(command)
             cmd.add_argument('channel', choices=tuple(CHANNEL_PROJECTS))
@@ -293,6 +297,17 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
             if command == 'import':
                 cmd.add_argument('--stdin', action='store_true', required=True)
         args = parser.parse_args(argv)
+        if args.command == 'push-token':
+            target = load_token_push_targets().get(args.vm)
+            if target is None:
+                raise SecretAdminError()
+            (token_push_admin or TokenPushAdmin()).push(args.vm)
+            print(json.dumps({
+                'target': target.vm,
+                'project': target.project,
+                'status': 'pushed',
+            }, sort_keys=True))
+            return 0
         selected = admin or SecretAdmin(configured_admin())
         if args.command == 'check':
             statuses = selected.check(args.channel, args.consumer)
