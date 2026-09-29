@@ -1103,4 +1103,5 @@ def test_deploy_launcher_parses_and_forwards_token_push_worker_arguments(
         "operation_id": operation_id,
         "attempt_id": attempt_id,
         "source": _CANARY,
+        "runner": subprocess.run,
     }
