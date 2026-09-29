@@ -637,6 +637,7 @@ class CheckboxProjectionService:
             )
 
         try:
+            # codeql[py/path-injection] note_path came from _vault_contained_abs_path, which realpath-checks containment.
             final_note = note_path.read_text(encoding="utf-8")
             final_content_hash = _content_hash(_normalize_note_newlines(final_note))
         except OSError:

@@ -606,6 +606,49 @@ def _execute_checked_profile_action(
             version_id=version_id,
         )
 
+    expected_written_version = hashlib.sha256(updated.encode("utf-8")).hexdigest()
+    try:
+        latest_text, latest_note_version = read_note_text_with_version(note_file)
+        _, _, latest_content = _profile_note_parts(latest_text)
+        latest_profile_note_id = _profile_note_id(note_file, note_text=latest_text)
+        if (
+            latest_note_version != expected_written_version
+            or latest_profile_note_id != identity.profile_note_id
+            or _digest(latest_content) != proposal_record.proposed_result_digest
+        ):
+            raise ProfileAuthorityConflict(
+                "Profile Note changed after the governed write and before its terminal receipt"
+            )
+    except Exception as exc:
+        failure = _write_failure_record(
+            state,
+            identity=identity,
+            attempt=attempt,
+            exc=exc,
+            note_file=note_file,
+            intended_digest=proposal_record.proposed_result_digest,
+            base_digest=current_digest,
+            force_indeterminate=True,
+        )
+        if failure is not None:
+            try:
+                store.append(
+                    failure,
+                    expected_revision=state.revision,
+                    authority=_PROFILE_AGENT_WRITE_CAPABILITY,
+                )
+            except Exception:
+                pass
+        return ProfileWriteResult(
+            status="blocked",
+            reason=f"profile_snapshot_changed_before_receipt:{type(exc).__name__}",
+            candidate_id=proposal.candidate.candidate_id,
+            proposal_id=proposal.proposal_id,
+            confirmation_id=confirmation.confirmation_id,
+            write_id=write_id,
+            version_id=version_id,
+        )
+
     receipt_id = _stable_id("receipt", write_id)
     receipt = CompletedWriteReceiptRecord(
         sequence=state.revision + 1,
@@ -645,7 +688,6 @@ def _execute_checked_profile_action(
             version_id=version_id,
         )
 
-    latest_text, latest_note_version = read_note_text_with_version(note_file)
     _best_effort_remove_completed_panel(
         note_file,
         latest_text,
@@ -999,6 +1041,7 @@ def _write_failure_record(
     note_file: Path,
     intended_digest: str,
     base_digest: str,
+    force_indeterminate: bool = False,
 ) -> WriteFailedRecord | None:
     try:
         current_note, _ = read_note_text_with_version(note_file)
@@ -1009,7 +1052,14 @@ def _write_failure_record(
     failure_code: Literal[
         "write_rejected", "write_failed", "stale_owner_revision", "receipt_unavailable", "indeterminate"
     ]
-    if observed_digest == intended_digest:
+    if force_indeterminate:
+        # The CAS write succeeded, but its exact source snapshot was not
+        # confirmed before the terminal receipt boundary. Even if a later
+        # read happens to match the base or intended bytes, the write outcome
+        # must remain unresolved until explicit reconciliation.
+        failure_code = "indeterminate"
+        content_effect: Literal["none", "indeterminate"] = "indeterminate"
+    elif observed_digest == intended_digest:
         # A writer may report a conflict after its atomic replacement took
         # effect. Without the terminal receipt, the intended bytes remain
         # uncommitted authority and must stay blocked pending reconciliation.

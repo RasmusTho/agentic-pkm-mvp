@@ -87,18 +87,24 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
         raise ValueError("malformed frontmatter")
     stripped_text = strip_ai_panels(text)
     root = (vault_root or path.parent).expanduser().resolve()
+    resolved_path = path.expanduser().resolve(strict=True)
+    assert_profile_note_ingestible(
+        root,
+        resolved_path.relative_to(root).as_posix(),
+        (
+            frontmatter.get("uuid")
+            if isinstance(frontmatter.get("uuid"), str)
+            else frontmatter.get("id")
+            if isinstance(frontmatter.get("id"), str)
+            else None
+        ),
+        source_text=text,
+    )
     store_backend = resolve_store_backend()
     from app.ingest.vault_alpha import resolve_vault_note_identity
 
     note_identity = resolve_vault_note_identity(
         path, vault_root=root, frontmatter=frontmatter, body=_body
-    )
-    resolved_path = path.expanduser().resolve(strict=True)
-    assert_profile_note_ingestible(
-        root,
-        resolved_path.relative_to(root).as_posix(),
-        note_identity.note_uuid,
-        source_text=text,
     )
     if store_backend == "pg":
         if not frontmatter.get("uuid"):

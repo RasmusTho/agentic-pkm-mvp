@@ -20,6 +20,11 @@ Implement the governed transition from provenance-bearing candidate data to a vi
 
 Admit only valid `ProfileUpdateCandidate` data through the inspectable handoff boundary. ProfileAgent evaluates it and creates a distinct unchecked proposal immediately after the Profile Note frontmatter/title. A checked task item enters the governed confirmation path; a separate later pass performs the approved-content write only after policy, WriteGuard, idempotency, and receipt checks.
 
+After the expected-version write succeeds, ProfileAgent rereads the source immediately before
+recording completion. The full note version, Profile Note identity, and approved-content digest must
+match the intended write. A changed or unreadable snapshot leaves the write indeterminate and
+non-consumable; ProfileAgent preserves the observed note bytes and skips proposal cleanup.
+
 ## Concretely
 
 `pytest -q tests/governance/test_governed_vault_profile_proposals.py` proves candidates never enter the profile or consumer context directly, a newly created proposal cannot write in the same pass, and confirmed writes bind the candidate/proposal/confirmation/version/receipt chain.
@@ -57,6 +62,11 @@ or Standing Questions context. The source-ingestion guard binds identity across 
 the current snapshot with authority state as one stream-locked observation. A terminal receipt does
 not itself create a consumer projection; GOVPROF-03 still gates consumers on receipt-bound
 ProfileVersions.
+
+Each ingestion producer applies this gate to the original source path and declared frontmatter
+`uuid` or legacy `id` before UUID healing or projection writes; a recovered identity cannot replace
+the declared identity at this gate. This keeps a moved Profile Note with a missing or invalid
+declared identity blocked while a ProfileAgent write remains unresolved.
 
 ## Related Docs
 

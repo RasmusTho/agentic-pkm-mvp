@@ -1107,6 +1107,178 @@ def test_post_exchange_write_conflict_stays_indeterminate_and_blocks_ingestion(
         assert_profile_note_ingestible(root, "Moved/Profile.md", note_uuid)
 
 
+@pytest.mark.parametrize("failure_mode", ["owner_restored_base", "readback_failed"])
+def test_owner_edit_after_successful_write_blocks_terminal_receipt(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+    failure_mode: str,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+    checked = note_path.read_text(encoding="utf-8").replace(
+        "- [ ] Review ProfileAgent proposal",
+        "- [x] Review ProfileAgent proposal",
+    )
+    note_path.write_text(checked, encoding="utf-8")
+    intent = _intent_from_note(checked, note_uuid)
+
+    from app.agents.profile_agent import runtime as profile_runtime
+
+    write_note = profile_runtime.write_note_from_absolute
+    original_read = profile_runtime.read_note_text_with_version
+    write_completed = False
+    expected_source_bytes: list[bytes] = []
+
+    def write_then_owner_edit(path: Path, content: str, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal write_completed
+        receipt = write_note(path, content, **kwargs)
+        if kwargs.get("action") == "profile.write":
+            write_completed = True
+            if failure_mode == "owner_restored_base":
+                # A post-write read that sees the prior approved body must
+                # remain indeterminate because the CAS write already succeeded.
+                path.write_bytes(checked.encode("utf-8"))
+                expected_source_bytes.append(checked.encode("utf-8"))
+            else:
+                expected_source_bytes.append(content.encode("utf-8"))
+        return receipt
+
+    def fail_post_write_read(path: Path):  # type: ignore[no-untyped-def]
+        if write_completed and failure_mode == "readback_failed":
+            raise OSError("simulated unreadable post-write snapshot")
+        return original_read(path)
+
+    monkeypatch.setattr(
+        profile_runtime, "write_note_from_absolute", write_then_owner_edit
+    )
+    monkeypatch.setattr(
+        profile_runtime, "read_note_text_with_version", fail_post_write_read
+    )
+
+    result = execute_panel_intent(intent, vault_root=root)
+
+    assert note_path.read_bytes() == expected_source_bytes[0]
+    assert result.actions[0].status == "logged"
+    expected_exception = "ProfileAuthorityConflict" if failure_mode == "owner_restored_base" else "OSError"
+    assert result.actions[0].details["reason"] == f"profile_snapshot_changed_before_receipt:{expected_exception}"
+    state = agent.store.load_state()
+    assert state is not None
+    assert not state.pending_writes
+    assert len(state.failed_writes) == 1
+    assert state.failed_writes[0].failure_code == "indeterminate"
+    assert state.failed_writes[0].content_effect == "indeterminate"
+    assert state.unresolved_indeterminate_write_ids == (state.failed_writes[0].write_id,)
+    assert not state.completed_receipts
+    assert not state.versions
+    assert state.receipt_bound_version is None
+
+
+@pytest.mark.parametrize("source_identity", ["missing", "invalid"])
+def test_unresolved_profile_ingestion_blocks_before_uuid_healing(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+    source_identity: str,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    candidate = _candidate(root, note_uuid)
+    agent.propose_candidate(candidate)
+    unchecked_text = note_path.read_text(encoding="utf-8")
+    checked_text = unchecked_text.replace(
+        "- [ ] Review ProfileAgent proposal",
+        "- [x] Review ProfileAgent proposal",
+    )
+    note_path.write_text(checked_text, encoding="utf-8")
+    intent = _intent_from_note(checked_text, note_uuid)
+
+    from app.agents.profile_agent.store import ProfileAuthorityStore
+
+    original_append = ProfileAuthorityStore.append
+
+    def fail_terminal_receipt(self, record, *, expected_revision, authority=None):
+        if isinstance(record, CompletedWriteReceiptRecord):
+            raise OSError("simulated receipt persistence failure")
+        return original_append(
+            self,
+            record,
+            expected_revision=expected_revision,
+            authority=authority,
+        )
+
+    monkeypatch.setattr(ProfileAuthorityStore, "append", fail_terminal_receipt)
+    result = execute_panel_intent(intent, vault_root=root)
+    assert result.actions[0].details["reason"] == "terminal_receipt_not_persisted:OSError"
+    state = agent.store.load_state()
+    assert state is not None and len(state.pending_writes) == 1
+
+    moved_note = root / "Moved" / "Profile.md"
+    moved_note.parent.mkdir(parents=True)
+    pending_source_text = note_path.read_text(encoding="utf-8")
+    moved_source_text = pending_source_text.replace(
+        f"uuid: {note_uuid}\n",
+        "" if source_identity == "missing" else "uuid: not-a-uuid\n",
+        1,
+    )
+    moved_note.write_text(moved_source_text, encoding="utf-8")
+    original_bytes = moved_note.read_bytes()
+
+    from app.ingest.vault_alpha import _ingest_single
+    from app.ingest.vault_root import _ingest_file
+    from app.ingest import vault_alpha, vault_root as vault_root_module
+
+    side_effects: list[str] = []
+
+    def unexpected_effect(*_args, **_kwargs):
+        side_effects.append("called")
+        pytest.fail("unresolved moved Profile Note reached identity recovery or ingest effect")
+
+    class EmptyStore:
+        _objects: dict[object, object] = {}
+
+        def get(self, _object_id):  # type: ignore[no-untyped-def]
+            pytest.fail("unresolved moved Profile Note reached the object store")
+
+    monkeypatch.setattr(vault_alpha, "get_object_store", lambda: EmptyStore())
+    monkeypatch.setattr(vault_alpha, "ensure_note_uuid", unexpected_effect)
+    monkeypatch.setattr(vault_alpha, "resolve_vault_note_identity", unexpected_effect)
+    monkeypatch.setattr(vault_alpha, "_ingest_single", unexpected_effect)
+    monkeypatch.setattr(vault_alpha, "index_ingest_object", unexpected_effect)
+    monkeypatch.setattr(vault_alpha, "write_companion", unexpected_effect)
+    monkeypatch.setattr(vault_alpha, "append_jsonl", unexpected_effect)
+    monkeypatch.setattr(vault_alpha, "_reset_invalid_files_log", lambda: None)
+    monkeypatch.setattr(vault_alpha, "record_ingest_run", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(vault_root_module, "resolve_store_backend", unexpected_effect)
+    monkeypatch.setattr(vault_root_module, "ensure_note_uuid", unexpected_effect)
+
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        _ingest_single(
+            moved_note,
+            vault_root=root,
+            trace_id="profile-moved-alpha-missing-uuid",
+            raw_text=moved_source_text,
+        )
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        _ingest_file(
+            moved_note,
+            trace_id="profile-moved-root-missing-uuid",
+            vault_root=root,
+        )
+
+    summary = vault_alpha._ingest_candidates(
+        root,
+        candidates=[moved_note],
+        included_folders=["Moved"],
+        force=True,
+        resume_from=None,
+    )
+
+    assert summary.ingested == 0
+    assert summary.errors == 1
+    assert not side_effects
+    assert moved_note.read_bytes() == original_bytes
+
+
 def test_receipt_directory_fsync_failure_is_not_read_as_committed(
     profile_note: tuple[Path, Path, str],
     monkeypatch: pytest.MonkeyPatch,

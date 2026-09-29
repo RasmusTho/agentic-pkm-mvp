@@ -598,14 +598,19 @@ def _ingest_single(
     if "\x00" in raw_text:
         raise InvalidNoteError("null byte detected", error_type="NullByteError")
     frontmatter, body, _ = _load_frontmatter_with_reporting(raw_text, path)
-    identity = resolve_vault_note_identity(
-        path, vault_root=vault_root, frontmatter=frontmatter, body=body
-    )
+    declared_note_uuid = frontmatter.get("uuid")
+    if not isinstance(declared_note_uuid, str):
+        declared_note_uuid = frontmatter.get("id")
+    if not isinstance(declared_note_uuid, str):
+        declared_note_uuid = None
     assert_profile_note_ingestible(
         vault_root,
         rel_path.as_posix(),
-        identity.note_uuid,
+        declared_note_uuid,
         source_text=raw_text,
+    )
+    identity = resolve_vault_note_identity(
+        path, vault_root=vault_root, frontmatter=frontmatter, body=body
     )
     companion = identity.companion
 
@@ -1011,6 +1016,17 @@ def _ingest_candidates(
             if fm_error:
                 malformed.append(rel_display)
                 continue
+            declared_note_uuid = frontmatter.get("uuid")
+            if not isinstance(declared_note_uuid, str):
+                declared_note_uuid = frontmatter.get("id")
+            if not isinstance(declared_note_uuid, str):
+                declared_note_uuid = None
+            assert_profile_note_ingestible(
+                vault_root,
+                rel_path.as_posix(),
+                declared_note_uuid,
+                source_text=raw_text,
+            )
             identity = resolve_vault_note_identity(
                 path, vault_root=vault_root, frontmatter=frontmatter, body=body
             )
