@@ -34,6 +34,7 @@ _TERMINAL_SOURCES = {
     "token-push": "remote-terminal",
     "deploy": "remote-terminal",
 }
+_TOKEN_PUSH_LOCAL_ABORT_SOURCE = "host-preflight"
 
 
 @dataclass(frozen=True)
@@ -46,14 +47,27 @@ class TerminalEvidence:
 
 
 class HostSecretOperation:
-    def __init__(self, journal_fd: int, operation_id: str, kind: str, target: str) -> None:
+    def __init__(
+        self,
+        journal_fd: int,
+        operation_id: str,
+        kind: str,
+        target: str,
+        *,
+        prior_generation: str | None = None,
+        prepared: bool = False,
+        mutation_started: bool = False,
+    ) -> None:
         self._journal_fd = journal_fd
         self.operation_id = operation_id
         self.kind = kind
         self.target = target
+        self.prior_generation = prior_generation
         self._finished = False
         self._active = True
         self._deferred_prepared = False
+        self._prepared = prepared
+        self._mutation_started = mutation_started
 
     def _record(self, stage: str, source: str | None = None) -> None:
         if not self._active or self._finished:
@@ -65,6 +79,10 @@ class HostSecretOperation:
             "stage": stage,
             "source": source,
         }
+        if self.kind == "token-push":
+            if not self._prepared:
+                raise HostSecretAdmissionError()
+            record["prior_generation"] = self.prior_generation
         raw = (json.dumps(record, sort_keys=True) + "\n").encode()
         # A partial write or failed fsync leaves a poison/pending journal, never admission.
         if os.write(self._journal_fd, raw) != len(raw):
@@ -76,22 +94,45 @@ class HostSecretOperation:
             raise HostSecretAdmissionError()
         os.fstat(self._journal_fd)
 
+    @property
+    def mutation_started(self) -> bool:
+        return self._mutation_started
+
     def prepare_mutation(self) -> None:
         """Persist before the first remote effect; caller already holds the host lock."""
-        if self.kind == "check":
+        if self.kind == "check" or (self.kind == "token-push" and not self._prepared):
             raise HostSecretAdmissionError()
         if self._deferred_prepared:
             self._record("prepared")
             self._deferred_prepared = False
         self._record("sent")
+        self._mutation_started = True
+
+    def prepare_token_push(self, prior_generation: str | None) -> None:
+        """Record the prior encrypted source before resolving or sending a token."""
+        if self.kind != "token-push" or self._prepared:
+            raise HostSecretAdmissionError()
+        if prior_generation is not None and str(UUID(prior_generation)) != prior_generation:
+            raise HostSecretAdmissionError()
+        self.prior_generation = prior_generation
+        self._prepared = True
+        self._record("prepared")
 
     def finish(self, evidence: TerminalEvidence) -> None:
+        valid_source = evidence.source == _TERMINAL_SOURCES.get(self.kind)
+        if (
+            self.kind == "token-push"
+            and evidence.result == "aborted"
+            and evidence.source == _TOKEN_PUSH_LOCAL_ABORT_SOURCE
+            and not self._mutation_started
+        ):
+            valid_source = True
         if (
             evidence.operation_id != self.operation_id
             or evidence.kind != self.kind
             or evidence.target != self.target
             or evidence.result not in {"committed", "aborted"}
-            or evidence.source != _TERMINAL_SOURCES[self.kind]
+            or not valid_source
         ):
             raise HostSecretAdmissionError()
         self._record(evidence.result, evidence.source)
@@ -201,11 +242,24 @@ class HostSecretController:
                 record = json.loads(line)
                 if (
                     not isinstance(record, dict)
-                    or set(record) != {"operation_id", "kind", "target", "stage", "source"}
+                    or not {"operation_id", "kind", "target", "stage", "source"} <= set(record)
                     or record["kind"] not in _KINDS
                     or record["target"] not in _TARGETS
                     or str(UUID(record["operation_id"])) != record["operation_id"]
                 ):
+                    raise HostSecretAdmissionError()
+                if record["kind"] == "token-push":
+                    if (
+                        set(record) != {
+                            "operation_id", "kind", "target", "stage", "source", "prior_generation"
+                        }
+                        or (
+                            record["prior_generation"] is not None
+                            and str(UUID(record["prior_generation"])) != record["prior_generation"]
+                        )
+                    ):
+                        raise HostSecretAdmissionError()
+                elif set(record) != {"operation_id", "kind", "target", "stage", "source"}:
                     raise HostSecretAdmissionError()
                 if record["stage"] == "prepared":
                     if (
@@ -221,6 +275,8 @@ class HostSecretController:
                         record[k] != pending[k] for k in ("operation_id", "kind", "target")
                     ):
                         raise HostSecretAdmissionError()
+                    if record["kind"] == "token-push" and record["prior_generation"] != pending["prior_generation"]:
+                        raise HostSecretAdmissionError()
                     if (
                         record["stage"] == "sent"
                         and record["source"] is None
@@ -230,7 +286,15 @@ class HostSecretController:
                         continue
                     if (
                         record["stage"] not in {"committed", "aborted"}
-                        or record["source"] != _TERMINAL_SOURCES[record["kind"]]
+                        or not (
+                            record["source"] == _TERMINAL_SOURCES[record["kind"]]
+                            or (
+                                record["kind"] == "token-push"
+                                and record["stage"] == "aborted"
+                                and pending["stage"] == "prepared"
+                                and record["source"] == _TOKEN_PUSH_LOCAL_ABORT_SOURCE
+                            )
+                        )
                     ):
                         raise HostSecretAdmissionError()
                     pending = None
@@ -241,6 +305,7 @@ class HostSecretController:
         if (
             kind not in _KINDS
             or target not in _TARGETS
+            or kind == "token-push"
             or (target == "shared" and kind not in {"check", "import"})
         ):
             raise HostSecretAdmissionError()
@@ -270,10 +335,38 @@ class HostSecretController:
                 str(pending["operation_id"]),
                 str(pending["kind"]),
                 str(pending["target"]),
+                prior_generation=pending.get("prior_generation"),
+                prepared=pending["kind"] == "token-push",
+                mutation_started=pending["stage"] == "sent",
             )
             try:
                 evidence = readback(operation.operation_id, operation.kind, operation.target)
                 operation.finish(evidence)
+            finally:
+                operation._active = False
+
+    @contextmanager
+    def token_push_operation(
+        self, target: str
+    ) -> Iterator[tuple[HostSecretOperation, dict[str, str | None] | None]]:
+        """Start or resume one same-ID VM token push under the shared host lock."""
+        if target not in _TARGETS - {"shared"}:
+            raise HostSecretAdmissionError()
+        with self._locked_journal(wait=True) as descriptor:
+            pending = self._pending(descriptor)
+            if pending and (pending["kind"] != "token-push" or pending["target"] != target):
+                raise HostSecretAdmissionError()
+            operation = HostSecretOperation(
+                descriptor,
+                str(pending["operation_id"]) if pending else str(uuid4()),
+                "token-push",
+                target,
+                prior_generation=pending["prior_generation"] if pending else None,
+                prepared=bool(pending),
+                mutation_started=bool(pending and pending["stage"] == "sent"),
+            )
+            try:
+                yield operation, pending
             finally:
                 operation._active = False
 

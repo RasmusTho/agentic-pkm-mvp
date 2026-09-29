@@ -9,7 +9,20 @@ import sys
 
 def run() -> int:
     try:
-        if len(sys.argv) != 3 or sys.argv[1] not in {'serve', 'rpc', 'guard', 'cleanup'} or sys.argv[2] not in {'dev', 'test', 'prod'}:
+        action_counts = {
+            'serve': 3,
+            'rpc': 3,
+            'guard': 3,
+            'cleanup': 3,
+            'token-push-inspect': 3,
+            'token-push-status': 4,
+            'token-push-worker': 5,
+            'token-push': 6,
+        }
+        if (
+            len(sys.argv) != action_counts.get(sys.argv[1], -1)
+            or sys.argv[2] not in {'dev', 'test', 'prod'}
+        ):
             return 78
         path = Path('/etc/yggdrasil/bws-deploy') / (sys.argv[2] + '.json')
         descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)

@@ -1695,7 +1695,7 @@ def test_missing_bws_access_token_file_fails_before_provider_request(tmp_path, m
 
 def test_agent_host_operation_lock_serializes_bws_and_deploy_entrypoints(tmp_path):
     reader, client, controller = _bws_fixture(tmp_path)
-    for kind in ("import", "token-push", "deploy", "bootstrap"):
+    for kind in ("import", "deploy", "bootstrap"):
         with controller.admit(kind, "dev") as operation:
             with pytest.raises(HostSecretBootstrapError):
                 resolve_host_secret_values(
@@ -1710,6 +1710,23 @@ def test_agent_host_operation_lock_serializes_bws_and_deploy_entrypoints(tmp_pat
             operation.finish(
                 TerminalEvidence(operation.operation_id, kind, "dev", "aborted", source)
             )
+    with controller.token_push_operation("dev") as (operation, pending):
+        assert pending is None
+        operation.prepare_token_push(None)
+        with pytest.raises(HostSecretBootstrapError):
+            resolve_host_secret_values(
+                channel="dev",
+                consumer="builderops-model-inquiry",
+                provider="bws",
+                bws_reader=reader,
+                controller=HostSecretController(controller.directory),
+            )
+        assert client.calls == []
+        operation.finish(
+            TerminalEvidence(
+                operation.operation_id, "token-push", "dev", "aborted", "host-preflight"
+            )
+        )
     assert stat.S_IMODE(controller.directory.stat().st_mode) == 0o700
     assert all(
         stat.S_IMODE(path.stat().st_mode) == 0o600 for path in controller.directory.iterdir()
@@ -1737,7 +1754,9 @@ with HostSecretController(Path(sys.argv[1])).admit("deploy", "dev") as operation
 
 def test_pending_operation_requires_matching_operation_id_readback(tmp_path):
     controller = HostSecretController(tmp_path / "controller")
-    with controller.admit("token-push", "dev") as operation:
+    with controller.token_push_operation("dev") as (operation, pending):
+        assert pending is None
+        operation.prepare_token_push(None)
         operation.prepare_mutation()
     for evidence in [
         TerminalEvidence("wrong", "token-push", "dev", "committed", "remote-terminal"),
