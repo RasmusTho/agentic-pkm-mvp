@@ -355,6 +355,13 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/instance/",
             "app/knowledge/",
             "app/vault/",
+            # ProfileAgent persists and writes the canonical owner-vault
+            # profile; route it to the GOVPROF runtime regressions instead of
+            # failing the PR check as unowned code.
+            "app/agents/profile_agent/",
+            # Reviewer reads vault-note content. Keep this exact consumer seam
+            # on the vault proposal and Reviewer-context regressions.
+            "app/agents/reviewer/agent.py",
             # The deletion seam owns vault file-state lifecycle and emits the
             # watcher-consumed tombstone. It is a vault runtime surface, not a
             # generic services module; leaving it unowned fail-closes the
@@ -385,6 +392,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/instance",
             "tests/vault",
             "tests/knowledge",
+            "tests/governance/test_governed_vault_profile_contract.py",
+            "tests/governance/test_governed_vault_profile_proposals.py",
+            "tests/agents/test_reviewer.py",
+            "tests/agents/test_reviewer_single_note.py",
             "tests/ports",
             "tests/services/test_vault_sync_lifecycle.py",
             "tests/services/test_vault_sync_atomicity.py",

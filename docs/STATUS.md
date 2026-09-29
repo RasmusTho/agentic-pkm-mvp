@@ -545,6 +545,9 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 
 ## Current Snapshot
 
+- Governed Vault Profile (#4944) remains a target-state capability outside the shipped baseline.
+  No ProfileAgent or same-scope consumer runtime behavior is claimed as shipped before the parent
+  acceptance and owner-doc promotion.
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - The bounded Mimer MCP producer adapter is delivered as the `mimer-mcp` stdio sidecar: exactly
   ask, governed capture, retrieve/search, note read, and health delegate to existing governed HTTP

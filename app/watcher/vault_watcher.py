@@ -30,6 +30,11 @@ from app.services.companion_note import (
 from app.events.types import INGEST_OBJECT_DELETED
 from app.ingest.vault_alpha import run_vault_alpha_ingest_paths
 from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.profile_authority import ProfileAuthorityConflict
+from app.knowledge.profile_authority_store import (
+    assert_profile_note_ingestible,
+    is_profile_note_source,
+)
 from app.knowledge.write_ops import read_note_text_with_version
 from app.knowledge.write_ops import write_note_from_absolute
 from app.services.outbox import (
@@ -123,6 +128,13 @@ def _standing_question_tick_inputs(
             continue
         if not isinstance(frontmatter, dict):
             continue
+        note_uuid = frontmatter.get("uuid") or frontmatter.get("id")
+        if is_profile_note_source(
+            vault_root, relative.as_posix(), str(note_uuid) if note_uuid else None
+        ):
+            # GOVPROF-02 owns the later approved profile projection. Generic
+            # watcher evidence must not expose proposal panels or profile text.
+            continue
         scope = frontmatter.get("scope")
         if not isinstance(scope, str) or not scope.strip():
             # Scope is a hard matcher boundary; an unscoped source is not
@@ -168,6 +180,20 @@ def _standing_question_tick_inputs(
                     continue
                 raw_bytes = source_path.read_bytes()
                 text = raw_bytes.decode("utf-8")
+                frontmatter, _body = load_frontmatter(text)
+                note_uuid = (
+                    frontmatter.get("uuid") or frontmatter.get("id")
+                    if isinstance(frontmatter, dict)
+                    else None
+                )
+                if is_profile_note_source(
+                    vault_root,
+                    source_relative.as_posix(),
+                    str(note_uuid) if note_uuid else None,
+                ):
+                    # Exclude prior persisted evidence aliases too, not only
+                    # newly changed Profile Notes.
+                    continue
             except (OSError, UnicodeError, ValueError, RuntimeError):
                 continue
             add_source(artifact_ref, provenance_ref, text, raw_bytes, relative.as_posix())
@@ -343,11 +369,27 @@ def _note_uuid_from_frontmatter(
     return str(uuid.uuid5(vault_alpha._VAULT_NOTE_UUID_NAMESPACE, rel_path.as_posix()))
 
 
-def _hydrate_store_with_markdown(note_uuid: str, note_path: Path) -> None:
+def _hydrate_store_with_markdown(
+    note_uuid: str, note_path: Path, *, vault_root: Path
+) -> None:
     try:
         markdown = note_path.read_text(encoding="utf-8")
     except Exception:
         return
+    frontmatter, _ = load_frontmatter(markdown)
+    _asserted_note_uuid = (
+        frontmatter.get("uuid") or frontmatter.get("id")
+        if isinstance(frontmatter, dict)
+        else None
+    )
+    resolved_root = vault_root.expanduser().resolve(strict=True)
+    resolved_path = note_path.expanduser().resolve(strict=True)
+    assert_profile_note_ingestible(
+        resolved_root,
+        resolved_path.relative_to(resolved_root).as_posix(),
+        str(_asserted_note_uuid) if _asserted_note_uuid else None,
+        source_text=markdown,
+    )
     store = ObjectStore()
     obj = store.get_object(note_uuid)
     if obj is None:
@@ -975,6 +1017,11 @@ def run_watcher_tick(
     summary["ingest_attempted"] = summary["changed"]
     try:
         ingest_summary = run_vault_alpha_ingest_paths(vault_root, result.changed, force=False)
+    except ProfileAuthorityConflict as exc:
+        summary["errors"] += 1
+        summary["ingested"] = 0
+        messages.append(f"Watcher ingest blocked by ProfileAuthority: {exc}")
+        ingest_summary = None
     except WritesBlockedError as exc:
         # Guard-at-seam defense-in-depth (#2910): the ingest path's own
         # layout-ensure writes carry the registered "vault.layout_ensure"
@@ -1099,7 +1146,16 @@ def run_watcher_tick(
                     messages.append(f"Watcher auto-exec blocked for {rel_path}: {exc}")
                     continue
 
-                _hydrate_store_with_markdown(canonical_object_id, note_path)
+                try:
+                    _hydrate_store_with_markdown(
+                        canonical_object_id, note_path, vault_root=vault_root
+                    )
+                except ProfileAuthorityConflict as exc:
+                    summary["errors"] += 1
+                    messages.append(
+                        f"Watcher panel run blocked for {rel_path}: {exc}"
+                    )
+                    continue
 
                 stored = store.get_object(canonical_object_id)
                 old_markdown = ""
@@ -1161,7 +1217,9 @@ def run_watcher_tick(
                             action="vault watcher panel write",
                             expected_version=expected_version,
                         )
-                        _hydrate_store_with_markdown(canonical_object_id, note_path)
+                        _hydrate_store_with_markdown(
+                            canonical_object_id, note_path, vault_root=vault_root
+                        )
                     except KnowledgeWriteConflict as exc:
                         if (
                             exc.receipt is not None
@@ -1174,6 +1232,12 @@ def run_watcher_tick(
                             messages.append(
                                 f"Warning: indeterminate panel write for {note_path}"
                             )
+                        summary["errors"] += 1
+                        continue
+                    except ProfileAuthorityConflict as exc:
+                        messages.append(
+                            f"Watcher panel refresh blocked for {rel_path}: {exc}"
+                        )
                         summary["errors"] += 1
                         continue
                     except WritesBlockedError:

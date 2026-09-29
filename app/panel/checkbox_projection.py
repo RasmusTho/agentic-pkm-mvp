@@ -22,7 +22,8 @@ from app.agents.panel.writeback import parse_action_line, stable_action_id
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
 from app.config.paths import VaultRootMisconfiguredError, resolve_optional_vault_root
 from app.text.helpers import content_hash as _content_hash
-from app.knowledge.write_ops import write_note_from_absolute
+from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.write_ops import read_note_text_with_version, write_note_from_absolute
 from app.objects import resolve_canonical_object_id
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
@@ -128,6 +129,10 @@ def _source_line_hash(source_line: str) -> str:
 
 def _source_line_without_newline(raw_line: str) -> str:
     return raw_line.rstrip("\r\n")
+
+
+def _normalize_note_newlines(text: str) -> str:
+    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _valid_note_path(note_path_raw: str) -> str | None:
@@ -338,7 +343,8 @@ class CheckboxProjectionService:
             )
             raise CheckboxProjectionHTTPError(404, response)
 
-        current = note_path.read_text(encoding="utf-8")
+        raw_current, expected_version = read_note_text_with_version(note_path)
+        current = _normalize_note_newlines(raw_current)
         content_hash_before = _content_hash(current)
         if content_hash_before != request.expected_content_hash:
             response = self._response(
@@ -439,7 +445,9 @@ class CheckboxProjectionService:
             self._idempotency.set(request.idempotency_key, response)
             return response
 
-        projected = _project_checked(current, line_index=option.source_range.start_line)
+        projected = _project_checked(
+            raw_current, line_index=option.source_range.start_line
+        )
         if projected is None:
             response = self._response(
                 request,
@@ -451,18 +459,100 @@ class CheckboxProjectionService:
             )
             raise CheckboxProjectionHTTPError(409, response)
 
-        write_note_from_absolute(note_path, projected, vault_root=vault_root)
-        written = note_path.read_text(encoding="utf-8")
-        content_hash_after = _content_hash(written)
+        try:
+            write_note_from_absolute(
+                note_path,
+                projected,
+                vault_root=vault_root,
+                expected_version=expected_version,
+            )
+        except KnowledgeWriteConflict as exc:
+            try:
+                latest, _ = read_note_text_with_version(note_path)
+                latest_hash = _content_hash(_normalize_note_newlines(latest))
+            except OSError:
+                latest_hash = content_hash_before
+            response = self._response(
+                request,
+                status="stale",
+                note_path=safe_note_path,
+                before=content_hash_before,
+                after=latest_hash,
+                block_reason="note_changed_during_projection",
+            )
+            raise CheckboxProjectionHTTPError(409, response) from exc
+        written_version = hashlib.sha256(projected.encode("utf-8")).hexdigest()
+        try:
+            written, observed_version = read_note_text_with_version(note_path)
+        except OSError as exc:
+            try:
+                write_note_from_absolute(
+                    note_path,
+                    raw_current,
+                    vault_root=vault_root,
+                    expected_version=written_version,
+                )
+            except KnowledgeWriteConflict:
+                try:
+                    latest, _ = read_note_text_with_version(note_path)
+                    latest_hash = _content_hash(_normalize_note_newlines(latest))
+                except OSError:
+                    latest_hash = content_hash_before
+                response = self._response(
+                    request,
+                    status="stale",
+                    note_path=safe_note_path,
+                    before=content_hash_before,
+                    after=latest_hash,
+                    block_reason="note_changed_after_projection_readback_failure",
+                )
+                self._idempotency.set(request.idempotency_key, response)
+                return response
+            except Exception as rollback_exc:
+                response = self._response(
+                    request,
+                    status="failed",
+                    note_path=safe_note_path,
+                    before=content_hash_before,
+                    after=content_hash_before,
+                    block_reason=(
+                        f"projection_readback_failed:{type(exc).__name__};"
+                        f"rollback_failed:{type(rollback_exc).__name__}"
+                    ),
+                )
+                self._idempotency.set(request.idempotency_key, response)
+                return response
+            response = self._response(
+                request,
+                status="failed",
+                note_path=safe_note_path,
+                before=content_hash_before,
+                after=content_hash_before,
+                block_reason=f"projection_readback_failed:{type(exc).__name__}",
+            )
+            self._idempotency.set(request.idempotency_key, response)
+            return response
+        if observed_version != written_version or written != projected:
+            response = self._response(
+                request,
+                status="stale",
+                note_path=safe_note_path,
+                before=content_hash_before,
+                after=_content_hash(_normalize_note_newlines(written)),
+                block_reason="note_changed_after_projection",
+            )
+            raise CheckboxProjectionHTTPError(409, response)
+        content_hash_after = _content_hash(_normalize_note_newlines(written))
 
         response = self._execute_or_projected(
             request,
             note_path=note_path,
             safe_note_path=safe_note_path,
-            rollback_text=current,
+            rollback_text=raw_current,
             raw_text=written,
             content_hash_before=content_hash_before,
             content_hash_after=content_hash_after,
+            projected_version=written_version,
             vault_root=vault_root,
         )
         self._idempotency.set(request.idempotency_key, response)
@@ -478,6 +568,7 @@ class CheckboxProjectionService:
         raw_text: str,
         content_hash_before: str,
         content_hash_after: str,
+        projected_version: str,
         vault_root: Path,
     ) -> CheckboxProjectionResponse:
         try:
@@ -487,6 +578,7 @@ class CheckboxProjectionService:
                 note_path=note_path,
                 raw_text=raw_text,
                 trace_id=request.idempotency_key,
+                vault_root=vault_root,
             )
             run_panel_note_execution(
                 canonical_artifact_id,
@@ -496,16 +588,59 @@ class CheckboxProjectionService:
                 trigger="companion",
             )
         except Exception as exc:
-            write_note_from_absolute(note_path, rollback_text, vault_root=vault_root)
-            rolled_back = note_path.read_text(encoding="utf-8")
+            try:
+                write_note_from_absolute(
+                    note_path,
+                    rollback_text,
+                    vault_root=vault_root,
+                    expected_version=projected_version,
+                )
+                rolled_back, _ = read_note_text_with_version(note_path)
+            except KnowledgeWriteConflict:
+                try:
+                    current_note, _ = read_note_text_with_version(note_path)
+                    current_hash = _content_hash(_normalize_note_newlines(current_note))
+                except OSError:
+                    current_hash = content_hash_after
+                return self._response(
+                    request,
+                    status="stale",
+                    note_path=safe_note_path,
+                    before=content_hash_before,
+                    after=current_hash,
+                    block_reason="note_changed_before_projection_rollback",
+                )
+            except Exception as rollback_exc:
+                try:
+                    current_note, _ = read_note_text_with_version(note_path)
+                    current_hash = _content_hash(_normalize_note_newlines(current_note))
+                except OSError:
+                    current_hash = content_hash_after
+                return self._response(
+                    request,
+                    status="failed",
+                    note_path=safe_note_path,
+                    before=content_hash_before,
+                    after=current_hash,
+                    block_reason=(
+                        f"runtime_execution_failed:{type(exc).__name__};"
+                        f"rollback_failed:{type(rollback_exc).__name__}"
+                    ),
+                )
             return self._response(
                 request,
                 status="failed",
                 note_path=safe_note_path,
                 before=content_hash_before,
-                after=_content_hash(rolled_back),
+                after=_content_hash(_normalize_note_newlines(rolled_back)),
                 block_reason=f"runtime_execution_failed:{type(exc).__name__}",
             )
+
+        try:
+            final_note = note_path.read_text(encoding="utf-8")
+            final_content_hash = _content_hash(_normalize_note_newlines(final_note))
+        except OSError:
+            final_content_hash = content_hash_after
 
         # Do not report execution without response-level receipt evidence.
         # The current runtime invocation may write its own durable callout, but
@@ -515,7 +650,7 @@ class CheckboxProjectionService:
             status="projected",
             note_path=safe_note_path,
             before=content_hash_before,
-            after=content_hash_after,
+            after=final_content_hash,
         )
 
     @staticmethod

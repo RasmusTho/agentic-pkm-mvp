@@ -1,9 +1,8 @@
-"""Dormant identity capabilities for the governed profile contract.
+"""Private identity capabilities for the governed profile contract.
 
-This module deliberately has no production issuer. GOVPROF-02 must connect its
-capabilities to authenticated owner confirmation and ProfileAgent runtime identity.
-Import access is protected by ``importlinter.ini``; replaying serialized records
-does not create or recover one of these capabilities.
+The ProfileAgent runtime is the only production issuer of owner-confirmation and
+ProfileAgent-write authority. Import access is protected by ``importlinter.ini``;
+replaying serialized records does not create or recover one of these capabilities.
 """
 
 from __future__ import annotations
