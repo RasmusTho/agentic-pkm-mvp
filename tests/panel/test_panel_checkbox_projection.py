@@ -124,6 +124,101 @@ def test_projection_endpoint_checks_markdown_source_and_projects_checkbox(
     assert "- [ ] ordinary task" in updated
 
 
+def test_projection_final_hash_read_rechecks_symlink_containment(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = tmp_path / "vault"
+    monkeypatch.setenv("VAULT_ROOT", str(vault))
+    note = _write_note(vault)
+    body = _request_for(note)
+    outside_note = tmp_path / "outside.md"
+    outside_note.write_text("outside note", encoding="utf-8")
+    runtime_result = MagicMock(runtime_results=[object()])
+    original_read_text = Path.read_text
+
+    def replace_note_with_symlink(*_args: object, **_kwargs: object) -> MagicMock:
+        note.unlink()
+        note.symlink_to(outside_note)
+        return runtime_result
+
+    def reject_outside_read(path: Path, *args: object, **kwargs: object) -> str:
+        if path.resolve(strict=True) == outside_note.resolve(strict=True):
+            raise AssertionError("projection read a note outside the vault")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        projection_module, "run_panel_note_execution", replace_note_with_symlink
+    )
+    monkeypatch.setattr(Path, "read_text", reject_outside_read)
+
+    response = client.post("/api/panel/checkbox-projection", json=body)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "projected"
+    assert outside_note.read_bytes() == b"outside note"
+
+
+def test_projection_accepts_workspace_hash_for_crlf_note(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note = _write_note(tmp_path)
+    note.write_bytes(_panel_note().replace("\n", "\r\n").encode("utf-8"))
+    refresh = MagicMock()
+    runtime = MagicMock(return_value=MagicMock(runtime_results=[object()]))
+    monkeypatch.setattr(projection_module, "refresh_panel_note_object", refresh)
+    monkeypatch.setattr(projection_module, "run_panel_note_execution", runtime)
+
+    response = client.post("/api/panel/checkbox-projection", json=_request_for(note))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "projected"
+    written = note.read_bytes()
+    assert b"\r\n- [x] Send email" in written
+    assert written.replace(b"\r\n", b"").count(b"\n") == 0
+
+
+def test_projection_readback_failure_rolls_back_before_runtime(
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    note = _write_note(tmp_path)
+    before = note.read_text(encoding="utf-8")
+    request = _request_for(note)
+    real_read = projection_module.read_note_text_with_version
+    reads = 0
+
+    def fail_projection_readback(path: Path | str) -> tuple[str, str]:
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            raise OSError("simulated projection readback failure")
+        return real_read(path)
+
+    refresh = MagicMock()
+    runtime = MagicMock()
+    monkeypatch.setattr(
+        projection_module, "read_note_text_with_version", fail_projection_readback
+    )
+    monkeypatch.setattr(projection_module, "refresh_panel_note_object", refresh)
+    monkeypatch.setattr(projection_module, "run_panel_note_execution", runtime)
+
+    response = client.post("/api/panel/checkbox-projection", json=request)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["block_reason"] == "projection_readback_failed:OSError"
+    assert note.read_text(encoding="utf-8") == before
+    refresh.assert_not_called()
+    runtime.assert_not_called()
+
+
 def test_projection_uses_canonical_store_id_and_retains_vault_uuid(
     client: TestClient,
     tmp_path: Path,

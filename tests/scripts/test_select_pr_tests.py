@@ -153,6 +153,22 @@ def test_knowledge_runtime_modules_select_vault_knowledge_and_port_coverage() ->
     assert "tests/ports" in selection.targets
 
 
+def test_profile_authority_and_reviewer_paths_select_vault_regressions() -> None:
+    selection = select_tests(
+        [
+            "app/agents/profile_agent/runtime.py",
+            "app/agents/reviewer/agent.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert "vault" in selection.subsystems
+    assert selection.unowned_paths == ()
+    assert "tests/governance/test_governed_vault_profile_proposals.py" in selection.targets
+    assert "tests/agents/test_reviewer.py" in selection.targets
+    assert "tests/agents/test_reviewer_single_note.py" in selection.targets
+
+
 def test_vault_sync_delete_seam_selects_vault_lifecycle_coverage() -> None:
     selection = select_tests(["app/services/vault_sync.py"])
 

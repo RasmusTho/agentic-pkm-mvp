@@ -57,12 +57,12 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "promote.done / promotion.transition.applied after this call on the same "
         "trace_id; the mirror write and the event are one logical transition (T-promote)."
     ),
-    ("app/agents/panel_agent/execution.py", 62): (
+    ("app/agents/panel_agent/execution.py", 89): (
         "refresh_panel_note_object: panel note refresh is a read-model refresh inside "
         "run_panel_note_execution, which emits panel.action.logged/blocked via the "
         "runtime's own outbox path (app/agents/panel_agent/runtime.py) for the same turn."
     ),
-    ("app/watcher/vault_watcher.py", 358): (
+    ("app/watcher/vault_watcher.py", 400): (
         "_hydrate_store_with_markdown: best-effort raw_text hydration for panel-scan "
         "note refresh; the mutating vault-sync path (T-sync) already emitted "
         "ingest.object.* for this note earlier in the same tick."
@@ -87,7 +87,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "caller drives through the promotion transition path (T-promote), which emits "
         "the promotion events; this write is the plan/graph bookkeeping half."
     ),
-    ("app/agents/normalizer/agent.py", 172): (
+    ("app/agents/normalizer/agent.py", 196): (
         "normalize_file's run(): legacy normalizer ingest shim used by classifier/"
         "normalizer test flows and the memory-backend CLI path; the object's creation "
         "event is emitted by the caller (ingest API / vault_alpha) that invokes normalize."
@@ -106,7 +106,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
-    ("app/ingest/vault_alpha.py", 768): (
+    ("app/ingest/vault_alpha.py", 780): (
         "Legacy vault-alpha compatibility save; the alpha ingest pipeline emits the "
         "corresponding ingest event upstream in the same run, so this mirror suppresses "
         "a duplicate."
@@ -1566,32 +1566,32 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
         "-> store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 768): (
+    ("app/ingest/vault_alpha.py", 780): (
         "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
         "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
         "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
     ),
-    ("app/ingest/vault_alpha.py", 771): (
+    ("app/ingest/vault_alpha.py", 783): (
         "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
         "store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 790): (
+    ("app/ingest/vault_alpha.py", 802): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
-    ("app/ingest/vault_root.py", 177): (
+    ("app/ingest/vault_root.py", 194): (
         "carries_frontmatter: canonical_payload carries episode_ref; objects_store.upsert -> "
         "PgObjects.upsert -> PgObjectStore.put -> store_objects (round-5 finding: this IS a "
         "canonical store_objects write, not the legacy `objects` table alone)."
     ),
-    ("app/ingest/vault_root.py", 181): (
+    ("app/ingest/vault_root.py", 198): (
         "carries_frontmatter: the TypeError fallback uses the same canonical_payload; "
         "objects_store.upsert -> store_objects."
     ),
-    ("app/ingest/vault_root.py", 196): (
+    ("app/ingest/vault_root.py", 213): (
         "carries_frontmatter: _ingest_file payload carries episode_ref; index_ingest_object -> "
         "store_vector_index."
     ),
-    ("app/ingest/vault_root.py", 208): (
+    ("app/ingest/vault_root.py", 225): (
         "carries_frontmatter: same payload ({**payload, 'text': ...}) -> store.put -> store_objects."
     ),
     ("app/rebuildability/product_projection_rebuild.py", 542): (
@@ -1669,7 +1669,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         " -> store_objects; a stamped episode_ref survives (new-object branch has no prior row to "
         "drop)."
     ),
-    ("app/agents/panel_agent/execution.py", 62): (
+    ("app/agents/panel_agent/execution.py", 89): (
         "preserves_existing_payload: panel execution updates from dict(existing.payload or {}); "
         "save_object -> store_objects."
     ),
@@ -1686,13 +1686,13 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "store_objects; a new-note branch has no prior row and no binding (unbound correct via the "
         "build_indexed_unit_payload choke at index time)."
     ),
-    ("app/watcher/vault_watcher.py", 358): (
+    ("app/watcher/vault_watcher.py", 400): (
         "preserves_existing_payload: _hydrate_store_with_markdown updates raw_text on "
         "dict(obj.payload); save_object -> store_objects; episode_ref preserved."
     ),
     # -- carries_at_construction: payload built in a separate function that carries episode_ref;
     #    verified by a RUNTIME test (the payload is opaque at this call site) ---------------------
-    ("app/agents/normalizer/agent.py", 172): (
+    ("app/agents/normalizer/agent.py", 196): (
         "carries_at_construction: shim.payload = normalize_file(...)['payload'], which carries "
         "episode_ref_from_frontmatter(frontmatter) in app/agents/normalizer/agent.py::normalize_file"
         "; save_object -> store_objects. Verified by "
