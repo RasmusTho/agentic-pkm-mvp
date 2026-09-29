@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-29 (bounded DevUI, Sources-zone, classification-evaluation, BWS PostgreSQL, and BWS-03 repository implementation review; repository evidence only, no deployment or owner acceptance)
+Last reviewed: 2026-09-29 (bounded DevUI, Sources-zone, classification-evaluation, BWS PostgreSQL, BWS-03 repository implementation, and GOVPROF-01–03 acceptance reviews; repository and GitHub delivery evidence only, no deployment or vault-data verification)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -20,6 +20,9 @@ Last verified against (BWS-03 repository implementation): Issue #5679 and PR #57
 (182 passed), Ruff, `mypy app` (1,020 source files), docs guard, and current-head CI passed.
 This is repository evidence only; no live TARS VM, Keychain, systemd-creds host key, BWS account,
 or channel qualification was accessed.
+Last verified against (governed vault profile): accepted parent #4944 and PRs #5731, #5733, and
+#5735; exact child heads, merge SHAs, Verify coverage, CI, and receipts are recorded on the parent.
+Repository and GitHub evidence only; no live vault contents or deployed runtime were exercised.
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
@@ -545,9 +548,10 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 
 ## Current Snapshot
 
-- Governed Vault Profile (#4944) remains a target-state capability outside the shipped baseline.
-  No ProfileAgent or same-scope consumer runtime behavior is claimed as shipped before the parent
-  acceptance and owner-doc promotion.
+- Governed Vault Profile (#4944) is accepted and delivered through GOVPROF-01–03: ProfileAgent-only
+  approved writes, owner-confirmed proposal flow, receipt-bound versions, and a rebuildable
+  same-scope consumer projection with explicit no-profile behavior (PRs #5731, #5733, #5735).
+  The separate four-part YouTube overlay renderer in #4117 remains unshipped.
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - The bounded Mimer MCP producer adapter is delivered as the `mimer-mcp` stdio sidecar: exactly
   ask, governed capture, retrieve/search, note read, and health delegate to existing governed HTTP
