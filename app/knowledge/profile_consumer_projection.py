@@ -22,10 +22,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Literal
 
-from scripts.yaml_roundtrip import load_frontmatter
-
 from app.knowledge.profile_authority import ProfileAuthorityContractError
 from app.knowledge.profile_authority_store import ProfileAuthorityStore
+from app.knowledge.profile_note import load_profile_note_frontmatter, profile_note_parts
 
 
 ProjectionStatus = Literal["available", "no-profile"]
@@ -104,7 +103,7 @@ def rebuild_profile_projection(
 
         note_path = _resolve_note_path(root, state.identity.note_path)
         note_text = note_path.read_text(encoding="utf-8")
-        frontmatter, _ = load_frontmatter(note_text)
+        frontmatter, _ = load_profile_note_frontmatter(note_text)
         if not isinstance(frontmatter, dict):
             return ProfileConsumerProjection.no_profile("profile_frontmatter_invalid")
         note_uuid = frontmatter.get("uuid")
@@ -139,7 +138,7 @@ def rebuild_profile_projection(
             receipt_id=version.receipt_id,
             content_digest=version.content_digest,
         )
-    except (OSError, UnicodeError, ValueError, ProfileAuthorityContractError):
+    except (OSError, RuntimeError, UnicodeError, ValueError, ProfileAuthorityContractError):
         return ProfileConsumerProjection.no_profile("profile_authority_unavailable")
 
 
@@ -155,20 +154,11 @@ def _resolve_note_path(root: Path, relative_path: str) -> Path:
 
 
 def _approved_content(note_text: str) -> str | None:
-    """Mirror ProfileAgent's digest boundary without importing its runtime layer."""
+    """Use the producer's shared header and managed-panel digest boundary."""
 
-    _, body = load_frontmatter(note_text)
-    lines = body.splitlines(keepends=True)
-    index = 0
-    while index < len(lines) and not lines[index].strip():
-        index += 1
-    if index >= len(lines) or not lines[index].lstrip().startswith("# "):
-        return None
-    index += 1
-    while index < len(lines) and not lines[index].strip():
-        index += 1
-    approved = "".join(lines[index:]).strip("\n")
-    if "<!--mimer:profile-proposal-start" in approved:
+    try:
+        _, _, approved = profile_note_parts(note_text)
+    except ProfileAuthorityContractError:
         return None
     return approved
 

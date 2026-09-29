@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from app.agents.panel_agent.parser import find_panels
 from app.agents.profile_agent.runtime import (
     PROFILE_APPLY_ACTION_ID,
     ProfileAgent,
@@ -121,6 +122,26 @@ def test_projection_rebuilds_only_from_approved_versions_and_receipts(
     assert note_path.read_bytes() == after_write
 
 
+def test_projection_rebuilds_when_completed_panel_cleanup_is_pending(
+    profile_note: tuple[Path, Path, str],
+) -> None:
+    root, note_path, note_uuid = profile_note
+    agent = ProfileAgent(root, _NOTE_PATH)
+    agent.propose_candidate(_candidate(root, note_uuid))
+    proposal_panel = find_panels(note_path.read_text(encoding="utf-8"))[0].raw_block
+
+    _complete_profile_write(root, note_path, note_uuid)
+    cleaned = note_path.read_text(encoding="utf-8")
+    note_path.write_text(
+        cleaned.replace(_APPROVED_CONTENT, f"{proposal_panel}\n\n{_APPROVED_CONTENT}", 1),
+        encoding="utf-8",
+    )
+
+    admitted = rebuild_profile_projection(root, active_scope_id=_SCOPE)
+    assert admitted.available
+    assert admitted.profile_content == "## Preferences\n\nPrefer direct answers."
+
+
 def test_consumer_admission_requires_same_scope_approved_receipt_bound_version(
     profile_note: tuple[Path, Path, str],
 ) -> None:
@@ -169,6 +190,20 @@ def test_nonconsumable_profile_states_return_explicit_no_profile(
         "profile_scope_missing_or_malformed"
     )
 
+    delimiter_root, delimiter_note, delimiter_uuid = _new_profile_note(
+        tmp_path / "delimiter-vault"
+    )
+    _complete_profile_write(delimiter_root, delimiter_note, delimiter_uuid)
+    delimiter_text = delimiter_note.read_text(encoding="utf-8")
+    delimiter_note.write_text(
+        delimiter_text.replace(
+            f"uuid: {delimiter_uuid}\n---",
+            f"uuid: {delimiter_uuid}\nlabel: a---b\n---",
+        ),
+        encoding="utf-8",
+    )
+    assert rebuild_profile_projection(delimiter_root, active_scope_id=_SCOPE).available
+
     # A real approved receipt becomes stale as soon as the receipt-bound body
     # changes, even when the authority stream itself remains available. Use a
     # fresh vault so the pending proposal above remains a separate refusal case.
@@ -183,6 +218,13 @@ def test_nonconsumable_profile_states_return_explicit_no_profile(
     stale = rebuild_profile_projection(stale_root, active_scope_id=_SCOPE)
     assert stale.status == "no-profile"
     assert stale.reason == "profile_content_stale"
+
+    loop_root, loop_note, loop_uuid = _new_profile_note(tmp_path / "symlink-loop-vault")
+    _complete_profile_write(loop_root, loop_note, loop_uuid)
+    loop_note.unlink()
+    loop_note.symlink_to(loop_note.name)
+    looped = rebuild_profile_projection(loop_root, active_scope_id=_SCOPE)
+    assert looped.status == "no-profile"
 
 
 def test_youtube_overlay_is_read_only_consumer_of_governed_profile_projection(
