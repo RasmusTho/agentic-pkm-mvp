@@ -50,6 +50,14 @@ The system may reason about owner preferences but cannot silently convert that i
 
 Pending proposals and confirmations recover only from GOVPROF-01 durable records. Replay is idempotent and cannot write an unconfirmed or superseded proposal; a write failure remains visible and non-consumable.
 
+While a ProfileAgent write is pending or indeterminate, raw Profile Note content is also
+non-consumable. Every raw-source entrypoint that admits Profile Note text into generic profile or
+consumer context must check durable identity before persisting to ObjectStore, Companion, an index,
+or Standing Questions context. The source-ingestion guard binds identity across path moves and reads
+the current snapshot with authority state as one stream-locked observation. A terminal receipt does
+not itself create a consumer projection; GOVPROF-03 still gates consumers on receipt-bound
+ProfileVersions.
+
 ## Related Docs
 
 - `docs/GOVERNED_VAULT_PROFILE/README.md`
