@@ -5,10 +5,11 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-09-25
+Last reviewed: 2026-09-29
 Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`. This is not fresh host qualification, residency, deployment, health, or SSH evidence from this workstation.
 Verification update (2026-09-25): also checked `.github/workflows/app-image-build.yml`, `.github/workflows/integration-nightly.yaml`, `scripts/deploy_channel.sh`, and `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`; the repository workflow set has no caller of the deploy script. This remains repository inspection, not fresh host qualification or deployment evidence.
+Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). This establishes repository support only; live VM installation and qualification remain separate gates under #5667.
 
 ## Why this document exists
 
@@ -530,8 +531,9 @@ The empty-data exception is bound to the effective managed `db:5432` target and 
 
 BWS-04 adds a governed Linux adapter around the existing channel deploy, migration, writer, and
 pin machinery. It does not authorize a live deploy or replace promotion/migration acknowledgement.
-Mac Keychain deployment remains unchanged. BWS-03 / #5679 still owns encrypted reader-token
-installation; parent #5667 stays open for that slice and owner live qualification.
+Mac Keychain deployment remains unchanged. BWS-03 / #5679's repository token-push command was
+delivered by PR #5732; parent #5667 stays open for live VM installation, existing-host migration,
+owner-approved sole-writer/credential-restriction or shared-fencing evidence, and channel qualification.
 
 The designated agent-host entrypoint is `python3 -m app.ops.postgres_deploy_host <channel> <revision>`.
 It uses the same BWS controller lock as import/check before selected-consumer parity checks, then
