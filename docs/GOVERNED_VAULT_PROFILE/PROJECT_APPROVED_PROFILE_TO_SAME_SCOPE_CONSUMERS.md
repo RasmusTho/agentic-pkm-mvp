@@ -52,6 +52,14 @@ Consumer convenience must not become a second writer, an implicit approval path,
 
 The projection is rebuildable and therefore may be discarded/rebuilt. Consumers do not retain an in-memory approval cache across restart; on unavailable proof they return explicit no-profile behavior.
 
+## Consumer Scope Binding
+
+The approved Profile Note body carries the consumer scope in one exact, receipt-digest-bound marker:
+`<!--mimer:profile-scope scope_id=scope:...-->`. The projection validates that marker against the
+consumer's explicit active scope before exposing approved content. Frontmatter is outside the approved
+content digest and cannot authorize a scope. Missing, malformed, or mismatched scope yields explicit
+no-profile behavior; the vault identity is never used as a scope substitute.
+
 ## Related Docs
 
 - `docs/GOVERNED_VAULT_PROFILE/README.md`
