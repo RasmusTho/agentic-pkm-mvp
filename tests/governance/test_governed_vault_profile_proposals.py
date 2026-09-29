@@ -225,6 +225,139 @@ def test_pending_profile_proposal_is_excluded_from_standing_question_context(
     assert replay_sources == {}
 
 
+def test_pending_profile_proposal_is_excluded_from_reviewer_context(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    candidate = _candidate(
+        root,
+        note_uuid,
+        proposed_change="PENDING_PROFILE_CANDIDATE_REVIEW_CONTEXT_MARKER",
+    )
+    ProfileAgent(root, _RELATIVE_PATH).propose_candidate(candidate)
+    refresh_panel_note_object(
+        note_uuid=note_uuid,
+        note_path=note_path,
+        raw_text=note_path.read_text(encoding="utf-8"),
+        trace_id="profile-proposal-review-context",
+        vault_root=root,
+    )
+
+    class StubFacade:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        def reason(self, task_kind, input, trace_id=None):
+            self.calls.append(
+                {"task_kind": task_kind, "input": input, "trace_id": trace_id}
+            )
+            return type("Review", (), {"model_dump": lambda self, mode: {}})()
+
+    from app.agents.reviewer import agent as reviewer_agent
+
+    facade = StubFacade()
+    monkeypatch.setattr(reviewer_agent, "get_reasoning_facade", lambda: facade)
+    from app.agents.reviewer.agent import review
+
+    review(note_uuid, trace_id="profile-proposal-review-context")
+
+    assert len(facade.calls) == 1
+    review_text = facade.calls[0]["input"]["text"]
+    assert _BASE_CONTENT in review_text
+    assert candidate.proposed_change not in review_text
+    assert candidate.provenance not in review_text
+    assert candidate.uncertainty not in review_text
+
+
+def test_vault_root_ingestion_rechecks_profile_write_with_explicit_root(
+    profile_note: tuple[Path, Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "profile-outbox.jsonl"))
+
+    agent = ProfileAgent(root, _RELATIVE_PATH)
+    candidate = _candidate(root, note_uuid)
+    agent.propose_candidate(candidate)
+    unchecked_text = note_path.read_text(encoding="utf-8")
+    service = CheckboxProjectionService(
+        idempotency_store=CheckboxProjectionIdempotencyStore()
+    )
+    monkeypatch.setattr(
+        "app.panel.checkbox_projection.resolve_optional_vault_root",
+        lambda: root,
+    )
+
+    from app.knowledge.profile_authority_store import ProfileAuthorityStore
+
+    original_append = ProfileAuthorityStore.append
+
+    def fail_terminal_receipt(self, record, *, expected_revision, authority=None):
+        if isinstance(record, CompletedWriteReceiptRecord):
+            raise OSError("simulated receipt persistence failure")
+        return original_append(
+            self,
+            record,
+            expected_revision=expected_revision,
+            authority=authority,
+        )
+
+    monkeypatch.setattr(ProfileAuthorityStore, "append", fail_terminal_receipt)
+
+    from app.agents.normalizer import agent as normalizer_agent
+    from app.ingest import vault_root as vault_root_ingest
+    from app.objects import ObjectStore
+
+    monkeypatch.setattr(
+        normalizer_agent, "resolve_optional_vault_root", lambda: None
+    )
+    original_normalize = vault_root_ingest.normalize_run
+    normalizer_saves: list[str] = []
+    original_save = ObjectStore.save_object
+
+    def track_save(self, obj, *args, **kwargs):
+        normalizer_saves.append(obj.uuid)
+        return original_save(self, obj, *args, **kwargs)
+
+    monkeypatch.setattr(ObjectStore, "save_object", track_save)
+
+    def create_pending_write_then_normalize(
+        source_path: str,
+        *,
+        trace_id: str,
+        persist: bool = True,
+        vault_root: Path | str | None = None,
+    ):
+        projected = service.project(_checkbox_request(unchecked_text, note_uuid))
+        assert projected.status == "projected"
+        pending = agent.store.load_state()
+        assert pending is not None and len(pending.pending_writes) == 1
+        normalizer_saves.clear()
+        return original_normalize(
+            source_path,
+            trace_id=trace_id,
+            persist=persist,
+            vault_root=vault_root,
+        )
+
+    monkeypatch.setattr(
+        vault_root_ingest, "normalize_run", create_pending_write_then_normalize
+    )
+    with pytest.raises(ProfileAuthorityConflict, match="vault ingestion is blocked"):
+        vault_root_ingest._ingest_file(
+            note_path,
+            trace_id="profile-explicit-root-recheck",
+            vault_root=root,
+        )
+
+    assert normalizer_saves == []
+
+
 def test_moved_profile_note_with_legacy_identity_stays_out_of_standing_questions(
     profile_note: tuple[Path, Path, str],
 ) -> None:

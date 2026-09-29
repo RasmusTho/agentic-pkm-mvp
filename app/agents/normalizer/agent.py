@@ -152,6 +152,7 @@ def run(
     trace_id: str,
     artifact_kind: str | None = None,
     persist: bool = True,
+    vault_root: Path | str | None = None,
 ) -> dict[str, Any]:
     """
     End-to-end:
@@ -163,9 +164,13 @@ def run(
 
     if persist:
         source_path = Path(path).expanduser().resolve(strict=True)
-        vault_root = resolve_optional_vault_root()
-        if vault_root is not None:
-            resolved_root = vault_root.expanduser().resolve(strict=True)
+        resolved_root = (
+            Path(vault_root).expanduser().resolve(strict=True)
+            if vault_root is not None
+            else resolve_optional_vault_root()
+        )
+        if resolved_root is not None:
+            resolved_root = resolved_root.expanduser().resolve(strict=True)
             try:
                 relative_path = source_path.relative_to(resolved_root).as_posix()
             except ValueError:

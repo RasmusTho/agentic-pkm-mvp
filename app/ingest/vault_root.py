@@ -115,7 +115,10 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     # explicit memory backend has no shared canonical provider behind get_stores(),
     # so retain the legacy normalizer row there for classifier compatibility.
     normalize_res = normalize_run(
-        str(path), trace_id=trace_id, persist=store_backend != "pg"
+        str(path),
+        trace_id=trace_id,
+        persist=store_backend != "pg",
+        vault_root=root,
     )
     sanitize_normalize = dict(normalize_res)
     payload_copy = dict(normalize_res.get("payload") or {})
