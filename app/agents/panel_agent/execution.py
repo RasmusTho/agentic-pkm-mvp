@@ -45,10 +45,11 @@ def refresh_panel_note_object(
 ) -> None:
     from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 
-    resolved_root = vault_root.expanduser().resolve(strict=True)
-    # Path.resolve follows symlinks; relative_to below rejects escapes before file I/O.
-    # codeql[py/path-injection]
-    resolved_path = note_path.expanduser().resolve(strict=True)
+    resolved_root = os.path.realpath(vault_root.expanduser(), strict=True)
+    resolved_path = os.path.realpath(note_path.expanduser(), strict=True)
+    root_prefix = resolved_root if resolved_root.endswith(os.sep) else resolved_root + os.sep
+    if resolved_path != resolved_root and not resolved_path.startswith(root_prefix):
+        raise ValueError("Profile Note path is outside its vault")
     frontmatter, _ = load_frontmatter(raw_text)
     source_uuid = (
         frontmatter.get("uuid") or frontmatter.get("id")
@@ -56,8 +57,8 @@ def refresh_panel_note_object(
         else None
     )
     assert_profile_note_ingestible(
-        resolved_root,
-        resolved_path.relative_to(resolved_root).as_posix(),
+        Path(resolved_root),
+        Path(resolved_path).relative_to(Path(resolved_root)).as_posix(),
         str(source_uuid) if source_uuid else None,
         source_text=raw_text,
     )

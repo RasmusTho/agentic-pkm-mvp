@@ -270,6 +270,29 @@ def test_pending_profile_proposal_is_excluded_from_reviewer_context(
     assert candidate.uncertainty not in review_text
 
 
+def test_panel_refresh_rejects_note_outside_vault(
+    profile_note: tuple[Path, Path, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, note_path, note_uuid = profile_note
+    outside_note = tmp_path / "outside.md"
+    outside_note.write_text(note_path.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(
+        "app.agents.panel_agent.execution.ObjectStore.save_object",
+        lambda *_args, **_kwargs: pytest.fail("outside-vault note reached object persistence"),
+    )
+
+    with pytest.raises(ValueError, match="outside its vault"):
+        refresh_panel_note_object(
+            note_uuid=note_uuid,
+            note_path=outside_note,
+            raw_text=outside_note.read_text(encoding="utf-8"),
+            trace_id="profile-refresh-outside-vault",
+            vault_root=root,
+        )
+
+
 def test_vault_root_ingestion_rechecks_profile_write_with_explicit_root(
     profile_note: tuple[Path, Path, str],
     monkeypatch: pytest.MonkeyPatch,
