@@ -124,8 +124,9 @@ paths, non-GET methods and malformed/unexpected queries stop before source reads
 one typed subject. This is an independent packaged browser journey with actual standalone-server
 proof, not a general Companion gateway or deployment executor. Private operator access must preserve
 this boundary, for example through the separately approved SSH tunnel; no ingress is provisioned.
-The image copies the five assets through the filtered build stage, replacing only the managed CSS
-with its committed source-mapped wrapping variant. Runtime asset/metadata checks and shared candidate
+The image copies the six assets through the filtered build stage, replacing only the managed CSS
+with its committed source-mapped wrapping variant and adding the generated Yggdrasil token sheet
+(#5637). Runtime asset/metadata checks and shared candidate
 diagnostics bind served pages and APIs to the addressed package. Historical Companion assets and the
 #4833 inventory remain unchanged; the managed reuse receipt and browser evidence are separate.
 

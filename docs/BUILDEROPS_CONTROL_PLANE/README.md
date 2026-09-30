@@ -104,12 +104,13 @@ ARO-09 / #5504 owns this finite read contract. #5520 delivers source wiring and 
 connects the managed Overview → server-supplied Focus → fresh Overview journey in the independent
 Builder package. The listener remains `python -m app.builderops.devui_runtime` at
 `http://127.0.0.1:8113`, with `builderops-devui` / `devui` on the dedicated `builderops` engine.
-Its entire GET allowlist is `/devui/overview`, `/devui/focus`, `/devui/assets/devui.css`,
+Its entire GET allowlist is `/devui/overview`, `/devui/focus`, `/devui/assets/yggdrasil.css` (the
+generated CSP-compatible Yggdrasil token sheet, #5637), `/devui/assets/devui.css`,
 `/devui/assets/overview.js`, `/devui/assets/focus.js`, `/api/devui/overview`, `/api/devui/focus`,
 `/version` and `/healthz`. There is no wildcard proxy, Product bootstrap, Companion gateway boot,
 external asset or browser credential.
 
-The five managed assets are image-baked and checked against their complete addressed inventory
+The six managed assets are image-baked and checked against their complete addressed inventory
 before source reads. Pages, assets and APIs carry the same source/image/config and asset-inventory
 diagnostics; missing or changed asset bytes or candidate metadata visibly withdraw the journey.
 Those diagnostics are inputs to independent image/config attestation, never attestation themselves.
@@ -203,7 +204,7 @@ The consumed set is closed:
 
 | Component/provider | Required first-read evidence |
 | --- | --- |
-| `devui_projection` | The existing `builderops-devui` / `devui` listener, all five managed assets and candidate-baked documents, unchanged GET allowlist and `_local_request` / `create_app.admit`; externally observed image/config and served document/asset inventories agree. |
+| `devui_projection` | The existing `builderops-devui` / `devui` listener, all six managed assets and candidate-baked documents, unchanged GET allowlist and `_local_request` / `create_app.admit`; externally observed image/config and served document/asset inventories agree. |
 | `builderops_control_plane` | Existing PostgreSQL authority, migration/readiness, API, worker and epoch/fencing on the dedicated `builderops` engine; source-owned repository grants, `status:read` and `receipts:read`, real Issue-bearing task and any explicitly addressed receipt reads. This does not establish API-only client cutover. |
 | `builderops_cockpit` | The existing pure Cockpit read-time composition inside that same Builder image; no separate Cockpit service is introduced. Its work, GitHub and candidate-document inputs must have admitted provenance. |
 | `github_git_ci_delivery` | Existing bounded gh REST reader, server-side credential custody and addressed repository/Issue/PR/check identity. GitHub remains lifecycle truth; no merge/readiness inference. |
