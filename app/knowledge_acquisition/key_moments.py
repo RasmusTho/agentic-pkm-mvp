@@ -28,7 +28,6 @@ from app.knowledge_acquisition.evidence_synthesis import (
     validate_generated_language,
     validate_resolvable_anchor,
 )
-from app.knowledge_acquisition.raw_record import raw_record_object_id
 from app.knowledge_acquisition.extraction_persistence import (
     ExtractionPersistenceError,
     PersistedExtraction,
@@ -37,6 +36,7 @@ from app.knowledge_acquisition.extraction_persistence import (
     _metadata_bundle,
     _parse_iso,
 )
+from app.knowledge_acquisition.raw_record import raw_record_object_id
 
 KEY_MOMENTS_ARTIFACT_KIND = "knowledge_acquisition.key_moments"
 KEY_MOMENTS_STAGE = "select_key_moments"
@@ -131,8 +131,11 @@ def derive_key_moments(
     }
     for chapter in transcript.extensions.get("chapters") or ():
         index = _chapter_segment(chapter, segments)
-        if index is None or not str(chapter.get("title") or "").strip():
+        if index is None:
             dropped.append("chapter_anchor_unresolvable")
+            continue
+        if not str(chapter.get("title") or "").strip():
+            dropped.append("chapter_title_missing")
             continue
         candidate = candidates[index]
         candidate["chapters"].append(str(chapter["title"]))

@@ -166,7 +166,15 @@ def test_selected_moments_are_timestamped_anchored_and_lineage_bearing() -> None
     by_time = {moment["timestamp_seconds"]: moment for moment in persisted.moments}
     assert set(by_time) == {30, 150}
     assert by_time[150]["evidence"][0] == {"kind": "chapter", "source_wording": "Setting up the lab"}
-    assert persisted.dropped == ("chapter_anchor_unresolvable",) * 4 + ("claim_anchor_unresolvable",) * 3
+    assert persisted.dropped == (
+        ("chapter_anchor_unresolvable",) * 3
+        + ("chapter_title_missing",)
+        + ("claim_anchor_unresolvable",) * 3
+    )
+    # The raw-identity binding uses the production YouTube source kind.
+    from app.knowledge_acquisition import youtube_plugin
+
+    assert key_moments_module._YOUTUBE_SOURCE_KIND == youtube_plugin.SOURCE_KIND
 
     # Stable identity: re-deriving the same ancestors is an idempotent rebuild.
     replay = derive_key_moments(transcript=transcript, item_ref=VIDEO_ID, claims_extraction=claims)
