@@ -283,6 +283,65 @@ def test_overlay_connection_requires_anchor_and_owner_link_with_separated_fields
     )
     assert "keeps every file on your own disk" in note
 
+    # The owner link must quote one approved profile entry: not a heading, a
+    # cross-line span, or a stray word; and fields may not contain one another.
+    weak = render_interest_overlay(
+        vault_root=root,
+        active_scope_id=_SCOPE,
+        normalized=_EN_NORMALIZED,
+        connections=[
+            _connection(owner_link="Interests"),
+            _connection(owner_link="Interests - Prefer local-first"),
+            _connection(owner_link="retrieval"),
+            _connection(system_inference="The source says it keeps every file on your own disk today."),
+            _connection(owner_link="local-first knowledge tools"),
+        ],
+    )
+    assert weak.dropped == (
+        "owner_link_not_in_approved_profile",
+        "owner_link_not_in_approved_profile",
+        "owner_link_not_in_approved_profile",
+        "fields_not_separated",
+    )
+    assert [c["owner_link"] for c in weak.connections] == ["local-first knowledge tools"]
+
+    # Transcript markup is inert: links are escaped and embeds are refused, so
+    # one odd segment never aborts the note or becomes an active link.
+    markup_segments = [
+        {"start": 0.0, "end": 9.0, "text": "See [click](javascript:alert(1)) for *details* now."},
+        {"start": 3700.0, "end": 3710.0, "text": "Open ![[secret.md]] for the rest of it."},
+    ]
+    markup = render_interest_overlay(
+        vault_root=root,
+        active_scope_id=_SCOPE,
+        normalized={"language": "en", "segments": markup_segments},
+        connections=[
+            _connection(
+                source_says="[click](javascript:alert(1)) for *details*",
+                anchors=[{"segment_index": 0, "start": 0.0, "end": 9.0}],
+            ),
+            _connection(
+                source_says="Open ![[secret.md]] for the rest",
+                anchors=[{"segment_index": 1, "start": 3700.0, "end": 3710.0}],
+            ),
+        ],
+    )
+    assert markup.dropped == ("connection_contains_embed",)
+    markup_note = render_review_required_note(
+        frontmatter={"type": "source-note"}, proposal_sections=[markup.section()], evidence=[("Source", "fixture")]
+    )
+    assert r"\[click\](javascript:alert(1)) for \*details\*" in markup_note
+    assert "[click](javascript" not in markup_note
+    long_source = render_interest_overlay(
+        vault_root=root,
+        active_scope_id=_SCOPE,
+        normalized={"language": "en", "segments": markup_segments},
+        connections=[
+            _connection(source_says="for the rest of it", anchors=[{"segment_index": 1, "start": 3700.0, "end": 3710.0}])
+        ],
+    )
+    assert "(1:01:40)" in long_source.section().content
+
     # An admitted profile with no supported connection renders one explicit line.
     empty = render_interest_overlay(
         vault_root=root, active_scope_id=_SCOPE, normalized=_EN_NORMALIZED, connections=[_connection(anchors=[])]

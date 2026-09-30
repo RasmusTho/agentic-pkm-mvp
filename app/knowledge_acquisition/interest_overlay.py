@@ -23,6 +23,7 @@ Incomplete, collapsed, or foreign-field connections are dropped and reported.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
@@ -44,7 +45,10 @@ OverlayStatus = Literal["connections", "no-connections", "no-profile"]
 _CONNECTION_FIELDS = frozenset(
     {"source_says", "anchors", "system_inference", "owner_link", "suggested_use"}
 )
-_MIN_OWNER_LINK_CHARS = 8
+_MIN_OWNER_LINK_WORDS = 3
+_EMBED_OPENER = "![["
+_LINE_MARKER = re.compile(r"^(?:[-*+>]\s+|\d+[.)]\s+)+")
+_MARKDOWN_ACTIVE = re.compile(r"([\\`*_\[\]!|~])")
 
 NO_PROFILE_LINES: Mapping[str, str] = {
     "en": "No approved profile is available for this scope, so no interest connections were produced.",
@@ -135,6 +139,8 @@ def render_interest_overlay(
 ) -> InterestOverlay:
     """Render four-part connections against the admitted governed profile only."""
 
+    if not isinstance(normalized, Mapping):
+        normalized = {}
     language = system_language_for(normalized.get("language"))
     projection = read_governed_profile_for_overlay(vault_root, active_scope_id=active_scope_id)
     if not projection.available or not projection.profile_content:
@@ -144,11 +150,13 @@ def render_interest_overlay(
     segments = normalized.get("segments")
     if not isinstance(segments, list):
         segments = []
-    profile_text = _normalize_space(projection.profile_content)
+    profile_lines = _profile_lines(projection.profile_content)
+    if not isinstance(connections, Sequence) or isinstance(connections, (str, bytes)):
+        connections = ()
     kept: list[Mapping[str, Any]] = []
     dropped: list[str] = []
     for candidate in connections:
-        outcome = _admit_connection(candidate, segments, profile_text, language)
+        outcome = _admit_connection(candidate, segments, profile_lines, language)
         if isinstance(outcome, str):
             dropped.append(outcome)
             continue
@@ -174,7 +182,7 @@ def render_interest_overlay(
 def _admit_connection(
     candidate: object,
     segments: Sequence[object],
-    profile_text: str,
+    profile_lines: Sequence[str],
     language: str,
 ) -> dict[str, Any] | str:
     """Return the admitted connection or the reason it was dropped."""
@@ -209,10 +217,18 @@ def _admit_connection(
         fields[name] = value
 
     owner_link = _normalize_space(fields["owner_link"])
-    if len(owner_link) < _MIN_OWNER_LINK_CHARS or owner_link not in profile_text:
+    if len(owner_link.split()) < _MIN_OWNER_LINK_WORDS or not any(
+        owner_link in line for line in profile_lines
+    ):
+        # The match signal must quote one approved profile entry, not a heading,
+        # a cross-line span, or a stray word.
         return "owner_link_not_in_approved_profile"
-    normalized_fields = {_normalize_space(value).casefold() for value in fields.values()}
-    if len(normalized_fields) != len(fields):
+    if any(_EMBED_OPENER in value for value in fields.values()):
+        return "connection_contains_embed"
+    normalized_fields = [_normalize_space(value).casefold() for value in fields.values()]
+    if any(
+        i != j and a in b for i, a in enumerate(normalized_fields) for j, b in enumerate(normalized_fields)
+    ):
         return "fields_not_separated"
     for name in ("system_inference", "suggested_use"):
         if not validate_generated_language(fields[name], language):
@@ -237,6 +253,20 @@ def _normalize_space(value: str) -> str:
     return " ".join(value.split())
 
 
+def _profile_lines(profile_content: str) -> tuple[str, ...]:
+    """Approved profile entries with list markers removed; headings are not entries."""
+
+    lines: list[str] = []
+    for raw in profile_content.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        line = _normalize_space(_LINE_MARKER.sub("", line))
+        if line:
+            lines.append(line)
+    return tuple(lines)
+
+
 def _segment_text(segments: Sequence[object], anchor: Mapping[str, Any]) -> str:
     segment = segments[int(anchor["segment_index"])]
     text = segment.get("text") if isinstance(segment, Mapping) else None
@@ -257,7 +287,9 @@ def _anchor_projection(segments: Sequence[object], anchor: Mapping[str, Any]) ->
 
 def _timestamp(seconds: float) -> str:
     whole = int(math.floor(seconds))
-    return f"{whole // 60:02d}:{whole % 60:02d}"
+    hours, rest = divmod(whole, 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
 
 
 def _render_connection(connection: Mapping[str, Any], language: str) -> str:
@@ -275,7 +307,9 @@ def _render_connection(connection: Mapping[str, Any], language: str) -> str:
 
 
 def _inline(value: str) -> str:
-    return _normalize_space(value).replace("*", r"\*").replace("_", r"\_")
+    """Render one field as inert inline text (no links, emphasis, or code)."""
+
+    return _MARKDOWN_ACTIVE.sub(r"\\\1", _normalize_space(value))
 
 
 __all__ = [
