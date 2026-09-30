@@ -97,7 +97,6 @@ by its own dedicated test in ``tests/agents/panel_agent/``, not duplicated here.
 
 from __future__ import annotations
 
-import ast
 import enum
 import hashlib
 import inspect
@@ -116,6 +115,7 @@ from app.events.models import new_event
 from app.objects import ObjectStore
 from app.promotion import consumer as promotion_consumer
 from app.stores import get_vector_index
+from tests.helpers.topic_dispatch import enumerate_topic_comparators
 
 pytestmark = pytest.mark.not_pg
 
@@ -139,49 +139,7 @@ def _enumerate_topic_comparators(source: str, module_ns: dict[str, Any]) -> list
       new topic could ship with zero coverage while the fixture gate stayed
       green (see test_string_literal_dispatch_branch_is_enumerated).
     """
-    tree = ast.parse(source)
-    func_def = tree.body[0]
-    assert isinstance(func_def, ast.FunctionDef)
-
-    comparators: list[ast.expr] = []
-
-    def _walk_if_chain(node: ast.stmt) -> None:
-        if not isinstance(node, ast.If):
-            return
-        test = node.test
-        if (
-            isinstance(test, ast.Compare)
-            and isinstance(test.left, ast.Name)
-            and test.left.id == "topic"
-            and len(test.ops) == 1
-            and isinstance(test.ops[0], ast.Eq)
-        ):
-            comparators.extend(test.comparators)
-        for stmt in node.orelse:
-            _walk_if_chain(stmt)
-
-    for stmt in func_def.body:
-        _walk_if_chain(stmt)
-
-    resolved: list[str] = []
-    for comparator in comparators:
-        if isinstance(comparator, ast.Constant):
-            assert isinstance(comparator.value, str), (
-                f"dispatch table compares topic against non-string literal {comparator.value!r}"
-            )
-            resolved.append(comparator.value)
-        elif isinstance(comparator, ast.Name):
-            name = comparator.id
-            assert name in module_ns, f"dispatch table references undefined name {name!r}"
-            value = module_ns[name]
-            assert isinstance(value, str), f"dispatch table constant {name!r} is not a string topic"
-            resolved.append(value)
-        else:  # pragma: no cover - guards against an unrecognized comparator form
-            raise AssertionError(
-                f"dispatch table compares topic against an unsupported node {type(comparator).__name__}; "
-                "extend _enumerate_topic_comparators to resolve it so the topic cannot ship uncovered."
-            )
-    return resolved
+    return enumerate_topic_comparators(source, module_ns)
 
 
 def _dispatched_topics() -> list[str]:
