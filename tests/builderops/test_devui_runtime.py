@@ -1168,6 +1168,7 @@ def test_managed_overview_rereads_sources_and_preserves_vm102(managed_sources) -
 MANAGED_ROUTES = {
     "/devui/overview": "overview.html",
     "/devui/focus": "focus.html",
+    "/devui/assets/yggdrasil.css": "yggdrasil.css",
     "/devui/assets/devui.css": "devui.css",
     "/devui/assets/overview.js": "overview.js",
     "/devui/assets/focus.js": "focus.js",
@@ -1182,6 +1183,7 @@ def _package_managed_shell(root: Path) -> None:
     source = ROOT / "companion-ui/companion-app/companion_ui/workspace/devui_candidate"
     shutil.copytree(source, root / "assets", dirs_exist_ok=True)
     shutil.copyfile(ROOT / "app/builderops/devui_managed.css", root / "assets/devui.css")
+    shutil.copyfile(ROOT / "app/builderops/devui_tokens.css", root / "assets/yggdrasil.css")
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["files"].update(

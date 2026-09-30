@@ -13,12 +13,12 @@
   },
   "candidate": {
     "subtree": "companion-ui/companion-app/companion_ui/workspace/devui_candidate",
-    "tree": "354f9d2c97c7c411f17bd2d070ef32bcdd521023",
+    "tree": "1fee7f1ac2641d40247de37fa0e90d3d7bd95a7f",
     "inventory": {
       "devui.css": "0a473a000bf9c15bb4ffbab93088c25e8f25d752",
-      "focus.html": "0bc461c6105f069702f4d4187b2c08f86e2661d8",
+      "focus.html": "bcf5e547bd70a5ed159d51a68c37c6ea5ce9dbbc",
       "focus.js": "2a11e4a04f204d1bca615a269757c06b380160e4",
-      "overview.html": "9b9ff9f58e6fb92b13396d234578eb8aa2c3adf7",
+      "overview.html": "f47bd3f93c6f33afb702bcb693362d43f52d35bb",
       "overview.js": "bf61c7f1bbe22b54f658f59886134ac892a3260b"
     }
   },
@@ -461,6 +461,30 @@
           "source_anchor": ".rungs .r-val{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2);overflow-wrap:break-word}"
         }
       ]
+    },
+    {
+      "issue": 5637,
+      "transformation_id": "issue-5637-generated-token-sheet-link",
+      "kind": "content_binding",
+      "source_path": "app/web/static/signboard.html",
+      "source_commit": "91cbb2bb43216e0ff0818b0685f9c6c76342b1ad",
+      "source_sha256": "sha256:cae1c56696ec6e26a14f5997a49544a52d050d9ad18ffc924d56892329c0b408",
+      "source_git_blob_oid": "21915fb136800650548b6fbbd601ecee50e3c7bf",
+      "source_anchors": [
+        "<link rel=\"stylesheet\" href=\"/static/yggdrasil-tokens.css\">\n  <link rel=\"stylesheet\" href=\"/static/signboard.css\">"
+      ],
+      "candidate_paths": [
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html"
+      ],
+      "candidate_anchors": [
+        "<link rel=\"stylesheet\" href=\"/devui/assets/yggdrasil.css\">\n  <link rel=\"stylesheet\" href=\"/devui/assets/devui.css\">"
+      ],
+      "candidate_git_blob_oids": {
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html": "f47bd3f93c6f33afb702bcb693362d43f52d35bb",
+        "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html": "bcf5e547bd70a5ed159d51a68c37c6ea5ce9dbbc"
+      },
+      "exact_rule": "Load the generated Yggdrasil tokens-only sheet as a same-origin DevUI asset immediately before the page stylesheet, as the shipped YDS-04 Builder pages do; the sheet is the generator's CSP-compatible rendering with no web-font import. No text, landmark, route, script, interaction, or authority change; the rendered token values are the accepted declarations the managed stylesheet previously copied inline."
     }
   ],
   "historical_consumer_issues": [

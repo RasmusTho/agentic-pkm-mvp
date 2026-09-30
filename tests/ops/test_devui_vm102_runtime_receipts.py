@@ -42,7 +42,10 @@ def _package_runtime_candidate(
     (root / "docs").mkdir()
     historical = ROOT / "companion-ui/companion-app/companion_ui/workspace/devui_candidate"
     for name in ASSET_SHA256:
-        source = ROOT / "app/builderops/devui_managed.css" if name == "devui.css" else historical / name
+        source = {
+            "devui.css": ROOT / "app/builderops/devui_managed.css",
+            "yggdrasil.css": ROOT / "app/builderops/devui_tokens.css",
+        }.get(name, historical / name)
         shutil.copyfile(source, root / "assets" / name)
     shutil.copyfile(ROOT / "app/builderops/ckm/seed/capabilities.yaml", root / "docs/capabilities.yaml")
     shutil.copyfile(ROOT / "docs/architecture/traceability-matrix.md", root / "docs/matrix.md")
