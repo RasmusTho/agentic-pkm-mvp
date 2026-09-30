@@ -9,7 +9,9 @@ JSON Schemas used across the repo. Three groups live here:
   of the doctrine, functional ontology, semantic dimensions, and CrossScopeFlow model. These pair
   one-to-one with prose docs under `docs/architecture/` and do **not** implement runtime behavior.
 - **`events/` — the event topic schema registry** (KERNEL-08, #2770): `<topic>.v1.schema.json` per
-  topic dispatched by `app/workers/outbox_worker.py::_dispatch_topic`. Unlike the two groups above,
+  topic dispatched by `app/workers/outbox_worker.py::_dispatch_topic`, plus a closed
+  `<topic>.v2.schema.json` for the seven kernel topics (#5704); older versions stay registered for
+  rows already tagged with them. Unlike the two groups above,
   these **are** runtime-enforced: `app/services/outbox.py::write_outbox_event` and
   `app/workers/outbox_worker.py::_dispatch_topic` validate against them via
   `app/events/topic_schema_registry.py` (the `jsonschema` `Draft202012Validator`, the same machinery

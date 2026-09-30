@@ -29,7 +29,10 @@ from app.events.types import (
 )
 from app.events.schema import make_outbox_event
 from app.events.topic_schema_registry import (
+    LEGACY_UNTAGGED_V0,
     TopicSchemaViolation,
+    baseline_schema_ref,
+    dispatch_schema_ref,
     is_registered_topic,
     resolve_payload_schema_version,
     validate_topic_payload,
@@ -430,7 +433,9 @@ def _message_meta(message: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return meta if isinstance(meta, Mapping) else None
 
 
-def _validate_dispatch_payload(topic: str | None, payload: Mapping[str, Any], *, message: Mapping[str, Any]) -> None:
+def _validate_dispatch_payload(
+    topic: str | None, payload: Mapping[str, Any], *, message: Mapping[str, Any]
+) -> str | None:
     """Validate ``payload`` at dispatch against its registered topic schema.
 
     Grandfathering (cross-task invariant #1, ``docs/RUNTIME_CORRECTNESS_KERNEL/README.md``):
@@ -440,12 +445,24 @@ def _validate_dispatch_payload(topic: str | None, payload: Mapping[str, Any], *,
     :class:`SchemaViolationDispatchError` so the caller dead-letters immediately
     with reason ``schema_violation`` instead of running the handler on a payload
     known to violate its own contract (no partial processing).
+
+    Version semantics (#5704): a tagged row is validated against the exact
+    registered version it was written under (``<topic>.v1`` rows keep the open
+    v1 contract, ``<topic>.v2`` rows the closed one); a v0 row is checked
+    log-only against the v1 baseline. Returns the row's schema ref
+    (:func:`dispatch_schema_ref`) so a worker retry re-emits under the same
+    version, or ``None`` for an unregistered topic.
     """
     if topic is None or not is_registered_topic(topic):
-        return
+        return None
     version = resolve_payload_schema_version(_message_meta(message))
+    schema_ref = dispatch_schema_ref(topic, version)
     try:
-        validate_topic_payload(topic, payload)
+        validate_topic_payload(
+            topic,
+            payload,
+            schema_ref=baseline_schema_ref(topic) if schema_ref == LEGACY_UNTAGGED_V0 else schema_ref,
+        )
     except TopicSchemaViolation as violation:
         if version.is_grandfathered:
             logger.warning(
@@ -453,8 +470,9 @@ def _validate_dispatch_payload(topic: str | None, payload: Mapping[str, Any], *,
                 topic,
                 violation.reason,
             )
-            return
+            return schema_ref
         raise SchemaViolationDispatchError(violation) from violation
+    return schema_ref
 
 
 def _dispatch_topic(
@@ -476,7 +494,7 @@ def _dispatch_topic(
     Schema validation (KERNEL-08, #2770) runs first, before any handler: an
     invalid payload against a registered schema must never partially process.
     """
-    _validate_dispatch_payload(topic, payload, message=message)
+    payload_schema = _validate_dispatch_payload(topic, payload, message=message)
     source_vault_binding_id = str(
         message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
     )
@@ -487,6 +505,7 @@ def _dispatch_topic(
             payload,
             trace_id=trace_id,
             source_vault_binding_id=source_vault_binding_id,
+            payload_schema=payload_schema,
         )
     elif topic == INGEST_OBJECT_DELETED:
         handle_ingest_object_deleted(payload)
@@ -497,6 +516,7 @@ def _dispatch_topic(
             trace_id=trace_id,
             scan_requested_ts=event_timestamp,
             source_vault_binding_id=source_vault_binding_id,
+            payload_schema=payload_schema,
         )
     elif topic == PROMOTE_INTENT_CREATED:
         from app.promotion.consumer import consume_promotion_intent_payload
@@ -1448,7 +1468,15 @@ def _queue_transient_retry(
     trace_id: str | None = None,
     original_event_id: str | None = None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    payload_schema: str | None = None,
 ) -> bool:
+    """Re-emit ``payload`` with the three typed ``_worker_retry_*`` fields.
+
+    ``payload_schema`` is the source row's dispatch schema ref (#5704): the
+    retry row is validated and tagged under that same version (``v0`` stays
+    untagged/log-only), never silently upgraded to the current closed schema.
+    ``None`` (direct callers outside dispatch) uses the current version.
+    """
     retry_count = _payload_retry_count(payload)
     if retry_count >= _MAX_TRANSIENT_RETRY_ATTEMPTS:
         try:
@@ -1504,6 +1532,7 @@ def _queue_transient_retry(
                 ),
                 required_db=True,
                 vault_binding_id=source_vault_binding_id,
+                payload_schema=payload_schema,
             )
         else:
             append_jsonl_outbox_event(_outbox_audit_path(), retry_event, default_source="worker")
@@ -1535,6 +1564,7 @@ def handle_panel_scan_requested(
     trace_id: str | None = None,
     scan_requested_ts: str | None = None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    payload_schema: str | None = None,
 ) -> WorkerPanelSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
@@ -1552,6 +1582,7 @@ def handle_panel_scan_requested(
             reason="file_unstable",
             trace_id=trace_id,
             source_vault_binding_id=source_vault_binding_id,
+            payload_schema=payload_schema,
         ):
             if _retry_exhausted(payload):
                 logger.warning("panel scan dropped after exhausted retries (file unstable) note_path=%s", note_path)
@@ -1585,6 +1616,7 @@ def handle_panel_scan_requested(
             reason="missing_uuid",
             trace_id=trace_id,
             source_vault_binding_id=source_vault_binding_id,
+            payload_schema=payload_schema,
         ):
             if _retry_exhausted(payload):
                 logger.warning("panel scan dropped after exhausted retries (missing uuid) note_path=%s", note_path)
@@ -1697,6 +1729,7 @@ def handle_ingest_vault_changed(
     vault_root: Path | None = None,
     trace_id: str | None = None,
     source_vault_binding_id: str = COMPATIBILITY_BINDING_ID,
+    payload_schema: str | None = None,
 ) -> WorkerIngestSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
@@ -1710,6 +1743,7 @@ def handle_ingest_vault_changed(
             reason="missing_or_unstable_note",
             trace_id=trace_id,
             source_vault_binding_id=source_vault_binding_id,
+            payload_schema=payload_schema,
         ):
             if _retry_exhausted(payload):
                 logger.warning("ingest dropped after exhausted retries note_path=%s", note_path)

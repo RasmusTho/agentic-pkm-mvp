@@ -1,0 +1,196 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/promote.intent.created.v2.schema.json",
+  "title": "promote.intent.created payload (v2, closed)",
+  "description": "Payload of promote.intent.created. Producer alternatives: app/agents/panel_agent/graph.py::_promotion_event (note/panel/action/instruction/trust_verb, plus maturity/transition), app/agents/panel_agent/runtime.py downstream emission (note_uuid/note_path/action_id/params), and app/orchestrator/executor.py (note/action/instruction/maturity/review_state/transition). Consumer app/promotion/consumer.py locates the note from note.uuid/note.path or note_path, so one of those is required. Nested objects stay open. Closed contract (#5704): undeclared top-level fields are rejected; producer extras belong under `extensions`. v1 stays registered for rows already tagged `promote.intent.created.v1`.",
+  "type": "object",
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "required": [
+        "note"
+      ],
+      "properties": {
+        "note": {
+          "anyOf": [
+            {
+              "required": [
+                "uuid"
+              ],
+              "properties": {
+                "uuid": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            {
+              "required": [
+                "path"
+              ],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "required": [
+        "note_path"
+      ],
+      "properties": {
+        "note_path": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  ],
+  "properties": {
+    "note": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "uuid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "note_path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "note_uuid": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "panel": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "action": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "action_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "params": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "instruction": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "maturity": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "review_state": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "trust_verb": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "transition": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "family": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_maturity": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "trace_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Envelope event id the worker run() loop copies into the payload before dispatch; carried onto retries."
+    },
+    "_worker_retry_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Worker transient-retry attempt number (app/workers/outbox_worker.py::_queue_transient_retry)."
+    },
+    "_worker_retry_reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Worker transient-retry reason code."
+    },
+    "_worker_retry_enqueued_at": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UTC ISO-8601 timestamp of the worker retry enqueue."
+    },
+    "extensions": {
+      "type": "object",
+      "description": "The only open extension point: producer-specific extras must be nested here, never added as undeclared top-level fields."
+    }
+  }
+}

@@ -46,7 +46,8 @@ def test_write_outbox_event_serializes_payload():
         "uuid": "abc-123",
         "kind": "capture_note",
         "trace_id": "trace-1",
-        "ts": datetime.now(timezone.utc).isoformat(),
+        # Closed v2 contract (#5704): producer extras ride under `extensions`.
+        "extensions": {"ts": datetime.now(timezone.utc).isoformat()},
     }
 
     event = new_event(event_type=INGEST_OBJECT_CREATED, payload=payload, trace_id=payload["trace_id"])
