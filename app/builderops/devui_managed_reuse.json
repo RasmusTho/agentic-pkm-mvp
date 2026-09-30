@@ -1,11 +1,11 @@
 {
-  "payload_sha256": "sha256:a8c1f1a2a1015d50dfe35dd6836d9066ca879b0a484461c4946b923628dcdc38",
+  "payload_sha256": "sha256:28b2a215934766e678787bf3879de8285ced98f70704c1a6fe28783838206ae8",
   "provenance_payload": {
     "contract_version": "yggdrasil-constrained-reuse.v1",
     "repository_commit": "63b1227bfc46becac96284e05a20798cf701c291",
     "authorship": {
       "author_identity": "claude-opus-5-5:session-10dda209",
-      "created_at": "2026-09-30T13:30:27Z"
+      "created_at": "2026-09-30T13:42:48Z"
     },
     "authority_claims": {
       "live_design_system_selection": "not_claimed",
@@ -110,11 +110,11 @@
       {
         "source_id": "source-5637-generated-token-sheet",
         "source_path": "companion-ui/companion-app/yggdrasil-tokens.css",
-        "stable_ref": "generated Yggdrasil tokens-only sheet (design-system/yggdrasil/build.py) shipped by YDS-03/YDS-04 at 91cbb2bb43216e0ff0818b0685f9c6c76342b1ad",
+        "stable_ref": "generated Yggdrasil v2.2.1 tokens-only sheet (design-system/yggdrasil/build.py), shipped to Companion and Builder pages, entire file at 8cb453986944b98b7dac483973aae67e8c5e64e7",
         "source_role": "pattern",
-        "content_sha256": "sha256:69f00d3530d3652900b74624eef9128025d121dbccdd43918b57416733781a87",
-        "source_commit": "91cbb2bb43216e0ff0818b0685f9c6c76342b1ad",
-        "source_git_blob_oid": "f2e3117d445fff85abb6456d822b90e928775bec"
+        "content_sha256": "sha256:ed184e7721b4e06b79490dc79bbe64c757103928f6f3d7050d27af2e519a9be2",
+        "source_commit": "8cb453986944b98b7dac483973aae67e8c5e64e7",
+        "source_git_blob_oid": "ef6468188b6529d41f76c7651c32da1354335bc5"
       },
       {
         "source_id": "source-5637-builder-token-link",
@@ -1330,10 +1330,10 @@
     "reviewer_identity": "PENDING",
     "independent_from_author": false,
     "independence_basis": "PENDING",
-    "reviewed_payload_sha256": "sha256:a8c1f1a2a1015d50dfe35dd6836d9066ca879b0a484461c4946b923628dcdc38",
+    "reviewed_payload_sha256": "sha256:28b2a215934766e678787bf3879de8285ced98f70704c1a6fe28783838206ae8",
     "reviewed_at": "PENDING",
     "verdict": "pending",
     "findings": []
   },
-  "receipt_sha256": "sha256:d03d8864455e01d89ead6c4ea425b2b3eb06ce83e284705880b0b58dbe859d9b"
+  "receipt_sha256": "sha256:d3416e420abef77c36e768c32d63782c51e09593598fae00b79513cd1c6a0437"
 }
