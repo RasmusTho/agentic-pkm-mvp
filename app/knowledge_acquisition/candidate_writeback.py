@@ -58,6 +58,11 @@ from app.knowledge_acquisition.evidence_synthesis import (
     RenderedEvidence,
     render_evidence_anchored,
 )
+from app.knowledge_acquisition.ontology_proposals import (
+    RenderedOntology,
+    ontology_section_content,
+    render_ontology_proposals,
+)
 from app.knowledge_acquisition.note_renderer import (
     NoteRenderError,
     ProposalSection,
@@ -127,6 +132,7 @@ class Candidate:
     optional_failures: tuple["ExtractionFailure", ...] = ()
     derived_transcript_link: str | None = None
     rendered_evidence: RenderedEvidence | None = None
+    rendered_ontology: RenderedOntology | None = None
 
     def summary_text(self) -> str | None:
         for extraction in self.extractions:
@@ -234,6 +240,12 @@ def assemble_candidate(
         normalized=normalized_dict,
         extractions=extractions,
     )
+    # YSNV2-08: ontology output renders only through the deterministic gate and per-element
+    # anchoring re-check; a failed gate omits the section. Proposal-only, never canonical.
+    rendered_ontology = None if is_metadata_only else render_ontology_proposals(
+        next((r.output for r in extractions if r.extractor_id == "ontology"), None),
+        normalized_dict,
+    )
 
     return Candidate(
         content_identity=content_identity,
@@ -254,6 +266,7 @@ def assemble_candidate(
         ),
         optional_failures=tuple(optional_failures),
         rendered_evidence=rendered_evidence,
+        rendered_ontology=rendered_ontology,
     )
 
 
@@ -376,6 +389,19 @@ def render_candidate_note(candidate: Candidate) -> str:
 
 def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:
     """Render reviewable extraction outputs without assigning them authority."""
+    sections = _evidence_and_summary_sections(candidate)
+    if candidate.rendered_ontology is None:
+        return sections
+    return sections + (
+        ProposalSection(
+            module_id="ontology-proposals",
+            title="Ontology proposals",
+            content=ontology_section_content(candidate.rendered_ontology),
+        ),
+    )
+
+
+def _evidence_and_summary_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:
     if candidate.rendered_evidence is not None:
         sections: list[ProposalSection] = []
         if candidate.rendered_evidence.synthesis_sentences:

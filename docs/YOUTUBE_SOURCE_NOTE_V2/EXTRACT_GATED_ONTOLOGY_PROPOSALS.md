@@ -53,4 +53,26 @@ Promotion into SIP ontology, ontology editing UI, and frame-assisted gate signal
 
 ## Related GitHub Issues
 
-Draft issue type: `type:task`, `prio:med`, `agent:blocked` pending YSNV2-05. SBS class: Product/Runtime. Recommended capability: Sol/xhigh; proposal authority and provenance boundaries require high-confidence review.
+[#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — delivered by PR #PRNUM. SBS class: Product/Runtime.
+
+## Delivery record
+
+Delivered implementation:
+
+- `app/knowledge_acquisition/ontology_proposals.py` holds the deterministic, model-free gate. It
+  uses closed English/Swedish cue sets for four signal families: definition, taxonomy, relation, and
+  distinction. It passes only when at least two families each match in at least two distinct,
+  time-bounded transcript segments. The same module re-validates elements at render time.
+- `app/knowledge_acquisition/extractors/ontology_extractor.py` registers the `ontology`
+  extractor (`extract.ontology`). A failed gate returns an empty, gate-bearing output without a
+  model call. The model schema has no status or authority field. Each accepted element is stamped
+  `status: proposed`, with `source_definition` and `system_paraphrase` wording classes, bounded
+  confidence, and resolvable anchors. A `source_definition` must be a verbatim span of its
+  anchored transcript text. Elements that fail anchoring, verbatim-source, or D6 checks are
+  dropped and reported.
+- `candidate_writeback` renders validated proposals as the `ontology-proposals` module inside
+  the non-authoritative proposal band. The section is omitted when the gate fails or when no
+  valid element remains. No concept, relation, review-state, or triage-state write occurs.
+
+The extractor is opt-in through explicit extractor selection. It is not part of
+`DEFAULT_EXTRACTOR_IDS`, and module routing remains owned by YSNV2-07 (#4114).
