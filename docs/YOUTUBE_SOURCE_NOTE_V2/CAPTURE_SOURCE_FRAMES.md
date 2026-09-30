@@ -1,4 +1,3 @@
-pyenv: cannot rehash: /Users/rasmus/.pyenv/shims isn't writable
 ---
 name: Capture source frames
 description: Capture source-dependent frames with bounded temporary media and deletion receipts.
