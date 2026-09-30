@@ -28,6 +28,7 @@ from app.knowledge_acquisition.evidence_synthesis import (
     validate_generated_language,
     validate_resolvable_anchor,
 )
+from app.knowledge_acquisition.raw_record import raw_record_object_id
 from app.knowledge_acquisition.extraction_persistence import (
     ExtractionPersistenceError,
     PersistedExtraction,
@@ -41,6 +42,8 @@ KEY_MOMENTS_ARTIFACT_KIND = "knowledge_acquisition.key_moments"
 KEY_MOMENTS_STAGE = "select_key_moments"
 KEY_MOMENTS_STAGE_VERSION = 1
 OUTPUT_MODE = "timestamp_only"
+# Mirrors ``youtube_plugin.SOURCE_KIND`` without importing the media-capable plugin module.
+_YOUTUBE_SOURCE_KIND = "youtube_url"
 
 # Budget: roughly one moment per four minutes of source, bounded to [1, 12].
 _SECONDS_PER_MOMENT = 240.0
@@ -97,6 +100,11 @@ def derive_key_moments(
 
     if not isinstance(item_ref, str) or not _SAFE_ITEM_REF.fullmatch(item_ref):
         raise KeyMomentsError("key moments require a safe stable YouTube item_ref")
+    expected_raw_id = raw_record_object_id(
+        source_kind=_YOUTUBE_SOURCE_KIND, item_ref=item_ref, content_identity=transcript.content_identity
+    )
+    if str(expected_raw_id) != transcript.raw_record_id:
+        raise KeyMomentsError("item_ref does not identify this transcript's raw source record")
     derived_from = [transcript.raw_record_id, transcript.object_id]
     if claims_extraction is not None:
         if (
@@ -123,11 +131,11 @@ def derive_key_moments(
     }
     for chapter in transcript.extensions.get("chapters") or ():
         index = _chapter_segment(chapter, segments)
-        if index is None:
+        if index is None or not str(chapter.get("title") or "").strip():
             dropped.append("chapter_anchor_unresolvable")
             continue
         candidate = candidates[index]
-        candidate["chapters"].append(str(chapter.get("title") or ""))
+        candidate["chapters"].append(str(chapter["title"]))
         _add_anchor(candidate, index, segments)
     claims = (claims_extraction.result.output.get("claims") if claims_extraction else None) or ()
     for claim in claims:
@@ -159,10 +167,11 @@ def derive_key_moments(
 
     selected: list[dict[str, Any]] = []
     for candidate in sorted(supported, key=lambda c: (-c["score"], c["time"], c["index"])):
-        if len(selected) >= budget["max_moments"]:
-            rejected["budget"] += 1
-        elif any(abs(candidate["time"] - other["time"]) < budget["min_gap_seconds"] for other in selected):
+        # Diversity suppression takes precedence over the budget in the rejection counts.
+        if any(abs(candidate["time"] - other["time"]) < budget["min_gap_seconds"] for other in selected):
             rejected["diversity"] += 1
+        elif len(selected) >= budget["max_moments"]:
+            rejected["budget"] += 1
         else:
             selected.append(candidate)
     selected.sort(key=lambda c: (c["time"], c["index"]))
@@ -247,7 +256,9 @@ def _segments(transcript: PersistedTranscript) -> list[dict[str, Any]]:
             raise KeyMomentsError("persisted transcript segment is malformed")
         start, end = segment.get("start"), segment.get("end")
         if (
-            not isinstance(start, (int, float))
+            isinstance(start, bool)
+            or isinstance(end, bool)
+            or not isinstance(start, (int, float))
             or not isinstance(end, (int, float))
             or not math.isfinite(float(start))
             or not math.isfinite(float(end))

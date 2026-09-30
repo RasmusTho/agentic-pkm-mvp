@@ -30,6 +30,7 @@ from app.knowledge_acquisition.key_moments import (
     derive_key_moments,
 )
 from app.knowledge_acquisition.normalize import NormalizedSegment, NormalizedTranscript
+from app.knowledge_acquisition.raw_record import raw_record_object_id
 from app.objects import ObjectStore
 from app.stores import reset_store_backends
 from tests.invariants._helpers import assert_validates
@@ -37,8 +38,16 @@ from tests.invariants._helpers import assert_validates
 pytestmark = pytest.mark.not_pg
 
 VIDEO_ID = "abcDEF12345"
-RAW_ID = "3f0f7a52-0b8e-5e0e-9d7b-1f6a8f0f0a01"
 CONTENT_IDENTITY = "sha256:moments-fixture"
+
+
+def _raw_id(content_identity: str) -> str:
+    return str(
+        raw_record_object_id(source_kind="youtube_url", item_ref=VIDEO_ID, content_identity=content_identity)
+    )
+
+
+RAW_ID = _raw_id(CONTENT_IDENTITY)
 
 
 @pytest.fixture(autouse=True)
@@ -81,7 +90,7 @@ def _transcript(
         "sensitivity": "internal",
     }
     return persist_normalized_transcript(
-        raw_record_id=RAW_ID, raw_record=raw_record, normalized=normalized
+        raw_record_id=_raw_id(content_identity), raw_record=raw_record, normalized=normalized
     ), normalized
 
 
@@ -95,7 +104,7 @@ def _claims(transcript, normalized, claims: list[dict]):
         created_at=datetime(2026, 9, 30, 12, 5, tzinfo=timezone.utc),
     )
     return persist_extraction_result(
-        raw_record_id=RAW_ID,
+        raw_record_id=transcript.raw_record_id,
         normalized_artifact_id=transcript.object_id,
         normalized=normalized.as_dict(),
         result=result,
@@ -114,7 +123,14 @@ def test_selected_moments_are_timestamped_anchored_and_lineage_bearing() -> None
     segments = _segments(600.0, 10.0)
     transcript, normalized = _transcript(
         segments,
-        chapters=({"start_time": 150.0, "end_time": 300.0, "title": "Setting up the lab"},),
+        chapters=(
+            {"start_time": 150.0, "end_time": 300.0, "title": "Setting up the lab"},
+            # Malformed chapters are omitted and reported without suppressing healthy evidence.
+            {"start_time": True, "title": "Bool start"},
+            {"start_time": float("nan"), "title": "NaN start"},
+            {"start_time": 9999.0, "title": "After the transcript"},
+            {"start_time": 400.0, "title": "   "},
+        ),
     )
     claims = _claims(
         transcript,
@@ -127,6 +143,8 @@ def test_selected_moments_are_timestamped_anchored_and_lineage_bearing() -> None
                 "system_paraphrase": "A claim beyond the transcript.",
                 "anchors": [{"segment_index": 999, "start": 0.0, "end": 1.0}],
             },
+            "not-a-claim",
+            {"source_wording": " ", "system_paraphrase": "Empty wording.", "anchors": [{"segment_index": 5, "start": 50.0, "end": 60.0}]},
         ],
     )
 
@@ -148,7 +166,7 @@ def test_selected_moments_are_timestamped_anchored_and_lineage_bearing() -> None
     by_time = {moment["timestamp_seconds"]: moment for moment in persisted.moments}
     assert set(by_time) == {30, 150}
     assert by_time[150]["evidence"][0] == {"kind": "chapter", "source_wording": "Setting up the lab"}
-    assert "claim_anchor_unresolvable" in persisted.dropped
+    assert persisted.dropped == ("chapter_anchor_unresolvable",) * 4 + ("claim_anchor_unresolvable",) * 3
 
     # Stable identity: re-deriving the same ancestors is an idempotent rebuild.
     replay = derive_key_moments(transcript=transcript, item_ref=VIDEO_ID, claims_extraction=claims)
@@ -165,6 +183,9 @@ def test_selected_moments_are_timestamped_anchored_and_lineage_bearing() -> None
     # Negative: an unsafe source identity cannot mint a timestamp link.
     with pytest.raises(key_moments_module.KeyMomentsError):
         derive_key_moments(transcript=transcript, item_ref="../evil?x=1", claims_extraction=claims)
+    # Negative: a safe-looking but different video id cannot retarget the timestamp links.
+    with pytest.raises(key_moments_module.KeyMomentsError):
+        derive_key_moments(transcript=transcript, item_ref="otherVideo1", claims_extraction=claims)
     # Negative: claims from a different content identity cannot be mixed into lineage.
     other_transcript, other_normalized = _transcript(segments, content_identity="sha256:other")
     other_claims = _claims(other_transcript, other_normalized, [_claim(segments[0], 0, wording="Other.")])
@@ -206,8 +227,8 @@ def test_moment_selection_enforces_budget_diversity_and_evidence_relevance() -> 
     # Relevance: every selected moment is supported by a claim or chapter, never plain timeline sampling.
     assert all(moment["evidence"] for moment in long_result.moments)
     assert long_result.rejected["unsupported"] > 0
-    # Chapter + claim co-support outranks isolated evidence.
-    assert 3000 in times  # chapter 6 start co-located with no claim still ranks via structure
+    # Organizing structure alone is relevant evidence: an uncontested chapter start is selected.
+    assert 3000 in times
     assert long_result.candidate_count > len(times)
 
     # Short source: tiny budget.
