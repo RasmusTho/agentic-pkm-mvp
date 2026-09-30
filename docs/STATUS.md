@@ -551,7 +551,8 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 - Governed Vault Profile (#4944) is accepted and delivered through GOVPROF-01–03: ProfileAgent-only
   approved writes, owner-confirmed proposal flow, receipt-bound versions, and a rebuildable
   same-scope consumer projection with explicit no-profile behavior (PRs #5731, #5733, #5735).
-  The separate four-part YouTube overlay renderer in #4117 remains unshipped.
+  The separate four-part YouTube overlay renderer (#4117) consumes only that projection and renders
+  one explicit no-profile line otherwise; it is not yet wired into acquisition-time notes.
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - The bounded Mimer MCP producer adapter is delivered as the `mimer-mcp` stdio sidecar: exactly
   ask, governed capture, retrieve/search, note read, and health delegate to existing governed HTTP

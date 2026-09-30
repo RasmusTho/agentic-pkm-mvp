@@ -56,4 +56,4 @@ Automated acceptance of subjective quality, background re-extraction, or requiri
 
 ## Related GitHub Issues
 
-Draft issue type: `type:task`, `prio:med`, `agent:blocked` pending YSNV2-01 through YSNV2-11, including YSNV2-10's external profile contract. SBS class: Product/Runtime. Recommended capability: Sol/xhigh; this final harness and parent-closure gate validates persistence, provenance, replay, media, profile authority, and cross-task convergence.
+Draft issue type: `type:task`, `prio:med`, `agent:blocked` pending YSNV2-01 through YSNV2-11; YSNV2-10 and its external profile contract are delivered. SBS class: Product/Runtime. Recommended capability: Sol/xhigh; this final harness and parent-closure gate validates persistence, provenance, replay, media, profile authority, and cross-task convergence.

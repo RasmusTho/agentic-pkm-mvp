@@ -140,7 +140,8 @@ companion rather than overwrite the original candidate or human-authored content
 YouTube deliveries do not ship the later v2 modules or change title-bearing paths or persistence.
 The owner revised the D1 frame-capture direction on 2026-09-30; D2–D6 remain as recorded.
 ProfileAgent behavior was delivered separately as GOVPROF-01–03 under parent #4944;
-that profile capability does not ship the separate YouTube overlay renderer, which remains Issue #4117.
+that profile capability does not ship the separate YouTube overlay renderer, which Issue #4117 delivers
+as a read-only consumer not yet wired into acquisition-time note rendering.
 
 The portable-source-bundle delivery adds a derived, rebuildable vault transcript and `source.json`
 under the YouTube attachment root (`Sources/YouTube/_attachments` by default). The stable
