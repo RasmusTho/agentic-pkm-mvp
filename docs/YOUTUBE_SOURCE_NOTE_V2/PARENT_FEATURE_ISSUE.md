@@ -32,7 +32,7 @@ Deliver the v2 source-note capability through its twelve child task contracts. T
 - Memory impact: none
 - Retrieval/context impact: governed overlay only after its child contract
 - Sync/deployment impact: none
-- External boundary impact: bounded optional frame-media egress only through YSNV2-11 under the recorded D1 opt-in posture
+- External boundary impact: bounded temporary media egress for frame extraction through YSNV2-11
 - New or changed contract: `docs/YOUTUBE_SOURCE_NOTE_V2/*`; `docs/contracts/ARTIFACT_CONTRACT.md`, `docs/contracts/GOVERNED_WRITE_PROTOCOL.md`, `docs/contracts/STORE_PORT.md`, `docs/contracts/CONTEXT_BUNDLE.md`, `docs/contracts/MEMORY_RECORD.md`, and `docs/contracts/A2A_CONTRACT_AND_TRACE.md` apply
 - Owner-doc impact: will-update-in-PR at accepted capability truth
 - Transition debt impact: reduces untruthful V1 candidate surfaces
@@ -42,7 +42,7 @@ Deliver the v2 source-note capability through its twelve child task contracts. T
 ## Constraints
 
 - Preserve every invariant in `README.md :: Cross-Task Invariants / Interaction Safety`.
-- Implement frame capture only under the recorded D1 opt-in/context-frame posture.
+- For acquisitions with timestamped moments, YSNV2-11 attempts bounded frame capture, retains one contextual frame when capture succeeds, and applies visual-necessity limits to additional frames.
 - Apply D6: system prose is English unless the source's original language is Swedish; quotations remain original-language.
 - Do not treat the external design brief as authority.
 
@@ -67,7 +67,7 @@ Deliver the v2 source-note capability through its twelve child task contracts. T
 8. [#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — `EXTRACT_GATED_ONTOLOGY_PROPOSALS.md`
 9. [#4116](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4116) — `SELECT_TIMESTAMPED_KEY_MOMENTS.md`
 10. [#4117](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4117) — `APPLY_GOVERNED_INTEREST_OVERLAY.md`
-11. [#4118](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4118) — `CAPTURE_OPT_IN_SOURCE_FRAMES.md`
+11. [#4118](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4118) — `CAPTURE_SOURCE_FRAMES.md`
 12. [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) — `EVALUATE_SOURCE_NOTE_QUALITY.md`; final invariant matrix and parent-closure handoff after tasks 1–11
 
 ## Verification Path
@@ -76,11 +76,11 @@ Run each child’s focused `Verify:` targets. YSNV2-12 owns the parent invariant
 
 ## Validation / Acceptance Path
 
-The parent remains `agent:blocked` while children or the vault-wide profile dependency remain. Record the operator-approved gold-set annotation scope and any source/media consent directly on the live parent validation ledger; the static spec cannot serve as that receipt. At candidate acceptance, validate the invariant matrix, attach receipts for recorded decisions where applicable, and promote current-state owner docs in one explicit PR.
+The parent remains `agent:blocked` while children or the vault-wide profile dependency remain. Record the operator-approved gold-set annotation scope directly on the live parent validation ledger; the static spec cannot serve as that receipt. At candidate acceptance, validate the invariant matrix, attach receipts for recorded decisions where applicable, and promote current-state owner docs in one explicit PR.
 
 ## Out of Scope
 
-Automatic promotion, candidate-note mutation, cross-source generalization, a UI, and media capture outside the recorded D1 posture.
+Automatic promotion, candidate-note mutation, cross-source generalization, a UI, unbounded frame capture, and video retention.
 
 ## Suggested Validation
 
