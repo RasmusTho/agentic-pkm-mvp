@@ -87,6 +87,7 @@ _STRUCTURED_OUTPUT_TASK_KINDS = frozenset(
         "plan",
         "tool",
         "extract.claims",
+        "extract.ontology",
         "extract.summary",
         "extract.synthesis",
         "heimdal.attribute.mentions",
