@@ -2,7 +2,7 @@ FROM scratch AS devui-source-inputs
 COPY AGENTS.md /devui-candidate/AGENTS.md
 COPY companion-ui/companion-app/companion_ui/workspace/devui_candidate /devui-candidate/assets
 COPY app/builderops/devui_managed.css /devui-candidate/assets/devui.css
-COPY app/builderops/devui_tokens.css /devui-candidate/assets/yggdrasil.css
+COPY companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css /devui-candidate/assets/yggdrasil.css
 COPY docs /devui-candidate/docs
 COPY app/builderops/ckm/seed/capabilities.yaml /devui-candidate/app/builderops/ckm/seed/capabilities.yaml
 COPY tests/fixtures/issue_readiness/valid_ready_candidate.md /ready-issue.md

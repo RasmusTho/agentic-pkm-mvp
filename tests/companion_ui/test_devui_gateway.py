@@ -31,7 +31,7 @@ def test_companion_source_tree_entrypoint_boots_without_builder_package() -> Non
         handler = make_handler(client=object(), api_base_url="http://127.0.0.1:18001")
         server = CompanionThreadingHTTPServer(("127.0.0.1", 0), handler)
         server.server_close()
-        for route in ("/devui/overview", "/devui/focus", "/devui/assets/devui.css",
+        for route in ("/devui/overview", "/devui/focus", "/devui/assets/yggdrasil.css", "/devui/assets/devui.css",
                       "/devui/assets/overview.js", "/devui/assets/focus.js"):
             assert load_devui_candidate_asset(route)[1]
         assert load_devui_candidate_asset("/devui/assets/unknown.js") is None

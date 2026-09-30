@@ -21,9 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STATIC = REPO_ROOT / "app" / "web" / "static"
 TOKENS_SHEET = STATIC / "yggdrasil-tokens.css"
 BINDING_SHEET = STATIC / "colors_and_type.css"
-DEVUI_TOKENS = REPO_ROOT / "app" / "builderops" / "devui_tokens.css"
 DEVUI_MANAGED = REPO_ROOT / "app" / "builderops" / "devui_managed.css"
 DEVUI_CANDIDATE = REPO_ROOT / "companion-ui" / "companion-app" / "companion_ui" / "workspace" / "devui_candidate"
+DEVUI_TOKENS = DEVUI_CANDIDATE.parent / "devui_yggdrasil.css"
 DEVUI_PAGES = [DEVUI_CANDIDATE / "overview.html", DEVUI_CANDIDATE / "focus.html"]
 # The DevUI CSP forbids web fonts, so these stacks stay DevUI-local system fonts.
 DEVUI_LOCAL_FONT_TOKENS = {"font-ui", "font-display", "font-mono"}

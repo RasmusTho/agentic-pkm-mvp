@@ -1183,7 +1183,7 @@ def _package_managed_shell(root: Path) -> None:
     source = ROOT / "companion-ui/companion-app/companion_ui/workspace/devui_candidate"
     shutil.copytree(source, root / "assets", dirs_exist_ok=True)
     shutil.copyfile(ROOT / "app/builderops/devui_managed.css", root / "assets/devui.css")
-    shutil.copyfile(ROOT / "app/builderops/devui_tokens.css", root / "assets/yggdrasil.css")
+    shutil.copyfile(ROOT / "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css", root / "assets/yggdrasil.css")
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["files"].update(

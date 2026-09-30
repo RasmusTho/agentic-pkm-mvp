@@ -36,10 +36,11 @@ CSS_OUTPUTS = (
 TOKENS_CSS_OUTPUT = "companion-ui/companion-app/yggdrasil-tokens.css"
 # The same tokens-only sheet for the web Builder surfaces served from app/web/static.
 TOKENS_CSS_OUTPUTS = (TOKENS_CSS_OUTPUT, "app/web/static/yggdrasil-tokens.css")
-# The tokens-only sheet without the web-font import, for the managed DevUI, whose CSP
-# forbids web fonts (`font-src 'none'`, `style-src 'self'`). It is served as a hash-pinned
-# DevUI asset (app/builderops/devui_assets.py).
-DEVUI_TOKENS_CSS_OUTPUT = "app/builderops/devui_tokens.css"
+# The tokens-only sheet without the web-font import, for the DevUI pages, whose CSP
+# forbids web fonts (`font-src 'none'`, `style-src 'self'`). Both the managed DevUI
+# (hash-pinned in app/builderops/devui_assets.py) and the Companion gateway serve it as
+# /devui/assets/yggdrasil.css; it sits in companion-app so the Companion image has it.
+DEVUI_TOKENS_CSS_OUTPUT = "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css"
 SWIFT_OUTPUT = "design-system/yggdrasil/dist/YggdrasilTokens.swift"
 JSON_OUTPUT = "design-system/yggdrasil/dist/tokens.json"
 
