@@ -225,15 +225,47 @@ def test_ontology_output_is_proposal_class_and_fully_anchored() -> None:
                 "confidence": 0.9,
                 "anchors": [_anchor(0)],
             },
+            {  # a span stitched across two anchored segments is not verbatim source wording
+                "kind": "concept",
+                "source_definition": "stable context. Motivation",
+                "system_paraphrase": "The video links context and motivation in one idea.",
+                "confidence": 0.5,
+                "anchors": [_anchor(0), _anchor(1)],
+            },
+            {  # re-cased wording is not verbatim source wording
+                "kind": "concept",
+                "source_definition": "A HABIT IS DEFINED AS A BEHAVIOUR",
+                "system_paraphrase": "The video gives a definition of what a habit is.",
+                "confidence": 0.5,
+                "anchors": [_anchor(0)],
+            },
+            {  # accepted relation and mapping elements, with anchor extras stripped
+                "kind": "relation",
+                "source_definition": None,
+                "system_paraphrase": "According to the speaker, a cue triggers the routine.",
+                "confidence": 0.6,
+                "anchors": [_anchor(2)],
+            },
+            {
+                "kind": "mapping",
+                "source_definition": "the trigger that starts the routine",
+                "system_paraphrase": "The speaker maps the idea of a cue onto a routine trigger.",
+                "confidence": 0.6,
+                "anchors": [_anchor(2)],
+            },
         ]
     }
     candidate, _ = _candidate(_raw(ENGLISH_ONTOLOGY_LINES), payload)
     output = _ontology_output(candidate)
     segments = 5
     assert output["artifact_class"] == "ontology_proposal"
-    assert [p["kind"] for p in output["proposals"]] == ["concept", "distinction", "competency_question"]
+    assert [p["kind"] for p in output["proposals"]] == [
+        "concept", "distinction", "competency_question", "relation", "mapping",
+    ]
     assert [d["reason"] for d in output["dropped"]] == [
         "element anchor is not resolvable",
+        "source_definition is not verbatim anchored source wording",
+        "source_definition is not verbatim anchored source wording",
         "source_definition is not verbatim anchored source wording",
     ]
     for proposal in output["proposals"]:
@@ -247,10 +279,10 @@ def test_ontology_output_is_proposal_class_and_fully_anchored() -> None:
 
     note = render_candidate_note(candidate)
     section = note.split("### Ontology proposals", 1)[1].split("## Evidence and lineage", 1)[0]
-    assert section.count("status `proposed`") == 3
-    assert section.count("(`system_paraphrase`, en)") == 3
-    assert section.count("(`source_definition`, en)") == 1
-    assert section.count("**Anchors:**") == 3
+    assert section.count("status `proposed`") == 5
+    assert section.count("(`system_paraphrase`, en)") == 5
+    assert section.count("(`source_definition`, en)") == 2
+    assert section.count("**Anchors:**") == 5
     assert "invented" not in section and "Cues lead to routines" not in section
 
     # The model has no status/authority field: a self-asserted standing is a schema refusal.
@@ -261,9 +293,10 @@ def test_ontology_output_is_proposal_class_and_fully_anchored() -> None:
 
     # Rendering re-checks persisted output: tampered standing or stripped anchors are omitted.
     good = output["proposals"][0]
+    planted = {**good, "anchors": [{**good["anchors"][0], "approved_by": "owner, canonical"}]}
     tampered = {
         **output,
-        "proposals": [{**good, "status": "canonical"}, {**good, "anchors": []}, good],
+        "proposals": [{**good, "status": "canonical"}, {**good, "anchors": []}, planted],
     }
     base = assemble_candidate(_raw(ENGLISH_ONTOLOGY_LINES, identity="sha256:tampered"), extractor_ids=())
     result = ExtractionResult(
@@ -276,6 +309,8 @@ def test_ontology_output_is_proposal_class_and_fully_anchored() -> None:
     assert base.rendered_ontology is None
     assert tampered_candidate.rendered_ontology is not None
     assert len(tampered_candidate.rendered_ontology.elements) == 1
+    assert tampered_candidate.rendered_ontology.elements[0]["anchors"] == good["anchors"]
+    assert "approved_by" not in render_candidate_note(tampered_candidate)
     assert tampered_candidate.rendered_ontology.dropped == (
         "element status is not proposed",
         "element has no anchors",

@@ -67,8 +67,8 @@ Delivered implementation:
   extractor (`extract.ontology`). A failed gate returns an empty, gate-bearing output without a
   model call. The model schema has no status or authority field. Each accepted element is stamped
   `status: proposed`, with `source_definition` and `system_paraphrase` wording classes, bounded
-  confidence, and resolvable anchors. A `source_definition` must be a verbatim span of its
-  anchored transcript text. Elements that fail anchoring, verbatim-source, or D6 checks are
+  confidence, and resolvable anchors. A `source_definition` must be a case-preserving verbatim
+  span of one anchored transcript segment. Elements that fail anchoring, verbatim-source, or D6 checks are
   dropped and reported.
 - `candidate_writeback` renders validated proposals as the `ontology-proposals` module inside
   the non-authoritative proposal band. The section is omitted when the gate fails or when no

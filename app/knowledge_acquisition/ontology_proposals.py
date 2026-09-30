@@ -183,8 +183,13 @@ def validate_ontology_element(
     if not isinstance(paraphrase, str) or not paraphrase.strip():
         return None, "system_paraphrase is required"
     if source_definition is not None:
-        anchored_text = _squash(" ".join(str(segments[a["segment_index"]].get("text", "")) for a in anchors))
-        if not source_definition.strip() or _squash(source_definition) not in anchored_text:
+        # Verbatim means a case-preserving span of one anchored segment, not a span stitched
+        # across segments and not a re-cased or translated rendering.
+        wording = _squash_space(source_definition)
+        if not wording or not any(
+            wording in _squash_space(str(segments[a["segment_index"]].get("text", "")))
+            for a in anchors
+        ):
             return None, "source_definition is not verbatim anchored source wording"
         if _squash(source_definition) == _squash(paraphrase):
             return None, "source_definition and system_paraphrase must remain distinct"
@@ -215,7 +220,14 @@ def validate_ontology_element(
             "language": system_language,
         },
         "confidence": bounded,
-        "anchors": [dict(anchor) for anchor in anchors],
+        "anchors": [
+            {
+                "segment_index": int(anchor["segment_index"]),
+                "start": float(anchor["start"]),
+                "end": float(anchor["end"]),
+            }
+            for anchor in anchors
+        ],
     }, None
 
 
@@ -295,6 +307,10 @@ def _wording_text(value: object, wording_class: str) -> tuple[bool, str | None]:
 
 def _squash(text: str) -> str:
     return " ".join(text.casefold().split())
+
+
+def _squash_space(text: str) -> str:
+    return " ".join(text.split())
 
 
 __all__ = [
