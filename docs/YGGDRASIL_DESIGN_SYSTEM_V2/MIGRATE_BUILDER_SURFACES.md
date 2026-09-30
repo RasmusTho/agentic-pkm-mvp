@@ -32,6 +32,9 @@ palettes.
   44 inline tokens identical; the three font stacks differ deliberately under its
   `font-src 'none'` CSP), and changing it needs a new `yggdrasil-constrained-reuse.v1` manifest
   revision, browser proof, and VM102 receipts.
+- **Delivered separately (#5637, 2026-09-30):** the DevUI pages load the generated
+  CSP-compatible tokens-only sheet (`/devui/assets/yggdrasil.css`) and keep only the three
+  system-font stacks locally; VM102 receipts follow the next operator-authorized deploy.
 
 ## Concretely
 
