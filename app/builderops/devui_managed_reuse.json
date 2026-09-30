@@ -1331,9 +1331,9 @@
     "independent_from_author": true,
     "independence_basis": "Separate read-only reviewer subagent with a fresh context, distinct from author claude-opus-5-5:session-10dda209; re-verified every hash, anchor, token declaration, proof artifact and pixel/ARIA baseline diff at 80da2e323e3a7fbdbb534ebf44d0366b75ed2194 after its first-round P1 (token-sheet source version) and P2 (stray uv.lock) findings were fixed.",
     "reviewed_payload_sha256": "sha256:28b2a215934766e678787bf3879de8285ced98f70704c1a6fe28783838206ae8",
-    "reviewed_at": "2026-09-30T14:05:00Z",
+    "reviewed_at": "2026-09-30T13:44:15Z",
     "verdict": "pass",
     "findings": []
   },
-  "receipt_sha256": "sha256:629ad3c4067853c4ea644b47e0e3f475f834e6791f8cab00e360a368a3451c9f"
+  "receipt_sha256": "sha256:187ace25e5194ce6876902e96b2d9388df955089d47e93d5725183d7ff8a324b"
 }
