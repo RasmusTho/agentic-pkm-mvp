@@ -159,8 +159,9 @@ claim about other event families.
 - **Closed top level**: v2 schemas set `additionalProperties: false`. Each lists its bounded producer
   alternatives (named in the schema `description`) and requires the consumer's input: an identity
   (`object_id` or `uuid`) for `ingest.object.created`/`ingest.object.deleted`; a non-empty
-  `vault_path` or `relative_path` for `ingest.vault.changed`/`panel.scan.requested`; `note.uuid`,
-  `note.path` or `note_path` for `promote.intent.created`; `note_path` for `note.move.workbench`;
+  `vault_path` or `relative_path` for `ingest.vault.changed`/`panel.scan.requested`; `note.uuid`
+  plus a note path (`note.path` or `note_path`) for `promote.intent.created`; `note_path` for
+  `note.move.workbench`;
   `object_id` for `index.embedding.requested`.
 - **Extension policy**: the only open extension point is an explicit top-level `extensions` object.
   Nested producer-shaped objects that are config- or model-driven (`params`, `note`, `panel`,

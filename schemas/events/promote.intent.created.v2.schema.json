@@ -2,40 +2,25 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://yggdrasil.local/schemas/events/promote.intent.created.v2.schema.json",
   "title": "promote.intent.created payload (v2, closed)",
-  "description": "Payload of promote.intent.created. Producer alternatives: app/agents/panel_agent/graph.py::_promotion_event (note/panel/action/instruction/trust_verb, plus maturity/transition), app/agents/panel_agent/runtime.py downstream emission (note_uuid/note_path/action_id/params), and app/orchestrator/executor.py (note/action/instruction/maturity/review_state/transition). Consumer app/promotion/consumer.py locates the note from note.uuid/note.path or note_path, so one of those is required. Nested objects stay open. Closed contract (#5704): undeclared top-level fields are rejected; producer extras belong under `extensions`. v1 stays registered for rows already tagged `promote.intent.created.v1`.",
+  "description": "Payload of promote.intent.created. Producer alternatives: app/agents/panel_agent/graph.py::_promotion_event (note/panel/action/instruction/trust_verb, plus maturity/transition), the legacy panel agent app/agents/panel/events.py::panel_intent_to_event written by app/watcher/registry.py (note/note_id/action_text/action_id/intent_source/instruction_text plus the mapping template's maturity/downstream_event), and app/orchestrator/executor.py (note/action/instruction/maturity/review_state/transition). Consumer app/promotion/consumer.py requires note.uuid plus a note path (note.path, falling back to note_path), so both are required. Nested objects stay open. Closed contract (#5704): undeclared top-level fields are rejected; producer extras belong under `extensions`. v1 stays registered for rows already tagged `promote.intent.created.v1`.",
   "type": "object",
   "additionalProperties": false,
+  "required": [
+    "note"
+  ],
   "anyOf": [
     {
-      "required": [
-        "note"
-      ],
       "properties": {
         "note": {
-          "anyOf": [
-            {
-              "required": [
-                "uuid"
-              ],
-              "properties": {
-                "uuid": {
-                  "type": "string",
-                  "minLength": 1
-                }
-              }
-            },
-            {
-              "required": [
-                "path"
-              ],
-              "properties": {
-                "path": {
-                  "type": "string",
-                  "minLength": 1
-                }
-              }
+          "required": [
+            "path"
+          ],
+          "properties": {
+            "path": {
+              "type": "string",
+              "minLength": 1
             }
-          ]
+          }
         }
       }
     },
@@ -57,10 +42,8 @@
       "additionalProperties": true,
       "properties": {
         "uuid": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string",
+          "minLength": 1
         },
         "path": {
           "type": [
@@ -80,7 +63,10 @@
             "null"
           ]
         }
-      }
+      },
+      "required": [
+        "uuid"
+      ]
     },
     "note_path": {
       "type": [
@@ -89,6 +75,12 @@
       ]
     },
     "note_uuid": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "note_id": {
       "type": [
         "string",
         "null"
@@ -112,6 +104,24 @@
         "null"
       ]
     },
+    "action_text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "intent_source": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "downstream_event": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "params": {
       "type": [
         "object",
@@ -119,6 +129,12 @@
       ]
     },
     "instruction": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "instruction_text": {
       "type": [
         "string",
         "null"

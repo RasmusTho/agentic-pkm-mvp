@@ -72,7 +72,9 @@ _MALFORMED: list[tuple[str, dict[str, Any], str]] = [
     ("ingest.vault.changed", {"mtime": 1.0, "hash": "h"}, "missing path"),
     ("panel.scan.requested", {"relative_path": ""}, "empty path"),
     ("promote.intent.created", {"instruction": "promote"}, "missing note"),
-    ("promote.intent.created", {"note": {"title": "t"}}, "note without uuid/path"),
+    ("promote.intent.created", {"note": {"title": "t", "path": "/v/n.md"}}, "note without uuid"),
+    ("promote.intent.created", {"note": {"uuid": OBJECT_ID}}, "note without any path"),
+    ("promote.intent.created", {"note_uuid": OBJECT_ID, "note_path": "/v/n.md"}, "no note.uuid for consumer"),
     ("note.move.workbench", {"params": {"destination_zone": "workbench"}}, "missing note_path"),
     ("index.embedding.requested", {}, "missing object_id"),
     # invalid field types
@@ -90,7 +92,7 @@ _MALFORMED: list[tuple[str, dict[str, Any], str]] = [
     ("ingest.vault.changed", {"vault_path": "/v/n.md", "surprise": 1}, "undeclared field"),
     ("ingest.object.deleted", {"object_id": OBJECT_ID, "surprise": 1}, "undeclared field"),
     ("panel.scan.requested", {"vault_path": "/v/n.md", "surprise": 1}, "undeclared field"),
-    ("promote.intent.created", {"note_path": "/v/n.md", "surprise": 1}, "undeclared field"),
+    ("promote.intent.created", {"note": {"uuid": OBJECT_ID, "path": "/v/n.md"}, "surprise": 1}, "undeclared field"),
     ("note.move.workbench", {"note_path": "/v/n.md", "surprise": 1}, "undeclared field"),
     ("index.embedding.requested", {"object_id": OBJECT_ID, "surprise": 1}, "undeclared field"),
 ]
@@ -140,6 +142,33 @@ def _promotion_event_payload() -> dict[str, Any]:
     return _promotion_event(intent, action).payload
 
 
+def _legacy_panel_promotion_payload() -> dict[str, Any]:
+    """The real legacy panel-agent shape written by ``app/watcher/registry.py``."""
+    from app.agents.panel.events import panel_intent_to_event
+    from app.agents.panel.intents import PanelIntent
+    from app.settings.panel_actions import _entries_to_mappings
+
+    (mapping,) = _entries_to_mappings(
+        {
+            "id": "promote.evergreen",
+            "label": "Make this note evergreen",
+            "intent_type": "promotion",
+            "downstream_event": "review.promote.evergreen",
+            "params": {"maturity": "evergreen"},
+        }
+    )
+    event = panel_intent_to_event(
+        PanelIntent(kind="action_triggered", action_text=mapping.text, action_id="promote.evergreen"),
+        {mapping.text: mapping},
+        note_id=OBJECT_ID,
+        instruction_text="make it evergreen",
+        note_path="/vault/inbox/n.md",
+    )
+    assert event is not None and event.event == "promote.intent.created"
+    assert event.payload["downstream_event"] == "review.promote.evergreen"
+    return event.payload
+
+
 _RETRY_FIELDS = {
     "_worker_retry_count": 1,
     "_worker_retry_reason": "file_unstable",
@@ -163,10 +192,11 @@ _DIRECT_VARIANTS: list[tuple[str, str, dict[str, Any]]] = [
     # retry re-emitted from the daemon loop carries it too.
     ("daemon-loop retry", "panel.scan.requested", {**_WATCH, **_RETRY_FIELDS, "event_id": "evt-1"}),
     ("panel graph promotion", "promote.intent.created", _promotion_event_payload()),
+    ("legacy panel agent promotion", "promote.intent.created", _legacy_panel_promotion_payload()),
     (
-        "panel downstream promotion",
+        "note object without path, top-level note_path",
         "promote.intent.created",
-        {"note_uuid": OBJECT_ID, "note_path": "/vault/n.md", "action_id": "promote.evergreen", "params": {}},
+        {"note": {"uuid": OBJECT_ID}, "note_path": "/vault/n.md", "action_id": "promote.evergreen"},
     ),
     (
         "orchestrator promotion",
