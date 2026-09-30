@@ -1102,6 +1102,7 @@ def test_managed_journey_preserves_focus_failures_and_fresh_return(managed_sourc
         assert set(url.split("?", 1)[0].removeprefix(ORIGIN) for _, url in requests) <= {
             "/devui/overview",
             "/devui/focus",
+            "/devui/assets/yggdrasil.css",
             "/devui/assets/devui.css",
             "/devui/assets/overview.js",
             "/devui/assets/focus.js",

@@ -1,14 +1,18 @@
 """YDS-04 (#5630): the web Builder surfaces consume the generated Yggdrasil tokens.
 
-Covers Signboard, the legacy dashboard, the Cockpit, and the CKM overview. The managed
-DevUI is out of scope here (#5637). Print styles are a deliberate exception: they
-switch to black-on-white for paper and are excluded from the hex ceiling.
+Covers Signboard, the legacy dashboard, the Cockpit, and the CKM overview, plus the
+managed DevUI (#5637), which loads a CSP-compatible generated token asset. Print styles
+are a deliberate exception: they switch to black-on-white for paper and are excluded
+from the hex ceiling.
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
+
+from app.builderops.devui_assets import ASSET_SHA256, ROUTES
 
 from app.builderops.ckm.overview_html import render_overview_html
 from tests.builderops.ckm.test_overview_html import overview_store  # noqa: F401  (fixture)
@@ -17,6 +21,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 STATIC = REPO_ROOT / "app" / "web" / "static"
 TOKENS_SHEET = STATIC / "yggdrasil-tokens.css"
 BINDING_SHEET = STATIC / "colors_and_type.css"
+DEVUI_MANAGED = REPO_ROOT / "app" / "builderops" / "devui_managed.css"
+DEVUI_CANDIDATE = REPO_ROOT / "companion-ui" / "companion-app" / "companion_ui" / "workspace" / "devui_candidate"
+DEVUI_TOKENS = DEVUI_CANDIDATE.parent / "devui_yggdrasil.css"
+DEVUI_PAGES = [DEVUI_CANDIDATE / "overview.html", DEVUI_CANDIDATE / "focus.html"]
+# The DevUI CSP forbids web fonts, so these stacks stay DevUI-local system fonts.
+DEVUI_LOCAL_FONT_TOKENS = {"font-ui", "font-display", "font-mono"}
 
 BUILDER_SURFACES = [
     STATIC / "signboard.css",
@@ -109,3 +119,41 @@ def test_focus_rules_keep_the_v2_ring() -> None:
             if re.search(r"outline:\s*(none|0\b|1px)", flat) or "cyan-glow" in flat:
                 offenders.append(f"{path.name}: {selector.strip()[-60:]}")
     assert offenders == []
+
+
+def _declared(text: str) -> set[str]:
+    return set(re.findall(r"--([a-z0-9-]+)\s*:", text))
+
+
+def test_served_devui_pages_resolve_every_token_variable() -> None:
+    """Both served DevUI pages load the generated token asset before devui.css, and every
+    `var(--…)` they use resolves; the managed sheet keeps only the system-font stacks."""
+    assert ROUTES["/devui/assets/yggdrasil.css"] == ("text/css; charset=utf-8", "yggdrasil.css")
+    tokens_link = '<link rel="stylesheet" href="/devui/assets/yggdrasil.css">'
+    managed_link = '<link rel="stylesheet" href="/devui/assets/devui.css">'
+    for page in DEVUI_PAGES:
+        html = page.read_text(encoding="utf-8")
+        assert html.count(tokens_link) == 1 and html.count(managed_link) == 1, page.name
+        assert html.index(tokens_link) < html.index(managed_link), page.name
+    managed = DEVUI_MANAGED.read_text(encoding="utf-8")
+    assert _declared(managed) == DEVUI_LOCAL_FONT_TOKENS
+    assert not _READABLE_FG3.search(managed)
+    tokens = DEVUI_TOKENS.read_text(encoding="utf-8")
+    assert not re.search(r"@import|url\s*\(|https?:", tokens, flags=re.IGNORECASE)
+    defined = _declared(tokens) | _declared(managed)
+    used = set()
+    for path in [DEVUI_MANAGED, *DEVUI_PAGES, DEVUI_CANDIDATE / "overview.js", DEVUI_CANDIDATE / "focus.js"]:
+        used |= set(re.findall(r"var\(--([a-z0-9-]+)", path.read_text(encoding="utf-8")))
+    assert used and used - defined == set()
+
+
+def test_managed_devui_asset_hash_matches_migrated_stylesheet() -> None:
+    sources = {
+        "devui.css": DEVUI_MANAGED,
+        "yggdrasil.css": DEVUI_TOKENS,
+        **{path.name: path for path in DEVUI_PAGES},
+        "overview.js": DEVUI_CANDIDATE / "overview.js",
+        "focus.js": DEVUI_CANDIDATE / "focus.js",
+    }
+    assert set(ASSET_SHA256) == set(sources)
+    assert {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in sources.items()} == ASSET_SHA256

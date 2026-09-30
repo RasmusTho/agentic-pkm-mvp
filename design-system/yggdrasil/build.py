@@ -36,6 +36,11 @@ CSS_OUTPUTS = (
 TOKENS_CSS_OUTPUT = "companion-ui/companion-app/yggdrasil-tokens.css"
 # The same tokens-only sheet for the web Builder surfaces served from app/web/static.
 TOKENS_CSS_OUTPUTS = (TOKENS_CSS_OUTPUT, "app/web/static/yggdrasil-tokens.css")
+# The tokens-only sheet without the web-font import, for the DevUI pages, whose CSP
+# forbids web fonts (`font-src 'none'`, `style-src 'self'`). Both the managed DevUI
+# (hash-pinned in app/builderops/devui_assets.py) and the Companion gateway serve it as
+# /devui/assets/yggdrasil.css; it sits in companion-app so the Companion image has it.
+DEVUI_TOKENS_CSS_OUTPUT = "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css"
 SWIFT_OUTPUT = "design-system/yggdrasil/dist/YggdrasilTokens.swift"
 JSON_OUTPUT = "design-system/yggdrasil/dist/tokens.json"
 
@@ -278,6 +283,7 @@ def render_all(src: dict[str, object] | None = None) -> dict[str, str]:
         "— Colors & Type", "— Tokens only (no element defaults)", 1
     )
     outputs.update({path: tokens_only for path in TOKENS_CSS_OUTPUTS})
+    outputs[DEVUI_TOKENS_CSS_OUTPUT] = tokens_only.replace("\n" + FONT_IMPORT + "\n", "", 1)
     outputs[SWIFT_OUTPUT] = render_swift(src)
     outputs[JSON_OUTPUT] = json.dumps(flatten(src), indent=2, ensure_ascii=False) + "\n"
     return outputs
