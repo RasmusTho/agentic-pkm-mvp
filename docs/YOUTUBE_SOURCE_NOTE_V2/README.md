@@ -1,4 +1,4 @@
-State: YSNV2-06 is delivered. This remains the active target-state capability specification with parent Issue #4107 and child Issues #4108–#4119. YSNV2-01 through YSNV2-06 are delivered or implemented; later slices remain outstanding. The separate Governed Vault Profile capability is accepted and delivered through parent #4944, while the YouTube overlay renderer #4117 remains unshipped; the complete v2 runtime is not claimed shipped.
+State: YSNV2-06 is delivered. This remains the active target-state capability specification with parent Issue #4107 and child Issues #4108–#4119. YSNV2-01 through YSNV2-06 are delivered or implemented, and YSNV2-09 (#4116) delivers the timestamp-only moment projection; other later slices remain outstanding. The separate Governed Vault Profile capability is accepted and delivered through parent #4944, while the YouTube overlay renderer #4117 remains unshipped; the complete v2 runtime is not claimed shipped.
 Doc role: Capability specification directory
 Authority: Defines the YouTube Source Note v2 target boundary, task graph, cross-task invariants, and acceptance path. Current behavior remains owned by `docs/KNOWLEDGE_ACQUISITION/*` and implementation evidence.
 
@@ -123,9 +123,9 @@ This stable heading is retained because parent Issue #4107 uses it as an accepta
 | 6 | `MATERIALIZE_PORTABLE_YOUTUBE_SOURCE_BUNDLE` | [#4113](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4113) — delivered by PR #4991 | task 4; D2/D3 resolved; D5 companion seam required |
 | 7 | `ROUTE_CONTENT_AND_RENDER_INITIAL_MODULES` | [#4114](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4114) — open / `agent:ready` | tasks 3/5 delivered; ready for pickup |
 | 8 | `EXTRACT_GATED_ONTOLOGY_PROPOSALS` | [#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — open / `agent:ready` | task 5 delivered; proposal-only |
-| 9 | `SELECT_TIMESTAMPED_KEY_MOMENTS` | [#4116](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4116) — open / `agent:ready` | task 5 delivered; timestamp-only, no media dependency |
+| 9 | `SELECT_TIMESTAMPED_KEY_MOMENTS` | [#4116](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4116) — delivered; derived timestamp-only moment projection (`app/knowledge_acquisition/key_moments.py`), not yet rendered into notes | task 5 delivered; timestamp-only, no media dependency |
 | 10 | `APPLY_GOVERNED_INTEREST_OVERLAY` | [#4117](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4117) — open | task 5 + delivered/accepted profile contract #4944; four-part renderer remains undelivered |
-| 11 | `CAPTURE_SOURCE_FRAMES` | [#4118](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4118) — `agent:blocked` | task 9; waiting only for timestamped moments in #4116 |
+| 11 | `CAPTURE_SOURCE_FRAMES` | [#4118](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4118) — `agent:blocked` | task 9 delivered by #4116; moments expose a stable `moment_id` seam and carry no frame field |
 | 12 | `EVALUATE_SOURCE_NOTE_QUALITY` | [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) — `agent:blocked` | final validation after tasks 1–11, including #4117; the profile-contract prerequisite is delivered |
 
 ## Acceptance and evidence
