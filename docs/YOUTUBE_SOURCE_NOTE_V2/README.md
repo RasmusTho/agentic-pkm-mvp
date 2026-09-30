@@ -33,9 +33,9 @@ The following are V1 limitations or deliberate choices, not retroactive defects:
 
 ## Capability boundary
 
-In scope: truthful candidate surfaces; a composable proposal renderer; durable, evidence-anchored derived artifacts; a portable source bundle; evidence-anchored synthesis/claims, routing, ontology proposals, moments, governed interest overlay, optional frames, and quality evaluation.
+In scope: truthful candidate surfaces; a composable proposal renderer; durable, evidence-anchored derived artifacts; a portable source bundle; evidence-anchored synthesis/claims, routing, ontology proposals, moments, governed interest overlay, bounded source frames, and quality evaluation.
 
-Out of scope: automatic promotion, mutation of human-authored note content, changing raw evidence, source egress during replay, full-media retention, unapproved frame capture, and language behavior outside recorded D6.
+Out of scope: automatic promotion, mutation of human-authored note content, changing raw evidence, source egress during replay, full-media retention, frame capture beyond the bounded YSNV2-11 contract, and language behavior outside recorded D6.
 
 ## Task graph
 
@@ -50,7 +50,7 @@ flowchart TD
   T5 --> T8["8 Gated ontology proposals"]
   T5 --> T9["9 Timestamped moments"]
   T5 --> T10["10 Governed interest overlay"]
-  T9 --> T11["11 Opt-in source frames"]
+  T9 --> T11["11 Source frames"]
   T5 --> T12["12 Final quality & invariant validation"]
   T6 --> T12
   T7 --> T12
@@ -58,7 +58,7 @@ flowchart TD
   T9 --> T12
   T10 --> T12
   T11 --> T12
-  D1["D1 decided: opt-in contextual frame"] -. enables .-> T11
+  D1["D1 revised: contextual frame on acquisition"] -. enables .-> T11
   D2["D2 decided: vault transcript"] -. enables .-> T6
   D3["D3 decided: flat notes + configured attachments"] -. enables .-> T6
   D4["D4 direction: vault-wide behavior profile"] -. enables .-> T10
@@ -71,7 +71,7 @@ The previous “nine slices” statement is corrected: S0 through S9 are ten con
 
 ## Owner decision record
 
-- **D1 — resolved 2026-07-25:** Frame capture is opt-in per acquisition. When temporary-media capture succeeds, retain one `context_frame` from the video even when it is not information-bearing under the normal visual-necessity rule; that exception is for the owner’s visual orientation. Additional retained frames still require visual necessity and remain subject to the cap. Capture failure or unavailable video degrades to timestamps-only, with no placeholder. Temporary video bytes are deleted in-run; only approved retained frames remain.
+- **D1 — revised 2026-09-30 (supersedes the 2026-07-25 decision):** For each eligible acquisition with timestamped moments, attempt bounded temporary-media capture and retain one `context_frame` when capture succeeds, even when it is not information-bearing under the normal visual-necessity rule; that exception provides visual orientation. Additional retained frames require visual necessity and remain subject to the cap. Capture failure or unavailable video degrades to timestamps-only, with no placeholder. Temporary video bytes are deleted in-run; retained frames remain source-dependent media derivatives with rights, sensitivity, lineage, and retention metadata.
 - **D2 — resolved 2026-07-25:** Write a rebuildable, non-authoritative `transcript.md` beside the candidate note and always link it from the note’s synthesis/evidence-and-lineage surface. Machine-side raw evidence remains the replay source and authority.
 - **D3 — resolved 2026-07-25:** Preserve the existing flat candidate-note path. Store `transcript.md`, `source.json`, and retained frames under a vault-relative attachment root configured by the YouTube plugin/add-on (`youtube_attachment_root`, default `Sources/YouTube/_attachments`), with a stable source-identity subfolder such as `yt-<video-id>` and one immutable child directory per content identity/version. The configuration value is validated as vault-relative; title changes never relocate attachments, while a content-identity change creates a new immutable version directory and never retargets an older candidate's links or anchors. A copied note therefore needs its linked attachment subfolder exported with it to remain fully browsable.
 - **D4 — resolved direction 2026-07-25:** The owner wants a behavior-derived relevance profile shared across the whole vault, not a YouTube-only profile. Its owner contract defines one vault-local, owner-visible Profile Note: an agentic preference-memory artifact that records relevant, reviewable knowledge about the owner. It is not hidden model state, human-authored knowledge, or a local YouTube profile. The delivered **ProfileAgent is the only system agent allowed to write the Profile Note's approved profile content**. Other agents have no direct profile-write route; they submit provenance-bearing `ProfileUpdateCandidate` handoffs to ProfileAgent over the inspectable A2A/handoff boundary. Such handoffs are data, not instructions or approval, and do not themselves enter the profile or agent context. Any direct owner correction remains owner authority, is never overwritten by an agent, and is reconciled visibly under the delivered profile contract.
@@ -82,10 +82,10 @@ The previous “nine slices” statement is corrected: S0 through S9 are ten con
 - **D5 — resolved 2026-07-26:** Every re-extraction or upgrade writes a new versioned proposal companion. It records its content identity, predecessor/proposal reference, inputs, and receipt, and never overwrites the original candidate note or human-authored content. A companion is review material, not automatic promotion.
 - **D6 — resolved 2026-07-26:** System-generated synthesis, section prose, and `system_paraphrase` are in English unless the source's original language is Swedish, in which case they are in Swedish. `source_wording` and direct quotations always remain in their original source language; the system must not present a translation as a quotation.
 
-**YSNV2-01 preservation receipt (2026-07-26):** D1–D6 above remain unchanged, binding inputs to
-their implementation children. That contract reconciliation implemented none of them and made no
-v2 or ProfileAgent runtime claim; the separate GOVPROF-01–03 capability was delivered and accepted
-under parent #4944 on 2026-09-29.
+**YSNV2-01 preservation receipt (2026-07-26):** D1–D6 were recorded as then-current inputs to
+their implementation children. The owner revised D1 on 2026-09-30; D2–D6 remain as recorded. That
+contract reconciliation implemented none of them and made no v2 or ProfileAgent runtime claim; the
+separate GOVPROF-01–03 capability was delivered and accepted under parent #4944 on 2026-09-29.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -95,7 +95,7 @@ under parent #4944 on 2026-09-29.
 4. **Partial failure is visible, not destructive.** Normalize/raw failure prevents candidate materialization. After required evidence has succeeded, an optional extractor failure emits a durable rerunnable failure receipt and an explicit degraded-note marker; it cannot erase successful required evidence or an already materialized candidate. A candidate may materialize only when its declared required evidence set is present.
 5. **Claims have evidence.** Every rendered factual claim, quote, synthesis sentence, and overlay `source_says` field carries one or more resolvable transcript anchors; anchorless output is omitted and reported, never softened into an uncited claim.
 6. **Transcript is a derivative.** Vault `transcript.md` is a readable rebuildable projection and never an input to replay. Replay begins with machine-side raw evidence, performs no source egress, and never mutates human-authored content.
-7. **Frames are exceptional.** Frame artifacts are source-dependent media derivatives, not ordinary rebuildable extractions. Per resolved D1, a successful opted-in acquisition retains one contextual frame; additional frames require visual necessity. Capture failure degrades to timestamp-only moments; after temporary video deletion no media bytes remain except explicitly approved retained frames.
+7. **Frames are exceptional.** Frame artifacts are source-dependent media derivatives, not ordinary rebuildable extractions. Per revised D1, a successful eligible acquisition retains one contextual frame; additional frames require visual necessity. Capture failure degrades to timestamp-only moments; after temporary video deletion no media bytes remain except retained frames.
 8. **Authority stays human-first.** All generated material is review-required proposal content. Overlay reads are allowlisted and read-only; no extraction, replay, or evaluation promotes, edits, or reorders human knowledge.
 
 ## Partial-failure policy introduced by v2
@@ -125,12 +125,12 @@ This stable heading is retained because parent Issue #4107 uses it as an accepta
 | 8 | `EXTRACT_GATED_ONTOLOGY_PROPOSALS` | [#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — open / `agent:ready` | task 5 delivered; proposal-only |
 | 9 | `SELECT_TIMESTAMPED_KEY_MOMENTS` | [#4116](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4116) — open / `agent:ready` | task 5 delivered; timestamp-only, no media dependency |
 | 10 | `APPLY_GOVERNED_INTEREST_OVERLAY` | [#4117](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4117) — open | task 5 + delivered/accepted profile contract #4944; four-part renderer remains undelivered |
-| 11 | `CAPTURE_OPT_IN_SOURCE_FRAMES` | [#4118](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4118) — `agent:blocked` | task 9; D1 resolved |
+| 11 | `CAPTURE_SOURCE_FRAMES` | [#4118](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4118) — `agent:blocked` | task 9; waiting only for timestamped moments in #4116 |
 | 12 | `EVALUATE_SOURCE_NOTE_QUALITY` | [#4119](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4119) — `agent:blocked` | final validation after tasks 1–11, including #4117; the profile-contract prerequisite is delivered |
 
 ## Acceptance and evidence
 
-Child PRs resolve their own `Verify:` targets and post a concise validation receipt to live parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107). YSNV2-12 is the final child: after tasks 1–11 have merged, it owns the end-to-end invariant matrix and the parent-closure handoff. The gold-set annotation scope and any source/media consent are recorded as an operator receipt on that live validation ledger, never inferred from this static specification or runtime data. The parent is accepted only when all twelve children are delivered, its v2 note is evidence-anchored, human content remains non-destructively protected, replay remains no-egress, dependency-gated work has its required authority contract, and the quality evaluation records an operator-visible result. Current-state owner docs are updated only at accepted capability truth.
+Child PRs resolve their own `Verify:` targets and post a concise validation receipt to live parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107). YSNV2-12 is the final child: after tasks 1–11 have merged, it owns the end-to-end invariant matrix and the parent-closure handoff. The gold-set annotation scope is recorded as an operator receipt on that live validation ledger, never inferred from runtime data. The parent is accepted only when all twelve children are delivered, its v2 note is evidence-anchored, human content remains non-destructively protected, replay remains no-egress, dependency-gated work has its required authority contract, and the quality evaluation records an operator-visible result. Current-state owner docs are updated only at accepted capability truth.
 
 ## Relationship to GitHub Issues
 

@@ -13,7 +13,7 @@ can_parallelize_with: [EXTRACT_GATED_ONTOLOGY_PROPOSALS]
 
 ## Purpose
 
-Deliver revisit-friendly timestamp selection without coupling its value or correctness to unapproved screenshot work.
+Deliver revisit-friendly timestamp selection without coupling its value or correctness to frame capture.
 
 ## What This Task Does
 
