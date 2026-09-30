@@ -26,7 +26,7 @@ import math
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal, Mapping, Sequence
+from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from app.knowledge.profile_consumer_projection import (
     ProfileConsumerProjection,
@@ -47,6 +47,7 @@ _CONNECTION_FIELDS = frozenset(
 )
 _MIN_OWNER_LINK_WORDS = 3
 _EMBED_OPENER = "![["
+_HEADING = re.compile(r"#{1,6}(?:\s|$)")
 _LINE_MARKER = re.compile(r"^(?:[-*+>]\s+|\d+[.)]\s+)+")
 _MARKDOWN_ACTIVE = re.compile(r"([\\`*_\[\]!|~])")
 
@@ -135,7 +136,7 @@ def render_interest_overlay(
     vault_root: Path | str,
     active_scope_id: str | None,
     normalized: Mapping[str, Any],
-    connections: Sequence[object],
+    connections: Iterable[object],
 ) -> InterestOverlay:
     """Render four-part connections against the admitted governed profile only."""
 
@@ -151,10 +152,11 @@ def render_interest_overlay(
     if not isinstance(segments, list):
         segments = []
     profile_lines = _profile_lines(projection.profile_content)
-    if not isinstance(connections, Sequence) or isinstance(connections, (str, bytes)):
-        connections = ()
     kept: list[Mapping[str, Any]] = []
     dropped: list[str] = []
+    if isinstance(connections, (str, bytes, Mapping)) or not isinstance(connections, Iterable):
+        dropped.append("connections_malformed")
+        connections = ()
     for candidate in connections:
         outcome = _admit_connection(candidate, segments, profile_lines, language)
         if isinstance(outcome, str):
@@ -259,7 +261,7 @@ def _profile_lines(profile_content: str) -> tuple[str, ...]:
     lines: list[str] = []
     for raw in profile_content.splitlines():
         line = raw.strip()
-        if not line or line.startswith("#"):
+        if not line or _HEADING.match(line):
             continue
         line = _normalize_space(_LINE_MARKER.sub("", line))
         if line:
