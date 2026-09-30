@@ -53,7 +53,7 @@ Promotion into SIP ontology, ontology editing UI, and frame-assisted gate signal
 
 ## Related GitHub Issues
 
-[#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — delivered by PR #PRNUM. SBS class: Product/Runtime.
+[#4115](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4115) — delivered by PR #5741. SBS class: Product/Runtime.
 
 ## Delivery record
 
