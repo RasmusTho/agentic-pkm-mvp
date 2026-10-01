@@ -173,7 +173,7 @@ class _MemoryAccountBindingBackend:
         with self._lock:
             return tuple(self._rows.values())
 
-    def set_state(self, account_binding_id: str, state: str, reason_code: str | None) -> AccountBinding:
+    def set_state(self, account_binding_id: str, state: str, reason_code: str | None, *, transaction_conn: Any = None) -> AccountBinding:
         with self._lock:
             row = self._rows.get(account_binding_id)
             if row is None:
@@ -395,23 +395,23 @@ class _PgAccountBindingBackend:
         finally:
             conn.close()
 
-    def set_state(self, account_binding_id: str, state: str, reason_code: str | None) -> AccountBinding:
-        conn = _pg_connect()
+    def set_state(self, account_binding_id: str, state: str, reason_code: str | None, *, transaction_conn: Any = None) -> AccountBinding:
+        conn = transaction_conn if transaction_conn is not None else _pg_connect()
         try:
             _assert_pg_schema(conn)
             cur = conn.cursor()
             cur.execute(
                 f"UPDATE {_TABLE} SET state = %s, reason_code = %s, updated_at = %s::timestamptz "
-                "WHERE account_binding_id = %s",
+                f"WHERE account_binding_id = %s RETURNING {_COLUMNS_SQL}",
                 (state, reason_code, _now_iso(), account_binding_id),
             )
-            if cur.rowcount == 0:
+            row = cur.fetchone()
+            if row is None:
                 raise KeyError(f"no such account binding: {account_binding_id}")
+            return _row_to_binding(tuple(row))
         finally:
-            conn.close()
-        result = self.get(account_binding_id)
-        assert result is not None  # just wrote it
-        return result
+            if transaction_conn is None:
+                conn.close()
 
     def delete(self, account_binding_id: str) -> bool:
         conn = _pg_connect()
@@ -503,10 +503,10 @@ class AccountBindingStore:
         return bindings[0]
 
     def set_state(
-        self, account_binding_id: str, *, state: str, reason_code: str | None = None
+        self, account_binding_id: str, *, state: str, reason_code: str | None = None, transaction_conn: Any = None
     ) -> AccountBinding:
         _validate_state(state, reason_code)
-        return self._backend.set_state(account_binding_id, state, reason_code)
+        return self._backend.set_state(account_binding_id, state, reason_code, transaction_conn=transaction_conn)
 
     def delete(self, account_binding_id: str) -> bool:
         return self._backend.delete(account_binding_id)

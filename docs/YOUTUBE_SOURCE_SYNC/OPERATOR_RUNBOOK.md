@@ -13,8 +13,10 @@ V1 provides core application routes, not a broad command family:
 - select one Inbox, sync once, inspect status: `YouTubeInboxSyncV1` in
   `app/knowledge_acquisition/playlist_discovery.py`.
 
-There is no automatic scheduler, next-sync promise, UI setup wizard, multi-playlist
-configuration, Takeout/RSS import, backfill command, analytics view, or full-media route.
+The bounded [YSS-06 continuation](SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) adds discovery-only
+scheduling when both accepted runtime gates are enabled; it does not automatically drain requests.
+There is no end-to-end next-sync promise, UI setup wizard, multi-playlist configuration,
+Takeout/RSS import, backfill command, analytics view, or full-media route.
 
 ## Dev command
 
@@ -68,8 +70,11 @@ OAuth status callback. The manual sequence is:
 3. `status()`
 
 `select_inbox` is idempotent for the same playlist and rejects a different second Inbox. It does
-not expose owned/public/Liked multi-source configuration. `sync_now` calls the production
-`poll_source` path exactly once. `status` returns only:
+not expose owned/public/Liked multi-source configuration. Before reading source state or claiming
+the shared lease, `sync_now` checks the accepted vault-shared `youtubeSync.enabled` master switch;
+when paused it returns `paused_global` without polling or egress. The vault-local
+`youtubeSync.runnerEnabled` switch controls only the unattended watcher. When enabled, `sync_now`
+calls the production `poll_source` path exactly once. `status` returns only:
 
 ```json
 {
@@ -97,9 +102,12 @@ material drains successfully, the result is a `youtube_source_note` candidate wi
 The Inbox route never calls knowledge promotion. Human review remains the only path to higher
 knowledge standing.
 
-Each `drain` invocation is one bounded pass and nothing more: it holds no lease, keeps no schedule,
-and leaves no process running. Unattended continuous sync remains deferred to YSS-06 (#3921), so a
-queue only advances when an operator runs the command.
+Each `drain` invocation is one bounded pass and nothing more: it holds no scheduler lease, keeps
+no schedule, and leaves no process running. YSS-06 (#3921) schedules discovery and enqueue only;
+queued requests are acquired only when an operator runs the drain command. While a claimed row is
+being acquired, the command refreshes its queue heartbeat with the attempt generation; a long live
+pipeline run therefore remains in progress, and a stopped process is still recovered after the
+stale threshold. Background acquisition remains a separate deferred slice.
 
 ## Troubleshooting
 
