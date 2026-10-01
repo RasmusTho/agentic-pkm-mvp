@@ -686,7 +686,7 @@ def candidate_note_exists_durable(
 
 def create_candidate_note_once(
     note_rel_path: str,
-    content: str,
+    content: str | bytes,
     *,
     vault_root: Path | str,
     action: str,
@@ -705,7 +705,9 @@ def create_candidate_note_once(
     resolved_root = Path(vault_root).expanduser().resolve()
     guard = write_guard or DEFAULT_WRITE_GUARD
     guard.assert_writes_allowed(action)
-    payload = content.encode("utf-8")
+    # ``bytes`` lets a derived binary attachment (e.g. a retained source frame) reuse the
+    # same first-write-wins, no-follow descriptor walk; text is encoded as UTF-8.
+    payload = content if isinstance(content, bytes) else content.encode("utf-8")
 
     current_dir_fd: int | None = None
     stage_fd: int | None = None

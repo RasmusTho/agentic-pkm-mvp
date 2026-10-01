@@ -440,6 +440,10 @@ def test_create_once_stays_behind_knowledge_service_boundary() -> None:
         # no-clobber derived members under the same governed write service.
         ("app/knowledge_acquisition/source_bundle.py", "materialize_youtube_source_bundle"),
         ("app/knowledge_acquisition/source_bundle.py", "materialize_youtube_source_bundle"),
+        # Source frames (#4118): retained frame stills and their manifest are immutable,
+        # no-clobber derived members of the bundle version under the same write service.
+        ("app/knowledge_acquisition/source_frames.py", "capture_source_frames"),
+        ("app/knowledge_acquisition/source_frames.py", "capture_source_frames"),
     ]
     writeback_path = app_root / "knowledge_acquisition" / "candidate_writeback.py"
     imports = [

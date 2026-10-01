@@ -143,6 +143,8 @@ only after its note has materialized. Re-extraction or upgrade must create a ver
 companion rather than overwrite the original candidate or human-authored content. These bounded
 YouTube deliveries do not ship the later v2 modules or change title-bearing paths or persistence.
 The owner revised the D1 frame-capture direction on 2026-09-30; D2–D6 remain as recorded.
+Issue #4118 delivers the bounded YSNV2-11 frame-capture stage (`source_frames.capture_source_frames`)
+under that direction; like #4116 moments, it is not yet wired into acquisition-time note rendering.
 ProfileAgent behavior was delivered separately as GOVPROF-01–03 under parent #4944;
 that profile capability does not ship the separate YouTube overlay renderer, which Issue #4117 delivers
 as a read-only consumer not yet wired into acquisition-time note rendering.
