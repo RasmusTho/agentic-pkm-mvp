@@ -149,39 +149,14 @@ def render_review_required_note(
     rendered_sections: list[str] = []
     seen_module_ids: set[str] = set()
     for section in proposal_sections:
-        if not isinstance(section.content, str):
-            raise NoteRenderError(
-                f"proposal content must be text for module {section.module_id!r}"
-            )
-        _assert_no_bidi_controls(section.content, surface="proposal content")
-        content = _normalize_generated_markdown(
-            section.content,
-            surface="proposal content",
-        ).strip()
-        if not content:
+        prepared = _prepare_proposal_section(section)
+        if prepared is None:
             continue
-        module_id = section.module_id.strip()
-        if not module_id:
-            raise NoteRenderError("proposal module_id must be non-blank")
+        module_id, title, content = prepared
         if module_id in seen_module_ids:
             raise NoteRenderError(
                 f"duplicate proposal module_id is not allowed: {module_id!r}"
             )
-        _assert_no_bidi_controls(section.title, surface="proposal title")
-        title = _normalize_generated_markdown(
-            section.title,
-            surface="proposal title",
-        ).strip()
-        if not title:
-            raise NoteRenderError(
-                f"proposal title must be non-blank for module {section.module_id!r}"
-            )
-        if len(title.splitlines()) != 1:
-            raise NoteRenderError(
-                f"proposal title must be one plain line for module {section.module_id!r}"
-            )
-        _assert_proposal_title_allowed(title)
-        _assert_generated_prose_allowed(content)
         seen_module_ids.add(module_id)
         rendered_sections.append(
             f"### {_escape_inline_markdown_text(title)}\n\n{_quote_markdown(content)}"
@@ -237,6 +212,51 @@ artifact; this source note remains provenance._
     _assert_no_bidi_controls(rendered, surface="rendered output")
     _assert_no_active_obsidian_embeds(rendered, surface="rendered output")
     return rendered
+
+
+def validate_proposal_section(section: ProposalSection) -> None:
+    """Apply the renderer's per-section safety checks without assembling a note.
+
+    Optional modules use this to drop an individual unsafe item before composition, so one
+    source line cannot fail the whole candidate render. Raises ``NoteRenderError``.
+    """
+
+    _prepare_proposal_section(section)
+
+
+def _prepare_proposal_section(section: ProposalSection) -> tuple[str, str, str] | None:
+    """Return ``(module_id, title, content)`` after all checks, or ``None`` when empty."""
+
+    if not isinstance(section.content, str):
+        raise NoteRenderError(
+            f"proposal content must be text for module {section.module_id!r}"
+        )
+    _assert_no_bidi_controls(section.content, surface="proposal content")
+    content = _normalize_generated_markdown(
+        section.content,
+        surface="proposal content",
+    ).strip()
+    if not content:
+        return None
+    module_id = section.module_id.strip()
+    if not module_id:
+        raise NoteRenderError("proposal module_id must be non-blank")
+    _assert_no_bidi_controls(section.title, surface="proposal title")
+    title = _normalize_generated_markdown(
+        section.title,
+        surface="proposal title",
+    ).strip()
+    if not title:
+        raise NoteRenderError(
+            f"proposal title must be non-blank for module {section.module_id!r}"
+        )
+    if len(title.splitlines()) != 1:
+        raise NoteRenderError(
+            f"proposal title must be one plain line for module {section.module_id!r}"
+        )
+    _assert_proposal_title_allowed(title)
+    _assert_generated_prose_allowed(content)
+    return module_id, title, content
 
 
 def _assert_generated_prose_allowed(content: str) -> None:
@@ -495,4 +515,5 @@ __all__ = [
     "NoteRenderError",
     "ProposalSection",
     "render_review_required_note",
+    "validate_proposal_section",
 ]
