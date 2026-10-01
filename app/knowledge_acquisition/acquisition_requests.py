@@ -1525,6 +1525,8 @@ def drain_one(
         acquire_youtube,
         acquire_metadata_only,
     )
+    from app.knowledge_acquisition.interest_overlay import bind_active_scope
+    from app.vault.manager import VaultContext
     from app.write_guard import DEFAULT_WRITE_GUARD
 
     if request.source_kind != YOUTUBE_SOURCE_KIND:
@@ -1617,6 +1619,11 @@ def drain_one(
         else None
     )
     guard = write_guard if write_guard is not None else DEFAULT_WRITE_GUARD
+    if isinstance(vault_context, VaultContext):
+        # #5749: the request's policy snapshot is the drain's only active-scope source; an unset
+        # or invalid value binds no scope (explicit no-profile overlay), and any scope already on
+        # the caller's context is not carried over into this request.
+        vault_context = bind_active_scope(vault_context, policy.get("active_scope_id"))
     if mode == "candidate_metadata_only":
         # A valid metadata-only snapshot has no extractor inputs and therefore cannot enter the
         # transcript producer.  Keep an injected function usable for production-seam tests while

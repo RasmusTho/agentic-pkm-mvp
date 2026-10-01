@@ -554,7 +554,9 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   The separate four-part YouTube overlay renderer (#4117) consumes only that projection and renders
   one explicit no-profile line otherwise; #5747 wires it into acquisition-time transcript notes with a
   deterministic local (no-egress) connection producer and the vault context's explicit active scope;
-  no production entry point binds that scope yet (#5749), so live notes render the no-profile line.
+  #5749 binds that scope in production from the acquisition request policy snapshot (`active_scope_id`)
+  or an explicit `acquire-youtube`/`acquire-replay` `--scope`; an unset or invalid scope renders the
+  no-profile line, and no scope is inferred from vault identity.
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - The bounded Mimer MCP producer adapter is delivered as the `mimer-mcp` stdio sidecar: exactly
   ask, governed capture, retrieve/search, note read, and health delegate to existing governed HTTP
