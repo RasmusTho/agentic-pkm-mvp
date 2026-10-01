@@ -352,7 +352,8 @@ mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
   relative tolerance; or any per-language / per-route-intent / per-class slice
   present in the baseline is **missing** in the candidate (a disappeared slice
   is the strongest possible regression — the comparison surface must never
-  silently shrink; slices only in the candidate are reported but non-blocking).
+  silently shrink; slices only in the candidate are reported but non-blocking);
+  or any supported **sample count shrank** versus the baseline (see below).
 - `improved` (exit 0) when no regression and at least one metric improved
   beyond the tolerance.
 - `neutral` (exit 0) otherwise.
@@ -361,6 +362,29 @@ mirrored in the `--output` JSON artifact (`eval_scorecard_compare.v1`):
   anywhere in the compared surface, malformed confusion/failure entries, wrong
   `schema_version`) is exit code **2** with an `error:` message naming the
   offending path — never conflated with a regression verdict.
+
+**Sample-count shrink (#5708).** A candidate with fewer cases but unchanged
+metric values and slice keys is reduced coverage, not equal quality, so compare
+checks these counts baseline → candidate (bounded to exactly these fields,
+`SAMPLE_COUNT_SPEC` in `app/eval/compare.py`): `aggregate.count`,
+`memory_recall.count`, `by_language.<lang>.count`, `by_slice.<route>.count`,
+`classification.n_cases`, and `classification.per_class.<class>.support`.
+
+- Any decrease is a blocking `regression` (exit 1) independent of the metric
+  tolerance. Each one is listed under `sample_count_regressions` in the artifact
+  as `{path, baseline, candidate}` and printed as
+  `Sample counts that SHRANK vs baseline (blocking)`.
+- Increases are informational only (`sample_count_increases`,
+  `Sample counts that grew`) and never make a verdict `improved`.
+- Only paths present on both sides are compared; a keyed slice that disappears
+  entirely is reported once, via `missing_slices`.
+- A missing, negative, non-integer (including boolean), or contradictory count
+  is malformed input (exit 2). Contradictory means a retrieval sub-bucket count
+  (`memory_recall`, `by_language.*`, `by_slice.*`) exceeds `aggregate.count`,
+  or `n_cases` / per-class `support` disagree with the confusion matrix.
+- Dataset membership changes with equal counts are not detected, and an
+  intentional dataset shrink is never accepted automatically: justify it in the
+  PR like any other regression.
 
 **Compare artifact required for Router/Synthesizer changes.** Any PR that
 changes the **Router** (intent classifier — `app/components/llm/intent_classifier.py`
