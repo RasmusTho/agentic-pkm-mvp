@@ -18,6 +18,14 @@ profile is admitted, each proposed connection must keep four separate fields:
 - ``suggested_use`` (generated prose, D6 language).
 
 Incomplete, collapsed, or foreign-field connections are dropped and reported.
+
+#5747 adds ``propose_local_connections``, the deterministic local producer used
+at acquisition time.  It reads profile state only through
+``read_governed_profile_for_overlay`` and proposes a connection when an
+approved profile entry shares enough distinct content terms with one
+transcript segment.  It performs no model, network, or LLM-routing call; its
+generated prose is fixed D6 template text.  ``produce_interest_overlay`` feeds
+those proposals through ``render_interest_overlay`` admission unchanged.
 """
 
 from __future__ import annotations
@@ -49,7 +57,47 @@ _MIN_OWNER_LINK_WORDS = 3
 _EMBED_OPENER = "![["
 _HEADING = re.compile(r"#{1,6}(?:\s|$)")
 _LINE_MARKER = re.compile(r"^(?:[-*+>]\s+|\d+[.)]\s+)+")
-_MARKDOWN_ACTIVE = re.compile(r"([\\`*_\[\]!|~])")
+# KD-EF0ADFABFD23: ``%`` (Obsidian comment ``%%``), ``=`` (highlight ``==``) and
+# ``#`` (inline ``#tag``) are escaped too, so transcript or profile text can neither
+# hide the rest of the note nor restyle or tag it.
+_MARKDOWN_ACTIVE = re.compile(r"([\\`*_\[\]!|~%=#])")
+_TERM = re.compile(r"\w+", re.UNICODE)
+_MIN_TERM_LENGTH = 4
+_MIN_SHARED_TERMS = 2
+_MAX_LOCAL_CONNECTIONS = 3
+# Function words long enough to pass the term-length floor; matching on them would
+# be noise rather than a content signal.  Bounded to the D6 languages.
+_STOP_TERMS = frozenset(
+    {
+        "about", "also", "been", "being", "from", "have", "into", "just", "like", "more",
+        "most", "much", "only", "other", "over", "some", "such", "than", "that", "their",
+        "them", "then", "there", "these", "they", "this", "those", "very", "were", "what",
+        "when", "where", "which", "while", "will", "with", "would", "your", "prefer",
+        "interested", "follow",
+        "alla", "andra", "denna", "detta", "eller", "efter", "från", "inte", "mellan",
+        "också", "eftersom", "under", "utan", "vara", "vill", "över",
+    }
+)
+_LOCAL_INFERENCE: Mapping[str, str] = {
+    "en": (
+        "This passage shares {count} distinct key terms with one approved profile entry, "
+        "so it may relate to that stated interest."
+    ),
+    "sv": (
+        "Det här avsnittet delar {count} olika nyckelord med en godkänd post i profilen, "
+        "så det kan höra ihop med det uttalade intresset."
+    ),
+}
+_LOCAL_SUGGESTED_USE: Mapping[str, str] = {
+    "en": (
+        "Review this passage when revisiting that interest and decide whether it belongs "
+        "with related notes."
+    ),
+    "sv": (
+        "Granska avsnittet när du återvänder till intresset och avgör om det hör hemma "
+        "bland relaterade anteckningar."
+    ),
+}
 
 NO_PROFILE_LINES: Mapping[str, str] = {
     "en": "No approved profile is available for this scope, so no interest connections were produced.",
@@ -178,6 +226,97 @@ def render_interest_overlay(
         profile_scope_id=projection.scope_id,
         profile_version_id=projection.version_id,
         profile_receipt_id=projection.receipt_id,
+    )
+
+
+def propose_local_connections(
+    *,
+    vault_root: Path | str,
+    active_scope_id: str | None,
+    normalized: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    """Deterministically propose four-part connections from local evidence only.
+
+    Profile state is read only through ``read_governed_profile_for_overlay``; no
+    model, network, or LLM-routing call is made.  For each approved profile entry
+    (in profile order) the earliest transcript segment sharing the most distinct
+    content terms (at least ``_MIN_SHARED_TERMS``) yields one proposal.  The
+    proposals are not trusted: ``render_interest_overlay`` re-admits each one.
+    """
+
+    if not isinstance(normalized, Mapping):
+        return ()
+    projection = read_governed_profile_for_overlay(vault_root, active_scope_id=active_scope_id)
+    if not projection.available or not projection.profile_content:
+        return ()
+    segments = normalized.get("segments")
+    if not isinstance(segments, list):
+        return ()
+    language = system_language_for(normalized.get("language"))
+    segment_terms = [
+        _content_terms(segment.get("text")) if isinstance(segment, Mapping) else frozenset()
+        for segment in segments
+    ]
+    proposals: list[dict[str, Any]] = []
+    for line in _profile_lines(projection.profile_content):
+        line_terms = _content_terms(line)
+        if len(line_terms) < _MIN_SHARED_TERMS:
+            continue
+        best_index, best_count = -1, 0
+        for index, terms in enumerate(segment_terms):
+            count = len(line_terms & terms)
+            if count > best_count:
+                best_index, best_count = index, count
+        if best_count < _MIN_SHARED_TERMS:
+            continue
+        segment = segments[best_index]
+        proposals.append(
+            {
+                "source_says": _normalize_space(str(segment.get("text") or "")),
+                "anchors": [
+                    {
+                        "segment_index": best_index,
+                        "start": segment.get("start"),
+                        "end": segment.get("end"),
+                    }
+                ],
+                "system_inference": _LOCAL_INFERENCE[language].format(count=best_count),
+                "owner_link": line,
+                "suggested_use": _LOCAL_SUGGESTED_USE[language],
+            }
+        )
+        if len(proposals) >= _MAX_LOCAL_CONNECTIONS:
+            break
+    return tuple(proposals)
+
+
+def produce_interest_overlay(
+    *,
+    vault_root: Path | str,
+    active_scope_id: str | None,
+    normalized: Mapping[str, Any],
+) -> InterestOverlay:
+    """Acquisition-time overlay: local deterministic proposals through governed admission."""
+
+    return render_interest_overlay(
+        vault_root=vault_root,
+        active_scope_id=active_scope_id,
+        normalized=normalized,
+        connections=propose_local_connections(
+            vault_root=vault_root,
+            active_scope_id=active_scope_id,
+            normalized=normalized,
+        ),
+    )
+
+
+def _content_terms(value: object) -> frozenset[str]:
+    if not isinstance(value, str):
+        return frozenset()
+    return frozenset(
+        term
+        for term in (match.casefold() for match in _TERM.findall(value))
+        if len(term) >= _MIN_TERM_LENGTH and not term.isdigit() and term not in _STOP_TERMS
     )
 
 
@@ -319,6 +458,8 @@ __all__ = [
     "NO_PROFILE_LINES",
     "InterestOverlay",
     "admit_profile_for_interest_overlay",
+    "produce_interest_overlay",
+    "propose_local_connections",
     "read_governed_profile_for_overlay",
     "render_interest_overlay",
 ]

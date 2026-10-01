@@ -461,3 +461,50 @@ def test_overlay_system_inference_and_suggested_use_follow_source_language_polic
     assert sv_cold.section().content.splitlines() == [NO_PROFILE_LINES["sv"]]
     assert validate_generated_language(NO_PROFILE_LINES["sv"], "sv")
     assert validate_generated_language(NO_PROFILE_LINES["en"], "en")
+
+
+def test_overlay_inline_fields_escape_obsidian_active_markup(tmp_path: Path) -> None:
+    """KD-EF0ADFABFD23: transcript and profile markup cannot hide, highlight, or tag the note."""
+
+    profile_line = "Track ==highlighted== %%hidden%% notes about #localfirst sync tools."
+    content = f"<!--mimer:profile-scope scope_id={_SCOPE}-->\n\n## Interests\n\n- {profile_line}"
+    root, _note_path = _approved_vault(tmp_path / "vault", content)
+    quote = "keeps %% every ==file== on #disk"
+    segments = [
+        {"start": 0.0, "end": 12.0, "text": f"Our app {quote} and %% syncs peer to peer."},
+        {"start": 12.0, "end": 20.0, "text": "Closing remarks without markup."},
+    ]
+    overlay = render_interest_overlay(
+        vault_root=root,
+        active_scope_id=_SCOPE,
+        normalized={"language": "en", "segments": segments},
+        connections=[
+            _connection(
+                source_says=quote,
+                anchors=[{"segment_index": 0, "start": 0.0, "end": 12.0}],
+                owner_link=profile_line,
+                system_inference="The product keeps #notes local and ==syncs== them %% directly.",
+                suggested_use="Compare this %%design%% with the ==current== #vault setup.",
+            )
+        ],
+    )
+    assert overlay.status == "connections", overlay.dropped
+    rendered = overlay.section().content
+    for active in ("%%", "==", " #", "“#"):
+        assert active not in rendered, active
+    assert r"\%\% every \=\=file\=\= on \#disk" in rendered
+    assert r"Track \=\=highlighted\=\= \%\%hidden\%\% notes about \#localfirst" in rendered
+    assert r"keeps \#notes local and \=\=syncs\=\= them \%\% directly" in rendered
+    assert r"Compare this \%\%design\%\% with the \=\=current\=\= \#vault setup" in rendered
+
+    # Through the shared proposals wrapper an unescaped "%%" would either raise (unterminated
+    # comment) or strip everything between delimiters; escaped, every field survives verbatim.
+    note = render_review_required_note(
+        frontmatter={"type": "source-note"},
+        proposal_sections=[overlay.section()],
+        evidence=[("Source", "fixture")],
+    )
+    overlay_band = note.split("### Interest overlay", 1)[1]
+    assert "%%" not in overlay_band and "==" not in overlay_band
+    assert r"\=\=file\=\= on \#disk" in overlay_band
+    assert r"\#vault setup" in overlay_band
