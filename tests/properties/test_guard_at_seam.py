@@ -411,6 +411,10 @@ def test_every_candidate_create_once_seam_has_port_coverage() -> None:
             "app/knowledge_acquisition/source_bundle.py",
             "materialize_youtube_source_bundle",
         ),
+        # YSNV2-11 source frames (#4118): retained frame stills and their manifest are
+        # guarded create-once derived members of the same immutable bundle version.
+        ("app/knowledge_acquisition/source_frames.py", "capture_source_frames"),
+        ("app/knowledge_acquisition/source_frames.py", "capture_source_frames"),
     ]
 
     writeback_tree = ast.parse(writeback_path.read_text(encoding="utf-8"))
