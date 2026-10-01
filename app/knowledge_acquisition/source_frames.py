@@ -68,7 +68,13 @@ MAX_RETAINED_FRAMES = 3  # one context_frame + at most two visually necessary fr
 MAX_FRAME_EXTRACTIONS = 6
 MAX_TEMP_MEDIA_BYTES = 256 * 1024 * 1024
 MAX_SOURCE_DURATION_SECONDS = 4 * 60 * 60
-MEDIA_FORMAT = "worst[height<=360][ext=mp4]/worst[height<=360]/worst"
+# Every alternative must be a progressive HTTP(S) file within the byte bound.  Fragmented
+# HLS/DASH downloaders do not enforce ``max_filesize``, and live streams have no end.
+_FORMAT_BOUND = f"[filesize<?{MAX_TEMP_MEDIA_BYTES // (1024 * 1024)}M][filesize_approx<?{MAX_TEMP_MEDIA_BYTES // (1024 * 1024)}M][protocol^=http]"
+MEDIA_FORMAT = (
+    f"worst[height<=360][ext=mp4]{_FORMAT_BOUND}/worst[height<=360]{_FORMAT_BOUND}/worst{_FORMAT_BOUND}"
+)
+_LIVE_STATUSES = frozenset({"is_live", "is_upcoming", "post_live"})
 FFMPEG_TIMEOUT_SECONDS = 60
 SOCKET_TIMEOUT_SECONDS = 30
 FRAME_MAX_WIDTH = 640
@@ -142,10 +148,22 @@ class YtDlpFfmpegMediaCapture:
         assert_source_egress_allowed("source_frames.download_temporary_media")
 
         def duration_filter(info: Mapping[str, Any], *, incomplete: bool = False) -> str | None:
+            if incomplete:
+                return None
+            if info.get("is_live") or info.get("live_status") in _LIVE_STATUSES:
+                return "live or upcoming streams are outside the bounded capture"
             duration = info.get("duration")
-            if isinstance(duration, (int, float)) and duration > max_duration_seconds:
+            if isinstance(duration, bool) or not isinstance(duration, (int, float)) or duration <= 0:
+                return "source duration is unknown; bounded capture requires a finite duration"
+            if duration > max_duration_seconds:
                 return f"source duration {duration}s exceeds the {max_duration_seconds}s capture bound"
             return None
+
+        def byte_bound(progress: Mapping[str, Any]) -> None:
+            for key in ("downloaded_bytes", "total_bytes", "total_bytes_estimate"):
+                value = progress.get(key)
+                if isinstance(value, (int, float)) and value > max_bytes:
+                    raise MediaUnavailableError(f"temporary media exceeds the {max_bytes}-byte capture bound")
 
         options: dict[str, Any] = {
             "format": MEDIA_FORMAT,
@@ -153,6 +171,7 @@ class YtDlpFfmpegMediaCapture:
             "paths": {"home": str(dest_dir), "temp": str(dest_dir)},
             "max_filesize": max_bytes,
             "match_filter": duration_filter,
+            "progress_hooks": [byte_bound],
             "noplaylist": True,
             "cachedir": False,
             "quiet": True,
@@ -186,7 +205,11 @@ class YtDlpFfmpegMediaCapture:
             raise FrameExtractionError(f"ffmpeg frame extraction failed: {exc}") from exc
         if encoded.returncode != 0 or raster.returncode != 0 or not still.is_file():
             raise FrameExtractionError(f"ffmpeg could not extract a frame at {timestamp_seconds}s")
-        return CapturedFrame(image_bytes=still.read_bytes(), grayscale_32=bytes(raster.stdout))
+        try:
+            image_bytes = still.read_bytes()
+        except OSError as exc:
+            raise FrameExtractionError(f"extracted frame could not be read: {exc}") from exc
+        return CapturedFrame(image_bytes=image_bytes, grayscale_32=bytes(raster.stdout))
 
 
 @dataclass(frozen=True)
@@ -237,8 +260,9 @@ def capture_source_frames(
 ) -> SourceFramesResult:
     """Production call site: bounded default capture over timestamped moments.
 
-    Returns a typed result for every degradation; raises only for inconsistent lineage or an
-    unprovable temporary-media cleanup.
+    Returns a typed result for every capture degradation; raises only for inconsistent lineage,
+    an unprovable temporary-media cleanup, or a failed vault/ObjectStore write (infrastructure
+    failures stay visible rather than being reported as a successful timestamps-only outcome).
     """
 
     extensions = key_moments.metadata_bundle.get("extensions") or {}
@@ -289,8 +313,10 @@ def capture_source_frames(
                 max_duration_seconds=MAX_SOURCE_DURATION_SECONDS,
             )
             _require_bounded_temp_media(media_path, temp_dir)
-            context = capture.extract_frame(
-                media_path=media_path, timestamp_seconds=int(context_moment["timestamp_seconds"]), work_dir=temp_dir
+            context = _validated_frame(
+                capture.extract_frame(
+                    media_path=media_path, timestamp_seconds=int(context_moment["timestamp_seconds"]), work_dir=temp_dir
+                )
             )
             selected.append((context_moment, "context_frame", context, perceptual_hash(context.grayscale_32)))
             extractions = 1
@@ -303,14 +329,16 @@ def capture_source_frames(
                     continue
                 extractions += 1
                 try:
-                    frame = capture.extract_frame(
-                        media_path=media_path, timestamp_seconds=int(moment["timestamp_seconds"]), work_dir=temp_dir
+                    frame = _validated_frame(
+                        capture.extract_frame(
+                            media_path=media_path, timestamp_seconds=int(moment["timestamp_seconds"]), work_dir=temp_dir
+                        )
                     )
                     digest = perceptual_hash(frame.grayscale_32)
                 except FrameExtractionError:
                     rejected["extraction_failed"] += 1
                     continue
-                if not visual_necessity(moment, frame):
+                if not _passes_visual_necessity(visual_necessity, moment, frame):
                     rejected["visual_necessity_not_met"] += 1
                 elif any(phash_distance(digest, kept[3]) <= PHASH_DUPLICATE_DISTANCE for kept in selected):
                     rejected["duplicate_phash"] += 1
@@ -366,7 +394,7 @@ def capture_source_frames(
                 str(record["path"]), frame.image_bytes, vault_root=vault_root,
                 action=SOURCE_FRAMES_WRITE_ACTION, write_guard=write_guard,
             )
-        create_candidate_note_once(
+        manifest_status = create_candidate_note_once(
             manifest_path, json.dumps(manifest, indent=2, sort_keys=True) + "\n", vault_root=vault_root,
             action=SOURCE_FRAMES_WRITE_ACTION, write_guard=write_guard,
         )
@@ -375,12 +403,28 @@ def capture_source_frames(
         return SourceFramesResult("blocked", str(exc), (), deletion_receipt, dict(rejected))
     except (OSError, ValueError) as exc:
         raise SourceFramesError(f"retained frame write failed: {exc}") from exc
+    if manifest_status == "already_exists":
+        # A concurrent capture won the first-write-wins manifest; its outcome is authoritative.
+        return SourceFramesResult("already_captured", None, (), deletion_receipt, dict(rejected), None, manifest_path)
     object_id = _persist_outcome(
         key_moments, transcript, "frames_retained", None, frames, rejected, deletion_receipt, attempted_at
     )
     return SourceFramesResult(
         "frames_retained", None, tuple(frames), deletion_receipt, dict(rejected), object_id, manifest_path
     )
+
+
+def _validated_frame(frame: CapturedFrame) -> CapturedFrame:
+    if not isinstance(frame, CapturedFrame) or frame.media_type != _FRAME_MEDIA_TYPE or not frame.image_bytes:
+        raise FrameExtractionError("retained frames must be non-empty JPEG stills")
+    return frame
+
+
+def _passes_visual_necessity(predicate: VisualNecessity, moment: Mapping[str, Any], frame: CapturedFrame) -> bool:
+    try:
+        return predicate(moment, frame) is True
+    except Exception:  # noqa: BLE001 - an unusable necessity judgement never admits a frame
+        return False
 
 
 def _require_bounded_temp_media(media_path: Path, temp_dir: Path) -> None:
@@ -449,8 +493,6 @@ def _frame_record(
     item_ref: str,
     sensitivity: str,
 ) -> dict[str, Any]:
-    if frame.media_type != _FRAME_MEDIA_TYPE or not frame.image_bytes:
-        raise FrameExtractionError("retained frames must be non-empty JPEG stills")
     sha256 = hashlib.sha256(frame.image_bytes).hexdigest()
     moment_id = str(moment["moment_id"])
     seconds = int(moment["timestamp_seconds"])

@@ -165,8 +165,11 @@ def _install_fake_media_boundaries(
     monkeypatch: pytest.MonkeyPatch,
     *,
     rasters: dict[int, bytes] | None = None,
-    duration: float = 1200.0,
+    duration: float | None = 1200.0,
     ffmpeg_fail_at: set[int] | None = None,
+    info_extra: dict[str, Any] | None = None,
+    stream_overflow: bool = False,
+    empty_still: bool = False,
 ) -> dict[str, Any]:
     """Replace only yt-dlp and ffmpeg process boundaries beneath the production capture class."""
 
@@ -186,10 +189,17 @@ def _install_fake_media_boundaries(
         def extract_info(self, url: str, *, download: bool):
             assert download is True
             calls["urls"].append(url)
-            info = {"id": VIDEO_ID, "duration": duration, "ext": "mp4"}
-            if self.options["match_filter"](info) is not None:
+            info = {"id": VIDEO_ID, "duration": duration, "ext": "mp4", **(info_extra or {})}
+            assert self.options["match_filter"](info, incomplete=True) is None
+            if self.options["match_filter"](info, incomplete=False) is not None:
                 return info  # yt-dlp skips a filtered download without writing media
-            Path(self.options["outtmpl"].replace("%(ext)s", "mp4")).write_bytes(VIDEO_BYTES)
+            target = Path(self.options["outtmpl"].replace("%(ext)s", "mp4"))
+            if stream_overflow:
+                # A fragmented stream that ignores max_filesize: the progress hook must stop it.
+                target.with_suffix(".mp4.part").write_bytes(VIDEO_BYTES)
+                for hook in self.options["progress_hooks"]:
+                    hook({"status": "downloading", "downloaded_bytes": frames_module.MAX_TEMP_MEDIA_BYTES + 1})
+            target.write_bytes(VIDEO_BYTES)
             return info
 
     def fake_ffmpeg(args):
@@ -202,7 +212,7 @@ def _install_fake_media_boundaries(
         if args[-1] == "pipe:1":
             raster = (rasters or {}).get(seconds, RASTERS["diagonal"])
             return subprocess.CompletedProcess(args, 0, raster, b"")
-        Path(args[-1]).write_bytes(_jpeg(seconds))
+        Path(args[-1]).write_bytes(b"" if empty_still else _jpeg(seconds))
         return subprocess.CompletedProcess(args, 0, b"", b"")
 
     monkeypatch.setattr(frames_module, "_youtube_dl", FakeYoutubeDL)
@@ -247,6 +257,10 @@ def test_capture_call_site_retains_context_frame_by_default(tmp_path: Path, monk
     (options,) = calls["ydl_options"]
     assert options["max_filesize"] == frames_module.MAX_TEMP_MEDIA_BYTES
     assert "height<=360" in options["format"] and options["noplaylist"] is True
+    # Every format alternative is a size-bounded progressive HTTP(S) file, never HLS/DASH fragments.
+    for alternative in options["format"].split("/"):
+        assert "[protocol^=http]" in alternative and "[filesize<?256M]" in alternative, alternative
+    assert len(options["progress_hooks"]) == 1
     assert options["outtmpl"].startswith(str(tmp_path / "media-tmp"))
     assert len(calls["ffmpeg"]) == 2  # one still + one pHash raster for the single context frame
 
@@ -294,9 +308,19 @@ def test_context_frame_is_retained_when_capture_succeeds_and_failure_degrades_to
     # Over-bound source: the production duration filter suppresses the download.
     _install_fake_media_boundaries(monkeypatch, duration=frames_module.MAX_SOURCE_DURATION_SECONDS + 1)
     failures["over_bound"] = run("over_bound")
-    # Frame decode failure for the context moment.
+    # Unknown duration and live/upcoming streams fail closed before any download.
+    _install_fake_media_boundaries(monkeypatch, duration=None)
+    failures["unknown_duration"] = run("unknown_duration")
+    _install_fake_media_boundaries(monkeypatch, info_extra={"is_live": True, "live_status": "is_live"})
+    failures["live"] = run("live")
+    # A stream that ignores max_filesize is stopped by the byte-bound progress hook.
+    _install_fake_media_boundaries(monkeypatch, stream_overflow=True)
+    failures["stream_overflow"] = run("stream_overflow")
+    # Frame decode failure, or an empty still, for the context moment.
     _install_fake_media_boundaries(monkeypatch, ffmpeg_fail_at={300})
     failures["decode"] = run("decode")
+    _install_fake_media_boundaries(monkeypatch, empty_still=True)
+    failures["empty_still"] = run("empty_still")
     # Media fetcher returning a path outside the capture-owned temp directory is refused.
     outside = tmp_path / "outside.mp4"
     outside.write_bytes(VIDEO_BYTES)
@@ -321,6 +345,16 @@ def test_context_frame_is_retained_when_capture_succeeds_and_failure_degrades_to
         assert stored is not None and stored.payload["extensions"]["status"] == "timestamps_only"
         assert stored.payload["extensions"]["frames"] == []
     assert outside.read_bytes() == VIDEO_BYTES  # a foreign path is never deleted or adopted
+
+    # A failing visual-necessity judgement never admits a frame and never fails the capture.
+    _install_fake_media_boundaries(monkeypatch)
+
+    def broken_predicate(_moment, _frame):
+        raise RuntimeError("classifier unavailable")
+
+    judged, _ = run("broken_predicate", visual_necessity=broken_predicate)
+    assert judged.status == "frames_retained" and [f["frame_role"] for f in judged.frames] == ["context_frame"]
+    assert judged.rejected["visual_necessity_not_met"] == len(original) - 1
 
     # Replay context: egress blocked means no capture attempt at all, and no failure.
     monkeypatch.setattr(frames_module, "_youtube_dl", lambda *_a, **_k: pytest.fail("egress during replay"))
