@@ -258,6 +258,7 @@ def _service(
             "reason_code": None,
             "refresh_token": "must-not-escape",
         },
+        global_sync_enabled=lambda: True,
     )
 
 
@@ -519,6 +520,7 @@ def test_manual_service_registry_failure_is_sanitized(outbox: FakeOutboxConn) ->
         requests=AcquisitionRequests.for_runtime(),
         api_client=StubApiClient(_page()),
         oauth_status=lambda _account: {"status": "connected", "reason_code": None},
+        global_sync_enabled=lambda: True,
     )
 
     for operation in (
@@ -553,6 +555,7 @@ def test_manual_service_registry_failure_is_sanitized(outbox: FakeOutboxConn) ->
         oauth_status=lambda _account: (_ for _ in ()).throw(
             RuntimeError("PRIVATE_DIAGNOSTIC from OAuth status")
         ),
+        global_sync_enabled=lambda: True,
     )
     oauth_failure_status = oauth_failure_service.status()
     assert oauth_failure_status["status"] == "degraded"

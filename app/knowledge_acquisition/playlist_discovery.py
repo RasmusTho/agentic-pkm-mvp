@@ -558,6 +558,7 @@ class YouTubeInboxSyncV1:
         requests: Any,
         api_client: Any,
         oauth_status: Callable[[str], dict[str, Any]],
+        global_sync_enabled: Callable[[], bool],
         sync_state: SyncStateStore | None = None,
     ) -> None:
         self._account_binding_id = account_binding_id
@@ -565,6 +566,7 @@ class YouTubeInboxSyncV1:
         self._requests = requests
         self._api_client = api_client
         self._oauth_status = oauth_status
+        self._global_sync_enabled = global_sync_enabled
         self._sync_state = sync_state
 
     def select_inbox(
@@ -629,6 +631,12 @@ class YouTubeInboxSyncV1:
     def sync_now(self) -> dict[str, Any]:
         """Run one synchronous production poll and return a secret-free receipt."""
 
+        if not self._global_sync_enabled():
+            return {
+                "status": "degraded", "discovered": 0, "enqueued": 0,
+                "deduped": 0, "not_modified": False, "reason_code": "paused_global",
+            }
+
         binding = self._enabled_inbox()
         from app.knowledge_acquisition.sync_state import for_runtime
 
@@ -650,6 +658,7 @@ class YouTubeInboxSyncV1:
             state=self._sync_state if self._sync_state is not None else for_runtime(),
             api_client=self._api_client,
             poll_fn=poll,
+            paused=lambda: not self._global_sync_enabled(),
             reconciled=True,
         )
         outcome = scheduler.sync_now(binding.binding_id)

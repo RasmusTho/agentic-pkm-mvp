@@ -439,7 +439,9 @@ def test_raising_poll_still_backs_off(last_attempt) -> None:
         sched.tick()
 
     assert len(attempts) == 1, f"a raising poll must back off, not retry every tick: {attempts}"
-    assert (state.get("backoff:playlist-1") or {}).get("consecutive_failures") == 1
+    backoff = state.get("backoff:playlist-1") or {}
+    assert backoff.get("consecutive_failures") == 1
+    assert backoff.get("reason_code") == "network_error"
 
 
 def test_benign_reason_codes_do_not_accumulate_backoff() -> None:
@@ -503,7 +505,8 @@ def test_manual_inbox_sync_shares_scheduler_lease(production_path, monkeypatch) 
     from app.knowledge_acquisition import sync_state
     monkeypatch.setattr(sync_state, "for_runtime", lambda: state)
     service = YouTubeInboxSyncV1(account_binding_id=account, registry=registry, requests=queue,
-        api_client=api, oauth_status=lambda _: {"status": "connected"})
+        api_client=api, oauth_status=lambda _: {"status": "connected"},
+        global_sync_enabled=lambda: True)
     # Use real wall-clock ownership: the existing manual entrypoint has no test-only clock.
     assert state.acquire_lease(key=LEASE_KEY, holder=default_holder(), ttl_seconds=600,
         now=datetime.now(timezone.utc))
@@ -516,6 +519,36 @@ def test_manual_inbox_sync_shares_scheduler_lease(production_path, monkeypatch) 
     api.videos.append("aaaaaaaaaaa")
     assert service.sync_now()["enqueued"] == 1
     assert state.get("backoff:" + binding.binding_id)["consecutive_failures"] == 0
+
+
+def test_manual_inbox_sync_global_pause_precedes_registry_and_lease(production_path, monkeypatch) -> None:
+    from app.knowledge_acquisition.playlist_discovery import YouTubeInboxSyncV1
+
+    registry, queue, api, _clock, _outbox, account, _binding = production_path
+    state = MemorySyncStateStore()
+    from app.knowledge_acquisition import sync_state
+
+    monkeypatch.setattr(sync_state, "for_runtime", lambda: pytest.fail("paused sync touched state"))
+    monkeypatch.setattr(
+        registry,
+        "list_for_account",
+        lambda _account_id: pytest.fail("paused sync read the source registry"),
+    )
+    service = YouTubeInboxSyncV1(
+        account_binding_id=account,
+        registry=registry,
+        requests=queue,
+        api_client=api,
+        oauth_status=lambda _: {"status": "connected"},
+        global_sync_enabled=lambda: False,
+        sync_state=state,
+    )
+
+    result = service.sync_now()
+
+    assert result["reason_code"] == "paused_global"
+    assert api.calls == 0
+    assert state.get(LEASE_KEY) is None
 
 
 def test_poll_stops_after_lease_loss_without_state_writes(production_path) -> None:
@@ -604,7 +637,9 @@ def test_poll_does_not_publish_cursor_after_enqueue_crosses_deadline(production_
     assert len(queue.list_all()) == 1
     assert registry.get(binding.binding_id).cursor == {}
     assert registry.get(binding.binding_id).last_success_at is None
-    assert state.get("backoff:" + binding.binding_id)["consecutive_failures"] == 1
+    backoff = state.get("backoff:" + binding.binding_id)
+    assert backoff["consecutive_failures"] == 1
+    assert backoff["reason_code"] == "api_unavailable"
 
 
 def test_priority_sources_receive_the_tick_budget_first() -> None:

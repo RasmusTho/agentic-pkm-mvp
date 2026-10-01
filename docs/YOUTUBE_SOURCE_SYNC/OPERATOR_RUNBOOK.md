@@ -70,8 +70,11 @@ OAuth status callback. The manual sequence is:
 3. `status()`
 
 `select_inbox` is idempotent for the same playlist and rejects a different second Inbox. It does
-not expose owned/public/Liked multi-source configuration. `sync_now` calls the production
-`poll_source` path exactly once. `status` returns only:
+not expose owned/public/Liked multi-source configuration. Before reading source state or claiming
+the shared lease, `sync_now` checks the accepted vault-shared `youtubeSync.enabled` master switch;
+when paused it returns `paused_global` without polling or egress. The vault-local
+`youtubeSync.runnerEnabled` switch controls only the unattended watcher. When enabled, `sync_now`
+calls the production `poll_source` path exactly once. `status` returns only:
 
 ```json
 {

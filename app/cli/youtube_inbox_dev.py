@@ -130,12 +130,19 @@ def _build_youtube_inbox_dev_services(
         source_registry=registry,
     )
     api_client = YouTubeApiClient(token_provider=token_provider)
+
+    def global_sync_enabled() -> bool:
+        from app.knowledge_acquisition.sync_runtime import is_youtube_sync_globally_enabled
+
+        return is_youtube_sync_globally_enabled(get_vault_manager().context())
+
     sync = YouTubeInboxSyncV1(
         account_binding_id=account_binding_id,
         registry=registry,
         requests=AcquisitionRequests.for_runtime(),
         api_client=api_client,
         oauth_status=binder.status,
+        global_sync_enabled=global_sync_enabled,
     )
     return YouTubeInboxDevServices(binder=binder, api_client=api_client, sync=sync)
 

@@ -78,6 +78,21 @@ BACKOFF_CAP_SECONDS = 6 * 60 * 60
 NON_FAILURE_REASON_CODES: frozenset[str] = frozenset(
     {"paused_source", "policy_unsupported", "not_modified"}
 )
+_POLL_FAILURE_REASON_CODES: frozenset[str] = frozenset(
+    {
+        "auth_missing",
+        "auth_key_missing",
+        "auth_expired",
+        "auth_revoked",
+        "auth_disconnected",
+        "quota_exhausted",
+        "api_unavailable",
+        "network_error",
+        "source_gone",
+        "source_unsupported",
+        "inbox_missing",
+    }
+)
 
 #: How long a tick may spend starting new polls. The tick runs inside the
 #: shared watcher loop, so the budget bounds how much of that cycle one sync
@@ -375,15 +390,31 @@ class SyncScheduler:
         value = self._backoff_row(binding_id).get("consecutive_failures")
         return value if isinstance(value, int) and value > 0 else 0
 
-    def _record_poll_result(self, binding_id: str, *, failed: bool, now: datetime) -> None:
+    def _record_poll_result(
+        self,
+        binding_id: str,
+        *,
+        failed: bool,
+        now: datetime,
+        reason_code: str | None = None,
+    ) -> None:
         # The attempt time is recorded here as well as by `poll_source`, because
         # the provider path does not record one when it raises.
         key = f"{_BACKOFF_KEY_PREFIX}{binding_id}"
         with self._owned_effect() as conn:
             failures = 0 if not failed else self._consecutive_failures(binding_id) + 1
+            safe_reason = (
+                reason_code
+                if isinstance(reason_code, str) and reason_code in _POLL_FAILURE_REASON_CODES
+                else "network_error"
+            )
             self._state.set(
                 key,
-                {"consecutive_failures": failures, "last_attempt_at": now.isoformat()},
+                {
+                    "consecutive_failures": failures,
+                    "last_attempt_at": now.isoformat(),
+                    "reason_code": safe_reason if failed else None,
+                },
                 transaction_conn=conn,
             )
 
@@ -422,11 +453,19 @@ class SyncScheduler:
             )
         except SyncLeaseLostError:
             raise
-        except Exception:
+        except Exception as exc:
             # One unreachable source must never end the tick for the others.
             logger.exception("source poll failed for %s", binding.binding_id)
             self._ensure_lease()
-            self._record_poll_result(binding.binding_id, failed=True, now=now)
+            candidate = "api_unavailable" if isinstance(exc, TimeoutError) else getattr(
+                exc, "reason_code", None
+            )
+            self._record_poll_result(
+                binding.binding_id,
+                failed=True,
+                now=now,
+                reason_code=candidate if isinstance(candidate, str) else None,
+            )
             return None
         self._ensure_lease()
         reason_code = getattr(result, "reason_code", None)
@@ -434,6 +473,7 @@ class SyncScheduler:
             binding.binding_id,
             failed=bool(reason_code) and reason_code not in NON_FAILURE_REASON_CODES,
             now=now,
+            reason_code=reason_code if isinstance(reason_code, str) else None,
         )
         return result
 

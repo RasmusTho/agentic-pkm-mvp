@@ -50,7 +50,9 @@ tick host; this task adds a sparse-cadence sub-tick beside the Daily Briefing pr
    in the migration-owned `youtube_sync_state` table. Scheduler instances derive distinct
    holder identities; a live lease blocks another holder, a stale lease may be taken over after
    expiry, and renewal/release check the acquiring holder. Existing manual Inbox sync uses the
-   same scheduler lease and backoff state for one immediate attempt. Polling renews/checks
+   same scheduler lease and backoff state for one immediate attempt; it also honors the accepted
+   shared `youtubeSync.enabled` pause, while `youtubeSync.runnerEnabled` applies only to the watcher.
+   Polling renews/checks
    ownership at cooperative boundaries. Shared database effects lock/check the lease and write
    on the same transaction connection, so a paused or disconnected old holder cannot publish
    after takeover; an admitted effect excludes contenders until commit/rollback. See

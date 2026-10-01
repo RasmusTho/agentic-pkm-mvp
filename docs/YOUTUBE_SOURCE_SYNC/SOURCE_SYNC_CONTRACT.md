@@ -208,7 +208,9 @@ unknown codes fail closed to the generic degraded message.
 Via the existing `SettingsService` registry — no parallel settings format. Vault-shared file:
 `<vault>/settings/youtube.md`. The table includes future-facing settings vocabulary; it does not
 claim that every key has a shipped consumer or UI. YSS-06 consumes the two accepted runtime gates
-and uses per-source cadence overrides. It adds no acquisition-concurrency setting.
+and uses per-source cadence overrides. The shared `youtubeSync.enabled` master switch also pauses
+manual Inbox sync; `youtubeSync.runnerEnabled` controls only the unattended watcher. It adds no
+acquisition-concurrency setting.
 
 | Key | Scope | Default | Notes |
 | --- | --- | --- | --- |

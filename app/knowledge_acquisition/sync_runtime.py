@@ -48,6 +48,19 @@ def _closed_gate_reason(effective: dict[str, Any]) -> str | None:
     return None
 
 
+def is_youtube_sync_globally_enabled(vault_context: Any) -> bool:
+    """Return the accepted shared YouTube sync switch for an operator route.
+
+    The local runner switch controls only the unattended watcher. A manual
+    Inbox sync still honors the accepted vault-shared master switch.
+    """
+
+    from app.vault.settings_service import SettingsService
+
+    effective = SettingsService().resolve_accepted_runtime_gating(vault_context)
+    return bool(_setting(effective, ENABLED_KEY, False))
+
+
 def _build_api_client() -> Any:
     """Compose the YouTube API client for the single connected account.
 
@@ -143,5 +156,6 @@ def run_scheduled_sync_tick(
 __all__ = [
     "ENABLED_KEY",
     "RUNNER_ENABLED_KEY",
+    "is_youtube_sync_globally_enabled",
     "run_scheduled_sync_tick",
 ]
