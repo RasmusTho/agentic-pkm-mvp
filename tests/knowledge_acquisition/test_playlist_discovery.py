@@ -71,6 +71,7 @@ class StubApiClient:
         *,
         etag: str | None = None,
         page_token: str | None = None,
+        **kwargs: Any,
     ) -> PlaylistItemsPage | NotModified:
         self.calls.append(
             {"playlist_id": playlist_id, "etag": etag, "page_token": page_token}
@@ -185,6 +186,9 @@ def _memory_backends(monkeypatch: pytest.MonkeyPatch):
     reset_memory_source_registry()
     reset_memory_acquisition_requests()
     object_store_module._MEMORY_STORE.clear()
+    from app.knowledge_acquisition import sync_state
+    state = sync_state.MemorySyncStateStore()
+    monkeypatch.setattr(sync_state, "for_runtime", lambda: state)
     clear_registry()
     synthesis_extractor.register(
         complete=lambda **_kwargs: json.dumps({
@@ -254,6 +258,7 @@ def _service(
             "reason_code": None,
             "refresh_token": "must-not-escape",
         },
+        global_sync_enabled=lambda: True,
     )
 
 
@@ -515,6 +520,7 @@ def test_manual_service_registry_failure_is_sanitized(outbox: FakeOutboxConn) ->
         requests=AcquisitionRequests.for_runtime(),
         api_client=StubApiClient(_page()),
         oauth_status=lambda _account: {"status": "connected", "reason_code": None},
+        global_sync_enabled=lambda: True,
     )
 
     for operation in (
@@ -549,6 +555,7 @@ def test_manual_service_registry_failure_is_sanitized(outbox: FakeOutboxConn) ->
         oauth_status=lambda _account: (_ for _ in ()).throw(
             RuntimeError("PRIVATE_DIAGNOSTIC from OAuth status")
         ),
+        global_sync_enabled=lambda: True,
     )
     oauth_failure_status = oauth_failure_service.status()
     assert oauth_failure_status["status"] == "degraded"

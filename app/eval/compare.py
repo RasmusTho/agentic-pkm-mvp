@@ -39,6 +39,12 @@ Verdict semantics:
      is the strongest possible regression; the comparison surface must never
      silently shrink. Keys only in the candidate are reported
      (``slice_coverage``) but do not block.
+  5. any supported sample count (``SAMPLE_COUNT_SPEC``: retrieval aggregate,
+     memory recall, per-language and per-slice retrieval buckets,
+     classification total, per-class support) is smaller in the candidate
+     than in the baseline — independent of metric tolerance, because a
+     smaller dataset with unchanged metrics is reduced coverage, not equal
+     quality. Count increases are reported but never count as improvement.
 - ``improved`` — no regression and at least one metric improved beyond the
   tolerance.
 - ``neutral`` — everything within tolerance.
@@ -103,6 +109,19 @@ CLASSIFICATION_METRIC_SPEC: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 )
 
 CLASSIFICATION_METRICS = tuple(name for name, _ in CLASSIFICATION_METRIC_SPEC)
+
+# Sample-count field per compared bucket (#5708). Every flat bucket and every
+# key of a keyed group must carry this field as a non-negative integer; the
+# classification total is compared at ``classification.n_cases``. A decrease
+# versus the baseline is a blocking regression.
+SAMPLE_COUNT_SPEC: Dict[str, str] = {
+    "aggregate": "count",
+    "memory_recall": "count",
+    "by_language": "count",
+    "by_slice": "count",
+    "per_class": "support",
+}
+CLASSIFICATION_TOTAL_COUNT_PATH = ("classification", "n_cases")
 
 # Keys every mutation-side confusion entry must carry (they are rendered).
 CONFUSION_ENTRY_KEYS = ("case_id", "expected_intent", "predicted_intent")
@@ -233,12 +252,28 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
     leaf raises :class:`ScorecardCompareError` naming the dotted path.
     """
     view: Dict = {"flat": {}, "keyed": {}}
+    # Unprefixed dotted path -> validated non-negative integer sample count.
+    sample_counts: Dict[str, int] = {}
+
+    def _sample_count(bucket: object, rel_path: str, field: str) -> None:
+        count_path = f"{rel_path}.{field}"
+        if not isinstance(bucket, dict) or field not in bucket:
+            raise ScorecardCompareError(
+                f"scorecard is missing required sample count at {label}.{count_path}"
+            )
+        value = bucket[field]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ScorecardCompareError(
+                f"sample count must be a non-negative integer at "
+                f"{label}.{count_path}: {value!r}"
+            )
+        sample_counts[count_path] = value
 
     for name, path, metrics in FLAT_BUCKET_SPEC:
         dotted = ".".join([label, *path])
-        view["flat"][name] = _validated_bucket(
-            _resolve_dict(scorecard, label, path), dotted, metrics
-        )
+        bucket = _resolve_dict(scorecard, label, path)
+        view["flat"][name] = _validated_bucket(bucket, dotted, metrics)
+        _sample_count(bucket, ".".join(path), SAMPLE_COUNT_SPEC[name])
 
     for name, path, metrics in KEYED_GROUP_SPEC:
         group = _resolve_dict(scorecard, label, path)
@@ -247,6 +282,22 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
             key: _validated_bucket(group[key], f"{dotted}.{key}", metrics)
             for key in sorted(group)
         }
+        for key in sorted(group):
+            _sample_count(
+                group[key], ".".join([*path, key]), SAMPLE_COUNT_SPEC[name]
+            )
+
+    # Retrieval sub-buckets partition or filter the aggregate query set, so
+    # none may claim more samples than the aggregate itself.
+    aggregate_count = sample_counts["aggregate.count"]
+    for count_path, value in sample_counts.items():
+        if count_path.startswith(("memory_recall.", "by_language.", "by_slice.")) and (
+            value > aggregate_count
+        ):
+            raise ScorecardCompareError(
+                f"sample count contradicts aggregate count at {label}.{count_path}: "
+                f"{value} > {aggregate_count}"
+            )
 
     view["classification_metrics"] = {
         name: _require_finite(_resolve(scorecard, label, path), ".".join([label, *path]))
@@ -290,6 +341,8 @@ def _validated_view(scorecard: Dict, label: str) -> Dict:
         raise ScorecardCompareError(
             f"classification n_cases contradicts confusion matrix at {label}"
         )
+    sample_counts[".".join(CLASSIFICATION_TOTAL_COUNT_PATH)] = classification_n_cases
+    view["sample_counts"] = dict(sorted(sample_counts.items()))
 
     def _classification_count(value: object, path: str) -> int:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -911,6 +964,25 @@ def _compare_validated(baseline: Dict, candidate: Dict, tolerance: float) -> Dic
         slice_coverage[f"{name}_only_in_baseline"] = only_in_baseline
         slice_coverage[f"{name}_only_in_candidate"] = sorted(candidate_keys - baseline_keys)
 
+    # Sample-count shrink (#5708): compared over paths present on both sides
+    # (a vanished keyed slice is already reported by missing_slices). A
+    # decrease blocks regardless of metric tolerance; an increase is
+    # informational only and never counts as an improvement.
+    sample_count_regressions: List[Dict] = []
+    sample_count_increases: List[Dict] = []
+    baseline_counts = baseline["sample_counts"]
+    candidate_counts = candidate["sample_counts"]
+    for count_path in sorted(set(baseline_counts) & set(candidate_counts)):
+        entry = {
+            "path": count_path,
+            "baseline": baseline_counts[count_path],
+            "candidate": candidate_counts[count_path],
+        }
+        if entry["candidate"] < entry["baseline"]:
+            sample_count_regressions.append(entry)
+        elif entry["candidate"] > entry["baseline"]:
+            sample_count_increases.append(entry)
+
     classification_confusion = {
         "baseline_hard_gate_passed": baseline["hard_gate_passed"],
         "candidate_hard_gate_passed": candidate["hard_gate_passed"],
@@ -956,7 +1028,13 @@ def _compare_validated(baseline: Dict, candidate: Dict, tolerance: float) -> Dic
     )
     candidate_floor_regression = candidate["floor_regression"]
 
-    if hard_gate_regression or candidate_floor_regression or missing_slices or regressions:
+    if (
+        hard_gate_regression
+        or candidate_floor_regression
+        or missing_slices
+        or sample_count_regressions
+        or regressions
+    ):
         verdict = "regression"
     elif improvements:
         verdict = "improved"
@@ -975,6 +1053,8 @@ def _compare_validated(baseline: Dict, candidate: Dict, tolerance: float) -> Dic
         },
         "slice_coverage": slice_coverage,
         "missing_slices": missing_slices,
+        "sample_count_regressions": sample_count_regressions,
+        "sample_count_increases": sample_count_increases,
         "regressions": regressions,
         "improvements": improvements,
         "verdict": verdict,
@@ -1097,6 +1177,21 @@ def render_compare_summary(comparison: Dict) -> str:
         lines.append("Slices present in baseline but MISSING in candidate (blocking):")
         for item in comparison["missing_slices"]:
             lines.append(f"  - {item['group']}:{item['key']}")
+
+    if comparison["sample_count_regressions"]:
+        lines.append("")
+        lines.append("Sample counts that SHRANK vs baseline (blocking):")
+        for item in comparison["sample_count_regressions"]:
+            lines.append(
+                f"  - {item['path']}: {item['baseline']} -> {item['candidate']}"
+            )
+    if comparison["sample_count_increases"]:
+        lines.append("")
+        lines.append("Sample counts that grew (reported, non-blocking):")
+        for item in comparison["sample_count_increases"]:
+            lines.append(
+                f"  - {item['path']}: {item['baseline']} -> {item['candidate']}"
+            )
 
     coverage = comparison["slice_coverage"]
     candidate_only = [

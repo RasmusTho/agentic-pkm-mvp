@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import importlib
+import json
 import secrets
+from contextlib import nullcontext
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -178,6 +180,104 @@ def test_connect_select_and_sync_compose_v1_services(
     assert sleeps == [2, 2, 7]
     assert sync.selected == [("PL_test_owned_inbox", "Synthetic Inbox")]
     assert sync.synced == 1
+
+
+def test_manual_sync_honors_accepted_global_pause_before_registry_or_egress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.knowledge_acquisition import sync_state
+    from app.knowledge_acquisition.sync_runtime import ENABLED_KEY, RUNNER_ENABLED_KEY
+    from app.vault.settings_service import SettingsService
+
+    context = object()
+    registry_reads: list[str] = []
+    api_calls: list[str] = []
+
+    class _VaultManager:
+        def context(self) -> object:
+            return context
+
+    class _BindingStore:
+        @classmethod
+        def for_runtime(cls) -> Any:
+            return cls()
+
+    class _Registry:
+        @classmethod
+        def for_runtime(cls) -> Any:
+            return cls()
+
+        def list_for_account(self, account_binding_id: str) -> Any:
+            registry_reads.append(account_binding_id)
+            raise AssertionError("global pause must be checked before the source registry")
+
+    class _OAuthClient:
+        @classmethod
+        def from_env(cls, **kwargs: Any) -> Any:
+            del kwargs
+            return cls()
+
+    class _TokenProvider:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+    class _ApiClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def list_playlist_items(self, *args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+            api_calls.append("poll")
+            raise AssertionError("global pause must prevent provider egress")
+
+    class _Binder:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        def status(self, account_binding_id: str) -> dict[str, str]:
+            return {"status": "connected", "account_binding_id": account_binding_id}
+
+    class _Requests:
+        @classmethod
+        def for_runtime(cls) -> Any:
+            return cls()
+
+    monkeypatch.setattr(youtube_cli.httpx, "Client", lambda: object())
+    monkeypatch.setattr(youtube_cli, "OAuthClient", _OAuthClient)
+    monkeypatch.setattr(youtube_cli, "YouTubeTokenStore", type("_Tokens", (), {}))
+    monkeypatch.setattr(youtube_cli, "AccountBindingStore", _BindingStore)
+    monkeypatch.setattr(youtube_cli, "SourceRegistry", _Registry)
+    monkeypatch.setattr(youtube_cli, "YouTubeAccountBinder", _Binder)
+    monkeypatch.setattr(youtube_cli, "TokenProvider", _TokenProvider)
+    monkeypatch.setattr(youtube_cli, "YouTubeApiClient", _ApiClient)
+    monkeypatch.setattr(youtube_cli, "AcquisitionRequests", _Requests)
+    monkeypatch.setattr(youtube_cli, "get_vault_manager", lambda: _VaultManager())
+    monkeypatch.setattr(
+        SettingsService,
+        "resolve_accepted_runtime_gating",
+        lambda self, actual_context: {
+            ENABLED_KEY: SimpleNamespace(value=False),
+            RUNNER_ENABLED_KEY: SimpleNamespace(value=True),
+        }
+        if actual_context is context
+        else pytest.fail("manual sync resolved settings for an unexpected vault"),
+    )
+    monkeypatch.setattr(
+        sync_state,
+        "for_runtime",
+        lambda: pytest.fail("paused manual sync touched scheduler state"),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["youtube-inbox-dev", "sync", "--account-binding-id", "binding-test"],
+        env=_dev_env(),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert _json_lines(result.output)[0]["reason_code"] == "paused_global"
+    assert registry_reads == []
+    assert api_calls == []
 
 
 def test_rejects_non_dev_and_redacts_secret_failures(
@@ -365,12 +465,17 @@ class _Queue:
     def __init__(self, rows: list[_Row]) -> None:
         self._pending = list(rows)
         self.claim_limits: list[int] = []
+        self.heartbeat_claims: list[str] = []
 
     def claim_batch(self, limit: int, **kwargs: Any) -> list[_Row]:
         self.claim_limits.append(limit)
         if not self._pending:
             return []
         return [self._pending.pop(0)]
+
+    def keep_claim_alive(self, request: _Row):
+        self.heartbeat_claims.append(request.request_id)
+        return nullcontext()
 
 
 class _VaultManager:
@@ -438,6 +543,7 @@ def test_drain_runs_claimed_requests_through_drain_one(
 
     assert result.exit_code == 0
     assert drained == ["req-1", "req-2"]
+    assert queue.heartbeat_claims == ["req-1", "req-2"]
     receipt = _json_lines(result.output)[-1]
     assert receipt["status"] == "drained"
     assert receipt["claimed"] == 2
