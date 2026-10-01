@@ -59,6 +59,11 @@ from app.knowledge_acquisition.evidence_synthesis import (
     RenderedEvidence,
     render_evidence_anchored,
 )
+from app.knowledge_acquisition.interest_overlay import (
+    INTEREST_OVERLAY_MODULE_ID,
+    InterestOverlay,
+    produce_interest_overlay,
+)
 from app.knowledge_acquisition.ontology_proposals import (
     RenderedOntology,
     ontology_section_content,
@@ -73,6 +78,7 @@ from app.knowledge_acquisition.note_renderer import (
     NoteRenderError,
     ProposalSection,
     render_review_required_note,
+    validate_proposal_section,
 )
 from app.knowledge_acquisition.normalize import (
     NormalizedMetadata,
@@ -141,6 +147,8 @@ class Candidate:
     rendered_ontology: RenderedOntology | None = None
     content_route: ContentRoute | None = None
     note_modules: RenderedModules | None = None
+    interest_overlay: InterestOverlay | None = None
+    interest_overlay_failed: bool = False
 
     def summary_text(self) -> str | None:
         for extraction in self.extractions:
@@ -187,8 +195,12 @@ def assemble_candidate(
     raw_record_id: str | None = None,
     normalized_artifact_id: str | None = None,
     optional_failures: Sequence[ExtractionFailure] = (),
+    vault_context: VaultContext | None = None,
 ) -> Candidate:
     """Assemble a `candidate` from a `raw` record and explicit derived lineage when supplied.
+
+    When `vault_context` is supplied for a transcript-bearing candidate, the governed interest
+    overlay (#5747) is produced locally against that vault and its explicit active scope.
 
     Raises `CandidateAssemblyError` if the raw record is missing required
     fields, wrapping the item-scoped failure a stage would otherwise raise
@@ -258,6 +270,14 @@ def assemble_candidate(
     # generic spine, and a failing module is captured, never allowed to erase spine evidence.
     content_route = None if is_metadata_only else route_content(normalized_dict)
     note_modules = None if is_metadata_only else compose_note_modules(content_route, normalized_dict)
+    # #5747: the governed overlay is a local, deterministic, review-required proposal. A failure
+    # is captured as degradation and never fails the candidate or erases evidence sections.
+    interest_overlay: InterestOverlay | None = None
+    interest_overlay_failed = False
+    if not is_metadata_only and vault_context is not None:
+        interest_overlay, interest_overlay_failed = _produce_interest_overlay(
+            vault_context, normalized_dict
+        )
 
     return Candidate(
         content_identity=content_identity,
@@ -281,7 +301,30 @@ def assemble_candidate(
         rendered_ontology=rendered_ontology,
         content_route=content_route,
         note_modules=note_modules,
+        interest_overlay=interest_overlay,
+        interest_overlay_failed=interest_overlay_failed,
     )
+
+
+def _produce_interest_overlay(
+    vault_context: VaultContext, normalized: Mapping[str, Any]
+) -> tuple[InterestOverlay | None, bool]:
+    """Return ``(overlay, failed)``; an unselected vault is an unresolvable scope."""
+    selected = vault_context.is_selected
+    try:
+        overlay = produce_interest_overlay(
+            vault_root=(
+                Path(str(vault_context.active_vault_path)).expanduser() if selected else Path()
+            ),
+            # Without a selected vault there is no scope-bound profile to consult; passing no
+            # scope makes the governed reader refuse before it touches any filesystem path.
+            active_scope_id=vault_context.active_scope_id if selected else None,
+            normalized=normalized,
+        )
+        validate_proposal_section(overlay.section())
+    except Exception:  # noqa: BLE001 - optional overlay failure is captured as degradation
+        return None, True
+    return overlay, False
 
 
 def candidate_note_path(candidate: Candidate, *, sources_dir: str = DEFAULT_SOURCES_DIR) -> str:
@@ -361,6 +404,22 @@ def render_candidate_note(candidate: Candidate) -> str:
         frontmatter["unavailable_note_modules"] = list(module_failures)
     if candidate.note_modules is not None and candidate.note_modules.omitted_items:
         frontmatter["omitted_module_items"] = candidate.note_modules.omitted_items
+    if candidate.interest_overlay is not None:
+        overlay = candidate.interest_overlay
+        frontmatter["interest_overlay"] = {
+            "status": overlay.status,
+            "reason": overlay.reason,
+            "profile_scope_id": overlay.profile_scope_id,
+            "profile_version_id": overlay.profile_version_id,
+            "profile_receipt_id": overlay.profile_receipt_id,
+            "dropped_connections": list(overlay.dropped),
+        }
+    if candidate.interest_overlay_failed:
+        frontmatter["degraded"] = True
+        frontmatter["unavailable_note_modules"] = [
+            *frontmatter.get("unavailable_note_modules", []),
+            INTEREST_OVERLAY_MODULE_ID,
+        ]
     degradation = [
         *(
             ["optional failures: " + ", ".join(f.extractor_id for f in candidate.optional_failures)]
@@ -369,6 +428,7 @@ def render_candidate_note(candidate: Candidate) -> str:
         ),
         *(["content module failures: " + ", ".join(module_failures)] if module_failures else []),
         *(["content routing failed"] if routing_failed else []),
+        *(["interest overlay failed"] if candidate.interest_overlay_failed else []),
     ]
 
     proposal_sections = _candidate_proposal_sections(candidate)
@@ -441,6 +501,8 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
     # Content modules follow the universal spine and never replace it.
     if candidate.note_modules is not None:
         sections += candidate.note_modules.sections
+    if candidate.interest_overlay is not None:
+        sections += (candidate.interest_overlay.section(),)
     return sections + degradation_sections(candidate.content_route, candidate.note_modules)
 
 

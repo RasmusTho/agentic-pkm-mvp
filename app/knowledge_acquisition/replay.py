@@ -471,6 +471,7 @@ def run_replay(
                     raw_record_id=str(object_id),
                     normalized_artifact_id=normalized_artifact.object_id,
                     optional_failures=optional_failures,
+                    vault_context=vault_context,
                 )
                 bundle = materialize_youtube_source_bundle(
                     candidate,

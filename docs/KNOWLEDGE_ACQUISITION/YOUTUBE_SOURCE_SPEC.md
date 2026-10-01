@@ -149,7 +149,9 @@ Issue #4118 delivers the bounded YSNV2-11 frame-capture stage (`source_frames.ca
 under that direction; like #4116 moments, it is not yet wired into acquisition-time note rendering.
 ProfileAgent behavior was delivered separately as GOVPROF-01–03 under parent #4944;
 that profile capability does not ship the separate YouTube overlay renderer, which Issue #4117 delivers
-as a read-only consumer not yet wired into acquisition-time note rendering.
+as a read-only consumer; Issue #5747 wires it into acquisition-time transcript notes with a
+deterministic local connection producer and the vault context's explicit active scope; no production
+entry point binds that scope yet (#5749), so live notes render the explicit no-profile line.
 
 The portable-source-bundle delivery adds a derived, rebuildable vault transcript and `source.json`
 under the YouTube attachment root (`Sources/YouTube/_attachments` by default). The stable

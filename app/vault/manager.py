@@ -148,6 +148,11 @@ class VaultContext:
     local_instance_id: str | None = None
     machine_role: MachineRole | None = None
     validation_error: str | None = None
+    # Explicit active consumer-scope binding (e.g. ``scope:work/project-alpha``) for
+    # scope-bound readers such as the governed profile projection (#5747). Never derived
+    # from the vault identity; ``None`` means unresolved, and consumers then render their
+    # explicit no-profile state rather than inferring or broadening a scope.
+    active_scope_id: str | None = None
 
     @property
     def is_selected(self) -> bool:
