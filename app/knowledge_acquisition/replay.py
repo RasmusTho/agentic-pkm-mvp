@@ -59,6 +59,7 @@ from uuid import UUID
 # process resolves "summary" without any pipeline-side import of a specific
 # extractor module.
 import app.knowledge_acquisition.extractors  # noqa: F401
+from app.knowledge_acquisition.candidate_moments import attach_key_moments
 from app.knowledge_acquisition.candidate_writeback import (
     CandidateAssemblyError,
     CandidateWritebackError,
@@ -89,6 +90,7 @@ from app.knowledge_acquisition.source_bundle import (
     SourceBundleError,
     materialize_youtube_source_bundle,
 )
+from app.knowledge_acquisition.source_frames import SourceFramesError
 from app.knowledge_acquisition.stage_events import (
     STAGE_EVENT_SOURCE,
     emit_stage_completed,
@@ -491,13 +493,28 @@ def run_replay(
                     )
                 else:
                     candidate = replace(candidate, derived_transcript_link=bundle.transcript_path)
+                    # Moments are rebuildable; frames are source-dependent and never recaptured
+                    # here — replay only re-references a frame an acquisition already retained.
+                    candidate = attach_key_moments(
+                        candidate,
+                        transcript=normalized_artifact,
+                        extractions=report.successes,
+                        vault_context=vault_context,
+                        capture=False,
+                        youtube_attachment_root=youtube_attachment_root,
+                    )
                     write_result = write_candidate_note(
                         candidate,
                         vault_context=vault_context,
                         write_guard=write_guard,
                         proposal_on_existing=True,
                     )
-            except (CandidateAssemblyError, CandidateWritebackError, SourceBundleError) as exc:
+            except (
+                CandidateAssemblyError,
+                CandidateWritebackError,
+                SourceBundleError,
+                SourceFramesError,
+            ) as exc:
                 emit_stage_dead_letter(
                     stage=CANDIDATE_STAGE,
                     stage_version=CANDIDATE_STAGE_VERSION,
@@ -505,6 +522,8 @@ def run_replay(
                     reason=(
                         "assembly_failed"
                         if isinstance(exc, CandidateAssemblyError)
+                        else "source_frames_failed"
+                        if isinstance(exc, SourceFramesError)
                         else "writeback_failed"
                     ),
                     error=str(exc),

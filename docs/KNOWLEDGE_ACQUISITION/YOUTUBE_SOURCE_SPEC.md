@@ -144,7 +144,13 @@ companion rather than overwrite the original candidate or human-authored content
 YouTube deliveries do not ship the later v2 modules or change title-bearing paths or persistence.
 The owner revised the D1 frame-capture direction on 2026-09-30; D2–D6 remain as recorded.
 Issue #4118 delivers the bounded YSNV2-11 frame-capture stage (`source_frames.capture_source_frames`)
-under that direction; like #4116 moments, it is not yet wired into acquisition-time note rendering.
+under that direction. Issue #5746 wires #4116 moments and that stage into acquisition-time notes:
+every transcript-bearing acquisition persists timestamp-only key moments, attempts bounded default
+capture, and renders a `Timestamped moments` proposal section (timestamp link, transcript anchors,
+D6 rationale) with the retained context frame embedded as a Markdown image. Capture degradation
+renders timestamps-only with no placeholder and a visible `Source frames` evidence status; capture
+infrastructure failures dead-letter the candidate stage. Metadata-only candidates render no moments
+and attempt no capture, and replay never recaptures, only re-referencing an already retained frame.
 ProfileAgent behavior was delivered separately as GOVPROF-01–03 under parent #4944;
 that profile capability does not ship the separate YouTube overlay renderer, which Issue #4117 delivers
 as a read-only consumer not yet wired into acquisition-time note rendering.

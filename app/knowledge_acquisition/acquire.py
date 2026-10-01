@@ -38,6 +38,7 @@ directly, the same two names the outbox module itself documents as the override.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Mapping, Sequence
 
@@ -47,12 +48,16 @@ from typing import Any, Callable, Mapping, Sequence
 # extractor module.
 import app.knowledge_acquisition.extractors  # noqa: F401
 from app.knowledge_acquisition import youtube_plugin
+from app.knowledge.write_ops import candidate_note_exists_durable
+from app.knowledge_acquisition.candidate_moments import attach_key_moments
 from app.knowledge_acquisition.candidate_writeback import (
+    Candidate,
     CandidateAssemblyError,
     CandidateWritebackError,
     CandidateWriteResult,
     ExtractionFailure,
     assemble_candidate,
+    candidate_note_path,
     write_candidate_note,
 )
 from app.knowledge_acquisition.extraction_persistence import (
@@ -73,6 +78,7 @@ from app.knowledge_acquisition.pipeline_defaults import (
 )
 from app.knowledge_acquisition.replay import CANDIDATE_STAGE, CANDIDATE_STAGE_VERSION
 from app.knowledge_acquisition.raw_record import RawRecordIntegrityError
+from app.knowledge_acquisition.source_frames import SourceFramesError, SourceMediaCapture
 from app.knowledge_acquisition.source_bundle import (
     SourceBundleError,
     materialize_youtube_source_bundle,
@@ -84,6 +90,7 @@ from app.knowledge_acquisition.stage_events import (
     run_extractors,
 )
 from app.vault.manager import VaultContext
+from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 YOUTUBE_SOURCE_KIND = youtube_plugin.SOURCE_KIND
@@ -274,6 +281,7 @@ def acquire_youtube(
     env: Mapping[str, str] | None = None,
     fetch_fn: Callable[[str], youtube_plugin.FetchOutcome] | None = None,
     youtube_attachment_root: str | None = None,
+    media_capture: SourceMediaCapture | None = None,
 ) -> AcquisitionReceipt:
     """Acquire a NEW YouTube URL end-to-end: fetch -> persist raw -> normalize -> extract ->
     assemble_candidate -> write_candidate_note, emitting one KA-06 stage event per transition.
@@ -283,6 +291,11 @@ def acquire_youtube(
     real source egress and persists the raw record (`replay.run_replay` instead reads an
     EXISTING raw record and blocks egress entirely). `fetch_fn` defaults to
     `youtube_plugin.fetch`; tests inject a stub there to avoid real network/ASR egress.
+
+    Transcript-bearing candidates carry durable timestamp-only key moments and, per revised
+    D1, attempt bounded default frame capture (#5746). `media_capture` defaults to the
+    production `YtDlpFfmpegMediaCapture`; tests inject a fake. Capture degradation renders a
+    timestamps-only moments section; a `SourceFramesError` dead-letters the candidate stage.
 
     Raises `DatabaseNotConfiguredError` before touching the source at all when no runtime DB
     is configured (loud DB-required guard — see `require_configured_database_url`).
@@ -494,22 +507,43 @@ def acquire_youtube(
             )
         else:
             candidate = replace(candidate, derived_transcript_link=bundle.transcript_path)
+            # An ordinary same-version restart hit has no new proposal. A fresh extractor
+            # version (or other newly executed successful extraction) is an upgrade under D5
+            # and must become a companion when the canonical candidate already exists.
+            proposal_on_existing = any(not result.replayed for result in report.successes)
+            if _candidate_will_render(candidate, vault_context, proposal_on_existing):
+                candidate = attach_key_moments(
+                    candidate,
+                    transcript=normalized_artifact,
+                    extractions=report.successes,
+                    vault_context=vault_context,
+                    capture=True,
+                    write_guard=write_guard,
+                    youtube_attachment_root=youtube_attachment_root,
+                    media_capture=media_capture,
+                )
             write_result: CandidateWriteResult = write_candidate_note(  # type: ignore[no-redef]
                 candidate,
                 vault_context=vault_context,
                 write_guard=write_guard,
-                # An ordinary same-version restart hit has no new proposal. A fresh extractor
-                # version (or other newly executed successful extraction) is an upgrade under D5
-                # and must become a companion when the canonical candidate already exists.
-                proposal_on_existing=any(not result.replayed for result in report.successes),
+                proposal_on_existing=proposal_on_existing,
             )
-    except (CandidateAssemblyError, CandidateWritebackError, SourceBundleError) as exc:
+    except (
+        CandidateAssemblyError,
+        CandidateWritebackError,
+        SourceBundleError,
+        SourceFramesError,
+    ) as exc:
         emit_stage_dead_letter(
             stage=CANDIDATE_STAGE,
             stage_version=CANDIDATE_STAGE_VERSION,
             content_identity=content_identity,
             reason=(
-                "assembly_failed" if isinstance(exc, CandidateAssemblyError) else "writeback_failed"
+                "assembly_failed"
+                if isinstance(exc, CandidateAssemblyError)
+                else "source_frames_failed"
+                if isinstance(exc, SourceFramesError)
+                else "writeback_failed"
             ),
             error=str(exc),
             trace_id=trace_id,
@@ -732,6 +766,26 @@ def acquire_metadata_only(
         stages=tuple(stages),
         blocked=candidate_blocked,
     )
+
+
+def _candidate_will_render(
+    candidate: Candidate, vault_context: VaultContext, proposal_on_existing: bool
+) -> bool:
+    """True unless the canonical note exists and no proposal companion will be written.
+
+    A traced no-op restart renders nothing, so it must not spend bounded media egress on frames
+    no note would reference.
+    """
+    if proposal_on_existing and candidate.extraction_artifact_ids:
+        return True
+    if not vault_context.active_vault_path:
+        return True  # write_candidate_note raises its own loud vault error
+    try:
+        vault_root = Path(vault_context.active_vault_path).expanduser().resolve()
+        note_path = candidate_note_path(candidate, sources_dir=get_vault_sources_dir_rel(vault_root))
+        return not candidate_note_exists_durable(note_path, vault_root=vault_root)
+    except Exception:  # noqa: BLE001 - write_candidate_note re-probes and fails loud itself
+        return True
 
 
 def _reload_raw(*, source_kind: str, item_ref: str, content_identity: str) -> dict[str, Any]:
