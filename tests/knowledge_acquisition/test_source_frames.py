@@ -55,6 +55,7 @@ VIDEO_ID = "abcDEF12345"
 CONTENT_IDENTITY = "sha256:frames-fixture"
 VIDEO_MARKER = b"FAKE-MP4-VIDEO-BYTES"
 VIDEO_BYTES = VIDEO_MARKER * 512
+_MEDIA_TOOLS = frozenset({"ffmpeg", "ffprobe", "yt-dlp", "yt_dlp", "curl", "wget"})
 RAW_ID = str(raw_record_object_id(source_kind="youtube_url", item_ref=VIDEO_ID, content_identity=CONTENT_IDENTITY))
 
 
@@ -72,10 +73,22 @@ def _no_real_egress(monkeypatch: pytest.MonkeyPatch):
     def _forbidden(*_args, **_kwargs):
         raise AssertionError("source-frame tests must not perform real network or media egress")
 
+    def _media_process_guard(real):
+        # Only media/network tools are forbidden; unrelated helpers (e.g. ctypes' ldconfig
+        # lookup behind the Linux no-follow rename) must keep working.
+        def guarded(args, *a, **kw):
+            argv = [args] if isinstance(args, (str, bytes, os.PathLike)) else list(args)
+            tool = os.path.basename(os.fsdecode(argv[0])).split(" ")[0] if argv else ""
+            if tool in _MEDIA_TOOLS:
+                raise AssertionError(f"source-frame tests must not run {tool}")
+            return real(args, *a, **kw)
+
+        return guarded
+
     monkeypatch.setattr(socket, "create_connection", _forbidden)
     monkeypatch.setattr(urllib.request, "urlopen", _forbidden)
-    monkeypatch.setattr(subprocess, "run", _forbidden)
-    monkeypatch.setattr(subprocess, "Popen", _forbidden)
+    monkeypatch.setattr(subprocess, "run", _media_process_guard(subprocess.run))
+    monkeypatch.setattr(subprocess, "Popen", _media_process_guard(subprocess.Popen))
     monkeypatch.setattr(frames_module, "_youtube_dl", _forbidden)
     monkeypatch.setattr(frames_module, "_run_ffmpeg", _forbidden)
 
