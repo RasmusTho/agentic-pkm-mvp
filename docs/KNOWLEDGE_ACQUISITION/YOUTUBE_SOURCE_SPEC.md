@@ -154,6 +154,8 @@ deterministic local connection producer and the vault context's explicit active 
 binds that scope in production only from the acquisition request policy snapshot (`active_scope_id`)
 or an explicit operator `--scope` on `acquire-youtube`/`acquire-replay`; an unset or invalid scope
 renders the explicit no-profile line, and the scope is never inferred from vault identity or paths.
+No source-registry binding policy writes the snapshot key yet, so drained requests currently render
+no-profile.
 
 The portable-source-bundle delivery adds a derived, rebuildable vault transcript and `source.json`
 under the YouTube attachment root (`Sources/YouTube/_attachments` by default). The stable

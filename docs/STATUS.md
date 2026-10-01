@@ -556,7 +556,8 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   deterministic local (no-egress) connection producer and the vault context's explicit active scope;
   #5749 binds that scope in production from the acquisition request policy snapshot (`active_scope_id`)
   or an explicit `acquire-youtube`/`acquire-replay` `--scope`; an unset or invalid scope renders the
-  no-profile line, and no scope is inferred from vault identity.
+  no-profile line, and no scope is inferred from vault identity. No source-registry binding policy
+  writes the snapshot key yet, so drained requests currently render no-profile.
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - The bounded Mimer MCP producer adapter is delivered as the `mimer-mcp` stdio sidecar: exactly
   ask, governed capture, retrieve/search, note read, and health delegate to existing governed HTTP
