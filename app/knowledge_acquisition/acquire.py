@@ -487,6 +487,7 @@ def acquire_youtube(
             raw_record_id=raw_record_id,
             normalized_artifact_id=normalized_artifact.object_id,
             optional_failures=optional_failures,
+            vault_context=vault_context,
         )
         bundle = materialize_youtube_source_bundle(
             candidate,
