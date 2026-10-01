@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import importlib
+import json
 import secrets
+from contextlib import nullcontext
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -464,12 +465,17 @@ class _Queue:
     def __init__(self, rows: list[_Row]) -> None:
         self._pending = list(rows)
         self.claim_limits: list[int] = []
+        self.heartbeat_claims: list[str] = []
 
     def claim_batch(self, limit: int, **kwargs: Any) -> list[_Row]:
         self.claim_limits.append(limit)
         if not self._pending:
             return []
         return [self._pending.pop(0)]
+
+    def keep_claim_alive(self, request: _Row):
+        self.heartbeat_claims.append(request.request_id)
+        return nullcontext()
 
 
 class _VaultManager:
@@ -537,6 +543,7 @@ def test_drain_runs_claimed_requests_through_drain_one(
 
     assert result.exit_code == 0
     assert drained == ["req-1", "req-2"]
+    assert queue.heartbeat_claims == ["req-1", "req-2"]
     receipt = _json_lines(result.output)[-1]
     assert receipt["status"] == "drained"
     assert receipt["claimed"] == 2

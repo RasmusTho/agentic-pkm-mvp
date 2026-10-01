@@ -16,6 +16,7 @@ No real playlist/channel/account identifiers anywhere (INV-YSS-9).
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -734,6 +735,44 @@ def test_reset_stale_in_progress_recovers_without_attempt_increment() -> None:
     recovered = q.get(row.request_id)
     assert recovered.status == "pending"
     assert recovered.attempts == 1
+
+
+def test_keep_claim_alive_refreshes_during_long_drain(monkeypatch: pytest.MonkeyPatch) -> None:
+    conn = FakeOutboxConn()
+    q = _queue()
+    now = datetime.now(timezone.utc)
+    _enqueue(q, conn, now=now)
+    claimed = q.claim_batch(1, now=now, conn=conn)[0]
+    heartbeat_seen = threading.Event()
+    original_heartbeat = q.heartbeat_in_progress
+    heartbeat_count = 0
+
+    def simulated_heartbeat(
+        request_id: str, *, expected_attempt: int, now: datetime | None = None
+    ) -> bool:
+        nonlocal heartbeat_count
+        heartbeat_count += 1
+        heartbeat_seen.set()
+        return original_heartbeat(
+            request_id,
+            expected_attempt=expected_attempt,
+            now=now + timedelta(seconds=3000 + heartbeat_count)
+            if now is not None
+            else datetime.now(timezone.utc) + timedelta(seconds=3000 + heartbeat_count),
+        )
+
+    monkeypatch.setattr(q, "heartbeat_in_progress", simulated_heartbeat)
+    with q.keep_claim_alive(claimed, interval_seconds=0.01):
+        assert heartbeat_seen.wait(timeout=2)
+        # The queue remains claimed even when its original claim is over an hour old.
+        assert q.reset_stale_in_progress(
+            older_than_seconds=3600, now=now + timedelta(seconds=6500)
+        ) == 0
+
+    # After the drain stops heartbeating, ordinary stale recovery takes over.
+    assert q.reset_stale_in_progress(
+        older_than_seconds=3600, now=now + timedelta(seconds=6700)
+    ) == 1
 
 
 def test_memory_backend_passes_shared_contract() -> None:

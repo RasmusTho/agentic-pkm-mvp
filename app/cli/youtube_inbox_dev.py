@@ -6,8 +6,10 @@ sync, one bounded manual drain, and sanitized status.
 
 ``drain`` is the operator-invoked half of the queue: discovery enqueues
 requests, and this command runs already-enqueued rows through the existing
-``drain_one`` adapter one at a time.  It is not a scheduler — no lease, no tick
-host, no long-running process.  Continuous operation remains YSS-06 (#3921).
+``drain_one`` adapter one at a time. It is not a scheduler or tick host;
+each claimed row is heartbeated while its synchronous acquisition runs so
+scheduler stale recovery can distinguish a live drain from a crashed one.
+Continuous operation remains YSS-06 (#3921).
 """
 
 from __future__ import annotations
@@ -316,7 +318,8 @@ def drain(max_requests: int) -> None:
             if not batch:
                 break
             claimed += 1
-            result = drain_one(batch[0], vault_context=vault_context, queue=queue)
+            with queue.keep_claim_alive(batch[0]):
+                result = drain_one(batch[0], vault_context=vault_context, queue=queue)
             outcomes[result.status] = outcomes.get(result.status, 0) + 1
     except click.ClickException:
         raise

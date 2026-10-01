@@ -273,6 +273,36 @@ def assert_reset_stale_in_progress(make_queue: MakeQueue) -> None:
     _terminalize(q, conn, row)
 
 
+def assert_heartbeat_refreshes_and_fences_attempt(make_queue: MakeQueue) -> None:
+    q = make_queue()
+    conn = FakeOutboxConn()
+    now = datetime.now(timezone.utc)
+    row = _enqueue(q, conn, _item(), now=now)
+    first = q.claim_batch(1, now=now, conn=conn)[0]
+
+    assert q.heartbeat_in_progress(
+        row.request_id, expected_attempt=first.attempts, now=now + timedelta(seconds=3000)
+    )
+    # A live attempt's refreshed timestamp remains newer than the stale cutoff.
+    assert q.reset_stale_in_progress(
+        older_than_seconds=3600, now=now + timedelta(seconds=6500)
+    ) == 0
+    assert q.get(row.request_id).status == "in_progress"
+
+    # Once its heartbeat has aged out, normal restart recovery still applies.
+    assert q.reset_stale_in_progress(
+        older_than_seconds=3600, now=now + timedelta(seconds=6700)
+    ) >= 1
+    second = q.claim_batch(1, now=now + timedelta(seconds=6700), conn=conn)[0]
+    assert second.attempts == first.attempts + 1
+    before_late_heartbeat = q.get(row.request_id).updated_at
+    assert not q.heartbeat_in_progress(
+        row.request_id, expected_attempt=first.attempts, now=now + timedelta(seconds=8000)
+    )
+    assert q.get(row.request_id).updated_at == before_late_heartbeat
+    _terminalize(q, conn, row)
+
+
 def assert_terminal_states_never_reopened(make_queue: MakeQueue) -> None:
     """INV-YSS-3: a late fail/complete from a stale drainer cannot reopen a
     terminal row, and the no-op emits no event."""
@@ -430,6 +460,7 @@ ALL_CONTRACT_ASSERTIONS = (
     assert_retry_then_exhaustion_dead_letter,
     assert_explicit_dead_letter,
     assert_reset_stale_in_progress,
+    assert_heartbeat_refreshes_and_fences_attempt,
     assert_terminal_states_never_reopened,
     assert_stale_attempt_cannot_mutate_new_in_progress_owner,
     assert_pending_dead_letter_cannot_dispose_concurrent_claim,

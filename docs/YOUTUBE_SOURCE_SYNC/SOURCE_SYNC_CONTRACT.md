@@ -129,7 +129,10 @@ State rules:
   dead-letter surfaced, or attempts exhausted); it emits `acquisition.failed` with
   `terminal: true` and is listable/retryable by operator command.
 - Restart recovery: rows stuck `in_progress` past a stale threshold are reset to `pending` (the
-  drain re-run converges through KA idempotency).
+  drain re-run converges through KA idempotency). The operator drain refreshes `updated_at` with
+  the expected attempt generation while its synchronous pipeline call is active, so a long live
+  acquisition is not mistaken for a crashed attempt; when the process exits, heartbeats stop and
+  the normal stale threshold recovers the row.
 - Every completion, retry, or terminal transition from `in_progress` carries the claimant's
   expected attempt generation. Memory and Postgres writers compare request id, status, and attempt
   atomically; a stale attempt cannot mutate a newer `in_progress` claimant or emit its outcome.

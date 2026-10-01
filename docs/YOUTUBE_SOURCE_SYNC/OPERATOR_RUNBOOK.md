@@ -104,8 +104,10 @@ knowledge standing.
 
 Each `drain` invocation is one bounded pass and nothing more: it holds no scheduler lease, keeps
 no schedule, and leaves no process running. YSS-06 (#3921) schedules discovery and enqueue only;
-queued requests are acquired only when an operator runs the drain command. Background acquisition
-remains a separate deferred slice.
+queued requests are acquired only when an operator runs the drain command. While a claimed row is
+being acquired, the command refreshes its queue heartbeat with the attempt generation; a long live
+pipeline run therefore remains in progress, and a stopped process is still recovered after the
+stale threshold. Background acquisition remains a separate deferred slice.
 
 ## Troubleshooting
 

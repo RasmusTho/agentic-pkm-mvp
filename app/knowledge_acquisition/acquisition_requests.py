@@ -56,14 +56,17 @@ The drain adapter :func:`drain_one` owns *what happens* when a request runs
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import random
 import threading
 import uuid
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from app.db.dsn import resolve_dsn
 from app.events.models import new_event
@@ -105,6 +108,8 @@ YOUTUBE_SOURCE_KIND = "youtube_url"
 
 DEFAULT_MAX_ATTEMPTS = 8
 DEFAULT_STALE_IN_PROGRESS_SECONDS = 900
+# Active drains refresh well inside the queue and scheduler stale thresholds.
+CLAIM_HEARTBEAT_INTERVAL_SECONDS = 300
 
 BACKOFF_BASE_SECONDS = 60
 BACKOFF_FACTOR = 4
@@ -122,6 +127,7 @@ _MIGRATION_HINT = (
     "app/alembic/versions/b5c6d7e8f9a0_yss04_acquisition_requests.py."
 )
 _ALLOWED_BACKENDS = {"memory", "pg"}
+logger = logging.getLogger(__name__)
 
 
 class AcquisitionRequestsSchemaMissingError(RuntimeError):
@@ -425,6 +431,14 @@ class _MemoryAcquisitionRequestsBackend:
                 self._rows[row.request_id] = updated
                 claimed.append(_copy_request(updated))
             return tuple(claimed)
+
+    def heartbeat(self, request_id: str, expected_attempt: int, now: datetime) -> bool:
+        with self._lock:
+            row = self._rows.get(request_id)
+            if row is None or row.status != "in_progress" or row.attempts != expected_attempt:
+                return False
+            self._rows[request_id] = replace(row, updated_at=_iso(now))
+            return True
 
     def _mutate(
         self,
@@ -827,6 +841,23 @@ class _PgAcquisitionRequestsBackend:
         finally:
             conn.close()
 
+    def heartbeat(self, request_id: str, expected_attempt: int, now: datetime) -> bool:
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"""
+                UPDATE {_TABLE}
+                SET updated_at = %s::timestamptz
+                WHERE request_id = %s AND status = 'in_progress' AND attempts = %s
+                """,
+                (_iso(now), request_id, expected_attempt),
+            )
+            return cur.rowcount == 1
+        finally:
+            conn.close()
+
     def _mutate(
         self,
         request_id: str,
@@ -1130,6 +1161,71 @@ class AcquisitionRequests:
                 conn=conn,
             )
         return list(claimed)
+
+    def heartbeat_in_progress(
+        self,
+        request_id: str,
+        *,
+        expected_attempt: int,
+        now: datetime | None = None,
+    ) -> bool:
+        """Refresh the stale-recovery clock only for the current claimed attempt."""
+        _validate_expected_attempt(expected_attempt)
+        return self._backend.heartbeat(request_id, expected_attempt, _now(now))
+
+    @contextmanager
+    def keep_claim_alive(
+        self,
+        request: AcquisitionRequest,
+        *,
+        interval_seconds: float = CLAIM_HEARTBEAT_INTERVAL_SECONDS,
+    ) -> Iterator[None]:
+        """Heartbeat a claimed row while a synchronous drain is still running.
+
+        A failed heartbeat is retried on the next interval; losing the attempt
+        stops the heartbeat because a newer claimant owns the row. The worker is
+        daemonized and joined briefly so a stalled database call cannot prevent
+        the operator command from exiting.
+        """
+        if (
+            isinstance(interval_seconds, bool)
+            or not isinstance(interval_seconds, (int, float))
+            or not math.isfinite(interval_seconds)
+            or interval_seconds <= 0
+        ):
+            raise ValueError("interval_seconds must be a finite positive number")
+
+        stop = threading.Event()
+
+        def heartbeat_loop() -> None:
+            while not stop.wait(interval_seconds):
+                try:
+                    still_owned = self.heartbeat_in_progress(
+                        request.request_id, expected_attempt=request.attempts
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "acquisition request heartbeat failed; will retry (%s)",
+                        type(exc).__name__,
+                    )
+                    continue
+                if not still_owned:
+                    logger.warning(
+                        "acquisition request heartbeat stopped after attempt ownership changed"
+                    )
+                    return
+
+        thread = threading.Thread(
+            target=heartbeat_loop,
+            name=f"acq-heartbeat-{request.request_id[:8]}-{request.attempts}",
+            daemon=True,
+        )
+        thread.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            thread.join(timeout=min(5.0, interval_seconds))
 
     def complete(
         self,
