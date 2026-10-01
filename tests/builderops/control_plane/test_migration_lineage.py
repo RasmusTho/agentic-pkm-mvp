@@ -7,6 +7,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 from psycopg import sql
+from psycopg.types.json import Jsonb
 
 from app.builderops.control_plane import PostgresBuilderOpsStore
 from app.builderops.control_plane.migrations import (
@@ -52,6 +53,8 @@ def test_initialize_refuses_newer_schema_and_preserves_runtime_authority_epoch(
     control_plane_store, envelope
 ) -> None:
     store = control_plane_store
+    seeded_epoch = store.readiness()["authority_epoch"]
+    assert seeded_epoch > 1
     future_version = SCHEMA_VERSION + 1
     with store._connect() as conn:
         conn.execute(
@@ -61,14 +64,14 @@ def test_initialize_refuses_newer_schema_and_preserves_runtime_authority_epoch(
         )
         conn.execute(
             "UPDATE builderops_authority_metadata "
-            "SET authority_epoch = 2, schema_version = %s WHERE singleton",
-            (future_version,),
+            "SET authority_epoch = %s, schema_version = %s WHERE singleton",
+            (seeded_epoch, future_version),
         )
 
     with pytest.raises(RuntimeError, match="newer or unknown migration version"):
         store.initialize()
     assert store.readiness() == {
-        "authority_epoch": 2,
+        "authority_epoch": seeded_epoch,
         "schema_version": future_version,
     }
 
@@ -79,12 +82,12 @@ def test_initialize_refuses_newer_schema_and_preserves_runtime_authority_epoch(
         )
         conn.execute(
             "UPDATE builderops_authority_metadata "
-            "SET authority_epoch = 2, schema_version = %s WHERE singleton",
-            (SCHEMA_VERSION,),
+            "SET authority_epoch = %s, schema_version = %s WHERE singleton",
+            (seeded_epoch, SCHEMA_VERSION),
         )
     store.initialize()
     assert store.readiness() == {
-        "authority_epoch": 2,
+        "authority_epoch": seeded_epoch,
         "schema_version": SCHEMA_VERSION,
     }
 
@@ -107,9 +110,11 @@ def test_initialize_refuses_mismatched_applied_migration_lineage(
 
 
 def test_initialize_is_idempotent_for_exact_current_lineage(control_plane_store, envelope) -> None:
+    seeded_epoch = control_plane_store.readiness()["authority_epoch"]
+    assert seeded_epoch > 1
     control_plane_store.initialize()
     assert control_plane_store.readiness() == {
-        "authority_epoch": 1,
+        "authority_epoch": seeded_epoch,
         "schema_version": SCHEMA_VERSION,
     }
 
@@ -184,126 +189,60 @@ def test_initialize_upgrades_v2_preserving_data_and_replacing_reconciliation_con
     )
     try:
         _initialize_schema_at_version(store, 2)
-        store.commit_transition(
-            envelope=envelope,
-            task_id="v2-preserved-task",
-            to_state="ready",
-            idempotency_key="v2-preserved-create",
-            request={"command": "create"},
-        )
-        _, lease = store.claim_task(
-            envelope=envelope,
-            task_id="v2-preserved-task",
-            holder="v2-executor",
-            idempotency_key="v2-preserved-claim",
-            request={"command": "claim"},
-        )
-        pending = store.commit_transition(
-            envelope=envelope,
-            task_id="v2-preserved-task",
-            to_state="effect_pending",
-            idempotency_key="v2-preserved-effect",
-            request={"command": "schedule-effect"},
-            outbox={
-                "effect_type": "github.comment",
-                "payload": {"issue": 3603},
-            },
-            lease=lease,
-        )
-        pending_claim = store.claim_outbox(
-            envelope=envelope,
-            operation_key=pending.operation_key,
-            worker_id="v2-outbox-worker",
-        )
-        store.mark_effect_unknown(pending_claim, detail="v2 readback required")
-        store.reconcile_outbox(
-            pending_claim,
-            observed_applied=False,
-            evidence={"readback": "not-found"},
-        )
-        assert store.readiness() == {
-            "authority_epoch": AUTHORITY_EPOCH,
-            "schema_version": 2,
-        }
+        # Seed the actual v2 table shape. The current writer requires v5
+        # admission and must never be used as an old-version writer fixture.
+        operation_key = "v2-preserved-effect"
+        authority = Jsonb(envelope.as_json())
+        with store._connect() as conn:
+            conn.execute(
+                "INSERT INTO builderops_tasks(repository, task_id, state, authority_envelope) "
+                "VALUES (%s, 'v2-preserved-task', 'effect_pending', %s)",
+                (envelope.repository, authority),
+            )
+            conn.execute(
+                "INSERT INTO builderops_outbox(repository, operation_key, task_id, effect_type, "
+                "payload, status, intent_receipt_sequence, intent_lsn, worker_id, "
+                "claim_fencing_token, claim_receipt_sequence, claim_lsn, authority_envelope) "
+                "VALUES (%s, %s, 'v2-preserved-task', 'github.comment', '{}', 'pending', "
+                "1, '0/1', 'v2-outbox-worker', 1, 2, '0/2', %s)",
+                (envelope.repository, operation_key, authority),
+            )
+            conn.execute(
+                "INSERT INTO builderops_outbox_reconciliations(repository, operation_key, "
+                "task_id, worker_id, claim_fencing_token, claim_receipt_sequence, claim_lsn, "
+                "observed_applied, evidence, request_hash, status, receipt_sequence, "
+                "recovery_lsn, authority_envelope) VALUES (%s, %s, 'v2-preserved-task', "
+                "'v2-outbox-worker', 1, 2, '0/2', false, %s, 'v2-request', 'pending', 3, '0/3', %s)",
+                (envelope.repository, operation_key, Jsonb({"readback": "not-found"}), authority),
+            )
 
         store.initialize()
 
-        assert store.readiness() == {
-            "authority_epoch": AUTHORITY_EPOCH,
-            "schema_version": SCHEMA_VERSION,
-        }
-        assert store.get_task(
-            envelope.repository, "v2-preserved-task"
-        )["state"] == "effect_pending"
+        assert store.readiness()["authority_epoch"] > AUTHORITY_EPOCH
+        assert store.readiness()["schema_version"] == SCHEMA_VERSION
+        assert store.bootstrap_status()["writers_enabled"] is False
+        assert store.get_task(envelope.repository, "v2-preserved-task")["state"] == "effect_pending"
+        assert store.outbox_status(envelope.repository, operation_key) == "unknown"
         with store._connect() as conn:
             reconciliation = conn.execute(
-                "SELECT status FROM builderops_outbox_reconciliations "
+                "SELECT status, evidence FROM builderops_outbox_reconciliations "
                 "WHERE repository = %s AND operation_key = %s",
-                (envelope.repository, pending.operation_key),
+                (envelope.repository, operation_key),
             ).fetchone()
-            versions = [
-                int(row["version"])
-                for row in conn.execute(
-                    "SELECT version FROM builderops_schema_migrations ORDER BY version"
-                ).fetchall()
-            ]
-        assert reconciliation is not None
-        assert reconciliation["status"] == "pending"
-        assert versions == list(range(1, SCHEMA_VERSION + 1))
-
-        store.commit_transition(
-            envelope=envelope,
-            task_id="v3-dead-letter-task",
-            to_state="ready",
-            idempotency_key="v3-dead-letter-create",
-            request={"command": "create"},
-        )
-        _, dead_letter_lease = store.claim_task(
-            envelope=envelope,
-            task_id="v3-dead-letter-task",
-            holder="v3-executor",
-            idempotency_key="v3-dead-letter-claim",
-            request={"command": "claim"},
-        )
-        dead_letter = store.commit_transition(
-            envelope=envelope,
-            task_id="v3-dead-letter-task",
-            to_state="effect_pending",
-            idempotency_key="v3-dead-letter-effect",
-            request={
-                "contract_version": "builderops_verification_run.v1",
-                "run": {
-                    "coordinator_session_id": None,
-                    "context_pack": None,
-                },
-            },
-            outbox={
-                "effect_type": "model.verification_coordinator",
-                "payload": {"head_sha": "a" * 40},
-            },
-            lease=dead_letter_lease,
-        )
-        dead_letter_claim = store.claim_outbox(
-            envelope=envelope,
-            operation_key=dead_letter.operation_key,
-            worker_id="v3-verification-host",
-        )
-        store.mark_effect_unknown(
-            dead_letter_claim,
-            detail="provider session identity was not durably observed",
-        )
-        terminal = store.reconcile_outbox(
-            dead_letter_claim,
-            observed_applied=False,
-            terminal_unknown=True,
-            evidence={
-                "head_sha": "a" * 40,
-                "outcome": "indeterminate_pre_session_model_effect",
-                "provider_session_id": None,
-                "relaunch_performed": False,
-            },
-        )
-        assert terminal.status == "dead_letter"
+            versions = [int(row["version"]) for row in conn.execute(
+                "SELECT version FROM builderops_schema_migrations ORDER BY version").fetchall()]
+            assert reconciliation == {"status": "pending", "evidence": {"readback": "not-found"}}
+            assert versions == list(range(1, SCHEMA_VERSION + 1))
+            # The v3 constraint upgrade remains usable by recovery while the
+            # v5 fence correctly keeps all ordinary writers disabled.
+            store._assert_reconciliation_admitted(conn)
+            conn.execute(
+                "UPDATE builderops_outbox_reconciliations SET status='dead_letter' "
+                "WHERE repository=%s AND operation_key=%s", (envelope.repository, operation_key))
+            assert conn.execute(
+                "SELECT status FROM builderops_outbox_reconciliations "
+                "WHERE repository=%s AND operation_key=%s", (envelope.repository, operation_key)
+            ).fetchone()["status"] == "dead_letter"
     finally:
         with psycopg.connect(control_plane_store.dsn, autocommit=True) as conn:
             conn.execute(

@@ -1,5 +1,4 @@
 import json
-import os
 from uuid import UUID, uuid4
 
 import psycopg
@@ -11,10 +10,12 @@ from .pg import PgObjectStore
 
 
 def _dsn() -> str:
-    url = os.environ.get("DATABASE_URL", "").strip()
+    from app.db.dsn import resolve_dsn
+
+    url = resolve_dsn()
     if not url:
         raise RuntimeError("DATABASE_URL is required for postgres store access")
-    return url.replace("+psycopg", "")
+    return url
 
 
 class PgObjects:

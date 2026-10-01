@@ -238,7 +238,7 @@ def test_runtime_loop_cold_rebuild_restores_seeded_contract(
         outbox_path=outbox_path,
     )
 
-    first = run_once(vault_root / DEFAULT_TARGET_SUBDIR, cfg)
+    first = run_once(vault_root, cfg)
     assert first.promotion.get("applied", 0) >= 1
 
     promoted_path = vault_root / DEFAULT_TARGET_SUBDIR / DEFAULT_FOLDER_NAME / "evergreen-strategy.md"
@@ -252,7 +252,7 @@ def test_runtime_loop_cold_rebuild_restores_seeded_contract(
     snapshot_path.unlink(missing_ok=True)
     Path(str(snapshot_path) + ".outbox_cursor.json").unlink(missing_ok=True)
 
-    second = run_once(vault_root / DEFAULT_TARGET_SUBDIR, cfg)
+    second = run_once(vault_root, cfg)
     assert second.watcher.get("ingested", 0) >= 1
     assert second.watcher.get("errors", 0) == 0
 

@@ -5,6 +5,8 @@ State: Repo-local skill index for builder agents working in this repository.
 Use this file after reading the repository root `AGENTS.md`.
 
 These skills are workflow helpers, not replacements for the canonical builder-agent policy.
+For use-case, feature, capability, subsystem, and SRD terminology, follow the planning vocabulary
+in `docs/development/DEV_WORKFLOW.md`.
 They are Builder System artifacts: durable repo-governed workflow instructions for development-time
 agents, not Product/Runtime System agents and not runtime CAO/MEM capability contracts. For
 Product/Runtime work, route SBS impact through `docs/architecture/SBS_OPERATING_MODEL.md`. For skill,
@@ -230,7 +232,7 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `docs-to-issue`
   - convert active docs into bounded backlog Issues
 - `feature-breakdown`
-  - break one docs-defined capability into a specification directory plus a parent feature issue and bounded child slice issues
+  - decompose a user-facing feature, multi-slice capability, or cross-subsystem contract while keeping scenario acceptance, subsystem ownership, and capability contracts distinct
 - `architecture-research`
   - deliberate evidence-based research pass over the live system: parallel subsystem explorers with `file:line`-anchored evidence-only briefs, cross-system synthesis, research-question resolution, invariant extraction with enforcement categories, then backlog handoff via `feature-breakdown` (reconcile against open epics, never duplicate); output is an advisory audit doc in `docs/audits/` plus an optional specification directory
 - `bug-to-issue`

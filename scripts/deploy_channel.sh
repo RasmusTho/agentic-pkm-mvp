@@ -101,6 +101,15 @@ case "${channel}" in
   *) usage; exit 2 ;;
 esac
 
+# Linux BWS deployment can enter only through the supervised host-admitted worker.
+# Check before temporary state, pin directories or any Docker command.
+if [ -f "/etc/yggdrasil/bws-deploy/${channel}.json" ]; then
+  export HOST_SECRET_PROVIDER=bws
+fi
+if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+  "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}" || exit $?
+fi
+
 # Classify the selected channel before creating temporary state, acquiring the
 # mutation lock, reading credentials, or contacting Docker. Dry-run performs no
 # deployment mutation and rollback must remain available for previous-good
@@ -207,6 +216,10 @@ acquire_channel_mutation_lock() {
   # channel. Two concurrent deploys would otherwise race the durable
   # pending-migration marker: the first finisher's cleanup deletes the record
   # the still-running attempt depends on for crash recovery.
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+    # Worker owns/removes the same mkdir lock through durable terminal receipt.
+    return 0
+  fi
   deploy_lock_dir="${pin_file}.lock"
   if ! mkdir "${deploy_lock_dir}" 2>/dev/null; then
     deploy_lock_dir=""
@@ -686,6 +699,11 @@ heimdal_raw_migration_secret_preflight() {
   (
     cd "${ROOT}" || exit 1
     export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
+    if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+      # The same-ID supervisor already owns admission and its project reader.
+      # Recheck through that inherited guard; the Mac child-launch path refuses BWS.
+      exec "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}"
+    fi
     exec "${PYTHON}" -m app.ops.host_secret_bootstrap \
       --channel "${channel}" \
       --consumer heimdal-raw-migrate \

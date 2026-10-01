@@ -13,6 +13,7 @@ from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.services.note_uuid import ensure_note_uuid
 from app.domain.state_axes import normalize_artifact_state_axes
 from app.index.outbox import append_jsonl
+from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.observability.ingest_meta import record_ingest_failure, record_ingest_success
 from app.observability.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
@@ -86,6 +87,19 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
         raise ValueError("malformed frontmatter")
     stripped_text = strip_ai_panels(text)
     root = (vault_root or path.parent).expanduser().resolve()
+    resolved_path = path.expanduser().resolve(strict=True)
+    assert_profile_note_ingestible(
+        root,
+        resolved_path.relative_to(root).as_posix(),
+        (
+            frontmatter.get("uuid")
+            if isinstance(frontmatter.get("uuid"), str)
+            else frontmatter.get("id")
+            if isinstance(frontmatter.get("id"), str)
+            else None
+        ),
+        source_text=text,
+    )
     store_backend = resolve_store_backend()
     from app.ingest.vault_alpha import resolve_vault_note_identity
 
@@ -107,7 +121,10 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     # explicit memory backend has no shared canonical provider behind get_stores(),
     # so retain the legacy normalizer row there for classifier compatibility.
     normalize_res = normalize_run(
-        str(path), trace_id=trace_id, persist=store_backend != "pg"
+        str(path),
+        trace_id=trace_id,
+        persist=store_backend != "pg",
+        vault_root=root,
     )
     sanitize_normalize = dict(normalize_res)
     payload_copy = dict(normalize_res.get("payload") or {})

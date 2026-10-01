@@ -19,6 +19,8 @@ pytestmark = pytest.mark.pg
 
 def _expire_outbox_claim(store, repository: str, operation_key: str) -> None:
     with store._connect() as conn:
+        conn.execute("SELECT set_config('builderops.authority_epoch', %s, true)",
+                     (str(store.readiness()["authority_epoch"]),))
         conn.execute(
             "UPDATE builderops_outbox SET claim_expires_at = clock_timestamp() - interval '1 second' "
             "WHERE repository = %s AND operation_key = %s",

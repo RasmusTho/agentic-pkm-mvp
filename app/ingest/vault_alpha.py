@@ -33,8 +33,9 @@ from app.services.companion_note import (
     scan_attachments,
     write_companion,
 )
-from app.services.note_uuid import ensure_note_uuid
+from app.services.note_uuid import VAULT_NOTE_UUID_NAMESPACE, ensure_note_uuid
 from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
+from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.rebuildability import (
     canonical_product_source_text,
     parse_bounded_frontmatter,
@@ -130,7 +131,7 @@ def _is_unindexed_system_path(rel_path: Path, *, system_root: Path) -> bool:
 _LOCKED_FILES_LOG_ENV = "LOCKED_FILES_LOG_PATH"
 _LOCKED_FILES_LOG_DEFAULT = Path("/app/tmp/locked-files.jsonl")
 
-_VAULT_NOTE_UUID_NAMESPACE = uuid.UUID("b6b2d8b3-8f2a-4a75-9c65-4c4a0d36b3b8")
+_VAULT_NOTE_UUID_NAMESPACE = VAULT_NOTE_UUID_NAMESPACE
 
 
 def _is_permission_denied_error(exc: Exception) -> bool:
@@ -597,6 +598,17 @@ def _ingest_single(
     if "\x00" in raw_text:
         raise InvalidNoteError("null byte detected", error_type="NullByteError")
     frontmatter, body, _ = _load_frontmatter_with_reporting(raw_text, path)
+    declared_note_uuid = frontmatter.get("uuid")
+    if not isinstance(declared_note_uuid, str):
+        declared_note_uuid = frontmatter.get("id")
+    if not isinstance(declared_note_uuid, str):
+        declared_note_uuid = None
+    assert_profile_note_ingestible(
+        vault_root,
+        rel_path.as_posix(),
+        declared_note_uuid,
+        source_text=raw_text,
+    )
     identity = resolve_vault_note_identity(
         path, vault_root=vault_root, frontmatter=frontmatter, body=body
     )
@@ -1004,6 +1016,17 @@ def _ingest_candidates(
             if fm_error:
                 malformed.append(rel_display)
                 continue
+            declared_note_uuid = frontmatter.get("uuid")
+            if not isinstance(declared_note_uuid, str):
+                declared_note_uuid = frontmatter.get("id")
+            if not isinstance(declared_note_uuid, str):
+                declared_note_uuid = None
+            assert_profile_note_ingestible(
+                vault_root,
+                rel_path.as_posix(),
+                declared_note_uuid,
+                source_text=raw_text,
+            )
             identity = resolve_vault_note_identity(
                 path, vault_root=vault_root, frontmatter=frontmatter, body=body
             )

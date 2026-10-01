@@ -48,7 +48,7 @@ REPOSITORY = "RasmusTho/agentic-pkm-mvp"
 
 def _bifrost_manifest():
     """The public constituent identity, with an independently tracked hub Issue."""
-    value = _manifest()
+    value = _manifest(model="gpt-5.6-luna")
     value["contract_version"] = "fca-issue-delivery.v2"
     value["repository"] = "rasmustho/bifrost"
     value["destination"]["base_sha"] = value["source"]["revision"]
@@ -91,7 +91,7 @@ def _bifrost_manifest():
 def test_issue_delivery_v1_compatibility_and_v2_scope() -> None:
     from app.builderops.control_plane.issue_delivery import IssueDeliveryContractError
 
-    legacy = _manifest()
+    legacy = _manifest(model="gpt-5.6-luna")
     legacy["expires_at"] = "2099-01-01T00:00:00+00:00"
     assert canonical_hash(normalize_issue_delivery_manifest(legacy)) == (
         "114f9b5bbaa7baea1d10834031b29535336e97d772a1f7c103b382d98b0c43ec"
@@ -115,7 +115,7 @@ def test_issue_delivery_v1_compatibility_and_v2_scope() -> None:
 
 def test_host_candidate_versions_preserve_v1_v2_history(issue_delivery_production_harness):
     from app.builderops.control_plane.issue_delivery import delivery_source_pair, tracking_repository
-    old = _manifest()
+    old = _manifest(model="gpt-5.6-luna")
     old["expires_at"] = "2099-01-01T00:00:00+00:00"
     assert canonical_hash(normalize_issue_delivery_manifest(old)) == "114f9b5bbaa7baea1d10834031b29535336e97d772a1f7c103b382d98b0c43ec"
     v2 = _bifrost_manifest()
@@ -184,6 +184,9 @@ def store() -> PostgresBuilderOpsStore:
     dsn = _schema_dsn(base, schema)
     value = PostgresBuilderOpsStore(dsn)
     value.initialize()
+    from tests.builderops.bootstrap_fixtures import accept_fixture_authority, admit_fixture_connections
+    accept_fixture_authority(value)
+    admit_fixture_connections(value)
     try:
         yield value
     finally:
@@ -246,7 +249,9 @@ def registry(tmp_path: Path) -> CredentialRegistry:
     return CredentialRegistry(manifest)
 
 
-def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
+def _manifest(
+    *, operation_key: str = "operation-5550", model: str = "gpt-6-luna"
+) -> dict[str, object]:
     expiry = (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat()
     artifacts = [
         {"path": "app/builderops/cli.py", "sha256": "1" * 64},
@@ -294,7 +299,7 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
             "selection_intent": "general_delivery",
             "capability": "luna",
             "model_class": "standard",
-            "model": "gpt-5.6-luna",
+            "model": model,
             "reasoning_effort": "xhigh",
             "runtime_difference": "invocation-hint-only",
         },
@@ -407,7 +412,7 @@ def _manifest(*, operation_key: str = "operation-5550") -> dict[str, object]:
         "selection_intent": "general_delivery",
         "resolved": {
             "capability": "luna",
-            "model": "gpt-5.6-luna",
+            "model": model,
             "reasoning_effort": "xhigh",
             "carrier": "codex",
         },
@@ -786,7 +791,7 @@ def test_bifrost_presented_owner_cannot_borrow_hub_scope(
             retained = {**harness.approval, "permission": permission}
             retained["approval_manifest_hash"] = issue_delivery_manifest_hash(retained)
             retained["approval_digest"] = approval_digest(retained)
-            with psycopg.connect(harness.store.dsn) as conn:
+            with harness.store._connect() as conn:
                 conn.execute(
                     "UPDATE builderops_records SET payload = %s::jsonb "
                     "WHERE repository = %s AND record_id = %s",
@@ -889,7 +894,7 @@ def test_issue_approval_production_admission(store, registry, monkeypatch, tmp_p
     assert preview["state"] == "previewed"
     assert preview["manifest"]["operation_type"] == "deliver_ready_issue"
     assert preview["manifest"]["owner_principal"] == "owner:human"
-    assert preview["manifest"]["authority_epoch"] == 1
+    assert preview["manifest"]["authority_epoch"] == store.readiness()["authority_epoch"]
 
     case_variant_repository = deepcopy(preview["manifest"])
     case_variant_repository["repository"] = "RasmusTho/agentic-pkm-mvp"

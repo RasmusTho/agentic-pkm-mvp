@@ -457,6 +457,25 @@ def _read_issue_inputs(
         summary=f"Read the governed Issue: {title}",
         captured_at=captured_at,
     )
+    from app.builderops.devui_issue_work import issue_handoff
+
+    observation, handoff = issue_handoff(issue, source_ref)
+    inputs["evidence"].append(_claim(
+        claim_id="issue-work-state:" + hashlib.sha256(
+            json.dumps({"source": source_ref, "observation": observation}, sort_keys=True).encode()
+        ).hexdigest()[:16],
+        claim=observation,
+        source_ref=source_ref,
+        captured_at=captured_at,
+        coverage="partial",
+        limitation="Issue labels are observations, not execution or ownership authority.",
+    ))
+    inputs["next_legal_step"] = {
+        "workflow_ref": ".codex/skills/issue-to-code/SKILL.md",
+        "actor_class": "owner",
+        "legality": "unavailable",
+        "reason": handoff,
+    }
     limitations = inputs["limitations"]
     if content_hash is None:
         limitations.append(
@@ -654,6 +673,7 @@ def read_focus_inputs(
     issue_reader: Callable[[str, str], Any] | None = None,
     owner_fact_reader: Callable[[], dict[str, Any]] | None = None,
     issue_delivery_reader: Callable[[str], dict[str, Any] | None] | None = None,
+    issue_result_reader: Callable[[str, int], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return detached composer inputs for exactly one stable governed subject."""
 
@@ -666,6 +686,19 @@ def read_focus_inputs(
         inputs = _read_issue_inputs(
             subject_id, match, repository=repository, issue_reader=issue_reader
         )
+        if issue_result_reader is not None:
+            from app.builderops.devui_issue_work import append_issue_results
+
+            try:
+                results = issue_result_reader(match[1], int(match[2]))
+                append_issue_results(inputs, results)
+            except Exception:
+                inputs["limitations"].append(_limitation(
+                    kind="issue_results_unavailable",
+                    reason="Linked result reads are unavailable. The Issue remains readable; refresh to retry.",
+                    source_ref=inputs["subject"]["authority_ref"],
+                    evidence_state="unread",
+                ))
         inputs = append_focus_owner_facts(inputs, owner_fact_reader() if owner_fact_reader else read_owner_fact_transport(repository=repository))
         delivery = issue_delivery_reader(subject_id) if issue_delivery_reader else None
         if delivery is not None:

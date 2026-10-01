@@ -71,6 +71,10 @@ class CaptionAcquisitionError(RuntimeError):
     """Raised when yt-dlp itself fails (network/tooling failure) — not for 'no captions'."""
 
 
+class MetadataAcquisitionError(RuntimeError):
+    """Raised when the metadata-only source fetch cannot produce source evidence."""
+
+
 def extract_video_id(url: str) -> str:
     """Return the stable YouTube video id (item_ref) from an explicit URL."""
     match = _VIDEO_ID_RE.search(url)
@@ -82,7 +86,7 @@ def extract_video_id(url: str) -> str:
     raise ValueError(f"Could not extract a YouTube video id from: {url!r}")
 
 
-def yt_dlp_extract_info(url: str) -> dict[str, Any]:
+def _yt_dlp_extract(url: str, *, include_captions: bool) -> dict[str, Any]:
     """Invoke yt-dlp once to retrieve metadata + caption track listing.
 
     Isolated as its own module-level function so tests can stub the network
@@ -90,7 +94,11 @@ def yt_dlp_extract_info(url: str) -> dict[str, Any]:
     internals — no real egress in CI. This is the only function in the plugin
     that talks to yt-dlp/YouTube.
     """
-    assert_source_egress_allowed("youtube_plugin.yt_dlp_extract_info")
+    assert_source_egress_allowed(
+        "youtube_plugin.yt_dlp_extract_info"
+        if include_captions
+        else "youtube_plugin.yt_dlp_extract_metadata"
+    )
     try:
         from yt_dlp import YoutubeDL  # type: ignore
     except ImportError as exc:  # pragma: no cover - exercised via stubbing in tests
@@ -98,8 +106,8 @@ def yt_dlp_extract_info(url: str) -> dict[str, Any]:
 
     ydl_opts = {
         "skip_download": True,
-        "writesubtitles": True,
-        "writeautomaticsub": True,
+        "writesubtitles": include_captions,
+        "writeautomaticsub": include_captions,
         "quiet": True,
         "noprogress": True,
         "sleep_requests": _SLEEP_REQUESTS_SECONDS,
@@ -111,6 +119,19 @@ def yt_dlp_extract_info(url: str) -> dict[str, Any]:
             return ydl.extract_info(url, download=False)
     except Exception as exc:  # pragma: no cover - network/tooling failure path
         raise CaptionAcquisitionError(f"yt-dlp failed to fetch {url!r}: {exc}") from exc
+
+
+def yt_dlp_extract_info(url: str) -> dict[str, Any]:
+    """Retrieve metadata and caption track listing for transcript acquisition."""
+    return _yt_dlp_extract(url, include_captions=True)
+
+
+def yt_dlp_extract_metadata(url: str) -> dict[str, Any]:
+    """Retrieve source metadata without requesting caption tracks or media."""
+    try:
+        return _yt_dlp_extract(url, include_captions=False)
+    except CaptionAcquisitionError as exc:
+        raise MetadataAcquisitionError(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -307,6 +328,23 @@ def compute_content_identity(
     return "sha256:" + hashlib.sha256(encoded).hexdigest()
 
 
+def compute_metadata_content_identity(*, item_ref: str, metadata: dict[str, Any]) -> str:
+    """Return a versioned identity for stable metadata evidence.
+
+    The scheme prefix keeps metadata-only identities distinct from transcript and ASR
+    identities even when the source metadata happens to be byte-equivalent.
+    """
+    fingerprint = {
+        "identity_version": "youtube-metadata-v1",
+        "item_ref": item_ref,
+        "metadata": {key: metadata.get(key) for key in sorted(metadata)},
+    }
+    encoded = json.dumps(
+        fingerprint, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str
+    ).encode("utf-8")
+    return "youtube-metadata-v1:sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
 @dataclass(frozen=True)
 class FetchOutcome:
     """Result of one `fetch` call.
@@ -321,11 +359,81 @@ class FetchOutcome:
     object_id: Any
     content_identity: str
     is_new: bool
-    acquisition_method: str  # "captions_manual" | "captions_auto" | "asr"
+    acquisition_method: str  # "metadata_only" | "captions_manual" | "captions_auto" | "asr"
     language: str | None
     record: dict[str, Any] = field(default_factory=dict)
     ok: bool = True
     failure: str | None = None
+
+
+def _metadata_payload(*, info: dict[str, Any], item_ref_or_url: str, video_id: str) -> dict[str, Any]:
+    """Build the immutable raw metadata payload from the source specification fields."""
+    metadata = {
+        "title": info.get("title"),
+        "channel": info.get("channel") or info.get("uploader"),
+        "channel_id": info.get("channel_id") or info.get("uploader_id"),
+        "publish_date": info.get("upload_date"),
+        "duration": info.get("duration"),
+        "description": info.get("description"),
+        "chapters": info.get("chapters"),
+        "tags": info.get("tags"),
+        "language": info.get("language"),
+        "thumbnail": info.get("thumbnail"),
+    }
+    content_identity = compute_metadata_content_identity(item_ref=video_id, metadata=metadata)
+    return {
+        "source_kind": SOURCE_KIND,
+        "item_ref": video_id,
+        "url": item_ref_or_url,
+        "metadata": metadata,
+        "acquisition_method": "metadata_only",
+        "transcript_available": False,
+        "provenance": {
+            "source_kind": SOURCE_KIND,
+            "url": item_ref_or_url,
+            "creator": metadata.get("channel"),
+            "published": metadata.get("publish_date"),
+            "acquisition_method": "metadata_only",
+            "plugin_version": "ka-metadata-v1",
+        },
+        "content_identity": content_identity,
+    }
+
+
+def fetch_metadata(item_ref_or_url: str) -> FetchOutcome:
+    """Acquire only the declared YouTube metadata fields and persist raw evidence.
+
+    This path makes one metadata-only yt-dlp call.  It never selects or downloads captions,
+    downloads media, invokes ASR, or invokes an extractor.
+    """
+    assert_source_egress_allowed("youtube_plugin.fetch_metadata")
+    video_id = extract_video_id(item_ref_or_url)
+    try:
+        info = yt_dlp_extract_metadata(item_ref_or_url)
+    except MetadataAcquisitionError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - source boundary, classified by caller
+        raise MetadataAcquisitionError(f"metadata fetch failed: {exc}") from exc
+    payload = _metadata_payload(
+        info=info, item_ref_or_url=item_ref_or_url, video_id=video_id
+    )
+    content_identity = str(payload["content_identity"])
+    result: RawRecordResult = persist_raw_record(
+        source_kind=SOURCE_KIND,
+        item_ref=video_id,
+        content_identity=content_identity,
+        payload=payload,
+        source_ref=item_ref_or_url,
+    )
+    metadata = payload["metadata"]
+    return FetchOutcome(
+        object_id=result.object_id,
+        content_identity=result.content_identity,
+        is_new=result.is_new,
+        acquisition_method="metadata_only",
+        language=metadata.get("language"),
+        record=result.record,
+    )
 
 
 def _run_asr_fallback(item_ref_or_url: str) -> dict[str, Any]:
@@ -499,6 +607,7 @@ def fetch(item_ref_or_url: str) -> FetchOutcome:
 __all__ = [
     "SOURCE_KIND",
     "CaptionAcquisitionError",
+    "MetadataAcquisitionError",
     "CaptionSelection",
     "FetchOutcome",
     "extract_video_id",
@@ -506,5 +615,8 @@ __all__ = [
     "select_caption_track",
     "fetch_caption_body",
     "compute_content_identity",
+    "compute_metadata_content_identity",
+    "yt_dlp_extract_metadata",
+    "fetch_metadata",
     "fetch",
 ]

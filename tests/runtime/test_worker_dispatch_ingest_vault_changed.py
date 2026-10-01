@@ -28,7 +28,7 @@ def test_worker_run_dispatches_ingest_vault_changed(
     called: list[dict] = []
 
     def fake_handle(
-        payload, *, vault_root=None, trace_id=None, source_vault_binding_id=None
+        payload, *, vault_root=None, trace_id=None, source_vault_binding_id=None, payload_schema=None
     ):
         called.append({"payload": dict(payload), "trace_id": trace_id})
         return outbox_worker.WorkerIngestSummary(ingested=0)
@@ -134,6 +134,7 @@ def test_worker_run_dispatches_panel_scan_requested(
         trace_id=None,
         scan_requested_ts=None,
         source_vault_binding_id=None,
+        payload_schema=None,
     ):
         called.append(dict(payload))
         return outbox_worker.WorkerPanelSummary(emitted=0, deferred=False)
@@ -182,6 +183,7 @@ def test_worker_run_acks_panel_scan_requested_after_retry_budget_exhausted(
         trace_id=None,
         scan_requested_ts=None,
         source_vault_binding_id=None,
+        payload_schema=None,
     ):
         return outbox_worker.WorkerPanelSummary(emitted=0, deferred=False)
 

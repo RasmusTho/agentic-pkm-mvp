@@ -28,7 +28,7 @@ from llm_contract import validate_schema_payload
 
 SAFE_PROFILE_REF = "profile.codex_cli_no_tools_v2"
 TOOL_SURFACE_CATALOG_VERSION = "codex_cli_tool_surfaces.v2"
-MODEL_CATALOG_SCHEMA_VERSION = "codex_cli_model_catalog.v1"
+MODEL_CATALOG_SCHEMA_VERSION = "codex_cli_model_catalog.v2"
 _MAX_BUNDLED_CATALOG_BYTES = 2_000_000
 _MAX_ACCOUNT_CATALOG_MODELS = 1_024
 _MAX_ACCOUNT_CATALOG_PAGES = 16
@@ -86,9 +86,11 @@ _MODEL_DESCRIPTOR_REQUIRED_KEYS = frozenset(
 _MODEL_DESCRIPTOR_OPTIONAL_KEYS = frozenset(
     {
         "comp_hash",
+        "default_service_tier",
         "model_specialty",
         "multi_agent_reasoning_effort",
         "multi_agent_version",
+        "supports_reasoning_effort_updates",
         "tool_mode",
     }
 )
@@ -135,6 +137,7 @@ _MODEL_DESCRIPTOR_BOOLEAN_FIELDS = frozenset(
         "supported_in_api",
         "supports_experimental_context",
         "supports_image_detail_original",
+        "supports_reasoning_effort_updates",
         "supports_search_tool",
         "use_responses_lite",
     }
@@ -280,7 +283,13 @@ def _valid_model_descriptor(descriptor: Mapping[str, Any]) -> bool:
         return False
     if any(
         type(descriptor[key]) is not bool
-        for key in _MODEL_DESCRIPTOR_BOOLEAN_FIELDS
+        for key in _MODEL_DESCRIPTOR_BOOLEAN_FIELDS.intersection(keys)
+    ):
+        return False
+    default_service_tier = descriptor.get("default_service_tier")
+    if "default_service_tier" in descriptor and (
+        not isinstance(default_service_tier, str)
+        or not re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", default_service_tier)
     ):
         return False
     if any(
@@ -347,6 +356,7 @@ def _valid_model_descriptor(descriptor: Mapping[str, Any]) -> bool:
     upgrade = descriptor.get("upgrade")
     if upgrade is not None:
         upgrade_shapes = (
+            {"model", "migration_markdown"},
             {"model", "migration_markdown", "retirement_at"},
             {
                 "id",

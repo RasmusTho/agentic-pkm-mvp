@@ -1081,14 +1081,18 @@ def test_drain_one_dead_letters_unknown_source_kind() -> None:
     assert result.last_failure["reason_code"] == "source_unsupported"
 
 
-def test_drain_candidate_metadata_only_does_not_run_transcript_acquisition() -> None:
-    """The drain boundary must not turn a shallow request into a full fetch."""
+def test_drain_candidate_metadata_only_rejects_explicit_transcript_extractors() -> None:
+    """Metadata-only rejects incompatible extractor policy before source egress."""
     conn = FakeOutboxConn()
     q = _queue()
     _enqueue(
         q,
         conn,
-        policy_snapshot={"policy_version": 1, "mode": "candidate_metadata_only"},
+        policy_snapshot={
+            "policy_version": 1,
+            "mode": "candidate_metadata_only",
+            "extractor_ids": ["summary"],
+        },
     )
     claimed = q.claim_batch(1, conn=conn)
     calls: list[dict[str, Any]] = []
@@ -1106,7 +1110,7 @@ def test_drain_candidate_metadata_only_does_not_run_transcript_acquisition() -> 
     assert result.completed_at is None
     assert result.last_failure is not None
     assert result.last_failure["reason_code"] == "policy_unsupported"
-    assert "candidate_metadata_only" in result.last_failure["error"]
+    assert "transcript extractors" in result.last_failure["error"]
 
 
 def test_drain_honors_captions_false_before_acquire_youtube() -> None:

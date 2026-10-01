@@ -830,10 +830,10 @@ python -m app.cli settings-explain --json
 python -m app.cli settings-validate
 ```
 
-Startup/runtime verification now treats task routes and embeddings explicitly:
-- `checks.llm_task_routes` verifies the effective chat/reasoning/embed/eval routes for the current config.
+Startup/runtime verification now treats selected text routes and embeddings explicitly:
+- `checks.llm_access` verifies selected text-generation routes through no-inference preflight; `checks.llm_task_routes` remains a compatibility projection.
 - `checks.embedding_index` reports `rebuild_required=true|false` and the active/stored embedding identity relationship.
-- `make verify-runtime` prints both the task-route summary and the embedding-index rebuild state from inside the containerized stack.
+- `make verify-runtime` prints the LLM access summary and the embedding-index rebuild state from inside the containerized stack.
 - Index operations share the canonical text contract in `docs/DB_SCHEMA.md :: store_vector_index`.
   Every producer removes AI panels to a fixed point once, then uses those exact bytes for the
   provider call, content hash, and derived `content`/`text` aliases. A remainder containing only

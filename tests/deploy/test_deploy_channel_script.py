@@ -14,6 +14,7 @@ from tests.deploy.test_deploy_channel import (
     _HEIMDAL_FIXED_OVERLAY,
     _configure_dev_test_environment_clobber_preflight,
     _configure_prod_retry_preflight,
+    _configure_bws_retry_driver,
     _deploy_events,
     _deploy_harness,
     _run_deploy,
@@ -1435,6 +1436,8 @@ def test_raw_migration_production_wrapper_bootstraps_before_compose(
             "DEPLOY_TTS_CONFIG_GOVERNED": "1",
             "DEPLOY_TTS_ENABLED": "false",
             "DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING": "1",
+            # Use the fixture's fake keychain provider explicitly on Linux.
+            "HOST_SECRET_PROVIDER": "keychain",
         }
     )
     env.pop("HOST_SECRET_RUNTIME_ENV_FILE", None)
@@ -1515,6 +1518,8 @@ def test_raw_migration_production_wrapper_fails_before_compose_and_redacts(
             "DEPLOY_TTS_CONFIG_GOVERNED": "1",
             "DEPLOY_TTS_ENABLED": "false",
             "DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING": "1",
+            # Use the fixture's fake keychain provider explicitly on Linux.
+            "HOST_SECRET_PROVIDER": "keychain",
         }
     )
     lib_path = REPO_ROOT / "scripts" / "lib" / "deploy_channel_compose.sh"
@@ -1806,3 +1811,836 @@ def test_heimdal_capture_watch_host_secret_layer_lives_in_base_compose() -> None
     ]
     assert len(host_secret_layers) == 1
     assert host_secret_layers[0].get("required") is False
+
+
+def test_deploy_waits_for_in_progress_shared_import_and_rechecks_parity(tmp_path: Path) -> None:
+    from dataclasses import replace
+    from io import StringIO
+    import threading
+    from app.ops.postgres_deploy import deploy_from_host
+    from tests.ops.test_secret_admin import CANARY
+    admin, provider, plan, remote = _bws_host(tmp_path)
+    plan = replace(plan, consumers=(*plan.consumers, 'builderops-model-inquiry'))
+    provider.seed()
+    import_entered, release_import, deploy_finished = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+    def during_import():
+        import_entered.set()
+        assert release_import.wait(5)
+    provider.on_put = during_import
+    def importer():
+        try:
+            admin.import_stdin('test', 'openai.api-key', StringIO(CANARY))
+        except Exception as error:
+            errors.append(error)
+    def deployer():
+        try:
+            deploy_from_host(admin, remote, plan, qualified=lambda: None)
+        except Exception as error:
+            errors.append(error)
+        finally:
+            deploy_finished.set()
+    writer = threading.Thread(target=importer)
+    writer.start()
+    assert import_entered.wait(5)
+    deploy = threading.Thread(target=deployer)
+    deploy.start()
+    assert not deploy_finished.wait(0.05)
+    assert not remote.events
+    release_import.set()
+    writer.join(5)
+    deploy.join(5)
+    assert not writer.is_alive() and not deploy.is_alive()
+    assert not errors
+    assert remote.activation_count == 1
+    assert all(provider.values[project, 'shared/openai.api-key'].value == CANARY for project in ('prod', 'non-prod'))
+    assert provider.calls[-2:] != [('put', 'non-prod', 'shared/openai.api-key'), ('put', 'prod', 'shared/openai.api-key')]
+    last_write = max(i for i, call in enumerate(provider.calls) if call[0] == 'put')
+    assert ('read', 'prod', 'shared/openai.api-key') in provider.calls[last_write + 1:]
+
+
+class _BwsVmEffects:
+    def __init__(self, *, running=False, auth=True, quiet=True):
+        self.events = []
+        self.running = running
+        self.auth = auth
+        self.quiet = quiet
+
+    def preflight(self, plan):
+        self.events.append('preflight:' + plan.channel)
+        return 'fake-postgres-canary'
+
+    def initialized(self):
+        return True
+
+    def materialize(self, password):
+        assert password == 'fake-postgres-canary'
+        self.events.append('materialized')
+
+    def local_database(self):
+        return True
+
+    def database_running(self):
+        return self.running
+
+    def start_database_only(self):
+        self.events.append('start:db:no-deps')
+        self.running = True
+
+    def authenticate(self):
+        self.events.append('password-auth')
+        if not self.auth:
+            raise RuntimeError('fake-postgres-canary')
+
+    def stop_database(self):
+        self.events.append('stop:db')
+        self.running = False
+
+    def activate(self, plan):
+        self.events.append('activate-clients')
+
+    def quiescent(self):
+        self.events.append('quiescence')
+        return self.quiet
+
+
+def _bws_worker(tmp_path, effects):
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, DeployWorker
+    from uuid import uuid4
+    plan = DeployPlan('test', 'a' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'))
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    return DeployWorker(journal, effects), journal, plan, str(uuid4())
+
+
+def test_initialized_postgres_auth_probe_starts_only_database_before_authentication(tmp_path):
+    effects = _BwsVmEffects()
+    worker, journal, plan, operation_id = _bws_worker(tmp_path, effects)
+    stages = []
+    original = journal.write
+
+    def write(identifier, stage):
+        stages.append(stage)
+        if stage == 'authenticating':
+            assert 'start:db:no-deps' not in effects.events
+        if stage == 'activating':
+            assert 'password-auth' in effects.events
+            assert 'activate-clients' not in effects.events
+        return original(identifier, stage)
+
+    journal.write = write
+    receipt = worker.run(operation_id, plan)
+    assert receipt.stage == 'committed'
+    assert stages == ['prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'committed']
+    assert effects.events.index('start:db:no-deps') < effects.events.index('password-auth') < effects.events.index('activate-clients')
+    assert 'fake-postgres-canary' not in (tmp_path / 'journal/test.json').read_text()
+
+
+@pytest.mark.parametrize('running,quiet', [(False, True), (True, True), (False, False), (True, False)])
+def test_wrong_initialized_postgres_password_leaves_new_consumers_stopped_and_rolls_back_probe(tmp_path, running, quiet):
+    from app.ops.postgres_deploy import PostgresDeployError
+    effects = _BwsVmEffects(running=running, auth=False, quiet=quiet)
+    worker, journal, plan, operation_id = _bws_worker(tmp_path, effects)
+    if quiet:
+        assert worker.run(operation_id, plan).stage == 'aborted'
+    else:
+        with pytest.raises(PostgresDeployError) as failure:
+            worker.run(operation_id, plan)
+        assert 'fake-postgres-canary' not in str(failure.value)
+        assert journal.read().stage == 'authenticating'
+    assert 'activate-clients' not in effects.events
+    assert ('stop:db' in effects.events) is not running
+    assert effects.running is running
+
+
+def test_deploy_writes_durable_operation_stages_and_terminal_receipt(tmp_path, monkeypatch):
+    import os
+    effects = _BwsVmEffects()
+    worker, journal, plan, operation_id = _bws_worker(tmp_path, effects)
+    events = []
+    real_fsync, real_rename = os.fsync, os.rename
+    monkeypatch.setattr(os, 'fsync', lambda fd: (events.append('fsync'), real_fsync(fd))[-1])
+    monkeypatch.setattr(os, 'rename', lambda *a, **kw: (events.append('rename'), real_rename(*a, **kw))[-1])
+    receipt = worker.run(operation_id, plan)
+    assert receipt == journal.read()
+    assert receipt.evidence().source == 'remote-terminal'
+    for index, event in enumerate(events):
+        if event == 'rename':
+            assert events[index - 1] == events[index + 1] == 'fsync'
+    assert (tmp_path / 'journal/test.json').stat().st_mode & 0o777 == 0o600
+
+
+def test_deploy_nonterminal_remote_receipt_blocks_next_operation(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError
+    from uuid import uuid4
+    worker, journal, plan, operation_id = _bws_worker(tmp_path, _BwsVmEffects())
+    journal.write(operation_id, 'prepared')
+    with pytest.raises(PostgresDeployError):
+        worker.run(str(uuid4()), plan)
+    with pytest.raises(PostgresDeployError):
+        worker.run(operation_id, plan)
+    assert journal.read().stage == 'prepared'
+
+
+def test_deploy_nonquiescent_compose_operation_remains_pending(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError
+    effects = _BwsVmEffects(quiet=False)
+    worker, journal, plan, operation_id = _bws_worker(tmp_path, effects)
+    with pytest.raises(PostgresDeployError):
+        worker.run(operation_id, plan)
+    assert journal.read().stage == 'activating'
+    assert 'activate-clients' in effects.events
+
+
+def _bws_host(tmp_path, *, missing=False):
+    from tests.ops.test_secret_admin import FakeProvider
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.secret_admin import SecretAdmin
+    from app.ops.postgres_deploy import DeployPlan, DeployReceipt
+    provider = FakeProvider()
+    if not missing:
+        provider.seed('test/postgres.password', 'fake-role-password', ('non-prod',))
+    admin = SecretAdmin(provider, controller=HostSecretController(tmp_path / 'controller'))
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',))
+
+    class Remote:
+        def __init__(self):
+            self.events = []
+            self.empty = missing
+            self.receipt = None
+            self.lost_ack = False
+            self.activation_count = 0
+        def prepare(self, operation_id, selected, *, bootstrap):
+            self.events.append(('prepare', operation_id, bootstrap))
+            assert any(call == ('read', 'non-prod', 'test/postgres.password') for call in provider.calls)
+            if bootstrap and not self.empty:
+                self.receipt = DeployReceipt(operation_id, 'test', 'deploy', 'aborted', 'aborted')
+            return self.empty
+        def activate(self, operation_id, selected):
+            self.events.append(('activate', operation_id))
+            if self.receipt is None:
+                self.activation_count += 1
+                self.receipt = DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
+            if self.lost_ack:
+                self.lost_ack = False
+                raise RuntimeError('transport lost')
+            return self.receipt
+        def join(self, operation_id, selected):
+            assert self.receipt is not None and self.receipt.operation_id == operation_id
+            return self.receipt
+    return admin, provider, plan, Remote()
+
+
+def test_admin_parity_preflight_precedes_remote_deploy_mutation(tmp_path):
+    from app.ops.postgres_deploy import DeployPlan, PostgresDeployError, deploy_from_host
+    admin, provider, _, remote = _bws_host(tmp_path)
+    provider.seed('shared/openai.api-key', 'a' * 32, ('non-prod',))
+    provider.seed('shared/openai.api-key', 'b' * 32, ('prod',))
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db', 'builderops-model-inquiry'))
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=lambda: None)
+    assert remote.events == []
+    assert ('read', 'prod', 'shared/openai.api-key') in provider.calls
+    assert not any(call[0] == 'put' for call in provider.calls)
+
+
+def test_postgres_password_preflight_precedes_remote_and_vm_mutation(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+    admin, provider, plan, remote = _bws_host(tmp_path)
+    provider.seed('test/postgres.password', '\ninvalid', ('non-prod',))
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=lambda: None)
+    assert remote.events == []
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor) is None
+    effects = _BwsVmEffects()
+    def refused(_): raise RuntimeError('unreadable')
+    effects.preflight = refused
+    worker, journal, _, operation_id = _bws_worker(tmp_path, effects)
+    with pytest.raises(RuntimeError):
+        worker.run(operation_id, plan)
+    assert effects.events == [] and journal.read() is None
+
+
+def test_vm_reader_recheck_is_project_scoped_and_precedes_compose(tmp_path):
+    from app.ops.postgres_deploy import vm_selected_values
+    _, _, plan, _ = _bws_host(tmp_path)
+    calls = []
+    class Reader:
+        def lookup(self, project, identity):
+            calls.append((project, identity))
+            return 'fake-role-password'
+    assert vm_selected_values(plan, Reader()) == {'postgres-db': {'postgres.password': 'fake-role-password'}}
+    assert calls == [('non-prod', 'test/postgres.password')]
+    effects = _BwsVmEffects()
+    worker, _, _, operation_id = _bws_worker(tmp_path, effects)
+    worker.run(operation_id, plan)
+    activation = effects.events.index('activate-clients')
+    assert effects.events[activation - 1] == 'preflight:test'
+
+
+def test_inactive_optional_model_credentials_do_not_block_deploy(tmp_path):
+    from app.ops.postgres_deploy import deploy_from_host
+    admin, provider, plan, remote = _bws_host(tmp_path)
+    assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
+    assert all('openai' not in identity and 'anthropic' not in identity for _, _, identity in provider.calls)
+
+
+def test_deploy_lost_ack_reconciles_matching_remote_terminal_receipt(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+    admin, _, plan, remote = _bws_host(tmp_path)
+    remote.lost_ack = True
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=lambda: None)
+    original = remote.receipt
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor)['operation_id'] == original.operation_id
+    receipt = deploy_from_host(admin, remote, plan, qualified=lambda: None)
+    assert receipt == original and remote.activation_count == 1
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor) is None
+
+
+def test_postgres_bootstrap_allows_absent_secret_only_for_locked_empty_data_directory(tmp_path):
+    from app.ops.postgres_deploy import deploy_from_host
+    from tests.ops.test_secret_admin import history
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+    def before_put():
+        records = history(admin.controller)
+        assert records[0]['event'] == 'snapshot' and records[0]['previous_state'] == 'absent'
+        assert any(record['event'] == 'prepared' for record in records)
+        assert remote.events[0][0] == 'prepare' and remote.events[0][2] is True
+    provider.on_put = before_put
+    receipt = deploy_from_host(admin, remote, plan, qualified=lambda: None)
+    assert receipt.stage == 'committed'
+    assert sum(call[0] == 'put' for call in provider.calls) == 1
+    assert receipt.operation_id in provider.values['non-prod', 'test/postgres.password'].note
+
+
+def test_postgres_bootstrap_blocks_absent_secret_for_initialized_directory(tmp_path):
+    from app.ops.postgres_deploy import deploy_from_host
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+    remote.empty = False
+    assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'aborted'
+    assert not any(call[0] == 'put' for call in provider.calls)
+    assert remote.activation_count == 0
+
+
+def test_postgres_secret_generated_only_for_empty_data_directory(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, bootstrap_password
+    admin, provider, _, _ = _bws_host(tmp_path, missing=True)
+    with admin.controller.deploy_operation('test') as (operation, _):
+        with pytest.raises(PostgresDeployError):
+            bootstrap_password(admin, operation, empty=False)
+    assert provider.calls == []
+
+
+def test_postgres_bootstrap_retry_reuses_stored_secret_after_interruption(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+    original = provider.put
+    def commit_then_disconnect(*args, **kwargs):
+        original(*args, **kwargs)
+        raise RuntimeError('lost provider acknowledgment')
+    provider.put = commit_then_disconnect
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=lambda: None)
+    provider.put = original
+    assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
+    assert sum(call[0] == 'put' for call in provider.calls) == 1
+
+
+def test_postgres_bootstrap_ambiguous_create_without_matching_operation_note_remains_pending(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+    provider.fail['put', 'non-prod'] = RuntimeError('unknown provider send')
+    for _ in range(2):
+        with pytest.raises(PostgresDeployError):
+            deploy_from_host(admin, remote, plan, qualified=lambda: None)
+    assert sum(call[0] == 'put' for call in provider.calls) == 1
+    assert remote.activation_count == 0
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor) is not None
+
+
+def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from dataclasses import asdict, replace
+    from types import SimpleNamespace
+    import threading
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+    effects = _BwsVmEffects()
+    _, journal, plan, identifier = _bws_worker(tmp_path, effects)
+    effects.config = SimpleNamespace(channel='test', journal=journal)
+    effects.validate_plan = lambda selected: selected.validate()
+    entered, release = threading.Event(), threading.Event()
+    counts = {'locks': 0, 'activations': 0}
+
+    @contextmanager
+    def channel_lock():
+        counts['locks'] += 1
+        yield
+        assert journal.read().terminal_result == 'committed'
+
+    def activate(selected):
+        counts['activations'] += 1
+        entered.set()
+        assert release.wait(5)
+
+    effects.channel_lock, effects.activate = channel_lock, activate
+    monkeypatch.setattr(linux, 'LinuxEffects', lambda cfg: effects)
+    supervisor = linux.DeploymentSupervisor(effects.config)
+    request = {'action': 'prepare', 'operation_id': identifier, 'plan': asdict(plan), 'bootstrap': False}
+    assert supervisor.request(request)['ready']
+    operation = supervisor.operation
+    # Simulate the transport's caller disappearing while its supervised work runs.
+    operation.activation.set()
+    assert entered.wait(5)
+    assert supervisor.request(request)['pending']
+    assert supervisor.operation is operation
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({**request, 'plan': asdict(replace(plan, revision='b' * 40))})
+    release.set()
+    receipt = supervisor.request({**request, 'action': 'join'})['receipt']
+    assert receipt['terminal_result'] == 'committed'
+    assert counts == {'locks': 1, 'activations': 1}
+    # A daemon restart may serve the old receipt only for its exact bound inputs.
+    restarted = linux.DeploymentSupervisor(effects.config)
+    assert restarted.request({**request, 'action': 'join'})['receipt'] == receipt
+    for changed in ({'bootstrap': True}, {'plan': asdict(replace(plan, revision='c' * 40))}):
+        with pytest.raises(PostgresDeployError):
+            restarted.request({**request, **changed, 'action': 'join'})
+    assert 'fake-postgres-canary' not in (journal.directory / 'test.request.json').read_text()
+
+
+def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from app.ops.postgres_deploy_linux import DeploymentSupervisor
+    from app.ops.postgres_deploy import PostgresDeployError
+    _, journal, plan, identifier = _bws_worker(tmp_path, _BwsVmEffects())
+    journal.bind_request(identifier, plan, False, create=True)
+    journal.write(identifier, 'prepared')
+    supervisor = DeploymentSupervisor(SimpleNamespace(channel='test', journal=journal))
+    for action in ('prepare', 'activate', 'join'):
+        with pytest.raises(PostgresDeployError):
+            supervisor.request({'action': action, 'operation_id': identifier, 'plan': asdict(plan), 'bootstrap': False})
+    assert supervisor.operation is None
+    assert journal.read().terminal_result is None
+
+
+def test_vm_channel_lock_is_retained_until_matching_terminal_receipt(tmp_path):
+    from types import SimpleNamespace
+    from app.ops.postgres_deploy_linux import LinuxEffects
+    _, journal, _, identifier = _bws_worker(tmp_path, _BwsVmEffects())
+    root = tmp_path / 'checkout'
+    (root / 'config/deploy').mkdir(parents=True)
+    cfg = SimpleNamespace(root=root, channel='test', journal=journal)
+    effects = LinuxEffects(cfg)
+    effects.operation_id = identifier
+    journal.write(identifier, 'prepared')
+    with effects.channel_lock():
+        assert effects.lock_fd is not None
+    lock = root / 'config/deploy/test.env.lock'
+    assert lock.is_dir()
+    with pytest.raises(FileExistsError):
+        with effects.channel_lock():
+            pytest.fail('a pending predecessor cannot be replaced')
+    # Model the only allowed cleanup path: terminal evidence while owner holds it.
+    other = tmp_path / 'other'
+    (other / 'config/deploy').mkdir(parents=True)
+    cfg.root = other
+    with effects.channel_lock():
+        journal.write(identifier, 'aborted')
+    assert not (other / 'config/deploy/test.env.lock').exists()
+
+
+def test_deploy_does_not_create_plaintext_postgres_env_file(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan
+    _, journal, _, identifier = _bws_worker(tmp_path, _BwsVmEffects())
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(identifier, stage)
+    source = tmp_path / 'tmpfs'
+    source.mkdir()
+    cfg = SimpleNamespace(channel='test', journal=journal, source_directory=source, root=tmp_path)
+    effects = linux.LinuxEffects(cfg)
+    effects.lock_fd = 123
+    effects.source = SimpleNamespace(verify=lambda: None)
+    effects.environment = lambda: {'HOST_SECRET_PROVIDER': 'bws'}
+    effects.consumer_values = {'heimdal-api-ingress': {}, 'heimdal-capture-watch': {}, 'heimdal-raw-migrate': {}}
+    plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()), tuple(DATABASE_CONSUMERS))
+    calls = []
+    def command(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs['pass_fds'] == (123,)
+        for name, value in kwargs['env'].items():
+            assert 'PASSWORD' not in name
+            assert 'canary' not in value
+        assert all(path.stat().st_mode & 0o777 == 0o600 for path in source.iterdir())
+        assert all(path.read_text() == '' for path in source.iterdir())
+        return ''
+    monkeypatch.setattr(linux, '_command', command)
+    effects.activate(plan)
+    assert len(calls) == 1
+    assert list(source.iterdir()) == []
+
+
+def test_bws_candidate_and_rollback_images_require_file_resolver_protocol(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+    calls = []
+    def command(argv, **kwargs):
+        calls.append(argv)
+        return 'DATABASE_FILE_CREDENTIAL_PROTOCOL = 1\n' if argv[-1].startswith('a' * 40) else 'legacy = True\n'
+    monkeypatch.setattr(linux, '_command', command)
+    linux.require_file_protocol(tmp_path, 'a' * 40)
+    with pytest.raises(PostgresDeployError):
+        linux.require_file_protocol(tmp_path, 'b' * 40)
+    with pytest.raises(PostgresDeployError):
+        linux.require_file_protocol(tmp_path, '--unsafe')
+    assert len(calls) == 2
+    assert all(call[:4] == ['git', '-C', str(tmp_path), 'show'] for call in calls)
+
+
+@pytest.mark.parametrize('source', ['DATABASE_URL', 'DB_DSN', 'both', 'runtime', 'pin'])
+@pytest.mark.parametrize('host', ['db', 'database.example.invalid'])
+def test_linux_effects_authenticates_effective_compose_connection(tmp_path, monkeypatch, source, host):
+    from app.ops import postgres_deploy_linux as linux
+    from app.config.database import credential_free_database_fields
+    from app.ops.postgres_deploy import PostgresDeployError
+    cfg = linux.LinuxConfig('test', tmp_path, tmp_path / 'data', 1000, 1000, '', '')
+    (tmp_path / 'config/deploy').mkdir(parents=True)
+    pin = tmp_path / 'config/deploy/test.env'
+    pin.write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    for name in ('DATABASE_URL', 'DB_DSN', 'POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE'):
+        monkeypatch.delenv(name, raising=False)
+    override = f'postgresql://reporter@{host}:5432/custom?sslmode=verify-full&application_name=bound-probe'
+    if source == 'runtime':
+        (tmp_path / 'tmp-test').mkdir()
+        (tmp_path / 'tmp-test/runtime.env').write_text('DB_DSN=' + override + '\n')
+    elif source == 'pin':
+        with pin.open('a') as stream:
+            stream.write('DB_DSN=' + override + '\n')
+    else:
+        monkeypatch.setenv('DB_DSN' if source == 'DB_DSN' else 'DATABASE_URL', override)
+        if source == 'both':
+            monkeypatch.setenv('DB_DSN', 'postgresql://ignored@ignored.example.invalid/ignored')
+    proofs, compose_environments = [], []
+    monkeypatch.setattr(linux, 'password_authenticate', lambda env: proofs.append(env))
+    def command(argv, **kwargs):
+        compose_environments.append(kwargs['env'])
+        return ''
+    monkeypatch.setattr(linux, '_command', command)
+    effects = linux.LinuxEffects(cfg)
+    effects.authenticate()
+    effects.compose('config', '--format', 'json')
+    runtime = credential_free_database_fields(compose_environments[0]['DATABASE_URL'])
+    assert compose_environments[0]['DATABASE_URL'] == compose_environments[0]['DB_DSN']
+    assert runtime == {'user': 'reporter', 'dbname': 'custom', 'host': host, 'port': '5432',
+                       'sslmode': 'verify-full', 'application_name': 'bound-probe'}
+    authenticated = credential_free_database_fields(proofs[0]['DATABASE_URL'])
+    expected = dict(runtime)
+    if host == 'db':
+        expected.update(hostaddr='127.0.0.1', port='15434')
+    assert authenticated == expected
+    assert proofs[0]['DATABASE_PASSWORD_FILE'] == str(cfg.password_file)
+    # An effective-target change during the operation cannot borrow prior proof.
+    monkeypatch.setenv('DATABASE_URL', 'postgresql://other@other.example.invalid/other')
+    with pytest.raises(PostgresDeployError):
+        effects.compose('up', '-d', 'api')
+    assert len(compose_environments) == 1
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
+@pytest.mark.parametrize('reject_recheck', [False, True])
+def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, channel, reject_recheck):
+    root, env, _ = _deploy_harness(tmp_path)
+    target = _commit_har_raw_migration(root, 'e7b4c9d2a6f1_heimdal_raw_representation.py')
+    env.update(FAKE_SHA=target, DEPLOY_ACK_FORWARD_ONLY='1', HOST_SECRET_PROVIDER='bws', BWS_DATABASE_TARGET='local',
+               FAKE_SECURITY_EVENT_LOG=env['FAKE_DEPLOY_EVENT_LOG'])
+    _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
+    if channel == 'prod':
+        _configure_bws_retry_driver(tmp_path, env)
+    # Fake only the VM credential/FD adapter; run the actual deployment shell and
+    # its real pending-HAR classification, pin/migration and Compose branches.
+    (root / 'app/ops/postgres_deploy_linux.py').write_text('''
+import os,sys
+from pathlib import Path
+assert sys.argv[1] == 'guard'
+log = Path(os.environ['FAKE_DEPLOY_EVENT_LOG'])
+prior = log.read_text().count('bws-guard') if log.exists() else 0
+with log.open('a') as stream:
+    stream.write('bws-guard\\n')
+if os.environ.get('FAKE_BWS_REJECT_RECHECK') == '1' and prior == 1:
+    raise SystemExit(78)
+''')
+    handle = tmp_path / 'migration.env'
+    handle.write_text('HEIMDAL_RAW_STORE_KEY=' + 'a' * 64 + '\n')
+    handle.chmod(0o600)
+    env['BWS_MIGRATE_SECRET_ENV_FILE'] = str(handle)
+    if reject_recheck:
+        env['FAKE_BWS_REJECT_RECHECK'] = '1'
+    result = _run_deploy(root, env, target, channel=channel)
+    events = _deploy_events(env)
+    assert not any(event.startswith('security ') for event in events)
+    assert events.count('bws-guard') >= 2
+    if reject_recheck:
+        assert result.returncode == 78
+        assert not any(event.startswith('docker ') for event in events)
+        assert 'migration raw-key preflight failed' in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        second_guard = [i for i, event in enumerate(events) if event == 'bws-guard'][1]
+        first_docker = next(i for i, event in enumerate(events) if event.startswith('docker '))
+        assert second_guard < first_docker
+        assert any('exit-code-from migrate' in event for event in events)
+
+
+@pytest.mark.parametrize('host,empty,authenticated,blocked_key', [
+    ('db', False, False, None), ('db', True, False, None),
+    ('database.example.invalid', True, False, None), ('database.example.invalid', True, True, None),
+    ('127.0.0.2', True, True, 'host'), ('127.0.0.2', True, True, 'hostaddr'),
+    ('::ffff:127.0.0.2', True, True, 'host'), ('::ffff:127.0.0.2', True, True, 'hostaddr'),
+    ("host=@ygg-review dbname=app_test", True, True, 'dsn'),
+    ("host='' dbname=app_test", True, True, 'dsn'),
+    ("dbname=app_test", True, True, 'dsn'),
+    ("postgresql:///app_test", True, True, 'dsn'),
+    ("postgresql:///?host=", True, True, 'dsn'),
+    ("postgresql:///?host=%40ygg-review", True, True, 'dsn'),
+])
+def test_linux_effects_wrong_overridden_role_cannot_borrow_default_role_proof(tmp_path, monkeypatch, host, empty, authenticated, blocked_key):
+    from types import SimpleNamespace
+    from uuid import uuid4
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, DeployWorker
+    for key in ('DATABASE_URL', 'DB_DSN', 'POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE'):
+        monkeypatch.delenv(key, raising=False)
+    from urllib.parse import urlencode
+    fields = {'host': host, 'user': 'not-the-default-role', 'port': '5432', 'dbname': 'app_test', 'sslmode': 'require'}
+    if blocked_key == 'hostaddr':
+        fields.update(host='database.example.invalid', hostaddr=host)
+    monkeypatch.setenv('DB_DSN', host if blocked_key == 'dsn' else 'postgresql:///?' + urlencode(fields))
+    (tmp_path / 'config/deploy').mkdir(parents=True)
+    (tmp_path / 'config/deploy/test.env').write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    data = tmp_path / 'data'
+    data.mkdir()
+    if not empty:
+        (data / 'PG_VERSION').write_text('16')
+    source = tmp_path / 'tmpfs'
+    source.mkdir()
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    cfg = SimpleNamespace(channel='test', root=tmp_path, data_directory=data, uid=1000, gid=1000,
+                          password_file=source / 'password', source_directory=source, journal=journal,
+                          reader=lambda: None)
+    plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate'))
+    monkeypatch.setattr(linux, 'vm_selected_values', lambda selected, reader:
+                        {name: {'postgres.password': 'fake-role-canary'} if name in DATABASE_CONSUMERS else {}
+                         for name in selected.consumers})
+    commands, connections = [], []
+    def command(argv, **kwargs):
+        commands.append(argv)
+        if argv[0] == 'git':
+            return 'DATABASE_FILE_CREDENTIAL_PROTOCOL = 1\n'
+        if argv[1:3] == ['volume', 'inspect']:
+            return str(data)
+        return ''
+    monkeypatch.setattr(linux, '_command', command)
+    class Connection:
+        pgconn = SimpleNamespace(used_password=True)
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def cursor(self): return self
+        def execute(self, sql): assert sql == 'SELECT 1'
+        def fetchone(self): return (1,)
+    def connect(dsn, **kwargs):
+        fields = conninfo_to_dict(dsn)
+        connections.append(fields)
+        if fields['user'] != 'app' and not authenticated:
+            raise RuntimeError('fake-role-canary')
+        return Connection()
+    monkeypatch.setattr(psycopg, 'connect', connect)
+    effects = linux.LinuxEffects(cfg)
+    effects.lock_fd = 123
+    effects.source = SimpleNamespace(materialize=lambda value: cfg.password_file.write_text(value), verify=lambda: None)
+    activations = []
+    effects.activate = lambda selected: activations.append(selected)
+    # Actual production initialized() must not offer bootstrap for this target,
+    # even though the selected local volume may be genuinely empty.
+    assert effects.initialized() is True
+    receipt = DeployWorker(journal, effects).run(str(uuid4()), plan)
+    if blocked_key:
+        # A host-loopback server would accept this password, but that says
+        # nothing about the same address inside the workers' network namespace.
+        assert receipt.stage == 'aborted'
+        assert not connections and not activations
+        assert not any(command[-2:] in (['--no-deps', 'db'], ['stop', 'db']) for command in commands)
+        assert not any('deploy_channel.sh' in ' '.join(command) for command in commands)
+        assert not any(command[1:3] == ['volume', 'inspect'] for command in commands)
+        assert (tmp_path / 'config/deploy/test.env').read_text() == 'APP_IMAGE_TAG=' + 'a' * 40 + '\n'
+        return
+    assert receipt.stage == ('committed' if authenticated else 'aborted')
+    expected = {'user': 'not-the-default-role', 'password': 'fake-role-canary', 'dbname': 'app_test',
+                'host': host, 'port': '5432', 'sslmode': 'require'}
+    if host == 'db':
+        expected.update(hostaddr='127.0.0.1', port='15434')
+    assert connections == [expected]
+    assert bool(activations) is authenticated
+    if host == 'db':
+        assert any(command[-2:] == ['--no-deps', 'db'] for command in commands)
+        assert any(command[-2:] == ['stop', 'db'] for command in commands)
+    else:
+        assert not any(command[-2:] in (['--no-deps', 'db'], ['stop', 'db']) for command in commands)
+        assert not any(command[1:3] == ['volume', 'inspect'] for command in commands)
+    assert not any('deploy_channel.sh' in ' '.join(command) for command in commands)
+
+    # Exercise the real supervisor bootstrap admission, not a fake empty flag.
+    monkeypatch.setattr('app.ops.host_secret_bootstrap._resolve_bws_consumer_values', lambda *args: {})
+    operation = linux.SupervisedOperation(effects, str(uuid4()), plan, True)
+    with pytest.raises(linux.PostgresDeployError):
+        operation._run_locked()
+    assert not operation.ready.is_set()
+    assert operation.empty is False
+
+
+@pytest.mark.parametrize('host', ['db', 'database.example.invalid'])
+@pytest.mark.parametrize('failure', ['terminal_rows', 'password_file', 'unreachable', 'query_unavailable'])
+def test_bws_prod_retry_preflight_uses_file_connection_and_preserves_availability_policy(tmp_path, host, failure):
+    root, env, target = _deploy_harness(tmp_path)
+    env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _configure_prod_retry_preflight(root, env, tmp_path,
+        rows=[('panel.scan.requested', {'_worker_retry_count': 3}, 0)],
+        unreachable=failure == 'unreachable')
+    _configure_bws_retry_driver(tmp_path, env, host=host)
+    if failure == 'password_file':
+        Path(env['BWS_POSTGRES_PASSWORD_SOURCE']).unlink()
+    if failure == 'query_unavailable':
+        env['FAKE_OUTBOX_QUERY_UNAVAILABLE'] = '1'
+    # Only the external worker credential/lock seam is fake. The shell, real
+    # preflight/resolver, libpq parser and terminal-row classifier all run.
+    (root / 'app/ops/postgres_deploy_linux.py').write_text('import sys\nassert sys.argv[1] == "guard"\n')
+    pin = root / 'config/deploy/prod.env'
+    before = pin.read_bytes() if pin.exists() else None
+    result = _run_deploy(root, env, target, channel='prod')
+    if failure in {'unreachable', 'query_unavailable'}:
+        # #3903 intentionally allows a genuine outage/absent initial schema;
+        # malformed DSNs must never enter this driver-error policy by mistake.
+        assert result.returncode == 0, result.stdout + result.stderr
+        reason = 'db_unreachable' if failure == 'unreachable' else 'outbox_query_failed'
+        assert 'skipped:' + reason in result.stdout + result.stderr
+        assert Path(env['FAKE_OUTBOX_CONNECT_LOG']).read_text() == 'validated-file-connection\n'
+        return
+    assert result.returncode == 87, result.stdout + result.stderr
+    assert (pin.read_bytes() if pin.exists() else None) == before
+    assert not any(event.startswith('docker ') for event in _deploy_events(env))
+    assert 'fake-preflight-canary' not in result.stdout + result.stderr
+    assert 'skipped:' not in result.stdout + result.stderr
+    if failure == 'terminal_rows':
+        assert 'terminal_pending_count=1' in result.stdout + result.stderr
+        assert Path(env['FAKE_OUTBOX_CONNECT_LOG']).read_text() == 'validated-file-connection\n'
+    elif failure == 'password_file':
+        assert not Path(env['FAKE_OUTBOX_CONNECT_LOG']).exists()
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
+def test_linux_effects_empty_proof_is_bound_to_default_local_initialization(tmp_path, monkeypatch, channel):
+    from app.ops import postgres_deploy_linux as linux
+    for key in ('DATABASE_URL', 'DB_DSN', 'POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE'):
+        monkeypatch.delenv(key, raising=False)
+    (tmp_path / 'config/deploy').mkdir(parents=True)
+    (tmp_path / 'config/deploy' / (channel + '.env')).write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    data = tmp_path / 'data'
+    data.mkdir()
+    cfg = linux.LinuxConfig(channel, tmp_path, data, 1000, 1000, '', '')
+    monkeypatch.setattr(linux, '_command', lambda argv, **kwargs:
+                        str(data) if argv[1:3] == ['volume', 'inspect'] else '')
+    effects = linux.LinuxEffects(cfg)
+    assert effects.local_database() is True
+    assert effects.initialized() is False
+    (data / 'PG_VERSION').write_text('16')
+    assert effects.initialized() is True
+
+
+@pytest.mark.parametrize('host,target,profiles,accepted', [
+    ('db', 'local', '', True), ('database.example.invalid', 'external', '', True),
+    ('db', 'external', '', False), ('database.example.invalid', 'local', '', False),
+    ('database.example.invalid', '', '', False),
+    ('database.example.invalid', 'external', 'bws-local-database-disabled', False),
+])
+def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, monkeypatch, host, target, profiles, accepted):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+    directory = tmp_path / 'config/deploy'
+    directory.mkdir(parents=True)
+    (directory / 'test.env').write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
+    lock = directory / 'test.env.lock'
+    lock.mkdir()
+    password = tmp_path / 'password'
+    password.write_text('fake-target-binding-password')
+    cfg = SimpleNamespace(root=tmp_path, channel='test', password_file=password,
+                          reader=lambda: object(), journal=SimpleNamespace(read=lambda:
+                          SimpleNamespace(stage='activating', operation_id='operation')))
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda channel: cfg)
+    reads = []
+    monkeypatch.setattr(linux.PasswordSource, 'verify', lambda self: reads.append('source'))
+    monkeypatch.setattr(linux, 'vm_selected_values', lambda *args:
+                        {'postgres-db': {'postgres.password': password.read_text()}})
+    monkeypatch.setattr(linux, 'require_file_protocol', lambda *args: None)
+    with (lock / 'bws-owner').open('w+') as owner:
+        monkeypatch.setattr(os, 'environ', {'DATABASE_URL': 'postgresql://app@' + host + ':5432/app_test',
+            'BWS_DEPLOY_LOCK_FD': str(owner.fileno()), 'BWS_DEPLOY_OPERATION_ID': 'operation',
+            'BWS_DATABASE_TARGET': target, 'COMPOSE_PROFILES': profiles})
+        if accepted:
+            linux.inherited_worker_guard('test', 'up')
+            assert reads == ['source']
+        else:
+            with pytest.raises(PostgresDeployError):
+                linux.inherited_worker_guard('test', 'up')
+            assert not reads
+
+
+@pytest.mark.parametrize('key', ['host', 'hostaddr'])
+@pytest.mark.parametrize('address', ['127.0.0.2', '::ffff:127.0.0.2'])
+def test_bws_prod_preflight_rejects_container_loopback_before_driver(tmp_path, key, address):
+    from urllib.parse import urlencode
+    root, env, target = _deploy_harness(tmp_path)
+    env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    _configure_bws_retry_driver(tmp_path, env)
+    fields = {'host': 'database.example.invalid', 'port': '5432', 'user': 'reporter', 'dbname': 'custom', key: address}
+    env['DATABASE_URL'] = env['DB_DSN'] = 'postgresql:///?' + urlencode(fields)
+    (root / 'app/ops/postgres_deploy_linux.py').write_text('import sys\nassert sys.argv[1] == "guard"\n')
+    result = _run_deploy(root, env, target, channel='prod')
+    assert result.returncode == 87, result.stdout + result.stderr
+    assert 'credential_configuration' in result.stderr
+    assert not Path(env['FAKE_OUTBOX_CONNECT_LOG']).exists()
+    assert not (root / 'config/deploy/prod.env').exists()
+    assert not any(event.startswith('docker ') for event in _deploy_events(env))
+    assert 'fake-preflight-canary' not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('dsn', [
+    "host=@ygg-review dbname=app_test", "host='' dbname=app_test", "dbname=app_test",
+    "postgresql:///app_test", "postgresql:///?host=", "postgresql:///?host=%40ygg-review",
+])
+def test_bws_prod_preflight_rejects_libpq_socket_and_default_targets_before_driver(tmp_path, dsn):
+    root, env, target = _deploy_harness(tmp_path)
+    env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    _configure_bws_retry_driver(tmp_path, env)
+    env['DATABASE_URL'] = env['DB_DSN'] = dsn
+    (root / 'app/ops/postgres_deploy_linux.py').write_text('import sys\nassert sys.argv[1] == "guard"\n')
+    result = _run_deploy(root, env, target, channel='prod')
+    assert result.returncode == 87, result.stdout + result.stderr
+    assert 'credential_configuration' in result.stderr
+    assert not Path(env['FAKE_OUTBOX_CONNECT_LOG']).exists()
+    assert not (root / 'config/deploy/prod.env').exists()
+    assert not any(event.startswith('docker ') for event in _deploy_events(env))
+    assert 'fake-preflight-canary' not in result.stdout + result.stderr

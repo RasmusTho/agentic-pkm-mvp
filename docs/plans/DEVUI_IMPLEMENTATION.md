@@ -298,6 +298,16 @@ full DDO controls remain behind #4169 and its existing authenticated owners.
 
 ### Stage B — decide and act: contextual command surface
 
+The managed Focus read now provides bounded supervised continuity before action activation: an
+Issue-specific external coding-agent handoff, current Issue/agent-label observations, and explicitly
+governed GitHub PR readbacks including merged results. It preserves the selected Issue through the
+handoff and a fresh result read using the existing Focus fields and packaged presentation. The
+handoff is not an approval or launch; its next-step legality stays unavailable and the coding agent
+must establish current eligibility and ownership through the existing workflow. Missing or capped
+result reads remain limitations. This reduces context reconstruction but does not deliver the
+authenticated Stage B controls or complete M2. The current boundary is owned by
+`docs/DEVUI.md :: Current state and target`.
+
 Full DDO remains a later mechanism chain. It must not block the LLM-assisted overview or the bounded
 first control path above, but every authority-bearing effect still waits for its named authenticated
 owners, exact scope, and truthful readback.

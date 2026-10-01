@@ -1,4 +1,4 @@
-State: Filed target-state capability specification; no total-loss recovery capability is shipped by this document. Shared validation epic: #5258 (`agent:blocked`).
+State: Filed target-state capability specification; no total-loss recovery capability is shipped by this document. Shared validation epic: #5258 (`agent:blocked`). RSC-01–03 are delivered, RSC-04 is #5292 (`agent:ready`), RSC-07 is #5712 (`agent:in-progress`), and RSC-05/06/08 remain unfiled.
 Doc role: Capability specification
 Authority: Defines bounded delivery for reconstructing machine state from retained human authority and for fencing operational state whose lineage is absent.
 Owner: Architecture / CES boundary, with HKA, SIP, GOV, PDM, DRI, WSP/MVR, Builder System, and Platform/Ops retaining local authority.
@@ -93,9 +93,7 @@ program.
    existing MVR owner contract and existing #2143 chain without duplicate recovery authority.
 6. [Apply MVR New Bootstrap](APPLY_MVR_NEW_BOOTSTRAP.md) — RSC-06. Depends on RSC-05 and applicable
    live MVR prerequisites; implement fenced epoch/readback/activation behavior.
-7. [Bootstrap BuilderOps From Authority](BOOTSTRAP_BUILDEROPS_FROM_AUTHORITY.md) — RSC-07. Depends on
-   RSC-01 and coordinates with #5056; seed a fresh authority epoch, read GitHub truth, and converge
-   before enabling writers.
+7. [Bootstrap BuilderOps From Authority](BOOTSTRAP_BUILDEROPS_FROM_AUTHORITY.md) — RSC-07 / #5712 (`agent:in-progress`). Depends on RSC-01 and coordinates with #5056 without broadening its live-activation scope; seed a fresh epoch and enable writers only after matching authority readback converges.
 8. [Verify Cross-System Total Loss](VERIFY_CROSS_SYSTEM_TOTAL_LOSS.md) — RSC-08. Depends on RSC-04,
    RSC-06, and RSC-07; prove integrated refusal, reconstruction, readback, and activation.
 

@@ -5,7 +5,24 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-23 (MARR-08 thin API source boundary; repository evidence only, no live Mac/Tailscale verification)
+Last reviewed: 2026-09-29 (bounded DevUI, Sources-zone, classification-evaluation, BWS PostgreSQL, BWS-03 repository implementation, and GOVPROF-01–03 acceptance reviews; repository and GitHub delivery evidence only, no deployment or vault-data verification)
+Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
+`tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
+repository proof only. The opt-in model comparison remains separate acceptance under #3429.
+Last verified against (BWS PostgreSQL): Issue #5680, `app/ops/postgres_deploy.py`,
+`app/ops/postgres_deploy_linux.py`, `app/config/database.py`, and the focused deploy/DSN tests;
+repository implementation only. The Bash-dependent entrypoint proof belongs to hosted Linux CI;
+BWS-03 repository token-push support is delivered by PR #5732, while live VM installation and
+parent #5667 qualification remain separate gates.
+Last verified against (BWS-03 repository implementation): Issue #5679 and PR #5732
+(merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`; reviewed candidate
+`1f9b2ff4e2a35ccd9c2fea5df01a233b6893f0e6`); focused token-push/secret-bootstrap tests
+(182 passed), Ruff, `mypy app` (1,020 source files), docs guard, and current-head CI passed.
+This is repository evidence only; no live TARS VM, Keychain, systemd-creds host key, BWS account,
+or channel qualification was accessed.
+Last verified against (governed vault profile): accepted parent #4944 and PRs #5731, #5733, and
+#5735; exact child heads, merge SHAs, Verify coverage, CI, and receipts are recorded on the parent.
+Repository and GitHub evidence only; no live vault contents or deployed runtime were exercised.
 Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
@@ -15,6 +32,7 @@ Last verified against (blocker-action projection): merged PR #5206 (merge commit
 `app/dispatcher/sync_github.py`, `app/builderops/cockpit_registry.py`,
 `scripts/reconcile_blocker_actions.py`, and current-head CI on 2026-08-30. The bounded action-label
 migration remains report-only by default and requires its own fresh targeted authority before apply.
+Last verified against (Sources-zone runtime boundary): Issue #5700, PR #5701, `tests/knowledge_acquisition`, `tests/invariants/test_vault_multiwriter.py`, `tests/knowledge/test_service.py`, `tests/services/test_artifact_identity_service.py`, and `tests/mcp/test_vault_tools.py`.
 
 Last verified against (SQ-04 candidate): PR #5174, `app/standing_questions/evidence_matching.py`,
 `app/standing_questions/answer_refresh.py`, and focused Standing Questions tests on 2026-08-29;
@@ -22,6 +40,12 @@ live test-channel and owner-UAT evidence remain absent.
 Last verified against (MARR-08 repository code): Issue #5635, merged commit
 `824b82760fa00cd289dadaded301838abf845527`, and the focused Model Access Router service/client
 tests on 2026-09-23; repository proof only, with no live host, Serve, or caller-migration evidence.
+Last verified against (DevUI supervised continuity): Issue #5655,
+`app/builderops/devui_issue_work.py`, `app/builderops/devui_sources.py`, and
+`tests/builderops/test_devui_issue_work.py` on 2026-09-24. The managed Focus read carries an
+Issue-specific external-agent handoff and explicitly governed PR observations through the existing
+read-only fields. This does not activate browser launch/control or establish a deployed result;
+the current boundary is in [DevUI current state](DEVUI.md#current-state-and-target).
 Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, app/dispatcher/verification_api.py, app/dispatcher/verification_runtime.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730/#4224/#4244/#4420/#4424, issue #3720, PRs #3743/#4416, closed parent issue #4080, live issue #3603, and current repo state at `origin/main` `f0bafe6e79f3cc1a087b2c2fcbe40450c8302da2` on 2026-07-30; DevUI runtime/receipt boundary: Issue #5476, app/builderops/devui_runtime.py, app/ops/devui_vm102_runtime_receipts.py (2026-09-11, repository-only)
 
 ### Live environment baseline (2026-08-22)
@@ -32,6 +56,17 @@ liveness but failing functional health (stale watcher/no worker heartbeat; Compa
 Both new-host APIs report unknown build identity. The promotion chain is therefore not yet executable;
 the missing test host, immutable artifact identity, and authoritative deployment handoff are explicit
 follow-up gates rather than implied by local Compose or old Mac mini state.
+
+The BWS-04 implementation (#5680) adds a supervised Linux database deployment path with selected
+host/VM secret checks, durable same-ID receipts, file-only PostgreSQL credentials, and real
+password authentication bound to the effective runtime DSN before client activation. A stopped
+initialized database may be started alone by the journaled authentication probe. This is repository
+support only: BWS-03/#5679's encrypted reader-token push command is delivered by PR #5732; actual
+live VM token installation, existing-host credential/data migration, the designated-writer/
+credential-restriction or shared-fencing gate, and live channel qualification remain unfulfilled.
+Neither the implementation nor its fake-adapter/static-render proof changes the live runtime
+posture. The detailed contract remains in `docs/CLOUD_SECRET_PROVISIONING/README.md` and
+`docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Linux channel secret provisioning`.
 
 The MARR-08 implementation (#5635) adds a bounded Product client and one host-side completion
 operation that dispatches an exact Product-selected route to Codex CLI or Ollama. This is repository
@@ -206,6 +241,7 @@ promote public internet readiness.
 - The Heimdal time-spend projection's vault writes (#4609, repairing PR #4586 P1 residuals) quarantine observed bucket labels through the HEIM-9 path before materialization, replace owned notes only by expected-version compare-and-swap, create absent targets atomically no-clobber, and clear owned weekly notes the rebuild fold no longer targets — a racing human edit or creation always wins with a loud, item-scoped `blocked` receipt entry (`docs/HEIMDAL_SCREEN_STREAM/PROJECT_TIME_SPEND_ANALYSIS.md`).
 
 ## Runtime verification
+- Sources-zone runtime boundaries are shipped (#5700, PR #5701): acquisition candidate and proposal writes, source-bundle outputs, Heimdal projections, and meeting finalization check the effective capture note before side effects; internal MCP append refuses destinations inside the configured Sources zone. Knowledge adapters and artifact identity classify the selected-vault Sources root across filesystem aliases. The Sources writer set and owner contract are unchanged; #3414’s separate writer census and fitness check remain outstanding.
 - `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
 - `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `watcher.run` audit rows plus `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.
 - The worker heartbeat probe in `scripts/start_full_system.sh` reads the worker's heartbeat file through the container boundary (`docker compose exec`, `scripts/lib/worker_heartbeat_probe.sh`), matching the pre-existing watcher heartbeat probe. `/app/tmp` (and `/app/tmp-test`) is always the `runtime-tmp` Docker-managed named volume in every channel, never a host bind mount, so a host-path read could never observe a healthy worker's heartbeat — this previously failed `make prod-start-full` against a fully healthy pinned-image prod stack (#4361). The same startup path now never silently builds over an `APP_IMAGE_TAG` pin: pinned-image mode (`COMPOSE_FILE` without the `docker-compose.app-bind.yml` overlay) pulls the pin and fails loud on a pull miss unless `APP_BUILD_OVERRIDE=1` is explicitly set (`scripts/lib/pinned_image_guard.sh`), mirroring the existing `scripts/deploy_channel.sh` pull-only contract.
@@ -364,6 +400,11 @@ promote public internet readiness.
 - **Sync-latency harness — partial acceptance (2026-04-12, updated 2026-04-23):** iCloud transport chain validated end-to-end (MacBook → Mac mini via CloudDocs); server-side watcher detection confirmed; clean numeric latency measurement not yet captured. The allowlist blocker is now resolved for harness/operator runs via measurement mode (`WATCHER_MEASUREMENT_MODE=1`), which temporarily admits `ingest.summary.create` while preserving the default production-safe allowlist posture. Remaining blocker: Mac mini headless infrastructure gaps (Screen Sharing, auto-login recovery) tracked in #432. Follow-up timing receipt tracked in #433. Root cause of iCloud upload-queue blockage (`.git` dir inside vault) fixed by `.git.nosync` + symlink (Issue #421 closed).
 
 ## CI & Test Markers
+- Classification evaluation is offline by default. The opt-in live golden-set runner binds an
+  exact registered model/transport and reports dataset coverage, mutation-side gate, captured
+  usage and dated cost provenance. Unsupported billing or incomplete evidence cannot produce
+  a complete cost receipt. Its GPT-5.6 API admission preserves ordinary Product routing;
+  invocation and evidence limits are owned by [the eval guide](eval.md#intent-classification-slice-classification_casev1-kernel-13).
 - CI legs assert `docs/ARCHITECTURE.md` contains fitness guard statements, confirm CLI health smoke commands pass, and verify the worker logs show `worker starting`.
 - `CI Smoke`'s push-lane `smoke-docker >> "CI gate: vaultwide panel verifier"` no longer false-positives on `main` (#4371): staged-backup verification (`_verify_staged_backup` -> `_global_live_owners`) validates the drained owner inventory by shape and ledger consistency instead of requiring every owner root to be a live directory in the verifying container, its top-level error names the failing inventory field, and the `vault` PR-test selection runs `tests/ops/test_instance_state_volume_contract.py` so this surface has pre-merge signal.
 - CI no longer treats absent model-provider credentials as a passing live-provider check: the optional
@@ -507,6 +548,11 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
 
 ## Current Snapshot
 
+- Governed Vault Profile (#4944) is accepted and delivered through GOVPROF-01–03: ProfileAgent-only
+  approved writes, owner-confirmed proposal flow, receipt-bound versions, and a rebuildable
+  same-scope consumer projection with explicit no-profile behavior (PRs #5731, #5733, #5735).
+  The separate four-part YouTube overlay renderer (#4117) consumes only that projection and renders
+  one explicit no-profile line otherwise; it is not yet wired into acquisition-time notes.
 - Runtime uses the registry watcher, DB outbox, worker, ASK API, and status/health surfaces as the canonical operational path.
 - The bounded Mimer MCP producer adapter is delivered as the `mimer-mcp` stdio sidecar: exactly
   ask, governed capture, retrieve/search, note read, and health delegate to existing governed HTTP

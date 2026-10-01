@@ -3,22 +3,15 @@ import shlex
 import typing as t
 
 
+from app.config.database import normalize_database_url, resolve_database_url
+
+
 def resolve_dsn(conninfo: t.Optional[str] = None) -> str:
-    url = (conninfo or os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "").strip()
-    if url.startswith("postgresql+psycopg://"):
-        url = "postgresql://" + url.split("postgresql+psycopg://", 1)[1]
-    return url
+    return normalize_database_url(resolve_database_url(os.environ, conninfo, default=False), sqlalchemy=False)
 
 
 def resolve_sqlalchemy_url(conninfo: t.Optional[str] = None) -> str:
-    url = (conninfo or os.getenv("DATABASE_URL") or os.getenv("DB_DSN") or "").strip()
-    if not url:
-        return ""
-    if url.startswith("postgresql+psycopg://"):
-        return url
-    if url.startswith("postgresql://"):
-        return "postgresql+psycopg://" + url.split("postgresql://", 1)[1]
-    return url
+    return normalize_database_url(resolve_database_url(os.environ, conninfo, default=False), sqlalchemy=True)
 
 
 def dsn() -> str:
@@ -78,18 +71,20 @@ def looks_like_prod_dsn(conninfo: t.Optional[str] = None) -> bool:
         return True
 
     try:
-        from urllib.parse import urlsplit  # noqa: PLC0415
+        from urllib.parse import parse_qs, urlsplit  # noqa: PLC0415
 
         parts = urlsplit(url)
     except Exception:
         return False
 
-    db_name = (parts.path or "").lstrip("/").split("?", 1)[0]
+    query = parse_qs(parts.query)
+    db_name = query.get("dbname", [(parts.path or "").lstrip("/").split("?", 1)[0]])[-1]
     if db_name == "app":
         return True
 
     try:
-        if parts.port == 15432:
+        port = int(query["port"][-1]) if "port" in query else parts.port
+        if port == 15432:
             return True
     except ValueError:
         # Malformed port: treat as ambiguous → flag as prod (conservative).

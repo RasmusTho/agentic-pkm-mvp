@@ -52,7 +52,7 @@ An agent can only act autonomously when a bounded delegation reaches the same sa
 
 ## Out of Scope
 
-- Raw filesystem writes, arbitrary schema creation, move/rename, batch execution, or writer CAS migrations already owned by #3570.
+- Raw filesystem writes, arbitrary schema creation, move/rename, batch execution, or migration of the registered writer families already delivered under #3570. A new AUTOOPS-02 writer path still needs its own bounded contract and verification against the current write protocol.
 
 ## Restart / Durability Posture
 
@@ -67,5 +67,5 @@ operation identity; restart never turns uncertainty into a retry.
 
 ## Related GitHub Issues
 
-Block on AUTOOPS-02 and reconcile with the existing #3570 writer-safety family. TCD hint:
+Block on AUTOOPS-02 and use the completed #3570 writer-safety work as existing seam evidence; do not treat it as coverage for a new AUTOOPS-02 writer path. TCD hint:
 `fresh_issue_agent`, helper budget 1, strongest reliable capability at high reasoning for authority-bearing writes.

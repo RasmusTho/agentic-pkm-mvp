@@ -19,9 +19,52 @@ python -m app.cli health --json
 | `ffmpeg` | `app/cli/health.py:20-28` | `shutil.which("ffmpeg")` | Install via a package manager (`brew install ffmpeg` or `apt`). |
 | `yt_dlp` | `app/cli/health.py:30-36` | Module import | `pip install -r requirements.txt`. |
 | `index_outbox` | `app/cli/health.py` | Existing `INDEX_OUTBOX_PATH` is a readable, writable regular file; missing paths are reported without creating them. | Start the producer/bootstrap path or fix permissions and adjust the env path. |
-| `ollama` | `app/cli/health.py:48-49` | GET `${OLLAMA_URL}/api/tags` when `LLM_PROVIDER=ollama`; skipped otherwise | Start Ollama or switch to `LLM_PROVIDER=mock`. |
+| `llm_access` | `app/cli/health.py` + `app/model_access/capability_health.py` | Required, no-inference health over logical capabilities required by active configured text routes. Only fresh `available` capability observations pass; degraded, unavailable, unknown, missing, malformed, and stale observations fail closed. `transport_observation` reports configured network-path reachability separately, including when a pre-completion path fallback was used. Skipped eval routes and embeddings are not probed; embedding identity stays separate under `embedding_index`. The public API omits provider, model, transport, endpoint, and selected-path identity from model-access health. | Inspect `checks.llm_access.capabilities`, `checks.llm_access.transport_observation`, and correlate `trace_id`. The local CLI retains route configuration under `checks.llm_router` for operator diagnosis. |
 | `obsidian` | `app/cli/health.py` + `app/knowledge/health.py` | Obsidian CLI in `PATH` and installer compatibility (`>=1.12.4`) when knowledge policy requires Obsidian adapter | Install/update Obsidian installer and ensure `obsidian` command is available. |
 | `companion_diagnostics` | `app/cli/health.py:586-635` + `app/services/companion_diagnostics.py` | Calls `companion_diagnostics_summary(vault_root)`; reports `duplicate_companion_count` (UUIDs present in both canonical `⚙️ System/companions/` and legacy `_system/companions/`). Optional check — does not affect the `ok` boolean; skipped when `vault_root` cannot be resolved. | Inspect `checks.companion_diagnostics.data.duplicate_companion_count` in the JSON output (`python -m app.cli health --json`). Non-zero counts indicate historical duplicates from a dual-write era; remove the legacy `_system/companions/<uuid>.md` files manually or wait for a future migration tool. |
+
+`checks.llm_access` is an `/api/health` dependency signal only. It does not change `/readyz`, whose readiness contract remains based on store/Postgres readiness; embedding identity remains separate under `checks.embedding_index`.
+
+## Provider-neutral capability health
+
+`checks.llm_access.capabilities` reports the logical requirements of active configured text routes.
+Each capability has a status (`available`, `degraded`, `unavailable`, or `unknown`), freshness, and
+a safe reason code. The baseline capability is `text_generation`; additional requirements such as
+`structured_output`, `native_tools`, `system_prompt_channel`, and `deterministic_execution` are
+included only when requested by route intent. If multiple active task routes require the same
+capability, every observation must be fresh and available. An adapter maps its own diagnostics and
+declared capabilities into this contract; absence of an unselected adapter does not affect health.
+The route inventory carries the caller contract for schema-backed `decide`, `plan`, `tool`, and
+registered extraction routes, so those workloads require `structured_output` even though health
+never invokes inference. A typed remote preflight refusal for one capability is reported against
+that capability; other capabilities remain `unknown` when preflight stopped before checking runtime
+readiness.
+The Product health route also fails closed for a configured transport that the Product completion
+facade rejects; configuring credentials for a different transport does not make that route healthy.
+
+`checks.llm_access.transport_observation` reports configured executor-path reachability separately
+with status, freshness, and a safe reason code. A successful configured path fallback is reported
+as `degraded` transport while required logical capabilities can remain `available`. The observation
+contains no selected path profile, endpoint, host, provider, or model identity; when no configured
+executor network path applies its status is `not_applicable`.
+
+A typed executor-path outage reports the required capability as `unavailable`. If path failure is
+unclassified, or the local preflight request is invalid, capability status is `unknown` because no
+adapter capability result was received; transport health is independently reported as unknown.
+
+The public `/api/health` projection omits named provider, model, transport, and endpoint details from
+model-access checks. It also reduces route-router and provider-inventory diagnostics to neutral
+summaries. Local CLI output retains those diagnostics under `checks.llm_router` and
+`checks.llm_providers` for operator troubleshooting. The evaluator checks the exact selected route,
+does not choose a model, authorize provider/model fallback, or perform inference. A configured
+network-path fallback may be used during no-inference preflight while preserving the logical route
+and capability intent.
+
+Skipped eval routes and embedding routes do not contribute to this aggregate. Embedding identity and
+index compatibility remain under `checks.embedding_index`; `/readyz` remains governed by
+store/Postgres readiness. This implementation does not activate a Product route or change any
+provider/model default. The bounded capability contract is specified by
+`docs/MODEL_ACCESS_ROUTER/REPORT_CAPABILITY_HEALTH.md`.
 
 ## Health contract snapshot
 ```bash
@@ -233,7 +276,7 @@ closed each gap.
 |---|---|---|
 | `GET /healthz` (api) | the API process is alive and serving HTTP | **Unconditional by design** — returns `200 {"ok": true}` with *every* dependency down. It is a liveness probe, not a dependency signal; use `/readyz`. |
 | `GET /readyz` (api) | the readiness contract is in a ready state **and** Postgres is reachable **and** the store backend resolves | Reflects real DB health since **OBSSTAB-01 (#2598)**: a live `ping_postgres()` runs inside `HealthContract.evaluate()`, so a DB outage forces `unhealthy` → `503`. Before #2598 it keyed only on outbox-event age, so a quiet-window outage still returned `200`. Also reflects store-resolution health since **#2843**: an unknown `STORE_BACKEND` value or no backend configured at all (no `STORE_BACKEND` and no `DATABASE_URL`/`DB_DSN`) now also forces `unhealthy` → `503`; before #2843, `_count_objects()` swallowed that resolution error into `store_object_count: 0` and the process reported ready. Note `degraded` is still a *ready* state (writes paused, reads served) — green here does not guarantee writes are accepted. |
-| `GET /api/health` (api) | every **required** check passed and the runtime probes are healthy | A `false` here means a **required** check or a runtime probe failed — it is **not** caused by an optional tool: `_checks_ok()` only counts checks with `required=True` (`app/cli/health.py:649-653`), so an absent optional tool (e.g. `ffmpeg`, `companion_diagnostics`) does **not** flip the result. (A common doc myth said `ffmpeg` absence sets `ok=false`; it does not.) `ok` and `required_ok` are currently computed **identically** (both required-only); the OBSSTAB-04 probe keys on `required_ok`. Its synchronous diagnostic work runs off the API event loop; Ollama uses `HEALTH_PROBE_TIMEOUT` (default `2` seconds), independent of generation/embedding `LLM_TIMEOUT`. |
+| `GET /api/health` (api) | every **required** check passed and the runtime probes are healthy | A `false` here means a **required** check or a runtime probe failed — it is **not** caused by an optional tool: `_checks_ok()` only counts checks with `required=True` (`app/cli/health.py`), so an absent optional tool (e.g. `ffmpeg`, `companion_diagnostics`) does **not** flip the result. `ok` and `required_ok` are currently computed identically; the OBSSTAB-04 probe keys on `required_ok`. LLM health is the no-inference preflight of selected text routes (`checks.llm_access`); an unselected Ollama service does not gate Product health. The probe uses `HEALTH_PROBE_TIMEOUT` (default `2` seconds), independent of generation/embedding `LLM_TIMEOUT`. |
 | `GET /agent/health` | the agent HTTP route is mounted and responding | **Known residual false-green:** returns `200 {"heartbeat": …}` regardless of whether the agent loop is actually alive (`app/api/routers/agent.py`). Do not treat it as agent liveness. Making it reflect real agent state is out of scope for Fas 0. |
 | Container healthcheck (`docker ps` / compose status) | the worker heartbeat is fresh; the watcher heartbeat is fresh and reports `healthy-idle` or bounded `catch-up`, not `degraded`/paused (and, at startup, db-dependents waited for Postgres before their first query) | Freshness and the watcher's own observation state are the only ongoing signals here. `healthy-idle` means a deterministic observation cycle drained; `catch-up` means its durable cursor still has work and is healthy while making forward progress; `degraded` is reserved for an actual error, pause, blind scope, or repeated no-progress. **`depends_on: condition: service_healthy` orders startup only** — if Postgres drops *after* startup while an idle worker/watcher keeps writing fresh heartbeats, the container can still show healthy. Ongoing DB health is reflected by `/readyz` and the API container healthcheck that targets it (OBSSTAB-01), **not** by the worker/watcher container probe. `ollama` has an in-image CLI healthcheck. |
 | Companion-UI `/healthz` | the UI process reached the **upstream** runtime API | Probes the upstream since **OBSSTAB-11 (#2618)**: it calls `/api/health` and returns `503 {"ok": false, "upstream": "unreachable"}` when the runtime is down (was an unconditional `200`, so the UI read green while every request 502'd). The same fix applies in production via the shared `make_handler` factory. |

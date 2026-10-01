@@ -38,6 +38,7 @@ And it cross-cuts (without replacing) the following concept contracts, which rem
 - `docs/CONCEPTS/CONTEXT_BUNDLE_CONTRACT.md` — bridge-artifact lifecycle, exclusion tracking, authority flags, stale/expiry.
 - `docs/CONCEPTS/ARTIFACT_MODEL_AND_LIFECYCLES.md` — three-surface model for vault notes, healing scenarios, rebuild from companions.
 - `docs/CONCEPTS/TEMPORAL_VALIDITY_AND_STALENESS_CONTRACT.md` — stale vs drift vs historical validity vs re-evaluation need.
+- `docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md` — shared policy for relative retention priority, physical hot/cold placement, storage-pool accounting, and pressure-triggered deletion review. Physical placement and deletion are not semantic lifecycle states; this lifecycle model remains authoritative for class-specific state names and transitions.
 
 ## 3. Load-bearing invariants
 

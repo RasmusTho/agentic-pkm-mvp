@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -17,10 +16,12 @@ from app.db.db import COMPATIBILITY_BINDING_ID
 
 
 def _dsn() -> str:
-    url = os.environ.get("DATABASE_URL", "").strip()
+    from app.db.dsn import resolve_dsn
+
+    url = resolve_dsn()
     if not url:
         raise RuntimeError("DATABASE_URL is required for backfill jobs")
-    return url.replace("postgresql+psycopg://", "postgresql://")
+    return url
 
 
 def _fetch_ids(sql: str, params: Sequence[object], limit: int) -> list[str]:

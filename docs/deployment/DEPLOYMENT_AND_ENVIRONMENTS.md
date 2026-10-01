@@ -5,9 +5,11 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-09-11
+Last reviewed: 2026-09-29
 Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`. This is not fresh host qualification, residency, deployment, health, or SSH evidence from this workstation.
+Verification update (2026-09-25): also checked `.github/workflows/app-image-build.yml`, `.github/workflows/integration-nightly.yaml`, `scripts/deploy_channel.sh`, and `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`; the repository workflow set has no caller of the deploy script. This remains repository inspection, not fresh host qualification or deployment evidence.
+Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). This establishes repository support only; live VM installation and qualification remain separate gates under #5667.
 
 ## Why this document exists
 
@@ -110,6 +112,16 @@ projects or the local Compose matrix below as evidence for the new-host runtime.
 remains exact candidate identity → dev verification → test deployment and verification → prod promotion
 and verification.
 
+### CI deployment automation posture
+
+The repository builds and verifies SHA-identified application images, and `scripts/deploy_channel.sh`
+provides channel deployment mechanics. In the verified workflow set, no GitHub Actions workflow calls
+that deploy script; post-merge automatic `dev` → `test` delivery is therefore not shipped. The
+[fast PR-to-dev/test plan](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) proposes a separate post-merge
+path that keeps nightly and live deployment out of the PR merge gate. It requires fresh channel and
+executor qualification, exact SHA/digest receipts, per-channel serialization, and a recovery contract
+before enablement. Production authority and promotion remain separate.
+
 RCA on 2026-06-29 (BuilderOps LearningSignal `lrn_20260629093241_59713bc1`) found that the system had **no deployment source-of-truth**. The observed reality:
 
 - All three docker API stacks bind-mount a single shared host checkout (`./:/app`) — there is **no code isolation between channels**; every channel runs whatever is checked out in that one tree.
@@ -153,7 +165,7 @@ Anchors for the values above: ports/DBs in `docker-compose.{dev,test,prod}.yml`;
 
 Notes on the current model:
 - The repo app bind mount is opt-in through `docker-compose.app-bind.yml`; the standard dev, test, and prod Compose/deploy paths omit it. When explicitly enabled for a local hot-reload or exact-worktree UAT session, it mounts the selected checkout at `/app` and therefore is not code-isolated from changes in that checkout. `dev` otherwise runs the baked local `pkm-app:dev-local` image, while test and prod use their channel image pins.
-- Companion UI gateways are now declared as managed compose units in the repo, but the running fleet has not yet adopted the pinned-image model. The cutover guard therefore checks gateway-unit participation in the recreate set before #2698 can treat a channel as ready.
+- Companion UI gateways are declared as managed Compose units in the repo. The final #2698 public receipt records a production pinned-image deployment; this document has no fresh equivalent `dev`/`test` receipts and does not infer their current runtime state. The cutover guard checks gateway-unit participation in the recreate set on the configured deployment path.
 - Production Compose fixes Companion's publish to `127.0.0.1:8113` and passes the matching explicit
   declaration `COMPANION_UI_BIND_HOST=127.0.0.1` into the gateway as one canonical producer pair;
   ambient shell configuration cannot widen or silently disable it. The production deploy wrapper
@@ -512,6 +524,82 @@ Before migration execution begins, a pending marker makes interruption recovery 
 
 For failures before migration execution starts, the ordinary fail-closed recovery path preserves the failing gate's original non-zero status and diagnostics, restores the previous pin, and attempts to recreate the prior service set before returning. The instance-state fence remains in place if its finalization fails, so consumer preflight refuses restart.
 
+## Linux channel secret provisioning
+
+The empty-data exception is bound to the effective managed `db:5432` target and its default `app` role/channel database, without connection-option overrides. An empty local volume never proves an external or overridden target empty: these targets require real password authentication and cannot bootstrap a new BWS password. External-target authentication and activation never start or stop the unrelated local database. The supervisor binds the Compose topology to the same effective target. For external targets, the dedicated overlay removes only local `db` dependency edges and excludes its service/volume from the selected graph, while preserving migration, instance-state, and provider dependencies. Ambient profiles cannot re-enable the excluded database; the inherited worker guard refuses a missing or mismatched topology selector before provider access. The governed BWS prod outbox-retry preflight uses the same file-aware resolver and host endpoint translation; invalid or missing file/connection configuration blocks deployment before pins or Compose mutation. After connection resolution, the existing #3903 policy for genuinely unavailable databases or queries remains in force, including first initialization; a successfully queried terminal-pending row blocks deployment. Legacy non-BWS behavior is unchanged.
+
+
+BWS-04 adds a governed Linux adapter around the existing channel deploy, migration, writer, and
+pin machinery. It does not authorize a live deploy or replace promotion/migration acknowledgement.
+Mac Keychain deployment remains unchanged. BWS-03 / #5679's repository token-push command was
+delivered by PR #5732; parent #5667 stays open for live VM installation, existing-host migration,
+owner-approved sole-writer/credential-restriction or shared-fencing evidence, and channel qualification.
+
+The designated agent-host entrypoint is `python3 -m app.ops.postgres_deploy_host <channel> <revision>`.
+It uses the same BWS controller lock as import/check before selected-consumer parity checks, then
+contacts only `ygg-<channel>` with value-free requests. An owner-installed `qualification.json` in
+the controller directory must be owner-only (`0600`) and record the exact `controller` path,
+`sole_writer_approved: true`, `credentials_restricted: true`, and a `live_receipt` comment on #5667.
+No CLI flag creates this approval. The admin token remains on the agent host.
+
+The root-owned `config/systemd/yggdrasil-bws-deploy@.service` and installed
+`scripts/postgres_deploy_service.py` launcher supervise VM work independently of SSH. Operator setup
+places the launcher at `/usr/local/libexec/yggdrasil-bws-deploy` and an owner-only (`root:root`, `0600`)
+`/etc/yggdrasil/bws-deploy/<channel>.json` containing the root-owned, non-writable checkout `root`,
+actual existing named-volume `data_directory`, non-root service `uid`/`gid`, `organization_id`, and
+channel-project `project_id`. The service consumes only the project reader credential at the BWS-03
+stable encrypted source `/var/lib/yggdrasil/bws-tokens/<channel>/current`. The config must name the
+actual channel volume; a missing volume, foreign/anonymous existing mount, or unproved data directory
+is refused. This task neither provisions volumes nor migrates retained plaintext/anonymous data.
+
+Host and VM selected-secret preflights precede deployment mutation. Under the host lock followed by
+the existing VM channel lock, the worker writes an owner-only persistent journal in
+`/var/lib/yggdrasil/bws-deploy`, outside Git and tmpfs. Stages are `prepared`, `preflighted`,
+`materialized`, optional `authenticating`, `activating`, then `committed` or `aborted`. Atomic file
+and parent-directory fsyncs make each stage durable; a separate value-free request binding prevents
+same-ID retries from changing revision or consumer scope. Reconnect joins the same worker. After
+worker loss, missing terminal/quiescence proof stays pending; a released kernel lock is not success
+and does not remove the channel admission directory.
+
+For initialized data, the candidate must authenticate to the active PostgreSQL role with real
+password authentication. The probe and Compose share one effective credential-free connection snapshot:
+process overrides precede deploy-pin values, then generated runtime values; within each source
+`DATABASE_URL` precedes `DB_DSN`. The selected role, database, host and connection options are
+preserved. Only Compose `db:5432` is translated to its channel's host-published TCP endpoint, with
+`hostaddr` retaining the original host for TLS identity checks. Ambiguous container-loopback
+endpoints cannot borrow a host-loopback proof and fail closed. A changed effective target during
+the operation invalidates admission; both runtime DSN aliases receive the same frozen value. After preflights, a stopped database may be started alone with `--no-deps`
+only after durable `authenticating`; its recovery/WAL writes count as deployment mutation. No new or
+recreated migration/application clients start before authentication succeeds. Wrong-password failure
+preserves a pre-existing running database, stops only a database started by the probe, and records
+`aborted` only after quiescence. Unknown outcomes stay pending. First initialization alone permits
+an absent BWS password, after locked empty-directory proof and durable absence/prepared history;
+an ambiguous sent create cannot be retried merely because its readback is missing.
+
+`docker-compose.bws.yml` is appended only on this managed path. It mounts
+`/run/yggdrasil/postgres/<channel>/password` solely into `db`, `migrate`, `api`, `worker`, `watcher`,
+and `heimdal-capture-watch`. The root-only tmpfs directory is `0700`; the file is root-owned `0440`
+with the configured service GID, verified through a non-root read probe. Compose bind-mount mode
+attributes are not relied on. Repeated materialization keeps the same inode and refuses a changed
+value while consumers could retain an old mount. Docker auto-restart is disabled for these services:
+after host boot the supervisor waits for an authorized managed start, which rehydrates before
+consumers start. `ExecStopPost` removes the source only after every consumer stops and Docker is
+quiescent; returning from Compose does not clean it. No persistent PostgreSQL password/env file is
+created. Other declared consumer environment handoffs are private tmpfs files removed after activation.
+
+A pending Heimdal raw-store migration rechecks its declared credential through the inherited
+supervised BWS guard; it never enters the Mac-only child-launch wrapper.
+
+The runtime exporter validates BWS direct DSNs before loading them and supplies credential-free
+channel defaults. `DATABASE_PASSWORD_FILE` is the sole application password source, resolved in
+memory by the shared app/config/DSN/Alembic/direct-client path. Candidate images must declare the
+file-credential protocol before admission; every client start/recreate, including automatic rollback,
+rechecks the effective pin and refuses a legacy image that lacks that protocol. Such a refused
+rollback leaves the deployment pending for compatible-image recovery. The PostgreSQL
+wrapper preserves upstream initialization but scrubs both password environment variables from
+`pg_ctl` and the final server exec. Repository evidence uses fake values/adapters and static Compose
+rendering. It does not establish installation, runtime operation, or live qualification.
+
 ## Promotion workflow binding
 
 The governed executor skills for this deploy procedure are `.codex/skills/prepare-promotion/SKILL.md`,
@@ -728,9 +816,9 @@ inside-container peer-loopback inference enters that exception.
 
 This document does **not** supersede `docs/RELEASE_CHANNELS/README.md` (channel identity, per-channel DB, promotion-plan/rollback/migration-classification contracts) — it implements the physical deploy beneath those contracts and references them rather than restating them.
 
-## Implementation slices
+## Historical implementation slices
 
-The epic (#2655) is delivered as the slices below. S1 is this document. S2–S7 map to concrete targets so `feature-breakdown` can derive child issues. **S7 (cutover) is operator-gated (`agent:needs-human`)** because it authorizes full-environment downtime and may apply forward-only migrations.
+The epic (#2655) was delivered as the slices below. S1 is this document. The original task descriptions are retained for provenance; they no longer represent open work. The terminal S7 cutover was operator-gated because it authorized full-environment downtime and could apply forward-only migrations.
 
 - **S1 — Canonical deployment spec (this slice).** `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` + `docs/ENVIRONMENTS.md §Deployment` pointer. Docs-only. *Done in this PR.*
 - **S2 — CI builds SHA-tagged image.** CI workflow builds the app image from the repo `Dockerfile`, injects `VCS_REF`/`BUILT_AT`, tags it `ghcr.io/<owner>/pkm-app:<sha>`. Target: `.github/workflows/**` (new build job), reuse the existing `Dockerfile` and the `Makefile` `VCS_REF`/`BUILT_AT` computation.
@@ -740,7 +828,7 @@ The epic (#2655) is delivered as the slices below. S1 is this document. S2–S7 
 - **S6 — Verify/formalize auth↔topology.** Verify and lock the configured trusted-proxy (`X-Forwarded-For` only when peer is loopback or explicitly allowed) topology; add/confirm tests that exercise the proxied path and assert untrusted non-loopback callers and unconfigured bridge peers are still rejected (#2223, #2706). Target: `app/auth.py` (formalize/comment), `tests/**` covering `require_loopback_or_api_key` + `_effective_client_host` on the runtime path.
 - **S7 — Cutover (OPERATOR-GATED, `agent:needs-human`).** Cut all three channels over from the shared-checkout bind-mount to pinned images, recreate API + managed gateways, run the migration gate (forward-only ack) and the health + UI smoke gates. **Authorizes full-environment downtime and may apply forward-only migrations — requires operator acknowledgement before execution.** Target: the live host; run S5's deploy script per channel under operator supervision; record receipts in `ops/promotions/`.
 
-Delivery status (2026-07-07): S1–S6 are delivered (#2668, #2693–#2697); the running fleet has **not** adopted the delivered tooling, and the promotion skill chain that landed after these slices is still checkout-based. The remaining work — reconciling the promotion workflow with pinned images, per-channel cutover readiness, a live fleet-model fitness guard, and the operator-gated cutover itself (#2698) — is specified in [`docs/deployment/PINNED_IMAGE_CUTOVER/`](PINNED_IMAGE_CUTOVER/README.md).
+Delivery status (2026-09-25): S1–S6 were delivered (#2668, #2693–#2697); the pinned-image reconcile, readiness preflight, and fleet-model guard were delivered in PRs #3206, #3205, and #3207. Issue #2698 is closed; its final public receipt records the production deployment at SHA `311631b08efdf08809a5677d20e3612f80a0022c`. That receipt does not establish fresh equivalent `dev` and `test` evidence here. See the [historical cutover receipt index](PINNED_IMAGE_CUTOVER/README.md). The separate proposed post-merge `dev` → `test` workflow is not shipped; see [FAST_PR_TO_DEV_TEST_AUTOMATION](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md).
 
 ## Suggested validation
 

@@ -4,7 +4,7 @@ Authority: Owns the YouTube source-sync capability design — account binding, s
 Owner: Architecture / knowledge acquisition
 Temporal class: strategic
 Review cadence: event-driven (task merge, YouTube API surface change)
-Last reviewed: 2026-09-24
+Last reviewed: 2026-09-28
 
 # YouTube Source Sync
 
@@ -22,6 +22,12 @@ YouTube playlist discovery
   → immutable raw evidence → normalize → extract
   → review-required youtube_source_note candidate
 ```
+
+The production acquisition drain also accepts the `candidate_metadata_only` policy for durable
+metadata-only requests. That path performs one logged-out metadata fetch, preserves immutable raw
+and normalized lineage, and writes a review-required metadata candidate without transcript,
+media, or extractor work. Issue #5722 supplies this producer prerequisite for the deferred
+subscription/RSS slice; it does not deliver YSS-07 or change its discovery and scheduling scope.
 
 **The playlist is only a user-friendly intent surface — never knowledge authority.** Discovery
 creates a durable request; KAP produces a review-required candidate; only Mimer's governed human
@@ -61,6 +67,10 @@ only: discovery scheduling on the existing watcher loop, with acquisition kept o
 Siblings #3922-#3926 remain deferred. Their continuation still requires a bounded contract,
 dependency order, and Verify targets; this slice changes no credential, cookie/scraping, media
 retention, or automatic-promotion authority.
+
+The owner-reprioritized continuation in #5722 is limited to the metadata-only acquisition producer
+and its replay, failure, and write-guard behavior. YSS-07 remains a separate deferred discovery
+slice whose Takeout/RSS work may consume this producer only after its own contract is activated.
 
 ## Capability boundary
 

@@ -21,7 +21,7 @@ from app.knowledge.obsidian_cli_scope import scoped_cli_args
 from app.knowledge.multiwriter import (
     NoteClass,
     WriteOperation,
-    classify_note,
+    classify_note_in_vault,
     conflict_artifact_path,
 )
 
@@ -1412,19 +1412,18 @@ class FsVaultAdapter:
         canonical_relative = target.relative_to(self.vault_root.resolve()).as_posix()
         capture_note_rel = self.capture_note_rel
         if capture_note_rel is None:
-            capture_note_rel = (os.getenv("VAULT_CAPTURE_NOTE_REL") or "").strip() or None
-        if capture_note_rel is None:
             try:
-                from app.vault.paths import get_vault_inbox_dir_rel
+                from app.vault.paths import get_vault_capture_note_rel
 
-                capture_note_rel = f"{get_vault_inbox_dir_rel(self.vault_root).strip('/')}/inbox.md"
+                capture_note_rel = get_vault_capture_note_rel(self.vault_root)
             except (OSError, ValueError):
                 # Generic filesystem adapters are also used against temporary
                 # roots with no selected vault layout.
                 capture_note_rel = None
-        return classify_note(
+        return classify_note_in_vault(
             canonical_relative,
             operation,
+            vault_root=self.vault_root,
             capture_note_rel=capture_note_rel,
             sources_root_rel=self.sources_root_rel,
         )
@@ -1479,9 +1478,18 @@ def _is_transport_failure(detail: str) -> bool:
 
 
 class ObsidianCliAdapter:
-    def __init__(self, *, cli_bin: str = "obsidian", runner: RunnerFn = subprocess.run) -> None:
+    def __init__(
+        self,
+        *,
+        cli_bin: str = "obsidian",
+        runner: RunnerFn = subprocess.run,
+        sources_root_rel: str | None = None,
+        vault_root: Path | str | None = None,
+    ) -> None:
         self.cli_bin = cli_bin
         self.runner = runner
+        self.sources_root_rel = sources_root_rel
+        self.vault_root = Path(vault_root).expanduser() if vault_root is not None else None
 
     def _run(self, *, vault: str, args: Sequence[str], capture_output: bool = True) -> subprocess.CompletedProcess[str]:
         cmd = [self.cli_bin, *scoped_cli_args(vault, args)]
@@ -1509,12 +1517,22 @@ class ObsidianCliAdapter:
         expected_version: str | None = None,
         writer_identity: str | None = None,
     ) -> WriteReceipt:
+        note_class = (
+            classify_note_in_vault(
+                locator.path,
+                WriteOperation.WRITE,
+                vault_root=self.vault_root,
+                sources_root_rel=self.sources_root_rel,
+            )
+            if self.sources_root_rel is not None
+            else None
+        )
         self._run(vault=locator.vault, args=["create", locator.path, content], capture_output=True)
         return WriteReceipt(
             operation="write_note",
             locator=locator,
             adapter="obsidian_cli",
-            note_class=classify_note(locator.path, WriteOperation.WRITE),
+            note_class=note_class,
             writer_identity=writer_identity or "obsidian-cli",
             written_at=datetime.now(UTC).isoformat(),
         )

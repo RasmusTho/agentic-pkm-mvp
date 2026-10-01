@@ -20,6 +20,13 @@ import threading
 import time
 from types import FrameType
 
+from app.ops.bws_secret_reader import (
+    BwsItemAbsent,
+    BwsLookupError,
+    BwsReaderConfig,
+    BwsSecretReader,
+)
+from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
 from app.ops.host_secret_contract import HostSecretContract, load_host_secret_contract
 
 
@@ -233,6 +240,14 @@ def _validate_secret(kind: str, value: str) -> bool:
     # be a place for the two to drift apart rather than a real distinction. The
     # kind exists at all because the contract derives it from the logical id's
     # suffix, and `GITHUB_TOKEN` requires the logical id `github.token`.
+    if kind == "password":
+        # Import must accept the initialized PostgreSQL role's existing value;
+        # imposing the API-key minimum would require an unauthorized rotation.
+        try:
+            value.encode("utf-8", errors="strict")
+        except UnicodeError:
+            return False
+        return bool(value) and all(char.isprintable() for char in value)
     if kind in {"api-key", "token"}:
         return (
             value == value.strip()
@@ -478,6 +493,70 @@ def _resolve_consumer_environment(
     return resolved
 
 
+def resolve_host_secret_values(
+    *, channel: str, consumer: str, provider: str,
+    contract: HostSecretContract | None = None,
+    keychain_lookup: KeychainLookup = _security_keychain_lookup,
+    bws_reader: BwsSecretReader | None = None,
+    controller: HostSecretController | None = None,
+    operation: HostSecretOperation | None = None,
+) -> dict[str, str]:
+    """Resolve only selected logical identities; keep results in memory.
+
+    Deployment callers pass their admitted operation and retain its host lock
+    through remote terminal readback. Standalone checks own a bounded check.
+    File consumers receive logical IDs, never password environment names.
+    """
+    try:
+        selected = contract or load_host_secret_contract()
+        if provider == "keychain":
+            values = _resolve_consumer_environment(channel=channel, consumer=consumer,
+                contract=selected, keychain_lookup=keychain_lookup)
+            return {secret: values[selected.binding_for(secret)] for secret in
+                    _declared_secrets(selected, channel=channel, consumer=consumer)
+                    if selected.binding_for(secret) in values}
+        if provider != "bws" or bws_reader is None:
+            raise HostSecretBootstrapError("host secret provider unavailable")
+        if operation is not None:
+            operation.require_active(channel)
+            return _resolve_bws_consumer_values(channel, consumer, selected, bws_reader)
+        active_controller = controller or HostSecretController()
+        with active_controller.admit("check", channel) as check_operation:
+            try:
+                resolved = _resolve_bws_consumer_values(channel, consumer, selected, bws_reader)
+            except Exception:
+                # A completed read has no remote mutation. Process death instead
+                # leaves prepared state requiring explicit reconciliation.
+                check_operation.finish(TerminalEvidence(check_operation.operation_id, "check", channel, "aborted", "read-complete"))
+                raise
+            check_operation.finish(TerminalEvidence(check_operation.operation_id, "check", channel, "committed", "read-complete"))
+            return resolved
+    except Exception:
+        raise HostSecretBootstrapError("host secret lookup failed for declared consumer") from None
+
+
+def _resolve_bws_consumer_values(channel: str, consumer: str, contract: HostSecretContract, reader: BwsSecretReader) -> dict[str, str]:
+    if consumer.startswith("postgres-"):
+        contract.file_binding(channel=channel, consumer=consumer, secret="postgres.password")
+        secrets = ["postgres.password"]
+    else:
+        secrets = _declared_secrets(contract, channel=channel, consumer=consumer)
+    resolved = {}
+    for secret in secrets:
+        project, identity = contract.bws_identity(channel=channel, consumer=consumer, secret=secret)
+        try:
+            value = reader.lookup(project, identity)
+        except BwsItemAbsent:
+            if secret != "postgres.password" and contract.is_optional(secret):
+                continue
+            raise
+        kind = "password" if secret == "postgres.password" else contract.kind_for(secret)
+        if not _validate_secret(kind, value):
+            raise HostSecretBootstrapError("host secret value unavailable")
+        resolved[secret] = value
+    return resolved
+
+
 @contextmanager
 def materialize_consumer_environment(
     *,
@@ -703,6 +782,9 @@ def _clean_child_environment(contract: HostSecretContract) -> dict[str, str]:
     child_env.pop(HOST_SECRET_BOOTSTRAP_FAILURE_REF, None)
     child_env.pop(HOST_SECRET_BOOTSTRAP_CHANNEL, None)
     child_env.pop(HOST_SECRET_BOOTSTRAP_CONSUMER, None)
+    # No legacy child may inherit the reader's token or credential-file access.
+    for name in ("BWS_ACCESS_TOKEN", "BWS_ACCESS_TOKEN_FILE", "CREDENTIALS_DIRECTORY"):
+        child_env.pop(name, None)
     for env_name in contract.child_bindings:
         child_env.pop(env_name, None)
     return child_env
@@ -711,6 +793,16 @@ def _clean_child_environment(contract: HostSecretContract) -> dict[str, str]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Launch a declared consumer with redacted host-secret bootstrap",
+    )
+    parser.add_argument(
+        "--provider",
+        default=os.environ.get("HOST_SECRET_PROVIDER")
+        or ("keychain" if sys.platform == "darwin" else None),
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="check selected credentials without emitting or materializing values",
     )
     parser.add_argument("--channel", required=True)
     parser.add_argument("--consumer", required=True)
@@ -732,6 +824,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     if command[:1] == ["--"]:
         command = command[1:]
     try:
+        if args.provider not in {"keychain", "bws"}:
+            raise HostSecretBootstrapError("explicit host secret provider required")
+        if args.check:
+            if command:
+                raise HostSecretBootstrapError("secret check does not launch commands")
+            resolve_host_secret_values(
+                channel=args.channel,
+                consumer=args.consumer,
+                provider=args.provider,
+                bws_reader=BwsSecretReader(BwsReaderConfig.from_environment(os.environ))
+                if args.provider == "bws"
+                else None,
+            )
+            return 0
+        if args.provider == "bws":
+            # BWS-04 owns deployment materialization and holds admission through
+            # remote terminal readback. The old Mac launcher cannot bypass it.
+            raise HostSecretBootstrapError("BWS launch requires governed deployment controller")
         return run_with_host_secrets(
             channel=args.channel,
             consumer=args.consumer,
@@ -744,10 +854,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 128 + exc.signum
-    except HostSecretBootstrapError as exc:
+    except (HostSecretBootstrapError, BwsLookupError) as exc:
+        guidance = (
+            "verify the declared Keychain item and non-interactive access"
+            if args.provider == "keychain"
+            else "verify the declared provider and file credential"
+        )
         print(
-            f"{exc}; "
-            "verify the declared Keychain item and non-interactive access",
+            f"{exc}; {guidance}",
             file=sys.stderr,
         )
         return 78

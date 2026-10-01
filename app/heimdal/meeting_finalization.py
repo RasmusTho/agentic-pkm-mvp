@@ -68,6 +68,7 @@ from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
 from app.knowledge.write_ops import create_candidate_note_once
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services import outbox as outbox_service
+from app.vault.path_overlap import assert_targets_do_not_overlap_capture_note
 from app.vault.paths import get_vault_sources_dir_rel
 
 logger = logging.getLogger(__name__)
@@ -736,6 +737,23 @@ def finalize_session(
     report = meeting_ledger.build_gap_report(session_id)
     state_sha256 = _state_identity(report, projection)
 
+    short = state_sha256[:8]
+    try:
+        base = f"{meetings_dir_rel(vault_root)}/{_session_path_component(session_id)}"
+        artifact_refs = {
+            "transcript": f"{base}/transcript-{short}.md",
+            "analysis": f"{base}/analysis-{short}.md",
+            "user_notes": f"{base}/user-notes-{short}.md",
+        }
+        assert_targets_do_not_overlap_capture_note(
+            list(artifact_refs.values()),
+            vault_root=vault_root,
+        )
+    except Exception as exc:  # noqa: BLE001 - no receipt backend before boundary proof
+        raise MeetingFinalizationError(
+            f"meeting artifact targets are unresolved or overlap the capture note: {exc}"
+        ) from exc
+
     store = _backend()
     existing = store.get(resolved_binding_id, session_id, state_sha256)
     if existing is not None:
@@ -743,14 +761,6 @@ def finalize_session(
 
     previous = store.latest(resolved_binding_id, session_id)
     supersedes = previous.state_sha256 if previous else None
-
-    short = state_sha256[:8]
-    base = f"{meetings_dir_rel(vault_root)}/{_session_path_component(session_id)}"
-    artifact_refs = {
-        "transcript": f"{base}/transcript-{short}.md",
-        "analysis": f"{base}/analysis-{short}.md",
-        "user_notes": f"{base}/user-notes-{short}.md",
-    }
 
     notes = [
         block

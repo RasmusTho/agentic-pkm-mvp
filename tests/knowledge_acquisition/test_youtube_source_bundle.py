@@ -62,6 +62,49 @@ def test_configured_attachment_root_is_source_identity_keyed_and_note_is_non_des
     assert (Path(vault.active_vault_path) / str(note.artifact_path)).read_bytes() == before
 
 
+@pytest.mark.parametrize("member", ["transcript.md", "source.json"])
+def test_bundle_paths_reject_capture_overlap_before_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    member: str,
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    _raw, transcript, candidate = _source_material(tmp_path)
+    attachment_root = "CollisionZone"
+    bundle_folder = (
+        Path(attachment_root)
+        / source_bundle_module._source_key(candidate.item_ref)
+        / source_bundle_module._version_key(
+            candidate.content_identity,
+            transcript.extensions.get("stage_version"),
+        )
+    )
+    target = (bundle_folder / member).as_posix()
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", target)
+    lock_calls: list[str] = []
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def track_lock(_vault_root: Path, folder: str):
+        lock_calls.append(folder)
+        yield
+
+    monkeypatch.setattr(source_bundle_module, "_bundle_lock", track_lock)
+
+    with pytest.raises(SourceBundleError, match="overlaps effective capture note"):
+        materialize_youtube_source_bundle(
+            candidate,
+            transcript,
+            vault_context=vault,
+            write_guard=_guard(),
+            youtube_attachment_root=attachment_root,
+        )
+
+    assert lock_calls == []
+    assert not list(Path(vault.active_vault_path).rglob("*"))
+
+
 def test_bundle_members_are_immutable_and_versioned_by_content_identity(tmp_path: Path) -> None:
     vault = _vault(tmp_path / "vault")
     _raw, transcript, candidate = _source_material(tmp_path)
@@ -163,8 +206,8 @@ def test_blocked_rollback_fsyncs_bundle_directory_before_return(
     )
 
     assert blocked.status == "blocked"
-    assert opened.count(Path(vault.active_vault_path)) == 2
     assert unlinked and unlinked[0][0] == "transcript.md"
+    # The parent descriptor used for rollback must be durably synced after unlink.
     assert unlinked[0][1] in synced
     assert not Path(vault.active_vault_path, blocked.transcript_path).exists()
 

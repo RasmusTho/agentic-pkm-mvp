@@ -13,7 +13,6 @@ Covers:
 
 from __future__ import annotations
 
-import ast
 import inspect
 from typing import Any
 
@@ -31,65 +30,82 @@ from app.events.topic_schema_registry import (
     validate_topic_payload,
 )
 from app.services.outbox import derive_binding_scoped_idempotency_key, write_outbox_event
+from tests.helpers.topic_dispatch import enumerate_topic_comparators
 
 pytestmark = pytest.mark.not_pg
 
 
-def _dispatched_topics() -> list[str]:
+def _dispatched_topics(
+    source: str | None = None,
+    module_ns: dict[str, Any] | None = None,
+) -> list[str]:
     """Enumerate every topic constant compared in ``_dispatch_topic``'s if/elif chain.
 
     Walks the function's own source via ``ast`` (not a hand-maintained list) so
     a newly dispatched topic without a schema fails this test instead of
     silently shipping uncovered.
     """
-    source = inspect.getsource(outbox_worker._dispatch_topic)
-    tree = ast.parse(source)
-    func_def = tree.body[0]
-    assert isinstance(func_def, ast.FunctionDef)
-
-    names: list[str] = []
-
-    def _walk_if_chain(node: ast.stmt) -> None:
-        if not isinstance(node, ast.If):
-            return
-        test = node.test
-        if (
-            isinstance(test, ast.Compare)
-            and isinstance(test.left, ast.Name)
-            and test.left.id == "topic"
-            and len(test.ops) == 1
-            and isinstance(test.ops[0], ast.Eq)
-        ):
-            for comparator in test.comparators:
-                if isinstance(comparator, ast.Name):
-                    names.append(comparator.id)
-        for stmt in node.orelse:
-            _walk_if_chain(stmt)
-
-    for stmt in func_def.body:
-        _walk_if_chain(stmt)
-
-    assert names, "expected to find at least one dispatched topic constant in _dispatch_topic"
-
-    module_ns = vars(outbox_worker)
-    resolved: list[str] = []
-    for name in names:
-        assert name in module_ns, f"dispatch table references undefined name {name!r}"
-        value = module_ns[name]
-        assert isinstance(value, str), f"dispatch table constant {name!r} is not a string topic"
-        resolved.append(value)
+    if source is None:
+        source = inspect.getsource(outbox_worker._dispatch_topic)
+    if module_ns is None:
+        module_ns = vars(outbox_worker)
+    resolved = enumerate_topic_comparators(source, module_ns)
+    assert resolved, "expected to find at least one dispatched topic comparator in _dispatch_topic"
     return resolved
+
+
+def _assert_every_dispatched_topic_has_schema(dispatched: list[str]) -> None:
+    missing = [topic for topic in dispatched if not is_registered_topic(topic)]
+    assert not missing, (
+        "every topic in the live outbox_worker dispatch table must have a "
+        f"schemas/events/<topic>.v1.schema.json: missing schemas for {missing}"
+    )
+
+
+def test_schema_enumerator_includes_literal_topics() -> None:
+    synthetic_source = (
+        "def _dispatch(topic):\n"
+        "    if topic == CONSTANT_TOPIC:\n"
+        "        pass\n"
+        "    elif topic == 'inline.literal.topic':\n"
+        "        pass\n"
+        "    else:\n"
+        "        pass\n"
+    )
+
+    assert _dispatched_topics(synthetic_source, {"CONSTANT_TOPIC": "module.constant.topic"}) == [
+        "module.constant.topic",
+        "inline.literal.topic",
+    ]
+
+
+def test_unregistered_literal_dispatch_topic_fails_schema_coverage() -> None:
+    synthetic_source = (
+        "def _dispatch(topic):\n"
+        "    if topic == CONSTANT_TOPIC:\n"
+        "        pass\n"
+        "    elif topic == 'unregistered.synthetic.literal.topic':\n"
+        "        pass\n"
+        "    else:\n"
+        "        pass\n"
+    )
+    dispatched = _dispatched_topics(synthetic_source, {"CONSTANT_TOPIC": "module.constant.topic"})
+
+    with pytest.raises(AssertionError, match="unregistered.synthetic.literal.topic"):
+        _assert_every_dispatched_topic_has_schema(dispatched)
+
+
+def test_schema_and_idempotency_enumerators_agree() -> None:
+    from tests.workers.test_handler_idempotency_harness import _dispatched_topics as idempotency_topics
+
+    assert _dispatched_topics() == idempotency_topics()
 
 
 def test_every_dispatched_topic_has_schema() -> None:
     dispatched = _dispatched_topics()
     assert len(dispatched) >= 9, f"expected at least the 9 known KERNEL-08 topics, got {dispatched}"
 
-    missing = [topic for topic in dispatched if not is_registered_topic(topic)]
-    assert not missing, (
-        "every topic in the live outbox_worker dispatch table must have a "
-        f"schemas/events/<topic>.v1.schema.json: missing schemas for {missing}"
-    )
+    _assert_every_dispatched_topic_has_schema(dispatched)
 
 
 def test_write_validates_and_stamps_schema() -> None:

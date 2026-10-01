@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.components.llm.fabric import get_chat_client
 from app.components.llm.router import LLMRouteError, LLMRouter, LLMTaskIntent
 from app.settings.models import LLMRoutingSettings, SettingsBundle
 
@@ -67,3 +68,51 @@ def test_no_compatible_route_fails_loud(clean_llm_env, cloud_primary_routing) ->
     router = LLMRouter()
     with pytest.raises(LLMRouteError):
         router.route(LLMTaskIntent(task_kind="ask", risk="high"))
+
+
+def test_legacy_route_projection_and_enforcement_compatibility(
+    clean_llm_env, cloud_primary_routing
+) -> None:
+    clean_llm_env.setenv("LLM_PROVIDER", "ollama")
+    clean_llm_env.setenv("LLM_PROVIDER_ENFORCE", "1")
+    clean_llm_env.setenv("LLM_MODEL", "llama3.1:8b")
+
+    client = get_chat_client(LLMTaskIntent(task_kind="qa"))
+
+    assert client.route.provider == "ollama"
+    assert client.route.model == "llama3.1:8b"
+    assert client.model_access_route is not None
+    assert client.model_access_route.provider == client.route.provider
+    assert client.model_access_route.model == client.route.model
+    assert client.model_access_route.transport_id == "ollama_http"
+
+
+def test_deepseek_legacy_route_projects_to_declared_adapter(
+    monkeypatch: pytest.MonkeyPatch, clean_llm_env
+) -> None:
+    from app.components.llm.fabric import get_chat_client_for_route
+    from app.components.llm.router import LLMRoute
+    from app.components.llm import fabric
+
+    captured = {}
+    monkeypatch.setattr(
+        fabric,
+        "call_llm",
+        lambda name, pack, **kwargs: captured.update(kwargs) or "deepseek response",
+    )
+    selected = LLMRoute(
+        provider="deepseek",
+        model="deepseek-chat",
+        mode="chat",
+        reason="legacy-config",
+        transport_id="deepseek_api",
+    )
+    client = get_chat_client_for_route(
+        LLMTaskIntent(task_kind="qa"), selected_route=selected
+    )
+
+    assert client.model_access_route is not None
+    assert client.model_access_route.transport_id == "deepseek_api"
+    assert client.chat("qa", {"system": "", "user": "hello"}) == "deepseek response"
+    assert captured["provider_override"] == "deepseek"
+    assert captured["model_override"] == "deepseek-chat"

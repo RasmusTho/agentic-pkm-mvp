@@ -373,6 +373,7 @@ def _capture_worker_keys(
         idempotency_key: str,
         vault_binding_id: str | None = None,
         required_db: bool = False,
+        payload_schema: str | None = None,
     ) -> str:
         keys.append(idempotency_key)
         if required_db_values is not None:
@@ -385,6 +386,7 @@ def _capture_worker_keys(
             conn,
             idempotency_key=idempotency_key,
             vault_binding_id=vault_binding_id,
+            payload_schema=payload_schema,
         )
 
     monkeypatch.setattr(outbox_worker, "write_outbox_event", _spy)

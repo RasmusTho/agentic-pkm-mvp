@@ -93,7 +93,7 @@ classes to `propose` and the enum owner doc marks the mapping non-amendable to `
 - **Bounded surfacing.** Per-pass caps (max findings per note, max total) — scarcity discipline
   borrowed from the reach-out contract; a connect pass that floods panels is worse than none.
 
-### 1.3 Capability contract (prose mirror; twelve fields per `docs/CAPABILITY_CONTRACT_MODEL.md`)
+### 1.3 Capability contract (prose mirror; thirteen fields per `docs/CAPABILITY_CONTRACT_MODEL.md`)
 
 **Name** `connection_proposal`. **Purpose** surface non-obvious candidate relationships across vault
 notes for human review. **Inputs** scope selector (required), note-set or whole-active-scope,

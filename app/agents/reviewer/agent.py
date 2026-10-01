@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 
+from app.agents.panel.filters import strip_ai_panels
 from app.components.reasoning import ReasoningTaskKind, get_reasoning_facade
 from app.objects import ObjectStore
 from app.services.decisions import insert_decision
@@ -24,7 +25,8 @@ _REVIEW_SETTINGS = ReviewerSettings()
 
 
 def _payload_text(payload: dict[str, Any]) -> str:
-    return str(payload.get("text") or payload.get("content") or payload.get("raw_text") or "")
+    text = str(payload.get("text") or payload.get("content") or payload.get("raw_text") or "")
+    return strip_ai_panels(text)
 
 
 def _apply_reviewer_settings(bundle: SettingsBundle) -> None:

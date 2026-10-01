@@ -53,19 +53,39 @@ from app.knowledge.write_ops import (
     candidate_note_exists_durable,
     create_candidate_note_once,
 )
+from app.knowledge_acquisition.content_router import ContentRoute, route_content
 from app.knowledge_acquisition.extraction_registry import ExtractionResult, run_extractor
 from app.knowledge_acquisition.evidence_synthesis import (
     RenderedEvidence,
     render_evidence_anchored,
+)
+from app.knowledge_acquisition.ontology_proposals import (
+    RenderedOntology,
+    ontology_section_content,
+    render_ontology_proposals,
+)
+from app.knowledge_acquisition.note_modules import (
+    RenderedModules,
+    compose_note_modules,
+    degradation_sections,
 )
 from app.knowledge_acquisition.note_renderer import (
     NoteRenderError,
     ProposalSection,
     render_review_required_note,
 )
-from app.knowledge_acquisition.normalize import has_usable_transcript, normalize
-from app.knowledge_acquisition.normalize import NormalizedTranscript
+from app.knowledge_acquisition.normalize import (
+    NormalizedMetadata,
+    NormalizedTranscript,
+    has_usable_transcript,
+    normalize,
+    normalize_metadata,
+)
 from app.vault.manager import VaultContext
+from app.vault.path_overlap import (
+    VaultPathOverlapError,
+    assert_targets_do_not_overlap_capture_note,
+)
 from app.vault.paths import get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 
@@ -118,6 +138,9 @@ class Candidate:
     optional_failures: tuple["ExtractionFailure", ...] = ()
     derived_transcript_link: str | None = None
     rendered_evidence: RenderedEvidence | None = None
+    rendered_ontology: RenderedOntology | None = None
+    content_route: ContentRoute | None = None
+    note_modules: RenderedModules | None = None
 
     def summary_text(self) -> str | None:
         for extraction in self.extractions:
@@ -159,7 +182,7 @@ def assemble_candidate(
     raw_record: Mapping[str, Any],
     *,
     extractor_ids: Sequence[str] = ("summary",),
-    normalized: NormalizedTranscript | None = None,
+    normalized: NormalizedTranscript | NormalizedMetadata | None = None,
     extraction_results: Sequence[ExtractionResult] | None = None,
     raw_record_id: str | None = None,
     normalized_artifact_id: str | None = None,
@@ -185,17 +208,31 @@ def assemble_candidate(
     provenance = raw_record.get("provenance") or {}
 
     try:
-        normalized_result = normalized or normalize(dict(raw_record))
+        if normalized is not None:
+            normalized_result = normalized
+        elif raw_record.get("acquisition_method") == "metadata_only":
+            normalized_result = normalize_metadata(dict(raw_record))
+        else:
+            normalized_result = normalize(dict(raw_record))
     except Exception as exc:  # noqa: BLE001 - re-raised as the assembly-scoped error below
         raise CandidateAssemblyError(
             f"normalize() failed for content_identity={content_identity!r}: {exc}"
         ) from exc
 
     normalized_dict = normalized_result.as_dict()
-    transcript_segment_count = len(normalized_result.segments)
-    transcript_available = has_usable_transcript(normalized_result)
+    is_metadata_only = isinstance(normalized_result, NormalizedMetadata)
+    if isinstance(normalized_result, NormalizedMetadata):
+        transcript_segment_count = 0
+        transcript_available = False
+    else:
+        transcript_segment_count = len(normalized_result.segments)
+        transcript_available = has_usable_transcript(normalized_result)
     extractions: list[ExtractionResult] = []
     if extraction_results is not None:
+        if is_metadata_only and extraction_results:
+            raise CandidateAssemblyError(
+                "metadata-only candidates cannot carry transcript extractor outputs"
+            )
         extractions.extend(extraction_results)
     elif transcript_available:
         for extractor_id in extractor_ids:
@@ -207,10 +244,20 @@ def assemble_candidate(
                     f"content_identity={content_identity!r}: {exc}"
                 ) from exc
 
-    rendered_evidence = _render_anchored_evidence(
+    rendered_evidence = None if is_metadata_only else _render_anchored_evidence(
         normalized=normalized_dict,
         extractions=extractions,
     )
+    # YSNV2-08: ontology output renders only through the deterministic gate and per-element
+    # anchoring re-check; a failed gate omits the section. Proposal-only, never canonical.
+    rendered_ontology = None if is_metadata_only else render_ontology_proposals(
+        next((r.output for r in extractions if r.extractor_id == "ontology"), None),
+        normalized_dict,
+    )
+    # YSNV2-07: conservative routing is a module input only; failure or uncertainty yields the
+    # generic spine, and a failing module is captured, never allowed to erase spine evidence.
+    content_route = None if is_metadata_only else route_content(normalized_dict)
+    note_modules = None if is_metadata_only else compose_note_modules(content_route, normalized_dict)
 
     return Candidate(
         content_identity=content_identity,
@@ -231,6 +278,9 @@ def assemble_candidate(
         ),
         optional_failures=tuple(optional_failures),
         rendered_evidence=rendered_evidence,
+        rendered_ontology=rendered_ontology,
+        content_route=content_route,
+        note_modules=note_modules,
     )
 
 
@@ -252,7 +302,7 @@ def candidate_note_path(candidate: Candidate, *, sources_dir: str = DEFAULT_SOUR
     """
     safe_dir = _safe_rel_path(sources_dir)
     slug = _slug(candidate.title)
-    identity_payload = candidate.content_identity.split(":", 1)[-1]
+    identity_payload = candidate.content_identity.rsplit(":", 1)[-1]
     short_identity = _slug(identity_payload)[:16] or "item"
     return (PurePosixPath(safe_dir) / f"{slug}-{short_identity}.md").as_posix()
 
@@ -297,6 +347,29 @@ def render_candidate_note(candidate: Candidate) -> str:
         frontmatter["unavailable_optional_extractors"] = [
             failure.extractor_id for failure in candidate.optional_failures
         ]
+    if candidate.content_route is not None:
+        frontmatter["content_route"] = candidate.content_route.frontmatter()
+    module_failures = (
+        tuple(f.module_id for f in candidate.note_modules.failures)
+        if candidate.note_modules is not None
+        else ()
+    )
+    routing_failed = candidate.content_route is not None and candidate.content_route.failed
+    if module_failures or routing_failed:
+        frontmatter["degraded"] = True
+    if module_failures:
+        frontmatter["unavailable_note_modules"] = list(module_failures)
+    if candidate.note_modules is not None and candidate.note_modules.omitted_items:
+        frontmatter["omitted_module_items"] = candidate.note_modules.omitted_items
+    degradation = [
+        *(
+            ["optional failures: " + ", ".join(f.extractor_id for f in candidate.optional_failures)]
+            if candidate.optional_failures
+            else []
+        ),
+        *(["content module failures: " + ", ".join(module_failures)] if module_failures else []),
+        *(["content routing failed"] if routing_failed else []),
+    ]
 
     proposal_sections = _candidate_proposal_sections(candidate)
     coverage = (
@@ -339,13 +412,16 @@ def render_candidate_note(candidate: Candidate) -> str:
             ),
             ("Derived transcript", candidate.derived_transcript_link or "not materialized"),
             (
-                "Materialization status",
+                "Content route",
                 (
-                    "degraded; optional failures: "
-                    + ", ".join(failure.extractor_id for failure in candidate.optional_failures)
-                    if candidate.optional_failures
-                    else "complete"
+                    candidate.content_route.describe()
+                    if candidate.content_route is not None
+                    else "generic (no transcript evidence)"
                 ),
+            ),
+            (
+                "Materialization status",
+                "degraded; " + "; ".join(degradation) if degradation else "complete",
             ),
         ),
     )
@@ -353,6 +429,22 @@ def render_candidate_note(candidate: Candidate) -> str:
 
 def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:
     """Render reviewable extraction outputs without assigning them authority."""
+    sections = _evidence_and_summary_sections(candidate)
+    if candidate.rendered_ontology is not None:
+        sections += (
+            ProposalSection(
+                module_id="ontology-proposals",
+                title="Ontology proposals",
+                content=ontology_section_content(candidate.rendered_ontology),
+            ),
+        )
+    # Content modules follow the universal spine and never replace it.
+    if candidate.note_modules is not None:
+        sections += candidate.note_modules.sections
+    return sections + degradation_sections(candidate.content_route, candidate.note_modules)
+
+
+def _evidence_and_summary_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:
     if candidate.rendered_evidence is not None:
         sections: list[ProposalSection] = []
         if candidate.rendered_evidence.synthesis_sentences:
@@ -496,6 +588,10 @@ def write_candidate_note(
     if sources_dir is None:
         sources_dir = get_vault_sources_dir_rel(vault_root)
     artifact_path = candidate_note_path(candidate, sources_dir=sources_dir)
+    targets = [artifact_path]
+    if proposal_on_existing and candidate.extraction_artifact_ids:
+        targets.append(_versioned_proposal_path(candidate, artifact_path))
+    _assert_capture_note_disjoint(targets, vault_root=vault_root)
 
     try:
         target_exists = candidate_note_exists_durable(
@@ -581,13 +677,8 @@ def _write_versioned_proposal(
     """Atomically create one D5 proposal companion without touching predecessor bytes."""
     identity_material = "\n".join(candidate.extraction_artifact_ids)
     proposal_reference = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:20]
-    predecessor = PurePosixPath(predecessor_path)
-    max_version = max((item.extractor_version for item in candidate.extractions), default=0)
-    proposal_name = (
-        f"{predecessor.stem}-proposal-extracted-v{max_version}-"
-        f"{proposal_reference}.meta.md"
-    )
-    proposal_path = predecessor.with_name(proposal_name).as_posix()
+    proposal_path = _versioned_proposal_path(candidate, predecessor_path)
+    _assert_capture_note_disjoint([proposal_path], vault_root=vault_root)
     now = _iso(datetime.now(timezone.utc))
     content = render_review_required_note(
         frontmatter={
@@ -657,6 +748,25 @@ def _vault_root(context: VaultContext) -> Path:
     if not context.active_vault_path:
         raise CandidateWritebackError("vault_context.active_vault_path is required")
     return Path(context.active_vault_path).expanduser().resolve()
+
+
+def _versioned_proposal_path(candidate: Candidate, predecessor_path: str) -> str:
+    identity_material = "\n".join(candidate.extraction_artifact_ids)
+    proposal_reference = hashlib.sha256(identity_material.encode("utf-8")).hexdigest()[:20]
+    predecessor = PurePosixPath(predecessor_path)
+    max_version = max((item.extractor_version for item in candidate.extractions), default=0)
+    proposal_name = (
+        f"{predecessor.stem}-proposal-extracted-v{max_version}-"
+        f"{proposal_reference}.meta.md"
+    )
+    return predecessor.with_name(proposal_name).as_posix()
+
+
+def _assert_capture_note_disjoint(targets: list[str], *, vault_root: Path) -> None:
+    try:
+        assert_targets_do_not_overlap_capture_note(targets, vault_root=vault_root)
+    except VaultPathOverlapError as exc:
+        raise CandidateWritebackError(str(exc)) from exc
 
 
 def _slug(value: str) -> str:

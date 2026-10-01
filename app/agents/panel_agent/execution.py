@@ -35,10 +35,37 @@ def use_db_outbox() -> bool:
     return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
 
-def refresh_panel_note_object(*, note_uuid: str, note_path: Path, raw_text: str, trace_id: str) -> None:
+def refresh_panel_note_object(
+    *,
+    note_uuid: str,
+    note_path: Path,
+    raw_text: str,
+    trace_id: str,
+    vault_root: Path,
+) -> None:
+    from app.knowledge.profile_authority_store import assert_profile_note_ingestible
+
+    resolved_root = os.path.realpath(vault_root.expanduser(), strict=True)
+    expanded_path = os.path.expanduser(os.fspath(note_path))
+    resolved_path = os.path.realpath(expanded_path, strict=True)
+    root_prefix = resolved_root if resolved_root.endswith(os.sep) else resolved_root + os.sep
+    if resolved_path == resolved_root or not resolved_path.startswith(root_prefix):
+        raise ValueError("Profile Note path is outside its vault")
+    frontmatter, _ = load_frontmatter(raw_text)
+    source_uuid = (
+        frontmatter.get("uuid") or frontmatter.get("id")
+        if isinstance(frontmatter, dict)
+        else None
+    )
+    assert_profile_note_ingestible(
+        Path(resolved_root),
+        Path(resolved_path).relative_to(Path(resolved_root)).as_posix(),
+        str(source_uuid) if source_uuid else None,
+        source_text=raw_text,
+    )
+
     store = ObjectStore()
     existing = store.get_object(note_uuid)
-    frontmatter, _ = load_frontmatter(raw_text)
     payload = dict(existing.payload or {}) if existing is not None else {}
     payload.update(
         {

@@ -1747,7 +1747,7 @@ def _display_preferences_script() -> str:
       root.style.setProperty('--display-line-height', prefs.lineHeight || defaults.lineHeight);
       root.style.setProperty('--display-reading-width', prefs.readingWidth || defaults.readingWidth);
       document.body.classList.toggle('display-pref-focus', Boolean(prefs.focusMode));
-      // YDS-03 (#5629): Yggdrasil Light "Shell" is a per-user trial; Dark is canonical.
+      // YDS-03 (#5629): Yggdrasil Light "Shell" is a per-user choice; Dark is canonical.
       if (prefs.theme === 'light') {
         root.setAttribute('data-theme', 'light');
       } else {
@@ -9283,7 +9283,7 @@ def _render_orientation_index_html(
         else ""
     )
     return f"""<!DOCTYPE html>
-<html lang="en" data-focus="v2">
+<html lang="en" class="fx-city" data-focus="v2">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11353,7 +11353,7 @@ def render_index_html(
     )
 
     return f"""<!DOCTYPE html>
-<html lang="en" data-focus="v2">
+<html lang="en" class="fx-city" data-focus="v2">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">

@@ -18,6 +18,8 @@ _CONTRACT_FIELDS = frozenset(
         "channels",
         "secrets",
         "consumers",
+        "bws",
+        "file_secrets",
     }
 )
 # `optional` is required on every declaration rather than defaulted (#4489):
@@ -27,23 +29,44 @@ _CONTRACT_FIELDS = frozenset(
 # consumer of a secret must resolve to identical material is a property of
 # the secret, and it must be stated explicitly rather than inferred from how
 # many consumers happen to declare it.
-_SECRET_FIELDS = frozenset(
-    {"logical_id", "child_binding", "kind", "optional", "shared_key_domain"}
-)
+_SECRET_FIELDS = frozenset({"logical_id", "child_binding", "kind", "optional", "shared_key_domain"})
 _CONSUMER_FIELDS = frozenset({"consumer", "channels", "secrets", "role_requirements"})
 _KEYCHAIN_ACCOUNT_TEMPLATE = "{channel}:{consumer}:{secret}"
 _KEYCHAIN_SERVICE = "yggdrasil.host-secrets"
 _CHANNEL_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,15}$")
-_CONSUMER_PATTERN = re.compile(
-    r"^[a-z][a-z0-9]{0,15}(?:-[a-z][a-z0-9]{0,15}){2,3}$"
-)
-_LOGICAL_SECRET_PATTERN = re.compile(
-    r"^[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,15}$"
-)
+_CONSUMER_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,15}(?:-[a-z][a-z0-9]{0,15}){2,3}$")
+_LOGICAL_SECRET_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,15}\.[a-z][a-z0-9-]{0,15}$")
 _CHILD_BINDING_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")
 _KIND_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,15}$")
 _ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,15}$")
 _IDENTIFIER_MAX_LENGTH = 128
+CHANNEL_PROJECTS = {"dev": "non-prod", "test": "non-prod", "prod": "prod"}
+BWS_IDENTITIES = {
+    "heimdal.raw-store-key": "channel",
+    "heimdal.archive-pass": "channel",
+    "postgres.password": "channel",
+    "openai.api-key": "shared",
+    "anthropic.api-key": "shared",
+    "github.token": "shared",
+    "discord.webhook": "shared",
+}
+DATABASE_CONSUMERS = {
+    "postgres-db": "db",
+    "postgres-migrate": "migrate",
+    "postgres-api": "api",
+    "postgres-worker": "worker",
+    "postgres-watcher": "watcher",
+    "postgres-capture-watch": "heimdal-capture-watch",
+}
+_ENVIRONMENT_GRANTS = {
+    "heimdal-api-ingress": {"heimdal.raw-store-key", "github.token"},
+    "heimdal-raw-migrate": {"heimdal.raw-store-key"},
+    "heimdal-capture-watch": {"heimdal.raw-store-key"},
+    "heimdal-cold-volume": {"heimdal.archive-pass"},
+    "builderops-model-inquiry": {"openai.api-key"},
+    "builderops-ckm-semantic": {"openai.api-key"},
+    "heimdal-external-alerts": {"discord.webhook"},
+}
 
 
 class UndeclaredSecretConsumerError(ValueError):
@@ -74,6 +97,26 @@ class HostSecretContract:
     # (#4512). Kept beside `secret_definitions` for the same reason as
     # `optional_secrets`.
     shared_key_domain_secrets: frozenset[str] = frozenset()
+
+    def bws_identity(self, *, channel: str, consumer: str, secret: str) -> tuple[str, str]:
+        if secret == "postgres.password":
+            self.file_binding(channel=channel, consumer=consumer, secret=secret)
+        else:
+            self.require_declared(channel=channel, consumer=consumer, secret=secret)
+        if channel not in CHANNEL_PROJECTS or secret not in BWS_IDENTITIES:
+            raise UndeclaredSecretConsumerError("undeclared host secret request")
+        prefix = "shared" if BWS_IDENTITIES[secret] == "shared" else channel
+        return CHANNEL_PROJECTS[channel], f"{prefix}/{secret}"
+
+    def file_binding(self, *, channel: str, consumer: str, secret: str) -> tuple[str, str]:
+        if (
+            channel not in CHANNEL_PROJECTS
+            or secret != "postgres.password"
+            or consumer not in DATABASE_CONSUMERS
+        ):
+            raise UndeclaredSecretConsumerError("undeclared host secret file request")
+        service = DATABASE_CONSUMERS[consumer]
+        return service, "POSTGRES_PASSWORD_FILE" if service == "db" else "DATABASE_PASSWORD_FILE"
 
     def require_declared(self, *, channel: str, consumer: str, secret: str) -> None:
         if (channel, consumer, secret) not in self.allowed:
@@ -173,7 +216,9 @@ def _expected_child_binding(logical_id: str) -> str:
 
 
 def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretContract:
-    payload = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_json_keys)
+    payload = json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_json_keys
+    )
     if not isinstance(payload, dict) or set(payload) != _CONTRACT_FIELDS:
         raise ValueError("invalid host secret contract")
     if (
@@ -276,6 +321,7 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
             role_requirements.append((consumer, role, required_secrets))
     if not allowed:
         raise ValueError("host secret contract declares no consumers")
+    _validate_bws_contract(payload, allowed, declared_secrets)
     return HostSecretContract(
         keychain_service=payload["keychain_service"],
         keychain_account_template=payload["keychain_account_template"],
@@ -285,3 +331,68 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
         optional_secrets=frozenset(optional_secrets),
         shared_key_domain_secrets=frozenset(shared_key_domain_secrets),
     )
+
+
+def _validate_bws_contract(
+    payload: dict[str, object], allowed: set[tuple[str, str, str]], declared_secrets: frozenset[str]
+) -> None:
+    expected_allowed = {
+        (channel, consumer, secret)
+        for channel in CHANNEL_PROJECTS
+        for consumer, secrets in _ENVIRONMENT_GRANTS.items()
+        for secret in secrets
+    }
+    expected_bws = {
+        "channel_projects": CHANNEL_PROJECTS,
+        "machine_accounts": {
+            "admin": ["non-prod", "prod"],
+            "non-prod-reader": ["non-prod"],
+            "prod-reader": ["prod"],
+        },
+        "identities": [
+            {"logical_id": secret, "scope": scope} for secret, scope in BWS_IDENTITIES.items()
+        ],
+    }
+    bws = payload["bws"]
+    if not isinstance(bws, dict) or set(bws) != set(expected_bws):
+        raise ValueError("invalid host secret BWS contract")
+    identities = bws["identities"]
+    expected_ids = [
+        {"logical_id": secret, "scope": scope} for secret, scope in BWS_IDENTITIES.items()
+    ]
+    if (
+        bws["channel_projects"] != CHANNEL_PROJECTS
+        or bws["machine_accounts"] != expected_bws["machine_accounts"]
+        or not isinstance(identities, list)
+        or len(identities) != len(BWS_IDENTITIES)
+        or any(item not in identities for item in expected_ids)
+        or declared_secrets != frozenset(BWS_IDENTITIES) - {"postgres.password"}
+        or allowed != expected_allowed
+    ):
+        raise ValueError("invalid host secret BWS identity or consumer grant")
+    expected_file = [
+        {
+            "logical_id": "postgres.password",
+            "kind": "password",
+            "optional": False,
+            "delivery": "file",
+            "channels": ["dev", "test", "prod"],
+            "consumers": [
+                {
+                    "consumer": consumer,
+                    "service": service,
+                    "path_binding": "POSTGRES_PASSWORD_FILE"
+                    if service == "db"
+                    else "DATABASE_PASSWORD_FILE",
+                }
+                for consumer, service in DATABASE_CONSUMERS.items()
+            ],
+        }
+    ]
+    file_secrets = payload["file_secrets"]
+    if (
+        not isinstance(file_secrets, list)
+        or file_secrets != expected_file
+        or type(file_secrets[0]["optional"]) is not bool
+    ):
+        raise ValueError("invalid host secret file delivery contract")

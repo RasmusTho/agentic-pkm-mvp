@@ -55,7 +55,12 @@ def validate_json(raw: str, schema_path: str) -> Dict[str, Any]:
     return data
 
 
-def _ollama_base_url() -> str:
+def _ollama_base_url(override: str | None = None) -> str:
+    if override is not None:
+        base_url = override.strip().rstrip("/")
+        if not base_url:
+            raise RuntimeError("Ollama base URL override must not be empty")
+        return base_url
     base_url = (
         os.getenv("OLLAMA_BASE_URL")
         or os.getenv("OLLAMA_HOST")
@@ -83,6 +88,7 @@ def _ollama_chat(
     timeout: float | None = None,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
+    base_url_override: str | None = None,
 ) -> str:
     if timeout is None:
         timeout = env_float("LLM_TIMEOUT")
@@ -101,7 +107,7 @@ def _ollama_chat(
         # object for schema-constrained decoding (KERNEL-07).
         body["format"] = response_format
 
-    base = _ollama_base_url()
+    base = _ollama_base_url(base_url_override)
     parsed = urlparse(base)
     host = parsed.hostname
     if not host:
@@ -278,10 +284,16 @@ def _http_chat(
     temperature: float = 0.0,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
+    evaluation_request: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     payload: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
+    if evaluation_request:
+        # Opt-in measured eval uses Standard text billing and GPT-5-compatible limits.
+        payload.pop("temperature")
+        payload["service_tier"] = "default"
+        payload["reasoning_effort"] = "none"
     if max_tokens is not None:
-        payload["max_tokens"] = int(max_tokens)
+        payload["max_completion_tokens" if evaluation_request else "max_tokens"] = int(max_tokens)
     if response_format is not None:
         # OpenAI-compatible JSON mode. NOTE: the caller's JSON Schema is NOT
         # transmitted on this path — a dict response_format degrades to generic
@@ -325,6 +337,10 @@ def call_llm(
     temperature: float | None = None,
     max_tokens: int | None = None,
     response_format: dict[str, Any] | str | None = None,
+    base_url_override: str | None = None,
+    api_key_override: str | None = None,
+    usage_observer: Callable[[dict[str, Any]], None] | None = None,
+    record_content: bool = True,
 ) -> str:
     def _deterministic_response_for_kind() -> str:
         if kind and "ranking" in str(kind):
@@ -416,6 +432,7 @@ def call_llm(
                     timeout=timeout,
                     max_tokens=max_tokens,
                     response_format=response_format,
+                    base_url_override=base_url_override,
                 )
             )
         except LLMBackendTimeout:
@@ -437,12 +454,25 @@ def call_llm(
         response_payload = {"content": response_text}
     elif provider == "openai":
         try:
-            api_key = os.environ["OPENAI_API_KEY"]
-            url = (os.getenv("OPENAI_BASE") or "").strip()
-            if not url:
-                _base_url = (os.getenv("OPENAI_BASE_URL") or "").strip().rstrip("/")
-                if _base_url:
-                    url = _base_url + "/chat/completions"
+            if api_key_override is not None:
+                if not api_key_override.strip():
+                    raise RuntimeError("OpenAI adapter API key override is empty")
+                api_key = api_key_override
+            else:
+                api_key = os.environ["OPENAI_API_KEY"]
+            url = ""
+            if base_url_override is not None:
+                url = base_url_override.strip().rstrip("/")
+                if not url:
+                    raise RuntimeError("OpenAI adapter base URL override is empty")
+                if not url.endswith("/chat/completions"):
+                    url += "/chat/completions"
+            else:
+                url = (os.getenv("OPENAI_BASE") or "").strip()
+                if not url:
+                    _base_url = (os.getenv("OPENAI_BASE_URL") or "").strip().rstrip("/")
+                    if _base_url:
+                        url = _base_url + "/chat/completions"
             if not url:
                 raise RuntimeError("OPENAI_BASE_URL or OPENAI_BASE is required for openai provider")
             response_text, response_payload = _http_chat(
@@ -454,6 +484,7 @@ def call_llm(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 response_format=response_format,
+                **({"evaluation_request": True} if usage_observer is not None else {}),
             )
         except Exception as exc:
             raise LLMError(
@@ -481,16 +512,24 @@ def call_llm(
                 f"deepseek provider call failed (model={model}); refusing to substitute a "
                 f"deterministic response: {exc}"
             ) from exc
-    log_llm_call(
-        provider=provider or "unknown",
-        model=str(model),
-        agent=agent or name or "unknown",
-        kind=kind or name or "unknown",
-        messages=messages,
-        response=response_payload,
-        response_text=response_text,
-        trace_id=trace_id,
-    )
+    if usage_observer is not None:
+        # Evidence consumers receive only billing metadata, never message content.
+        usage_observer({
+            "model": response_payload.get("model"),
+            "usage": response_payload.get("usage"),
+            "service_tier": response_payload.get("service_tier"),
+        })
+    if record_content:
+        log_llm_call(
+            provider=provider or "unknown",
+            model=str(model),
+            agent=agent or name or "unknown",
+            kind=kind or name or "unknown",
+            messages=messages,
+            response=response_payload,
+            response_text=response_text,
+            trace_id=trace_id,
+        )
 
     return response_text
 

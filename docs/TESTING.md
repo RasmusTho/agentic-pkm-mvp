@@ -95,12 +95,14 @@ Use these terms distinctly in both docs and execution:
 
 - Testing = the commands, suites, and checks that run.
 - Slice verification = proof that one bounded slice / child issue implemented its intended contract correctly.
-- Feature validation = proof that the wider feature / capability works for the intended operator or product outcome, sometimes after merge.
-- Acceptance = the explicit decision that the repo can now claim and support that feature in owner docs.
+- Scenario acceptance = whether the human outcome and failure boundaries described in the Scenario Acceptance Matrix are met.
+- Feature validation = proof that the composed user-facing outcome works across its required capabilities, surfaces, integrations, and subsystems, sometimes after merge.
+- Capability validation = proof that a reusable function meets its typed contract and belongs coherently to its named subsystem; it does not replace scenario or feature acceptance.
+- Acceptance = the explicit decision that the repo can now claim and support the feature outcome or capability contract in owner docs.
 
 Real-life evidence rule:
 - PRs should carry slice verification evidence.
-- Parent feature / capability issues should carry post-merge validation evidence and the acceptance checklist, typically through the issue body and validation comments.
+- Parent feature issues should carry end-to-end user-outcome validation evidence; parent capability issues, when used, should carry contract-level evidence. Both keep the applicable acceptance checklist in the issue body and validation comments.
 - Owner docs should change when the accepted support claim changes, not for every rerun or post-merge observation.
 
 This keeps docs stable while still allowing truthful post-merge validation.
@@ -243,6 +245,8 @@ Current implementation:
 - `.github/workflows/ci-smoke.yaml` — PR smoke for pull-request creation, reopening, code/integration updates (`synchronize`), and base-ref retargets represented by `edited`, with explicit system dependency parity (`ffmpeg`, `ripgrep`), required `ruff check app tests` and `settings-validate` checks, split baseline pytest and deterministic Quality Wave UAT harness steps, and path-based skipping of the heavy pytest slices for docs-only PRs that do not touch code, tests, scripts, workflow, Docker, dependency, or Makefile surfaces. Pure PR title/body metadata edits keep the workflow jobs skipped and are checked by `.github/workflows/issue-pr-governance.yml`.
 - `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC, explicit deterministic acceptance harness coverage via `tests/quality_wave/test_uat_harness.py`, first bounded PG contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`), runtime contract regressions, and fitness gates.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
+
+Post-merge automatic `dev` → `test` deployment is not currently implemented by these workflows. The proposed fast PR-to-merge and exact-image delivery policy is documented in [FAST_PR_TO_DEV_TEST_AUTOMATION](plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md); it is target state and does not change the current test gates or resolve the separate PG nightly policy decision.
 
 Dedicated PR workflows are path-scoped to the subsystem they validate: PanelAgent live-LLM E2E runs only for panel/promotion/LLM changes, Companion UI browser runtime only for Companion UI/API/web changes, app-image validation only for image inputs, and import-linter only when the import graph or its contract changes. Generic PR pytest excludes opt-in live/provider/browser/UAT/eval markers.
 

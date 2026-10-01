@@ -54,6 +54,10 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 - The artifact-only producer, ledger, and host-local consumer authenticate the same `CI Smoke`
   pull-request source workflow at `.github/workflows/ci-smoke.yaml`; a retired `CI` identity or
   mismatched path is rejected before verification work can start.
+- Ordinary verification-request resolution and CLI artifact generation use only the Python
+  standard library, matching the clean interpreter in `verification-dispatch-request.yml`.
+  The request builder loads optional BuilderOps canary dependencies only when an explicit canary
+  receipt is supplied; that path retains its existing validation and dependency requirements.
 
 - `app.dispatcher.verification_api.BuilderOpsVerificationLedger` is the production durable port:
   runs are BuilderOps tasks, review/repair/verification events are BuilderOps attempts, and every

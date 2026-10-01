@@ -16,9 +16,6 @@ from app.dispatcher.verification_contract import (
     resolve_issue_authority,
     resolve_issue_contract as resolve_issue_contract,
 )
-from app.builderops.execution_routing_receipts import (
-    bind_canary_receipt_to_verification_request,
-)
 
 
 CONTRACT_VERSION = "verification_dispatch_request.v3"
@@ -229,6 +226,12 @@ def build_request(
         ),
     }
     if canary_receipt is not None:
+        # Ordinary CI artifacts use only the standard library. Canary binding
+        # is an explicit local path with additional BuilderOps dependencies.
+        from app.builderops.execution_routing_receipts import (
+            bind_canary_receipt_to_verification_request,
+        )
+
         request = bind_canary_receipt_to_verification_request(
             request, canary_receipt
         )

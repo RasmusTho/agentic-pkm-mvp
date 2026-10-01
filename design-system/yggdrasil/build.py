@@ -36,6 +36,11 @@ CSS_OUTPUTS = (
 TOKENS_CSS_OUTPUT = "companion-ui/companion-app/yggdrasil-tokens.css"
 # The same tokens-only sheet for the web Builder surfaces served from app/web/static.
 TOKENS_CSS_OUTPUTS = (TOKENS_CSS_OUTPUT, "app/web/static/yggdrasil-tokens.css")
+# The tokens-only sheet without the web-font import, for the DevUI pages, whose CSP
+# forbids web fonts (`font-src 'none'`, `style-src 'self'`). Both the managed DevUI
+# (hash-pinned in app/builderops/devui_assets.py) and the Companion gateway serve it as
+# /devui/assets/yggdrasil.css; it sits in companion-app so the Companion image has it.
+DEVUI_TOKENS_CSS_OUTPUT = "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css"
 SWIFT_OUTPUT = "design-system/yggdrasil/dist/YggdrasilTokens.swift"
 JSON_OUTPUT = "design-system/yggdrasil/dist/tokens.json"
 
@@ -114,7 +119,8 @@ def shell_overrides(src: dict[str, object]) -> dict[str, dict[str, object]]:
 REDUCED_MOTION = (
     "/* ============================================================\n   ACCESSIBILITY — reduced motion (always on)\n   ============================================================ */\n"
     "@media (prefers-reduced-motion: reduce) {\n"
-    "  :root {\n    --duration-fast: 0ms;\n    --duration-base: 0ms;\n    --duration-slow: 0ms;\n  }\n}"
+    "  :root {\n    --duration-fast: 0ms;\n    --duration-base: 0ms;\n    --duration-slow: 0ms;\n  }\n"
+    "  .fx-city::before, .fx-city::after, .fx-city > body::before, .fx-city > body::after { animation: none; }\n}"
 )
 
 
@@ -127,7 +133,7 @@ def render_css(src: dict[str, object], *, include_base: bool = True) -> str:
         "   ============================================================\n"
         "   GENERATED from design-system/yggdrasil/ by build.py. Do not edit;\n"
         "   change the token source and run: python3 design-system/yggdrasil/build.py\n"
-        "   Themes: Yggdrasil Dark (default) and Yggdrasil Light \"Shell\" (trial,\n"
+        "   Themes: Yggdrasil Dark (default) and Yggdrasil Light \"Shell\" (opt-in,\n"
         "   data-theme=\"light\" or \"system\"). Density: data-density=\"compact\".\n"
         "   ============================================================ */\n"
     )
@@ -143,7 +149,7 @@ def render_css(src: dict[str, object], *, include_base: bool = True) -> str:
             if include_base
             else []
         ),
-        "/* ============================================================\n   THEME — Yggdrasil Light \"Shell\" (trial, opt-in)\n   ============================================================ */",
+        "/* ============================================================\n   THEME — Yggdrasil Light \"Shell\" (opt-in)\n   ============================================================ */",
         _block(':root[data-theme="light"]', shell_tokens, properties=("color-scheme: light",)),
         "",
         "@media (prefers-color-scheme: light) {\n"
@@ -246,7 +252,17 @@ def flatten(src: dict[str, object]) -> dict[str, object]:
         def one(name: str, depth: int = 0) -> str:
             value = css_value(resolve(tokens, name))
             ref = re.fullmatch(r"var\(--([a-z0-9-]+)\)", value)
-            return one(ref.group(1), depth + 1) if ref and ref.group(1) in tokens and depth < 8 else value
+            if ref and ref.group(1) in tokens and depth < 8:
+                return one(ref.group(1), depth + 1)
+            if depth < 8:
+                # Inline references inside composite values (e.g. the Shell city
+                # backdrop's palette colours) resolve to their static defaults.
+                value = re.sub(
+                    r"var\(--([a-z0-9-]+)\)",
+                    lambda m: one(m.group(1), depth + 1) if m.group(1) in tokens else m.group(0),
+                    value,
+                )
+            return value
 
         return {name: one(name) for name in tokens}
 
@@ -267,6 +283,7 @@ def render_all(src: dict[str, object] | None = None) -> dict[str, str]:
         "— Colors & Type", "— Tokens only (no element defaults)", 1
     )
     outputs.update({path: tokens_only for path in TOKENS_CSS_OUTPUTS})
+    outputs[DEVUI_TOKENS_CSS_OUTPUT] = tokens_only.replace("\n" + FONT_IMPORT + "\n", "", 1)
     outputs[SWIFT_OUTPUT] = render_swift(src)
     outputs[JSON_OUTPUT] = json.dumps(flatten(src), indent=2, ensure_ascii=False) + "\n"
     return outputs

@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/note.move.workbench.v2.schema.json",
+  "title": "note.move.workbench payload (v2, closed)",
+  "description": "Payload of note.move.workbench. Producer: app/agents/panel_agent/runtime.py downstream emission for zone_move actions (note_uuid/note_path/action_id/params). Consumer: handle_note_move_workbench requires note_path and reads params.destination_zone. params stays open (config-driven). Closed contract (#5704): undeclared top-level fields are rejected; producer extras belong under `extensions`. v1 stays registered for rows already tagged `note.move.workbench.v1`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "note_path"
+  ],
+  "properties": {
+    "note_path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "note_uuid": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "source_zone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destination_zone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "action_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "intent_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "trace_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Envelope event id the worker run() loop copies into the payload before dispatch; carried onto retries."
+    },
+    "_worker_retry_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Worker transient-retry attempt number (app/workers/outbox_worker.py::_queue_transient_retry)."
+    },
+    "_worker_retry_reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Worker transient-retry reason code."
+    },
+    "_worker_retry_enqueued_at": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UTC ISO-8601 timestamp of the worker retry enqueue."
+    },
+    "extensions": {
+      "type": "object",
+      "description": "The only open extension point: producer-specific extras must be nested here, never added as undeclared top-level fields."
+    }
+  }
+}

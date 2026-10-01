@@ -92,8 +92,20 @@ providers:
       - id: gpt-6-astra
         effective_identity: openai/gpt-6-astra
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-6-luna
+        effective_identity: openai/gpt-6-luna
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
       - id: gpt-5.4
         effective_identity: openai/gpt-5.4
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-5.4-mini
+        effective_identity: openai/gpt-5.4-mini
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-4.1
+        effective_identity: openai/gpt-4.1
+        capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+      - id: gpt-4.1-mini
+        effective_identity: openai/gpt-4.1-mini
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
 projections:
   - site: app/components/llm/router.py::_KNOWN_PROVIDERS
@@ -107,7 +119,7 @@ projections:
   - site: app/llm/adapter.py::_DISPATCH_PROVIDERS
     providers: [mock, ollama, openai, deepseek]
   - site: app/cli/health.py::_check_llm_providers
-    providers: [mock, ollama]
+    providers: [mock, ollama, openai, deepseek]
   - site: docs/settings/models/registry.yaml::provider
     providers: [mock, ollama, openai]
   - site: docs/LLM.md::Providers (Current)
@@ -131,17 +143,17 @@ runtime_channels:
   builder_execution:
     dev:
       spark: {capability_tier: spark, provider: openai, model: gpt-5.3-codex-spark, reasoning_effort: low, requires: [structured_output, native_tools]}
-      luna: {capability_tier: luna, provider: openai, model: gpt-5.6-luna, reasoning_effort: xhigh, selection_intents: [coordination, general_delivery], selection_intent_reasoning_efforts: {coordination: low, general_delivery: xhigh}, requires: [structured_output, native_tools]}
+      luna: {capability_tier: luna, provider: openai, model: gpt-6-luna, selectable_models: [gpt-6-luna, gpt-5.6-luna], reasoning_effort: xhigh, selection_intents: [coordination, general_delivery], selection_intent_reasoning_efforts: {coordination: low, general_delivery: xhigh}, requires: [structured_output, native_tools]}
       terra: {capability_tier: terra, provider: openai, model: gpt-5.6-terra, reasoning_effort: high, requires: [structured_output, native_tools]}
       sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, selectable_models: [gpt-5.6-sol, gpt-6-astra], model_reasoning_efforts: {gpt-5.6-sol: high, gpt-6-astra: max}, reasoning_effort: high, selection_intents: [strong_reasoning, verification], selection_intent_reasoning_efforts: {strong_reasoning: max, verification: max}, selection_intent_models: {strong_reasoning: gpt-6-astra, verification: gpt-6-astra}, requires: [structured_output, native_tools]}
     test:
       spark: {capability_tier: spark, provider: openai, model: gpt-5.3-codex-spark, reasoning_effort: low, requires: [structured_output, native_tools]}
-      luna: {capability_tier: luna, provider: openai, model: gpt-5.6-luna, reasoning_effort: xhigh, selection_intents: [coordination, general_delivery], selection_intent_reasoning_efforts: {coordination: low, general_delivery: xhigh}, requires: [structured_output, native_tools]}
+      luna: {capability_tier: luna, provider: openai, model: gpt-6-luna, selectable_models: [gpt-6-luna, gpt-5.6-luna], reasoning_effort: xhigh, selection_intents: [coordination, general_delivery], selection_intent_reasoning_efforts: {coordination: low, general_delivery: xhigh}, requires: [structured_output, native_tools]}
       terra: {capability_tier: terra, provider: openai, model: gpt-5.6-terra, reasoning_effort: high, requires: [structured_output, native_tools]}
       sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, selectable_models: [gpt-5.6-sol, gpt-6-astra], model_reasoning_efforts: {gpt-5.6-sol: high, gpt-6-astra: max}, reasoning_effort: high, selection_intents: [strong_reasoning, verification], selection_intent_reasoning_efforts: {strong_reasoning: max, verification: max}, selection_intent_models: {strong_reasoning: gpt-6-astra, verification: gpt-6-astra}, requires: [structured_output, native_tools]}
     prod:
       spark: {capability_tier: spark, provider: openai, model: gpt-5.3-codex-spark, reasoning_effort: low, requires: [structured_output, native_tools]}
-      luna: {capability_tier: luna, provider: openai, model: gpt-5.6-luna, reasoning_effort: xhigh, selection_intents: [coordination, general_delivery], selection_intent_reasoning_efforts: {coordination: low, general_delivery: xhigh}, requires: [structured_output, native_tools]}
+      luna: {capability_tier: luna, provider: openai, model: gpt-6-luna, selectable_models: [gpt-6-luna, gpt-5.6-luna], reasoning_effort: xhigh, selection_intents: [coordination, general_delivery], selection_intent_reasoning_efforts: {coordination: low, general_delivery: xhigh}, requires: [structured_output, native_tools]}
       terra: {capability_tier: terra, provider: openai, model: gpt-5.6-terra, reasoning_effort: high, requires: [structured_output, native_tools]}
       sol: {capability_tier: sol, provider: openai, model: gpt-5.6-sol, selectable_models: [gpt-5.6-sol, gpt-6-astra], model_reasoning_efforts: {gpt-5.6-sol: high, gpt-6-astra: max}, reasoning_effort: high, selection_intents: [strong_reasoning, verification], selection_intent_reasoning_efforts: {strong_reasoning: max, verification: max}, selection_intent_models: {strong_reasoning: gpt-6-astra, verification: gpt-6-astra}, requires: [structured_output, native_tools]}
   model_inquiry:

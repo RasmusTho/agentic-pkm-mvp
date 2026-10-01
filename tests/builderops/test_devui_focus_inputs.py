@@ -105,7 +105,10 @@ def test_issue_declarations_do_not_infer_requirement_coverage_or_document_read()
 """
     )
 
-    declarations = result["governing_sources"][1:] + result["evidence"][1:]  # type: ignore[index]
+    declarations = [
+        item for item in result["governing_sources"] + result["evidence"]  # type: ignore[operator]
+        if item["claim_id"].startswith("issue-declaration:")
+    ]
     assert declarations
     assert all(item["coverage"] == "partial" for item in declarations)
     assert all(item["cardinality"] == "not_countable" for item in declarations)

@@ -325,7 +325,7 @@ def test_bifrost_recovery_refuses_corrupted_identity(issue_delivery_production_h
     receipt = harness.executor.execute(request)
     payload = deepcopy(harness.ledger.status(receipt.operation_key)["payload"])
     payload[field] = {} if field == "delivery_sources" else "0" * 64
-    with psycopg.connect(harness.store.dsn) as conn:
+    with harness.store._connect() as conn:
         conn.execute("UPDATE builderops_outbox SET payload = %s::jsonb WHERE repository = %s AND operation_key = %s",
                      (json.dumps(payload), request.repository, receipt.operation_key))
     with pytest.raises(ValueError, match="recovery authority binding"):
@@ -938,12 +938,17 @@ def test_revocation_and_target_drift_fail_closed(
     with pytest.raises(ValueError, match="target/source/profile"):
         drifted.executor.execute(drifted.completed_request())
     assert drifted.transport.apply_calls == drifted.credentials.calls == 0
-    assert drifted.ledger.status(
+    status = drifted.ledger.status(
         drifted.ledger.operation_key(
             effect_slot_sha256=drifted.completed_request().effect_slot_sha256,
             effect_type="github.issue-delivery.claim.v1",
         )
-    )["status"] == "pending"
+    )
+    assert status["status"] == "pending"
+    assert status["reconciliation_evidence"]["outcome"] == "not_applied"
+    assert status["reconciliation_evidence"]["transport_invoked"] is False
+    assert "readback" not in status["reconciliation_evidence"]
+    assert drifted.store.bootstrap_status()["writers_enabled"] is True
 
 
 @pytest.mark.pg
@@ -1450,7 +1455,7 @@ def test_unknown_effect_requires_readback_before_retry(
     assert ledger.status(first.operation_key)["status"] == "unknown"
 
     def expire_current_fence() -> None:
-        with psycopg.connect(issue_delivery_pg_store.dsn) as conn:
+        with issue_delivery_pg_store._connect() as conn:
             conn.execute(
                 "UPDATE builderops_outbox "
                 "SET claim_expires_at = clock_timestamp() - interval '1 second' "
@@ -1631,7 +1636,7 @@ def test_unknown_effect_requires_readback_before_retry(
         effect_slot_sha256=race_request.effect_slot_sha256,
         effect_type="github.issue-delivery.claim.v1",
     )
-    with psycopg.connect(race.store.dsn) as conn:
+    with race.store._connect() as conn:
         conn.execute(
             "UPDATE builderops_outbox "
             "SET claim_expires_at = clock_timestamp() - interval '1 second' "

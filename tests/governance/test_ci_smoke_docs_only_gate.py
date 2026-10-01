@@ -162,6 +162,26 @@ def test_unit_test_lane_covers_agent_contract_and_doc_paths() -> None:
     assert cheap_selection.subsystems == ("docs",)
 
 
+def test_product_reasoning_facade_selects_its_llm_tests() -> None:
+    selection = select_tests(["app/components/reasoning/facade.py"])
+
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("llm_eval",)
+    assert "tests/components/reasoning" in selection.targets
+    assert "tests/components/llm" in selection.targets
+    assert selection.full_suite is False
+
+    # Keep the new ownership exact: an adjacent but undeclared runtime file
+    # must still fail closed instead of inheriting a broad directory owner.
+    for path in (
+        "app/components/reasoning/facade.py_extra.py",
+        "app/components/reasoning/new_module.py",
+    ):
+        adjacent_unowned = select_tests([path])
+        assert adjacent_unowned.unowned_paths == (path,)
+        assert adjacent_unowned.subsystems == ("unowned",)
+
+
 def _smoke_job_text() -> str:
     workflow = _smoke_text()
     return workflow[workflow.index("  smoke:") : workflow.index("  smoke-docker:")]

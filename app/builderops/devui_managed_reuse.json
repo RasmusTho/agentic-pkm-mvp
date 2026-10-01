@@ -1,11 +1,11 @@
 {
-  "payload_sha256": "sha256:8700496864a4594bc89bd4427848c77d391b42881e89d8e5e8491ac7f4940418",
+  "payload_sha256": "sha256:28b2a215934766e678787bf3879de8285ced98f70704c1a6fe28783838206ae8",
   "provenance_payload": {
     "contract_version": "yggdrasil-constrained-reuse.v1",
-    "repository_commit": "acf9497b2f01a82c52965ace8daf7c045499c9d7",
+    "repository_commit": "63b1227bfc46becac96284e05a20798cf701c291",
     "authorship": {
-      "author_identity": "codex-deliver-5599",
-      "created_at": "2026-09-19T21:27:29Z"
+      "author_identity": "claude-opus-5-5:session-10dda209",
+      "created_at": "2026-09-30T13:42:48Z"
     },
     "authority_claims": {
       "live_design_system_selection": "not_claimed",
@@ -106,46 +106,74 @@
           "def _flaw_evidence(",
           "def _candidate("
         ]
+      },
+      {
+        "source_id": "source-5637-generated-token-sheet",
+        "source_path": "companion-ui/companion-app/yggdrasil-tokens.css",
+        "stable_ref": "generated Yggdrasil v2.2.1 tokens-only sheet (design-system/yggdrasil/build.py), shipped to Companion and Builder pages, entire file at 8cb453986944b98b7dac483973aae67e8c5e64e7",
+        "source_role": "pattern",
+        "content_sha256": "sha256:ed184e7721b4e06b79490dc79bbe64c757103928f6f3d7050d27af2e519a9be2",
+        "source_commit": "8cb453986944b98b7dac483973aae67e8c5e64e7",
+        "source_git_blob_oid": "ef6468188b6529d41f76c7651c32da1354335bc5"
+      },
+      {
+        "source_id": "source-5637-builder-token-link",
+        "source_path": "app/web/static/signboard.html",
+        "stable_ref": "tokens-only sheet linked before the page stylesheet (YDS-04 Builder page pattern) at 91cbb2bb43216e0ff0818b0685f9c6c76342b1ad",
+        "source_role": "pattern",
+        "content_sha256": "sha256:cae1c56696ec6e26a14f5997a49544a52d050d9ad18ffc924d56892329c0b408",
+        "source_commit": "91cbb2bb43216e0ff0818b0685f9c6c76342b1ad",
+        "source_git_blob_oid": "21915fb136800650548b6fbbd601ecee50e3c7bf",
+        "source_anchors": [
+          "<link rel=\"stylesheet\" href=\"/static/yggdrasil-tokens.css\">\n  <link rel=\"stylesheet\" href=\"/static/signboard.css\">"
+        ]
+      },
+      {
+        "source_id": "source-5637-cockpit-empty-fg2",
+        "source_path": "app/web/static/cockpit.css",
+        "stable_ref": ".chip-empty readable empty-state text on --fg-2 (YDS-04 fg-3 to fg-2 move) at 91cbb2bb43216e0ff0818b0685f9c6c76342b1ad",
+        "source_role": "pattern",
+        "content_sha256": "sha256:2b64b93be705edc0cd5093f7c64553be3e5f8507f9ca12e66d99275342e24361",
+        "source_commit": "91cbb2bb43216e0ff0818b0685f9c6c76342b1ad",
+        "source_git_blob_oid": "e9883bd5d118cbad4e2236971bd7a0eb8b5be39e",
+        "source_anchors": [
+          ".chip-empty{color:var(--fg-2);border-style:dashed}"
+        ]
       }
     ],
     "tokens": {
       "source_path": "companion-ui/companion-app/colors_and_type.css",
-      "content_sha256": "sha256:7d8cdd49f59061f895959159a08e82348e7e02eb8b8ba7426020a50c7fa915b1",
+      "content_sha256": "sha256:edbc81c77209b5274b26b5e827191f95595f20d6bc5a97a17f7dd8751a774ba2",
       "declarations": [
         {
           "token_id": "--accent",
-          "declaration": "--accent:        #d4a843;",
-          "declaration_sha256": "sha256:97f3ed523141204c7dd2bcefa3704b4aaf31ce19138b79def8ab3b310015e4b0"
-        },
-        {
-          "token_id": "--amber",
-          "declaration": "--amber:         #f09030;",
-          "declaration_sha256": "sha256:4df8b2f36d01e311193538063326e7f9ebf052f9efc3aba00f02d1e7fde1d606"
+          "declaration": "--accent: #d4a843;",
+          "declaration_sha256": "sha256:cd04033283cb5326744c2766ffb650af11e1d5311156bdb17774f017e7f97ae9"
         },
         {
           "token_id": "--bg-base",
-          "declaration": "--bg-base:       #070b12;",
-          "declaration_sha256": "sha256:5fca5d696414f365990c4b475702ac1e2fa111ddb9021b28c2aeff2f41940892"
+          "declaration": "--bg-base: #070b12;",
+          "declaration_sha256": "sha256:dd985c7783d06261936863f478cbdeabaec57ca1f860c8864758f6d3aadf01db"
         },
         {
           "token_id": "--bg-overlay",
-          "declaration": "--bg-overlay:    #162038;",
-          "declaration_sha256": "sha256:17d66ddd93d805c09587aa77d1436206d67eccb30c9a14ff5946452713b43d30"
+          "declaration": "--bg-overlay: #162038;",
+          "declaration_sha256": "sha256:0628444c43faa208e0ccaffdbc2c08a0da1d07fe6d1aedfa2de70b32a3ba7f97"
         },
         {
           "token_id": "--bg-raised",
-          "declaration": "--bg-raised:     #111a2e;",
-          "declaration_sha256": "sha256:c08f5b062528107efeb5cfd1fcc2c2f8be1ba82aef938540b5507befe963f937"
+          "declaration": "--bg-raised: #111a2e;",
+          "declaration_sha256": "sha256:de92701ce77d2db519893e45d62dfbccad82a12bcdaed1b3ccb17b942ef82f8a"
         },
         {
           "token_id": "--bg-surface",
-          "declaration": "--bg-surface:    #0c1220;",
-          "declaration_sha256": "sha256:a2b98f0e189f52f29c9dd769a63d5433bffd57278f1979d27bb33288a41292f4"
+          "declaration": "--bg-surface: #0c1220;",
+          "declaration_sha256": "sha256:1c378d6a89a2456f4615362c0ec623b47ca079c7c58fab70374074ef8c0e818b"
         },
         {
           "token_id": "--border",
-          "declaration": "--border:        #152030;",
-          "declaration_sha256": "sha256:3e4011f3310a0bec8fa462dbea4808a2728085b4b28334d2d2aafa9d3e2a1f0c"
+          "declaration": "--border: #152030;",
+          "declaration_sha256": "sha256:a7427229b04d3b8e817fd9fc554aa4be83926275f5e76e3a4a8a84877b1e3702"
         },
         {
           "token_id": "--border-strong",
@@ -154,78 +182,63 @@
         },
         {
           "token_id": "--cyan",
-          "declaration": "--cyan:          #00d4e8;",
-          "declaration_sha256": "sha256:6c4111fac205f0a37d72498091cae2c77894e2a3877196b00270f4a0d1c35b02"
-        },
-        {
-          "token_id": "--cyan-dim",
-          "declaration": "--cyan-dim:      #007a8a;",
-          "declaration_sha256": "sha256:521c1c5d5266bdc3d351c319f70c461098fee8464a4b42cf49238dacb3d7e9f1"
+          "declaration": "--cyan: #00d4e8;",
+          "declaration_sha256": "sha256:facd4b88fb8cba1f0306543dd1b5b738226a100f8b982fa1ec1bb550124fdccf"
         },
         {
           "token_id": "--cyan-glow",
-          "declaration": "--cyan-glow:     0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5);",
-          "declaration_sha256": "sha256:984591c95784e48a5d699bb184dd11efe8ab8ec82650c1f80f9bbea0e261e8fb"
+          "declaration": "--cyan-glow: 0 0 12px rgba(0,212,232,0.35), 0 0 4px rgba(0,212,232,0.5);",
+          "declaration_sha256": "sha256:349e8a4c170531ae99b13cf13bba452be2405dc5041f11c09584fe4298840786"
         },
         {
           "token_id": "--destructive",
-          "declaration": "--destructive:      #ff3d3d;",
-          "declaration_sha256": "sha256:b150ed4693390211c0d0c582beb2ea98c9ef7a389fee917e6884e860777f209e"
+          "declaration": "--destructive: #ff3d3d;",
+          "declaration_sha256": "sha256:4e021bafcbb19fd5d36e12b0b60a4a93d45f38ecbc8a8508af37822518b8ecd7"
         },
         {
           "token_id": "--destructive-muted",
-          "declaration": "--destructive-muted:#160404;",
-          "declaration_sha256": "sha256:c65581be66699bec5ead7904a636062962faf7fe3b53906ac9558707a7f8584f"
+          "declaration": "--destructive-muted: #160404;",
+          "declaration_sha256": "sha256:5832b6c075c7bc18d3148b08a63f9ba411c88bf500d76b587702aa869e78c22e"
         },
         {
           "token_id": "--fg-1",
-          "declaration": "--fg-1:          #dce8f0;",
-          "declaration_sha256": "sha256:8887fbda9664633c4baa27afe931c7d0d0097e00e6a5d16617ae0f1bede91925"
+          "declaration": "--fg-1: #dce8f0;",
+          "declaration_sha256": "sha256:a6386d3918e0852d518fed0b55f836333d9ff52f80260440ef412e2d338fbd5f"
         },
         {
           "token_id": "--fg-2",
-          "declaration": "--fg-2:          #7a9ab8;",
-          "declaration_sha256": "sha256:3e7003559888029ac1f8c12214874037801f6488760cb4db770467e0314d1527"
-        },
-        {
-          "token_id": "--fg-3",
-          "declaration": "--fg-3:          #3d5570;",
-          "declaration_sha256": "sha256:8cd8c37a7b63f644a8b5223b7f4c22932b84d6abe72203d0c0ff953a550c2058"
+          "declaration": "--fg-2: #7a9ab8;",
+          "declaration_sha256": "sha256:9e7723815e36ebd91c3cb4c9e1f04d76e109dd9b971d7a717e6605a80e22b9e5"
         },
         {
           "token_id": "--font-display",
-          "declaration": "--font-display:  'EB Garamond', Georgia, serif;",
-          "declaration_sha256": "sha256:e1e06b2980e1a1b0fb56b7d8ee54495f47adbc0dd6298b1d435120db2ef7d3bd"
+          "declaration": "--font-display: 'EB Garamond', Georgia, serif;",
+          "declaration_sha256": "sha256:4f89560f0f0611c8127c328bdfde4a578c57a75719d058fd4751f1b5cbee28d7"
         },
         {
           "token_id": "--font-mono",
-          "declaration": "--font-mono:     'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;",
-          "declaration_sha256": "sha256:749893fabe1decf61fb54f974b62798f51a5901cd385ef7d8c9e1d0b3e0e098d"
+          "declaration": "--font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;",
+          "declaration_sha256": "sha256:443c4792b5cbe2e584c3a71111e3ad6aa8406e8bf141093c228c06984e011210"
         },
         {
           "token_id": "--font-ui",
-          "declaration": "--font-ui:       'Space Grotesk', system-ui, sans-serif;",
-          "declaration_sha256": "sha256:0e0f61b0971b93c89eca155a74a6933ac578f5b5593d6ce72a1def3b7394c044"
+          "declaration": "--font-ui: 'Space Grotesk', system-ui, sans-serif;",
+          "declaration_sha256": "sha256:7fe509e33134046dd3912852da1912e537c067aadf8b369c538cd2bf6f3096e1"
         },
         {
           "token_id": "--leading-snug",
-          "declaration": "--leading-snug:   1.4;",
-          "declaration_sha256": "sha256:94154e4e1b8bfd267992865840b49ab8aba490d89d2863d68be44071f0d44d9a"
+          "declaration": "--leading-snug: 1.4;",
+          "declaration_sha256": "sha256:07176b080b5610232cea0ccbb86abc67bc8ad42a5b2386ff5668465a579ff20f"
         },
         {
           "token_id": "--radius-md",
-          "declaration": "--radius-md:   4px;",
-          "declaration_sha256": "sha256:ea4e91f125f2775061808f747c7006649fd98a6d82ef5ecba9104795ed2deb1d"
+          "declaration": "--radius-md: 4px;",
+          "declaration_sha256": "sha256:51d9dfcd8ace53dcb996e696be0cb099775a281fd1689195f4ab825a099c000a"
         },
         {
           "token_id": "--radius-sm",
-          "declaration": "--radius-sm:   2px;",
-          "declaration_sha256": "sha256:8a1e7d4f4cfe88936a688fc7bb419ca8760ecd93356b34031ec193cad21970af"
-        },
-        {
-          "token_id": "--space-1",
-          "declaration": "--space-1:   4px;",
-          "declaration_sha256": "sha256:5ddd722b9f8de0f303ec59ff55402d60a4d11ad51dc49827a80128d7c10e78e0"
+          "declaration": "--radius-sm: 2px;",
+          "declaration_sha256": "sha256:b04c86821bb9e3cafb2d9818f520a3d6cfdf919fc8988ff315a8e6eeaa43b21d"
         },
         {
           "token_id": "--space-10",
@@ -244,63 +257,63 @@
         },
         {
           "token_id": "--space-2",
-          "declaration": "--space-2:   8px;",
-          "declaration_sha256": "sha256:6a5592349d1f0f7e31f04e308e95fb5e79f1d734c6ecb50df8e533236bb9e342"
+          "declaration": "--space-2: 8px;",
+          "declaration_sha256": "sha256:7e7a8be6e44016eada5998d37a9f1c624ff57a2d56b922eedcdf7f816fee8b12"
         },
         {
           "token_id": "--space-3",
-          "declaration": "--space-3:  12px;",
-          "declaration_sha256": "sha256:9f8b6e43d3a32811fe671a45a2bd1af900a41584b9df7b3bd07016cee5c68e25"
+          "declaration": "--space-3: 12px;",
+          "declaration_sha256": "sha256:a7bfec952f1b612545f1f6082939712e9815cc05c5421c0a21249b1896605238"
         },
         {
           "token_id": "--space-4",
-          "declaration": "--space-4:  16px;",
-          "declaration_sha256": "sha256:77ed2b36cd2a1cb2a35d216b8db36ab57cbf877824bb777314f29b15bd377792"
+          "declaration": "--space-4: 16px;",
+          "declaration_sha256": "sha256:aa794550c5017155b83803c505d42c0bb4b6ca02637ccd2f7dea3e7dfb7bac50"
         },
         {
           "token_id": "--space-5",
-          "declaration": "--space-5:  20px;",
-          "declaration_sha256": "sha256:e7c858c7f37d3550e7ea902b13ad5d795ece262cd0d316f8b4b017520de9341d"
+          "declaration": "--space-5: 20px;",
+          "declaration_sha256": "sha256:7821197743603e6979f7e4a8b04da83755f3e83c0514cf50751fe19e630e621d"
         },
         {
           "token_id": "--space-6",
-          "declaration": "--space-6:  24px;",
-          "declaration_sha256": "sha256:b93578e1b217d408dc79420223985dec323e6ca396cadc902668999904bfcaad"
+          "declaration": "--space-6: 24px;",
+          "declaration_sha256": "sha256:6a7ee531eae7c8f6803d51dd7b2be2942de42f25286689cb940e771a6fcecc9f"
         },
         {
           "token_id": "--space-8",
-          "declaration": "--space-8:  32px;",
-          "declaration_sha256": "sha256:6387fd482ab122c613bf801312661bc7a6306facf06eeb98b76ef21392c1dc5b"
+          "declaration": "--space-8: 32px;",
+          "declaration_sha256": "sha256:ba65635c05ff2cbb135e3ecfb681e44e6013d2a91dd9b40dc05d5e0e16e9289a"
         },
         {
           "token_id": "--text-2xl",
-          "declaration": "--text-2xl:   2rem;",
-          "declaration_sha256": "sha256:bd783716417f27bf0880f83dc12210dbed36d3a5403af10c424dc225fa65c4c3"
+          "declaration": "--text-2xl: 2rem;",
+          "declaration_sha256": "sha256:71c776ac1734d596c7ef89edffd9246cb7a0214b88d00098f3449fc248741e16"
         },
         {
           "token_id": "--text-base",
-          "declaration": "--text-base:  0.9375rem;",
-          "declaration_sha256": "sha256:b95bee6ef0623e44bf95a89918d22fa5b323a586a07aa0c4a219ac373c8cfc81"
+          "declaration": "--text-base: 0.9375rem;",
+          "declaration_sha256": "sha256:197c0c9031d9c9eccc79bba9bebe4e951200e62623544a9b22cc2fe0cfeea1ea"
         },
         {
           "token_id": "--text-md",
-          "declaration": "--text-md:    1.0625rem;",
-          "declaration_sha256": "sha256:55f553b1f5960ee94ad5fe52f71e714a6a4eb5a14f921fae8632eb80cfd2e1a1"
+          "declaration": "--text-md: 1.0625rem;",
+          "declaration_sha256": "sha256:66d9ba8cb9011af89bebf8634b6884a31c1bf3a50776642de5267d94348afa85"
         },
         {
           "token_id": "--text-sm",
-          "declaration": "--text-sm:    0.8125rem;",
-          "declaration_sha256": "sha256:e761fb0504e3b9d29b8c0c20ada4e0ccd43845fe84c6317574a5b3879a20c211"
+          "declaration": "--text-sm: 0.8125rem;",
+          "declaration_sha256": "sha256:f529fc0a445e6e1607b1c11b05139214f5aa69143f5cfea7085a46c5d51e7e88"
         },
         {
           "token_id": "--text-xl",
-          "declaration": "--text-xl:    1.5rem;",
-          "declaration_sha256": "sha256:b416752602b5ea426df5cbe47195640addf3e3efb4381b9950aed1ea223f0269"
+          "declaration": "--text-xl: 1.5rem;",
+          "declaration_sha256": "sha256:d7b75a57e4973aa114def844c15f690728a45fe9719a4cac4a317593231a05ff"
         },
         {
           "token_id": "--text-xs",
-          "declaration": "--text-xs:    0.6875rem;",
-          "declaration_sha256": "sha256:7bd896e26f673d9b98e857470f24c3080f0e228c645a453fd726c8ea8ae6035c"
+          "declaration": "--text-xs: 0.6875rem;",
+          "declaration_sha256": "sha256:545792712bfe041b7c40e92f5f09d88b2a04cb045410d0b9810d2d8a9f6da99c"
         },
         {
           "token_id": "--tracking-tight",
@@ -309,28 +322,23 @@
         },
         {
           "token_id": "--tracking-wide",
-          "declaration": "--tracking-wide:   0.04em;",
-          "declaration_sha256": "sha256:cfa64b5c41cc560d077e9bacc4df40f4ddc36482ef4fc2d3843d5b4c6a2389ea"
+          "declaration": "--tracking-wide: 0.04em;",
+          "declaration_sha256": "sha256:6c6f1f21b746eabee21fbe6282b41a4cb2c5ee4368240dadfbd05a01f987f7d6"
         },
         {
           "token_id": "--tracking-wider",
-          "declaration": "--tracking-wider:  0.08em;",
-          "declaration_sha256": "sha256:9770d1b96f7fd6b68d365bdc94bcb8dbb48a5c286544114b348b1bf99e8739bc"
+          "declaration": "--tracking-wider: 0.08em;",
+          "declaration_sha256": "sha256:156599cafbce2dd6bca8b01990aebb4f4f987111d00f654b356fb11fb5623351"
         },
         {
           "token_id": "--vault",
-          "declaration": "--vault:         #39e87d;",
-          "declaration_sha256": "sha256:b3d00755e338629911f3e01e3e30d559aa95c3978d7f0571a996dc66183f1399"
-        },
-        {
-          "token_id": "--vault-dim",
-          "declaration": "--vault-dim:     #1a7840;",
-          "declaration_sha256": "sha256:c677acefc2c692bdaef1fa39ae52577fe05d3f1f997be28fb978e3bf782035f9"
+          "declaration": "--vault: #39e87d;",
+          "declaration_sha256": "sha256:0e54d20edf0395336aac625a7f4d332008f4e686ac02977077a8d72b5316ab4b"
         },
         {
           "token_id": "--weight-medium",
-          "declaration": "--weight-medium:  500;",
-          "declaration_sha256": "sha256:6512e4882f413b78b82f2456bcfb293697e996454ff1cecd5715a17f59fbc7ca"
+          "declaration": "--weight-medium: 500;",
+          "declaration_sha256": "sha256:d6b4eaed667b0f54435dfb1a8e4f3165fb07797a9a5fe912e6b61983bdf81f38"
         }
       ]
     },
@@ -577,6 +585,56 @@
           }
         ],
         "exact_rule": "Carry the existing source-value wrapping pattern into the managed copy and preserve the existing limitations overlay, all text, axis layout, tokens, interactions, and authority boundaries."
+      },
+      {
+        "transformation_id": "issue-5637-generated-token-sheet-link",
+        "kind": "content_binding",
+        "source_ids": [
+          "source-5637-builder-token-link",
+          "source-5637-generated-token-sheet",
+          "source-overview.html",
+          "source-focus.html"
+        ],
+        "exact_rule": "Both DevUI pages link the generated tokens-only sheet as the same-origin asset /devui/assets/yggdrasil.css immediately before /devui/assets/devui.css, as the shipped YDS-04 Builder pages do. No text, landmark, route, script, interaction, or authority change.",
+        "target_anchors": [
+          "<link rel=\"stylesheet\" href=\"/devui/assets/yggdrasil.css\">\n  <link rel=\"stylesheet\" href=\"/devui/assets/devui.css\">"
+        ]
+      },
+      {
+        "transformation_id": "issue-5637-token-copy-removal",
+        "kind": "content_binding",
+        "source_ids": [
+          "source-devui.css",
+          "source-5637-generated-token-sheet"
+        ],
+        "exact_rule": "Remove the managed stylesheet's inline :root token copy; every var(--...) it uses now resolves from the generated sheet to the exact accepted declaration listed under tokens. All other selectors and declarations are unchanged except the two recorded #5637 transformations.",
+        "target_anchors": [
+          ":root{--font-ui:system-ui,-apple-system,\"Segoe UI\",sans-serif;--font-display:Georgia,\"Times New Roman\",serif;--font-mono:ui-monospace,\"SFMono-Regular\",Consolas,monospace}"
+        ]
+      },
+      {
+        "transformation_id": "issue-5637-font-import-removal",
+        "kind": "local_system_font_no_egress_normalization",
+        "source_ids": [
+          "source-5637-generated-token-sheet",
+          "source-devui.css"
+        ],
+        "exact_rule": "The served token asset is the generator's tokens-only rendering with its single external web-font @import removed; the three font tokens are overridden in the managed stylesheet with the exact previously normalized local-system stacks. No web font, font-src or CSP change.",
+        "target_anchors": [
+          ":root{--font-ui:system-ui,-apple-system,\"Segoe UI\",sans-serif;--font-display:Georgia,\"Times New Roman\",serif;--font-mono:ui-monospace,\"SFMono-Regular\",Consolas,monospace}"
+        ]
+      },
+      {
+        "transformation_id": "issue-5637-readable-empty-fg2",
+        "kind": "content_binding",
+        "source_ids": [
+          "source-devui.css",
+          "source-5637-cockpit-empty-fg2"
+        ],
+        "exact_rule": "Bind the readable .empty empty-state text to --fg-2, the shipped YDS-04 Cockpit empty-state treatment (.chip-empty); font, size and layout unchanged.",
+        "target_anchors": [
+          ".empty{font-family:var(--font-mono);font-size:var(--text-xs);color:var(--fg-2)}"
+        ]
       }
     ],
     "decision_inventory": [
@@ -584,13 +642,13 @@
         "decision_id": "decision-devui.css",
         "target_ref": "app/builderops/devui_managed.css (all original selectors/declarations and media behavior)",
         "source_ids": [
-          "source-devui.css",
+          "source-5637-generated-token-sheet",
           "source-cockpit-disclosure-css",
-          "source-cockpit-disclosure-js"
+          "source-cockpit-disclosure-js",
+          "source-devui.css"
         ],
         "token_ids": [
           "--accent",
-          "--amber",
           "--bg-base",
           "--bg-overlay",
           "--bg-raised",
@@ -598,20 +656,17 @@
           "--border",
           "--border-strong",
           "--cyan",
-          "--cyan-dim",
           "--cyan-glow",
           "--destructive",
           "--destructive-muted",
           "--fg-1",
           "--fg-2",
-          "--fg-3",
           "--font-display",
           "--font-mono",
           "--font-ui",
           "--leading-snug",
           "--radius-md",
           "--radius-sm",
-          "--space-1",
           "--space-10",
           "--space-12",
           "--space-16",
@@ -631,7 +686,6 @@
           "--tracking-wide",
           "--tracking-wider",
           "--vault",
-          "--vault-dim",
           "--weight-medium"
         ],
         "transformation_ids": [
@@ -640,17 +694,23 @@
           "issue-5594-owner-language-disclosure",
           "issue-5594-disclosure-source-mapping",
           "issue-5599-candidate-wrap-reflow",
-          "issue-5599-managed-wrap-reflow"
+          "issue-5599-managed-wrap-reflow",
+          "issue-5637-token-copy-removal",
+          "issue-5637-font-import-removal"
         ]
       },
       {
         "decision_id": "decision-focus.html",
         "target_ref": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html (entire file, including all text-only render states, semantic landmarks, keyboard navigation and no-JS behavior)",
         "source_ids": [
+          "source-5637-builder-token-link",
+          "source-5637-generated-token-sheet",
           "source-focus.html"
         ],
         "token_ids": [],
-        "transformation_ids": []
+        "transformation_ids": [
+          "issue-5637-generated-token-sheet-link"
+        ]
       },
       {
         "decision_id": "decision-focus.js",
@@ -670,10 +730,14 @@
         "decision_id": "decision-overview.html",
         "target_ref": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html (entire file, including all text-only render states, semantic landmarks, keyboard navigation and no-JS behavior)",
         "source_ids": [
+          "source-5637-builder-token-link",
+          "source-5637-generated-token-sheet",
           "source-overview.html"
         ],
         "token_ids": [],
-        "transformation_ids": []
+        "transformation_ids": [
+          "issue-5637-generated-token-sheet-link"
+        ]
       },
       {
         "decision_id": "decision-overview.js",
@@ -707,12 +771,77 @@
           "issue-5599-candidate-wrap-reflow",
           "issue-5599-managed-wrap-reflow"
         ]
+      },
+      {
+        "decision_id": "decision-5637-yggdrasil.css",
+        "target_ref": "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css (served as /devui/assets/yggdrasil.css; generated, entire file)",
+        "source_ids": [
+          "source-5637-generated-token-sheet"
+        ],
+        "token_ids": [
+          "--accent",
+          "--bg-base",
+          "--bg-overlay",
+          "--bg-raised",
+          "--bg-surface",
+          "--border",
+          "--border-strong",
+          "--cyan",
+          "--cyan-glow",
+          "--destructive",
+          "--destructive-muted",
+          "--fg-1",
+          "--fg-2",
+          "--font-display",
+          "--font-mono",
+          "--font-ui",
+          "--leading-snug",
+          "--radius-md",
+          "--radius-sm",
+          "--space-10",
+          "--space-12",
+          "--space-16",
+          "--space-2",
+          "--space-3",
+          "--space-4",
+          "--space-5",
+          "--space-6",
+          "--space-8",
+          "--text-2xl",
+          "--text-base",
+          "--text-md",
+          "--text-sm",
+          "--text-xl",
+          "--text-xs",
+          "--tracking-tight",
+          "--tracking-wide",
+          "--tracking-wider",
+          "--vault",
+          "--weight-medium"
+        ],
+        "transformation_ids": [
+          "issue-5637-font-import-removal"
+        ]
+      },
+      {
+        "decision_id": "decision-5637-empty-fg2",
+        "target_ref": "app/builderops/devui_managed.css :: .empty",
+        "source_ids": [
+          "source-devui.css",
+          "source-5637-cockpit-empty-fg2"
+        ],
+        "token_ids": [
+          "--fg-2"
+        ],
+        "transformation_ids": [
+          "issue-5637-readable-empty-fg2"
+        ]
       }
     ],
     "target_artifacts": [
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.html",
-        "content_sha256": "sha256:ea1dcbaf91a93c8016e22f80cf967e5eda5cb670ba04c0ab2b59fce5130c4361"
+        "content_sha256": "sha256:464e2f2ee5ba59268177261ac6f8f9464cb024caac567d8054e13c058a3a753e"
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
@@ -720,7 +849,7 @@
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
-        "content_sha256": "sha256:71070fe77686d033502c983aac687a6a75997422ca3578c48a4797f9be27a8fb"
+        "content_sha256": "sha256:6e0b20cf2aca808d1330bc6033994e9f9acb7b17c9cf46d3f61479995fa7b2b5"
       },
       {
         "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
@@ -728,7 +857,11 @@
       },
       {
         "target_path": "app/builderops/devui_managed.css",
-        "content_sha256": "sha256:826c4fee9527d8635e628dcefeb3a147fda07e98e266dbd699db9598846a135d"
+        "content_sha256": "sha256:04f248ebed67ed91cf4356a280d90eac05ea6f811faa3323c1370537de7661ce"
+      },
+      {
+        "target_path": "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css",
+        "content_sha256": "sha256:1cffbb6d4226a1ad593902b7b72ec54fb76a39f071ae64bd74bc1176331a203b"
       }
     ],
     "zero_novel_visual_language": {
@@ -745,12 +878,8 @@
     "no_egress": {
       "external_font_imports_removed": [
         {
-          "declaration": "@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Space+Grotesk:wght@300;400;500;600&display=swap');",
-          "declaration_sha256": "sha256:d4c81030d0cc4820166f7e0c2c794ccb7853ffeeb358548c2ddeda19a0c6dfa2"
-        },
-        {
-          "declaration": "@import url('https://fonts.bunny.net/css?family=jetbrains-mono:400,500&display=swap');",
-          "declaration_sha256": "sha256:4a41f94cd9e317b332669af15a8fee0db04357fb67c6a186d398a1e58fb1f268"
+          "declaration": "@import url('https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&family=Space+Grotesk:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');",
+          "declaration_sha256": "sha256:7aa9d62f558f800d458070ce4d0f3c32e7677f9b380c5f81e3c35a150b38de4e"
         }
       ],
       "font_normalization": {
@@ -758,19 +887,19 @@
         "mappings": [
           {
             "source_token_id": "--font-display",
-            "source_declaration_sha256": "sha256:e1e06b2980e1a1b0fb56b7d8ee54495f47adbc0dd6298b1d435120db2ef7d3bd",
+            "source_declaration_sha256": "sha256:4f89560f0f0611c8127c328bdfde4a578c57a75719d058fd4751f1b5cbee28d7",
             "normalized_declaration": "--font-display:Georgia,\"Times New Roman\",serif;",
             "normalized_declaration_sha256": "sha256:9f3c1ec2d4ce11fea774865ced8db0e357470b29fd5f9df4e10000de5ecae4ee"
           },
           {
             "source_token_id": "--font-mono",
-            "source_declaration_sha256": "sha256:749893fabe1decf61fb54f974b62798f51a5901cd385ef7d8c9e1d0b3e0e098d",
+            "source_declaration_sha256": "sha256:443c4792b5cbe2e584c3a71111e3ad6aa8406e8bf141093c228c06984e011210",
             "normalized_declaration": "--font-mono:ui-monospace,\"SFMono-Regular\",Consolas,monospace;",
             "normalized_declaration_sha256": "sha256:c44434646f3ccafed384061dc59fcd9c76f571e7a2d05b7eced4ce56fe9293af"
           },
           {
             "source_token_id": "--font-ui",
-            "source_declaration_sha256": "sha256:0e0f61b0971b93c89eca155a74a6933ac578f5b5593d6ce72a1def3b7394c044",
+            "source_declaration_sha256": "sha256:7fe509e33134046dd3912852da1912e537c067aadf8b369c538cd2bf6f3096e1",
             "normalized_declaration": "--font-ui:system-ui,-apple-system,\"Segoe UI\",sans-serif;",
             "normalized_declaration_sha256": "sha256:2dc7a9d49841c8b424f979dff6aa7ef015e3df785656a9a6fc1e743d22578361"
           }
@@ -781,11 +910,12 @@
         "companion-ui/companion-app/companion_ui/workspace/devui_candidate/focus.js",
         "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.html",
         "companion-ui/companion-app/companion_ui/workspace/devui_candidate/overview.js",
-        "app/builderops/devui_managed.css"
+        "app/builderops/devui_managed.css",
+        "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css"
       ],
       "cross_origin_request_count": 0,
       "network_evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-      "network_evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af",
+      "network_evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0",
       "csp_relaxations": []
     },
     "state_matrix": [
@@ -798,11 +928,13 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Render source-owned Overview and exact selected Issue Focus, unsupported Conversation Port, no inferred linkage; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "hostile-and-source-refused",
@@ -813,11 +945,13 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Render source text literally, preserve independent unavailable/refused metadata and complete text across all accessibility modes.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "refusal",
@@ -828,11 +962,13 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "timeout",
@@ -843,11 +979,13 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "404",
@@ -858,11 +996,13 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "http_status",
@@ -873,11 +1013,13 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "malformed",
@@ -888,11 +1030,13 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "request_failure",
@@ -903,11 +1047,13 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "page_error",
@@ -918,11 +1064,13 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "console_error",
@@ -933,86 +1081,102 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Preserve the actual transport/read error or detect the explicitly injected page/console failure; never probe an alternate route; fresh Overview return.",
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "state_id": "candidate-missing",
         "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
         "decision_ids": [
           "decision-overview.js",
-          "decision-focus.js"
+          "decision-focus.js",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Production admission refuses the missing candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:3f61e04e8dd08da9367658e2197b2cfcb4802d2eb9a6cf1d59c0464df0f5aadd"
+        "evidence_sha256": "sha256:b7924cc7302fca90cadc2e6ea2bfb5ec4413cb53bc87cb40cb96ddc15d459f2b"
       },
       {
         "state_id": "candidate-sha",
         "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
         "decision_ids": [
           "decision-overview.js",
-          "decision-focus.js"
+          "decision-focus.js",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Production admission refuses the sha candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:3f61e04e8dd08da9367658e2197b2cfcb4802d2eb9a6cf1d59c0464df0f5aadd"
+        "evidence_sha256": "sha256:b7924cc7302fca90cadc2e6ea2bfb5ec4413cb53bc87cb40cb96ddc15d459f2b"
       },
       {
         "state_id": "candidate-inventory",
         "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
         "decision_ids": [
           "decision-overview.js",
-          "decision-focus.js"
+          "decision-focus.js",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Production admission refuses the inventory candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:3f61e04e8dd08da9367658e2197b2cfcb4802d2eb9a6cf1d59c0464df0f5aadd"
+        "evidence_sha256": "sha256:b7924cc7302fca90cadc2e6ea2bfb5ec4413cb53bc87cb40cb96ddc15d459f2b"
       },
       {
         "state_id": "candidate-bytes",
         "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
         "decision_ids": [
           "decision-overview.js",
-          "decision-focus.js"
+          "decision-focus.js",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Production admission refuses the bytes candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:3f61e04e8dd08da9367658e2197b2cfcb4802d2eb9a6cf1d59c0464df0f5aadd"
+        "evidence_sha256": "sha256:b7924cc7302fca90cadc2e6ea2bfb5ec4413cb53bc87cb40cb96ddc15d459f2b"
       },
       {
         "state_id": "candidate-extra",
         "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_shell_api_and_asset_inventory_bind_one_candidate",
         "decision_ids": [
           "decision-overview.js",
-          "decision-focus.js"
+          "decision-focus.js",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Production admission refuses the extra candidate condition with visible 503 JSON before source reads on the named routes; existing Overview/Focus scripts preserve non-success API responses as unavailable and do not probe alternatives. No visual rendering claim is made for the browser-native JSON response.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:3f61e04e8dd08da9367658e2197b2cfcb4802d2eb9a6cf1d59c0464df0f5aadd"
+        "evidence_sha256": "sha256:b7924cc7302fca90cadc2e6ea2bfb5ec4413cb53bc87cb40cb96ddc15d459f2b"
       },
       {
         "state_id": "managed-document-provenance",
         "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_source_packaging_and_isolation_contract",
         "decision_ids": [
-          "decision-overview.js"
+          "decision-overview.js",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Source-owned document references retain their exact repository paths and content hashes. Package-only shell aliases remain in the complete checked inventory and are not presented as repository document references. Existing text-only rendering is unchanged.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:3f61e04e8dd08da9367658e2197b2cfcb4802d2eb9a6cf1d59c0464df0f5aadd"
+        "evidence_sha256": "sha256:b7924cc7302fca90cadc2e6ea2bfb5ec4413cb53bc87cb40cb96ddc15d459f2b"
       },
       {
         "state_id": "managed-repository-identity",
         "fixture_ref": "tests/builderops/test_devui_runtime.py::test_managed_focus_preserves_canonical_repository_case",
         "decision_ids": [
-          "decision-focus.js"
+          "decision-focus.js",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "expected_behavior": "Existing canonical repository identity admits display-case variation while Focus retains the exact selected subject and original source URL. Foreign repository or malformed source identity remains unavailable. Real package_candidate and standalone Overview-to-Focus browser proof use mixed-case GitHub-style source identity; no visual or interaction change.",
         "evidence_ref": "tests/fixtures/devui_managed/candidate-refusal-proof.json",
-        "evidence_sha256": "sha256:3f61e04e8dd08da9367658e2197b2cfcb4802d2eb9a6cf1d59c0464df0f5aadd"
+        "evidence_sha256": "sha256:b7924cc7302fca90cadc2e6ea2bfb5ec4413cb53bc87cb40cb96ddc15d459f2b"
       }
     ],
     "accessibility_matrix": [
@@ -1025,10 +1189,12 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "mode": "narrow",
@@ -1039,10 +1205,12 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "mode": "zoom_200",
@@ -1053,10 +1221,12 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "mode": "keyboard",
@@ -1067,10 +1237,12 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "mode": "screen_reader",
@@ -1081,10 +1253,12 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "mode": "print",
@@ -1095,10 +1269,12 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       },
       {
         "mode": "javascript_off",
@@ -1109,53 +1285,55 @@
           "decision-focus.js",
           "decision-overview.html",
           "decision-overview.js",
-          "decision-managed-limitations-wrap"
+          "decision-managed-limitations-wrap",
+          "decision-5637-yggdrasil.css",
+          "decision-5637-empty-fg2"
         ],
         "evidence_ref": "tests/fixtures/devui_managed/browser-proof.json",
-        "evidence_sha256": "sha256:cd5330e9b928acd5ae3a1dac6350fe1022bbed65e252d4b171cc9d372ebd39af"
+        "evidence_sha256": "sha256:1b2b882ccd6b58d4e811c2ca5e2842de41c6897d498056fd7c5bc5aaeded6ae0"
       }
     ],
     "proof_binding": {
-      "source_commit": "f7adc2b34a3a207663699c932cbddfa5362a22a0",
+      "source_commit": "63b1227bfc46becac96284e05a20798cf701c291",
       "managed_browser": {
-        "execution_id": "5599-repaired-managed-f7adc",
-        "junit_ref": ".codex-tmp/5599-source04-final-proof/managed-f7adc-junit.xml",
-        "junit_sha256": "sha256:55de99a3c8c4d0431a26955fa67b5044e3ceeee15262b7b9066dca48da808a10",
-        "stdout_ref": ".codex-tmp/5599-source04-final-proof/managed-f7adc.stdout",
-        "stdout_sha256": "sha256:c0c33aa7338cddb2250b87d53a72e172431e5d9d4dbed93c5d963cf1407ccf58",
+        "execution_id": "5637-managed-63b1227",
+        "junit_ref": ".codex-tmp/5637-proof/managed-junit.xml",
+        "junit_sha256": "sha256:1b06555809564036efeab4cc4562c0ed37092e1618611db8a28a32b7942db54b",
+        "stdout_ref": ".codex-tmp/5637-proof/managed.stdout",
+        "stdout_sha256": "sha256:1762ae480bc5d29938e428279f897f4c66cac0f2e15a74980dc86bd20360f396",
         "tests": 54,
         "skips": 0
       },
       "ordinary_overview": {
-        "execution_id": "5599-repaired-overview-f7adc",
-        "junit_ref": ".codex-tmp/5599-source04-final-proof/overview-f7adc-junit.xml",
-        "junit_sha256": "sha256:497722bc47f2abd0b7d689034bfff83a1535ce485253876bd621701bb6767fdd",
-        "stdout_ref": ".codex-tmp/5599-source04-final-proof/overview-f7adc.stdout",
-        "stdout_sha256": "sha256:21f9c933fc730750f13bbe17a3ac5c819f54b5c89ada07f5bb7b2c3ab8560ed2",
+        "execution_id": "5637-overview-63b1227",
+        "junit_ref": ".codex-tmp/5637-proof/overview-junit.xml",
+        "junit_sha256": "sha256:f986e17ebd971d61e20f1e28379c5e5058c764ec9cab76dc26dfbf00caffc2c8",
+        "stdout_ref": ".codex-tmp/5637-proof/overview.stdout",
+        "stdout_sha256": "sha256:d4e9b265bc71cd3811fd5a7237533850b40d1272f82116fe8a22735045b3d0b4",
         "tests": 21,
         "skips": 0
       },
       "source_runtime": {
-        "execution_id": "5599-final-unit-ad4c548c",
-        "junit_ref": ".codex-tmp/5599-final-proof/unit-final-junit.xml",
-        "junit_sha256": "sha256:c3969149337c5faea8b472c2a2897e20dd53d8599171b2220e4636f875a9ed79",
-        "stdout_ref": ".codex-tmp/5599-final-proof/unit-final.stdout",
-        "stdout_sha256": "sha256:1a0b345c38dfa0e3830405936dea888c14d8e0ec709dd54f790422794dea67ab",
+        "execution_id": "5637-refusal-63b1227",
+        "junit_ref": ".codex-tmp/5637-proof/refusal-junit.xml",
+        "junit_sha256": "sha256:8ed37a28c1aeda230d2d8af9794aaeab4c9f8908abf7812e179fe489c7869eb6",
+        "stdout_ref": ".codex-tmp/5637-proof/refusal.stdout",
+        "stdout_sha256": "sha256:e1e3838cca3edefa3b4ad67668911144fcfb72d4d8df5294b4d45e5812979f9b",
         "passed": 72,
-        "skips": 1,
-        "collected": 73
+        "skips": 0,
+        "collected": 72
       },
       "historical_exact_ref_inventory": 5
     }
   },
   "independent_review": {
-    "reviewer_identity": "codex-review:/root/final_review_5599_r2",
+    "reviewer_identity": "claude-subagent:independent-review-5637",
     "independent_from_author": true,
-    "independence_basis": "Fresh author-independent read-only SOURCE-04 convergence review at f7adc2b34a3a207663699c932cbddfa5362a22a0, followed in the same independent context by exact Artifact A acf9497b2f01a82c52965ace8daf7c045499c9d7 and Envelope B deb9d47a7e1d4ce81d216732449814036756f7e4 authentication. No implementation, publication, or lifecycle authority. Independently authenticated repaired source/test equality, Git objects and literal source/target anchors, unchanged reviewed tokens/transformations/controls, affected proof-consumer hashes and UTF-8 JCS payload. Actual host-leased 21 Overview plus 54 managed cases passed without skips at the repaired source head; focused 19 plus 1 source tests remain applicable. Unchanged visual mapping and historical five-node evidence are reused by exact byte equality. Historical refusal/runtime proof remains historical; this reuse verdict does not replace current-head CI, original-thread disposition or closure gates.",
-    "reviewed_payload_sha256": "sha256:8700496864a4594bc89bd4427848c77d391b42881e89d8e5e8491ac7f4940418",
-    "reviewed_at": "2026-09-19T23:15:13.158899Z",
+    "independence_basis": "Separate read-only reviewer subagent with a fresh context, distinct from author claude-opus-5-5:session-10dda209; re-verified every hash, anchor, token declaration, proof artifact and pixel/ARIA baseline diff at 80da2e323e3a7fbdbb534ebf44d0366b75ed2194 after its first-round P1 (token-sheet source version) and P2 (stray uv.lock) findings were fixed.",
+    "reviewed_payload_sha256": "sha256:28b2a215934766e678787bf3879de8285ced98f70704c1a6fe28783838206ae8",
+    "reviewed_at": "2026-09-30T13:44:15Z",
     "verdict": "pass",
     "findings": []
   },
-  "receipt_sha256": "sha256:739deebc63866b296f8451a51beb0b593dbfd365ffeebac92c5ba684ce01a160"
+  "receipt_sha256": "sha256:187ace25e5194ce6876902e96b2d9388df955089d47e93d5725183d7ff8a324b"
 }

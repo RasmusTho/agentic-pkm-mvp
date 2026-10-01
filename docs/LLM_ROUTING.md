@@ -11,7 +11,7 @@ for high-level modules to talk to LLMs.
 Related docs:
 - `docs/LLM.md` for provider setup, environment configuration, and operational scenarios
 - `docs/SETTINGS.md` for the broader settings/registry model
-- `docs/HEALTH.md` for route/provider visibility in health output
+- `docs/HEALTH.md` for current route health and the provider-neutral capability-health target
 
 ## Concepts
 
@@ -21,6 +21,12 @@ Related docs:
 - **Fabric**: Runtime entrypoint that binds a route to an actual client. It exposes:
   - `get_chat_client(LLMTaskIntent)` → `ChatClient` with `.chat(...)`
   - `get_embeddings_client(LLMTaskIntent)` → embedding client with `.embed_text(...)`
+- **Explicit evaluation**: `get_chat_client(..., model_id=..., transport_id=...)`
+  admits an explicit transport only for an exact registered evaluation target and
+  disables catalog promotion and fallback. A model descriptor's
+  `explicit_eval_transports` adds admission only for that explicit eval request;
+  ordinary `allowed_transports` and their existing refusal/selection stay unchanged.
+  Measured classification invocation and usage/cost evidence are defined in `docs/eval.md`.
 - **Routes/Providers**: A route selects a provider + model. Providers are identified by string values
   (`mock`, `ollama`, `openai`, `deepseek`, etc.).
 - **Deterministic routing**: If `determinism_required=True`, the router prefers `mock` over non-deterministic providers.
@@ -30,8 +36,10 @@ Related docs:
   `provider` and `model` from that registry so users do not need to keep both in sync by hand.
 - **Embedding identity protection**: embed tasks may auto-repair transport/endpoints, but must not silently switch
   to an incompatible embedding identity when `require_compatible_identity=true`.
-- **Default route reporting**: The fabric exposes `describe_default_routes()` so health checks can report
-  the active defaults and `describe_default_route_policies()` so health checks can report preferred versus effective routes.
+- **Default route reporting**: The fabric exposes `describe_default_routes()` and
+  `describe_default_route_policies()` for current operator diagnostics. The accepted health target
+  reports logical capability status; route/provider diagnostics remain behind the routing and
+  adapter diagnostic surfaces.
 
 ## Configuration precedence
 
@@ -70,6 +78,49 @@ Current state:
 - The router never emits a route whose `model` belongs to a different provider than the one that will execute the call. `LLM_PROVIDER` binds the executing provider on the enforced path **and** on the no-explicit-policy default path: the env provider is bound only when `LLM_PROVIDER_ENFORCE=1` (enforce) or when the task has no explicit policy (`router.py`: `if enforce or not has_explicit_task_policy`). For a task that *does* carry an explicit policy (e.g. `tasks.qa` with a cloud primary) and `LLM_PROVIDER` set **without** enforce, the router falls through to the policy primary — so `LLM_PROVIDER` does not necessarily run that call. To force an explicit-policy task onto the env provider, set `LLM_PROVIDER_ENFORCE=1`; then the resolved route uses a candidate (primary or fallback) that provider actually serves — e.g. an `ollama`-enforced chat task with a cloud-primary policy resolves to the local `ollama` fallback model, not the cloud model. When `LLM_PROVIDER_ENFORCE=1` and no candidate is served by the enforced provider, the router fails loud (`LLMRouteError`) rather than guessing a cross-provider route. The model swap is surfaced via `LLMRoute.reason` (`enforced-provider:<provider>`).
 
 Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`, `tests/components/llm/test_router_enforced_provider.py`
+
+### Provider-neutral capability health and network paths (accepted target)
+
+Model choice and cross-host network path are separate configuration layers. The Product client now
+resolves `profile.codex_remote_host` through the ordered profiles in
+`config/model_access/executor_network_paths.yaml`: `ygg_vlan_primary`, then
+`tailscale_fallback`. The profile order and host-local environment-variable references are checked
+in; endpoint values, host identities, CA bundles, and client certificates remain on the host.
+Provider/model policy does not choose an endpoint or network adapter.
+
+Before completion, the path router runs no-inference catalog and route-preflight requests. It may
+advance to the next configured path only for `PATH_UNAVAILABLE`, `CONNECT_TIMEOUT`,
+`PREFLIGHT_TIMEOUT`, or `PATH_AUTHENTICATION_FAILED`. Common Product authorization denial, malformed
+requests, route/capability mismatch, and missing path configuration fail closed. Once a non-200 HTTP
+status is received, a stalled, disconnected, or oversized error body preserves that status; only a
+fully decoded explicit path-local error code can authorize another path. The VLAN ingress
+uses mutually authenticated HTTPS to a host-local RFC1918 IPv4 or IPv6 unique-local address literal;
+DNS names are rejected so a public endpoint cannot receive completion content. Its gateway must map
+the authenticated caller to the same Product channel/action capability contract used by Tailscale
+Serve, strip caller-supplied capability headers, and inject the trusted claim. The executor backend
+remains loopback-bound.
+After preflight, exactly one completion uses the selected path. An ambiguous completion cannot retry
+over another path or switch providers. Provider/model fallback remains a separate explicit policy
+decision.
+
+This is code and configuration-schema support, not live TARS activation. Host-local VLAN/Tailscale
+settings, gateway authorization, the designated-host acceptance receipt, and the release-channel
+rollout remain separate operational gates. The model route can use Luna through the Codex CLI once
+its Product policy selects that route and those gates pass.
+
+System health reports whether the configured workload's logical capabilities are available, not
+whether an unselected provider is installed or reachable. Adapter readiness and declared
+capabilities map into `checks.llm_access.capabilities`; only fresh `available` observations satisfy
+a required capability. `checks.llm_access.transport_observation` separately reports configured
+executor-path reachability; a successful pre-completion path fallback is `degraded` transport while
+the same logical capability can remain available. The public `/api/health` response omits
+model-access provider, model, transport, endpoint, and selected-path identity. Local CLI output
+retains selected-route diagnostics in `checks.llm_router` and `checks.llm_providers` for operator
+troubleshooting. Health remains a
+no-inference observer: it checks the configured route and does not select a model or authorize
+provider/model fallback. `docs/HEALTH.md` and
+`docs/MODEL_ACCESS_ROUTER/REPORT_CAPABILITY_HEALTH.md` define the shipped contract. This code change
+does not activate a host route or change the Product model default.
 
 ## Supported environment variables
 
@@ -137,9 +188,10 @@ export LLM_FORCE_MODEL=llama3.1:8b-instruct
 - **Health snapshot** (`/api/health`)
   - `checks.llm_router.selected_defaults` shows the router’s default routes.
   - `checks.llm_router.route_policies` shows preferred and effective routes per task class.
-  - `checks.llm_task_routes.routes` shows whether each effective task route is actually configured and startup-safe.
+  - `checks.llm_access.routes` shows no-inference preflight status for effective text-generation routes; embeddings remain separate.
+  - `checks.llm_task_routes.routes` is a compatibility projection of `llm_access` during migration.
   - `checks.embedding_index` shows whether the active embedding identity is compatible with the stored index or requires rebuild.
-  - `checks.llm_providers.providers` lists provider health checks.
+  - `checks.llm_providers.providers` lists declared providers only; selected-route readiness is reported by `llm_access`.
 - **Alpha status output** (`scripts/alpha_status.py`)
   - Prints `llm routes` and `llm providers` summaries for human operators.
 

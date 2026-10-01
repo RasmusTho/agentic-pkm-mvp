@@ -2,6 +2,13 @@
   "invariant": "INV-EF1",
   "rows": [
     {
+      "artifact": "tests/builderops/bootstrap_fixtures.py",
+      "category": "iv",
+      "why_load_bearing": "The authenticated bootstrap fixture names the public governed Bifrost constituent used by existing delivery proofs, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#5712"
+    },
+    {
       "artifact": "app/builderops/owner_fact_producers.py",
       "category": "iv",
       "why_load_bearing": "The bounded documentation source names the public Bifrost constituent and exact hub tracking contract, not personal vault data.",

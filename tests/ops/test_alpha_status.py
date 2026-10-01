@@ -94,3 +94,55 @@ def test_alpha_status_sums_store_counts() -> None:
     assert "- events_log: lines=9 path=/tmp/index-outbox.jsonl" in output
     assert "- worker_queue: mode=jsonl pending=2 processed_total=7" in output
     assert "- suggested: llm_mock(optional) mock" in output
+
+
+@pytest.mark.not_pg
+def test_alpha_status_reports_declared_providers_without_calling_them_unhealthy() -> None:
+    def fake_fetch(url: str) -> FetchResult:
+        if url.endswith("/api/status"):
+            return 200, {}, None
+        if url.endswith("/api/health"):
+            return 200, {
+                "ok": True,
+                "required_ok": True,
+                "runtime": {"db": {"ok": True}},
+                "checks": {
+                    "llm_providers": {
+                        "providers": [
+                            {"name": "mock", "declared": True},
+                            {"name": "ollama", "declared": True},
+                        ]
+                    }
+                },
+            }, None
+        return None, None, "missing"
+
+    output = render_status(fake_fetch, api_base_url="http://localhost:18000")
+
+    assert "- llm providers: mock=declared ollama=declared" in output
+
+
+@pytest.mark.not_pg
+def test_alpha_status_preserves_live_provider_ok_status_when_present() -> None:
+    def fake_fetch(url: str) -> FetchResult:
+        if url.endswith("/api/status"):
+            return 200, {}, None
+        if url.endswith("/api/health"):
+            return 200, {
+                "ok": True,
+                "required_ok": True,
+                "runtime": {"db": {"ok": True}},
+                "checks": {
+                    "llm_providers": {
+                        "providers": [
+                            {"name": "openai", "ok": True},
+                            {"name": "legacy", "ok": False},
+                        ]
+                    }
+                },
+            }, None
+        return None, None, "missing"
+
+    output = render_status(fake_fetch, api_base_url="http://localhost:18000")
+
+    assert "- llm providers: openai=ok legacy=fail" in output

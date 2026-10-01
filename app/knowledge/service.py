@@ -130,23 +130,42 @@ class HybridKnowledgePort:
         )
 
 
-def _build_adapter(adapter: KnowledgeAdapter, *, fs_root: Path | None) -> KnowledgePort:
+def _build_adapter(
+    adapter: KnowledgeAdapter,
+    *,
+    fs_root: Path | None,
+    sources_root_rel: str | None = None,
+    vault_root: Path | None = None,
+) -> KnowledgePort:
     if adapter == KnowledgeAdapter.FS_VAULT:
         if fs_root is None:
             raise KnowledgeConfigError(
                 "Vault root is required for fs_vault knowledge adapter; pass vault_root or configure VAULT_ROOT."
-            )
-        return FsVaultAdapter(fs_root)
+        )
+        if sources_root_rel is None:
+            try:
+                from app.vault.paths import get_vault_sources_dir_rel
+
+                sources_root_rel = get_vault_sources_dir_rel(fs_root)
+            except Exception as exc:  # noqa: BLE001 - malformed zone authority must fail closed
+                raise KnowledgeConfigError(
+                    f"Sources zone could not be resolved for filesystem knowledge adapter: {exc}"
+                ) from exc
+        return FsVaultAdapter(fs_root, sources_root_rel=sources_root_rel)
     if adapter == KnowledgeAdapter.OBSIDIAN_CLI:
-        return ObsidianCliAdapter()
+        return ObsidianCliAdapter(
+            sources_root_rel=sources_root_rel,
+            vault_root=vault_root,
+        )
     raise KnowledgeConfigError(f"Unsupported knowledge adapter: {adapter}")
 
 
 def _build_fs_fallback(vault_root: Path | str | None, adapter: KnowledgeAdapter | None) -> KnowledgePort | None:
     if adapter is None:
         return None
-    fs_root = _resolve_fs_root(vault_root) if adapter == KnowledgeAdapter.FS_VAULT else None
-    return _build_adapter(adapter, fs_root=fs_root)
+    selected_root = _resolve_fs_root(vault_root)
+    fs_root = selected_root if adapter == KnowledgeAdapter.FS_VAULT else None
+    return _build_adapter(adapter, fs_root=fs_root, vault_root=selected_root)
 
 
 def resolve_knowledge_port(
@@ -155,10 +174,30 @@ def resolve_knowledge_port(
     settings: KnowledgeSettings | None = None,
 ) -> KnowledgePort:
     effective = settings or load_knowledge_settings()
-    if effective.primary_adapter == KnowledgeAdapter.FS_VAULT:
-        return _build_adapter(effective.primary_adapter, fs_root=_resolve_fs_root(vault_root))
+    resolved_root = _resolve_fs_root(vault_root)
+    sources_root_rel: str | None = None
+    if resolved_root is not None:
+        try:
+            from app.vault.paths import get_vault_sources_dir_rel
 
-    primary = _build_adapter(effective.primary_adapter, fs_root=None)
+            sources_root_rel = get_vault_sources_dir_rel(resolved_root)
+        except Exception as exc:  # noqa: BLE001 - malformed zone authority must fail closed
+            raise KnowledgeConfigError(
+                f"Sources zone could not be resolved for knowledge adapter: {exc}"
+            ) from exc
+    if effective.primary_adapter == KnowledgeAdapter.FS_VAULT:
+        return _build_adapter(
+            effective.primary_adapter,
+            fs_root=resolved_root,
+            sources_root_rel=sources_root_rel,
+        )
+
+    primary = _build_adapter(
+        effective.primary_adapter,
+        fs_root=None,
+        sources_root_rel=sources_root_rel,
+        vault_root=resolved_root,
+    )
 
     status = obsidian_dependency_status()
     if effective.primary_adapter == KnowledgeAdapter.OBSIDIAN_CLI and not status.ok:

@@ -26,10 +26,9 @@ def _dsn() -> str:
     must not implicitly couple to a DB that happens to be running.
     """
 
-    v = (os.environ.get("DATABASE_URL") or "").strip()
-    if not v:
-        return ""
-    return v.replace("postgresql+psycopg://", "postgresql://")
+    from app.db.dsn import resolve_dsn
+
+    return resolve_dsn()
 
 
 def _enabled() -> bool:

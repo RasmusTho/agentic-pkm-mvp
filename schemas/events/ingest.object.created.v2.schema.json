@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/ingest.object.created.v2.schema.json",
+  "title": "ingest.object.created payload (v2, closed)",
+  "description": "Payload of ingest.object.created. Producer alternatives: app/services/vault_sync.py (canonical identity plus title/review_state/maturity/content/path/frontmatter/episode_ref/replay), app/objects/__init__.py::ObjectStore.save_object ({uuid, kind}), app/api/routes/ingest.py (IngestRequest fields plus normalized maturity/workflow_state/legacy_review_state), and app/cli/__init__.py pipe ({object_id, source_ref}); insert_object_and_outbox adds object_id/trace_id/event. Consumer app/services/indexer.py resolves identity from object_id or uuid, so at least one is required. Closed contract (#5704): undeclared top-level fields are rejected; producer extras belong under `extensions`. v1 stays registered for rows already tagged `ingest.object.created.v1`.",
+  "type": "object",
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "required": [
+        "object_id"
+      ],
+      "properties": {
+        "object_id": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    {
+      "required": [
+        "uuid"
+      ],
+      "properties": {
+        "uuid": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  ],
+  "properties": {
+    "uuid": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "object_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "vault_uuid": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "review_state": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "maturity": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workflow_state": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "legacy_review_state": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "content": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "path": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "source_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "origin": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "trust": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event": {
+      "type": "string"
+    },
+    "payload": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "frontmatter": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "episode_ref": {
+      "type": [
+        "string",
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "replay": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "trace_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "event_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Envelope event id the worker run() loop copies into the payload before dispatch; carried onto retries."
+    },
+    "_worker_retry_count": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Worker transient-retry attempt number (app/workers/outbox_worker.py::_queue_transient_retry)."
+    },
+    "_worker_retry_reason": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Worker transient-retry reason code."
+    },
+    "_worker_retry_enqueued_at": {
+      "type": "string",
+      "minLength": 1,
+      "description": "UTC ISO-8601 timestamp of the worker retry enqueue."
+    },
+    "extensions": {
+      "type": "object",
+      "description": "The only open extension point: producer-specific extras must be nested here, never added as undeclared top-level fields."
+    }
+  }
+}

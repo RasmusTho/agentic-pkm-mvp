@@ -321,21 +321,21 @@ Creating/proposing/mutating the vault-wide profile, its ProfileAgent, ProfileUpd
 
 None.
 
-## YSNV2-11 — task: capture opt-in source frames
+## YSNV2-11 — task: capture source frames
 
-Labels: `type:task`, `prio:low`, `agent:blocked` (YSNV2-09; D1 resolved)
+Labels: `type:task`, `prio:low`, `agent:blocked` (YSNV2-09)
 
 ## Context
 
-Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/CAPTURE_OPT_IN_SOURCE_FRAMES`. Frames are source-dependent media derivatives with rights, retention, and egress implications. TCD hint: Sol/xhigh — media rights, retention, egress, and deletion receipts carry high defect cost.
+Parent validation hub: #4107. Implements `YOUTUBE_SOURCE_NOTE_V2/CAPTURE_SOURCE_FRAMES`. Frames are source-dependent media derivatives with rights, retention, and egress implications. TCD hint: Sol/xhigh — media rights, retention, egress, and deletion receipts carry high defect cost.
 
 ## Scope
 
-Use the recorded opt-in capture posture, retaining one contextual frame on successful acquisition, plus exception metadata and deletion receipts.
+For each eligible acquisition with timestamped moments, attempt bounded capture by default and retain one contextual frame on successful capture, plus exception metadata and deletion receipts.
 
 ## Source Anchors
 
-- `docs/YOUTUBE_SOURCE_NOTE_V2/CAPTURE_OPT_IN_SOURCE_FRAMES.md :: Acceptance Criteria`
+- `docs/YOUTUBE_SOURCE_NOTE_V2/CAPTURE_SOURCE_FRAMES.md :: Acceptance Criteria`
 - `docs/CONTEXTUALIZATION_LAYER/MEDIA_ARTIFACT_CONTRACT.md :: media_derivative`
 
 ## SBS Impact
@@ -344,33 +344,33 @@ Use the recorded opt-in capture posture, retaining one contextual frame on succe
 - Secondary subsystem(s): HKA, SIP, GOV, PDM, OEF
 - Write class: derived
 - Authority impact: frame remains source-dependent derivative
-- Persistence impact: approved durable frames; temporary media must be deleted
+- Persistence impact: retained durable frames; temporary media must be deleted
 - Derived/rebuildable impact: retained frames are source-dependent exceptions, not ordinary rebuildable extractions
 - Human knowledge impact: no candidate or human-authored content overwrite
 - Memory impact: none
 - Retrieval/context impact: none
 - Sync/deployment impact: none
 - External boundary impact: bounded temporary media egress
-- New or changed contract: explicit opt-in capture, contextual-frame exception, rights metadata, and deletion receipt; `docs/contracts/ARTIFACT_CONTRACT.md` applies and is unchanged
+- New or changed contract: default bounded capture, contextual-frame exception, rights metadata, and deletion receipt; `docs/contracts/ARTIFACT_CONTRACT.md` applies and is unchanged
 - Owner-doc impact: will-update-in-PR
 - Transition debt impact: none beyond the separately gated media capability
-- Fitness rule impact: production call-site opt-in, degradation, cleanup inventory, lineage, and pHash tests
+- Fitness rule impact: default production call-site capture, degradation, cleanup inventory, lineage, and pHash tests
 - Boundary risk: high — rights, temporary-media retention, path safety, and deletion receipts must fail visibly
 
 ## Constraints
 
-- No pickup until timestamped moments are available; capture must follow the recorded D1 posture.
+- No pickup until timestamped moments are available; apply the revised D1 bounded-capture direction.
 
 ## Acceptance Criteria
 
-- [ ] The production capture call site requires the recorded opt-in/context-frame posture. Verify: `tests/knowledge_acquisition/test_source_frames.py::test_capture_call_site_requires_explicit_opt_in_and_retains_context_frame`.
+- [ ] The production capture call site attempts bounded capture for timestamped moments by default and retains one contextual frame when capture succeeds. Verify: `tests/knowledge_acquisition/test_source_frames.py::test_capture_call_site_retains_context_frame_by_default`.
 - [ ] Successful capture retains one contextual frame; failure becomes timestamps-only. Verify: `tests/knowledge_acquisition/test_source_frames.py::test_context_frame_is_retained_when_capture_succeeds_and_failure_degrades_to_timestamps_only`.
-- [ ] Cleanup leaves only approved frames and emits receipt. Verify: `tests/knowledge_acquisition/test_source_frames.py::test_temporary_video_deletion_leaves_only_approved_frames_with_receipt`.
+- [ ] Cleanup leaves only retained frames and emits receipt. Verify: `tests/knowledge_acquisition/test_source_frames.py::test_temporary_video_deletion_leaves_only_retained_frames_with_receipt`.
 - [ ] Retained frames carry exception metadata and pHash dedup. Verify: `tests/knowledge_acquisition/test_source_frames.py::test_retained_frames_have_exception_metadata_and_phash_deduplication`.
 
 ## Out of Scope
 
-Always-on frames, video retention, and publishing.
+Unbounded frame capture, video retention, and publishing.
 
 ## Suggested Validation
 
@@ -378,7 +378,7 @@ Always-on frames, video retention, and publishing.
 
 ## Source Docs
 
-- `docs/YOUTUBE_SOURCE_NOTE_V2/CAPTURE_OPT_IN_SOURCE_FRAMES.md`
+- `docs/YOUTUBE_SOURCE_NOTE_V2/CAPTURE_SOURCE_FRAMES.md`
 
 ## Applies learning (optional)
 
@@ -416,7 +416,7 @@ Implement the versioned gold-set/evaluation harness, operator annotation receipt
 - New or changed contract: source-note gold set, quality metrics, and operator annotation receipt; `docs/contracts/ARTIFACT_CONTRACT.md` applies and is unchanged
 - Owner-doc impact: will-update-in-PR
 - Transition debt impact: creates the acceptance evidence needed before broad re-extraction
-- Fitness rule impact: claim entailment, anchor validity, must-capture recall, consent receipt, no-mutation, and capability-wide invariant tests
+- Fitness rule impact: claim entailment, anchor validity, must-capture recall, annotation-scope receipt, no-mutation, and capability-wide invariant tests
 - Boundary risk: high — a weak evaluation must not launder plausible output into accepted capability truth
 
 ## Constraints
@@ -428,7 +428,7 @@ Implement the versioned gold-set/evaluation harness, operator annotation receipt
 
 - [ ] Unanchored/non-entailing claims fail quality gate. Verify: `tests/knowledge_acquisition/test_source_note_quality.py::test_quality_gate_rejects_unanchored_or_non_entailing_claims`.
 - [ ] Metrics include anchor validity and must-capture recall with fixture lineage. Verify: `tests/knowledge_acquisition/test_source_note_quality.py::test_quality_metrics_record_anchor_validity_and_must_capture_recall`.
-- [ ] Gold-set annotation scope and source/media consent are represented by an operator receipt rather than inferred. Verify: operator receipt on the live parent feature Issue validation ledger identified by `docs/YOUTUBE_SOURCE_NOTE_V2/PARENT_FEATURE_ISSUE.md :: Validation / Acceptance Path`.
+- [ ] Gold-set annotation scope is represented by an operator receipt rather than inferred. Verify: operator receipt on the live parent feature Issue validation ledger identified by `docs/YOUTUBE_SOURCE_NOTE_V2/PARENT_FEATURE_ISSUE.md :: Validation / Acceptance Path`.
 - [ ] Evaluation stays no-egress and non-mutating. Verify: `tests/knowledge_acquisition/test_source_note_quality.py::test_quality_evaluation_is_no_egress_and_non_mutating`.
 - [ ] A representative v2 fixture proves the capability-wide invariants and supplies the parent-closure handoff after all prerequisite children are delivered. Verify: `tests/knowledge_acquisition/test_source_note_quality.py::test_v2_end_to_end_invariant_matrix`.
 
@@ -439,7 +439,7 @@ Automatic subjective acceptance and background re-extraction.
 ## Suggested Validation
 
 - Run the four named focused tests, including the final end-to-end invariant matrix.
-- Record and inspect the operator receipt for gold-set annotation scope and any source/media consent at the parent validation hub.
+- Record and inspect the operator receipt for gold-set annotation scope at the parent validation hub.
 
 ## Source Docs
 

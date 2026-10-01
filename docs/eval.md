@@ -173,9 +173,49 @@ Deterministic CI mode replays recorded model completions
 completion seam, so KERNEL-07's constrained-output validation layer runs for
 real without a live LLM. The gate runs in the `not pg` PR suite (named CI
 step "Intent-classification golden gate" in `.github/workflows/ci.yml`) via
-`tests/eval/test_classification_golden.py`; live mode
-(`EVAL_LLM_MODE=run pytest -q -m eval tests/eval/test_classification_golden.py`)
-is opt-in and never part of the PR gate.
+`tests/eval/test_classification_golden.py`. Live evaluation is opt-in and never part
+of the PR gate. To run the checked-in classification golden set against one exact
+registered API model, provide an authorized key through the environment (never
+put the key in command arguments or receipts), then run:
+
+```bash
+EVAL_LLM_MODE=run EVAL_LLM_MODEL=gpt-5.6-luna \
+EVAL_LLM_TRANSPORT=openai_api EVAL_LLM_BASE_URL=https://api.openai.com/v1 \
+python -m app.eval.live_classification
+```
+
+`EVAL_LLM_API_KEY` takes precedence over `OPENAI_API_KEY`, including an explicitly
+empty value, which refuses the run. The measured command requires the official
+OpenAI API endpoint so a compatible proxy cannot inherit OpenAI billing claims.
+It binds one registry model and the explicit transport through the Product facade
+for every golden case; active conflicting force/enforcement settings, unknown
+models, and unadmitted transports fail before inference. Catalog promotion and
+model/transport fallback are disabled. Normal Product routes retain their existing
+behavior: implicit GPT-5.6 Luna selection still uses `codex_cli_tailscale`, while
+explicit evaluation may use `openai_api`. Terra and Sol are registered API targets.
+
+The command emits `classification_live_run.v1` JSON containing the requested route,
+observed model identities (the same alias or its dated snapshot), UTC timestamp,
+golden-set path and SHA-256, expected/completed case counts, metrics, mutation-side
+hard-gate result, captured input/cached-input/output usage, and a Standard text-token
+cost estimate with dated registry price sources. It requests Standard service and
+`reasoning_effort=none`; cost is an estimate from reported token use, not an invoice.
+Prices must be reviewed before comparisons when their date or promotion window is
+no longer applicable. The GPT-5.6 prices were retrieved from each official model
+page on 2026-09-28; Sol's published promotional window runs at least through
+2026-11-21.
+
+A provider failure stops further requests. Missing/malformed usage, mismatched
+model identity, non-Standard service, unsupported cache-write/audio billing,
+requests above 272,000 input tokens, or missing registered prices produce
+`complete: false` and `cost: null`; missing usage never becomes zero cost. A complete
+run can still fail the mutation-side hard gate. Exit status is 0 only for complete
+runs passing that gate, 1 for incomplete or hard-gate-failing runs, and 2 for setup
+failures. Invalid structured output retains `UNKNOWN` safe-fail behavior. The
+runner does not emit or persist prompts, raw completions, keys, endpoint values,
+or provider exception text. Only the checked-in golden set is sent; vault/user
+notes are outside this command. The parent comparison remains a separate opt-in
+acceptance step and does not change Product defaults.
 
 ### Thresholds and the regression gate
 

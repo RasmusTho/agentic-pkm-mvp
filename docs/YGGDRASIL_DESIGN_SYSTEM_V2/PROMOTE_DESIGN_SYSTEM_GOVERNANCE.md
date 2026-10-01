@@ -45,7 +45,7 @@ palettes.
 - [ ] The design-handoff skill gate reads the generated sheet and records the token version.
   - Verify: doc writeback at `.codex/skills/yggdrasil-design-handoff/SKILL.md :: Live design-system gate`
 - [ ] The Shell trial outcome is recorded with the owner's decision.
-  - Verify: doc writeback at `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Yggdrasil Light "Shell" (trial)`
+  - Verify: doc writeback at `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Yggdrasil Light "Shell"`
 - [ ] The parent-closure handoff is recorded.
   - Verify: doc writeback at `docs/YGGDRASIL_DESIGN_SYSTEM_V2/PARENT_FEATURE_ISSUE.md :: Validation / Acceptance Path`
 

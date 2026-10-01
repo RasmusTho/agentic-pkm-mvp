@@ -846,6 +846,73 @@ The system should preserve primary artifacts as directly intelligible long-lived
   - inspect the artifacts with ordinary filesystem tools and assert readable content, links where promised, and preserved human meaning
   - retain the result as a non-blocking durability receipt until the broader survivability contract is implemented
 
+## 13. Follow a meeting with relevant project context
+
+### Scenario
+
+The user joins a desktop meeting about a person or project they have discussed before. They want to
+stay present while the system recognizes likely participants and project context, transcribes the
+discussion, and privately surfaces timely, source-linked information.
+
+### User need
+
+Understanding and remembering important context without having to reconstruct it during the
+meeting.
+
+### User outcome
+
+The user can explicitly start capture, see who and what the assistant has matched, receive concise
+context when it is relevant, ask direct questions, and review a source-linked note proposal after
+the meeting. Uncertain matches remain uncertain, and the system does not write meeting notes without
+review.
+
+### System function
+
+The system should compose desktop capture and transcription, participant/project resolution,
+vault-grounded retrieval and context assembly, and a private sidecar. It should ground each answer
+and card in inspectable sources, preserve freshness and confidence, and send any durable note through
+human review and governed writeback. Assessment and deletion of meeting artifacts follow the shared
+storage-pressure retention contract; a low score marks a candidate but does not itself delete it.
+
+### Acceptance signals
+
+- capture has clear start, pause, and stop controls, with configured provider disclosures before it
+  begins;
+- participant and project matches show their evidence and confidence, while ambiguous matches stay
+  unresolved;
+- unsolicited cards are concise, timely, private, and linked to supporting sources;
+- direct answers distinguish source facts from interpretation and say when evidence is unavailable;
+- the user can inspect transcript spans and review or reject the post-meeting note proposal;
+- no durable note is written without the user's governed approval; and
+- storage inventory reports candidate and estimated reclaimable bytes without treating an
+  assessment as deletion authority.
+
+### Failure modes to avoid
+
+- guessing who attended or which project was discussed;
+- exposing private sidecar content to meeting participants;
+- interrupting the user with low-confidence or stale cards;
+- treating a transcript or model-generated summary as an authoritative meeting note;
+- allowing an assessment to trigger deletion without storage pressure, notice, and authority checks;
+- or silently transmitting meeting audio to an unconfigured remote provider.
+
+### Ontology consequences
+
+- meeting audio and transcripts remain distinct source artifacts with provenance;
+- live session state and indexes remain rebuildable runtime projections;
+- context bundles remain inspectable bridge artifacts, not memory;
+- note and commitment proposals remain non-canonical until governed review; and
+- retention priority, storage placement, and semantic lifecycle remain separate concerns.
+
+### Implementation and validation posture
+
+- Current implementation posture: `future`.
+- Test posture: non-blocking acceptance until the live desktop workflow is implemented and
+  explicitly promoted.
+- Minimum executable scenario: start a disclosed desktop capture, resolve a seeded participant and
+  project from the local vault, show one source-linked context card, ask one direct question, and
+  review a transcript-linked note proposal without applying it.
+
 ## Human-agent scenario inventory
 
 This section is the consolidated human-agent scenario surface. Each scenario cites its

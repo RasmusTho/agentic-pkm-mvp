@@ -65,7 +65,7 @@ those modules until they use tokens.
 
 ## Related Docs
 
-- `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Yggdrasil Light "Shell" (trial)`
+- `docs/YGGDRASIL_DESIGN_SYSTEM_V2/README.md :: Yggdrasil Light "Shell"`
 - `docs/YGGDRASIL_DESIGN_SYSTEM_V2/exploration/2026-09-22-shell-light-theme.html`
 
 ## Related GitHub Issues

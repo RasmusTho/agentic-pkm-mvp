@@ -96,11 +96,12 @@ seam and the `FABLE_COMPANION.md` §4.2 contract-first/module-lazy discipline). 
 **both** shapes; the default is host-derives.
 
 **Client home = Bifrost (ADR-0050).** A native macOS client is a constituent-surface client; per
-ADR-0050 its home is the governed **Bifrost** repo (topology C). SCREEN-03 (the reference client) may
-**transfer** to `bifrost`; this repo keeps the **host-side contract** (SCREEN-01) fully specified so
-the Bifrost client consumes it, mirroring how `docs/contracts/MIMER_CLIENT_CONTRACT.md` specifies the
-host side for the Bifrost knowledge/capture clients. The host contract is the durable, in-repo
-authority; the client is a consumer of it.
+ADR-0050 its home is the governed **Bifrost** repo (topology C). The native SCREEN-03 implementation is
+tracked by [Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72); Heimdal #3341 remains the
+parent validation pointer. This repo keeps the **host-side contract** (SCREEN-01) and governed controls
+(SCREEN-06) fully specified for the Bifrost client, mirroring how
+`docs/contracts/MIMER_CLIENT_CONTRACT.md` specifies the host side for the Bifrost knowledge/capture
+clients. The host contract and settings are the durable, in-repo authority; the client consumes them.
 
 ## Input-source / modality relationship to Heimdal and ERE
 
@@ -111,19 +112,20 @@ authority; the client is a consumer of it.
 | Time-spend analysis | none anywhere | rebuildable markdown projection (SCREEN-05) |
 | Auto-journal skeleton | none | the observation stream is the seam Conversational Journaling consumes |
 
-## Implementation tasks (execution order)
+## Implementation tasks (dependency graph)
 
 | # | Task | id | Prereqs | Home |
 | --- | --- | --- | --- | --- |
 | 1 | [DEFINE_SCREEN_OBSERVATION_CONTRACT](DEFINE_SCREEN_OBSERVATION_CONTRACT.md) | SCREEN-01 | — | this repo |
 | 2 | [DERIVE_ACTIVITY_OBSERVATIONS](DERIVE_ACTIVITY_OBSERVATIONS.md) | SCREEN-02 | SCREEN-01 | this repo |
-| 3 | [BUILD_MACOS_OBSERVER_CLIENT](BUILD_MACOS_OBSERVER_CLIENT.md) | SCREEN-03 | SCREEN-01 (∥ SCREEN-02) | **Bifrost** (may transfer) |
+| 3 | [BUILD_MACOS_OBSERVER_CLIENT](BUILD_MACOS_OBSERVER_CLIENT.md) | SCREEN-03 | SCREEN-01, SCREEN-06 (∥ SCREEN-02) | **Bifrost #72**; Heimdal #3341 tracks validation |
 | 4 | [REGISTER_SCREEN_STREAM_WITH_ERE](REGISTER_SCREEN_STREAM_WITH_ERE.md) | SCREEN-04 | SCREEN-02; **BLOCKED on ERE stream registry #3176** | this repo |
 | 5 | [PROJECT_TIME_SPEND_ANALYSIS](PROJECT_TIME_SPEND_ANALYSIS.md) | SCREEN-05 | SCREEN-02 (∥ SCREEN-03, SCREEN-06) | this repo |
-| 6 | [CONTROL_SURFACE_AND_EXCLUSIONS](CONTROL_SURFACE_AND_EXCLUSIONS.md) | SCREEN-06 | SCREEN-01, SCREEN-03 (∥ SCREEN-05) | this repo (client half in Bifrost) |
+| 6 | [CONTROL_SURFACE_AND_EXCLUSIONS](CONTROL_SURFACE_AND_EXCLUSIONS.md) | SCREEN-06 | SCREEN-01 (∥ SCREEN-02) | this repo; settings consumed by Bifrost #72 |
 
-Flat order: **01 → 02‖03 → 05‖06 → 04**. SCREEN-04 is externally blocked on the ERE stream registry
-(#3176) regardless of internal readiness; it is the parent-closure child once #3176 lands.
+Dependencies: **01 → {02, 06}; {01, 06} → 03; 02 → 05; {02, #3176} → 04.** SCREEN-04 is externally
+blocked on the ERE stream registry (#3176) regardless of internal readiness; it is the parent-closure
+child once #3176 lands.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -150,8 +152,10 @@ list. These invariants hold *across* tasks; each names its partial-failure walk.
   client does **not sample** the screen (not "sample then drop"), the offline buffer does **not grow**,
   and **nothing ships**. Pause state is **durable**: a client that crashes or restarts while paused
   comes back **paused** — it never silently resumes capture. **Trust consequence:** if pause reset to
-  "on" at restart, the owner would be observed without knowing; visible pause state (SCREEN-06) is the
-  guarantee the owner can always see at a glance whether observation is on.
+  "on" at restart, the owner would be observed without knowing. SCREEN-06 supplies the durable governed
+  pause setting; SCREEN-03 renders status from the actual capture loop and must never show `observing`
+  merely because the setting requests resume. The capability acceptance criterion verifies the
+  operator-visible status and capture behavior together.
 - **INV-SCREEN-D — exclusion is honored at CAPTURE time, not derivation time.** An excluded app's (or
   excluded scope's) pixels **never leave the client** — the frontmost app / active scope is checked
   **before** a frame is sampled; an excluded target is never captured, never buffered, never shipped.
@@ -198,7 +202,7 @@ declared once and settings-governed (SETTINGS_SPINE posture, SCREEN-06), tuned a
       accumulating. Verify: `tests/heimdal/test_screen_frame_retention.py::test_frames_age_out_bounded_and_receipted` (SCREEN-01/02)
 - [ ] Exclusion is capture-time: an excluded app's pixels never reach the host (asserted at the client
       capture entrypoint). Verify: `tests/heimdal/test_screen_exclusion.py::test_excluded_app_never_captured` (SCREEN-03/06)
-- [ ] Pause is durable and PAUSED means no capture/buffer/ship, visibly. Verify: `tests/heimdal/test_screen_pause.py::test_pause_is_durable_and_total` (SCREEN-03/06)
+- [ ] Pause is durable and PAUSED means no capture/buffer/ship; the visible status reflects the actual capture loop and never reports observing from a resume setting alone. Verify: `tests/heimdal/test_screen_pause.py::test_visible_status_matches_capture_loop` (SCREEN-03/06)
 - [ ] `screen` is registered in the ERE stream registry as `live` and consumed only via the registry;
       coalesced span boundaries survive into the segmenter's signal shape. Verify: `tests/episodes/test_stream_registry.py::test_screen_stream_registered_live` + `tests/heimdal/test_screen_coalescing.py::test_span_boundaries_survive_on_dimension_shift` (SCREEN-02/04)
 - [ ] A rebuildable time-spend projection reconstructs by app/project/scope/day/week from observations
@@ -219,13 +223,10 @@ declared once and settings-governed (SETTINGS_SPINE posture, SCREEN-06), tuned a
 
 - Parent feature issue: **#3340**, filed `Backlog` + `agent:blocked` as the live validation hub.
   Draft body: [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md).
-- Children, in dependency order, all filed `agent:blocked`: SCREEN-01 → **#3343** is the sole
-  dependency-free head (per its `prerequisites: []` frontmatter) and flips to `agent:ready` once this
-  spec PR merges to `main`; SCREEN-02 → **#3344** and SCREEN-03 → **#3341** (Bifrost-transfer note)
-  stay blocked until SCREEN-01/#3343 merges; SCREEN-05 → **#3345** stays blocked until SCREEN-02/#3344
-  merges; SCREEN-06 → **#3342** stays blocked until SCREEN-01/#3343 and SCREEN-03/#3341 merge;
-  **SCREEN-04 → #3346 stays blocked until SCREEN-02/#3344 merges and is additionally, externally
-  blocked on the ERE stream registry (#3176)**.
+- Child issue mapping: SCREEN-01 → **#3343**; SCREEN-02 → **#3344**; SCREEN-06 → **#3342**; native
+  SCREEN-03 implementation → [Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72), with Heimdal
+  **#3341** as the validation pointer; SCREEN-05 → **#3345**; SCREEN-04 → **#3346**. Bifrost #72 depends
+  on #3343 and #3342; #3346 also depends on the ERE stream registry #3176.
 
 The spec is the source of truth; issues track pickup state.
 

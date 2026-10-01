@@ -103,6 +103,31 @@ class NormalizedTranscript:
         }
 
 
+@dataclass(frozen=True)
+class NormalizedMetadata:
+    """Deterministic normalized metadata for the metadata-only acquisition mode.
+
+    Metadata is a separate normalized content type.  It deliberately carries no transcript
+    segments, so downstream candidate assembly cannot accidentally infer transcript evidence or
+    invoke an extractor designed for transcript input.
+    """
+
+    metadata: dict[str, Any]
+    source_content_identity: str
+    acquisition_method: str = "metadata_only"
+    stage: str = "normalize_metadata"
+    stage_version: int = 1
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "stage": self.stage,
+            "stage_version": self.stage_version,
+            "source_content_identity": self.source_content_identity,
+            "acquisition_method": self.acquisition_method,
+            "metadata": {key: value for key, value in self.metadata.items()},
+        }
+
+
 def has_usable_transcript(normalized: NormalizedTranscript) -> bool:
     """Whether normalized evidence contains at least one usable transcript segment.
 
@@ -111,6 +136,30 @@ def has_usable_transcript(normalized: NormalizedTranscript) -> bool:
     Captionless and malformed inputs never reach this helper because ``normalize`` fails loudly.
     """
     return bool(normalized.segments)
+
+
+def normalize_metadata(raw_record: Mapping[str, Any]) -> NormalizedMetadata:
+    """Normalize a metadata-only raw record without creating transcript-shaped evidence."""
+    acquisition_method = raw_record.get("acquisition_method")
+    if acquisition_method != "metadata_only":
+        raise NormalizeError(
+            "metadata normalization requires acquisition_method='metadata_only'"
+        )
+    content_identity = raw_record.get("content_identity")
+    if not isinstance(content_identity, str) or not content_identity:
+        raise NormalizeError(
+            "raw_record.content_identity is required and must be a string"
+        )
+    metadata = raw_record.get("metadata")
+    if not isinstance(metadata, Mapping):
+        raise NormalizeError("metadata-only raw record must carry a metadata object")
+    normalized_metadata = {
+        str(key): value for key, value in metadata.items() if isinstance(key, str)
+    }
+    return NormalizedMetadata(
+        metadata=normalized_metadata,
+        source_content_identity=content_identity,
+    )
 
 
 # Quality notes are deterministic, fixed strings keyed by acquisition method — per

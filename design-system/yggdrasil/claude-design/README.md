@@ -1,6 +1,6 @@
 # Yggdrasil Design System
 
-Version 2.1.0. Token sheet: `colors_and_type.css`, generated from the repo token source
+Version 2.2.1. Token sheet: `colors_and_type.css`, generated from the repo token source
 `design-system/yggdrasil/` in `RasmusTho/agentic-pkm-mvp`. The repo sheet
 `companion-ui/companion-app/colors_and_type.css` is the binding authority. This project's copy must
 match it byte for byte. If this README and the sheet ever disagree, the sheet wins.
@@ -105,7 +105,7 @@ theme or density: both are pure token swaps.
 | `data-density` | `comfortable`, `compact` | missing means `comfortable` |
 | `data-focus` | `v2` opts in to the 2px solid focus ring | missing keeps the v1 glow ring |
 
-Yggdrasil Dark is the default for every surface. Shell is a per-user trial choice. Never make Shell
+Yggdrasil Dark is the default for every surface. Shell is a per-user choice. Never make Shell
 the default of a design unless the brief asks for it.
 
 ### Themes
@@ -115,14 +115,15 @@ Norse gold is the primary accent. Electric cyan is the signal colour. Vault gree
 amber, and red carry domain meaning. The only material is a faint cyan grid, available through
 `.fx-grid`.
 
-**Yggdrasil Light "Shell" (trial).** The suit against the city. People read and write on calm
+**Yggdrasil Light "Shell".** The suit against the city. People read and write on calm
 porcelain sheets. The frame around them is a saturated neon city that the porcelain catches as rim
 light.
 
-- **City backdrop** (app frame): `var(--surface-page)`. Red, cyan, magenta, and blue radial fields
-  over violet, with vertical glitch streaks and faint scanlines.
+- **City backdrop** (app frame): `var(--surface-page)`. A lit night: a near-black base with small
+  neon sign glows and corner fields in four palette colours, glitch streaks, and scanlines. With
+  `class="fx-city"` on `<html>` the palette cycles over 10 minutes (Neo-Tokyo, Aurora, Ice & Ember).
 - **Porcelain sheet** (content): `var(--surface-panel)` and `var(--surface-main)`, frosted glass.
-  A translucent white to `#e4e6eb` gradient (75 % coverage) with `backdrop-filter:
+  A translucent white to `#e4e6eb` gradient (85 % coverage) with `backdrop-filter:
   var(--surface-panel-filter)`, so the city and its glitch streaks show through. Rim light is
   `var(--surface-panel-shadow)`: cyan from the left, red from the right.
 - **Reading surface** (note body, editors): `var(--surface-reading)`. Calm glitch: denser porcelain
@@ -130,7 +131,8 @@ light.
 - **Dark glass chrome** (top bar, anything directly on the city): `var(--material-glass)` with
   `var(--material-on-glass)` text.
 - **Emblem:** the ᛉ rune inside a thin triangle. Wordmark in light, widely tracked capitals.
-- **Motion:** the streak layer may jump a few pixels every 7s. Content never moves. Disabled under
+- **Motion (`.fx-city`):** a brief horizontal tear every 29 s and a city power dip every 53 s,
+  never more than three flashes per second. Content never moves. Everything stops under
   `prefers-reduced-motion`.
 
 Shell's material belongs to the theme. Dark surfaces must not borrow it.

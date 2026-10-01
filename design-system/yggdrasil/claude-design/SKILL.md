@@ -1,6 +1,6 @@
 ---
 name: yggdrasil-design
-description: Use this skill to design interfaces for Yggdrasil, a local-first AI second brain. It holds the v2 token sheet (Yggdrasil Dark default, Yggdrasil Light "Shell" trial, comfortable and compact density), content rules, and preview cards for the Companion UI, Builder System UIs, and Bifrost.
+description: Use this skill to design interfaces for Yggdrasil, a local-first AI second brain. It holds the v2 token sheet (Yggdrasil Dark default, Yggdrasil Light "Shell", comfortable and compact density), content rules, and preview cards for the Companion UI, Builder System UIs, and Bifrost.
 user-invocable: true
 ---
 

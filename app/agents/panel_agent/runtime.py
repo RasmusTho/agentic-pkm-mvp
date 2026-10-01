@@ -140,6 +140,8 @@ def execute_panel_intent(
     # the contract uniform with the sibling guarded writers: callers that want
     # a soft "blocked" outcome catch `WritesBlockedError` themselves.
     DEFAULT_WRITE_GUARD.assert_writes_allowed("panel.writeback")
+    source_intent_event = intent_event
+    source_actions = list(intent_event.payload.actions)
     policy_flags = {
         "execution_mode": "watcher" if intent_event.source.trigger == "watcher" else "manual",
         "allow_legacy_promotion_without_trust_verb": allow_legacy_promotion_without_trust_verb,
@@ -156,16 +158,20 @@ def execute_panel_intent(
         note_text = str(payload.get("raw_text") or payload.get("text") or "")
         executed_ids = set(payload.get("executed_action_ids") or [])
 
-    original_action_count = len(list(intent_event.payload.actions))
+    original_action_count = len(source_actions)
     # Filter executed actions. Accept both formats in executed_ids:
     #   - stable_action_id hash of action.label (new format written by upsert_executed_ids)
     #   - action.id string (legacy format from notes written before #1204)
     # Both checks are required so restart deduplication is backward-compatible.
     from app.agents.panel.writeback import stable_action_id
     actions = [
-        action for action in intent_event.payload.actions
-        if stable_action_id(action.label) not in executed_ids
-        and action.id not in executed_ids
+        action
+        for action in source_actions
+        if action.id == "profile.apply_proposal"
+        or (
+            stable_action_id(action.label) not in executed_ids
+            and action.id not in executed_ids
+        )
     ]
     converged_rerun = bool(executed_ids) and original_action_count > 0 and not actions
     payload = intent_event.payload.model_copy(update={"actions": list(actions)})
@@ -197,6 +203,40 @@ def execute_panel_intent(
             vault_root = resolve_optional_vault_root()
         except VaultRootMisconfiguredError:
             vault_root = None
+
+    if any(action.id == "profile.apply_proposal" for action in source_actions):
+        from app.agents.profile_agent.runtime import execute_profile_panel_actions
+
+        profile_action_results = execute_profile_panel_actions(
+            source_actions,
+            note_path=source_intent_event.payload.note.path,
+            vault_root=vault_root,
+        )
+        if any(result.status == "triggered" for result in profile_action_results):
+            note_file = _resolve_note_file(source_intent_event.payload.note.path, vault_root)
+            if note_file is not None and vault_root is not None:
+                try:
+                    from app.agents.panel_agent.execution import refresh_panel_note_object
+
+                    refresh_panel_note_object(
+                        note_uuid=source_intent_event.payload.note.uuid,
+                        note_path=note_file,
+                        raw_text=note_file.read_text(encoding="utf-8"),
+                        trace_id=source_intent_event.trace_id,
+                        vault_root=vault_root,
+                    )
+                except Exception:
+                    # A successful profile write must not trigger checkbox
+                    # rollback because its derived object-store refresh failed.
+                    pass
+        return PanelRuntimeResult(
+            intent=source_intent_event,
+            actions=profile_action_results,
+            emitted_events=[],
+        )
+
+    intent_payload = source_intent_event.payload.model_copy(update={"actions": actions})
+    intent_event = source_intent_event.model_copy(update={"payload": intent_payload})
     decider_mode = get_panel_agent_decider()
     initial_state = PanelAgentState(
         trace_id=intent_event.trace_id,

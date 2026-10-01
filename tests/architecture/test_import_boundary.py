@@ -52,6 +52,12 @@ def _instance_storage_capability_contract_section() -> configparser.SectionProxy
     return parser["importlinter:contract:instance-storage-capability-protected"]
 
 
+def _profile_authority_capability_contract_section() -> configparser.SectionProxy:
+    parser = configparser.ConfigParser()
+    parser.read(IMPORTLINTER_INI)
+    return parser["importlinter:contract:profile-authority-capability-protected"]
+
+
 def _builder_llm_authority_contract_section() -> configparser.SectionProxy:
     parser = configparser.ConfigParser()
     parser.read(IMPORTLINTER_INI)
@@ -216,14 +222,12 @@ def test_source_modules_exclude_interaction_and_resolve() -> None:
     real = _real_app_packages()
 
     leaked_interaction = sorted(source & INTERACTION_LAYER)
-    assert not leaked_interaction, (
-        f"interaction packages must stay in forbidden_modules, not source_modules: {leaked_interaction}"
-    )
+    assert not leaked_interaction, f"interaction packages must stay in forbidden_modules, not source_modules: {leaked_interaction}"
 
     unresolvable = sorted(source - real)
-    assert not unresolvable, (
-        f"source_modules names packages that do not exist under app/: {unresolvable}"
-    )
+    assert (
+        not unresolvable
+    ), f"source_modules names packages that do not exist under app/: {unresolvable}"
 
 
 def test_llm_contract_kernel_is_covered_by_import_boundary() -> None:
@@ -339,6 +343,30 @@ def test_instance_storage_mutation_import_contract_is_complete() -> None:
     }
     runtime_module = importlib.import_module("app.instance.runtime")
     assert not hasattr(runtime_module, "_STORAGE_MUTATION_CAPABILITY")
+
+
+def test_profile_authority_capability_import_contract_is_sealed() -> None:
+    """Only the contract and its designated ProfileAgent issuer inspect capabilities."""
+
+    section = _profile_authority_capability_contract_section()
+    assert section["type"] == "protected"
+    assert section.getboolean("as_packages") is False
+    assert _module_list(section["protected_modules"]) == {
+        "app.knowledge._profile_authority_boundary",
+    }
+    assert _module_list(section["allowed_importers"]) == {
+        "app.knowledge.profile_authority",
+        "app.agents.profile_agent.runtime",
+    }
+    public_contract = importlib.import_module("app.knowledge.profile_authority")
+    for capability_name in (
+        "_OWNER_CONFIRMATION_CAPABILITY",
+        "_PROFILE_AGENT_WRITE_CAPABILITY",
+        "_DIRECT_OWNER_CORRECTION_CAPABILITY",
+        "_DIRECT_OWNER_RECONCILIATION_CAPABILITY",
+    ):
+        assert capability_name not in public_contract.__all__
+        assert not hasattr(public_contract, capability_name)
 
 
 # ---------------------------------------------------------------------------

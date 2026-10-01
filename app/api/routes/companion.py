@@ -4694,6 +4694,7 @@ def read_companion_workspace(
         vault_root=vault_root,
         safe_note_path=safe_note_path,
         body=body,
+        allow_recovered_identity=True,
     )
     if identity.identity_state == "healed":
         body = artifact_path.read_text(encoding="utf-8")
@@ -4725,7 +4726,9 @@ def read_companion_workspace(
 
     content_hash = _content_hash(body)
     selectable_options: list[PanelSelectableOption] = []
-    if identity.artifact_id:
+    # A recovered identity is read-only: it was never written to the create-once
+    # note, so it must not offer checkbox mutation affordances (#5663).
+    if identity.artifact_id and identity.identity_state != "recovered":
         selectable_options = extract_panel_selectable_options(
             body,
             artifact_id=identity.artifact_id,

@@ -46,10 +46,17 @@ consumers can weigh quality (manual > ASR > auto-captions, per the research memo
 
 ## Metadata
 
-Fetched with (not before) captions via the same yt-dlp call: title, channel + channel ID, publish
-date, duration, description, chapters, tags, language, thumbnail reference. Metadata lands in the
-`raw` record and drives the early rejection filters (language, duration, duplicate, ignored
-channel) defined in the pipeline contract.
+The `candidate_metadata_only` policy fetches title, channel + channel ID, publish date, duration,
+description, chapters, tags, language, and thumbnail reference with one logged-out yt-dlp metadata
+request. It does not request caption tracks, download media, run ASR, or invoke an extractor. The
+raw payload declares `acquisition_method: metadata_only` and uses the versioned
+`youtube-metadata-v1:sha256:<digest>` identity. The deterministic `normalize_metadata@1` artifact
+retains raw lineage and the same stable metadata projection. Unchanged metadata is a traced
+deduplication no-op; changed acquired metadata creates a new raw and normalized identity.
+
+The existing transcript path fetches this metadata with captions in its existing yt-dlp call.
+Metadata lands in the `raw` record and drives the early rejection filters (language, duration,
+duplicate, ignored channel) defined in the pipeline contract.
 
 ## Discovery (Inbox V1 shipped; broader Phase 4 target state)
 
@@ -87,6 +94,14 @@ template (`docs/examples/vault-templates/youtube-source-note.md`). Metadata, pro
 owner-authored takeaways/open threads, one `Proposals (non-authoritative)` wrapper for registered
 extraction output, and deterministic evidence/lineage. Production acquisition renders anchored
 `synthesis@1` and `claims@1` modules; explicit legacy `summary@2` policies remain supported.
+A deterministic content router (YSNV2-07, #4114) may add at most two ranked
+`decision_framework`/`documentary_science` modules of anchored verbatim source excerpts after
+that spine inside the same wrapper; uncertain routing renders the generic note, and routing or
+module failure renders a visibly `degraded` generic note without removing spine evidence.
+Metadata-only candidates render no proposal modules and no derived transcript attachment. They
+retain source URL/title/creator/published metadata, raw and normalized metadata lineage,
+`transcript_available: false`, `authority.requires_review: true`, `review_state: draft`, and
+`triage_state: captured`. The existing candidate WriteGuard and first-write-wins rules apply.
 Generated content never enters
 the owner band, and first-write-wins replay leaves every byte of an existing note unchanged.
 
@@ -128,8 +143,13 @@ change only through the bounded YouTube Source Note v2 child contracts. Those co
 immutable raw evidence, first-write-wins candidate notes, and the rule that a candidate is terminal
 only after its note has materialized. Re-extraction or upgrade must create a versioned proposal
 companion rather than overwrite the original candidate or human-authored content. These bounded
-deliveries do not ship the later v2 modules, change title-bearing paths or persistence, alter
-D1–D6, or introduce ProfileAgent behavior.
+YouTube deliveries do not ship the later v2 modules or change title-bearing paths or persistence.
+The owner revised the D1 frame-capture direction on 2026-09-30; D2–D6 remain as recorded.
+Issue #4118 delivers the bounded YSNV2-11 frame-capture stage (`source_frames.capture_source_frames`)
+under that direction; like #4116 moments, it is not yet wired into acquisition-time note rendering.
+ProfileAgent behavior was delivered separately as GOVPROF-01–03 under parent #4944;
+that profile capability does not ship the separate YouTube overlay renderer, which Issue #4117 delivers
+as a read-only consumer not yet wired into acquisition-time note rendering.
 
 The portable-source-bundle delivery adds a derived, rebuildable vault transcript and `source.json`
 under the YouTube attachment root (`Sources/YouTube/_attachments` by default). The stable

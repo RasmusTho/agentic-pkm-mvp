@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -59,6 +62,86 @@ def _pr(*, head_sha: str = HEAD_SHA, state: str = "open") -> dict[str, object]:
 
 def _issue() -> dict[str, object]:
     return {"number": 3602, "state": "open"}
+
+
+@pytest.mark.parametrize("review_rounds", [0, 1])
+def test_ordinary_request_cli_runs_without_site_packages(
+    tmp_path: Path, review_rounds: int
+) -> None:
+    pr = _pr()
+    pr["body"] = str(pr["body"]).replace(
+        "Final-Review-Rounds: 1", f"Final-Review-Rounds: {review_rounds}"
+    )
+    for name, payload in (("event", _event()), ("pr", pr), ("issue", _issue())):
+        (tmp_path / f"{name}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    # Match the workflow's clean setup-python environment, even when the test
+    # runner itself has the optional BuilderOps dependencies installed.
+    env = {key: value for key, value in os.environ.items() if key != "PYTHONPATH"}
+    resolve = subprocess.run(
+        [
+            sys.executable, "-S", "-c",
+            "import json, sys; "
+            "from scripts.build_verification_dispatch_request import resolve_pr_number; "
+            "print(resolve_pr_number(event=json.load(sys.stdin), candidates=[]))",
+        ],
+        cwd=REPO_ROOT, env=env, input=json.dumps(_event()),
+        capture_output=True, text=True, timeout=20,
+    )
+    assert resolve.returncode == 0, resolve.stderr
+    assert resolve.stdout.strip() == "3602"
+
+    output_json = tmp_path / "request.json"
+    output_markdown = tmp_path / "request.md"
+    github_output = tmp_path / "github-output"
+    result = subprocess.run(
+        [
+            sys.executable, "-S", "-m", "scripts.build_verification_dispatch_request",
+            "--event-json", str(tmp_path / "event.json"),
+            "--pr-json", str(tmp_path / "pr.json"),
+            "--issue-json", str(tmp_path / "issue.json"),
+            "--output-json", str(output_json),
+            "--output-markdown", str(output_markdown),
+            "--artifact-workflow-run-id", "123",
+            "--artifact-repository-id", "456",
+            "--github-output", str(github_output),
+        ],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    if review_rounds == 0:
+        assert not output_json.exists()
+        assert not output_markdown.exists()
+        assert "reason=light-path" in github_output.read_text()
+    else:
+        request = json.loads(output_json.read_text())
+        assert request == build_request(event=_event(), pr=pr, issue=_issue())
+        assert HEAD_SHA in output_markdown.read_text()
+        assert "emitted=true" in github_output.read_text()
+
+
+def test_explicit_canary_receipt_requires_optional_dependencies() -> None:
+    from app.builderops.execution_routing_receipts import CanaryReceiptEvidenceError
+
+    with pytest.raises(CanaryReceiptEvidenceError, match="unsupported canary receipt schema"):
+        build_request(event=_event(), pr=_pr(), issue=_issue(), canary_receipt={})
+
+    result = subprocess.run(
+        [
+            sys.executable, "-S", "-c",
+            "import json, sys; "
+            "from scripts.build_verification_dispatch_request import build_request; "
+            "build_request(**json.load(sys.stdin), canary_receipt={})",
+        ],
+        cwd=REPO_ROOT,
+        env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
+        input=json.dumps({"event": _event(), "pr": _pr(), "issue": _issue()}),
+        capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode != 0
+    assert "ModuleNotFoundError" in result.stderr
+    assert "pydantic" in result.stderr
+    assert "in build_request" in result.stderr
 
 
 def test_request_schema_and_idempotency_are_deterministic() -> None:

@@ -75,10 +75,31 @@ def _make_fixture(
     return root, child_path, root / "alembic.log"
 
 
+def _install_psycopg_package(support: Path, driver_source: str) -> Path:
+    package = support / "psycopg"
+    package.mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_text(driver_source, encoding="utf-8")
+    (package / "conninfo.py").write_text(
+        "from urllib.parse import urlsplit\n"
+        "\n"
+        "\n"
+        "def conninfo_to_dict(conninfo):\n"
+        "    parts = urlsplit(conninfo)\n"
+        "    return {\n"
+        "        'dbname': parts.path.lstrip('/'),\n"
+        "        'host': parts.hostname or '',\n"
+        "        'port': str(parts.port or 5432),\n"
+        "    }\n",
+        encoding="utf-8",
+    )
+    return support
+
+
 def _install_ready_postgres_probe(root: Path) -> Path:
     support = root / "support"
     support.mkdir(exist_ok=True)
-    (support / "psycopg.py").write_text(
+    return _install_psycopg_package(
+        support,
         "class _Cursor:\n"
         "    def __enter__(self):\n"
         "        return self\n"
@@ -103,15 +124,14 @@ def _install_ready_postgres_probe(root: Path) -> Path:
         "\n"
         "def connect(dsn, **kwargs):\n"
         "    return _Connection()\n",
-        encoding="utf-8",
     )
-    return support
 
 
 def _install_delayed_postgres_probe(root: Path, readiness_log: Path) -> Path:
     support = root / "support"
     support.mkdir(exist_ok=True)
-    (support / "psycopg.py").write_text(
+    return _install_psycopg_package(
+        support,
         "from pathlib import Path\n"
         "import os\n"
         "\n"
@@ -149,18 +169,16 @@ def _install_delayed_postgres_probe(root: Path, readiness_log: Path) -> Path:
         "    if attempts == 1:\n"
         "        raise RuntimeError(\"database is still starting\")\n"
         "    return _Connection()\n",
-        encoding="utf-8",
     )
-    return support
 
 
 def _install_failing_postgres_probe(root: Path) -> None:
     support = root / "support"
     support.mkdir(exist_ok=True)
-    (support / "psycopg.py").write_text(
+    _install_psycopg_package(
+        support,
         "def connect(dsn, **kwargs):\n"
         "    raise RuntimeError(\"database is still starting\")\n",
-        encoding="utf-8",
     )
     sleep = root / "bin" / "sleep"
     sleep.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")

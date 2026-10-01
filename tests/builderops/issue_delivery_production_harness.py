@@ -394,6 +394,9 @@ def issue_delivery_pg_store() -> PostgresBuilderOpsStore:
         pytest.skip(f"PostgreSQL unavailable for host-executor test: {exc}")
     store = PostgresBuilderOpsStore(_schema_dsn(base, schema))
     store.initialize()
+    from tests.builderops.bootstrap_fixtures import accept_fixture_authority, admit_fixture_connections
+    accept_fixture_authority(store)
+    admit_fixture_connections(store)
     try:
         yield store
     finally:
@@ -1213,7 +1216,7 @@ def issue_delivery_production_harness(
                             "subject_ref": f"github:{REPOSITORY}#{manifest['issue']['number']}",
                             "source_owner": "bifrost_git_documentation_source",
                             "owner_actor": {"actor_type": "human", "id": "owner:human"},
-                            "authorization_ref": {"ref": "policy:document-owner", "version": "1", "authority_epoch": 1},
+                            "authorization_ref": {"ref": "policy:document-owner", "version": "1", "authority_epoch": issue_delivery_pg_store.readiness()["authority_epoch"]},
                             "criterion_refs": [{"id": key, "sha256": value} for key, value in policy["verification_profile"]["criterion_hashes"].items()],
                             "limitation_refs": [{"id": "limit:documentation-only", "sha256": "e" * 64}],
                             "retention_policy_ref": {"ref": "BuilderOpsReceipt", "version": "1"}},

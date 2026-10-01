@@ -5,8 +5,8 @@ Owner: Product / human-function SoT
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-07-08
-Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/GLOSSARY.md, docs/adr/ADR-0044-research08-d1-conforms-to-acknowledged-sos.md, docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md, docs/adr/ADR-0051-episode-as-ontological-primitive.md, docs/adr/ADR-0054-episode-resolution-engine-is-a-mimer-organ.md, docs/HEIMDAL/CAPABILITY_CHARTER.md, docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md, docs/DECISION_RECEIPT_LOG/README.md, docs/KNOWLEDGE_ACQUISITION/README.md, docs/EPISODE_RESOLUTION_ENGINE/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, and current repo state at 8e19a275 on 2026-07-08
+Last reviewed: 2026-09-27
+Last verified against: docs/PROJECT_KERNEL.md, docs/ARCHITECTURE.md, docs/STATUS.md, docs/OPERATIONS.md, docs/GLOSSARY.md, docs/adr/ADR-0044-research08-d1-conforms-to-acknowledged-sos.md, docs/adr/ADR-0050-cross-repo-governance-and-bifrost-client-repo.md, docs/adr/ADR-0051-episode-as-ontological-primitive.md, docs/adr/ADR-0054-episode-resolution-engine-is-a-mimer-organ.md, docs/HEIMDAL/CAPABILITY_CHARTER.md, docs/BIFROST/APP_TOPOLOGY_AND_PLATFORMS.md, docs/DECISION_RECEIPT_LOG/README.md, docs/KNOWLEDGE_ACQUISITION/README.md, docs/EPISODE_RESOLUTION_ENGINE/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, app/relevance/now_surface.py, tests/relevance/test_vault_native_moments.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2133, docs/MEETING_CONTEXT_ASSISTANCE/README.md, docs/CONCEPTS/ARTIFACT_RETENTION_POLICY_CONTRACT.md, docs/HUMAN_FLOW_TO_RUNTIME_MAP.md, docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md, and current repo baseline at 393ca4287 (2026-09-27)
 
 
 # Human Flows — Yggdrasil
@@ -233,6 +233,7 @@ These loops are compact recurring patterns, not a claim that all work must follo
 They summarize the kinds of cycles the system should keep legible and support across changing runtime implementations.
 
 - Capture -> clarify -> place
+- Meet -> capture -> contextualize -> review/place
 - Retrieve -> orient -> act
 - Source -> interpret -> stabilize
 - Intent -> propose -> decide -> execute -> receipt
@@ -254,7 +255,7 @@ Validation note:
 Scope note:
 - `Intent -> propose -> decide -> execute -> receipt` is a canonical loop for mutation-capable interaction surfaces, especially AI-panel and action-driven flows.
 - **For artifact-local interaction, Panel is the primary surface for this loop.** Its distinctive function is to make likely artifact intentions visible before they are fully formed as user commands. The agent may propose what the user likely wants to do with the active artifact; the user recognizes, corrects, or confirms; only confirmed intent enters governed execution; a receipt is written near the artifact.
-- New emergent features (for example resume my thinking, suggest next action, memory candidate, research pack, dormant project resurfacing, agent learns my workflow) compose this loop together with context bundles, reusable capabilities, policy evaluation, and feedback signals; see `docs/EMERGENT_FEATURES_MODEL.md` for the composition pattern and the rule that emergent features must not bypass governance, write guards, provenance, or authority boundaries.
+- New emergent features (for example resume my thinking, suggest next action, memory candidate, research pack, dormant project resurfacing, agent learns my workflow, and meeting context assistance) compose these loops together with context bundles, reusable capabilities, policy evaluation, and feedback signals; see `docs/EMERGENT_FEATURES_MODEL.md` for the composition pattern and the rule that emergent features must not bypass governance, write guards, provenance, or authority boundaries.
 - It is not a blanket requirement that every runtime interaction must pass through a human approval step before the system can propose or execute low-risk work.
 - The runtime should reduce cognitive load by generating autonomous proposals where the action is low-risk and the artifact value is not threatened, while reserving harder guardrails for writes or transitions that could damage artifact integrity, provenance, or user trust.
 - Suggested actions may surface as proposed checkbox items in an AI panel when the system has enough context to help but not enough certainty or authority to mutate directly.
@@ -303,6 +304,13 @@ Capture must work for:
 - creative fragments,
 - roleplaying/hobby material,
 - and open loops that are not yet clarified.
+
+For desktop meetings, the target flow also supports explicit-start audio capture, time-aligned
+transcription, real-time retrieval of relevant vault and meeting context, private source-linked
+assistance, and review of a linked note proposal after the session. Capture and transcription are
+not yet shipped as a live meeting workflow; see `docs/MEETING_CONTEXT_ASSISTANCE/README.md` for
+the target-state scope, privacy boundaries, and subsystem ownership. User-outcome acceptance is
+captured in `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md` §13.
 
 Capture must also work from the lived world, not only from a writing surface. When something
 happens on a walk, in a meeting, or in a passing conversation, the human should be able to speak it

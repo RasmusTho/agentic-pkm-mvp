@@ -1,9 +1,9 @@
-State: FILED — the parent feature issue is live as #3340 (Backlog, agent:blocked validation hub). GitHub is the authoritative backlog/validation surface; this file is the archived draft + local pointer. Children were filed agent:blocked: #3343 (SCREEN-01, dependency-free head — flips to agent:ready when this spec PR merges to main), #3341 (SCREEN-03, dependency-free head per this spec's own design — flips to agent:ready when this spec PR merges to main; Bifrost-transfer candidate), #3344 (SCREEN-02, blocked until SCREEN-01/#3343 merges), #3345 (SCREEN-05, blocked until SCREEN-02/#3344 merges), #3342 (SCREEN-06, blocked until SCREEN-01/#3343 and SCREEN-03/#3341 merge), #3346 (SCREEN-04, blocked until SCREEN-02/#3344 merges and externally blocked on ERE stream registry #3176).
+State: FILED — the parent feature issue is live as #3340 (Backlog, agent:blocked validation hub). GitHub is the authoritative backlog/validation surface; this file is the archived draft + local pointer. Issue map: SCREEN-01/#3343; SCREEN-02/#3344; SCREEN-06/#3342; native SCREEN-03 implementation in [Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72), with Heimdal #3341 as validation pointer; SCREEN-05/#3345; SCREEN-04/#3346. Bifrost #72 depends on #3343 and #3342; #3346 also depends on the external ERE stream registry #3176.
 Doc role: Parent feature issue draft (feature-breakdown lane)
 Temporal class: operational
 Review cadence: event-driven (issue lifecycle)
 Source of truth: GitHub issue #3340; this file is the archived draft + local pointer
-Last reviewed: 2026-07-07
+Last reviewed: 2026-09-28
 
 # [Heimdal Screen Stream] parent: always-on desktop observer → screen-modality observations → event motor / journaling / time-spend
 
@@ -82,16 +82,17 @@ receipt from the test channel posted to this issue.
 
 ## Implementation Tasks
 
-`docs/HEIMDAL_SCREEN_STREAM/` — SCREEN-01..SCREEN-06 per the README execution order:
-**01 → 02‖03 → 05‖06 → 04**. SCREEN-03 (the client) is Bifrost-homed and may transfer to the `bifrost`
-repo; SCREEN-04 is externally blocked on the ERE stream registry (#3176) and is the parent-closure child.
+`docs/HEIMDAL_SCREEN_STREAM/` — SCREEN-01..SCREEN-06 per the README dependency graph:
+**01 → {02, 06}; {01, 06} → 03; 02 → 05; {02, #3176} → 04.** Native SCREEN-03 is implemented in
+[Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72); Heimdal #3341 remains its validation
+pointer. SCREEN-04 is externally blocked on the ERE stream registry (#3176) and is the parent-closure child.
 
 ## Verification Path
 
 Per-task `Verify:` targets (each task file couples ACs to `How to Verify (Pre-Merge)`); capture/publish
 hot-path children (SCREEN-01/02/06) run the full `not pg` suite + integrated-runtime UAT where they
 touch the vault/watcher hot path; SCREEN-03 verifies in Bifrost CI (Swift build+test+lint per ADR-0050)
-if transferred, with the same AC names.
+against the same AC names.
 
 ## Validation / Acceptance Path
 

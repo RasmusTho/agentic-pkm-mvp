@@ -17,3 +17,41 @@
 .fx-glow-agent { box-shadow: var(--agent-glow); }
 .fx-grid       { background-image: var(--material-backdrop); background-size: var(--material-backdrop-size); }
 .fx-chroma     { text-shadow: var(--material-chroma-split); }
+
+/* Shell night city (#5662). Opt in with class="fx-city" on <html>. Three static
+   palette layers (the page backdrop plus html::before/::after) cross-fade over a
+   600 s cycle with opacity only, so the cycle runs on the compositor. Animation
+   names are tokens, so Dark (name: none) never moves. Tear and dip layers never
+   take input; reduced motion stops everything (see the accessibility block). */
+@keyframes fx-city-fade-2 {
+  0% { opacity: 0; }
+  33.333% { opacity: 1; }
+  66.667%, 100% { opacity: 0; }
+}
+@keyframes fx-city-fade-3 {
+  0%, 33.333% { opacity: 0; }
+  66.667% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes fx-city-glitch {
+  0%, 70.9% { opacity: 0; transform: none; }
+  71% { opacity: 1; transform: translateX(-9px); }
+  71.25% { opacity: 1; transform: translateX(14px) scaleY(1.03); }
+  71.5%, 100% { opacity: 0; transform: none; }
+}
+@keyframes fx-city-dip {
+  0%, 87.9% { opacity: 0; }
+  88% { opacity: 1; }
+  88.15% { opacity: 0; }
+  88.5% { opacity: 0.7; }
+  88.65%, 100% { opacity: 0; }
+}
+.fx-city::before,
+.fx-city::after,
+.fx-city > body::before,
+.fx-city > body::after { content: ""; inset: 0; opacity: 0; pointer-events: none; position: fixed; z-index: -1; }
+.fx-city::before { animation: var(--city-fade-2-animation) 600s linear infinite; background: var(--material-backdrop-2); }
+.fx-city::after { animation: var(--city-fade-3-animation) 600s linear infinite; background: var(--material-backdrop-3); }
+.fx-city > body { isolation: isolate; }
+.fx-city > body::before { animation: var(--city-glitch-animation) 29s steps(1) infinite; background: var(--material-glitch); z-index: 2147483000; }
+.fx-city > body::after { animation: var(--city-dip-animation) 53s steps(1) infinite; background: var(--material-dip); }

@@ -26,7 +26,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from app.components.llm.fabric import ChatClient
+from app.components.llm.fabric import ChatClient, get_chat_client_for_route
 from app.components.llm.router import LLMRouter, LLMTaskIntent
 
 logger = logging.getLogger(__name__)
@@ -280,8 +280,9 @@ class ReasoningFacade:
         """Chat completion that requests JSON conforming to *schema*.
 
         The facade injects the schema description into the system prompt so
-        that any provider can attempt structured output.  Parsing is best-
-        effort (``json.loads``); callers should validate.
+        providers without native constrained output can still attempt it, and
+        forwards the schema to transports that support constrained output.
+        Parsing is best-effort (``json.loads``); callers should validate.
         """
         trace_id = trace_id or uuid4().hex
         intent = LLMTaskIntent(task_kind=task_kind, json_schema_required=True)
@@ -303,6 +304,7 @@ class ReasoningFacade:
                 agent="reasoning_facade",
                 kind=task_kind,
                 trace_id=trace_id,
+                response_format=schema,
             )
             return json.loads(raw or "{}")  # type: ignore[no-any-return]
         except json.JSONDecodeError as exc:
@@ -342,6 +344,25 @@ class ReasoningFacade:
         client = self._resolve_client(intent)
 
         tool_descriptions = json.dumps(tools, indent=2)
+        tool_names = list(
+            dict.fromkeys(
+                tool["name"]
+                for tool in tools
+                if isinstance(tool.get("name"), str) and tool["name"]
+            )
+        )
+        tool_name_schema: dict[str, Any] = {"type": "string"}
+        if tool_names:
+            tool_name_schema["enum"] = tool_names
+        output_schema = {
+            "type": "object",
+            "properties": {
+                "tool": tool_name_schema,
+                "arguments": {"type": "object"},
+            },
+            "required": ["tool", "arguments"],
+            "additionalProperties": False,
+        }
         tool_instruction = (
             "You have these tools available:\n"
             f"```json\n{tool_descriptions}\n```\n"
@@ -359,6 +380,7 @@ class ReasoningFacade:
                 agent="reasoning_facade",
                 kind=task_kind,
                 trace_id=trace_id,
+                response_format=output_schema,
             )
             parsed = json.loads(raw or "{}")
             return ToolResult(
@@ -541,7 +563,7 @@ class ReasoningFacade:
 
     def _resolve_client(self, intent: LLMTaskIntent) -> ChatClient:
         route = self.router.route(intent)
-        return ChatClient(route=route)
+        return get_chat_client_for_route(intent, selected_route=route)
 
     @staticmethod
     def _messages_to_pack(

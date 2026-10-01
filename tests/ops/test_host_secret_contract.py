@@ -461,3 +461,86 @@ def test_loader_rejects_a_declaration_without_an_explicit_boolean_shared_key_dom
 
     with pytest.raises(ValueError, match=expected):
         load_host_secret_contract(contract_path)
+
+
+def test_existing_consumer_environment_grants_are_unchanged() -> None:
+    contract = load_host_secret_contract()
+    expected = {
+        "heimdal-api-ingress": {"heimdal.raw-store-key", "github.token"},
+        "heimdal-raw-migrate": {"heimdal.raw-store-key"},
+        "heimdal-capture-watch": {"heimdal.raw-store-key"},
+        "heimdal-cold-volume": {"heimdal.archive-pass"},
+        "builderops-model-inquiry": {"openai.api-key"},
+        "builderops-ckm-semantic": {"openai.api-key"},
+        "heimdal-external-alerts": {"discord.webhook"},
+    }
+    assert contract.allowed == frozenset(
+        (channel, consumer, secret)
+        for channel in ("dev", "test", "prod")
+        for consumer, secrets in expected.items()
+        for secret in secrets
+    )
+    assert "POSTGRES_PASSWORD" not in contract.child_bindings
+    assert "DATABASE_PASSWORD" not in contract.child_bindings
+
+
+def test_postgres_password_contract_is_file_only_and_consumer_set_is_closed() -> None:
+    contract = load_host_secret_contract()
+    expected = {
+        "postgres-db": "db",
+        "postgres-migrate": "migrate",
+        "postgres-api": "api",
+        "postgres-worker": "worker",
+        "postgres-watcher": "watcher",
+        "postgres-capture-watch": "heimdal-capture-watch",
+    }
+    for channel in ("dev", "test", "prod"):
+        for consumer, service in expected.items():
+            assert contract.file_binding(
+                channel=channel, consumer=consumer, secret="postgres.password"
+            ) == (
+                service,
+                "POSTGRES_PASSWORD_FILE" if service == "db" else "DATABASE_PASSWORD_FILE",
+            )
+            with pytest.raises(UndeclaredSecretConsumerError):
+                contract.require_declared(
+                    channel=channel, consumer=consumer, secret="postgres.password"
+                )
+    with pytest.raises(UndeclaredSecretConsumerError):
+        contract.binding_for("postgres.password")
+    with pytest.raises(UndeclaredSecretConsumerError):
+        contract.file_binding(channel="dev", consumer="postgres-other", secret="postgres.password")
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["duplicate", "unknown", "scope", "project", "consumer", "file-consumer", "password-env"],
+)
+def test_bws_identity_scope_is_closed_and_consumer_grants_are_preserved(
+    tmp_path: Path, corruption: str
+) -> None:
+    payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text())
+    if corruption == "duplicate":
+        payload["bws"]["identities"].append(payload["bws"]["identities"][0])
+    elif corruption == "unknown":
+        payload["bws"]["identities"][0]["logical_id"] = "unknown.secret"
+    elif corruption == "scope":
+        payload["bws"]["identities"][0]["scope"] = "shared"
+    elif corruption == "project":
+        payload["bws"]["channel_projects"]["dev"] = "prod"
+    elif corruption == "consumer":
+        payload["consumers"][0]["secrets"].append("openai.api-key")
+    elif corruption == "file-consumer":
+        payload["file_secrets"][0]["consumers"].append(
+            {
+                "consumer": "postgres-other",
+                "service": "other",
+                "path_binding": "DATABASE_PASSWORD_FILE",
+            }
+        )
+    else:
+        payload["file_secrets"][0]["child_binding"] = "POSTGRES_PASSWORD"
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        load_host_secret_contract(path)

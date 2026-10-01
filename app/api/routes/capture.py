@@ -76,18 +76,17 @@ from app.services.outbox import (
     derive_idempotency_key,
     write_outbox_event,
 )
-from app.vault.paths import get_vault_inbox_dir_rel
+from app.vault import path_overlap
+from app.vault.paths import get_vault_capture_note_rel, get_vault_sources_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.standing_questions.registration import RegistrationProposalResult, propose_question_registration
 
 logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/companion", tags=["companion"])
 
 CAPTURE_APPENDED_EVENT = "capture.inbox.appended"
 _WRITE_GUARD_ACTION = "companion.capture.append"
 _WRITE_CLASS = "vault_capture_append"
-_DEFAULT_CAPTURE_NOTE_NAME = "inbox.md"
 _EVENT_SOURCE = "companion.capture"
 _STATE_OWNER = "knowledge"
 _GOVERNED_WRITE_ADAPTER = GovernedWriteAdapter()
@@ -141,12 +140,28 @@ class CaptureResponse(BaseModel):
 
 
 def _capture_note_rel(vault_root: Path) -> str:
-    override = (os.getenv("VAULT_CAPTURE_NOTE_REL") or "").strip()
-    if override:
-        return override
-    inbox_rel = get_vault_inbox_dir_rel(vault_root)
-    return (Path(inbox_rel) / _DEFAULT_CAPTURE_NOTE_NAME).as_posix()
+    return get_vault_capture_note_rel(vault_root)
 
+
+# Re-exported for route-level callers; path semantics are shared with runtime writers.
+_nearest_existing_directory = path_overlap._nearest_existing_directory
+_linux_mount_type = path_overlap._linux_mount_type
+_linux_ext4_casefolded = path_overlap._linux_ext4_casefolded
+_probe_case_insensitive_directory = path_overlap._probe_case_insensitive_directory
+_filesystem_name_semantics = path_overlap._filesystem_name_semantics
+_same_path_prefix = path_overlap._same_path_prefix
+_path_is_within = path_overlap._path_is_within
+
+
+def _capture_target_overlaps_sources(
+    note_rel: str, sources_dir_rel: str, *, vault_root: Path
+) -> bool:
+    """Compare normalized paths, following symlinks and filesystem aliases."""
+    return path_overlap.vault_paths_overlap(
+        note_rel,
+        sources_dir_rel,
+        vault_root=vault_root,
+    )
 
 def _compose_entry(text: str, captured_at: str) -> str:
     lines = text.splitlines() or [text]
@@ -318,6 +333,37 @@ def capture_to_inbox(req: CaptureRequest, request: Request) -> CaptureResponse |
                 ),
             },
         ) from exc
+
+    # The governed capture inbox is outside the sensor/acquisition archive.
+    # Resolve the selected vault's configured Sources root before issuing any
+    # authorization token, and fail closed when that authority is malformed.
+    try:
+        sources_dir_rel = get_vault_sources_dir_rel(vault_root)
+        overlaps_sources = _capture_target_overlaps_sources(
+            note_rel, sources_dir_rel, vault_root=vault_root
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "sources_zone_unresolved",
+                "message": (
+                    "The vault Sources zone could not be resolved; "
+                    f"nothing was written. {exc}"
+                ),
+            },
+        ) from exc
+    if overlaps_sources:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "capture_sources_overlap",
+                "message": (
+                    "The capture target overlaps the vault Sources zone; "
+                    "nothing was written."
+                ),
+            },
+        )
 
     # Policy — the governed-write adapter maps WriteGuard approval to a
     # DecisionToken before the state-owning writer mutates the vault.

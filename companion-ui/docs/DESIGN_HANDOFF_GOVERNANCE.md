@@ -203,11 +203,11 @@ a Crossing-B cleanup task.
 
 - Resolve the live Claude Design system by exact name through `list_design_systems`; the currently
   verified ID is `f2b13410-af14-4875-8029-445352123f57`.
-- Current reconciled state (#5652, after YDS-02 #5628): system version `2.1.0`
+- Current reconciled state (#5673, after YDS-02 #5628, #5652 and #5662): system version `2.2.1`
   (`design-system/yggdrasil/VERSION`), token SHA-256
-  `a20474025cc58fda24459d80bf6022bdb5e76631276aeabf91ff920418ce1cf1`, reconciled 2026-09-24 by
-  reading the live `colors_and_type.css` back after a targeted upload of the Shell frosted-glass
-  change. A live
+  `edbc81c77209b5274b26b5e827191f95595f20d6bc5a97a17f7dd8751a774ba2`, reconciled 2026-09-25 by
+  reading the live `colors_and_type.css` back after a targeted upload of the Shell "(trial)" label
+  removal. The owner confirmed on 2026-09-25 that the live project no longer shows as Legacy. A live
   or repo sheet with any other hash fails this gate until the next reconciliation records it here.
 - Select it at project creation. For an existing project that cannot express selection, attach its
   `SKILL.md`, `README.md`, exact `colors_and_type.css`, and relevant component/reference previews
@@ -237,7 +237,7 @@ B when all of the following are true:
 
 - [ ] The package README names the surface it covers and declares its authority status ("Visual guidance only" or equivalent).
 - [ ] The package README contains a passing Yggdrasil design-system receipt: exact live name and ID,
-      selection/attachment mechanism, binding repo token path, matching token SHA-256, and relevant
+      selection/attachment mechanism, binding repo token path, token `VERSION`, matching token SHA-256, and relevant
       component/preview inputs.
 - [ ] `authority-boundaries.md` is present and distinguishes: design guidance / normalized spec / architecture contract / runtime truth.
 - [ ] `implementation-contracts.md` is present and lists the state enum, allowed transitions, and data attributes.

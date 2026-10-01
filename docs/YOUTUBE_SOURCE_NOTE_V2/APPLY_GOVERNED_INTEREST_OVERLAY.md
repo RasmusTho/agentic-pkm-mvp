@@ -17,11 +17,11 @@ Make relevance helpful and falsifiable without turning similarity, prior behavio
 
 ## What This Task Does
 
-After the future vault-wide relevance-profile contract is delivered, reads only its authorized same-scope projection after ProfileAgent has completed a valid Panel checkbox confirmation, governed profile write, and receipt. It emits four-part proposal connections: source evidence, system inference, owner link/match signal, and suggested use. This task never creates, infers, proposes, or mutates the profile.
+Consumes only the authorized same-scope projection provided by the delivered vault-wide profile contract after ProfileAgent has completed valid Panel checkbox confirmation, governed profile write, and receipt. It emits four-part proposal connections: source evidence, system inference, owner link/match signal, and suggested use. This task never creates, infers, proposes, or mutates the profile.
 
 ## Concretely
 
-The overlay is read-only and excludes suppressed/tombstoned, secret, unapproved or unrelated agent-memory, and ungranted cross-scope context. A behavior-derived profile is admissible only through its future vault-wide owner contract; it cannot be reconstructed from YouTube behavior. ProfileUpdateCandidate A2A handoffs and pending ProfileAgent suggestions, whether unchecked or checked but not yet receipted, are not profile state and are inadmissible. The authorized, approved ProfileAgent projection is the sole exception to the agent-memory exclusion. If no governed profile is present, the note renders one explicit no-profile line and stops.
+The overlay is read-only and excludes suppressed/tombstoned, secret, unapproved or unrelated agent-memory, and ungranted cross-scope context. A behavior-derived profile is admissible only through the delivered vault-wide owner contract; it cannot be reconstructed from YouTube behavior. ProfileUpdateCandidate A2A handoffs and pending ProfileAgent suggestions, whether unchecked or checked but not yet receipted, are not profile state and are inadmissible. The authorized, approved ProfileAgent projection is the sole exception to the agent-memory exclusion. When this task is implemented, if no governed profile is present, the note renders one explicit no-profile line and stops.
 
 ## Why This Matters
 
@@ -51,9 +51,9 @@ Creating, proposing, or mutating the vault-wide profile; the ProfileAgent; Profi
 - `docs/architecture/cross-scope-flow.md`
 - `docs/PANEL_AGENT.md :: Canonical confirmation semantics`
 - `docs/AGENT-FLOWS.md :: Handoff artifacts and agent-to-agent continuity`
-- Future vault-wide relevance-profile owner contract (not yet authored)
+- [Governed Vault Profile contract](../GOVERNED_VAULT_PROFILE/README.md) (delivered and accepted under parent #4944)
 - `docs/YOUTUBE_SOURCE_NOTE_V2/README.md :: Authority stays human-first`
 
 ## Related GitHub Issues
 
-Draft issue type: `type:task`, `prio:med`, `agent:blocked` pending YSNV2-05 and the future vault-wide relevance-profile contract; D4 direction is recorded. SBS class: Product/Runtime. Recommended capability: Sol/xhigh; behavior-profile authority and cross-scope policy have high hidden-defect risk.
+Issue #4117 delivers the four-part overlay renderer as `app/knowledge_acquisition/interest_overlay.py :: render_interest_overlay`, a review-required `ProposalSection` producer that is not yet wired into acquisition-time note rendering. Its YSNV2-05 prerequisite (#4112) is delivered and the governed profile prerequisite is accepted under #4944. SBS class: Product/Runtime. Behavior-profile authority and cross-scope policy retain high hidden-defect risk.

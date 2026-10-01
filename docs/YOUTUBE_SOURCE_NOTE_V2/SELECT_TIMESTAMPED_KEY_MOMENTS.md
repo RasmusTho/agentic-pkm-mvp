@@ -13,7 +13,7 @@ can_parallelize_with: [EXTRACT_GATED_ONTOLOGY_PROPOSALS]
 
 ## Purpose
 
-Deliver revisit-friendly timestamp selection without coupling its value or correctness to unapproved screenshot work.
+Deliver revisit-friendly timestamp selection without coupling its value or correctness to frame capture.
 
 ## What This Task Does
 
@@ -53,4 +53,4 @@ Downloading video, scene/slide analysis, vision captioning, and retained frame b
 
 ## Related GitHub Issues
 
-Draft issue type: `type:task`, `prio:med`, `agent:blocked` pending YSNV2-05. SBS class: Product/Runtime. Recommended capability: Sol/xhigh; selection/provenance state must converge before optional media work.
+Issue #4116 delivered this task by PR #5740 as `app/knowledge_acquisition/key_moments.py :: derive_key_moments`; the separate #4118 frame stage attaches frames by `moment_id`. SBS class: Product/Runtime. Recommended capability: Sol/xhigh; selection/provenance state must converge before optional media work.

@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import time
 import asyncio
+import importlib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -15,6 +17,8 @@ from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.settings.models import SettingsBundle
 from app.vault.paths import get_vault_inbox_dir_rel
 from app.watcher.heartbeat import resolve_heartbeat_path
+
+health_module = importlib.import_module("app.cli.health")
 
 
 @pytest.fixture(autouse=True)
@@ -117,14 +121,16 @@ def _assert_check_metadata(payload: dict) -> None:
     assert "required" in checks["ffmpeg"]
     assert "severity" in checks["ffmpeg"]
     assert "llm_router" in checks
-    assert "selected_defaults" in checks["llm_router"]
-    assert "route_policies" in checks["llm_router"]
+    assert checks["llm_router"]["detail"] == "route configuration loaded"
+    assert "llm_access" in checks
+    assert checks["llm_access"]["required"] is True
+    assert "capabilities" in checks["llm_access"]
     assert "llm_task_routes" in checks
-    assert "routes" in checks["llm_task_routes"]
+    assert "capabilities" in checks["llm_task_routes"]
     assert "embedding_index" in checks
     assert "rebuild_required" in checks["embedding_index"]
     assert "llm_providers" in checks
-    assert "providers" in checks["llm_providers"]
+    assert checks["llm_providers"]["detail"] == "adapter declarations loaded"
     assert "obsidian" in checks
     assert "required" in checks["obsidian"]
 
@@ -165,7 +171,7 @@ def test_health_success(monkeypatch, tmp_path) -> None:
     _assert_check_metadata(data)
     actions = data.get("suggested_actions")
     assert isinstance(actions, list)
-    assert any(action.get("id") == "llm_mock" for action in actions if isinstance(action, dict))
+    assert all(action.get("id") != "llm_mock" for action in actions if isinstance(action, dict))
 
 
 def test_health_allows_stale(monkeypatch, tmp_path) -> None:
@@ -303,7 +309,103 @@ def test_health_requires_task_route_configuration(monkeypatch, tmp_path) -> None
     data = resp.json()
     assert data["required_ok"] is False
     assert data["checks"]["llm_task_routes"]["ok"] is False
-    assert data["checks"]["llm_task_routes"]["routes"]["decide"]["status"] == "fail"
+    assert data["checks"]["llm_task_routes"]["capabilities"]["text_generation"]["status"] != "available"
+
+
+def test_health_luna_route_is_not_blocked_by_unselected_ollama(
+    monkeypatch, tmp_path
+) -> None:
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+    monkeypatch.delenv("OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_URL", raising=False)
+    monkeypatch.delenv("OLLAMA_HOST", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+
+    route_policies = {
+        "qa": {
+            "effective": {
+                "provider": "openai",
+                "model": "gpt-6-luna",
+                "transport_id": "codex_cli_tailscale",
+                "reasoning_effort": "low",
+            },
+            "intent": {},
+        },
+        "embed": {
+            "effective": {
+                "provider": "ollama",
+                "model": "nomic-embed-text",
+                "transport_id": "ollama_http",
+            },
+            "intent": {},
+        },
+    }
+    monkeypatch.setattr(
+        health_module,
+        "_check_llm_router",
+        lambda: {"ok": True, "route_policies": route_policies},
+    )
+    monkeypatch.setattr(
+        health_module, "_check_embedding_index", lambda: {"ok": True}
+    )
+
+    def _unexpected_ollama_probe(**_kwargs):
+        raise AssertionError("unselected Ollama must not be probed")
+
+    monkeypatch.setattr(health_module, "_check_ollama", _unexpected_ollama_probe)
+
+    class _Client:
+        preflight_transport_observation = {
+            "status": "available",
+            "reason_code": "transport_reachable",
+        }
+        model_access_route = SimpleNamespace(
+            provider="openai",
+            model="gpt-6-luna",
+            transport_id="codex_cli_tailscale",
+            preflight_status="passed",
+        )
+
+        def chat(self, *_args, **_kwargs):
+            raise AssertionError("health must never dispatch a completion")
+
+    seen_intents = []
+
+    def _get_chat_client_for_route(
+        intent, *, selected_route, allow_fallback, allow_catalog_promotion
+    ):
+        assert selected_route.model == "gpt-6-luna"
+        assert allow_fallback is False
+        assert allow_catalog_promotion is False
+        seen_intents.append(intent)
+        return _Client()
+
+    monkeypatch.setattr(
+        health_module, "get_chat_client_for_route", _get_chat_client_for_route
+    )
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    data = response.json()
+    checks = data["checks"]
+    assert data["required_ok"] is True
+    assert "ollama" not in checks
+    assert checks["llm_access"]["ok"] is True
+    assert checks["llm_access"]["required"] is True
+    assert set(checks["llm_access"]["capabilities"]) == {"text_generation"}
+    assert checks["llm_task_routes"]["capabilities"] == checks["llm_access"]["capabilities"]
+    assert data["runtime"]["llm"]["ok"] is True
+    assert data["runtime"]["llm"]["capabilities"] == checks["llm_access"]["capabilities"]
+    assert checks["llm_access"]["transport_observation"]["status"] == "available"
+    assert (
+        data["runtime"]["llm"]["transport_observation"]["status"]
+        == "available"
+    )
+    assert "provider" not in repr(checks["llm_access"])
+    assert "openai" not in repr(checks["llm_router"])
+    assert [intent.task_kind for intent in seen_intents] == ["health"]
 
 
 def test_health_includes_v6_0_seams_optional(monkeypatch, tmp_path) -> None:
@@ -357,11 +459,18 @@ def test_health_skips_eval_route_by_default(monkeypatch, tmp_path) -> None:
     _write_worker_heartbeat(worker_hb, ts=time.time())
     client = _health_client(monkeypatch, tmp_path, watcher_path=heartbeat, worker_path=worker_hb, worker_enabled=True)
 
+    probed: list[str] = []
+    real_probe = health_module._probe_selected_route
+
+    def _record_probe(task_kind, effective, intent, *, ollama_probe=None):
+        probed.append(task_kind)
+        return real_probe(task_kind, effective, intent, ollama_probe=ollama_probe)
+
+    monkeypatch.setattr(health_module, "_probe_selected_route", _record_probe)
     resp = client.get("/api/health")
 
     assert resp.status_code == 200
-    data = resp.json()
-    assert data["checks"]["llm_task_routes"]["routes"]["eval"]["status"] == "skipped"
+    assert "eval" not in probed
 
 
 # --- security: DSN must not appear in health response ---
@@ -419,7 +528,7 @@ def test_health_api_sanitizes_exception_details(monkeypatch) -> None:
     assert data["trace_id"] == "trace-health-redaction"
 
 
-def test_health_api_preserves_operator_base_urls(monkeypatch) -> None:
+def test_health_api_omits_selected_route_identity(monkeypatch) -> None:
     client = TestClient(app)
 
     def fake_run_health() -> dict[str, object]:
@@ -427,16 +536,32 @@ def test_health_api_preserves_operator_base_urls(monkeypatch) -> None:
             "ok": True,
             "required_ok": True,
             "checks": {
-                "ollama": {
+                "llm_access": {
                     "ok": True,
-                    "status": "ok",
-                    "base_url": "http://127.0.0.1:11434",
+                    "transport_observation": {
+                        "status": "available",
+                        "freshness": "fresh",
+                        "reason_code": "transport_reachable",
+                        "selected_path_profile": "private_vlan",
+                    },
+                    "routes": {
+                        "qa": {
+                            "status": "ok",
+                            "base_url": "https://operator:password@api.openai.com/private?token=secret#fragment",
+                        }
+                    },
                 }
             },
             "runtime": {
                 "llm": {
-                    "provider": "openai",
-                    "base_url": "https://api.openai.com/v1",
+                    "ok": True,
+                    "providers": ["openai"],
+                    "transport_observation": {
+                        "status": "available",
+                        "freshness": "fresh",
+                        "reason_code": "transport_reachable",
+                        "selected_path_profile": "private_vlan",
+                    },
                 }
             },
             "suggested_actions": [],
@@ -448,8 +573,13 @@ def test_health_api_preserves_operator_base_urls(monkeypatch) -> None:
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["checks"]["ollama"]["base_url"] == "http://127.0.0.1:11434"
-    assert data["runtime"]["llm"]["base_url"] == "https://api.openai.com/v1"
+    assert "routes" not in data["checks"]["llm_access"]
+    assert "providers" not in data["runtime"]["llm"]
+    assert "selected_path_profile" not in data["checks"]["llm_access"]["transport_observation"]
+    assert "private_vlan" not in resp.text
+    for secret in ("operator", "password", "private", "token", "secret", "fragment"):
+        assert secret not in resp.text
+    assert "openai" not in resp.text
 
 
 def test_health_api_exposes_bounded_authority_spine_status(tmp_path, monkeypatch) -> None:

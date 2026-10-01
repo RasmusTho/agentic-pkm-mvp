@@ -153,6 +153,22 @@ def test_knowledge_runtime_modules_select_vault_knowledge_and_port_coverage() ->
     assert "tests/ports" in selection.targets
 
 
+def test_profile_authority_and_reviewer_paths_select_vault_regressions() -> None:
+    selection = select_tests(
+        [
+            "app/agents/profile_agent/runtime.py",
+            "app/agents/reviewer/agent.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert "vault" in selection.subsystems
+    assert selection.unowned_paths == ()
+    assert "tests/governance/test_governed_vault_profile_proposals.py" in selection.targets
+    assert "tests/agents/test_reviewer.py" in selection.targets
+    assert "tests/agents/test_reviewer_single_note.py" in selection.targets
+
+
 def test_vault_sync_delete_seam_selects_vault_lifecycle_coverage() -> None:
     selection = select_tests(["app/services/vault_sync.py"])
 
@@ -177,6 +193,27 @@ def test_ci_smoke_workflow_change_selects_full_shared_suite() -> None:
     assert selection.full_suite is True
     assert selection.reason == "shared CI/test/runtime configuration changed"
     assert selection.unowned_paths == ()
+
+
+def test_shared_note_path_normalization_has_exact_vault_ownership() -> None:
+    selection = select_tests(
+        [
+            "app/path_utils.py",
+            "app/vault/paths.py",
+            "app/vault/path_overlap.py",
+            "app/knowledge/locators.py",
+        ]
+    )
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("vault",)
+    assert selection.unowned_paths == ()
+    assert "tests/vault" in selection.targets
+    assert "tests/knowledge" in selection.targets
+
+    same_prefix_sibling = select_tests(["app/path_utils_extra.py"])
+    assert same_prefix_sibling.subsystems == ("unowned",)
+    assert same_prefix_sibling.unowned_paths == ("app/path_utils_extra.py",)
 
 
 def test_governance_docs_change_selects_governance_tests() -> None:
