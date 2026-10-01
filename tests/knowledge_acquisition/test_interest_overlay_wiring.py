@@ -36,6 +36,7 @@ from app.knowledge_acquisition.extraction_registry import clear_registry
 from app.knowledge_acquisition.extractors import claims_extractor, summary_extractor, synthesis_extractor
 from app.knowledge_acquisition.interest_overlay import NO_PROFILE_LINES, propose_local_connections
 from app.knowledge_acquisition.normalize import normalize
+from app.knowledge_acquisition.replay import run_replay
 from app.knowledge_acquisition.note_renderer import EVIDENCE_HEADING, PROPOSALS_HEADING
 from app.stores import reset_store_backends
 from app.vault.manager import VaultContext
@@ -253,6 +254,20 @@ def test_acquisition_renders_overlay_connections_from_admitted_profile(
     assert "### Evidence-anchored claims" in note
     assert "**Materialization status:** complete" in note
 
+    # The replay orchestrator uses the same assembly seam: replaying the raw record into another
+    # approved vault renders that vault's overlay without any source egress.
+    replay_root, _ = _approved_vault(tmp_path / "replay-vault")
+    replay_projection = rebuild_profile_projection(replay_root, active_scope_id=_SCOPE)
+    monkeypatch.setattr(plugin, "fetch_caption_body", lambda url: pytest.fail("replay egress"))
+    replay = run_replay(
+        receipt.raw_record_id, vault_context=_context(replay_root), conn=_FakeOutboxConn(), assert_no_source_egress=True
+    )
+    assert replay.source_egress == 0
+    replay_note = _candidate_note(replay_root)
+    assert f"approved profile version {replay_projection.version_id}" in _overlay_band(replay_note)
+    assert _frontmatter(replay_note)["interest_overlay"]["profile_receipt_id"] == replay_projection.receipt_id
+    assert calls[-1]["active_scope_id"] == _SCOPE
+
 
 def test_connection_producer_is_deterministic_local_and_no_egress(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -378,32 +393,45 @@ def test_acquisition_overlay_no_profile_metadata_only_and_failure_isolation(
     assert NO_PROFILE_LINES["en"] not in meta_note
     assert calls == []
 
-    # Overlay failure (a raising producer, or an approved entry the shared wrapper refuses to
-    # render) degrades the overlay only; the candidate and its evidence sections survive.
+    # Overlay failure degrades the overlay only; the candidate and its evidence sections survive.
     def exploding(**_kwargs: Any):
         raise RuntimeError("overlay producer exploded")
 
     raising_root, _ = _approved_vault(tmp_path / "raising")
+    with monkeypatch.context() as scoped_patch:
+        scoped_patch.setattr(candidate_writeback, "produce_interest_overlay", exploding)
+        object_store_module._MEMORY_STORE.clear()
+        receipt = acquire_youtube(
+            VIDEO_URL, vault_context=_context(raising_root), write_guard=_guard(), conn=_FakeOutboxConn()
+        )
+    assert receipt.ok is True
+    note = _candidate_note(raising_root)
+    assert "### Interest overlay" not in note
+    assert "### Evidence-anchored synthesis" in note
+    assert "### Evidence-anchored claims" in note
+    meta = _frontmatter(note)
+    assert meta["degraded"] is True
+    assert meta["unavailable_note_modules"] == ["interest_overlay"]
+    assert "interest overlay failed" in note
+
+    # An admitted connection the shared wrapper would refuse (banned owner-authority phrasing in
+    # an approved entry) is dropped and reported on its own; healthy connections still render.
+    banned_line = "Local-first knowledge tools matter because you decided they keep the machine yours."
     banned_root, _ = _approved_vault(
         tmp_path / "banned",
-        f"<!--mimer:profile-scope scope_id={_SCOPE}-->\n\n## Interests\n\n"
-        "- Local-first knowledge tools matter because you decided they keep the machine yours.",
+        f"<!--mimer:profile-scope scope_id={_SCOPE}-->\n\n## Interests\n\n- {banned_line}\n- {_PROFILE_LINE}",
     )
-    for name, root, patch in (("raising", raising_root, True), ("unrenderable", banned_root, False)):
-        with monkeypatch.context() as scoped_patch:
-            if patch:
-                scoped_patch.setattr(candidate_writeback, "produce_interest_overlay", exploding)
-            object_store_module._MEMORY_STORE.clear()
-            receipt = acquire_youtube(
-                VIDEO_URL, vault_context=_context(root), write_guard=_guard(), conn=_FakeOutboxConn()
-            )
-            assert receipt.ok is True, name
-            note = _candidate_note(root)
-            assert "### Interest overlay" not in note, name
-            assert "### Evidence-anchored synthesis" in note, name
-            assert "### Evidence-anchored claims" in note, name
-            meta = _frontmatter(note)
-            assert meta["degraded"] is True, name
-            assert meta["unavailable_note_modules"] == ["interest_overlay"], name
-            assert "interest overlay failed" in note, name
-
+    object_store_module._MEMORY_STORE.clear()
+    receipt = acquire_youtube(
+        VIDEO_URL, vault_context=_context(banned_root), write_guard=_guard(), conn=_FakeOutboxConn()
+    )
+    assert receipt.ok is True
+    note = _candidate_note(banned_root)
+    band = _overlay_band(note)
+    assert "you decided" not in band
+    assert "**Owner link:** “Prefer local-first knowledge tools" in band
+    meta = _frontmatter(note)
+    assert meta["interest_overlay"]["status"] == "connections"
+    assert meta["interest_overlay"]["dropped_connections"] == ["connection_unsafe_for_proposal_band"]
+    assert "degraded" not in meta
+    assert "### Evidence-anchored synthesis" in note

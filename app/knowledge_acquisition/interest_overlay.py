@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
@@ -45,7 +45,11 @@ from app.knowledge_acquisition.evidence_synthesis import (
     validate_generated_language,
     validate_resolvable_anchor,
 )
-from app.knowledge_acquisition.note_renderer import ProposalSection
+from app.knowledge_acquisition.note_renderer import (
+    NoteRenderError,
+    ProposalSection,
+    validate_proposal_section,
+)
 
 INTEREST_OVERLAY_MODULE_ID = "interest_overlay"
 OverlayStatus = Literal["connections", "no-connections", "no-profile"]
@@ -296,9 +300,15 @@ def produce_interest_overlay(
     active_scope_id: str | None,
     normalized: Mapping[str, Any],
 ) -> InterestOverlay:
-    """Acquisition-time overlay: local deterministic proposals through governed admission."""
+    """Acquisition-time overlay: local deterministic proposals through governed admission.
 
-    return render_interest_overlay(
+    The renderer re-reads the governed projection and re-admits every proposal, so a profile
+    change between proposal and admission can only drop a connection, never admit one.  Each
+    admitted connection is then checked against the shared proposals wrapper on its own; one
+    the wrapper would refuse is dropped and reported instead of discarding the whole overlay.
+    """
+
+    overlay = render_interest_overlay(
         vault_root=vault_root,
         active_scope_id=active_scope_id,
         normalized=normalized,
@@ -307,6 +317,23 @@ def produce_interest_overlay(
             active_scope_id=active_scope_id,
             normalized=normalized,
         ),
+    )
+    if overlay.status != "connections":
+        return overlay
+    kept: list[Mapping[str, Any]] = []
+    dropped = list(overlay.dropped)
+    for connection in overlay.connections:
+        try:
+            validate_proposal_section(replace(overlay, connections=(connection,)).section())
+        except NoteRenderError:
+            dropped.append("connection_unsafe_for_proposal_band")
+            continue
+        kept.append(connection)
+    return replace(
+        overlay,
+        status="connections" if kept else "no-connections",
+        connections=tuple(kept),
+        dropped=tuple(dropped),
     )
 
 
@@ -441,7 +468,7 @@ def _render_connection(connection: Mapping[str, Any], language: str) -> str:
             f"- **{labels['source_says']}** ({stamps}): “{_inline(connection['source_says'])}”",
             f"  - **{labels['system_inference']}:** {_inline(connection['system_inference'])}",
             f"  - **{labels['owner_link']}:** “{_inline(connection['owner_link'])}” "
-            f"({labels['profile_version']} {connection['profile_version_id']})",
+            f"({labels['profile_version']} {_inline(str(connection['profile_version_id']))})",
             f"  - **{labels['suggested_use']}:** {_inline(connection['suggested_use'])}",
         )
     )
