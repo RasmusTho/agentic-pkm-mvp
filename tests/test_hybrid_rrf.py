@@ -1,54 +1,53 @@
 from __future__ import annotations
 
-from uuid import uuid4
+import pytest
 
+from app.retrieval import hybrid
 from app.search.service import search_hybrid
-from app.search.vector_index import VectorResult
 
 
-_FIXTURE_EMBED_MODEL = "nomic-embed-text:latest"
+def _vec(*head: float) -> list[float]:
+    return list(head) + [0.0] * (8 - len(head))
 
 
-def test_hybrid_rrf_combines_ft_and_vector(monkeypatch, stub_index) -> None:
-    first_id = uuid4()
-    second_id = uuid4()
-    third_id = uuid4()
-
-    stub_index.upsert(
-        object_id=first_id,
-        kind="note",
-        source_ref="doc-1",
-        payload={"title": "First"},
-        embedding=[1.0, 0.0],
-        model=_FIXTURE_EMBED_MODEL,
-    )
-    stub_index.upsert(
-        object_id=second_id,
-        kind="note",
-        source_ref="doc-2",
-        payload={"title": "Second"},
-        embedding=[0.0, 1.0],
-        model=_FIXTURE_EMBED_MODEL,
-    )
-    stub_index.upsert(
-        object_id=third_id,
-        kind="note",
-        source_ref="doc-3",
-        payload={"title": "Third"},
-        embedding=[0.5, 0.5],
-        model=_FIXTURE_EMBED_MODEL,
-    )
-
-    def fake_ft(query_text: str, *, k: int) -> list[VectorResult]:
-        return [
-            VectorResult(object_id=first_id, score=0.9, payload=stub_index.store[first_id].payload),
-            VectorResult(object_id=third_id, score=0.6, payload=stub_index.store[third_id].payload),
+@pytest.fixture
+def _canonical_corpus():
+    store = hybrid.get_store()
+    snapshot = [
+        {
+            "doc_id": d.doc_id,
+            "text": d.text,
+            "language": d.language,
+            "source_ref": d.source_ref,
+            "payload": d.payload,
+            "embedding": d.embedding,
+        }
+        for d in store.all()
+    ]
+    store.set_documents(
+        [
+            {"doc_id": "first", "text": "alpha first note", "payload": {"title": "First"}, "embedding": _vec(1.0, 0.0)},
+            {"doc_id": "second", "text": "unrelated second note", "payload": {"title": "Second"}, "embedding": _vec(0.0, 1.0)},
+            {"doc_id": "third", "text": "alpha third note", "payload": {"title": "Third"}, "embedding": _vec(0.5, 0.5)},
         ]
+    )
+    yield
+    store.set_documents(snapshot)
 
-    monkeypatch.setattr("app.search.service.search_full_text", fake_ft)
 
-    results = search_hybrid("alpha", [0.0, 1.0], k=2)
+def test_hybrid_rrf_combines_ft_and_vector(monkeypatch, _canonical_corpus) -> None:
+    """Legacy ``search_hybrid`` fuses lexical and vector signals via the canonical ranking (#5707).
 
-    assert len(results) == 2
-    assert results[0].object_id == first_id
-    assert results[1].object_id == third_id
+    It no longer returns full-text hits first: the vector-only doc competes with the lexical hits,
+    and the order and scores are exactly the canonical entrypoint's.
+    """
+    monkeypatch.delenv("ASK_DOMAIN_SCOPE", raising=False)
+    qvec = _vec(0.0, 1.0)
+
+    results = search_hybrid("alpha", qvec, k=2)
+    canonical = hybrid.hybrid_search("alpha", k=2, query_vector=qvec)
+
+    assert [r.object_id for r in results] == [hit["doc_id"] for hit in canonical]
+    assert "second" in [r.object_id for r in results]
+    assert [r.score for r in results] == [hit["score"] for hit in canonical]
+    assert [r.payload for r in results] == [hit["payload"] for hit in canonical]

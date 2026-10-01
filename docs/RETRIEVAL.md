@@ -49,6 +49,17 @@ query, scope/domain inputs, trace id, hit metadata, response `metadata.provenanc
 freshness, or an opt-in salience/staleness signal payload seam. It adapts the current results; it
 does not introduce relation-aware ranking, orientation, resurfacing, or a new retrieval agent.
 
+Legacy compatibility adapter (#5707): `app/search/service.py:hybrid_search(query_text,
+query_vector, *, k)` and its `search_hybrid` alias (both exported from `app.search`) are adapters
+over the canonical `app/retrieval/hybrid.py:hybrid_search`. They pass the supplied query vector and
+`k` through unchanged and project each canonical hit onto the legacy result attributes
+(`object_id` = canonical `doc_id`, `score`, `payload`). The canonical implementation is the sole
+authority for ranking (fusion and rerank defaults), scope filtering, eligibility, stored-vector
+use, and durable-index cache freshness (generation check and rebuild). The former independent
+full-text-first lookup with vector fallback is removed; legacy result ordering intentionally
+converges onto the canonical ranking contract. The direct `bm25_search` / `vector_search`
+utility APIs in `app.search` are unchanged and are not hybrid retrieval.
+
 ### Scoring
 Per document, we compute:
 - `bm25_norm` = normalized BM25 score

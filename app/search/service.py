@@ -222,35 +222,33 @@ def vector_search(query_vector: list[float], *, k: int) -> list:
 
 search_vector = vector_search  # legacy-alias
 
-# --- Hybrid (FT-first) ------------------------------------------------------
+# --- Hybrid (legacy compatibility adapter, #5707) -----------------------------
+
+class _LegacyHybridResult:
+    """Legacy result shape (``object_id``/``score``/``payload``) over a canonical hit."""
+
+    __slots__ = ("object_id", "score", "payload")
+
+    def __init__(self, object_id: str, score: float, payload: dict) -> None:
+        self.object_id = object_id
+        self.score = score
+        self.payload = payload
+
 
 def hybrid_search(query_text: str, query_vector: list[float], *, k: int) -> list:
-    """FT-prioriterad hybrid: FT[:k] om träffar; annars vektor, unika tills k."""
-    ft = search_full_text(query_text, k=k) or []
-    if ft:
-        def _oid(it): return getattr(it, "object_id", None) or getattr(it, "id", None)
-        def _pl(it):  return getattr(it, "payload", None) or {}
-        class _Result:
-            __slots__=("object_id","score","payload")
-            def __init__(self, object_id, score, payload):
-                self.object_id=object_id; self.score=score; self.payload=payload
-        top = ft[:k]
-        return [_Result(_oid(it), float(k-i), _pl(it)) for i, it in enumerate(top)]
-    # annars fyll på med vektor
-    vec = vector_search(query_vector, k=k) or []
-    seen, ordered = set(), []
-    def _oid(it): return getattr(it, "object_id", None) or getattr(it, "id", None)
-    def _pl(it):  return getattr(it, "payload", None) or {}
-    for it in vec:
-        oid = _oid(it)
-        if oid is None or oid in seen: continue
-        ordered.append((oid, _pl(it))); seen.add(oid)
-        if len(ordered) >= k: break
-    class _Result:
-        __slots__=("object_id","score","payload")
-        def __init__(self, object_id, score, payload):
-            self.object_id=object_id; self.score=score; self.payload=payload
-    return [_Result(oid, float(k-i), pl) for i, (oid, pl) in enumerate(ordered)]
+    """Legacy entrypoint: a compatibility adapter over ``app.retrieval.hybrid.hybrid_search``.
+
+    Ranking, scope filtering, eligibility, and durable-cache freshness are the canonical
+    implementation's; this adapter only projects each hit onto the legacy result shape
+    (``object_id`` = canonical ``doc_id``). See docs/RETRIEVAL.md :: Hybrid Search (Current).
+    """
+    from app.retrieval import hybrid as _canonical
+
+    hits = _canonical.hybrid_search(query_text, k=k, query_vector=query_vector)
+    return [
+        _LegacyHybridResult(hit["doc_id"], float(hit["score"]), dict(hit.get("payload") or {}))
+        for hit in hits
+    ]
 
 search_hybrid = hybrid_search  # legacy
 
