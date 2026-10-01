@@ -1650,7 +1650,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: INDEX_EMBEDDING_REQUESTED path; upsert_kwargs['payload'] "
         "= build_indexed_unit_payload(payload=dict(obj.payload)) -> store_vector_index."
     ),
-    ("app/search/service.py", 282): (
+    ("app/search/service.py", 280): (
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
