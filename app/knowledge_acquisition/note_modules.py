@@ -90,6 +90,11 @@ _DEGRADED_ITEM = {
     "en": "Content module `{module_id}` could not be rendered and was omitted; the generic note remains intact.",
     "sv": "Innehållsmodulen `{module_id}` kunde inte renderas och utelämnades; den generiska anteckningen är intakt.",
 }
+_OMITTED_TITLE = {"en": "Omitted module excerpts", "sv": "Utelämnade modulutdrag"}
+_OMITTED_BODY = {
+    "en": "{count} source excerpt(s) matched by a content module were omitted because they could not be rendered safely inside the proposal band.",
+    "sv": "{count} källutdrag som matchats av en innehållsmodul utelämnades eftersom de inte kunde återges säkert i förslagsavsnittet.",
+}
 _ROUTING_FAILED_TITLE = {"en": "Content routing failed", "sv": "Innehållsroutningen misslyckades"}
 _ROUTING_FAILED_BODY = {
     "en": "Content routing failed ({reason}); this note uses the generic layout without content modules.",
@@ -167,6 +172,14 @@ def degradation_sections(route: ContentRoute | None, modules: RenderedModules | 
                 ),
             )
         )
+    if modules is not None and modules.omitted_items:
+        sections.append(
+            ProposalSection(
+                module_id="content-module-omissions",
+                title=_OMITTED_TITLE[language],
+                content=_OMITTED_BODY[language].format(count=modules.omitted_items),
+            )
+        )
     return tuple(sections)
 
 
@@ -190,7 +203,10 @@ def _build_module_sections(
                 continue
             seen.add(evidence.segment_index)
             text = " ".join(str(segments[evidence.segment_index].get("text", "")).split())
-            item = f"- `[{_timestamp(evidence.start)}–{_timestamp(evidence.end)}]` “{text}”"
+            item = (
+                f"- `[seg {evidence.segment_index} · {_timestamp(evidence.start)}–"
+                f"{_timestamp(evidence.end)}]` “{text}”"
+            )
             try:
                 validate_proposal_section(ProposalSection(module_id=module_id, title=title, content=item))
             except NoteRenderError:

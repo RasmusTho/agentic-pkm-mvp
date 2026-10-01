@@ -66,11 +66,11 @@ Delivered implementation (#4114):
   `documentary_science` modules. Each section maps to one cue family and renders only verbatim,
   anchored source excerpts presented as quotations in the original language; sections without
   evidence are omitted. Module titles and the lead line follow D6. An item that would fail the
-  renderer's authority lint is dropped and counted; any other module exception becomes a
-  `ModuleFailure`.
+  renderer's authority lint is dropped, counted in `omitted_module_items`, and reported visibly;
+  any other module exception becomes a `ModuleFailure`.
 - `candidate_writeback` routes and composes modules at assembly, renders module sections after
-  the universal spine (synthesis, claims, evidence gaps, ontology) inside the one proposals
-  wrapper, records `content_route` in frontmatter and the evidence band, and marks routing or
+  the universal spine (synthesis, claims, evidence gaps) and any ontology proposals inside the one
+  proposals wrapper, records `content_route` in frontmatter and the evidence band, and marks routing or
   module failure as `degraded` with a visible degradation section. Spine evidence is unaffected.
 
 Ontology, interest overlay, moment selection, and other content profiles remain out of scope.

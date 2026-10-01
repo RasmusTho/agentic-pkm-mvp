@@ -164,7 +164,7 @@ def test_initial_modules_compose_under_shared_proposal_wrapper() -> None:
         module_body = band[band.index(f"### {module_title}") :]
         for line in module_body.splitlines():
             assert line == "" or line.startswith("### ") or line.startswith(">")
-        assert "`[00:00:00" in module_body or "`[00:00:02" in module_body
+        assert "`[seg 0 · 00:00:00–00:00:02]`" in module_body
 
     # Generic routing renders the spine only, with no module headings at all.
     generic_note = render_candidate_note(_english_candidate(GENERIC_LINES, "sha256:generic"))
@@ -229,6 +229,9 @@ def test_optional_module_failure_preserves_required_evidence_note(monkeypatch, t
     assert "You decide which option" not in risky_note
     assert "### Decision framework — Options considered" in risky_note
     assert risky_candidate.note_modules.omitted_items >= 1
+    # The omission is visible, not silent.
+    assert _frontmatter(risky_note)["omitted_module_items"] == risky_candidate.note_modules.omitted_items
+    assert "### Omitted module excerpts" in _band(risky_note)
     assert not risky_candidate.note_modules.failures
 
 

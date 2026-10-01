@@ -359,6 +359,8 @@ def render_candidate_note(candidate: Candidate) -> str:
         frontmatter["degraded"] = True
     if module_failures:
         frontmatter["unavailable_note_modules"] = list(module_failures)
+    if candidate.note_modules is not None and candidate.note_modules.omitted_items:
+        frontmatter["omitted_module_items"] = candidate.note_modules.omitted_items
     degradation = [
         *(
             ["optional failures: " + ", ".join(f.extractor_id for f in candidate.optional_failures)]
