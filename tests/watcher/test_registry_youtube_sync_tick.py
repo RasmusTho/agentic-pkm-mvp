@@ -66,14 +66,18 @@ def test_sub_tick_gated_and_exception_isolated(
     def forbidden_client():
         raise AssertionError("closed flags must prevent all provider/store construction")
     monkeypatch.setattr(sync_runtime, "_build_api_client", forbidden_client)
-    for enabled, runner in ((False, False), (False, True), (True, False)):
+    for enabled, runner, reason in (
+        (False, False, "paused_global"),
+        (False, True, "paused_global"),
+        (True, False, "disabled"),
+    ):
         monkeypatch.setattr(SettingsService, "resolve_accepted_runtime_gating",
             lambda self, context: {
                 "youtubeSync.enabled": SimpleNamespace(value=enabled),
                 "youtubeSync.runnerEnabled": SimpleNamespace(value=runner),
             })
         result = _run_youtube_sync_tick(cfg, now=1000.0, cadence=SyncTickCadence())
-        assert result["reason"] == "disabled"
+        assert result["reason"] == reason
         assert result["triggered"] is False
 
     # --- cadence keeps the sub-tick sparse ---------------------------------

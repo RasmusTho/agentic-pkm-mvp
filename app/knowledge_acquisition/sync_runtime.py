@@ -40,10 +40,12 @@ def _setting(effective: dict[str, Any], key: str, default: Any) -> Any:
     return default if value is None else value
 
 
-def _both_gates_open(effective: dict[str, Any]) -> bool:
-    return bool(_setting(effective, ENABLED_KEY, False)) and bool(
-        _setting(effective, RUNNER_ENABLED_KEY, False)
-    )
+def _closed_gate_reason(effective: dict[str, Any]) -> str | None:
+    if not bool(_setting(effective, ENABLED_KEY, False)):
+        return "paused_global"
+    if not bool(_setting(effective, RUNNER_ENABLED_KEY, False)):
+        return "disabled"
+    return None
 
 
 def _build_api_client() -> Any:
@@ -99,8 +101,11 @@ def run_scheduled_sync_tick(
     # registered safe default for first-seen, denied, cross-file, or otherwise
     # unreceipted disk input, so an unreviewed settings edit cannot switch a
     # runner on.
-    if not _both_gates_open(service.resolve_accepted_runtime_gating(vault_context)):
-        return TickOutcome(reason="disabled")
+    gate_reason = _closed_gate_reason(
+        service.resolve_accepted_runtime_gating(vault_context)
+    )
+    if gate_reason is not None:
+        return TickOutcome(reason=gate_reason)
 
     owns_process_marker = scheduler is None
     if scheduler is None:

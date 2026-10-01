@@ -14,9 +14,9 @@ from __future__ import annotations
 import time
 import uuid
 from copy import deepcopy
-from contextlib import AbstractContextManager, nullcontext
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
-from typing import Any, Callable, NoReturn
+from typing import Any, Callable, Iterator, NoReturn
 
 from app.knowledge_acquisition.acquisition_requests import (
     DiscoveryTrigger,
@@ -73,6 +73,10 @@ _SAFE_REASON_DETAILS: dict[str, str] = {
 
 class SourcePollPersistenceError(RuntimeError):
     """A durable request/disposition could not be proven before cursor write."""
+
+
+class _PollDeadlineExceeded(TimeoutError):
+    """The cooperative poll budget expired before a durable success write."""
 
 
 @dataclass(frozen=True)
@@ -167,6 +171,8 @@ def _successful_result(
                 **({"transaction_conn": conn} if conn is not None else {}),
             )
     except SyncLeaseLostError:
+        raise
+    except _PollDeadlineExceeded:
         raise
     except Exception:
         persistence_failed = True
@@ -316,17 +322,32 @@ def poll_source(
     run_id = str(uuid.uuid4())
     started = time.monotonic()
 
+    def check_deadline() -> None:
+        if deadline is not None and monotonic() >= deadline:
+            raise _PollDeadlineExceeded("YouTube discovery poll deadline expired")
+
     def guard() -> None:
+        check_deadline()
         if check_active is not None:
             check_active()
 
-    def degraded(binding: SourceBinding, **kwargs: Any) -> SourcePollResult:
+    @contextmanager
+    def deadline_commit_guard() -> Iterator[Any]:
+        # Check both before admission and after the lease-fenced transaction is
+        # opened. A slow request/outbox write may consume the remaining budget;
+        # the later cursor publication must then be rejected.
         guard()
+        with commit_guard() as conn:
+            check_deadline()
+            yield conn
+
+    def degraded(binding: SourceBinding, **kwargs: Any) -> SourcePollResult:
+        if check_active is not None:
+            check_active()
         return _degraded_result(binding, commit_guard=commit_guard, **kwargs)
 
     def successful(binding: SourceBinding, **kwargs: Any) -> SourcePollResult:
-        guard()
-        return _successful_result(binding, commit_guard=commit_guard, **kwargs)
+        return _successful_result(binding, commit_guard=deadline_commit_guard, **kwargs)
 
     guard()
     current: SourceBinding | None = None
@@ -456,8 +477,7 @@ def poll_source(
                     existing = getter(
                         request_identity("youtube_url", item.video_id, policy_version)
                     )
-            guard()
-            with commit_guard() as conn:
+            with deadline_commit_guard() as conn:
                 requests.enqueue(
                     source_kind="youtube_url",
                     item_ref=item.video_id,
@@ -475,6 +495,8 @@ def poll_source(
                     **({"transaction_conn": conn} if conn is not None else {}),
                 )
         except SyncLeaseLostError:
+            raise
+        except _PollDeadlineExceeded:
             raise
         except Exception:
             persistence_failed = True

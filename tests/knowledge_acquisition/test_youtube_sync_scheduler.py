@@ -576,6 +576,37 @@ def test_poll_deadline_stops_pagination_and_stream_without_cursor(production_pat
     assert state.get("backoff:" + binding.binding_id)["consecutive_failures"] == 1
 
 
+def test_poll_does_not_publish_cursor_after_enqueue_crosses_deadline(production_path, monkeypatch) -> None:
+    registry, queue, api, clock, _outbox, _account, binding = production_path
+    api.videos.append("aaaaaaaaaaa")
+    elapsed = [0.0]
+    original_enqueue = queue.enqueue
+
+    def slow_enqueue(**kwargs: Any) -> Any:
+        result = original_enqueue(**kwargs)
+        elapsed[0] = 31.0
+        clock.advance(31)
+        return result
+
+    monkeypatch.setattr(queue, "enqueue", slow_enqueue)
+    state = MemorySyncStateStore()
+    scheduler = SyncScheduler(
+        registry=registry,
+        requests=queue,
+        state=state,
+        api_client=api,
+        clock=clock,
+        monotonic=lambda: elapsed[0],
+        tick_budget_seconds=30,
+    )
+
+    assert scheduler.tick().reason == "ran"
+    assert len(queue.list_all()) == 1
+    assert registry.get(binding.binding_id).cursor == {}
+    assert registry.get(binding.binding_id).last_success_at is None
+    assert state.get("backoff:" + binding.binding_id)["consecutive_failures"] == 1
+
+
 def test_priority_sources_receive_the_tick_budget_first() -> None:
     rows = [_Binding("normal"), _Binding("inbox")]
     rows[0].priority = "normal"
