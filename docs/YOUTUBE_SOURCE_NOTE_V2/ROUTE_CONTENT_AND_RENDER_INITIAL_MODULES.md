@@ -51,6 +51,30 @@ Ontology, interest overlay, moment selection, and other content profiles.
 - `docs/YOUTUBE_SOURCE_NOTE_V2/README.md :: Partial-failure policy introduced by v2`
 - `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md :: Extraction registry`
 
+## Delivery record
+
+Delivered implementation (#4114):
+
+- `app/knowledge_acquisition/content_router.py` is a deterministic, model-free router over
+  normalized transcript segments. A profile is admitted only when its closed English/Swedish cue
+  table matches at least three distinct anchorable segments across at least two cue families and
+  at least a quarter of the anchorable segments. At most two admitted profiles return, ranked by
+  score, each with its anchored evidence. Insufficient evidence yields the generic spine
+  (`insufficient_confidence`); any routing exception yields the generic spine with
+  `routing_failed`. Routing never raises.
+- `app/knowledge_acquisition/note_modules.py` defines the initial `decision_framework` and
+  `documentary_science` modules. Each section maps to one cue family and renders only verbatim,
+  anchored source excerpts presented as quotations in the original language; sections without
+  evidence are omitted. Module titles and the lead line follow D6. An item that would fail the
+  renderer's authority lint is dropped, counted in `omitted_module_items`, and reported visibly;
+  any other module exception becomes a `ModuleFailure`.
+- `candidate_writeback` routes and composes modules at assembly, renders module sections after
+  the universal spine (synthesis, claims, evidence gaps) and any ontology proposals inside the one
+  proposals wrapper, records `content_route` in frontmatter and the evidence band, and marks routing or
+  module failure as `degraded` with a visible degradation section. Spine evidence is unaffected.
+
+Ontology, interest overlay, moment selection, and other content profiles remain out of scope.
+
 ## Related GitHub Issues
 
-Draft issue type: `type:task`, `prio:med`, `agent:blocked` pending YSNV2-03 and YSNV2-05. SBS class: Product/Runtime. Recommended capability: Terra/high; bounded router/template work with clear degradation tests.
+Issue #4114 (`type:task`, `prio:med`) under parent #4107. SBS class: Product/Runtime.

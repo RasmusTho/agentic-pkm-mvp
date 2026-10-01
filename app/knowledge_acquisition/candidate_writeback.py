@@ -53,6 +53,7 @@ from app.knowledge.write_ops import (
     candidate_note_exists_durable,
     create_candidate_note_once,
 )
+from app.knowledge_acquisition.content_router import ContentRoute, route_content
 from app.knowledge_acquisition.extraction_registry import ExtractionResult, run_extractor
 from app.knowledge_acquisition.evidence_synthesis import (
     RenderedEvidence,
@@ -62,6 +63,11 @@ from app.knowledge_acquisition.ontology_proposals import (
     RenderedOntology,
     ontology_section_content,
     render_ontology_proposals,
+)
+from app.knowledge_acquisition.note_modules import (
+    RenderedModules,
+    compose_note_modules,
+    degradation_sections,
 )
 from app.knowledge_acquisition.note_renderer import (
     NoteRenderError,
@@ -133,6 +139,8 @@ class Candidate:
     derived_transcript_link: str | None = None
     rendered_evidence: RenderedEvidence | None = None
     rendered_ontology: RenderedOntology | None = None
+    content_route: ContentRoute | None = None
+    note_modules: RenderedModules | None = None
 
     def summary_text(self) -> str | None:
         for extraction in self.extractions:
@@ -246,6 +254,10 @@ def assemble_candidate(
         next((r.output for r in extractions if r.extractor_id == "ontology"), None),
         normalized_dict,
     )
+    # YSNV2-07: conservative routing is a module input only; failure or uncertainty yields the
+    # generic spine, and a failing module is captured, never allowed to erase spine evidence.
+    content_route = None if is_metadata_only else route_content(normalized_dict)
+    note_modules = None if is_metadata_only else compose_note_modules(content_route, normalized_dict)
 
     return Candidate(
         content_identity=content_identity,
@@ -267,6 +279,8 @@ def assemble_candidate(
         optional_failures=tuple(optional_failures),
         rendered_evidence=rendered_evidence,
         rendered_ontology=rendered_ontology,
+        content_route=content_route,
+        note_modules=note_modules,
     )
 
 
@@ -333,6 +347,29 @@ def render_candidate_note(candidate: Candidate) -> str:
         frontmatter["unavailable_optional_extractors"] = [
             failure.extractor_id for failure in candidate.optional_failures
         ]
+    if candidate.content_route is not None:
+        frontmatter["content_route"] = candidate.content_route.frontmatter()
+    module_failures = (
+        tuple(f.module_id for f in candidate.note_modules.failures)
+        if candidate.note_modules is not None
+        else ()
+    )
+    routing_failed = candidate.content_route is not None and candidate.content_route.failed
+    if module_failures or routing_failed:
+        frontmatter["degraded"] = True
+    if module_failures:
+        frontmatter["unavailable_note_modules"] = list(module_failures)
+    if candidate.note_modules is not None and candidate.note_modules.omitted_items:
+        frontmatter["omitted_module_items"] = candidate.note_modules.omitted_items
+    degradation = [
+        *(
+            ["optional failures: " + ", ".join(f.extractor_id for f in candidate.optional_failures)]
+            if candidate.optional_failures
+            else []
+        ),
+        *(["content module failures: " + ", ".join(module_failures)] if module_failures else []),
+        *(["content routing failed"] if routing_failed else []),
+    ]
 
     proposal_sections = _candidate_proposal_sections(candidate)
     coverage = (
@@ -375,13 +412,16 @@ def render_candidate_note(candidate: Candidate) -> str:
             ),
             ("Derived transcript", candidate.derived_transcript_link or "not materialized"),
             (
-                "Materialization status",
+                "Content route",
                 (
-                    "degraded; optional failures: "
-                    + ", ".join(failure.extractor_id for failure in candidate.optional_failures)
-                    if candidate.optional_failures
-                    else "complete"
+                    candidate.content_route.describe()
+                    if candidate.content_route is not None
+                    else "generic (no transcript evidence)"
                 ),
+            ),
+            (
+                "Materialization status",
+                "degraded; " + "; ".join(degradation) if degradation else "complete",
             ),
         ),
     )
@@ -390,15 +430,18 @@ def render_candidate_note(candidate: Candidate) -> str:
 def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:
     """Render reviewable extraction outputs without assigning them authority."""
     sections = _evidence_and_summary_sections(candidate)
-    if candidate.rendered_ontology is None:
-        return sections
-    return sections + (
-        ProposalSection(
-            module_id="ontology-proposals",
-            title="Ontology proposals",
-            content=ontology_section_content(candidate.rendered_ontology),
-        ),
-    )
+    if candidate.rendered_ontology is not None:
+        sections += (
+            ProposalSection(
+                module_id="ontology-proposals",
+                title="Ontology proposals",
+                content=ontology_section_content(candidate.rendered_ontology),
+            ),
+        )
+    # Content modules follow the universal spine and never replace it.
+    if candidate.note_modules is not None:
+        sections += candidate.note_modules.sections
+    return sections + degradation_sections(candidate.content_route, candidate.note_modules)
 
 
 def _evidence_and_summary_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:
