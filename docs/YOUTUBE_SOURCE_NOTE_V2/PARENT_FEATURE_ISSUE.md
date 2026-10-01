@@ -48,7 +48,7 @@ Deliver the v2 source-note capability through its twelve child task contracts. T
 
 ## Acceptance Criteria
 
-- [ ] All twelve child contracts are delivered, with each merged child posting its `Verify:` receipt to this parent; until the separate vault-wide profile contract exists, YSNV2-10 and this parent remain truthfully dependency-blocked.
+- [ ] All twelve child contracts are delivered, with each merged child posting its `Verify:` receipt to this parent; the vault-wide profile contract prerequisite of YSNV2-10 is delivered under #4944.
   Verify: parent issue validation ledger mirrors `docs/YOUTUBE_SOURCE_NOTE_V2/README.md :: Execution order and proposed issue state`.
 - [ ] A representative v2 note proves immutable evidence, anchored claims, non-destructive candidate materialization, and no-egress replay together.
   Verify: `tests/knowledge_acquisition/test_source_note_quality.py::test_v2_end_to_end_invariant_matrix`.

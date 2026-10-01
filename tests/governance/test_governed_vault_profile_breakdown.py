@@ -67,4 +67,7 @@ def test_profile_breakdown_records_delivery_without_claiming_youtube_renderer() 
     readme = _document("README.md")
 
     assert "GOVPROF-01 through GOVPROF-03 were delivered by PRs #5731, #5733, and #5735" in readme
-    assert "separate YouTube overlay renderer remains in Issue #4117 and is not claimed as shipped here" in readme
+    assert (
+        "separate YouTube overlay renderer is delivered under Issue #4117 as a read-only consumer"
+        " and is not part of this capability"
+    ) in readme

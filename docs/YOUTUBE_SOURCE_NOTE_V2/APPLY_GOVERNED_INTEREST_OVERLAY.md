@@ -56,4 +56,4 @@ Creating, proposing, or mutating the vault-wide profile; the ProfileAgent; Profi
 
 ## Related GitHub Issues
 
-Live Issue #4117 owns the separate, still-undelivered four-part overlay renderer. Its YSNV2-05 prerequisite (#4112) is delivered and the governed profile prerequisite is accepted under #4944. SBS class: Product/Runtime. Behavior-profile authority and cross-scope policy retain high hidden-defect risk.
+Issue #4117 delivers the four-part overlay renderer as `app/knowledge_acquisition/interest_overlay.py :: render_interest_overlay`, a review-required `ProposalSection` producer that is not yet wired into acquisition-time note rendering. Its YSNV2-05 prerequisite (#4112) is delivered and the governed profile prerequisite is accepted under #4944. SBS class: Product/Runtime. Behavior-profile authority and cross-scope policy retain high hidden-defect risk.
