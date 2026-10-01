@@ -144,27 +144,56 @@ See `docs/CONCURRENCY.md` for the broader concurrency and idempotency guardrails
 ## Event Topic Schema Registry (normative)
 
 Every topic dispatched by `app/workers/outbox_worker.py::_dispatch_topic` has a versioned per-topic
-JSON Schema (KERNEL-08, #2770): `schemas/events/<topic>.v1.schema.json`. Today: `ingest.object.created`,
-`ingest.vault.changed`, `ingest.object.deleted`, `panel.scan.requested`, `promote.intent.created`,
-`note.move.workbench`, `index.embedding.requested`. Coverage is enforced dynamically —
-`tests/events/test_topic_schema_registry.py::test_every_dispatched_topic_has_schema` enumerates the
-live dispatch table via its AST and fails on any gap, so a newly dispatched topic without a schema
-cannot ship silently.
+JSON Schema (KERNEL-08, #2770) under `schemas/events/<topic>.v<N>.schema.json`, loaded by
+`app/events/topic_schema_registry.py`. Every registered topic has a baseline `v1`. Coverage is
+enforced dynamically — `tests/events/test_topic_schema_registry.py::test_every_dispatched_topic_has_schema`
+enumerates the live dispatch table via its AST and fails on any gap, so a newly dispatched topic
+without a schema cannot ship silently.
 
-- **Validation at write**: `app/services/outbox.py::write_outbox_event` validates the payload against
-  its topic's registered schema before the DB insert (`app.events.topic_schema_registry`) and stamps
-  `meta.payload_schema = "<topic>.v1"` on success. A violation raises
+**Strict kernel topic set (#5704, audit #2899 F6).** Exactly these seven topics have a closed `v2`,
+which is their current version: `ingest.object.created`, `ingest.vault.changed`,
+`ingest.object.deleted`, `panel.scan.requested`, `promote.intent.created`, `note.move.workbench`,
+`index.embedding.requested`. Every other registered topic stays at `v1`; the strict contract makes no
+claim about other event families.
+
+- **Closed top level**: v2 schemas set `additionalProperties: false`. Each lists its bounded producer
+  alternatives (named in the schema `description`) and requires the consumer's input: an identity
+  (`object_id` or `uuid`) for `ingest.object.created`/`ingest.object.deleted`; a non-empty
+  `vault_path` or `relative_path` for `ingest.vault.changed`/`panel.scan.requested`; `note.uuid`
+  plus a note path (`note.path` or `note_path`) for `promote.intent.created`; `note_path` for
+  `note.move.workbench`;
+  `object_id` for `index.embedding.requested`.
+- **Extension policy**: the only open extension point is an explicit top-level `extensions` object.
+  Nested producer-shaped objects that are config- or model-driven (`params`, `note`, `panel`,
+  `action`, `transition`, `frontmatter`, `replay`) stay open; closure applies to top-level fields.
+- **Always-admitted metadata**: `trace_id`, `event_id` (the `run()` loop copies the envelope
+  `event_id` into the payload before dispatch, and retries carry it), and the worker retry fields
+  `_worker_retry_count` (integer ≥ 1), `_worker_retry_reason` (non-empty string), and
+  `_worker_retry_enqueued_at` (non-empty UTC ISO-8601 string).
+- **Version selection at write**: `app/services/outbox.py::write_outbox_event` validates a new payload
+  against the topic's current version (`current_schema_ref`: `<topic>.v2` for the seven, `<topic>.v1`
+  otherwise) before the DB insert and stamps `meta.payload_schema` with that ref. A violation raises
   `app.events.topic_schema_registry.TopicSchemaViolation` — the write does not happen.
 - **Validation at dispatch**: `_dispatch_topic` validates again before invoking the real topic
-  handler. An invalid payload against a registered schema dead-letters immediately with reason
+  handler, against the version the row is tagged with (`dispatch_schema_ref`): an exact registered
+  `<topic>.v<N>` tag keeps that version, so rows already tagged `<topic>.v1` keep the open v1
+  contract and are never reinterpreted as v2; any other non-empty tag keeps the pre-#5704 meaning
+  (validated against `v1`). An invalid tagged payload dead-letters immediately with reason
   `schema_violation` via the existing `outbox.event.dead_lettered` path — never partial processing,
   and never a retry-budget spend (a schema violation is structural, not transient).
+- **Retry compatibility**: a worker transient retry (`_queue_transient_retry`) re-emits the payload
+  with the three retry fields under the source row's dispatch version (`write_outbox_event(...,
+  payload_schema=...)`): a `v2` row retries as `v2`, a `v1` row as `v1`, and an untagged `v0` row is
+  re-emitted untagged with log-only validation. A retry never upgrades a row to a stricter contract,
+  and retry budgets, idempotency keys, binding identity, and ordering are unchanged.
 - **Grandfathering (cross-task invariant #1)**: a DB outbox row with no `meta.payload_schema` (nor
   the legacy `meta.schema_version`) tag predates the registry and is treated as `v0`. Grandfathered
-  rows are validated **log-only** at dispatch — a violation is logged and the real handler still
-  runs; grandfathered rows are never dead-lettered retroactively.
+  rows are validated **log-only** against `v1` at dispatch — a violation is logged and the real
+  handler still runs; grandfathered rows are never dead-lettered retroactively.
 - Topics with no registered schema are dispatched unvalidated; schema coverage is a property of the
   registered set, not an implicit requirement on every possible topic string.
+- Verification: `tests/events/test_kernel_event_schema_closure.py` (write seam) and
+  `tests/workers/test_kernel_event_schema_closure.py` (dispatch, retry, legacy and v0 rows).
 
 ## Outbox consumer contract
 

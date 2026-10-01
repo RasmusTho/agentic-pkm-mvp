@@ -16,6 +16,9 @@ from app.db.errors import OutboxSchemaMissingError
 from app.events.models import Event, new_event
 from app.events.schema import OutboxEvent
 from app.events.topic_schema_registry import (
+    LEGACY_UNTAGGED_V0,
+    TopicSchemaViolation,
+    baseline_schema_ref,
     current_schema_ref,
     is_registered_topic,
     validate_topic_payload,
@@ -785,6 +788,31 @@ def payload_fingerprint(payload: Mapping[str, Any] | None, *, exclude: tuple[str
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+def _validate_and_stamp_schema(envelope: Event, payload_schema: str | None) -> Event:
+    """Validate a registered-topic payload before insert and stamp its schema ref.
+
+    Stamping happens on a copy: ``envelope`` may be the caller's own ``Event``
+    instance (isinstance branch in ``_coerce_event``) and must not be mutated.
+    """
+    topic = envelope.event_type
+    if payload_schema == LEGACY_UNTAGGED_V0:
+        # Re-emission of a pre-registry row keeps the untagged-v0 log-only
+        # rule: never hard-fail and never stamp (#5704).
+        try:
+            validate_topic_payload(topic, envelope.payload, schema_ref=baseline_schema_ref(topic))
+        except TopicSchemaViolation as violation:
+            _LOGGER.warning(
+                "outbox write schema violation on grandfathered (v0) re-emission topic=%s reason=%s",
+                topic,
+                violation.reason,
+            )
+        return envelope
+    validate_topic_payload(topic, envelope.payload, schema_ref=payload_schema)
+    stamped_meta = dict(envelope.meta or {})
+    stamped_meta["payload_schema"] = payload_schema or current_schema_ref(topic)
+    return envelope.model_copy(update={"meta": stamped_meta})
+
+
 def write_outbox_event(
     event: Event | OutboxEvent,
     conn: Any = None,
@@ -792,6 +820,7 @@ def write_outbox_event(
     idempotency_key: str,
     vault_binding_id: str | None = None,
     required_db: bool = False,
+    payload_schema: str | None = None,
 ) -> str:
     """Insert one event into the DB outbox, keyed by a mandatory idempotency key.
 
@@ -802,10 +831,17 @@ def write_outbox_event(
     :func:`derive_idempotency_key`.
 
     Registry coverage validation (KERNEL-08, #2770): when the event's topic has
-    a registered schema (``schemas/events/<topic>.v1.schema.json``), the payload
-    is validated against it before the insert and ``meta.payload_schema`` is
-    stamped ``"<topic>.v1"`` so dispatch-time validation can distinguish
-    registry-covered rows from pre-registry ("grandfathered") ones. Topics with
+    a registered schema (``schemas/events/<topic>.v<N>.schema.json``), the
+    payload is validated against the topic's current version before the insert
+    and ``meta.payload_schema`` is stamped with that ref (``current_schema_ref``,
+    ``<topic>.v2`` for the seven closed kernel topics, #5704) so dispatch-time
+    validation can distinguish registry-covered rows from pre-registry
+    ("grandfathered") ones.
+
+    ``payload_schema`` is only for re-emitting an existing row (the worker's
+    transient retry): an explicit registered ``<topic>.v<N>`` validates and
+    stamps that older version, and ``LEGACY_UNTAGGED_V0`` validates log-only and
+    writes no tag, so a retry never upgrades a row to a stricter contract. Topics with
     no registered schema are written unchanged (unvalidated) — coverage over the
     live dispatch table is enforced by
     ``tests/events/test_topic_schema_registry.py::test_every_dispatched_topic_has_schema``,
@@ -842,12 +878,11 @@ def write_outbox_event(
         idempotency_key,
     )
     if is_registered_topic(envelope.event_type):
-        validate_topic_payload(envelope.event_type, envelope.payload)
-        # Stamp on a copy: `envelope` may be the caller's own `Event` instance
-        # (isinstance branch in `_coerce_event`) and must not be mutated in place.
-        stamped_meta = dict(envelope.meta or {})
-        stamped_meta["payload_schema"] = current_schema_ref(envelope.event_type)
-        envelope = envelope.model_copy(update={"meta": stamped_meta})
+        envelope = _validate_and_stamp_schema(envelope, payload_schema)
+    elif payload_schema is not None:
+        raise ValueError(
+            f"payload_schema={payload_schema!r} given for unregistered topic {envelope.event_type!r}"
+        )
     if conn is None and _self_owned_outbox_write_policy(
         backend=os.environ.get("STORE_BACKEND"),
         dsn_configured=_self_owned_database_is_named(),
