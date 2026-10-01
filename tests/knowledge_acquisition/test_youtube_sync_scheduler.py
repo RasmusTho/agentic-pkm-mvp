@@ -385,6 +385,42 @@ def test_pause_semantics() -> None:
     assert outcome.skipped["paused-source"] == "paused_source"
 
 
+def test_reenabled_source_resumes_at_cadence_after_failure_backoff() -> None:
+    registry = _Registry([
+        _Binding("paused-source", enabled=False, last_attempt_at=START.isoformat())
+    ])
+    state = MemorySyncStateStore()
+    state.set(
+        "backoff:paused-source",
+        {
+            "consecutive_failures": 10,
+            "last_attempt_at": START.isoformat(),
+            "reason_code": "network_error",
+        },
+    )
+    polls: list[str] = []
+    sched, clock, _state, _queue = _make(
+        registry=registry,
+        state=state,
+        poll_fn=lambda binding, **kwargs: (polls.append(binding.binding_id) or _PollResult()),
+        reconciled=True,
+    )
+
+    paused = sched.tick()
+    assert paused.skipped["paused-source"] == "paused_source"
+    assert polls == []
+    backoff = state.get("backoff:paused-source")
+    assert backoff["consecutive_failures"] == 0
+    assert backoff["reason_code"] is None
+
+    registry.rows = [replace(row, enabled=True) for row in registry.rows]
+    clock.advance(179)
+    assert sched.tick().skipped["paused-source"] == "not_due"
+    clock.advance(1)
+    assert sched.tick().polled == ("paused-source",)
+    assert polls == ["paused-source"]
+
+
 def test_tick_never_performs_acquisition() -> None:
     # The watcher cycle holds a shared ingress flock while this tick runs, so a
     # multi-minute media download here stalls vault watching and blocks a
@@ -607,6 +643,63 @@ def test_poll_deadline_stops_pagination_and_stream_without_cursor(production_pat
     assert registry.get(binding.binding_id).last_error["reason_code"] == "api_unavailable"
     assert queue.list_all() == ()
     assert state.get("backoff:" + binding.binding_id)["consecutive_failures"] == 1
+
+
+@pytest.mark.parametrize("quota_effect", ["deadline", "lease", "remaining-timeout"])
+def test_api_rechecks_lease_and_deadline_after_quota_accounting(quota_effect) -> None:
+    import httpx
+    from app.knowledge_acquisition.youtube_api_client import YouTubeApiClient, YouTubeApiError
+
+    elapsed = [0.0]
+    lease_active = [True]
+    sent = []
+
+    class Tokens:
+        def get_access_token(self, **kwargs):
+            return "fixture-token"
+
+    class SlowQuota:
+        def increment(self):
+            if quota_effect == "deadline":
+                elapsed[0] = 31.0
+            elif quota_effect == "lease":
+                lease_active[0] = False
+            else:
+                elapsed[0] = 20.0
+            return SimpleNamespace(quota_date="2026-09-22")
+
+    def check_active() -> None:
+        if not lease_active[0]:
+            raise RuntimeError("lease lost")
+
+    def transport(request):
+        sent.append(request)
+        if quota_effect == "remaining-timeout":
+            assert request.extensions["timeout"]["read"] <= 10.0
+        return httpx.Response(200, json={"items": []})
+
+    client = YouTubeApiClient(
+        token_provider=Tokens(),
+        quota=SlowQuota(),
+        http=httpx.Client(transport=httpx.MockTransport(transport)),
+    )
+    options = {
+        "deadline": 30.0,
+        "monotonic": lambda: elapsed[0],
+        "check_active": check_active,
+    }
+
+    if quota_effect == "deadline":
+        with pytest.raises(YouTubeApiError, match="deadline expired"):
+            client.list_playlist_items("PL_scheduler_fixture", **options)
+        assert sent == []
+    elif quota_effect == "lease":
+        with pytest.raises(RuntimeError, match="lease lost"):
+            client.list_playlist_items("PL_scheduler_fixture", **options)
+        assert sent == []
+    else:
+        client.list_playlist_items("PL_scheduler_fixture", **options)
+        assert len(sent) == 1
 
 
 def test_poll_does_not_publish_cursor_after_enqueue_crosses_deadline(production_path, monkeypatch) -> None:

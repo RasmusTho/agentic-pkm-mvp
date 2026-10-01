@@ -314,7 +314,8 @@ YSS-06 persists source failures and attempt time separately from the source regi
 reason-coded backoff uses base 60 s, factor 4, and cap 6 h, added to the effective source interval;
 raising polls also record an attempt. Existing manual Inbox sync enters the same scheduler lease
 and backoff path, bypassing the due-time check without resetting failure backoff. It introduces
-no new CLI/UI family.
+no new CLI/UI family. When the scheduler observes a disabled source, it clears that source's
+failure streak; after re-enabling, the normal source cadence controls the next automatic poll.
 
 Jitter and next-quota-window scheduling remain target-state refinements of the broader contract;
 the delivered scheduler uses the deterministic capped source backoff above. Per-item attempts

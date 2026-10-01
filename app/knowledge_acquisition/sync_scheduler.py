@@ -318,6 +318,16 @@ class SyncScheduler:
         for binding in self._sources(only_binding_id):
             if not getattr(binding, "enabled", False):
                 skipped[binding.binding_id] = "paused_source"
+                # A pause is a benign disposition. Clear a prior failure streak
+                # when we first observe the disabled source, so re-enabling it
+                # resumes at cadence instead of inheriting the old cooldown.
+                if self._consecutive_failures(binding.binding_id):
+                    self._record_poll_result(
+                        binding.binding_id,
+                        failed=False,
+                        now=now,
+                        reason_code="paused_source",
+                    )
                 continue
             if self._monotonic() - started >= self._tick_budget_seconds:
                 skipped[binding.binding_id] = "tick_budget_exhausted"

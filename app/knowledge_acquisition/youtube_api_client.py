@@ -600,6 +600,12 @@ class YouTubeApiClient:
         request.headers.pop("cookie", None)
         _validate_absolute_data_url(str(request.url), require_path=True)
         quota_date = self._quota.increment().quota_date
+        # Quota accounting may block. Recheck immediately before provider
+        # egress and tighten the transport timeout to the remaining budget.
+        send_timeout = guard()
+        request.extensions["timeout"] = {
+            key: send_timeout for key in ("connect", "read", "write", "pool")
+        }
         response: httpx.Response | None = None
         send_error: YouTubeApiError | None = None
         try:

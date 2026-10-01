@@ -42,7 +42,8 @@ tick host; this task adds a sparse-cadence sub-tick beside the Daily Briefing pr
      vault watching and blocks a foreground rebind. Draining stays the operator-invoked
      `youtube-inbox-dev drain` command (#5613); a bounded background drain is its own slice;
    - global pause and per-source pause (registry `enabled=false`) short-circuit with
-     `paused_global`/`paused_source` reasons;
+     `paused_global`/`paused_source` reasons. Observing a paused source clears its prior failure
+     streak so re-enabling resumes on the normal source cadence;
    - **acquisition shutdown is outside this slice.** No acquisition request is claimed by the
      tick. Discovery cooperatively checks the deadline and active lease; a future background
      drain needs its own stop and durable retry protocol.
