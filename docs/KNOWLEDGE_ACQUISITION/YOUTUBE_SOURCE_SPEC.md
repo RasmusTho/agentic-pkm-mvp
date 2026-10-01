@@ -92,6 +92,10 @@ template (`docs/examples/vault-templates/youtube-source-note.md`). Metadata, pro
 owner-authored takeaways/open threads, one `Proposals (non-authoritative)` wrapper for registered
 extraction output, and deterministic evidence/lineage. Production acquisition renders anchored
 `synthesis@1` and `claims@1` modules; explicit legacy `summary@2` policies remain supported.
+A deterministic content router (YSNV2-07, #4114) may add at most two ranked
+`decision_framework`/`documentary_science` modules of anchored verbatim source excerpts after
+that spine inside the same wrapper; uncertain routing renders the generic note, and routing or
+module failure renders a visibly `degraded` generic note without removing spine evidence.
 Metadata-only candidates render no proposal modules and no derived transcript attachment. They
 retain source URL/title/creator/published metadata, raw and normalized metadata lineage,
 `transcript_available: false`, `authority.requires_review: true`, `review_state: draft`, and
