@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
-from app.orchestrator.executor import MockPlanExecutor, StepContext, StepExecutionError
+from app.orchestrator.executor import StepContext, StepExecutionError
 from app.orchestrator.mcp_tool_provider import MCPToolProvider
-from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
+from app.planner.schema import PlanMetadata, ToolDescriptor
 
 pytestmark = pytest.mark.not_pg
 
@@ -16,11 +14,37 @@ def _context(tool_settings: dict[str, object] | None = None) -> StepContext:
         plan_id="plan-provider",
         object_id="obj-provider",
         trace_id="trace-provider",
-        metadata=PlanMetadata(goal="test", source_object_uuid="obj-provider", created_by="tester"),
+        metadata=PlanMetadata(
+            goal="test", source_object_uuid="obj-provider", created_by="tester"
+        ),
         results={},
         tool_settings=tool_settings or {},
         agent_id="ask.v1",
     )
+
+
+class _RemoteDescriptors:
+    def __init__(self) -> None:
+        self.executions = 0
+
+    def list_descriptors(self) -> dict[str, ToolDescriptor]:
+        return {
+            "mcp.search.objects": ToolDescriptor(
+                name="mcp.search.objects",
+                kind="mcp",
+                schema={"type": "object", "required": ["query"]},
+                allowed_args={"query": "string"},
+                mock_result={"status": "remote-descriptor"},
+            ),
+            "unknown.remote.tool": ToolDescriptor(
+                name="unknown.remote.tool",
+                kind="mcp",
+            ),
+        }
+
+    def execute_tool_call(self, **_: object) -> dict[str, object]:
+        self.executions += 1
+        return {"status": "unexpected"}
 
 
 def test_tool_provider_lists_registry_descriptors() -> None:
@@ -37,420 +61,54 @@ def test_tool_provider_lists_registry_descriptors() -> None:
     assert descriptors["mcp.search.objects"].allowed_args["query"] == "string"
 
 
-def test_tool_provider_mock_execution_matches_descriptor_executor() -> None:
-    provider = MCPToolProvider()
-    executor = MockPlanExecutor()
-    step = PlanStep(
-        id="s1",
-        kind="tool_call",
-        description="Search",
-        tool="mcp.search.objects",
-        tool_args={"query": "agentic"},
-    )
-    context = _context()
+def test_remote_provider_is_used_for_discovery_only() -> None:
+    remote = _RemoteDescriptors()
+    provider = MCPToolProvider(remote_provider=remote)
 
-    expected = executor.execute_step(step, context)
-    actual = provider.execute_tool_call(
-        tool_name="mcp.search.objects",
-        tool_args={"query": "agentic"},
-        context=context,
-        step_id="s1",
-        description="Search",
-        executor=executor,
-    )
-    assert actual == expected
+    descriptors = provider.list_descriptors({"mcp_remote_multiplex_enable": True})
 
-    with pytest.raises(StepExecutionError) as provider_exc:
-        provider.execute_tool_call(
+    assert descriptors["mcp.search.objects"].mock_result == {
+        "status": "remote-descriptor"
+    }
+    assert "unknown.remote.tool" not in descriptors
+    assert remote.executions == 0
+
+
+def test_remote_descriptor_failure_preserves_local_discovery() -> None:
+    class _RemoteFailure:
+        def list_descriptors(self) -> dict[str, ToolDescriptor]:
+            raise RuntimeError("remote discovery unavailable")
+
+        def execute_tool_call(self, **_: object) -> dict[str, object]:
+            raise AssertionError("descriptor discovery must not execute a tool")
+
+    descriptors = MCPToolProvider(remote_provider=_RemoteFailure()).list_descriptors(
+        {"mcp_remote_multiplex_enable": True}
+    )
+
+    assert "mcp.search.objects" in descriptors
+    assert "mcp.vault.append_note" in descriptors
+
+
+def test_direct_provider_execution_refuses_before_effects() -> None:
+    remote = _RemoteDescriptors()
+    local_calls: list[str] = []
+
+    class _Executor:
+        def _invoke_tool(self, *args: object, **kwargs: object) -> dict[str, object]:
+            local_calls.append("invoke")
+            return {"status": "unexpected"}
+
+    with pytest.raises(StepExecutionError) as exc_info:
+        MCPToolProvider(remote_provider=remote).execute_tool_call(
             tool_name="mcp.search.objects",
-            tool_args={"query": 123},
-            context=context,
-            step_id="s2",
-            description="Bad search",
-            executor=executor,
-        )
-    with pytest.raises(StepExecutionError) as direct_exc:
-        executor.execute_step(
-            PlanStep(
-                id="s2",
-                kind="tool_call",
-                description="Bad search",
-                tool="mcp.search.objects",
-                tool_args={"query": 123},
-            ),
-            context,
+            tool_args={"query": "agentic"},
+            context=_context({"mcp_remote_multiplex_enable": True}),
+            step_id="direct",
+            description="Direct call",
+            executor=_Executor(),  # type: ignore[arg-type]
         )
 
-    assert provider_exc.value.error_type == direct_exc.value.error_type == "invalid_tool_args"
-
-
-def test_tool_provider_vault_append_respects_existing_gates(tmp_path: Path) -> None:
-    provider = MCPToolProvider()
-    executor = MockPlanExecutor()
-
-    denied_result = provider.execute_tool_call(
-        tool_name="mcp.vault.append_note",
-        tool_args={"title": "A", "body": "B"},
-        context=_context(
-            {
-                "mcp_vault_enable": True,
-                "allowed_mcp_tools": ["mcp.search.objects"],
-                "vault_root": tmp_path,
-            }
-        ),
-        step_id="s3",
-        description="Denied append",
-        executor=executor,
-    )
-    assert denied_result["result"]["note_path"] == "vault/_mcp/mock-note.md"
-    assert not any(tmp_path.rglob("*.md"))
-
-    allowed_result = provider.execute_tool_call(
-        tool_name="mcp.vault.append_note",
-        tool_args={"title": "C", "body": "D"},
-        context=_context(
-            {
-                "mcp_vault_enable": True,
-                "allowed_mcp_tools": ["mcp.vault.append_note"],
-                "vault_root": tmp_path,
-            }
-        ),
-        step_id="s4",
-        description="Allowed append",
-        executor=executor,
-    )
-    assert allowed_result["result"]["note_path"] != "vault/_mcp/mock-note.md"
-    assert any(tmp_path.rglob("*.md"))
-
-
-def test_tool_provider_builderops_tools_preserve_store_semantics(tmp_path: Path) -> None:
-    provider = MCPToolProvider()
-    executor = MockPlanExecutor()
-    db_path = tmp_path / "builderops.sqlite3"
-    context = _context(
-        {
-            "mcp_builderops_enable": True,
-            "allowed_mcp_tools": [
-                "mcp.builderops.create_worklog",
-                "mcp.builderops.create_learning_signal",
-                "mcp.builderops.list_records",
-                "mcp.builderops.read_record",
-                "mcp.builderops.append_receipt",
-            ],
-            "builderops_db_path": str(db_path),
-        }
-    )
-    source_refs = [{"ref_type": "github_issue", "ref": "#1503"}]
-    actor = {"actor_type": "agent", "id": "tool-codex"}
-
-    created = provider.execute_tool_call(
-        tool_name="mcp.builderops.create_worklog",
-        tool_args={
-            "summary": "Tool worklog",
-            "body": "Created through the BuilderOps MCP tool boundary.",
-            "task_context": {"issue": "#1503"},
-            "source_refs": source_refs,
-            "created_by": actor,
-            "idempotency_key": "tool:create-worklog",
-        },
-        context=context,
-        step_id="builderops-create",
-        description="Create BuilderOps worklog",
-        executor=executor,
-    )
-    record = created["result"]["record"]
-    assert record["object_type"] == "AgentWorklog"
-    assert record["created_by"] == actor
-    assert record["idempotency_key"] == "tool:create-worklog"
-
-    duplicate = provider.execute_tool_call(
-        tool_name="mcp.builderops.create_worklog",
-        tool_args={
-            "summary": "Tool worklog",
-            "body": "Created through the BuilderOps MCP tool boundary.",
-            "task_context": {"issue": "#1503"},
-            "source_refs": source_refs,
-            "created_by": actor,
-            "idempotency_key": "tool:create-worklog",
-        },
-        context=context,
-        step_id="builderops-create-retry",
-        description="Retry BuilderOps worklog",
-        executor=executor,
-    )
-    assert duplicate["result"]["record"] == record
-
-    signal = provider.execute_tool_call(
-        tool_name="mcp.builderops.create_learning_signal",
-        tool_args={
-            "summary": "Tool learning signal",
-            "content": "BuilderOps content must not be copied into body.",
-            "signal_type": "workflow",
-            "source_refs": source_refs,
-            "created_by": actor,
-            "idempotency_key": "tool:create-learning-signal",
-        },
-        context=context,
-        step_id="builderops-learning",
-        description="Create BuilderOps learning signal",
-        executor=executor,
-    )
-    signal_record = signal["result"]["record"]
-    assert signal_record["object_type"] == "LearningSignal"
-    assert signal_record["content"] == "BuilderOps content must not be copied into body."
-    assert "body" not in signal_record
-
-    listed = provider.execute_tool_call(
-        tool_name="mcp.builderops.list_records",
-        tool_args={"object_type": "AgentWorklog"},
-        context=context,
-        step_id="builderops-list",
-        description="List BuilderOps worklogs",
-        executor=executor,
-    )
-    assert [item["id"] for item in listed["result"]["records"]] == [record["id"]]
-
-    receipt = provider.execute_tool_call(
-        tool_name="mcp.builderops.append_receipt",
-        tool_args={
-            "summary": "Tool receipt",
-            "event_type": "object_created",
-            "actor": actor,
-            "occurred_at": "2026-06-01T00:00:00Z",
-            "target_refs": [{"ref_type": "builderops_object", "ref": record["id"]}],
-            "action": "create",
-            "receipt_body": "Recorded BuilderOps tool write.",
-            "idempotency_key": "tool:receipt-worklog",
-            "source_refs": source_refs,
-        },
-        context=context,
-        step_id="builderops-receipt",
-        description="Append BuilderOps receipt",
-        executor=executor,
-    )
-    assert receipt["result"]["record"]["object_type"] == "BuilderOpsReceipt"
-    assert receipt["result"]["record"]["actor"] == actor
-
-    read_receipt = provider.execute_tool_call(
-        tool_name="mcp.builderops.read_record",
-        tool_args={"record_id": receipt["result"]["record"]["id"]},
-        context=context,
-        step_id="builderops-read-receipt",
-        description="Read BuilderOps receipt",
-        executor=executor,
-    )
-    assert read_receipt["result"]["record"] == receipt["result"]["record"]
-
-
-def test_tool_provider_builderops_tools_accept_string_actor_ids(tmp_path: Path) -> None:
-    provider = MCPToolProvider()
-    executor = MockPlanExecutor()
-    db_path = tmp_path / "builderops.sqlite3"
-    context = _context(
-        {
-            "mcp_builderops_enable": True,
-            "allowed_mcp_tools": [
-                "mcp.builderops.create_worklog",
-                "mcp.builderops.append_receipt",
-            ],
-            "builderops_db_path": str(db_path),
-        }
-    )
-
-    created = provider.execute_tool_call(
-        tool_name="mcp.builderops.create_worklog",
-        tool_args={
-            "summary": "String actor worklog",
-            "body": "Created with a string actor id through the MCP boundary.",
-            "source_refs": [{"ref_type": "github_issue", "ref": "#1503"}],
-            "created_by": "tool-codex",
-        },
-        context=context,
-        step_id="builderops-create-string-actor",
-        description="Create BuilderOps worklog with string actor",
-        executor=executor,
-    )
-    record = created["result"]["record"]
-    assert record["created_by"] == {"actor_type": "agent", "id": "tool-codex"}
-
-    receipt = provider.execute_tool_call(
-        tool_name="mcp.builderops.append_receipt",
-        tool_args={
-            "summary": "String actor receipt",
-            "event_type": "object_created",
-            "actor": "tool-codex",
-            "occurred_at": "2026-06-01T00:00:00Z",
-            "target_refs": [{"ref_type": "builderops_object", "ref": record["id"]}],
-            "action": "create",
-            "receipt_body": "Recorded BuilderOps tool write.",
-            "idempotency_key": "tool:receipt-string-actor",
-            "source_refs": [{"ref_type": "github_issue", "ref": "#1503"}],
-        },
-        context=context,
-        step_id="builderops-receipt-string-actor",
-        description="Append BuilderOps receipt with string actor",
-        executor=executor,
-    )
-    assert receipt["result"]["record"]["actor"] == {"actor_type": "agent", "id": "tool-codex"}
-
-
-def test_tool_provider_builderops_tools_are_mocked_until_enabled(
-    tmp_path: Path,
-) -> None:
-    provider = MCPToolProvider()
-    result = provider.execute_tool_call(
-        tool_name="mcp.builderops.create_worklog",
-        tool_args={
-            "summary": "Mocked worklog",
-            "body": "Should not hit the real store.",
-            "source_refs": [{"ref_type": "github_issue", "ref": "#1503"}],
-        },
-        context=_context({"builderops_db_path": str(tmp_path / "builderops.sqlite3")}),
-        step_id="builderops-mock",
-        description="Mocked BuilderOps worklog",
-    )
-
-    assert result["result"] == {"status": "ok", "record": {"object_type": "AgentWorklog"}}
-    assert not (tmp_path / "builderops.sqlite3").exists()
-
-
-def test_tool_provider_rejects_registry_only_tool_not_in_supported_allowlist() -> None:
-    provider = MCPToolProvider()
-    context = _context()
-
-    with pytest.raises(StepExecutionError) as exc:
-        provider.execute_tool_call(
-            tool_name="vault.read_note.v1",
-            tool_args={"path": "x.md"},
-            context=context,
-            step_id="s-unsupported",
-            description="Unsupported tool",
-        )
-
-    assert exc.value.error_type == "invalid_tool"
-
-
-class _RemoteProviderOK:
-    def list_descriptors(self) -> dict[str, ToolDescriptor]:
-        return {
-            "mcp.search.objects": ToolDescriptor(
-                name="mcp.search.objects",
-                kind="mcp",
-                schema={"type": "object", "required": ["query"]},
-                allowed_args={"query": "string"},
-                mock_result={"status": "ok"},
-            )
-        }
-
-    def execute_tool_call(self, **_: object) -> dict[str, object]:
-        return {"tool": "mcp.search.objects", "result": {"status": "remote-ok", "route": "remote"}}
-
-
-class _RemoteProviderError(_RemoteProviderOK):
-    def execute_tool_call(self, **_: object) -> dict[str, object]:
-        raise RuntimeError("remote unavailable")
-
-
-class _RemoteProviderListError(_RemoteProviderError):
-    def list_descriptors(self) -> dict[str, ToolDescriptor]:
-        raise RuntimeError("remote descriptor lookup failed")
-
-
-class _RemoteProviderMismatchedDescriptor(_RemoteProviderError):
-    def list_descriptors(self) -> dict[str, ToolDescriptor]:
-        return {
-            "mcp.search.objects": ToolDescriptor(
-                name="mcp.search.objects",
-                kind="mcp",
-                schema={"type": "object", "required": ["query", "tenant"]},
-                allowed_args={"query": "string", "tenant": "string"},
-                mock_result={"status": "remote-schema"},
-            )
-        }
-
-
-def test_remote_multiplex_path_flagged() -> None:
-    provider = MCPToolProvider(remote_provider=_RemoteProviderOK())
-    executor = MockPlanExecutor()
-    context = _context({"mcp_remote_multiplex_enable": True})
-
-    result = provider.execute_tool_call(
-        tool_name="mcp.search.objects",
-        tool_args={"query": "agentic"},
-        context=context,
-        step_id="s-remote",
-        description="Remote path",
-        executor=executor,
-    )
-
-    assert result["result"]["status"] == "remote-ok"
-    assert result["result"]["route"] == "remote"
-
-
-def test_remote_multiplex_fallback_on_provider_error() -> None:
-    provider = MCPToolProvider(remote_provider=_RemoteProviderError())
-    executor = MockPlanExecutor()
-    context = _context({"mcp_remote_multiplex_enable": True})
-
-    result = provider.execute_tool_call(
-        tool_name="mcp.search.objects",
-        tool_args={"query": "agentic"},
-        context=context,
-        step_id="s-fallback",
-        description="Fallback path",
-        executor=executor,
-    )
-
-    assert result["tool"] == "mcp.search.objects"
-    assert result["result"]["status"] == "ok"
-
-
-def test_remote_multiplex_fallback_when_descriptor_lookup_fails() -> None:
-    provider = MCPToolProvider(remote_provider=_RemoteProviderListError())
-    context = _context({"mcp_remote_multiplex_enable": True})
-
-    result = provider.execute_tool_call(
-        tool_name="mcp.search.objects",
-        tool_args={"query": "agentic"},
-        context=context,
-        step_id="s-fallback-descriptor",
-        description="Fallback path when descriptor lookup fails",
-    )
-
-    assert result["tool"] == "mcp.search.objects"
-    assert result["result"]["status"] == "ok"
-
-
-def test_remote_fallback_revalidates_against_local_descriptor() -> None:
-    provider = MCPToolProvider(remote_provider=_RemoteProviderMismatchedDescriptor())
-    context = _context({"mcp_remote_multiplex_enable": True})
-
-    result = provider.execute_tool_call(
-        tool_name="mcp.search.objects",
-        tool_args={"query": "agentic"},
-        context=context,
-        step_id="s-fallback-local-descriptor",
-        description="Fallback should use local descriptor semantics",
-    )
-
-    assert result["tool"] == "mcp.search.objects"
-    assert result["result"]["status"] == "ok"
-
-
-def test_remote_error_without_local_descriptor_raises_tool_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("app.orchestrator.mcp_tool_provider._load_registry_descriptors", lambda: {})
-    provider = MCPToolProvider(remote_provider=_RemoteProviderMismatchedDescriptor())
-    context = _context({"mcp_remote_multiplex_enable": True})
-
-    with pytest.raises(StepExecutionError) as exc:
-        provider.execute_tool_call(
-            tool_name="mcp.search.objects",
-            tool_args={"query": "agentic", "tenant": "t1"},
-            context=context,
-            step_id="s-no-local-fallback",
-            description="No local descriptor available",
-        )
-
-    assert exc.value.error_type == "tool_unavailable"
+    assert exc_info.value.error_type == "admission_required"
+    assert local_calls == []
+    assert remote.executions == 0

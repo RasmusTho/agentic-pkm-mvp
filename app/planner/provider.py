@@ -43,6 +43,57 @@ def _merge_tags(existing: List[str], new_tags: List[str]) -> List[str]:
     return merged
 
 
+def build_vault_append_steps(
+    *,
+    step_id: str,
+    description: str,
+    tool_args: Mapping[str, Any],
+    reason: str,
+    depends_on: Sequence[str] = (),
+    agent_id: str | None = None,
+) -> List[PlanStep]:
+    """Build the concrete policy-check, append, and executor-result reference chain."""
+    authority_id = f"{step_id}-authority"
+    receipt_id = f"{step_id}-receipt"
+    copied_args = dict(tool_args)
+    return [
+        PlanStep(
+            id=authority_id,
+            kind="decision",
+            description="Check policy and WriteGuard for vault append",
+            tool="mcp.vault.append_note",
+            tool_args=dict(copied_args),
+            depends_on=list(depends_on),
+            agent_id=agent_id,
+            step_class="authority_check",
+            metadata={"append_effect_step_id": step_id},
+            reason=f"Authorize the concrete append requested by {step_id}",
+        ),
+        PlanStep(
+            id=step_id,
+            kind="tool_call",
+            description=description,
+            tool="mcp.vault.append_note",
+            tool_args=dict(copied_args),
+            depends_on=[authority_id],
+            agent_id=agent_id,
+            step_class="governed_effect",
+            metadata={"authority_check_step_id": authority_id},
+            reason=reason,
+        ),
+        PlanStep(
+            id=receipt_id,
+            kind="note",
+            description=f"Reference the executor result for {step_id}",
+            depends_on=[step_id],
+            step_class="receipt",
+            metadata={"receipt_from_step": step_id},
+            verify="result:execution_result",
+            reason=f"Keep the receipt reference bound to the {step_id} executor result",
+        ),
+    ]
+
+
 def _enrich_plan(plan: Plan, inp: "PlannerInput") -> Plan:
     plan.meta.goal = plan.meta.goal or inp.goal
     plan.meta.source_object_uuid = plan.meta.source_object_uuid or inp.object_uuid
@@ -72,7 +123,7 @@ def select_flow_pattern_prompt(flow_profiles: Sequence[Mapping[str, Any]] | None
     }
 
 
-def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanStep:
+def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> List[PlanStep]:
     if isinstance(step_data, BaseModel):
         raw_entry = step_data.model_dump()
     elif isinstance(step_data, dict):
@@ -95,7 +146,7 @@ def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanSt
     description_fallback = remainder or target_value or f"step-{index}"
     step_id = f"step-{index}"
     if prefix == "agent":
-        return PlanStep(
+        return [PlanStep(
             id=step_id,
             kind="agent_call",
             description=description or f"Execute agent '{description_fallback}'",
@@ -103,7 +154,7 @@ def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanSt
             intent=intent,
             reason=reason_text or description or f"Agent call for {remainder or description_fallback}",
             explanation=explanation,
-        )
+        )]
     if prefix in {"tool", "mcp"}:
         tool_name = remainder
         if prefix == "mcp" and remainder and not remainder.startswith("mcp"):
@@ -113,7 +164,16 @@ def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanSt
             tool_args.setdefault("title", f"Planner note for {inp.object_uuid}")
             tool_args.setdefault("body", f"Planner output for {inp.object_uuid}")
             tool_args.setdefault("tags", ["planner-auto"])
-        return PlanStep(
+            return build_vault_append_steps(
+                step_id=step_id,
+                description=description or f"Invoke tool '{tool_name}'",
+                tool_args=tool_args,
+                reason=reason_text or description or f"Tool call for {tool_name}",
+                agent_id=raw_entry.get("agent_id")
+                if isinstance(raw_entry.get("agent_id"), str)
+                else None,
+            )
+        return [PlanStep(
             id=step_id,
             kind="tool_call",
             description=description or f"Invoke tool '{tool_name}'",
@@ -121,24 +181,24 @@ def _step_from_target(step_data: Any, index: int, inp: "PlannerInput") -> PlanSt
             tool_args=tool_args,
             reason=reason_text or description or f"Tool call for {tool_name}",
             explanation=explanation,
-        )
+        )]
     if prefix == "decision":
-        return PlanStep(
+        return [PlanStep(
             id=step_id,
             kind="decision",
             description=description or f"Decision: {description_fallback}",
             reason=reason_text or description or f"Decision for {description_fallback}",
             explanation=explanation,
             metadata=metadata,
-        )
-    return PlanStep(
+        )]
+    return [PlanStep(
         id=step_id,
         kind="note",
         description=description or f"Note: {description_fallback}",
         reason=reason_text or description or f"Note about {description_fallback}",
         explanation=explanation,
         metadata={"target": target_value, **metadata},
-    )
+    )]
 
 
 def _steps_from_pattern(pattern: Dict[str, Any] | None, inp: "PlannerInput") -> List[PlanStep]:
@@ -147,7 +207,11 @@ def _steps_from_pattern(pattern: Dict[str, Any] | None, inp: "PlannerInput") -> 
     raw_steps = pattern.get("steps") if isinstance(pattern, dict) else None
     if not isinstance(raw_steps, list) or not raw_steps:
         return []
-    return [_step_from_target(step, idx + 1, inp) for idx, step in enumerate(raw_steps)]
+    return [
+        plan_step
+        for idx, step in enumerate(raw_steps)
+        for plan_step in _step_from_target(step, idx + 1, inp)
+    ]
 
 
 class PlannerRelation(BaseModel):
@@ -195,6 +259,17 @@ class MockPlanner(BasePlanner):
                 },
             )
         if not pattern_steps:
+            append_steps = build_vault_append_steps(
+                step_id="step-2",
+                description="Append insights to the vault note",
+                tool_args={
+                    "title": f"Summary for {inp.object_uuid}",
+                    "body": "Summaries from ingest-agent",
+                    "tags": ["ingest-summary"],
+                },
+                depends_on=("step-1",),
+                reason="Persist the summary back to the note",
+            )
             pattern_steps = [
                 PlanStep(
                     id="step-1",
@@ -204,19 +279,7 @@ class MockPlanner(BasePlanner):
                     intent="summarize",
                     reason="Summaries guide the follow-up actions",
                 ),
-                PlanStep(
-                    id="step-2",
-                    kind="tool_call",
-                    description="Append insights to the vault note",
-                    tool="mcp.vault.append_note",
-                    tool_args={
-                        "title": f"Summary for {inp.object_uuid}",
-                        "body": "Summaries from ingest-agent",
-                        "tags": ["ingest-summary"],
-                    },
-                    depends_on=["step-1"],
-                    reason="Persist the summary back to the note",
-                ),
+                *append_steps,
                 PlanStep(
                     id="step-3",
                     kind="decision",
@@ -362,6 +425,7 @@ def get_planner() -> BasePlanner:
 
 
 __all__ = [
+    "build_vault_append_steps",
     "PlannerInput",
     "PlannerRelation",
     "BasePlanner",

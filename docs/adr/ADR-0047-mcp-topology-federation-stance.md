@@ -1,4 +1,4 @@
-State: Deferred for the consumer-side remote/sibling MCP seam (owner decision, 2026-07-04; RESEARCH-08 decision D4), with a producer-side successor decision recorded by ADR-0061 on 2026-08-21. ADR-0061 accepts constituent ownership for Mimer's external MCP client adapter (Rule 2) under A2/B1/C1, but does not ratify this ADR's remote-provider registry/admission bundle, enable remote multiplex, or ship a server. The consumer-side deferral and silent-fallback residual risk remain in force.
+State: Deferred for the consumer-side remote/sibling MCP seam (owner decision, 2026-07-04; RESEARCH-08 decision D4), with a producer-side successor decision recorded by ADR-0061 on 2026-08-21. ADR-0061 accepts constituent ownership for Mimer's external MCP client adapter (Rule 2) under A2/B1/C1, but does not ratify this ADR's remote-provider registry/admission bundle, enable remote multiplex, or ship a server. The consumer-side deferral remains in force; silent fallback is limited to descriptor discovery, while provider execution fails closed under issue #5705.
 Doc role: Decision record (ADR)
 Authority: Authoritative for the deferred consumer-side remote-provider/registry/admission stance at the ecosystem-federation seam. MCP's protocol-tier status is unchanged (ADR-0036; doctrine §2.7); this ADR does not promote MCP to architecture. ADR-0061 is the narrower successor authority for Mimer's producer-side external client adapter and supersedes only the Rule-2 ownership deferral for that surface. The design content is owned by `docs/architecture/ecosystem-federation.md` § Dual-role + MCP → *MCP topology stance*; this ADR records its deferral, not its adoption.
 Owner: Architecture / CES stewardship
@@ -17,22 +17,26 @@ Source of truth: This ADR plus `docs/architecture/ecosystem-federation.md` § Du
 Part of RESEARCH-08 (`docs/architecture/ecosystem-federation.md`, #2852), the companion-thread
 artifact resolving the 2026-07-04 Fable research week's ecosystem-federation design. The audit and
 its descendant artifact found that MCP server/registry ownership has no stated stance, and that the
-existing remote-MCP seam has three concrete gaps: a silent exception swallow, no admission
-allowlist, and an untyped settings flag. Siblings will need a decided topology before the first one
-attaches; without a stance, the next MCP-related change re-litigates ownership from scratch.
+then-existing remote-MCP seam had three concrete gaps: a silent descriptor-listing exception
+swallow, no admission allowlist for a future execution route, and an untyped settings flag. The
+current `MCPToolProvider.execute_tool_call` fails closed before local or remote effects, so the
+multiplex flag now gates optional descriptor discovery/merging rather than execution admission.
+Siblings will need a decided topology before the first one attaches; without a stance, the next
+MCP-related change re-litigates ownership from scratch.
 
 Current reality, stated honestly (all anchors verified against code): Yggdrasil today is an MCP
 **tool consumer only**. `RemoteMCPProvider` is a `Protocol` with **zero production
 implementations** — test fakes only
 (`app/orchestrator/mcp_tool_provider.py:14-27`). No MCP server exists anywhere in `app/`. The
-silent-fallback gap is real today, not hypothetical: `MCPToolProvider.list_descriptors` merges
+silent descriptor-discovery fallback is real today, not hypothetical: `MCPToolProvider.list_descriptors` merges
 remote descriptors into the local registry only when `mcp_remote_multiplex_enable` is truthy and a
 remote provider is injected, and on any remote exception it swallows the failure and falls back to
 the local registry unremarked (`except Exception: pass`,
-`app/orchestrator/mcp_tool_provider.py:41-43`). The contract confirms there is **no separate
-admission allowlist** for remote providers — "Enabling remote multiplex is currently the admission
-gate" (`docs/security/AGENT_TOOL_EXECUTION_SECURITY_ADDENDUM.md:31,62-68`) — and the Integration
-Fabric Contract's phrase "remote MCP servers behind the flagged multiplex seam"
+`app/orchestrator/mcp_tool_provider.py:41-43`). This affects discovery results only:
+`MCPToolProvider.execute_tool_call` returns `admission_required` before consulting a local executor
+or remote provider. The security addendum now states that the multiplex flag gates descriptor
+discovery, not execution admission. The Integration Fabric Contract's phrase
+"remote MCP servers behind the flagged multiplex seam"
 (`docs/INTEGRATION_FABRIC_CONTRACT.md:44`) is target-state language describing a seam that exists
 as a flag, not as an attached reality (divergence DV-3). The multiplex flag itself is an untyped
 `tool_settings` dict key with no settings-schema declaration (divergence DV-4).
@@ -128,11 +132,13 @@ to be filed only once D4 is ratified.
 - The topology question the boundary audit raised stays undecided for now — deferred rather than
   re-litigated ad hoc, with the leading candidate stance preserved in the artifact for when a real
   attachment appears.
-- **Residual risk, named honestly:** the silent-fallback gap (`except Exception: pass`,
+- **Residual risk, named honestly:** silent fallback for descriptor discovery (`except Exception: pass`,
   `app/orchestrator/mcp_tool_provider.py:41-43`) remains live and unaddressed by this deferral. It is
-  reachable today by enabling `mcp_remote_multiplex_enable` with any injected remote provider — no
-  admission allowlist gates it. Deferring D4 does not close this gap; it stays open until rule 4 (or
-  an equivalent fix) is separately adopted and enacted.
+  reachable today by enabling `mcp_remote_multiplex_enable` with an injected remote provider; a
+  listing error silently leaves local descriptors available. This does not route tool execution:
+  direct `execute_tool_call` fails closed with `admission_required`. Legible discovery degradation
+  and a typed setting remain open until rule 4 (or an equivalent fix) is separately adopted and
+  enacted.
 - No implementation follow-up issues are filed by this ADR — the admission allowlist, legible
   degradation, typed multiplex flag, and availability-impact descriptor field are candidate work
   items only, contingent on future ratification.
@@ -147,8 +153,9 @@ ADR-0061 and its linked owner receipt accept **Rule 2 only for Mimer's producer-
 client adapter**: the constituent owns a separate sidecar that delegates to Mimer's governed HTTP
 API. Its v1 wire is stdio, so it adds no network listener and no new authentication. This is not a
 remote provider attached through `RemoteMCPProvider`, does not enable or modify the internal
-ToolProvider/multiplex seam, and does not close that seam's silent-fallback, allowlist, or typed-flag
-debt.
+ToolProvider/discovery seam, and does not close that seam's silent descriptor-listing fallback or
+typed-flag debt. The historical admission-allowlist concern applies to any future remote execution
+route; current provider execution is dormant and fails closed.
 
 Streamable HTTP over tailnet/LAN plus per-device authentication are separately gated follow-ons
 under ADR-0061. Their deferral is not permission to enable a listener under this ADR's unresolved

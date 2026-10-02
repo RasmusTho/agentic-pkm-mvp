@@ -330,3 +330,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Source:** Astra review / capture-learning
 **Diverged:** Existing module-path detection in the issue-triage skill could mark work delivered without evidence that its scoped acceptance criteria were met, even when the requested capability would extend that module.
 **Upstream artifact:** `.codex/skills/docs-to-issue/SKILL.md` — compare existing implementation evidence with scoped acceptance criteria; file missing bounded work and never infer delivery from path existence alone.
+
+## 2026-10-02 — #5705 (guard dormant MCP execution and structurally admit vault append steps)
+**Source:** deliver-issue-set / issue-to-code / independent convergence review
+**Diverged:** The first candidate compared only explicit `PlanStep.agent_id` even though V1/V2 resolve the effective execution actor through step metadata, plan context, or flow default, and the verified base advanced before publication so the branch-truth gate stopped the stale candidate pending governed base-drift recovery.
+**Upstream artifact:** `app/orchestrator/admission.py :: _check_r2_governed_effects`; `app/orchestrator/runtime.py :: _resolve_step_agent_id`; `app/orchestrator/v2_runtime.py :: _resolve_step_agent_id`; `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Post-validation base-drift evidence reuse`; `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure`
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: the documented CLI could not import because the canonical virtual environment has incompatible `pydantic`/`pydantic-core` versions (`pydantic` requires core 2.46.5, installed core is 2.41.1). No BuilderOps store write was attempted; convert this entry to a LearningSignal when the CLI can load.

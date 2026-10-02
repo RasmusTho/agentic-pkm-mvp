@@ -3,100 +3,50 @@ from __future__ import annotations
 import pytest
 
 from app.events.types import MCP_TOOL_CALL_FINISHED, MCP_TOOL_CALL_STARTED
-from app.orchestrator.executor import StepContext
+from app.orchestrator.executor import StepContext, StepExecutionError
 from app.orchestrator.mcp_tool_provider import MCPToolProvider
-from app.planner.schema import PlanMetadata, ToolDescriptor
+from app.planner.schema import PlanMetadata
 
 pytestmark = pytest.mark.not_pg
 
 
-def _context(tool_settings: dict[str, object] | None = None) -> StepContext:
+def _context() -> StepContext:
     return StepContext(
         plan_id="plan-route-metadata",
         object_id="obj-route-metadata",
         trace_id="trace-route-metadata",
-        metadata=PlanMetadata(goal="test", source_object_uuid="obj-route-metadata", created_by="tester"),
+        metadata=PlanMetadata(
+            goal="test",
+            source_object_uuid="obj-route-metadata",
+            created_by="tester",
+        ),
         results={},
-        tool_settings=tool_settings or {},
+        tool_settings={"mcp_remote_multiplex_enable": True},
         agent_id="ask.v1",
     )
 
 
-class _RemoteProviderOK:
-    def list_descriptors(self) -> dict[str, ToolDescriptor]:
-        return {
-            "mcp.search.objects": ToolDescriptor(
-                name="mcp.search.objects",
-                kind="mcp",
-                schema={"type": "object", "required": ["query"]},
-                allowed_args={"query": "string"},
-                mock_result={"status": "ok"},
-            )
-        }
-
-    def execute_tool_call(self, **_: object) -> dict[str, object]:
-        return {"tool": "mcp.search.objects", "result": {"status": "remote-ok"}}
-
-
-class _RemoteProviderError(_RemoteProviderOK):
-    def execute_tool_call(self, **_: object) -> dict[str, object]:
-        raise RuntimeError("remote execute failed")
-
-
-def test_tool_execution_records_provider_route(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_direct_provider_execution_emits_no_route_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: list[tuple[str, dict[str, object]]] = []
 
     def _fake_audit_log(*, action: str, details: dict, **kwargs: object) -> None:
         captured.append((action, details))
 
     monkeypatch.setattr("app.orchestrator.events.audit_log", _fake_audit_log)
+    provider = MCPToolProvider()
 
-    provider = MCPToolProvider(remote_provider=_RemoteProviderOK())
-    provider.execute_tool_call(
-        tool_name="mcp.search.objects",
-        tool_args={"query": "agentic"},
-        context=_context(
-            {
-                "mcp_remote_multiplex_enable": True,
-                "mcp_remote_allowed_providers": ["remote_multiplex"],
-            }
-        ),
-        step_id="s-route",
-        description="Route metadata",
-    )
+    with pytest.raises(StepExecutionError) as exc_info:
+        provider.execute_tool_call(
+            tool_name="mcp.search.objects",
+            tool_args={"query": "agentic"},
+            context=_context(),
+            step_id="direct",
+            description="Direct provider call",
+        )
 
-    started = [details for action, details in captured if action == MCP_TOOL_CALL_STARTED]
-    finished = [details for action, details in captured if action == MCP_TOOL_CALL_FINISHED]
-    assert started
-    assert finished
-    assert started[-1]["provider_route"] == "remote_multiplex"
-    assert finished[-1]["provider_route"] == "remote_multiplex"
-
-
-def test_tool_execution_records_remote_error_fallback_reason(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[tuple[str, dict[str, object]]] = []
-
-    def _fake_audit_log(*, action: str, details: dict, **kwargs: object) -> None:
-        captured.append((action, details))
-
-    monkeypatch.setattr("app.orchestrator.events.audit_log", _fake_audit_log)
-
-    provider = MCPToolProvider(remote_provider=_RemoteProviderError())
-    provider.execute_tool_call(
-        tool_name="mcp.search.objects",
-        tool_args={"query": "agentic"},
-        context=_context(
-            {
-                "mcp_remote_multiplex_enable": True,
-                "mcp_remote_allowed_providers": ["remote_multiplex"],
-            }
-        ),
-        step_id="s-route-fallback",
-        description="Route metadata fallback",
-    )
-
-    finished = [details for action, details in captured if action == MCP_TOOL_CALL_FINISHED]
-    assert finished
-    assert finished[-1]["provider_route"] == "local_registry"
-    assert finished[-1]["provider_route_reason"] == "remote_provider_error"
-    assert finished[-1]["provider_route_attempted"] == "remote_multiplex"
+    assert exc_info.value.error_type == "admission_required"
+    actions = [action for action, _ in captured]
+    assert MCP_TOOL_CALL_STARTED not in actions
+    assert MCP_TOOL_CALL_FINISHED not in actions

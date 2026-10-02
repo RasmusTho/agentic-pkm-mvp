@@ -96,12 +96,14 @@ bounded budget and an enforced wall-clock, so a malformed or runaway plan cannot
   mandatory-by-default timeout) is therefore wired into **both** `Orchestrator.run_plan` (V1) and
   `OrchestratorV2.run_plan`, so the contract holds on every live construction path, including the
   direct ones.
-- **`step_class` scope (honest boundary):** LLM-produced plans always carry `step_class` — the
+- **`step_class` scope (honest boundary):** For targets other than the registered append target
+  described below, LLM-produced plans always carry `step_class` — the
   planner-facing registered schema `planner.plan.output.v1` requires it on every step, so
   constrained decoding cannot omit it and R1/R2 are never vacuous for LLM plans. Legacy and
   code-built/deserialized plans without `step_class` are admitted under the remaining rules only
   (schema, R3 intrinsic verify targets, R4 budgets + timeout, R5 DAG); R1/R2 bind on declared
-  classes and make no claim about undeclared steps.
+  classes and make no claim about undeclared steps. The structural R2 rule below independently
+  covers `mcp.vault.append_note`.
 - **Timeout semantics, stated precisely:** a plan-authored `plan_timeout_seconds`
   (`plan.context.tool_settings`) may only **lower** the effective bound — it is clamped (loudly
   logged) to the operator setting or `DEFAULT_PLAN_TIMEOUT_SECONDS`. The deadline gates step
@@ -109,6 +111,30 @@ bounded budget and an enforced wall-clock, so a malformed or runaway plan cannot
   `plan_timeout`; steps already in flight are bounded only by their own `tool_timeout_seconds`.
   In-flight cancellation at the plan deadline is a known gap tracked as follow-up work, not a
   claim of this task.
+
+### Structural append boundary (Issue #5705)
+
+The registered `mcp.vault.append_note` tool is structurally classified as a governed effect in
+`app/orchestrator/admission.py`, regardless of a caller-authored or missing `step_class`. Its plan
+must contain an upstream `authority_check` decision for the same tool, arguments, and agent, followed
+by the append and a `receipt` note that references that exact append step. “Same agent” compares the
+effective executor identity, resolved in precedence order from `step.agent_id`, step metadata,
+`plan.context.agent_id`, then the flow default. Admission and both V1/V2 production loops use the
+same resolution helpers, so authority cannot be checked as one actor and applied as another. Both
+versions execute the authority check through their normal step path. That runtime check calls the
+existing tool policy and `WriteGuard`; it does not trust plan metadata as permission. The receipt
+step returns the completed executor result and its executor-generated `receipt_ref`, so plan metadata
+cannot mint or substitute a receipt.
+
+The finite supported producer set is `MockPlanner.plan`'s default append plan, its use as the
+`LLMPlanner` fallback and `get_planner()` CI/mock selection, a successful `LLMPlanner` output that
+follows `app/planner/prompts.py`'s structural append contract, `_step_from_target` for the
+`mcp:vault.append_note` flow-pattern target, and the three hand-built append plans in
+`app/cli/smoke.py`. The named consumers are the `ask` CLI, `handle_event` ingest and QA flows, the
+panel pipeline, and the ask/reality smoke paths. Other tools and agent calls retain the existing
+declaration-based R1/R2 boundary: `step_class` declarations trigger those checks, while absent or
+misstated classes are not universal effect classification. This rule makes no claim to classify all
+possible mutation targets.
 
 ## Related Docs
 

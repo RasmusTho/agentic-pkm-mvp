@@ -28,12 +28,12 @@ Use this document with:
 | Area | Current-state claim | Future hardening need |
 | --- | --- | --- |
 | Descriptor trust | Local YAML registry and legacy in-code descriptors define known tools. Descriptor fields include stable id, protocol, server, description, allowed args, and optional mock result. | Remote descriptor trust, descriptor versioning, signature/provenance, and admission review are not fully governed. |
-| Remote MCP admission | Remote multiplex is behind `mcp_remote_multiplex_enable`; failures fall back to local registry; unsupported tools are filtered. | Enabling remote multiplex is currently the admission gate. A stronger remote-provider allowlist/admission contract is needed before broader exposure. |
-| Allowlists and flags | Real vault append requires `allowed_mcp_tools` plus MCP enable flag. BuilderOps real execution requires `mcp_builderops_enable` plus allowlist. | Future real tools should inherit explicit per-tool flags, allowlists, and policy checks rather than using descriptor presence as authorization. |
+| Remote MCP admission | `mcp_remote_multiplex_enable` gates optional remote descriptor discovery/merging; unsupported descriptors are filtered. `MCPToolProvider.execute_tool_call` fails closed with `admission_required`, before local or remote effects; no execution fallback is wired. | A remote-provider admission and execution contract is needed before remote execution can be exposed. |
+| Allowlists and flags | The MCP feature flag gates real vault append. `allowed_mcp_tools` further restricts real execution when configured; it is not mandatory when absent. `POLICY_ENFORCE=1` separately checks the agent registry, and append plans also require structural R2, policy/WriteGuard authority execution. | Future real tools should inherit explicit per-tool flags, optional allowlists, and policy checks rather than using descriptor presence as authorization. |
 | Argument validation | Executor validates top-level declared argument types and required fields. It does not coerce values or validate deep schemas/min/max constraints. | Rich JSON Schema validation and path/domain-specific constraints may be needed for higher-risk tools. |
 | Policy enforcement | `POLICY_ENFORCE=1` requires an `agent_id` and calls `assert_tool_allowed`; current policy is minimal for known tools. | Stronger per-agent, per-tool, per-surface authorization is future work. |
 | Timeout and call budget | Per-tool `tool_timeout_seconds`, optional `max_tool_calls`, and optional plan timeout budgets are supported by executor/orchestrator surfaces. | Default timeout/call-budget policy should be explicit for high-risk real tools. |
-| Mock versus real execution | Most tools return deterministic mock payloads; real execution is limited and flag/allowlist controlled. | Reviews must prevent test/mock assumptions from being mistaken for production real-tool behavior. |
+| Mock versus real execution | Most tools return deterministic mock payloads; real execution is limited by feature flags and any configured allowlist, with policy and write governance applied separately. | Reviews must prevent test/mock assumptions from being mistaken for production real-tool behavior. |
 | Egress and secrets | Tools and providers may produce outbound or sensitive data flows only when configured; secrets are governed by `docs/SECURITY.md` and `docs/PRIVACY.md`. | Remote tools/providers need explicit egress, secrets, and prompt/data minimization review before non-local exposure. |
 | Trace/audit | Tool calls emit started/finished outbox events with trace ids where available; A2A emits request/response/error audit events; timeout errors are observable. | Tool validation failures/timeouts may rely on orchestrator-level error events rather than tool-specific error receipts. |
 
@@ -46,8 +46,8 @@ Current controls:
 - descriptor ids are stable names in local registry or legacy in-code descriptors;
 - `allowed_args` constrains accepted top-level argument names and primitive types;
 - `required` fields are enforced separately;
-- unsupported remote-discovered tools are filtered before execution;
-- real execution requires relevant flags and allowlists for currently implemented real tool families.
+- unsupported remote-discovered tools are filtered from discovery results;
+- real execution requires the relevant feature flag; a configured `allowed_mcp_tools` list further restricts it. `POLICY_ENFORCE=1` separately applies the agent registry check, while vault append also requires structural R2 and its policy/WriteGuard authority step.
 
 Security interpretation:
 
@@ -59,13 +59,13 @@ Security interpretation:
 
 ## Remote MCP admission model
 
-Current remote MCP posture is bounded and experimental:
+Current remote MCP posture is discovery-only and fail-closed for execution:
 
-- `mcp_remote_multiplex_enable` must be truthy before remote multiplex is used.
-- If no remote provider is available or the provider fails, execution falls back to the local
-  registry with deterministic route reason codes.
-- Remote descriptor listing is best-effort and failures are swallowed.
-- The current contract records no separate admission allowlist for remote providers.
+- `mcp_remote_multiplex_enable` gates optional remote descriptor discovery and merging.
+- Remote descriptor listing is best-effort; failures leave local registry descriptors available.
+- Unsupported discovered tools are filtered before they are returned.
+- `MCPToolProvider.execute_tool_call` returns `admission_required` before consulting the local
+  executor or remote provider. Neither remote execution nor a local execution fallback is wired.
 
 Security review rule:
 
@@ -75,14 +75,14 @@ supported LAN/Tailscale/public use.
 
 ## Allowlist and flag model
 
-Flags and allowlists are necessary but not sufficient:
+Feature flags, optional allowlists, policy, and write governance have distinct roles:
 
 | Control | Security role | Non-bypass rule |
 | --- | --- | --- |
-| `mcp_vault_enable` / `mcp.enable` | Enables real vault append path for eligible tool. | Does not bypass allowed-tool checks or write governance. |
-| `mcp_builderops_enable` | Enables real BuilderOps tool execution. | Does not promote BuilderOps records into repo/product truth. |
-| `allowed_mcp_tools` | Names tools allowed for real execution. | Does not validate arguments beyond descriptor rules or authorize unrelated tools. |
-| `POLICY_ENFORCE` | Turns on agent id and tool-allowed check. | Minimal current policy must not be treated as full authorization. |
+| `mcp_vault_enable` / `mcp.enable` | Enables the real vault append path when its other execution checks pass. | Does not bypass structural R2, policy/WriteGuard authority, or a configured `allowed_mcp_tools` restriction. |
+| `mcp_builderops_enable` | Enables real BuilderOps tool execution when its other execution checks pass. | Does not promote BuilderOps records into repo/product truth. |
+| `allowed_mcp_tools` | Further restricts real execution when this optional setting is configured. | Does not validate arguments beyond descriptor rules or authorize unrelated tools. |
+| `POLICY_ENFORCE=1` | Separately requires an agent id and checks the tool against the agent registry. | Minimal current policy must not be treated as full authorization; this setting is independent of feature flags and allowlists. |
 | `may_write` flags in context/bundles | Communicate bundle authority posture. | Never bypass WriteGuard, policy, or admission. |
 
 ## Argument validation expectations

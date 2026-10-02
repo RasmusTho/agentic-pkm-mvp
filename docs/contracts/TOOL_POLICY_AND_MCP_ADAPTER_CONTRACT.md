@@ -9,12 +9,11 @@ It is a current-state contract for tool descriptor completeness, allowed-argumen
 It does not claim rich descriptor versioning or future permission-model expansion as shipped.
 
 **Producer/consumer distinction:** the MCP boundary in this contract is Mimer's internal
-consumer-side ToolProvider and optional remote-multiplex seam. ADR-0061 separately governs the
+consumer-side ToolProvider descriptor-discovery seam. ADR-0061 separately governs the
 producer-side external Mimer client adapter: the delivered `mimer-mcp` constituent-owned stdio
 sidecar over the governed HTTP API. PR #5351 verifies one hermetic JSON-RPC stdio-client journey;
-the sidecar does not reuse this registry or `app/mcp/vault_tools.py`, and does not change any
-ToolProvider validation, execution, fallback, or admission behavior documented here. General
-third-party-client support and production activation remain unclaimed.
+the sidecar does not reuse this registry or `app/mcp/vault_tools.py`. General third-party-client
+support and production activation remain unclaimed.
 
 Use this document with:
 - `docs/ARCHITECTURE.md` for current runtime boundaries and the planner/orchestrator pipeline.
@@ -32,10 +31,9 @@ Use this document with:
 - The current tool kinds are: `mcp` (MCP-backed tools), `internal` (repo-owned step handlers), and `cli` (future; not currently dispatched).
 - Tool validation happens at execution time in the orchestrator (MockPlanExecutor) and includes argument type checking, required-field validation, and agent authorization checks via `POLICY_ENFORCE`.
 - Tool execution supports deterministic/mock behavior for CI and development, real vault append for enabled MCP tools, and internal step handlers for repo-specific operations.
-- A local MCP ToolProvider boundary exposes registry-loaded descriptors and delegates execution through the existing executor validation/policy/timeout/mock-real paths.
-- A bounded remote multiplex seam is available behind explicit flag `mcp_remote_multiplex_enable`; default behavior remains local registry execution.
-- If remote multiplex is enabled but unavailable or failing, execution deterministically falls back to local registry with route reason codes.
-- When remote multiplex is enabled and a remote provider is configured, remote descriptors are merged into the local registry on a best-effort basis (try/except; failures are silent and local registry remains available).
+- The dormant `MCPToolProvider` exposes supported local descriptors and may merge supported remote descriptors for discovery when `mcp_remote_multiplex_enable` is set.
+- `MCPToolProvider.execute_tool_call` fails closed with `admission_required` before local executor or remote-provider execution. No production caller is wired to this dormant provider.
+- The existing orchestrator executor remains the supported plan-execution path; the registered vault append target additionally requires structural R2 admission and its runtime authority check.
 
 ## Descriptor sources and structure
 
@@ -138,8 +136,9 @@ The executor supports deterministic tool execution for CI and development:
    - The decision to use real vs. mock is made in `_should_use_real_tool(...)` (line 250-263):
      - If the tool is not `mcp.vault.append_note`, always return mock result.
      - If the tool is `mcp.vault.append_note`:
-       - Check `settings.allowed_mcp_tools` (allowlist) and `settings.mcp_vault_enable` or `settings.mcp.enable` (feature flag).
-       - Only use the real implementation if the allowlist includes the tool AND the feature flag is enabled.
+       - Check `settings.mcp_vault_enable` or `settings.mcp.enable` (feature flag).
+       - If `settings.allowed_mcp_tools` is configured, require it to include the tool as an additional gate.
+       - With no configured allowlist, the feature flag remains sufficient for this setting-level check; plan execution still applies structural R2 and its policy/WriteGuard authority check.
 
 3. **Determinism guarantee**:
    - Mock execution is deterministic: the same plan step with the same mock result always produces the same output.
@@ -171,7 +170,7 @@ The executor respects vault-specific settings when executing `mcp.vault.append_n
 | --- | --- | --- |
 | `vault_root` | string (path) | Root directory for the vault. If not provided, `append_note(...)` uses default resolution. |
 | `mcp_vault_enable` or `mcp.enable` | boolean-like | Feature flag to enable real vault execution. |
-| `allowed_mcp_tools` | list | Allowlist of tools to execute in real mode. |
+| `allowed_mcp_tools` | list (optional) | Further restricts tools in real mode when configured. |
 
 ### BuilderOps settings
 
@@ -181,7 +180,7 @@ The executor respects BuilderOps-specific settings when executing `mcp.builderop
 | --- | --- | --- |
 | `builderops_db_path` | string path | Optional BuilderOps SQLite database path. If omitted, normal BuilderOps path resolution applies. |
 | `mcp_builderops_enable` | boolean-like | Feature flag to enable real BuilderOps tool execution. Disabled tools return deterministic mock payloads. |
-| `allowed_mcp_tools` | list | Allowlist of BuilderOps tools to execute in real mode. |
+| `allowed_mcp_tools` | list (optional) | Further restricts BuilderOps tools in real mode when configured. |
 
 BuilderOps MCP tools are autonomous-agent-safe only for BuilderOps operational records. They do not
 execute promotions, create GitHub Issues, mutate repo docs, or change product/runtime truth.
@@ -238,16 +237,10 @@ Both are handled synchronously during plan execution and do not support real vs.
 
 Dynamic MCP descriptor discovery is best-effort and bounded:
 
-- Discovery runs only when `mcp_remote_multiplex_enable` is truthy and a remote provider is configured.
-- When enabled, `list_descriptors` calls the remote provider and merges the returned descriptors into the local registry. If the remote call fails, the exception is silently swallowed and local registry descriptors remain available.
-- There is no admission-allowlist gate. Enabling `mcp_remote_multiplex_enable` is sufficient to route to the remote provider.
+- Descriptor discovery may merge remote descriptors only when `mcp_remote_multiplex_enable` is truthy and a remote provider is configured.
+- If remote listing fails, the exception is swallowed and local registry descriptors remain available.
 - Unsupported discovered tools (not in the local `MCP_TOOL_DESCRIPTORS` supported set) are filtered out by `_filter_supported`.
-- Route reason codes are deterministic:
-  - `remote_disabled` — `mcp_remote_multiplex_enable` is falsy
-  - `remote_unavailable` — flag enabled but no remote provider is injected
-  - `remote_provider_error` — remote execution failed; fell back to local registry
-  - `remote_descriptor_list_error` — remote descriptor fetch failed during execution resolution
-  - `ok` — routed successfully
+- Discovery does not authorize or route execution. `execute_tool_call` returns `admission_required` without consulting the setting, local executor, or remote provider.
 
 ## MCP integration boundary
 
@@ -257,8 +250,8 @@ This contract explicitly bounds current tool execution behavior and reserves fut
   ask, governed capture, retrieve/search, note-read, and health through a separate stdio sidecar
   delegating to the HTTP API. It has no network listener in v1, exposes neither generic vault write
   nor receipt read-back, and is not an implementation of `RemoteMCPProvider`.
-- **Currently implemented**: local registry-backed ToolProvider default path, plus optional remote multiplex seam with best-effort descriptor merging (no admission gate).
-- **Fallback behavior**: when remote multiplex is enabled but no remote adapter is present or the adapter errors, route falls back to local registry with deterministic reason codes (`remote_unavailable`, `remote_provider_error`).
+- **Currently implemented**: registry-backed descriptor discovery and best-effort optional remote descriptor merging. Direct ToolProvider execution fails closed with `admission_required`; discovery state does not create an execution route.
+- **Supported execution boundary**: plans run through `Orchestrator.run_plan` or `OrchestratorV2.run_plan`. For `mcp.vault.append_note`, structural R2 requires an executable policy-and-WriteGuard authority check before the effect, bound to the same effective agent identity (step field, step metadata, plan context, then flow default) and a receipt referencing the exact executor result. `MCPToolProvider` remains dormant and is not wired into production.
 - **Not currently implemented**: descriptor versioning/evolution policies across remote providers.
 - **Current implementation boundary**: execution semantics still run through the existing executor contract and policy checks.
 - **Planned**: The repo still tracks broader LangGraph and remote MCP integration work in the v5.6 forward line (see `docs/tracks/TRACK_AGENTOPS_A2A_MCP.md`).
