@@ -163,6 +163,14 @@ renders the explicit no-profile line, and the scope is never inferred from vault
 No source-registry binding policy writes the snapshot key yet, so drained requests currently render
 no-profile.
 
+Issue #4119 (YSNV2-12) adds a read-only, no-egress quality evaluation of these notes
+(`source_note_quality.evaluate_source_note`). It never writes a note, companion, or ObjectStore
+record, and it is not invoked by acquisition or replay. The evaluation resolves every rendered
+synthesis sentence, claim, moment, and overlay quote against the note's durable lineage. It names
+failed mechanical criteria (evidence lineage, anchor validity, claim entailment, must-capture
+recall) against a versioned gold set. The owner's real must-capture annotations are pending owner
+input under receipt `ysnv2_gold_set_annotation_scope.v1`, and v2 acceptance remains with parent #4107.
+
 The portable-source-bundle delivery adds a derived, rebuildable vault transcript and `source.json`
 under the YouTube attachment root (`Sources/YouTube/_attachments` by default). The stable
 `yt-<video-id>` folder contains immutable content-identity/stage-version members, so a later
