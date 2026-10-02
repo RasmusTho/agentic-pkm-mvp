@@ -6,7 +6,7 @@ from app.agents.base.audit import _audit_ring_snapshot
 from app.events.types import ORCHESTRATOR_STEP_ERROR
 from app.orchestrator.runtime import Orchestrator
 from app.planner.provider import build_vault_append_steps
-from app.planner.schema import Plan, PlanMetadata, PlanStep
+from app.planner.schema import Plan, PlanMetadata
 
 pytestmark = pytest.mark.not_pg
 

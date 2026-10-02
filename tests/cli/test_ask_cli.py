@@ -7,7 +7,7 @@ from click.testing import CliRunner
 
 from app.cli import cli
 from app.planner.provider import build_vault_append_steps
-from app.planner.schema import Plan, PlanMetadata, PlanStep
+from app.planner.schema import Plan, PlanMetadata
 from app.stores.plan_store import reset_plan_store
 
 

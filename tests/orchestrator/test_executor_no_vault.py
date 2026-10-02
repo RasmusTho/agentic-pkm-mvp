@@ -6,7 +6,7 @@ import pytest
 
 from app.orchestrator.runtime import Orchestrator
 from app.planner.provider import build_vault_append_steps
-from app.planner.schema import Plan, PlanMetadata, PlanStep
+from app.planner.schema import Plan, PlanMetadata
 
 pytestmark = pytest.mark.not_pg
 

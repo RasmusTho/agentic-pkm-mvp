@@ -1145,6 +1145,12 @@ EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
     # knowledge modules, both covered by the vault owner's target set. Keep
     # this exact so a similarly named, unowned runtime module still fails closed.
     "vault": frozenset({"app/path_utils.py"}),
+    # These two planner producers are part of the orchestration admission
+    # boundary. Keep their ownership exact while routing them through the
+    # existing orchestration target set.
+    "orchestration": frozenset(
+        {"app/planner/provider.py", "app/planner/prompts.py"}
+    ),
 }
 
 
