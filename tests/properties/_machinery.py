@@ -1723,11 +1723,11 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
     # -- harness_excluded: dev/CI seeders (formal-model.md 2.3) -----------------------------------
     (
         "app/cli/smoke.py",
-        115,
-    ): "harness_excluded: smoke reality-probe seeder; never a real vault producer.",
-    ("app/cli/smoke.py", 139): "harness_excluded: smoke reality-probe seeder.",
-    ("app/cli/smoke.py", 277): "harness_excluded: smoke ASK-corpus seeder.",
-    ("app/cli/smoke.py", 281): "harness_excluded: smoke ASK-corpus seeder (index_ingest_object).",
+        116,
+    ): "harness_excluded: smoke reality-probe store refresh; never a real vault producer.",
+    ("app/cli/smoke.py", 140): "harness_excluded: smoke reality-probe note seeder.",
+    ("app/cli/smoke.py", 275): "harness_excluded: smoke ASK-corpus object seeder.",
+    ("app/cli/smoke.py", 279): "harness_excluded: smoke ASK-corpus index seeder (index_ingest_object).",
 }
 
 STORE_PAYLOAD_CARRIES_DICT_PREFIXES: tuple[str, ...] = (
