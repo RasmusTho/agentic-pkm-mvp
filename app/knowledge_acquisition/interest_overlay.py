@@ -39,6 +39,7 @@ from typing import Any, Iterable, Literal, Mapping, Sequence
 from app.knowledge.profile_consumer_projection import (
     ProfileConsumerProjection,
     rebuild_profile_projection,
+    validate_consumer_scope,
 )
 from app.knowledge_acquisition.evidence_synthesis import (
     system_language_for,
@@ -50,6 +51,7 @@ from app.knowledge_acquisition.note_renderer import (
     ProposalSection,
     validate_proposal_section,
 )
+from app.vault.manager import VaultContext
 
 INTEREST_OVERLAY_MODULE_ID = "interest_overlay"
 OverlayStatus = Literal["connections", "no-connections", "no-profile"]
@@ -158,6 +160,18 @@ class InterestOverlay:
             title=_TITLES[language],
             content=content,
         )
+
+
+def bind_active_scope(vault_context: VaultContext, scope_id: object) -> VaultContext:
+    """Bind one explicit consumer scope onto an acquisition/replay ``VaultContext`` (#5749).
+
+    The only production sources are an operator-stated CLI ``--scope`` and the
+    acquisition request's policy snapshot.  The value is validated, never coerced;
+    an unset or invalid value binds ``None`` so the overlay renders its explicit
+    no-profile line.  Vault identity, paths, and profile content are never consulted.
+    """
+
+    return replace(vault_context, active_scope_id=validate_consumer_scope(scope_id))
 
 
 def admit_profile_for_interest_overlay(
@@ -485,6 +499,7 @@ __all__ = [
     "NO_PROFILE_LINES",
     "InterestOverlay",
     "admit_profile_for_interest_overlay",
+    "bind_active_scope",
     "produce_interest_overlay",
     "propose_local_connections",
     "read_governed_profile_for_overlay",

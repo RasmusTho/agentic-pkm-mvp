@@ -536,6 +536,19 @@ def transcribe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
     _dump(res, as_json)
 
 
+def _bind_cli_scope(vault_context: Any, scope_id: Optional[str]) -> Any:
+    """Bind the operator's explicit ``--scope`` (#5749); invalid values bind no scope."""
+    from app.knowledge_acquisition.interest_overlay import bind_active_scope
+
+    bound = bind_active_scope(vault_context, scope_id)
+    if scope_id is not None and bound.active_scope_id is None:
+        click.echo(
+            f"warning: ignoring invalid --scope {scope_id!r}; the interest overlay renders no-profile",
+            err=True,
+        )
+    return bound
+
+
 @cli.command(
     name="acquire-replay",
     help="Replay a KA raw record's derived levels (normalize -> extract -> candidate) with "
@@ -556,6 +569,14 @@ def transcribe(source: str, as_json: bool, trace_id: Optional[str]) -> None:
     is_flag=True,
     help="Assert zero source egress (always enforced; the flag makes the guarantee explicit).",
 )
+@click.option(
+    "--scope",
+    "scope_id",
+    default=None,
+    help="Explicit active consumer scope (e.g. scope:work/project-alpha) for the governed "
+    "interest overlay. Never inferred from the vault; unset or invalid renders the overlay's "
+    "no-profile line.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Also print the JSON receipt to stdout.")
 @click.option("--trace-id", default=None, help="Attach a trace id to the run.")
 def acquire_replay(
@@ -564,6 +585,7 @@ def acquire_replay(
     assert_no_source_egress: bool,
     as_json: bool,
     trace_id: Optional[str],
+    scope_id: Optional[str],
 ) -> None:
     """Thin wrapper over `app.knowledge_acquisition.replay.run_replay` (the testable core).
 
@@ -581,6 +603,7 @@ def acquire_replay(
         active_vault_name="CLI Replay Vault",
         active_vault_path=str(vault_root),
     )
+    vault_context = _bind_cli_scope(vault_context, scope_id)
     try:
         receipt = run_replay(
             raw_record_id,
@@ -614,6 +637,14 @@ def acquire_replay(
     required=True,
     help="Vault root the candidate note is written to (first-write-wins).",
 )
+@click.option(
+    "--scope",
+    "scope_id",
+    default=None,
+    help="Explicit active consumer scope (e.g. scope:work/project-alpha) for the governed "
+    "interest overlay. Never inferred from the vault; unset or invalid renders the overlay's "
+    "no-profile line.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Also print the JSON receipt to stdout.")
 @click.option("--trace-id", default=None, help="Attach a trace id to the run.")
 def acquire_youtube_cmd(
@@ -621,6 +652,7 @@ def acquire_youtube_cmd(
     vault_root: str,
     as_json: bool,
     trace_id: Optional[str],
+    scope_id: Optional[str],
 ) -> None:
     """Thin wrapper over `app.knowledge_acquisition.acquire.acquire_youtube` (the testable core).
 
@@ -637,6 +669,7 @@ def acquire_youtube_cmd(
         active_vault_name="CLI Acquire Vault",
         active_vault_path=str(vault_root),
     )
+    vault_context = _bind_cli_scope(vault_context, scope_id)
     try:
         receipt = acquire_youtube(url_or_id, vault_context=vault_context, trace_id=trace_id)
     except DatabaseNotConfiguredError as exc:

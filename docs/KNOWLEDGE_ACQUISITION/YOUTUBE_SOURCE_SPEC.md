@@ -156,8 +156,12 @@ and attempt no capture, and replay never recaptures, only re-referencing an alre
 ProfileAgent behavior was delivered separately as GOVPROF-01–03 under parent #4944;
 that profile capability does not ship the separate YouTube overlay renderer, which Issue #4117 delivers
 as a read-only consumer; Issue #5747 wires it into acquisition-time transcript notes with a
-deterministic local connection producer and the vault context's explicit active scope; no production
-entry point binds that scope yet (#5749), so live notes render the explicit no-profile line.
+deterministic local connection producer and the vault context's explicit active scope. Issue #5749
+binds that scope in production only from the acquisition request policy snapshot (`active_scope_id`)
+or an explicit operator `--scope` on `acquire-youtube`/`acquire-replay`; an unset or invalid scope
+renders the explicit no-profile line, and the scope is never inferred from vault identity or paths.
+No source-registry binding policy writes the snapshot key yet, so drained requests currently render
+no-profile.
 
 The portable-source-bundle delivery adds a derived, rebuildable vault transcript and `source.json`
 under the YouTube attachment root (`Sources/YouTube/_attachments` by default). The stable

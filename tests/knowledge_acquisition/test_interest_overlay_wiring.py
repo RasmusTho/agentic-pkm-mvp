@@ -435,3 +435,152 @@ def test_acquisition_overlay_no_profile_metadata_only_and_failure_isolation(
     assert meta["interest_overlay"]["dropped_connections"] == ["connection_unsafe_for_proposal_band"]
     assert "degraded" not in meta
     assert "### Evidence-anchored synthesis" in note
+
+
+# --- #5749: production active-scope binding ---------------------------------------------------
+#
+# The production entry points are the ``acquire-youtube``/``acquire-replay`` CLI commands
+# (explicit operator ``--scope``) and the acquisition-request drain (``drain_one``), which takes
+# the scope from the request's policy snapshot.  The CLI runs get only an injected runtime outbox
+# connection and write guard (callers' own values win, so the drain passes its own); each entry
+# point's VaultContext construction and the real pipeline run unchanged.
+
+
+def _cli_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.knowledge_acquisition import acquire as acquire_module
+    from app.knowledge_acquisition import replay as replay_module
+
+    real_acquire = acquire_module.acquire_youtube
+    real_replay = replay_module.run_replay
+    monkeypatch.setattr(
+        acquire_module,
+        "acquire_youtube",
+        lambda url, **kwargs: real_acquire(url, **{"conn": _FakeOutboxConn(), "write_guard": _guard(), **kwargs}),
+    )
+    monkeypatch.setattr(
+        replay_module,
+        "run_replay",
+        lambda raw_id, **kwargs: real_replay(raw_id, **{"conn": _FakeOutboxConn(), "write_guard": _guard(), **kwargs}),
+    )
+
+
+def _invoke(args: list[str]) -> Any:
+    from app.cli import cli
+    from tests._click_compat import cli_runner
+
+    result = cli_runner(mix_stderr=False).invoke(cli, args)
+    assert result.exit_code == 0, (result.output, result.exception)
+    return result
+
+
+def _drain(root: Path, policy_snapshot: dict[str, Any], *, context: VaultContext | None = None) -> Any:
+    from app.knowledge_acquisition.acquisition_requests import (
+        AcquisitionRequests,
+        DiscoveryTrigger,
+        drain_one,
+        reset_memory_acquisition_requests,
+    )
+
+    reset_memory_acquisition_requests()
+    object_store_module._MEMORY_STORE.clear()
+    conn = _FakeOutboxConn()
+    queue = AcquisitionRequests.for_runtime()
+    queue.enqueue(
+        source_kind="youtube_url",
+        item_ref=VIDEO_ID,
+        source_ref=VIDEO_URL,
+        trigger=DiscoveryTrigger(
+            binding_id="00000000-0000-0000-0000-000000005749",
+            collection_kind="inbox_playlist",
+            collection_ref="PL5749",
+            trigger="poll",
+            playlist_item_id="item-5749",
+        ),
+        policy_snapshot=policy_snapshot,
+        conn=conn,
+    )
+    claimed = queue.claim_batch(1, conn=conn)
+    result = drain_one(
+        claimed[0],
+        vault_context=context or _context(root, None),
+        queue=queue,
+        write_guard=_guard(),
+        conn=conn,
+    )
+    assert result.status == "completed", result
+    return result
+
+
+def _assert_single_no_profile(root: Path) -> None:
+    note = _candidate_note(root)
+    lines = [line for line in _overlay_band(note).splitlines() if line.strip() and line.strip() != ">"]
+    assert lines == [f"> {NO_PROFILE_LINES['en']}"]
+    assert note.count(NO_PROFILE_LINES["en"]) == 1
+    assert _PROFILE_LINE not in note
+    assert _frontmatter(note)["interest_overlay"]["reason"] == "missing_or_invalid_active_scope"
+
+
+def test_production_entry_point_binds_active_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_fetch(monkeypatch)
+    _cli_runtime(monkeypatch)
+    calls = _spy_render(monkeypatch)
+
+    # acquire-youtube --scope: the operator-stated scope reaches the governed renderer.
+    root, _ = _approved_vault(tmp_path / "cli")
+    projection = rebuild_profile_projection(root, active_scope_id=_SCOPE)
+    result = _invoke(["acquire-youtube", VIDEO_URL, "--vault-root", str(root), "--scope", _SCOPE, "--json"])
+    assert [call["active_scope_id"] for call in calls] == [_SCOPE]
+    note = _candidate_note(root)
+    assert f"approved profile version {projection.version_id}" in _overlay_band(note)
+    assert _frontmatter(note)["interest_overlay"]["status"] == "connections"
+    raw_record_id = json.loads(result.output.strip().splitlines()[-1])["raw_record_id"]
+
+    # acquire-replay --scope binds the same way, with zero source egress.
+    replay_root, _ = _approved_vault(tmp_path / "cli-replay")
+    with monkeypatch.context() as no_egress:
+        no_egress.setattr(plugin, "fetch_caption_body", lambda url: pytest.fail("replay egress"))
+        _invoke(["acquire-replay", raw_record_id, "--vault-root", str(replay_root), "--scope", _SCOPE])
+    assert calls[-1]["active_scope_id"] == _SCOPE
+    assert _frontmatter(_candidate_note(replay_root))["interest_overlay"]["status"] == "connections"
+
+    # Drained acquisition requests take the scope from the request's policy snapshot, even when
+    # the drain caller's context carries none.
+    drain_root, _ = _approved_vault(tmp_path / "drain")
+    _drain(drain_root, {"policy_version": 1, "mode": "acquire_transcript", "active_scope_id": _SCOPE})
+    assert calls[-1]["active_scope_id"] == _SCOPE
+    assert Path(calls[-1]["vault_root"]).resolve() == drain_root.resolve()
+    assert _frontmatter(_candidate_note(drain_root))["interest_overlay"]["status"] == "connections"
+
+
+def test_production_entry_point_without_scope_renders_no_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_fetch(monkeypatch)
+    _cli_runtime(monkeypatch)
+    calls = _spy_render(monkeypatch)
+
+    # No --scope: an approved profile exists, but no scope is inferred from the vault.
+    root, _ = _approved_vault(tmp_path / "unscoped")
+    _invoke(["acquire-youtube", VIDEO_URL, "--vault-root", str(root)])
+    assert calls[-1]["active_scope_id"] is None
+    _assert_single_no_profile(root)
+
+    # An invalid --scope degrades to the same single no-profile line.
+    object_store_module._MEMORY_STORE.clear()
+    invalid_root, _ = _approved_vault(tmp_path / "invalid")
+    _invoke(["acquire-youtube", VIDEO_URL, "--vault-root", str(invalid_root), "--scope", "not a scope!"])
+    assert calls[-1]["active_scope_id"] is None
+    _assert_single_no_profile(invalid_root)
+
+    # A drained request without a snapshot scope renders no-profile; the snapshot is the drain's
+    # only source, so a scope already present on the caller's context is not carried over.
+    drain_root, _ = _approved_vault(tmp_path / "drain")
+    _drain(drain_root, {"policy_version": 1, "mode": "acquire_transcript"}, context=_context(drain_root, _SCOPE))
+    assert calls[-1]["active_scope_id"] is None
+    _assert_single_no_profile(drain_root)
+
+    # An invalid snapshot scope is never coerced into a binding.
+    drain_invalid_root, _ = _approved_vault(tmp_path / "drain-invalid")
+    _drain(drain_invalid_root, {"policy_version": 1, "mode": "acquire_transcript", "active_scope_id": 42})
+    assert calls[-1]["active_scope_id"] is None
+    _assert_single_no_profile(drain_invalid_root)
