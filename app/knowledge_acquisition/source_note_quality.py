@@ -75,7 +75,7 @@ CRITERION_CLAIM_ENTAILMENT = "claim_entailment"
 CRITERION_MUST_CAPTURE_RECALL = "must_capture_recall"
 OPERATOR_SCORED_DIMENSIONS = ("selection", "hierarchy", "uncertainty", "connections", "revisit_value")
 
-ItemKind = Literal["synthesis_sentence", "claim", "moment", "overlay_source_says"]
+ItemKind = Literal["synthesis_sentence", "claim", "moment", "overlay_source_says", "module_excerpt"]
 
 _SAFE_ITEM_REF = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _SECTION = re.compile(r"^### (.+)$", re.MULTILINE)
@@ -83,6 +83,7 @@ _CLAIM_WORDING = re.compile(r"^- \*\*Source wording:\*\* (.*)$")
 _CLAIM_ANCHORS = re.compile(r"^\s+\*\*Anchors:\*\* (.*)$")
 _MOMENT_ANCHORS = re.compile(r"^\s+\*\*Transcript anchors:\*\* (.*)$")
 _MOMENT_LINE = re.compile(r"^- \[[0-9:]+\]\(")
+_MODULE_EXCERPT = re.compile(r"^- `\[seg (\d+) · [0-9:]+–[0-9:]+\]` “(.*)”$")
 _OVERLAY_SOURCE = re.compile(r"^- \*\*(?:Source says|Källan säger)\*\* \(([^)]*)\): “(.*)”$")
 _MARKDOWN_UNESCAPE = re.compile(r"\\(.)")
 _CLOCK = re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{2})$")
@@ -172,7 +173,7 @@ def parse_gold_set(document: Mapping[str, Any]) -> GoldSet:
                 f"owner gold set exceeds the receipt scope of {ANNOTATION_SCOPE_MAX_VIDEOS} videos; "
                 "a larger scope requires a new operator receipt"
             )
-    elif annotated_by == "owner" or receipt is not None:
+    elif str(annotated_by or "").strip().casefold() == "owner" or receipt is not None:
         raise GoldSetError("a synthetic fixture must not claim owner annotation or the owner scope receipt")
     threshold = document.get("must_capture_recall_threshold")
     if (
@@ -276,6 +277,8 @@ class EvaluationSubject:
     items: tuple[EvidenceItem, ...]
     lineage: Mapping[str, Any]
     lineage_failures: tuple[str, ...] = ()
+    unparsed_items: tuple[str, ...] = ()
+    """Rendered evidence bullets the harness could not recognize; they fail anchor validity."""
     diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -292,12 +295,15 @@ def load_rendered_subject(note_text: str) -> EvaluationSubject:
     item_ref = _item_ref_from_url(str(provenance.get("url") or ""))
     raw_record_id = frontmatter.get("raw_record_id")
     normalized_id = frontmatter.get("normalized_artifact_id")
-    extraction_ids = [str(v) for v in frontmatter.get("extraction_artifact_ids") or ()]
+    raw_extraction_ids = frontmatter.get("extraction_artifact_ids") or []
+    if not isinstance(raw_extraction_ids, list):
+        failures.append("extraction_artifact_ids_malformed")
+        raw_extraction_ids = []
+    extraction_ids = [str(v) for v in raw_extraction_ids]
     moments_id = frontmatter.get("key_moments_artifact_id")
-    store = ObjectStore()
 
     segments: list[Mapping[str, Any]] = []
-    transcript = store.get_object(str(normalized_id)) if normalized_id else None
+    transcript = _get_object(normalized_id)
     if transcript is None or transcript.kind != NORMALIZED_ARTIFACT_KIND:
         failures.append("normalized_transcript_unresolvable")
     else:
@@ -310,7 +316,7 @@ def load_rendered_subject(note_text: str) -> EvaluationSubject:
     for extraction_id in extraction_ids:
         try:
             extraction = load_extraction_artifact(extraction_id)
-        except ExtractionPersistenceError:
+        except (ExtractionPersistenceError, ValueError, TypeError):
             extraction = None
         if extraction is None:
             failures.append(f"extraction_unresolvable:{extraction_id}")
@@ -327,16 +333,19 @@ def load_rendered_subject(note_text: str) -> EvaluationSubject:
 
     diagnostics: dict[str, Any] = {"content_route": frontmatter.get("content_route")}
     if moments_id:
-        moments = store.get_object(str(moments_id))
+        moments = _get_object(moments_id)
+        moments_ext = (dict(moments.payload).get("extensions") or {}) if moments is not None else {}
         if moments is None or moments.kind != KEY_MOMENTS_ARTIFACT_KIND:
             failures.append("key_moments_unresolvable")
+        elif moments_ext.get("content_identity") != content_identity:
+            failures.append("key_moments_wrong_content_identity")
         else:
-            budget = (dict(moments.payload).get("extensions") or {}).get("budget") or {}
+            budget = moments_ext.get("budget") or {}
             diagnostics["moment_budget_duration_seconds"] = budget.get("duration_seconds")
     if raw_record_id:
         try:
             raw = get_raw_record(str(raw_record_id))
-        except RawRecordIntegrityError:
+        except (RawRecordIntegrityError, ValueError, TypeError):
             raw = None
         if raw is None or raw.get("content_identity") != content_identity:
             failures.append("raw_record_unresolvable")
@@ -351,7 +360,7 @@ def load_rendered_subject(note_text: str) -> EvaluationSubject:
     else:
         failures.append("raw_record_unresolvable")
 
-    items = _rendered_items(note_text, segments=segments, synthesis_anchors=synthesis_anchors)
+    items, unparsed = _rendered_items(note_text, segments=segments, synthesis_anchors=synthesis_anchors)
     return EvaluationSubject(
         item_ref=item_ref,
         content_identity=content_identity if isinstance(content_identity, str) else None,
@@ -365,8 +374,20 @@ def load_rendered_subject(note_text: str) -> EvaluationSubject:
             "note_digest": "sha256:" + hashlib.sha256(note_text.encode("utf-8")).hexdigest(),
         },
         lineage_failures=tuple(failures),
+        unparsed_items=tuple(unparsed),
         diagnostics=diagnostics,
     )
+
+
+def _get_object(object_id: object) -> Any:
+    """Read one durable object; a malformed id is an unresolvable reference, not a crash."""
+
+    if not object_id:
+        return None
+    try:
+        return ObjectStore().get_object(str(object_id))
+    except (ValueError, TypeError):
+        return None
 
 
 def _frontmatter(note_text: str) -> Mapping[str, Any]:
@@ -385,16 +406,27 @@ def _item_ref_from_url(url: str) -> str | None:
 
 
 def _proposal_sections(note_text: str) -> dict[str, list[str]]:
-    if PROPOSALS_HEADING not in note_text:
+    """Split the proposals band into its ``### `` sections.
+
+    Band and section headings are matched as whole lines: generated content is blockquoted
+    (``> `` prefixed), so a heading-like string inside source text can never end the band early.
+    """
+
+    lines = note_text.splitlines()
+    try:
+        start = lines.index(PROPOSALS_HEADING)
+    except ValueError:
         return {}
-    band = note_text.split(PROPOSALS_HEADING, 1)[1].split(EVIDENCE_HEADING, 1)[0]
+    end = next((i for i in range(start + 1, len(lines)) if lines[i] == EVIDENCE_HEADING), len(lines))
     sections: dict[str, list[str]] = {}
-    matches = list(_SECTION.finditer(band))
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(band)
-        body = band[match.end() : end]
-        lines = [html.unescape(line[2:] if line.startswith("> ") else line.lstrip(">")) for line in body.splitlines()]
-        sections[html.unescape(match.group(1).strip())] = lines
+    current: list[str] | None = None
+    for line in lines[start + 1 : end]:
+        heading = _SECTION.match(line)
+        if heading is not None:
+            current = sections.setdefault(html.unescape(heading.group(1).strip()), [])
+            continue
+        if current is not None:
+            current.append(html.unescape(line[2:] if line.startswith("> ") else line.lstrip(">")))
     return sections
 
 
@@ -403,9 +435,12 @@ def _rendered_items(
     *,
     segments: Sequence[Mapping[str, Any]],
     synthesis_anchors: Mapping[str, tuple[Mapping[str, Any], ...]],
-) -> list[EvidenceItem]:
+) -> tuple[list[EvidenceItem], list[str]]:
+    """Return every recognized rendered evidence item plus any unrecognized evidence bullet."""
+
     sections = _proposal_sections(note_text)
     items: list[EvidenceItem] = []
+    unparsed: list[str] = []
     for line in sections.get("Evidence-anchored synthesis", ()):
         if line.startswith("- "):
             text = line[2:].strip()
@@ -415,9 +450,13 @@ def _rendered_items(
     for index, line in enumerate(claim_lines):
         wording = _CLAIM_WORDING.match(line)
         if wording is None:
+            if line.startswith("- "):
+                unparsed.append(f"Evidence-anchored claims: {line[:80]}")
             continue
         anchors: tuple[Mapping[str, Any], ...] = ()
-        for follow in claim_lines[index + 1 : index + 3]:
+        for follow in claim_lines[index + 1 :]:
+            if follow.startswith("- "):
+                break
             matched = _CLAIM_ANCHORS.match(follow)
             if matched is not None:
                 anchors = _literal_anchors(matched.group(1))
@@ -429,6 +468,8 @@ def _rendered_items(
     moment_lines = sections.get("Timestamped moments", [])
     for index, line in enumerate(moment_lines):
         if not _MOMENT_LINE.match(line):
+            if line.startswith("- "):
+                unparsed.append(f"Timestamped moments: {line[:80]}")
             continue
         anchors = ()
         for follow in moment_lines[index + 1 : index + 2]:
@@ -444,16 +485,31 @@ def _rendered_items(
         items.append(EvidenceItem("moment", line, anchors))
 
     for title, lines in sections.items():
-        if title not in {"Interest overlay", "Intresseöverlägg"}:
-            continue
+        overlay = title in {"Interest overlay", "Intresseöverlägg"}
         for line in lines:
+            excerpt = _MODULE_EXCERPT.match(line)
+            if excerpt is not None:
+                # Content-module excerpts are anchored verbatim transcript quotes.
+                index = int(excerpt.group(1))
+                quote = excerpt.group(2)
+                excerpt_anchors: tuple[Mapping[str, Any], ...] = (
+                    (_segment_anchor((index, segments[index])),)
+                    if 0 <= index < len(segments)
+                    else ({"segment_index": index},)
+                )
+                items.append(EvidenceItem("module_excerpt", quote, excerpt_anchors, verbatim=quote))
+                continue
+            if not overlay:
+                continue
             matched = _OVERLAY_SOURCE.match(line)
             if matched is None:
+                if line.startswith("- "):
+                    unparsed.append(f"{title}: {line[:80]}")
                 continue
             quote = _MARKDOWN_UNESCAPE.sub(r"\1", matched.group(2))
-            anchors = tuple(_overlay_anchors(matched.group(1), quote, segments))
-            items.append(EvidenceItem("overlay_source_says", quote, anchors, verbatim=quote))
-    return items
+            overlay_anchors = tuple(_overlay_anchors(matched.group(1), quote, segments))
+            items.append(EvidenceItem("overlay_source_says", quote, overlay_anchors, verbatim=quote))
+    return items, unparsed
 
 
 def _literal_anchors(value: str) -> tuple[Mapping[str, Any], ...]:
@@ -527,6 +583,8 @@ class QualityReport:
             "gold_set_lineage": dict(self.gold_set_lineage) if self.gold_set_lineage else None,
             "diagnostics": dict(self.diagnostics),
             "operator_scored_dimensions": {name: "pending_operator" for name in self.operator_scored_dimensions},
+            # A mechanical pass is never capability or note acceptance.
+            "evaluation_scope": "mechanical_only",
         }
 
 
@@ -540,7 +598,9 @@ def evaluate_subject(subject: EvaluationSubject, *, gold_set: GoldSet | None = N
         CRITERION_MUST_CAPTURE_RECALL: [],
     }
     valid_items: list[EvidenceItem] = []
+    supported_items: list[EvidenceItem] = []
     entailed = 0
+    failures[CRITERION_ANCHOR_VALIDITY].extend(f"unparsed rendered item: {line}" for line in subject.unparsed_items)
     for position, item in enumerate(subject.items):
         label = f"{item.kind}[{position}]: {item.text[:80]}"
         if not item.anchors or not all(validate_resolvable_anchor(a, subject.segments) for a in item.anchors):
@@ -551,8 +611,9 @@ def evaluate_subject(subject: EvaluationSubject, *, gold_set: GoldSet | None = N
             cited = " ".join(str(subject.segments[int(a["segment_index"])].get("text") or "") for a in item.anchors)
             if not item.verbatim.strip() or _normalize(item.verbatim) not in _normalize(cited):
                 failures[CRITERION_CLAIM_ENTAILMENT].append(label)
-            else:
-                entailed += 1
+                continue
+            entailed += 1
+        supported_items.append(item)
 
     total = len(subject.items)
     verbatim_total = sum(1 for item in subject.items if item.verbatim is not None)
@@ -566,6 +627,7 @@ def evaluate_subject(subject: EvaluationSubject, *, gold_set: GoldSet | None = N
         failures[CRITERION_ANCHOR_VALIDITY].append("no rendered evidence items")
 
     gold_lineage: dict[str, Any] | None = None
+    metrics["must_capture_recall"] = "not_evaluated"
     if gold_set is not None:
         gold_lineage = gold_set.lineage()
         entry = gold_set.entry_for(item_ref=subject.item_ref, content_identity=subject.content_identity)
@@ -575,7 +637,8 @@ def evaluate_subject(subject: EvaluationSubject, *, gold_set: GoldSet | None = N
             )
             metrics["must_capture_recall"] = None
         else:
-            captured, missed = _must_capture(entry, valid_items, subject.segments)
+            # Only anchored AND entailed items can capture a point; a fabricated quote cannot.
+            captured, missed = _must_capture(entry, supported_items)
             recall = len(captured) / len(entry.points)
             metrics["must_capture_recall"] = recall
             metrics["must_capture_threshold"] = gold_set.recall_threshold
@@ -618,9 +681,7 @@ def _count_by_kind(items: Sequence[EvidenceItem]) -> dict[str, int]:
     return counts
 
 
-def _must_capture(
-    entry: GoldSetEntry, items: Sequence[EvidenceItem], segments: Sequence[Mapping[str, Any]]
-) -> tuple[list[str], list[str]]:
+def _must_capture(entry: GoldSetEntry, items: Sequence[EvidenceItem]) -> tuple[list[str], list[str]]:
     spans = [
         (float(anchor["start"]), float(anchor["end"]))
         for item in items
@@ -629,7 +690,10 @@ def _must_capture(
     captured: list[str] = []
     missed: list[str] = []
     for point in entry.points:
-        hit = any(start <= point.end_seconds and point.start_seconds <= end for start, end in spans)
+        if point.start_seconds == point.end_seconds:
+            hit = any(start <= point.start_seconds <= end for start, end in spans)
+        else:  # positive overlap; spans that merely touch a boundary do not capture the point
+            hit = any(start < point.end_seconds and point.start_seconds < end for start, end in spans)
         (captured if hit else missed).append(point.point_id)
     return captured, missed
 

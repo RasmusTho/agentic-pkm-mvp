@@ -19,6 +19,7 @@ import json
 import socket
 import urllib.request
 from pathlib import Path
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -50,7 +51,9 @@ from app.knowledge_acquisition.source_note_quality import (
     SYNTHETIC_FIXTURE,
     GoldSetError,
     evaluate_source_note,
+    evaluate_subject,
     load_owner_gold_set,
+    load_rendered_subject,
     parse_gold_set,
 )
 from app.objects import ObjectStore
@@ -371,6 +374,34 @@ def test_quality_gate_rejects_unanchored_or_non_entailing_claims(tmp_path: Path,
     unanchored = report.failures[CRITERION_ANCHOR_VALIDITY]
     assert any(item.startswith("synthesis_sentence[") and "uncited synthesis" in item for item in unanchored)
     assert any(item.startswith("claim[") and "Hello world" in item for item in unanchored)
+
+    # A heading-like string inside rendered source text cannot end the evaluated band early, and
+    # an unrecognized evidence bullet fails rather than silently dropping out of the evaluation.
+    heading_text = clean_note.replace(
+        "> - **Source wording:** Hello world\n",
+        "> - **Source wording:** Hello world ## Evidence and lineage\n",
+        1,
+    ).replace(
+        "> **Timestamped moments (non-authoritative; selected from transcript evidence):**",
+        "> **Timestamped moments (non-authoritative; selected from transcript evidence):**\n> - a stray bullet",
+        1,
+    )
+    report = evaluate_source_note(heading_text)
+    assert report.metrics["rendered_items_by_kind"]["moment"] == 1  # moments still parsed
+    assert any("unparsed rendered item" in item for item in report.failures[CRITERION_ANCHOR_VALIDITY])
+    # A non-entailing claim never credits must-capture recall, even when its anchor overlaps.
+    subject = load_rendered_subject(bad_note)
+    only_bad_claim = replace(
+        subject, items=tuple(item for item in subject.items if item.verbatim == _UNSUPPORTED_WORDING)
+    )
+    span_gold = _synthetic_gold_set(item_ref=VIDEO_A, content_identity=str(subject.content_identity))
+    span_gold["videos"][0]["must_capture"] = [
+        {"point_id": "synthetic-bad-span", "description": "synthetic", "start_seconds": 3, "end_seconds": 5}
+    ]
+    swapped_report = evaluate_subject(only_bad_claim, gold_set=parse_gold_set(span_gold))
+    assert CRITERION_CLAIM_ENTAILMENT in swapped_report.failed_criteria
+    assert swapped_report.metrics["must_capture_missed"] == ["synthetic-bad-span"]
+    assert evaluate_source_note(clean_note).as_dict()["metrics"]["must_capture_recall"] == "not_evaluated"
 
     # Unresolvable lineage is its own failed criterion, never a silent pass.
     meta = _frontmatter(clean_note)
