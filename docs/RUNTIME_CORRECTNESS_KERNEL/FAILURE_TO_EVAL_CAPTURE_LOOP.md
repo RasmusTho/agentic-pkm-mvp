@@ -70,10 +70,11 @@ memory-candidate-specific end to end. Every entry is an
 activation-policy / working-context-recall semantics, and a promotion path
 (`materialize_promoted_memory`) that writes a `semantic_memory` note into the agent-memory ledger;
 the companion API projection (`_memory_review_candidate_projection`) hard-requires
-`proposed_memory_type`. An eval-dataset case has no cognitive memory type and promotes into a
-golden-dataset file, not the memory ledger — forcing it into that queue would fabricate a
-`MemoryType` and materialize it as a memory note (a category error). Eval drafts therefore live in
-their own file-based surface (`<system_dir>/eval_drafts/` with `status` frontmatter).
+`proposed_memory_type`. An eval-dataset case has no cognitive memory type; its eventual integration
+destination is a golden-dataset file, not the memory ledger. Forcing it into that queue would
+fabricate a `MemoryType` and materialize it as a memory note (a category error). Eval drafts
+therefore live in their own file-based surface (`<system_dir>/eval_drafts/` with `status`
+frontmatter).
 
 A discoverable *pending-eval-drafts view* (distinct from the memory ledger) is **delivered** (#2871):
 `app.eval.failure_capture.list_pending_drafts` scans `<system_dir>/eval_drafts/*.md` for

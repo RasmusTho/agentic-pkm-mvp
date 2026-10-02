@@ -23,12 +23,12 @@ DB. Drafting is WriteGuard-gated exactly like `materialize_promoted_memory`
 (`app/agent_memory/materialization.py`) — a blocked write-state prevents the
 draft from landing.
 
-**No auto-promotion.** A draft is a candidate, not ground truth. Only an
-explicit, recorded human decision via :func:`promote_draft` moves a draft into
-the golden datasets (`docs/eval/classification_golden.yaml` for classification
-cases; a topic-schema fixture for schema-violation cases). Until that decision
-is recorded the draft is inert: present as a pending file, absent from any
-golden dataset.
+**No auto-promotion.** A draft is a candidate, not ground truth. An explicit,
+recorded human decision via :func:`promote_draft` changes the draft's status to
+promoted and persists its decision provenance. That decision does not add the
+case to a golden dataset or fixture. Integration into
+`docs/eval/classification_golden.yaml` or a topic-schema fixture is a separate,
+reviewed code change. Until a decision is recorded the draft remains pending.
 
 Deliberate divergence from "reuse the existing queue surface"
 -------------------------------------------------------------
@@ -47,8 +47,8 @@ projection (`_memory_review_candidate_projection` in
 `app/api/routes/companion.py`) hard-requires ``proposed_memory_type``.
 
 An eval-dataset case is a **distinct artifact class**: it has no cognitive
-memory type, no working-context recall meaning, and its promotion target is a
-golden-dataset file, not the memory ledger. Forcing it into
+memory type or working-context recall meaning. Its eventual integration
+destination is a golden-dataset file, not the memory ledger. Forcing it into
 `MemoryCandidateReviewQueue` would mean fabricating a ``MemoryType`` and
 materializing it as a memory note — a category error. So eval drafts live in
 their own file-based surface (``<system_dir>/eval_drafts/`` with ``status``
@@ -399,8 +399,10 @@ def _render_draft_note(draft: DraftEvalCase, *, title: str) -> str:
     return (
         f"---\n{yaml_block}\n---\n\n"
         f"# {title}\n\n"
-        "This is a drafted eval-case candidate, awaiting human adjudication. "
-        "It is NOT part of any golden dataset until explicitly promoted.\n\n"
+        "This is an eval-case candidate; its status and any human decision are "
+        "recorded in frontmatter. A promote decision does not add it to any "
+        "golden dataset or fixture. Integration requires a separate reviewed "
+        "code change.\n\n"
         "## Provenance\n\n"
         f"- trace_id: `{draft.trace_id or '-'}`\n"
         f"- source topic: `{draft.source_event.topic}`\n"

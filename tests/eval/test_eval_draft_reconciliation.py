@@ -294,6 +294,12 @@ def test_promotion_persists_provenance_under_existing_guards(
     assert persisted.decided_by == "owner:service"
     assert persisted.decided_at == decision.decided_at
     assert persisted.notes == "adjudicated\nintegration_ref: golden-case:case-exact"
+    persisted_text = draft_path.read_text(encoding="utf-8")
+    assert (
+        "A promote decision does not add it to any golden dataset or fixture."
+        in persisted_text
+    )
+    assert "Integration requires a separate reviewed code change." in persisted_text
     assert captured["expected_version"] == hashlib.sha256(original_bytes).hexdigest()
     assert captured["action"] == failure_capture.FAILURE_CAPTURE_DRAFT_ACTION
     assert captured["writer_identity"] == "eval.failure_capture.decision"
