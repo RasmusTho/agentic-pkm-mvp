@@ -60,6 +60,26 @@ def test_mimer_mcp_adapter_selects_semantic_and_existing_http_contract_tests() -
     assert "tests/api" not in selection.targets
 
 
+@pytest.mark.parametrize(
+    "planner_path",
+    ("app/planner/provider.py", "app/planner/prompts.py"),
+)
+def test_mcp_planner_producers_select_orchestration_and_changed_contract_tests(
+    planner_path: str,
+) -> None:
+    boundary_test = "tests/orchestrator/test_mcp_admission_boundary.py"
+    planner_test = "tests/planner/test_llm_planner.py"
+
+    selection = select_tests([planner_path, boundary_test, planner_test])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("orchestration",)
+    assert selection.unowned_paths == ()
+    assert "tests/orchestrator" in selection.targets
+    assert boundary_test in selection.targets
+    assert planner_test in selection.targets
+
+
 def test_static_web_surface_is_owned_by_builder_system_and_companion_ui() -> None:
     selection = select_tests(["app/web/static/cockpit.html", "app/web/static/signboard.js"])
 

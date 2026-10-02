@@ -42,8 +42,10 @@ Scope of ``step_class`` (honest boundary): LLM-produced plans always carry
 (``planner.plan.output.v1``) requires it, so constrained decoding cannot omit
 it. Legacy and code-built/deserialized plans without ``step_class``
 declarations are admitted under the remaining rules only (schema, R3 intrinsic
-targets, R4 budgets/timeout, R5 DAG); R1/R2 bind on declared classes and make
-no security claim about undeclared steps.
+targets, R4 budgets/timeout, R5 DAG), except that the registered
+``mcp.vault.append_note`` target independently triggers the structural R2
+check described below. For undeclared, non-registered targets, R1/R2 bind on
+declared classes and make no security claim about undeclared steps.
 
 Failure semantics are explicit and loud: any violation raises
 :class:`PlanAdmissionError` naming the rule; there is no silent repair and no
@@ -53,6 +55,7 @@ partial admission.
 from __future__ import annotations
 
 import logging
+import math
 from collections import defaultdict
 from typing import Any, Dict, List, Mapping, Set
 
@@ -73,6 +76,10 @@ DEFAULT_PLAN_TIMEOUT_SECONDS: float = 600.0
 #: ``test:`` name durable artifacts outside the plan.
 VERIFY_TARGET_SCHEMES: frozenset[str] = frozenset({"result", "step", "receipt", "event", "test"})
 
+# This registered tool mutates the vault, so its admission class is derived
+# from the target itself rather than a caller-authored ``step_class``.
+_STRUCTURALLY_GOVERNED_TOOLS: frozenset[str] = frozenset({"mcp.vault.append_note"})
+
 #: Intrinsic verify target per step kind for steps that do not declare one.
 #: Each maps onto a key the executor actually emits for that kind
 #: (``MockPlanExecutor.execute_step``), so the target is mechanically
@@ -92,6 +99,72 @@ class PlanAdmissionError(Exception):
         super().__init__(f"plan inadmissible ({rule}): {reason}")
         self.rule = rule
         self.reason = reason
+
+
+def resolve_plan_flow_id(plan_context: Mapping[str, Any] | None) -> str | None:
+    """Resolve the flow identity shared by both production execution loops."""
+    if not isinstance(plan_context, Mapping):
+        return None
+
+    profile_selection = plan_context.get("profile_selection")
+    if isinstance(profile_selection, Mapping) and profile_selection.get("flow_id"):
+        return profile_selection["flow_id"]
+
+    for key in ("flow_ids", "flows"):
+        flow_ids = plan_context.get(key)
+        if isinstance(flow_ids, list) and flow_ids:
+            return flow_ids[0]
+    return None
+
+
+def resolve_step_agent_id(
+    step: PlanStep,
+    flow_id: str | None,
+    plan_context: Mapping[str, Any] | None,
+) -> str | None:
+    """Resolve the effective executor actor for a plan step."""
+    if step.agent_id:
+        return step.agent_id
+
+    meta_agent = step.metadata.get("agent_id")
+    if isinstance(meta_agent, str) and meta_agent.strip():
+        return meta_agent.strip()
+
+    if isinstance(plan_context, Mapping):
+        context_agent = plan_context.get("agent_id")
+        if isinstance(context_agent, str) and context_agent.strip():
+            return context_agent.strip()
+
+    if not flow_id:
+        return None
+    if str(flow_id).strip().lower() in {"ask", "qa", "ask.graph.v1"}:
+        return "ask.v1"
+    return None
+
+
+def _strict_json_equal(left: Any, right: Any) -> bool:
+    """Compare JSON values without Python's bool/int equality equivalence."""
+    if type(left) is not type(right):
+        return False
+    if type(left) is dict:
+        if any(type(key) is not str for key in left) or any(
+            type(key) is not str for key in right
+        ):
+            return False
+        return left.keys() == right.keys() and all(
+            _strict_json_equal(left[key], right[key]) for key in left
+        )
+    if type(left) is list:
+        return len(left) == len(right) and all(
+            _strict_json_equal(left_value, right_value)
+            for left_value, right_value in zip(left, right)
+        )
+    if left is None or type(left) in (str, int, bool):
+        return left == right
+    if type(left) is float:
+        return math.isfinite(left) and math.isfinite(right) and left == right
+    # Tuples, custom objects, and other non-JSON values fail closed.
+    return False
 
 
 def _positive_timeout(settings: Mapping[str, Any] | None) -> float | None:
@@ -140,7 +213,12 @@ def admit_plan(plan: Plan, *, plan_timeout_seconds: float | None) -> Plan:
     _check_r5_dag(steps)  # R5 first: the ordering rules below need a sound DAG.
     transitive_deps = _transitive_dependencies(steps)
     _check_r1_transform_validation(steps, transitive_deps)
-    _check_r2_governed_effects(steps, transitive_deps)
+    _check_r2_governed_effects(
+        steps,
+        transitive_deps,
+        flow_id=resolve_plan_flow_id(plan.context),
+        plan_context=plan.context,
+    )
     _check_r3_leaf_verify_targets(steps, transitive_deps)
     _check_r4_budgets(plan, steps, plan_timeout_seconds)
     return plan
@@ -252,32 +330,62 @@ def _check_r1_transform_validation(
 
 
 def _check_r2_governed_effects(
-    steps: List[PlanStep], transitive_deps: Dict[str, Set[str]]
+    steps: List[PlanStep],
+    transitive_deps: Dict[str, Set[str]],
+    *,
+    flow_id: str | None,
+    plan_context: Mapping[str, Any] | None,
 ) -> None:
-    """R2: governed-effect steps are preceded by an authority check and followed by a receipt."""
+    """R2: declared and registered structural effects need executable guard and receipt steps."""
     by_id = {s.id: s for s in steps}
     for effect in steps:
-        if effect.step_class != "governed_effect":
+        structural_append = (
+            effect.kind == "tool_call" and effect.tool in _STRUCTURALLY_GOVERNED_TOOLS
+        )
+        if effect.step_class != "governed_effect" and not structural_append:
             continue
         upstream = transitive_deps[effect.id]
-        if not any(by_id[sid].step_class == "authority_check" for sid in upstream):
+        authority_step_id = effect.metadata.get("authority_check_step_id")
+        authority = by_id.get(authority_step_id) if isinstance(authority_step_id, str) else None
+        has_authority = any(by_id[sid].step_class == "authority_check" for sid in upstream)
+        if structural_append:
+            has_authority = bool(
+                authority
+                and authority.id in upstream
+                and authority.step_class == "authority_check"
+                and authority.kind == "decision"
+                and authority.tool == effect.tool
+                and _strict_json_equal(authority.tool_args, effect.tool_args)
+                and resolve_step_agent_id(authority, flow_id, plan_context)
+                == resolve_step_agent_id(effect, flow_id, plan_context)
+                and authority.metadata.get("append_effect_step_id") == effect.id
+            )
+        if not has_authority:
             raise PlanAdmissionError(
                 rule="R2",
                 reason=(
-                    f"governed_effect step '{effect.id}' is not preceded by an "
-                    "authority_check step"
+                    f"governed effect step '{effect.id}' is not preceded by an "
+                    "executable matching authority_check step"
                 ),
             )
         has_receipt = any(
             step.step_class == "receipt" and effect.id in transitive_deps[step.id]
             for step in steps
         )
+        if structural_append:
+            has_receipt = any(
+                step.step_class == "receipt"
+                and step.kind == "note"
+                and step.metadata.get("receipt_from_step") == effect.id
+                and effect.id in transitive_deps[step.id]
+                for step in steps
+            )
         if not has_receipt:
             raise PlanAdmissionError(
                 rule="R2",
                 reason=(
-                    f"governed_effect step '{effect.id}' is not followed by "
-                    "receipt emission"
+                    f"governed effect step '{effect.id}' is not followed by "
+                    "a receipt reference to its executor result"
                 ),
             )
 

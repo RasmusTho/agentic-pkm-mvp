@@ -20,7 +20,13 @@ from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Set
 
 from app.planner.schema import Plan, PlanMetadata, PlanStep
 
-from .admission import PlanAdmissionError, admit_plan, resolve_plan_timeout
+from .admission import (
+    PlanAdmissionError,
+    admit_plan,
+    resolve_plan_flow_id,
+    resolve_plan_timeout,
+    resolve_step_agent_id,
+)
 from .delivery_sla import map_delivery_sla_terminal_state
 from .events import (
     emit_compensation_started,
@@ -33,7 +39,13 @@ from .events import (
     emit_step_retry_exhausted,
     emit_step_started,
 )
-from .executor import MockPlanExecutor, PlanExecutor, StepContext, StepExecutionError
+from .executor import (
+    MockPlanExecutor,
+    PlanExecutor,
+    StepContext,
+    StepExecutionError,
+    execute_plan_step,
+)
 
 import logging
 
@@ -67,15 +79,6 @@ def _coerce_int(value: Any) -> int | None:
         return None
 
 
-def _default_agent_id_for_flow(flow_id: str | None) -> str | None:
-    if not flow_id:
-        return None
-    normalized = str(flow_id).strip().lower()
-    if normalized in {"ask", "qa", "ask.graph.v1"}:
-        return "ask.v1"
-    return None
-
-
 def _context_dimensions_from_plan_context(plan_context: Mapping[str, Any] | None) -> tuple[str | None, list[str], str | None]:
     if not isinstance(plan_context, Mapping):
         return None, [], None
@@ -84,25 +87,6 @@ def _context_dimensions_from_plan_context(plan_context: Mapping[str, Any] | None
         [str(item) for item in (plan_context.get("sphere_memberships") or [])] if isinstance(plan_context.get("sphere_memberships"), list) else [],
         plan_context.get("situated_identity") if isinstance(plan_context.get("situated_identity"), str) or plan_context.get("situated_identity") is None else None,
     )
-
-
-def _resolve_step_agent_id(step: PlanStep, flow_id: str | None, plan_context: Mapping[str, Any] | None) -> str | None:
-    if getattr(step, "agent_id", None):
-        return step.agent_id
-    metadata = None
-    try:
-        metadata = step.metadata
-    except Exception:
-        metadata = None
-    if isinstance(metadata, Mapping):
-        meta_agent = metadata.get("agent_id")
-        if isinstance(meta_agent, str) and meta_agent.strip():
-            return meta_agent.strip()
-    if plan_context and isinstance(plan_context, Mapping):
-        ctx_agent = plan_context.get("agent_id")
-        if isinstance(ctx_agent, str) and ctx_agent.strip():
-            return ctx_agent.strip()
-    return _default_agent_id_for_flow(flow_id)
 
 
 class OrchestratorV2Error(Exception):
@@ -188,6 +172,7 @@ class OrchestratorV2:
         # operator/default bound (oversized values are clamped loudly),
         # never raise it, never unbounded.
         plan_timeout = resolve_plan_timeout(self._tool_settings, plan_tool_settings)
+        plan_flow_id = self._resolve_flow_id(plan)
         admit_plan(plan, plan_timeout_seconds=plan_timeout)
 
         # Extract plan metadata and context
@@ -224,9 +209,6 @@ class OrchestratorV2:
 
         # Build dependency graph
         graph = DependencyGraph(plan.steps)
-
-        # Resolve flow context
-        plan_flow_id = self._resolve_flow_id(plan)
 
         # Execute with parallel scheduling
         with ThreadPoolExecutor(max_workers=self._max_workers) as executor:
@@ -284,7 +266,7 @@ class OrchestratorV2:
 
                     emit_step_started(plan_id=plan.id, step=step, object_id=object_id, trace_id=trace_id)
 
-                    agent_id = _resolve_step_agent_id(step, plan_flow_id, plan.context)
+                    agent_id = resolve_step_agent_id(step, plan_flow_id, plan.context)
                     scope, sphere_memberships, situated_identity = _context_dimensions_from_plan_context(plan.context)
                     context = StepContext(
                         plan_id=plan.id,
@@ -548,7 +530,7 @@ class OrchestratorV2:
         while attempt <= retry_count:
             attempt += 1
             try:
-                return self._executor.execute_step(step, context)
+                return execute_plan_step(self._executor, step, context)
             except StepExecutionError as exc:
                 last_error = str(exc)
                 last_error_type = getattr(exc, "error_type", None)
@@ -724,24 +706,7 @@ class OrchestratorV2:
 
     def _resolve_flow_id(self, plan: Plan) -> str | None:
         """Extract flow_id from plan context."""
-        plan_context = plan.context if plan.context else {}
-
-        if isinstance(plan_context, dict) and plan_context.get("profile_selection"):
-            profile_selection = plan_context.get("profile_selection")
-            if isinstance(profile_selection, dict) and profile_selection.get("flow_id"):
-                return profile_selection.get("flow_id")
-
-        if isinstance(plan_context, dict) and plan_context.get("flow_ids"):
-            flow_ids = plan_context.get("flow_ids")
-            if isinstance(flow_ids, list) and flow_ids:
-                return flow_ids[0]
-
-        if isinstance(plan_context, dict) and plan_context.get("flows"):
-            flows = plan_context.get("flows")
-            if isinstance(flows, list) and flows:
-                return flows[0]
-
-        return None
+        return resolve_plan_flow_id(plan.context)
 
     def _validate_plan(self, plan: Plan) -> None:
         """Validate plan structure and dependencies."""

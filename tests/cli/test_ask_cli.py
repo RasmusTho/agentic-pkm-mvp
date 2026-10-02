@@ -6,7 +6,8 @@ import pytest
 from click.testing import CliRunner
 
 from app.cli import cli
-from app.planner.schema import Plan, PlanMetadata, PlanStep
+from app.planner.provider import build_vault_append_steps
+from app.planner.schema import Plan, PlanMetadata
 from app.stores.plan_store import reset_plan_store
 
 
@@ -51,15 +52,12 @@ def test_ask_cli_reports_tool_errors(monkeypatch):
             return Plan(
                 id="plan-cli-stub",
                 meta=PlanMetadata(goal=inp.goal, source_object_uuid=inp.object_uuid, created_by="stub"),
-                steps=[
-                    PlanStep(
-                        id="s1",
-                        kind="tool_call",
-                        description="Broken tool",
-                        tool="mcp.vault.append_note",
-                        tool_args={"title": "missing body"},
-                    )
-                ],
+                steps=build_vault_append_steps(
+                    step_id="s1",
+                    description="Broken tool",
+                    tool_args={"title": "missing body"},
+                    reason="Reach argument validation with the required R2 chain",
+                ),
                 context={"flow_ids": ["qa"]},
                 tags=["qa"],
             )

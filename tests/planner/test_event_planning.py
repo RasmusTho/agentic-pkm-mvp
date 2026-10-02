@@ -83,13 +83,18 @@ def test_plan_for_event_uses_flow_profiles_when_enabled(monkeypatch: pytest.Monk
     assert plan.context.get("flow_profiles")
     assert plan.context["flow_profiles"][0]["intent"] == "Turn new text into knowledge."
     assert "flow:ingest" in plan.tags
-    assert len(plan.steps) == 2
+    assert len(plan.steps) == 4
     assert plan.steps[0].kind == "agent_call"
     assert plan.steps[0].agent == "normalizer"
-    assert plan.steps[1].kind == "tool_call"
-    assert plan.steps[1].tool == "mcp.vault.append_note"
-    assert "title" in plan.steps[1].tool_args
-    assert "body" in plan.steps[1].tool_args
+    assert plan.steps[1].step_class == "authority_check"
+    assert plan.steps[1].metadata["append_effect_step_id"] == plan.steps[2].id
+    assert plan.steps[2].kind == "tool_call"
+    assert plan.steps[2].tool == "mcp.vault.append_note"
+    assert plan.steps[2].depends_on == [plan.steps[1].id]
+    assert "title" in plan.steps[2].tool_args
+    assert "body" in plan.steps[2].tool_args
+    assert plan.steps[3].step_class == "receipt"
+    assert plan.steps[3].metadata["receipt_from_step"] == plan.steps[2].id
     selection = plan.context.get("profile_selection")
     assert selection and selection["flow_id"] == "ingest"
     assert selection["pattern"]["name"] == "standard"

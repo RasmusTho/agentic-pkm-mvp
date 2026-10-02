@@ -14,6 +14,7 @@ from app.agents.ask.graph import run_ask_graph
 from app.agents.panel_agent import execute_panel_intent, run_panel_intent_for_note
 from app.knowledge.write_ops import write_note_from_absolute
 from app.orchestrator.runtime import Orchestrator
+from app.planner.provider import build_vault_append_steps
 from app.planner.schema import Plan, PlanMetadata, PlanStep, new_plan_id
 from app.planner.tools import MCP_TOOL_DESCRIPTORS
 from app.retrieval.hybrid import hybrid_search, rebuild_from_durable_index
@@ -148,20 +149,17 @@ def _append_plan(note_uuid: str, vault: Path) -> Plan:
             source_object_uuid=note_uuid,
             created_by="cli.smoke",
         ),
-        steps=[
-            PlanStep(
-                id="append-note",
-                kind="tool_call",
-                description="Append smoke note",
-                tool="mcp.vault.append_note",
-                tool_args={
+        steps=build_vault_append_steps(
+            step_id="append-note",
+            description="Append smoke note",
+            tool_args={
                     "title": "Reality Smoke",
                     "body": f"Smoke write for {note_uuid}",
                     "tags": ["smoke", "reality"],
-                },
-                agent_id="panel_agent.v5",
-            )
-        ],
+            },
+            agent_id="panel_agent.v5",
+            reason="Write the smoke note through the guarded append path",
+        ),
         context={"tool_settings": {"vault_root": str(vault), "mcp_vault_enable": True}},
         goal="Reality smoke append",
     )
@@ -321,18 +319,47 @@ def _append_ask_plan(body: str, vault: Path) -> Plan:
             source_object_uuid="ask-smoke",
             created_by="cli.smoke.ask",
         ),
-        steps=[
-            PlanStep(
-                id="append-answer",
-                kind="tool_call",
-                description="Append ASK answer",
-                tool="mcp.vault.append_note",
-                tool_args={"title": _ASK_NOTE_TITLE, "body": body, "tags": ["smoke", "ask"]},
-                agent_id="panel_agent.v5",
-            )
-        ],
+        steps=build_vault_append_steps(
+            step_id="append-answer",
+            description="Append ASK answer",
+            tool_args={"title": _ASK_NOTE_TITLE, "body": body, "tags": ["smoke", "ask"]},
+            agent_id="panel_agent.v5",
+            reason="Write the answer through the guarded append path",
+        ),
         context={"tool_settings": {"vault_root": str(vault), "mcp_vault_enable": True}},
         goal="ASK smoke append",
+    )
+
+
+def _ask_smoke_plan(query: str, body: str, vault: Path) -> Plan:
+    """Build the read/search plus guarded append plan used by ``smoke ask``."""
+    return Plan(
+        id=new_plan_id(),
+        meta=PlanMetadata(
+            goal="ASK smoke",
+            source_object_uuid="ask-smoke",
+            created_by="cli.smoke.ask",
+        ),
+        steps=[
+            PlanStep(
+                id="search",
+                kind="tool_call",
+                description="Search corpus",
+                tool="mcp.search.objects",
+                tool_args={"query": query, "k": 3},
+                agent_id="ask.v1",
+            ),
+            *build_vault_append_steps(
+                step_id="append-answer",
+                description="Append ASK answer",
+                tool_args={"title": _ASK_NOTE_TITLE, "body": body, "tags": ["smoke", "ask"]},
+                depends_on=("search",),
+                agent_id="panel_agent.v5",
+                reason="Write the answer through the guarded append path",
+            ),
+        ],
+        context={"tool_settings": {"vault_root": str(vault), "mcp_vault_enable": True}},
+        goal="ASK smoke",
     )
 
 
@@ -477,35 +504,7 @@ def smoke_ask(vault: Path, outbox: Path, query: str, as_json: bool) -> None:
             ],
         }
 
-    plan = Plan(
-        id=new_plan_id(),
-        meta=PlanMetadata(
-            goal="ASK smoke",
-            source_object_uuid="ask-smoke",
-            created_by="cli.smoke.ask",
-        ),
-        steps=[
-            PlanStep(
-                id="search",
-                kind="tool_call",
-                description="Search corpus",
-                tool="mcp.search.objects",
-                tool_args={"query": query, "k": 3},
-                agent_id="ask.v1",
-            ),
-            PlanStep(
-                id="append-answer",
-                kind="tool_call",
-                description="Append ASK answer",
-                tool="mcp.vault.append_note",
-                tool_args={"title": _ASK_NOTE_TITLE, "body": body, "tags": ["smoke", "ask"]},
-                depends_on=["search"],
-                agent_id="panel_agent.v5",
-            ),
-        ],
-        context={"tool_settings": {"vault_root": str(vault), "mcp_vault_enable": True}},
-        goal="ASK smoke",
-    )
+    plan = _ask_smoke_plan(query, body, vault)
 
     orchestrator = Orchestrator(tool_settings={"vault_root": str(vault), "mcp_vault_enable": True})
     results = orchestrator.run_plan(plan)

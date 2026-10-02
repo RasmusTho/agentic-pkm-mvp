@@ -14,6 +14,7 @@ from app.builderops.boundary import execute_builderops_mcp_tool, is_builderops_m
 from app.builderops.models import BuilderOpsValidationError
 from app.domain.state_axes import normalize_promotion_payload
 from app.execution.execution_request import ExecutionRequest, ExecutionResult
+from app.knowledge.write_ops import KNOWLEDGE_WRITE_ACTION
 from app.mcp.vault_tools import VaultToolError, append_note
 from app.orchestrator.agents import AgentPermissionError, _normalize_agent_target, resolve_agent_config, validate_agent_permissions
 from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
@@ -26,6 +27,7 @@ from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import append_jsonl_record
 from app.objects import ObjectStore
 from app.events.schema import OutboxEvent
+from app.write_guard import DEFAULT_WRITE_GUARD
 
 from .events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
 
@@ -361,14 +363,14 @@ class MockPlanExecutor(PlanExecutor):
             mcp_event = OutboxEvent(**event_kwargs)
             _write_outbox_events(_resolve_outbox_path(), [mcp_event])
             effect_result = {"status": "ok", "note_path": str(note_path)}
-            ExecutionResult(
+            execution_result = ExecutionResult(
                 request=execution_request,
                 status="succeeded",
                 effect_result=effect_result,
                 receipt_ref=f"mcp.vault.append_note:{note_path}",
                 trace_id=context.trace_id,
             )
-            return effect_result
+            return {**effect_result, "receipt_ref": execution_result.receipt_ref}
         except VaultToolError as exc:
             ExecutionResult(
                 request=execution_request,
@@ -377,6 +379,70 @@ class MockPlanExecutor(PlanExecutor):
                 trace_id=context.trace_id,
             )
             raise StepExecutionError(f"vault append failed: {exc}", error_type="mcp_tool_error") from exc
+
+
+def execute_plan_step(
+    executor: PlanExecutor,
+    step: PlanStep,
+    context: StepContext,
+) -> Dict[str, Any]:
+    """Execute the bounded authority and receipt steps for structural vault appends.
+
+    Admission verifies these step references against the concrete append step. The
+    authority check repeats the same policy and WriteGuard used by append execution;
+    it is a runtime check, not authority conferred by plan metadata. The receipt step
+    returns the completed executor result itself so a caller-authored declaration can
+    never mint or substitute a receipt.
+    """
+    if (
+        step.step_class == "authority_check"
+        and step.kind == "decision"
+        and step.tool == "mcp.vault.append_note"
+        and isinstance(step.metadata.get("append_effect_step_id"), str)
+    ):
+        if is_policy_enforced() and not context.agent_id:
+            raise StepExecutionError(
+                "policy: missing agent_id in StepContext",
+                error_type="policy_denied",
+            )
+        try:
+            assert_tool_allowed(context.agent_id, "mcp.vault.append_note")
+        except PermissionError as exc:
+            raise StepExecutionError(str(exc), error_type="policy_denied") from exc
+        try:
+            DEFAULT_WRITE_GUARD.assert_writes_allowed(KNOWLEDGE_WRITE_ACTION)
+        except Exception as exc:
+            raise StepExecutionError(
+                f"WriteGuard blocked mcp.vault.append_note: {exc}",
+                error_type="write_guard_denied",
+            ) from exc
+        return {"status": "allowed", "tool": "mcp.vault.append_note"}
+
+    receipt_from_step = step.metadata.get("receipt_from_step")
+    if (
+        step.step_class == "receipt"
+        and step.kind == "note"
+        and isinstance(receipt_from_step, str)
+    ):
+        execution_result = context.results.get(receipt_from_step)
+        if not isinstance(execution_result, dict):
+            raise StepExecutionError(
+                f"receipt source step '{receipt_from_step}' has no executor result",
+                error_type="receipt_missing",
+            )
+        result_payload = execution_result.get("result")
+        receipt_ref = (
+            result_payload.get("receipt_ref")
+            if isinstance(result_payload, dict)
+            else None
+        )
+        return {
+            "result_step_id": receipt_from_step,
+            "receipt_ref": receipt_ref,
+            "execution_result": execution_result,
+        }
+
+    return executor.execute_step(step, context)
 
 
 def _run_promotion_intent(args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
@@ -425,4 +491,11 @@ def _run_promotion_intent(args: Mapping[str, Any], context: StepContext) -> Dict
     return {"status": "ok", "event": promote_event.model_dump(mode="json")}
 
 
-__all__ = ["AgentHandler", "PlanExecutor", "StepContext", "StepExecutionError", "MockPlanExecutor"]
+__all__ = [
+    "AgentHandler",
+    "PlanExecutor",
+    "StepContext",
+    "StepExecutionError",
+    "MockPlanExecutor",
+    "execute_plan_step",
+]
