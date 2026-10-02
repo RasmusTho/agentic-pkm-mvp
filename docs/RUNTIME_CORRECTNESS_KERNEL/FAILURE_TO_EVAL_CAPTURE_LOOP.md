@@ -1,6 +1,6 @@
 ---
 name: Failure to Eval Capture Loop
-description: Draft every schema_violation dead-letter and every UNKNOWN classification as an eval-case candidate with full provenance into a human review queue; human confirmation promotes to the golden sets
+description: Draft every schema_violation dead-letter and every UNKNOWN classification as an eval-case candidate with full provenance; a human records the draft decision, and a separate reviewed change integrates it into a golden set or fixture
 task_id: KERNEL-15
 source_anchor: "docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: §5.4"
 parent_capability: RUNTIME_CORRECTNESS_KERNEL
@@ -16,7 +16,8 @@ can_parallelize_with: []
 Eval ground truth in a probabilistic system is accumulated **adjudicated history**, not a-priori
 labels (audit **§5.4**, RQ4). Today dead-letters and misclassifications vanish into logs
 (`outbox.event.dead_lettered` → JSONL; `intent_classifier` `_defaulted` → nothing durable). This task
-closes the loop: every failure becomes a candidate regression test after human adjudication.
+closes the loop by preserving each failure as a candidate for human adjudication and later,
+separately reviewed integration into regression coverage.
 
 ## What This Task Does
 
@@ -33,15 +34,17 @@ closes the loop: every failure becomes a candidate regression test after human a
 - Drafts land in a **file-based human review surface** that *mirrors the shape* of the existing
   pattern (`app/agent_memory/review_queue.py` + `materialize_promoted_memory` in
   `app/agent_memory/materialization.py`): a WriteGuard-gated file, an explicit human-decision
-  promotion step, and no write to the golden set before a promoted decision.
+  promotion step that records the decision on the draft, and no golden-set write as part of that
+  decision. Golden-set or fixture integration is a separate reviewed code change.
   It does **not reuse `MemoryCandidateReviewQueue`** — see "Reviewer surfacing" below for why that
   queue is memory-candidate-specific and an eval-dataset case is a distinct artifact class.
 - Drafting is **WriteGuard-gated** like all vault writes: call
   `app/write_guard.py::WriteGuard.assert_writes_allowed(action)` before the vault write, matching
   `materialize_promoted_memory`'s use of `DEFAULT_WRITE_GUARD`.
-- **No auto-promotion.** Human confirmation promotes a draft into the golden datasets
-  (`classification_case.v1` for UNKNOWN cases from KERNEL-13; a topic-schema fixture for
-  `schema_violation` cases). Adjudication is the ground-truth step.
+- **No auto-promotion.** Human confirmation changes a draft from pending to promoted and records
+  the adjudication. It does not write to a golden dataset or fixture. A separate reviewed change
+  integrates a `classification_case.v1` case or a topic-schema fixture; that integration is the
+  ground-truth step.
 
 ## Concretely
 
@@ -118,8 +121,9 @@ note-write and concurrency contract follows
 - [ ] Draft writes go through WriteGuard; a blocked write-state prevents the draft, asserted through
       the production write path.
       Verify: `tests/eval/test_failure_capture_loop.py::test_draft_is_write_guard_gated` — asserts `WriteGuard.assert_writes_allowed` is invoked from the draft-write entrypoint.
-- [ ] No auto-promotion: a draft is not in the golden dataset until a recorded human decision
-      promotes it.
+- [ ] No auto-promotion: promoting a draft records the human decision but does not itself change
+      the golden dataset or fixture. Integration is a separate reviewed change.
+      Verify: `tests/eval/test_eval_draft_reconciliation.py::test_promoted_unintegrated_draft_is_reported`
       Verify: `tests/eval/test_failure_capture_loop.py::test_no_auto_promotion`
 
 ## How to Verify (Pre-Merge)
