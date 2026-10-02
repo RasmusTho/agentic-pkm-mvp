@@ -45,6 +45,7 @@ import hashlib
 import math
 import re
 from dataclasses import dataclass
+from urllib.parse import quote
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Sequence
@@ -149,6 +150,13 @@ class Candidate:
     note_modules: RenderedModules | None = None
     interest_overlay: InterestOverlay | None = None
     interest_overlay_failed: bool = False
+    # YSNV2 acquisition wiring (#5746): durable timestamp-only moments and any retained frames.
+    # ``moments_status`` is None when the producer did not run (metadata-only or legacy caller).
+    key_moments: tuple[dict[str, Any], ...] = ()
+    key_moments_artifact_id: str | None = None
+    moment_frames: tuple[dict[str, Any], ...] = ()
+    moments_status: str | None = None
+    frames_status: str | None = None
 
     def summary_text(self) -> str | None:
         for extraction in self.extractions:
@@ -385,6 +393,8 @@ def render_candidate_note(candidate: Candidate) -> str:
         frontmatter["normalized_artifact_id"] = candidate.normalized_artifact_id
     if candidate.extraction_artifact_ids:
         frontmatter["extraction_artifact_ids"] = list(candidate.extraction_artifact_ids)
+    if candidate.key_moments_artifact_id is not None:
+        frontmatter["key_moments_artifact_id"] = candidate.key_moments_artifact_id
     if candidate.optional_failures:
         frontmatter["degraded"] = True
         frontmatter["unavailable_optional_extractors"] = [
@@ -483,8 +493,27 @@ def render_candidate_note(candidate: Candidate) -> str:
                 "Materialization status",
                 "degraded; " + "; ".join(degradation) if degradation else "complete",
             ),
+            *_moment_evidence(candidate),
         ),
     )
+
+
+def _moment_evidence(candidate: Candidate) -> tuple[tuple[str, str], ...]:
+    """Deterministic moment/frame lineage; a capture degradation is visible here, not as a placeholder."""
+    if candidate.moments_status is None:
+        return ()
+    if candidate.key_moments:
+        moments = f"{len(candidate.key_moments)} timestamped moments"
+    elif candidate.moments_status.startswith("unavailable"):
+        moments = candidate.moments_status
+    else:
+        moments = "none supported by transcript evidence"
+    if candidate.key_moments_artifact_id is not None:
+        moments += f"; key_moments={candidate.key_moments_artifact_id}"
+    rows = [("Key moments", moments)]
+    if candidate.frames_status is not None:
+        rows.append(("Source frames", candidate.frames_status))
+    return tuple(rows)
 
 
 def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:
@@ -498,12 +527,43 @@ def _candidate_proposal_sections(candidate: Candidate) -> tuple[ProposalSection,
                 content=ontology_section_content(candidate.rendered_ontology),
             ),
         )
+    moments = _timestamped_moments_section(candidate)
+    if moments is not None:
+        sections += (moments,)
     # Content modules follow the universal spine and never replace it.
     if candidate.note_modules is not None:
         sections += candidate.note_modules.sections
     if candidate.interest_overlay is not None:
         sections += (candidate.interest_overlay.section(),)
     return sections + degradation_sections(candidate.content_route, candidate.note_modules)
+
+
+def _timestamped_moments_section(candidate: Candidate) -> ProposalSection | None:
+    """Timestamp links with transcript anchors; a retained frame is embedded under its moment."""
+    if not candidate.key_moments:
+        return None
+    frames = {str(frame["moment_id"]): frame for frame in candidate.moment_frames}
+    lines = ["**Timestamped moments (non-authoritative; selected from transcript evidence):**"]
+    for moment in candidate.key_moments:
+        clock = _clock(int(moment["timestamp_seconds"]))
+        lines.append(f"- [{clock}]({moment['timestamp_link']}) — {moment['selection_rationale']}")
+        anchors = ", ".join(str(anchor["anchor"]) for anchor in moment.get("transcript_anchors") or ())
+        lines.append(f"  **Transcript anchors:** {anchors}")
+        frame = frames.get(str(moment["moment_id"]))
+        if frame is not None:
+            role = "Context frame" if frame.get("frame_role") == "context_frame" else "Source frame"
+            lines.append(f"  ![{role} at {clock}]({quote(str(frame['path']), safe='/')})")
+    return ProposalSection(
+        module_id="timestamped-moments",
+        title="Timestamped moments",
+        content="\n".join(lines),
+    )
+
+
+def _clock(seconds: int) -> str:
+    hours, rest = divmod(max(0, seconds), 3600)
+    minutes, secs = divmod(rest, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
 
 
 def _evidence_and_summary_sections(candidate: Candidate) -> tuple[ProposalSection, ...]:

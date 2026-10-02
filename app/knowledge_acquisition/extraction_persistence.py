@@ -403,6 +403,18 @@ def load_latest_extraction(
     return max(matches, key=lambda item: (item.result.created_at, item.object_id))
 
 
+def load_extraction_artifact(object_id: str) -> PersistedExtraction | None:
+    """Load one immutable extraction run by its durable artifact id."""
+    stored = ObjectStore().get_object(object_id)
+    if stored is None:
+        return None
+    if stored.kind != EXTRACTION_ARTIFACT_KIND:
+        raise ExtractionPersistenceError(
+            f"extraction identity {object_id} is occupied by kind {stored.kind!r}"
+        )
+    return _extraction_from_payload(dict(stored.payload), replayed=True)
+
+
 def _create_immutable(
     *,
     object_id: str,
@@ -586,6 +598,7 @@ __all__ = [
     "PersistedExtraction",
     "PersistedTranscript",
     "PersistedMetadata",
+    "load_extraction_artifact",
     "load_latest_extraction",
     "load_persisted_transcript",
     "load_persisted_metadata",

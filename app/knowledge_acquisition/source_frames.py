@@ -273,12 +273,7 @@ def capture_source_frames(
     ):
         raise SourceFramesError("key moments do not descend from this transcript and item_ref")
     vault_root = _vault_root(vault_context)
-    if youtube_attachment_root is None:
-        youtube_attachment_root = f"{get_vault_sources_dir_rel(vault_root)}/YouTube/_attachments"
-    root = validate_youtube_attachment_root(youtube_attachment_root)
-    bundle_folder = PurePosixPath(root) / _source_key(item_ref) / _version_key(
-        transcript.content_identity, transcript.extensions.get("stage_version")
-    )
+    bundle_folder = _bundle_folder(vault_root, item_ref, transcript, youtube_attachment_root)
     manifest_path = (bundle_folder / "frames.json").as_posix()
 
     moments = [dict(moment) for moment in key_moments.moments if moment.get("moment_id")]
@@ -411,6 +406,63 @@ def capture_source_frames(
     )
     return SourceFramesResult(
         "frames_retained", None, tuple(frames), deletion_receipt, dict(rejected), object_id, manifest_path
+    )
+
+
+def retained_frames(
+    *,
+    key_moments: PersistedKeyMoments,
+    transcript: PersistedTranscript,
+    item_ref: str,
+    vault_context: VaultContext,
+    youtube_attachment_root: str | None = None,
+) -> tuple[dict[str, Any], ...]:
+    """Read-only lookup of frames an earlier capture already retained for these moments.
+
+    Performs no source egress and no write, so replay and text-only re-rendering can reference
+    a durable retained frame without recapturing it.  Returns ``()`` when nothing was retained;
+    a manifest that exists but cannot be read or does not descend from this source fails loudly.
+    """
+
+    vault_root = _vault_root(vault_context)
+    bundle_folder = _bundle_folder(vault_root, item_ref, transcript, youtube_attachment_root)
+    manifest_path = (bundle_folder / "frames.json").as_posix()
+    frames_prefix = f"{(bundle_folder / 'frames').as_posix()}/"
+    if not candidate_note_exists_durable(manifest_path, vault_root=vault_root):
+        return ()
+    try:
+        manifest = json.loads((vault_root / manifest_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SourceFramesError(f"retained frame manifest {manifest_path} is unreadable: {exc}") from exc
+    if (
+        not isinstance(manifest, Mapping)
+        or manifest.get("artifact_kind") != "youtube_source_frames"
+        or manifest.get("item_ref") != item_ref
+        or manifest.get("content_identity") != transcript.content_identity
+        or not isinstance(manifest.get("frames"), list)
+    ):
+        raise SourceFramesError(f"retained frame manifest {manifest_path} does not descend from this source")
+    moment_ids = {str(moment.get("moment_id")) for moment in key_moments.moments}
+    return tuple(
+        dict(frame)
+        for frame in manifest["frames"]
+        if isinstance(frame, Mapping)
+        and str(frame.get("moment_id")) in moment_ids
+        and isinstance(frame.get("path"), str)
+        and str(frame["path"]).startswith(frames_prefix)
+        and ".." not in PurePosixPath(str(frame["path"])).parts
+        and (vault_root / str(frame["path"])).is_file()
+    )
+
+
+def _bundle_folder(
+    vault_root: Path, item_ref: str, transcript: PersistedTranscript, youtube_attachment_root: str | None
+) -> PurePosixPath:
+    if youtube_attachment_root is None:
+        youtube_attachment_root = f"{get_vault_sources_dir_rel(vault_root)}/YouTube/_attachments"
+    root = validate_youtube_attachment_root(youtube_attachment_root)
+    return PurePosixPath(root) / _source_key(item_ref) / _version_key(
+        transcript.content_identity, transcript.extensions.get("stage_version")
     )
 
 
@@ -630,4 +682,5 @@ __all__ = [
     "capture_source_frames",
     "perceptual_hash",
     "phash_distance",
+    "retained_frames",
 ]
