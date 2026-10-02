@@ -1,4 +1,4 @@
-State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, anchored synthesis and claims bound to retained transcript segments, deterministic coverage/confidence reporting, and authority-banded review-required proposal rendering. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. The bounded YSS-06 continuation (#3921 / PR #5616) adds gated discovery scheduling for this Inbox; acquisition draining remains operator-invoked. Liked Videos, multi-playlist product sync, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
+State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, anchored synthesis and claims bound to retained transcript segments, deterministic coverage/confidence reporting, and authority-banded review-required proposal rendering. YouTube Source Note v2 is delivered and accepted under parent #4107 (see `:: Writeback`): durable anchored lineage, portable versioned source bundles, conservative content routing and modules, gated ontology proposals, timestamped moments with bounded default frame capture, the governed interest overlay, and a no-egress quality evaluation; the owner gold-set quality run (#5756) is pending. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. The bounded YSS-06 continuation (#3921 / PR #5616) adds gated discovery scheduling for this Inbox; acquisition draining remains operator-invoked. Liked Videos, multi-playlist product sync, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
 Doc role: Source instance specification
 Authority: Instantiates `SOURCE_PLUGIN_CONTRACT.md` for YouTube. Mechanism choices are grounded in `RESEARCH_2026-07.md` (mid-2026 verification). The triage flow for the resulting artifacts is owned by `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` §4.3; the artifact class by `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (`youtube_source_note`).
 
@@ -137,13 +137,16 @@ decision, takeaway, or approval; impersonates a reserved band; contains a Unicod
 uses an active Obsidian embed that could materialize unvalidated content. This is a finite
 authority lint, not a semantic claims-quality classifier.
 
-Process-local extraction results, the single delivered `summary@2` module, and title-bearing
-candidate paths remain V1 limitations or deliberate choices, not retroactive defects. They may
-change only through the bounded YouTube Source Note v2 child contracts. Those contracts preserve
-immutable raw evidence, first-write-wins candidate notes, and the rule that a candidate is terminal
-only after its note has materialized. Re-extraction or upgrade must create a versioned proposal
-companion rather than overwrite the original candidate or human-authored content. These bounded
-YouTube deliveries do not ship the later v2 modules or change title-bearing paths or persistence.
+YouTube Source Note v2 is delivered and accepted under parent #4107: all twelve child contracts
+(#4108–#4119) and integration slices #5746, #5747 and #5749 are merged, and
+`tests/knowledge_acquisition/test_source_note_quality.py::test_v2_end_to_end_invariant_matrix`
+proves immutable versioned bundle evidence, anchored claims, non-destructive D5 materialization,
+governed overlay admission, bounded frame capture, and no-egress replay together. Extraction
+lineage is durable (#4111), and title-bearing candidate paths remain a deliberate V1 choice. The
+v2 contracts preserve immutable raw evidence, first-write-wins candidate notes, and the rule that
+a candidate is terminal only after its note has materialized. Re-extraction or upgrade creates a
+versioned proposal companion rather than overwriting the original candidate or human-authored
+content.
 The owner revised the D1 frame-capture direction on 2026-09-30; D2–D6 remain as recorded.
 Issue #4118 delivers the bounded YSNV2-11 frame-capture stage (`source_frames.capture_source_frames`)
 under that direction. Issue #5746 wires #4116 moments and that stage into acquisition-time notes:
@@ -168,8 +171,11 @@ Issue #4119 (YSNV2-12) adds a read-only, no-egress quality evaluation of these n
 record, and it is not invoked by acquisition or replay. The evaluation resolves every rendered
 synthesis sentence, claim, moment, and overlay quote against the note's durable lineage. It names
 failed mechanical criteria (evidence lineage, anchor validity, claim entailment, must-capture
-recall) against a versioned gold set. The owner's real must-capture annotations are pending owner
-input under receipt `ysnv2_gold_set_annotation_scope.v1`, and v2 acceptance remains with parent #4107.
+recall) against a versioned gold set. Real-world note quality is not yet measured: the owner's
+must-capture annotations under receipt `ysnv2_gold_set_annotation_scope.v1` and the first
+operator-visible quality run are pending in #5756. Known Defects KD-0A5C9F1AB7EE (router
+thresholds), KD-6BD17B74F8B3 (moment budget uses transcript span) and KD-14B32C6A1CB0 (no
+registry writer for the drained-request scope) stay deferred on #4172.
 
 The portable-source-bundle delivery adds a derived, rebuildable vault transcript and `source.json`
 under the YouTube attachment root (`Sources/YouTube/_attachments` by default). The stable

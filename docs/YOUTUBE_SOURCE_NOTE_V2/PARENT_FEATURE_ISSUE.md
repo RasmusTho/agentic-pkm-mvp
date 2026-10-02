@@ -1,4 +1,4 @@
-State: Active parent feature Issue #4107; authoritative backlog and validation hub. It remains `agent:blocked` until all twelve child Issues and the external profile-contract dependency are delivered.
+State: Parent feature Issue #4107 record; validation hub. All twelve child Issues (#4108–#4119), integration slices #5746, #5747 and #5749, and the external profile-contract dependency (#4944) are delivered; parent acceptance promotes the current-state owner docs, and the owner gold-set quality run continues outside the parent in #5756. The body below preserves the filed Issue contract.
 
 # feature: YouTube Source Note v2 — evidence-anchored review-required source bundles
 
