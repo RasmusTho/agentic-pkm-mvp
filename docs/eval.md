@@ -15,6 +15,33 @@ State: SoT v5.5 baseline (descriptive, opt-in). Eval suites are optional and may
   - **TruLens** for tracing + eval.
   - **promptfoo** for prompt/agent scenario testing and red-teaming (optional CLI tool).
 
+Failure-capture drafts from `UNKNOWN` classifications and schema-violation
+dead letters are reviewed through the existing eval-draft decision flow. A
+promotion records `decided_by`, `decided_at`, and reviewer `notes` in the
+draft's guarded Companion Note. When recording the promotion, a reviewer may
+include exactly one standalone `integration_ref:` line in the notes:
+`integration_ref: golden-case:<case-id>` for a classification case or
+`integration_ref: schema-fixture:<repo-relative-path>::<test-name>` for a
+schema-violation case. This records the intended integration target; it does
+not edit the golden set or test fixture.
+
+Use the read-only reconciliation report to see promoted drafts and whether
+their exact reference resolves in the current repository checkout:
+
+```bash
+python -m app.eval.draft_reconciliation --vault-root <vault-path> --repository-root .
+```
+
+The report lists only promoted drafts. Missing, malformed, duplicate,
+ambiguous, wrong-kind, or unresolved references remain unverified and need
+manual review. A golden case resolves only when its ID occurs exactly once in
+`docs/eval/classification_golden.yaml`; a schema fixture resolves only when
+the repository-relative file contains exactly one matching top-level test
+function. Fixture modules are parsed but never imported or executed. See
+`docs/RUNTIME_CORRECTNESS_KERNEL/FAILURE_TO_EVAL_CAPTURE_LOOP.md :: Reviewer
+surfacing` and the write/version contract in
+`docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`.
+
 ## How eval fits into the test pyramid
 - Classic tests: unit/contract/e2e run via `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha>:eval-baseline --wait-seconds 900 -- pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m "not pg"`.
 - LLM-eval tests: marked with `@pytest.mark.eval` and **not** included in the fast/default suites.

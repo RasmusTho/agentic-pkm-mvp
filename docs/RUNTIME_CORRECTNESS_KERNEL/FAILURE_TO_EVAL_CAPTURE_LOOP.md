@@ -1,6 +1,6 @@
 ---
 name: Failure to Eval Capture Loop
-description: Draft every schema_violation dead-letter and every UNKNOWN classification as an eval-case candidate with full provenance into a human review queue; human confirmation promotes to the golden sets
+description: Draft every schema_violation dead-letter and every UNKNOWN classification as an eval-case candidate with full provenance; a human records the draft decision, and a separate reviewed change integrates it into a golden set or fixture
 task_id: KERNEL-15
 source_anchor: "docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: §5.4"
 parent_capability: RUNTIME_CORRECTNESS_KERNEL
@@ -16,7 +16,8 @@ can_parallelize_with: []
 Eval ground truth in a probabilistic system is accumulated **adjudicated history**, not a-priori
 labels (audit **§5.4**, RQ4). Today dead-letters and misclassifications vanish into logs
 (`outbox.event.dead_lettered` → JSONL; `intent_classifier` `_defaulted` → nothing durable). This task
-closes the loop: every failure becomes a candidate regression test after human adjudication.
+closes the loop by preserving each failure as a candidate for human adjudication and later,
+separately reviewed integration into regression coverage.
 
 ## What This Task Does
 
@@ -33,15 +34,17 @@ closes the loop: every failure becomes a candidate regression test after human a
 - Drafts land in a **file-based human review surface** that *mirrors the shape* of the existing
   pattern (`app/agent_memory/review_queue.py` + `materialize_promoted_memory` in
   `app/agent_memory/materialization.py`): a WriteGuard-gated file, an explicit human-decision
-  promotion step, and no write to the golden set before a promoted decision.
+  promotion step that records the decision on the draft, and no golden-set write as part of that
+  decision. Golden-set or fixture integration is a separate reviewed code change.
   It does **not reuse `MemoryCandidateReviewQueue`** — see "Reviewer surfacing" below for why that
   queue is memory-candidate-specific and an eval-dataset case is a distinct artifact class.
 - Drafting is **WriteGuard-gated** like all vault writes: call
   `app/write_guard.py::WriteGuard.assert_writes_allowed(action)` before the vault write, matching
   `materialize_promoted_memory`'s use of `DEFAULT_WRITE_GUARD`.
-- **No auto-promotion.** Human confirmation promotes a draft into the golden datasets
-  (`classification_case.v1` for UNKNOWN cases from KERNEL-13; a topic-schema fixture for
-  `schema_violation` cases). Adjudication is the ground-truth step.
+- **No auto-promotion.** Human confirmation changes a draft from pending to promoted and records
+  the adjudication. It does not write to a golden dataset or fixture. A separate reviewed change
+  integrates a `classification_case.v1` case or a topic-schema fixture; that integration is the
+  ground-truth step.
 
 ## Concretely
 
@@ -67,10 +70,11 @@ memory-candidate-specific end to end. Every entry is an
 activation-policy / working-context-recall semantics, and a promotion path
 (`materialize_promoted_memory`) that writes a `semantic_memory` note into the agent-memory ledger;
 the companion API projection (`_memory_review_candidate_projection`) hard-requires
-`proposed_memory_type`. An eval-dataset case has no cognitive memory type and promotes into a
-golden-dataset file, not the memory ledger — forcing it into that queue would fabricate a
-`MemoryType` and materialize it as a memory note (a category error). Eval drafts therefore live in
-their own file-based surface (`<system_dir>/eval_drafts/` with `status` frontmatter).
+`proposed_memory_type`. An eval-dataset case has no cognitive memory type; its eventual integration
+destination is a golden-dataset file, not the memory ledger. Forcing it into that queue would
+fabricate a `MemoryType` and materialize it as a memory note (a category error). Eval drafts
+therefore live in their own file-based surface (`<system_dir>/eval_drafts/` with `status`
+frontmatter).
 
 A discoverable *pending-eval-drafts view* (distinct from the memory ledger) is **delivered** (#2871):
 `app.eval.failure_capture.list_pending_drafts` scans `<system_dir>/eval_drafts/*.md` for
@@ -82,6 +86,32 @@ A discoverable *pending-eval-drafts view* (distinct from the memory ledger) is *
 KERNEL-08 (#2770), the `schema_violation` producer; the surfacing view itself is not dormant. The
 review **UI** itself stays out of scope (W7/W8, see below).
 
+Promotion and rejection persist `decided_by`, `decided_at`, and reviewer `notes`
+in the existing draft frontmatter, using the same WriteGuard and observed-byte
+version check as the status change. The decision API returns the same values
+that were written. This keeps decision provenance with the draft and prevents
+a stale concurrent edit from being overwritten.
+
+To track a promoted draft's intended integration, include exactly one
+standalone line in its decision notes, using the form that matches the draft:
+
+- `integration_ref: golden-case:<case-id>` for `classification_case.v1` drafts.
+- `integration_ref: schema-fixture:<repo-relative-path>::<test-name>` for
+  `schema_violation` drafts.
+
+The read-only `python -m app.eval.draft_reconciliation --vault-root
+<vault-path> --repository-root .` report lists promoted drafts only and
+resolves references against the checked-out repository. A golden case is
+verified only when its ID occurs exactly once in
+`docs/eval/classification_golden.yaml`. A schema fixture is verified only
+when the confined repository-relative file contains exactly one matching
+top-level test function; the file is parsed as syntax and never imported or
+executed. Missing, malformed, duplicate, ambiguous, wrong-kind, escaped, and
+not-yet-present references remain unverified. The report never edits a golden
+dataset or fixture; integration remains a separate reviewed code change. Its
+note-write and concurrency contract follows
+`docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`.
+
 ## Acceptance Criteria
 
 - [ ] A `schema_violation` dead-letter produces a draft eval-case companion-note artifact in the
@@ -92,8 +122,9 @@ review **UI** itself stays out of scope (W7/W8, see below).
 - [ ] Draft writes go through WriteGuard; a blocked write-state prevents the draft, asserted through
       the production write path.
       Verify: `tests/eval/test_failure_capture_loop.py::test_draft_is_write_guard_gated` — asserts `WriteGuard.assert_writes_allowed` is invoked from the draft-write entrypoint.
-- [ ] No auto-promotion: a draft is not in the golden dataset until a recorded human decision
-      promotes it.
+- [ ] No auto-promotion: promoting a draft records the human decision but does not itself change
+      the golden dataset or fixture. Integration is a separate reviewed change.
+      Verify: `tests/eval/test_eval_draft_reconciliation.py::test_promoted_unintegrated_draft_is_reported`
       Verify: `tests/eval/test_failure_capture_loop.py::test_no_auto_promotion`
 
 ## How to Verify (Pre-Merge)
@@ -120,7 +151,8 @@ This is the last child of the capability. On merge, drive the parent-issue closu
 ## Related Docs
 
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: §5.4`
-- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `app/write_guard.py`
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `app/write_guard.py`,
+  `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`
 - `app/agent_memory/review_queue.py`, `app/agent_memory/materialization.py` (queue + promote pattern)
 
 ## Related GitHub Issues
