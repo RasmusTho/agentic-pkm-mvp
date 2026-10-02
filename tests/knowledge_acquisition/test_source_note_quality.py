@@ -403,6 +403,30 @@ def test_quality_gate_rejects_unanchored_or_non_entailing_claims(tmp_path: Path,
     assert swapped_report.metrics["must_capture_missed"] == ["synthetic-bad-span"]
     assert evaluate_source_note(clean_note).as_dict()["metrics"]["must_capture_recall"] == "not_evaluated"
 
+    # A multi-line source wording is checked whole: a fabricated continuation line after a real
+    # transcript quote fails claim_entailment instead of riding on the entailed first line.
+    object_store_module._MEMORY_STORE.clear()
+    fabricated = f"{_MATCHING_CUE}\nThey also upload everything to the vendor cloud."
+    _register_extractors(
+        claims={
+            "claims": [
+                _CLAIMS["claims"][0],
+                {
+                    "source_wording": fabricated,
+                    "system_paraphrase": "The source describes local and cloud storage.",
+                    "anchors": [{"segment_index": 1, "start": 2.0, "end": 6.0}],
+                },
+            ]
+        }
+    )
+    _r, _c, multi_path, _cap = _acquire(tmp_path / "multi-line", monkeypatch)
+    multi_note = multi_path.read_text(encoding="utf-8")
+    assert "They also upload everything to the vendor cloud." in multi_note
+    multi = evaluate_source_note(multi_note)
+    assert multi.failed_criteria == (CRITERION_CLAIM_ENTAILMENT,)
+    (multi_failure,) = multi.failures[CRITERION_CLAIM_ENTAILMENT]
+    assert "Local-first knowledge tools" in multi_failure
+
     # Unresolvable lineage is its own failed criterion, never a silent pass.
     meta = _frontmatter(clean_note)
     orphan = clean_note.replace(str(meta["normalized_artifact_id"]), "00000000-0000-0000-0000-000000000000")

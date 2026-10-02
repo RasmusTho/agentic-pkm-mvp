@@ -81,6 +81,7 @@ _SAFE_ITEM_REF = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _SECTION = re.compile(r"^### (.+)$", re.MULTILINE)
 _CLAIM_WORDING = re.compile(r"^- \*\*Source wording:\*\* (.*)$")
 _CLAIM_ANCHORS = re.compile(r"^\s+\*\*Anchors:\*\* (.*)$")
+_CLAIM_FIELD = re.compile(r"^\s+\*\*(?:System paraphrase|Anchors):\*\*")
 _MOMENT_ANCHORS = re.compile(r"^\s+\*\*Transcript anchors:\*\* (.*)$")
 _MOMENT_LINE = re.compile(r"^- \[[0-9:]+\]\(")
 _MODULE_EXCERPT = re.compile(r"^- `\[seg (\d+) · [0-9:]+–[0-9:]+\]` “(.*)”$")
@@ -454,6 +455,10 @@ def _rendered_items(
                 unparsed.append(f"Evidence-anchored claims: {line[:80]}")
             continue
         anchors: tuple[Mapping[str, Any], ...] = ()
+        # A multi-line source wording continues until its paraphrase/anchors field; every
+        # continuation line is part of the verbatim text that must be entailed.
+        wording_lines = [wording.group(1)]
+        in_wording = True
         for follow in claim_lines[index + 1 :]:
             if follow.startswith("- "):
                 break
@@ -461,7 +466,11 @@ def _rendered_items(
             if matched is not None:
                 anchors = _literal_anchors(matched.group(1))
                 break
-        text = wording.group(1).strip()
+            if _CLAIM_FIELD.match(follow):
+                in_wording = False
+            elif in_wording:
+                wording_lines.append(follow)
+        text = " ".join(" ".join(wording_lines).split())
         items.append(EvidenceItem("claim", text, anchors, verbatim=text))
 
     by_anchor = {str(seg.get("anchor")): (i, seg) for i, seg in enumerate(segments) if seg.get("anchor")}
@@ -486,7 +495,13 @@ def _rendered_items(
 
     for title, lines in sections.items():
         overlay = title in {"Interest overlay", "Intresseöverlägg"}
+        # A content-module section is any section rendering at least one module excerpt; every
+        # other bullet in it is unrecognized evidence and fails rather than being ignored.
+        module_section = any(_MODULE_EXCERPT.match(line) for line in lines)
         for line in lines:
+            if module_section and line.startswith("- ") and not _MODULE_EXCERPT.match(line):
+                unparsed.append(f"{title}: {line[:80]}")
+                continue
             excerpt = _MODULE_EXCERPT.match(line)
             if excerpt is not None:
                 # Content-module excerpts are anchored verbatim transcript quotes.
