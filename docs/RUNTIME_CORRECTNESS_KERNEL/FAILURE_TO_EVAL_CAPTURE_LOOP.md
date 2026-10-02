@@ -82,6 +82,32 @@ A discoverable *pending-eval-drafts view* (distinct from the memory ledger) is *
 KERNEL-08 (#2770), the `schema_violation` producer; the surfacing view itself is not dormant. The
 review **UI** itself stays out of scope (W7/W8, see below).
 
+Promotion and rejection persist `decided_by`, `decided_at`, and reviewer `notes`
+in the existing draft frontmatter, using the same WriteGuard and observed-byte
+version check as the status change. The decision API returns the same values
+that were written. This keeps decision provenance with the draft and prevents
+a stale concurrent edit from being overwritten.
+
+To track a promoted draft's intended integration, include exactly one
+standalone line in its decision notes, using the form that matches the draft:
+
+- `integration_ref: golden-case:<case-id>` for `classification_case.v1` drafts.
+- `integration_ref: schema-fixture:<repo-relative-path>::<test-name>` for
+  `schema_violation` drafts.
+
+The read-only `python -m app.eval.draft_reconciliation --vault-root
+<vault-path> --repository-root .` report lists promoted drafts only and
+resolves references against the checked-out repository. A golden case is
+verified only when its ID occurs exactly once in
+`docs/eval/classification_golden.yaml`. A schema fixture is verified only
+when the confined repository-relative file contains exactly one matching
+top-level test function; the file is parsed as syntax and never imported or
+executed. Missing, malformed, duplicate, ambiguous, wrong-kind, escaped, and
+not-yet-present references remain unverified. The report never edits a golden
+dataset or fixture; integration remains a separate reviewed code change. Its
+note-write and concurrency contract follows
+`docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`.
+
 ## Acceptance Criteria
 
 - [ ] A `schema_violation` dead-letter produces a draft eval-case companion-note artifact in the
@@ -120,7 +146,8 @@ This is the last child of the capability. On merge, drive the parent-issue closu
 ## Related Docs
 
 - `docs/audits/SYSTEM_REDESIGN_CORRECTNESS_KERNEL_2026-07-02.md :: §5.4`
-- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `app/write_guard.py`
+- `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`, `app/write_guard.py`,
+  `docs/contracts/OBSIDIAN_KNOWLEDGE_PORT.md`
 - `app/agent_memory/review_queue.py`, `app/agent_memory/materialization.py` (queue + promote pattern)
 
 ## Related GitHub Issues

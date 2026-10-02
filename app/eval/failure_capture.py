@@ -140,6 +140,9 @@ class DraftEvalCase:
     created_at: str
     status: str = DRAFT_STATUS_PENDING
     draft_path: str | None = None
+    decided_by: str | None = None
+    decided_at: str | None = None
+    notes: str | None = None
 
 
 def is_schema_violation_reason(reason: str | None) -> bool:
@@ -379,6 +382,18 @@ def _render_draft_note(draft: DraftEvalCase, *, title: str) -> str:
         },
         "created_at": draft.created_at,
     }
+    if (
+        draft.decided_by is not None
+        or draft.decided_at is not None
+        or draft.notes is not None
+    ):
+        frontmatter.update(
+            {
+                "decided_by": draft.decided_by,
+                "decided_at": draft.decided_at,
+                "notes": draft.notes,
+            }
+        )
     yaml_block = yaml.safe_dump(frontmatter, sort_keys=True, allow_unicode=False).strip()
     payload_json = json.dumps(dict(draft.payload_snapshot), indent=2, sort_keys=True)
     return (
@@ -478,6 +493,9 @@ def _parse_draft_text(
         created_at=str(fm.get("created_at", "")),
         status=str(fm.get("status", DRAFT_STATUS_PENDING)),
         draft_path=str(_draft_path(vault_root, draft_id)),
+        decided_by=fm.get("decided_by") if isinstance(fm.get("decided_by"), str) else None,
+        decided_at=fm.get("decided_at") if isinstance(fm.get("decided_at"), str) else None,
+        notes=fm.get("notes") if isinstance(fm.get("notes"), str) else None,
     )
 
 
@@ -585,6 +603,9 @@ def _decide(
         created_at=draft.created_at,
         status=target_status,
         draft_path=draft.draft_path,
+        decided_by=decided_by,
+        decided_at=decided_at,
+        notes=notes,
     )
     title = f"{_VALID_DECISIONS[target_status].capitalize()}d draft: {draft.kind}"
     content = _render_draft_note(updated, title=title)
