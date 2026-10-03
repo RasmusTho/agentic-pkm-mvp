@@ -1070,9 +1070,11 @@ class CodexCliExecutor:
                     "shell_type": "disabled",
                     "supports_search_tool": False,
                     "tool_mode": None,
-                    "web_search_tool_type": None,
                 }
             )
+            # Codex CLI 0.159.2 rejects an explicit null for this enum-like
+            # catalog field, while treating an omitted field as unavailable.
+            safe_descriptor.pop("web_search_tool_type", None)
             if slug == model and reasoning_effort is not None:
                 supported_efforts = {
                     item["effort"]

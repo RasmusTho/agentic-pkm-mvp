@@ -41,9 +41,10 @@ those hosts and does not depend on SSH into the macOS host. Product Codex reques
 single-purpose executor on the designated macOS host; that executor invokes the host's
 already-authenticated Codex CLI subscription session. Ygg Product VMs and the designated macOS executor share a
 VLAN, so the current Ygg profile uses VLAN as its sole network path. Tailscale, Serve, and a second
-path are not prerequisites for host acceptance or rollout. This remains target state until host
-acceptance is complete. The executor is not a Product API, Product gateway, or general-purpose
-BuilderOps service.
+path are not prerequisites for host acceptance or rollout. The designated Ygg development-host
+acceptance is verified by the sanitized MARR-06 receipt in Issue #5624; persistent Product route
+activation and release-channel rollout remain separate gates. The executor is not a Product API,
+Product gateway, or general-purpose BuilderOps service.
 
 The model route and network path are separate configuration dimensions. Product policy selects the
 logical executor and exact model/capability intent; deployment configuration supplies an ordered

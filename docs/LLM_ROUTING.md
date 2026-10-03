@@ -104,11 +104,12 @@ After preflight, exactly one completion uses the selected path. An ambiguous com
 over another path or switch providers. Provider/model fallback remains a separate explicit policy
 decision.
 
-This is code and configuration support, not live TARS activation. Host-local VLAN settings, gateway
-authorization, the designated-host acceptance receipt, and the release-channel rollout remain
-separate operational gates. Optional generic multi-path adapters do not make Tailscale a current
-Ygg dependency. The model route can use Luna through the Codex CLI once Product policy selects that
-route and the VLAN acceptance gates pass.
+This is code and configuration support, not persistent Product-route or release-channel activation.
+The designated Ygg development-host VLAN settings, gateway authorization, Luna/Codex CLI route, and
+sanitized acceptance receipt are verified by Issue #5624. That receipt proves the bounded dev-host
+path only; release-channel rollout remains a separate operational gate. Optional generic multi-path
+adapters do not make Tailscale a current Ygg dependency. Product policy can select Luna through the
+Codex CLI, but a PR merge or host acceptance alone does not change the deployed Product default.
 
 System health reports whether the configured workload's logical capabilities are available, not
 whether an unselected provider is installed or reachable. Adapter readiness and declared

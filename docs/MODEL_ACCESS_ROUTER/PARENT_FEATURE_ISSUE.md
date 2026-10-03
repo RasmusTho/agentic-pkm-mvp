@@ -1,4 +1,4 @@
-State: Open parent validation hub Issue #5618; lifecycle agent:blocked. Its contract was reconciled on 2026-10-02 to the ten-slice ledger and VLAN-only Ygg host profile. It remains blocked until child delivery, authorized VLAN host acceptance, and rollout evidence are complete.
+State: Open parent validation hub Issue #5618; lifecycle agent:blocked. Its contract was reconciled on 2026-10-02 to the ten-slice ledger and VLAN-only Ygg host profile. The designated-host VLAN acceptance is evidenced by the validator-accepted MARR-06 receipt in Issue #5624; the parent remains blocked for remaining child delivery, integrated capability validation, and MARR-07 rollout evidence.
 
 # Model Access Router Parent Feature Issue
 
@@ -9,7 +9,7 @@ This document is the local contract for the feature issue that will validate the
 Title: [ModelAccessRouter] model-access-router: shared Product and Builder access with governed discovery
 
 Issue: #5618 (open, agent:blocked).
-Initial state: agent:blocked; the parent waits on child work and host acceptance and is never agent:ready.
+Initial state: agent:blocked; the parent waits on child work and host acceptance and is never agent:ready. MARR-06 host acceptance is complete; this does not satisfy the separate parent-level integration or release-rollout gates.
 
 ## Validation Hub Responsibilities
 
