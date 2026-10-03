@@ -17,6 +17,16 @@ from llm_contract import ModelAccessRoute, ModelCapabilities, ModelResolutionReq
 
 _LOGICAL_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,255}$")
 PREFLIGHT_MAX_AGE = timedelta(seconds=30)
+_CAPABILITY_TIER_RANK = {"economy": 0, "standard": 1, "frontier": 2}
+_REASONING_EFFORT_RANK = {
+    "minimal": 0,
+    "low": 1,
+    "medium": 2,
+    "high": 3,
+    "xhigh": 4,
+    "max": 5,
+    "ultra": 6,
+}
 
 
 class ModelAccessRollbackError(ValueError):
@@ -93,6 +103,38 @@ def _satisfies(
     )
 
 
+def _supports_intent_quality(
+    route: ModelAccessRoute,
+    request: ModelResolutionRequest,
+) -> bool:
+    verified = route.request.intent
+    requested = request.intent
+    if (
+        _CAPABILITY_TIER_RANK[verified.capability_tier]
+        < _CAPABILITY_TIER_RANK[requested.capability_tier]
+    ):
+        return False
+    if (
+        _REASONING_EFFORT_RANK[verified.reasoning_effort]
+        < _REASONING_EFFORT_RANK[requested.reasoning_effort]
+    ):
+        return False
+    # A single candidate cannot prove that it differs from a second effective target.
+    return requested.independence != "distinct_effective_target"
+
+
+def _bind_current_request(
+    route: ModelAccessRoute,
+    request: ModelResolutionRequest,
+) -> ModelAccessRoute | None:
+    try:
+        return ModelAccessRoute.model_validate(
+            {**route.model_dump(), "request": request.model_dump()}
+        )
+    except ValueError:
+        return None
+
+
 def plan_model_access_rollback(
     candidates: Sequence[PinnedRouteVerification],
     *,
@@ -119,7 +161,7 @@ def plan_model_access_rollback(
     if not isinstance(embedding_identity, EmbeddingIdentity):
         raise ValueError("embedding_identity must be the current embedding identity")
 
-    eligible: list[PinnedRouteVerification] = []
+    eligible: list[tuple[PinnedRouteVerification, ModelAccessRoute]] = []
     for candidate in candidates:
         if not isinstance(candidate, PinnedRouteVerification):
             raise ValueError("rollback candidates must be validated pinned-route records")
@@ -131,25 +173,32 @@ def plan_model_access_rollback(
             continue
         if instant - preflight_at > preflight_max_age:
             continue
+        if not _supports_intent_quality(candidate.route, current_request):
+            continue
         if not _satisfies(candidate.route.capabilities, current_request):
             continue
-        eligible.append(candidate)
+        rebound_route = _bind_current_request(candidate.route, current_request)
+        if rebound_route is None:
+            continue
+        eligible.append((candidate, rebound_route))
 
     if not eligible:
         raise ModelAccessRollbackError(
             "no fresh, verified, pinned route satisfies the current capability intent"
         )
 
-    latest_verified_at = max(item.verified_at.astimezone(timezone.utc) for item in eligible)
+    latest_verified_at = max(item.verified_at.astimezone(timezone.utc) for item, _route in eligible)
     latest = [
-        item for item in eligible if item.verified_at.astimezone(timezone.utc) == latest_verified_at
+        (item, route)
+        for item, route in eligible
+        if item.verified_at.astimezone(timezone.utc) == latest_verified_at
     ]
-    identities = {(item.route.model_dump_json(), item.path_policy_ref) for item in latest}
+    identities = {(route.model_dump_json(), item.path_policy_ref) for item, route in latest}
     if len(identities) != 1:
         raise ModelAccessRollbackError("latest compatible pinned route is ambiguous")
-    selected = min(latest, key=lambda item: item.verification_receipt_ref)
+    selected, rebound_route = min(latest, key=lambda pair: pair[0].verification_receipt_ref)
     return ModelAccessRollbackPlan(
-        route=selected.route,
+        route=rebound_route,
         path_policy_ref=selected.path_policy_ref,
         verification_receipt_ref=selected.verification_receipt_ref,
         embedding_identity=embedding_identity,

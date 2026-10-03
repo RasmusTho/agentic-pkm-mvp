@@ -31,11 +31,13 @@ def _request(
     *,
     output_schema_ref: str | None = None,
     determinism_required: bool = False,
+    capability_tier: str = "frontier",
+    reasoning_effort: str = "high",
 ) -> ModelResolutionRequest:
     return ModelResolutionRequest(
         intent=ModelAccessIntent(
-            capability_tier="frontier",
-            reasoning_effort="high",
+            capability_tier=capability_tier,
+            reasoning_effort=reasoning_effort,
             determinism_required=determinism_required,
             output_schema_ref=output_schema_ref,
             independence="none",
@@ -51,6 +53,7 @@ def _request(
 def _route(
     model: str,
     *,
+    request: ModelResolutionRequest | None = None,
     structured_output: bool = True,
     native_tools: bool = True,
     system_prompt_channel: bool = True,
@@ -58,9 +61,8 @@ def _route(
     embedding_dimension: int | None = None,
     preflight_status: str = "passed",
 ) -> ModelAccessRoute:
-    request = _request(ModelCapabilityRequirements())
     resolved = ResolvedModelAccess(
-        request=request,
+        request=request or _request(ModelCapabilityRequirements()),
         provider="openai",
         model=model,
         adapter_id="codex_cli",
@@ -107,10 +109,12 @@ def _candidate(
     embedding_dimension: int | None = None,
     pinned: bool = True,
     path_policy_ref: str = "path.ygg_vlan_primary",
+    verified_request: ModelResolutionRequest | None = None,
 ) -> PinnedRouteVerification:
     return PinnedRouteVerification(
         route=_route(
             model,
+            request=verified_request,
             structured_output=structured_output,
             native_tools=native_tools,
             system_prompt_channel=system_prompt_channel,
@@ -142,7 +146,10 @@ def test_rollback_restores_last_pinned_capability_compatible_route() -> None:
         now=NOW,
     )
 
-    assert plan.route == latest.route
+    assert plan.route.model_dump(exclude={"request"}) == latest.route.model_dump(
+        exclude={"request"}
+    )
+    assert plan.route.request == _request(ModelCapabilityRequirements(native_tools=True))
     assert plan.path_policy_ref == latest.path_policy_ref
     assert plan.verification_receipt_ref == latest.verification_receipt_ref
     assert plan.embedding_identity is identity
@@ -155,6 +162,63 @@ def test_rollback_fails_closed_without_a_fresh_compatible_preflight() -> None:
         plan_model_access_rollback(
             [candidate],
             current_request=_request(ModelCapabilityRequirements(native_tools=True)),
+            embedding_identity=EmbeddingIdentity(
+                provider="ollama", model="nomic-embed-text", dim=768
+            ),
+            now=NOW,
+        )
+
+
+def test_rollback_binds_the_current_request_to_the_selected_route() -> None:
+    verified_request = _request(ModelCapabilityRequirements())
+    current_request = _request(ModelCapabilityRequirements(native_tools=True))
+    candidate = _candidate(
+        "verified-without-tools-required",
+        verified_minutes_ago=1,
+        verified_request=verified_request,
+    )
+
+    plan = plan_model_access_rollback(
+        [candidate],
+        current_request=current_request,
+        embedding_identity=EmbeddingIdentity(provider="ollama", model="nomic-embed-text", dim=768),
+        now=NOW,
+    )
+
+    assert plan.route.request == current_request
+    assert plan.route.request.requirements.native_tools is True
+
+
+def test_rollback_rejects_a_route_verified_for_lower_intent_quality() -> None:
+    candidate = _candidate(
+        "economy-low",
+        verified_minutes_ago=1,
+        verified_request=_request(
+            ModelCapabilityRequirements(),
+            capability_tier="economy",
+            reasoning_effort="minimal",
+        ),
+    )
+
+    with pytest.raises(ModelAccessRollbackError, match="no fresh"):
+        plan_model_access_rollback(
+            [candidate],
+            current_request=_request(ModelCapabilityRequirements()),
+            embedding_identity=EmbeddingIdentity(
+                provider="ollama", model="nomic-embed-text", dim=768
+            ),
+            now=NOW,
+        )
+
+
+def test_rollback_rejects_developer_mapping_for_literal_system_requirement() -> None:
+    candidate = _candidate("developer-channel", verified_minutes_ago=1)
+    current_request = _request(ModelCapabilityRequirements(literal_system_role_required=True))
+
+    with pytest.raises(ModelAccessRollbackError, match="no fresh"):
+        plan_model_access_rollback(
+            [candidate],
+            current_request=current_request,
             embedding_identity=EmbeddingIdentity(
                 provider="ollama", model="nomic-embed-text", dim=768
             ),
