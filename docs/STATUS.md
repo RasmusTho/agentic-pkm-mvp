@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-09-29 (bounded DevUI, Sources-zone, classification-evaluation, BWS PostgreSQL, BWS-03 repository implementation, and GOVPROF-01–03 acceptance reviews; repository and GitHub delivery evidence only, no deployment or vault-data verification)
+Last reviewed: 2026-10-03 (bounded MARR-06 host-acceptance and MARR-07 release-channel review; repository and accepted GitHub receipt evidence only, no dev/test/prod deployment or vault-data verification)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -39,7 +39,14 @@ Last verified against (SQ-04 candidate): PR #5174, `app/standing_questions/evide
 live test-channel and owner-UAT evidence remain absent.
 Last verified against (MARR-08 repository code): Issue #5635, merged commit
 `824b82760fa00cd289dadaded301838abf845527`, and the focused Model Access Router service/client
-tests on 2026-09-23; repository proof only, with no live host, Serve, or caller-migration evidence.
+tests on 2026-09-23; repository proof only at that checkpoint, with no live host, Serve, or
+caller-migration evidence then recorded.
+Last verified against (MARR-06 host acceptance): Issue #5624 and PR #5759, merged as
+`bdee7772dd6b55dc681d0204db3e18d0e1ed908d`; the accepted v3 receipt records one successful Luna
+Codex CLI completion through the sole configured `ygg_vlan_primary` path, authenticated preflight,
+and pre-inference refusal of unsupported native tools. This is designated-host acceptance only;
+persistent Product routing and dev/test/prod rollout remain separate. Tailscale and Ollama were not
+used or required.
 Last verified against (DevUI supervised continuity): Issue #5655,
 `app/builderops/devui_issue_work.py`, `app/builderops/devui_sources.py`, and
 `tests/builderops/test_devui_issue_work.py` on 2026-09-24. The managed Focus read carries an
@@ -68,11 +75,12 @@ Neither the implementation nor its fake-adapter/static-render proof changes the 
 posture. The detailed contract remains in `docs/CLOUD_SECRET_PROVISIONING/README.md` and
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Linux channel secret provisioning`.
 
-The MARR-08 implementation (#5635) adds a bounded Product client and one host-side completion
-operation that dispatches an exact Product-selected route to Codex CLI or Ollama. This is repository
-code only: Product callers are not migrated, the Mac service and Tailscale Serve capability are not
-activated, and no live acceptance receipt exists. The current operational claim therefore remains
-Ollama-only on the Mac mini; this code does not establish a live Codex route or fallback.
+At the 2026-09-23 MARR-08 repository checkpoint, Issue #5635 had added a bounded Product client and
+one host-side completion operation that dispatches an exact Product-selected route to Codex CLI or
+Ollama. At that checkpoint, Product callers were not migrated and no live acceptance receipt had
+been recorded, so the repository implementation alone did not establish a live Codex route or
+fallback. The later, VLAN-only designated-host acceptance is recorded above; it did not persist a
+Product default or perform a dev/test/prod rollout.
 
 Status snapshot now includes SoT baseline + release-line fields and intent/event counters (`promote.intent.created`, `panel.intent.executed`, `watcher.run`, ingest runs by plane). Code still exposes `sot_forward_line_version` / `feature_line_version` as the v5.6 release-line marker, but GitHub issue truth treats v5.6 as delivered rather than active. `watcher_runs` now counts watcher audit events from the registry watcher as well as the legacy snapshot watcher, while runtime health still relies on heartbeat + tick logs.
 

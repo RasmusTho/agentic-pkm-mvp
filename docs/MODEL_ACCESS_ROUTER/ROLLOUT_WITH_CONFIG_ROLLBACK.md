@@ -22,6 +22,8 @@ Prepare the dev → test → prod rollout under the existing release-channel ski
 
 Actual test/prod channel mutations, deployment, and rollback use the established operator-acknowledged release workflow. This task does not embed deployment into the Model Access Router code PR.
 
+This child slice implements and tests the pure rollback planner and protects the existing production acknowledgment gate. Live dev/test stage receipts and final production health/rollback evidence remain an integrated acceptance gate owned by parent Issue #5618; merging this child does not claim those runtime stages are complete.
+
 ## Concretely
 
 Before a stage advances, its candidate ref, route and path configuration, migration/config delta, health checks, designated-host receipt, and exact rollback target are recorded. If a gate fails, the release workflow restores the last verified pinned capability-compatible route and path policy, then runs the owning verification procedure.
@@ -32,20 +34,17 @@ A valid PR or designated-host smoke does not prove that a release channel is rea
 
 ## Acceptance Criteria
 
-- [ ] Dev and test rollout evidence is attached to the governing parent and shows the exact candidate SHA, route, and rollback target.
-  - Verify: runtime receipt: model_access_router.staged_rollout.v1
 - [ ] Rollback restores only the last verified pinned route and path policy that satisfies the current capability intent, and preserves embedding identity; no provider is assumed.
   - Verify: `tests/release/test_model_access_router_rollback_plan.py::test_rollback_restores_last_pinned_capability_compatible_route`
+  - The planner is pure: it requires a current no-inference preflight, selects only a pinned route with a prior verification receipt, and carries the existing embedding identity through unchanged. Applying a plan remains owned by the release-channel workflow.
 - [ ] Prod is not advanced unless the current prepare/execute/verify release workflow has its required operator acknowledgment.
   - Verify: `tests/release/test_model_access_router_rollback_plan.py::test_prod_transition_requires_operator_acknowledged_release_plan`
-- [ ] Final prod health or rollback verification is recorded without claiming completion from a PR merge alone.
-  - Verify: runtime receipt: model_access_router.staged_rollout.v1
+  - The production gate remains the existing `execute-promotion` / `promote-test-to-prod` operator-review gate; this Model Access Router change does not create a second deployment authority.
 
 ## How to Verify (Pre-Merge)
 
 - Run pytest -q tests/release/test_model_access_router_rollback_plan.py.
-- Prepare the candidate with the applicable release-channel skill. Execute no test/prod mutation until that skill has the complete operator-acknowledged plan.
-- Attach the stage and final verification receipts to the parent issue.
+- After this child merges, prepare/execute/verify dev and test under the applicable release-channel skills and attach candidate-bound stage and final verification receipts to parent Issue #5618. Do not close the parent from the PR merge alone.
 
 ## Out of Scope
 
