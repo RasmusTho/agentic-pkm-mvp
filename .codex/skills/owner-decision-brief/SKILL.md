@@ -65,6 +65,11 @@ repo-local method's contract-dominance preflight, then delegate terminal routing
    select the complete Direct Repair block, workflow contract, owner document, protected invariant,
    or operator gate that applies. Do not manufacture an Issue or acceptance-criterion dependency
    for work governed by another authority surface.
+   For an apparent Issue-imposed technical choice or owner-approval step, apply
+   `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion` first. Establish its source
+   and purpose; its wording alone is not proof that the owner reserved the decision. Execute
+   `issue-maintenance-change-control :: Repair technical constraints and resume` when the established
+   mandate permits the repair, then return to the caller without sending an owner ask.
 2. Keep an established contract dominant over implementation or integration drift. A missing
    implementation, integration or rebase conflict, source drift, or failed recovery is technical
    evidence, not proof that the intended value is undecided. Remove options that would silently

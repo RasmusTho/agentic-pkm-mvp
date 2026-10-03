@@ -127,6 +127,10 @@ no consolidated formal SRD; do not treat a plan or feature spec as shipped runti
 
 **Stop conditions** — stop and resolve before coding if any of these is true:
 
+Stop the affected operation, then execute authorized diagnosis or contract maintenance and resume.
+For technical plan restrictions, use `issue-maintenance-change-control :: Repair technical constraints
+and resume`; a missing prerequisite is not automatically a session stop or owner decision.
+
 - Authority boundary is unclear (plan/spec doc treated as shipped runtime without code/test evidence).
 - Task touches `prod`, `stable`, migrations, vault paths, DSNs, or watcher execution without reading `docs/RELEASE_CHANNELS/README.md` and `docs/ENVIRONMENTS.md` first.
 - Task depends on target-state or spec docs as shipped behavior but no code path, passing test, or owner-doc acceptance record confirms the behavior is live.
@@ -165,7 +169,9 @@ If no BuilderOps record is needed, record `BuilderOps routing: none` with the re
 handoff. Never append to `docs/learning-log.md` except as an explicit compatibility fallback when a
 BuilderOps write is unavailable.
 
-Treat every canonical Issue contract section (`.codex/skills/_shared/ISSUE_CONTRACT.md`) as binding for the governing slice issue.
+Bind execution to the current, reconciled Issue contract. Apply
+`.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion` to distinguish required outcomes
+and boundaries from engineering defaults; repair contradictory plan details before coding past them.
 
 When a `deliver-issue-set` handoff carries a Phase 1 `bounded_fast` execution-routing shadow
 receipt, treat it as evidence only. Confirm its Issue authority, worker-context hash, and immutable
@@ -210,7 +216,7 @@ handoff changes still follow the explicit commands in this skill.
   - work with the smallest safe implementation surface
   - work that reduces architectural fragmentation or rollout drift
 - Do not pick a lower-priority issue while a clearly ready higher-priority issue is available unless you can justify the exception explicitly.
-- If the chosen issue is stale, malformed, drifted, or too large, stop implementation and hand off to Issue maintenance before coding.
+- If the chosen issue is stale, malformed, drifted, or too large, suspend implementation, execute authorized `issue-maintenance-change-control`, validate/read back the repaired contract, and resume before coding.
 - If the chosen issue is clearly feature-level, references multiple child slices, or carries the full feature acceptance path, stop implementation and route through `feature-breakdown` or Issue maintenance before coding.
 
 ## Issue Context Ownership And Bounded Delegation
@@ -369,7 +375,10 @@ Project reconciliation, when desired, is a separate cold-path projection repair.
 
 ### Action: Issue is Blocked (Mid-Implementation)
 
-If work becomes blocked before or during implementation:
+Before changing lifecycle state, execute `issue-maintenance-change-control :: Repair technical
+constraints and resume` for a repairable contract restriction or stale dependency. Keep the active
+owner's valid claim during bounded repair. Use the following transition only for a residual technical
+blocker after classification; a genuine owner gate follows `owner-decision-brief` instead:
 
 1. **Add blocker label:**
    ```bash
@@ -435,8 +444,10 @@ scope; it never adds steps to the implementation hot path.
     `:: Builder Learning, Evaluation, And TCD Governance Loop` for learning or TCD surfaces)
   - `AGENTS.md`, `CLAUDE.md`, `.codex/AGENTS.md`, or `.codex/skills/**` changed →
     `docs/development/AGENT_INSTRUCTION_GOVERNANCE.md :: Maintenance rules`
-- Stay strictly within Issue scope.
-- Do not expand scope without updating the Issue contract first.
+- Stay within the authorized outcome and boundaries. Treat necessary internal wiring, helpers, tests,
+  and corrected implementation assumptions under `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion`.
+- Do not code past conflicting Issue scope: execute bounded contract maintenance first, then resume.
+  A genuine outcome/authority expansion still requires its governing authorization.
 - Preserve architecture boundaries and event/outbox compatibility where relevant.
 - Update docs in the same change if behavior, contracts, or architecture change.
 - If the work turns a roadmap/plan item into shipped reality, update the owner doc and rewrite roadmap/plan wording so it no longer reads as pending.
@@ -539,7 +550,7 @@ When continuing through anchor drift:
    before reading source-anchored docs and owning code paths; a refusal preserves the explicit
    owner-document route and all mandatory workflow reads.
 8. If anchor drift exists, resolve it using the rules above before coding.
-9. **Verify acceptance verifiability**: every Acceptance Criterion must carry a resolvable `Verify:` target. If any AC lacks one, stop implementation and route through `issue-maintenance-change-control` to repair the contract before coding.
+9. **Verify acceptance verifiability**: every Acceptance Criterion must carry a resolvable `Verify:` target. If any AC lacks one, suspend implementation, execute `issue-maintenance-change-control :: Repair technical constraints and resume`, validate/read back the repair, and resume. Supported new behavioral-test targets need not exist until implementation; required closure evidence must exist and pass.
 10. **Coverage for behavioral ACs**: resolve each `Verify:` target using existing tests first. One meaningful test may cover several ACs. Add a reproducing test before a bug fix when practical; add tests for uncovered new behavior. A behavior-preserving refactor may use existing passing tests and does not require an artificial failing test. Do not add tests solely to mirror implementation or pin documentation wording. For enforcement ACs, keep `.codex/skills/_shared/ISSUE_CONTRACT.md :: Verify: marker rule` in view: when the AC is about runtime wiring, config, schema, ports, compose/install behavior, or service integration, the verification must reach the real production path or an integration-equivalent path, not only a stubbed dependency. If a stub is still needed for isolation, add at least one real-path assertion that proves the path under test.
 10a. **Failure-mode completeness (conditional)**: apply this check when the slice reads or writes durable state, aggregates multiple records, crosses a host/provider/config boundary, or adds a refusal or invariant. Before implementation, name one credible malformed, unavailable, stale, partial-failure, or replay/restore case and add a focused production-path test that proves the applicable parts of this contract:
     - a bad item does not suppress unrelated healthy state where isolation is required;
@@ -617,18 +628,15 @@ Lead with the human summary; include later sections only when they have content,
 9. Doc Writeback Performed
 10. Risks / Follow-ups
 
-If blocked, do not guess. Report the blocker only if one of these is true:
+Before reporting blocked, execute authorized maintenance and bounded technical diagnosis. For an
+Issue dependency, identify the still-missing concrete prerequisite and why independent verification
+cannot proceed; an open Issue or preferred order alone does not block this slice. Technical design
+uncertainty calls for investigation or TCD capability escalation before any owner ask.
 
-- missing doc authority after checking nearest authoritative passages
-- stale or conflicting source docs that change scope materially
-- unresolved architecture ambiguity
-- dependency on another Issue
-
-If blocked:
-
-- do not code past the blocker
-- correct labels and Issue comments so they reflect the blocked reality
-- recommend Issue maintenance when the task contract itself needs correction
+Do not code past a remaining authority or verification gap. Record truthful lifecycle/action state
+and the next recovery action only for the residual blocker. A terminal handoff must satisfy
+`docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`; merely
+recommending maintenance does not satisfy this skill.
 
 Do not block solely because an exact anchor label is absent if the governing doc passages still make the bounded task clear.
 
