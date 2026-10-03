@@ -5,14 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from app.config.paths import VaultRootMisconfiguredError
-from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.errors import KnowledgeAtomicExchangeNotApplied, KnowledgeWriteConflict
 from app.knowledge.multiwriter import NoteClass, WriteOperation, classify_note_in_vault
 from app.rebuildability.product_total_loss import parse_bounded_frontmatter
 from app.services.companion_note import companion_path
 from app.services.note_uuid import ensure_note_uuid
 from app.vault.paths import get_vault_sources_dir_rel
-from app.write_guard import WritesBlockedError
 from scripts.yaml_roundtrip import load_frontmatter
 
 
@@ -87,13 +85,10 @@ def resolve_note_artifact_identity(
     if heal_missing_uuid:
         try:
             healed_uuid = ensure_note_uuid(contained_artifact_path, vault_root=resolved_root)
-        except (
-            OSError,
-            ValueError,
-            VaultRootMisconfiguredError,
-            WritesBlockedError,
-            KnowledgeWriteConflict,
-        ):
+        except KnowledgeAtomicExchangeNotApplied:
+            # UUID healing is optional for this read.  This type is emitted
+            # only when the initial exchange was proven not to have applied;
+            # all other write failures remain fail-closed and propagate.
             healed_uuid = ""
         if healed_uuid:
             return ArtifactIdentity(

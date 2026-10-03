@@ -68,6 +68,18 @@ Events MUST be idempotent across retries.
 - **Concurrent note edits:** MUST fail safe on version mismatch and avoid corrupting vault files.
 - **Retry storms:** MUST be absorbed by deterministic IDs and consumer dedup; retries should not produce new side effects.
 
+## Mimer / Vault concurrency
+
+Companion workspace reads may attempt optional UUID healing for an eligible note that
+lacks a UUID. If the *initial* atomic exchange is refused with a typed, proven
+not-applied capability result (including the Linux `RENAME_EXCHANGE` `EINVAL`
+case), the read may return an `unresolved_missing_uuid` identity with no artifact
+ID and unchanged canonical bytes. This is a read degradation, not write success.
+
+Unknown initial I/O, ordinary write conflicts, post-exchange verification,
+rollback, late recovery, and cleanup failures are indeterminate or failed writes
+and MUST propagate. They must never be relabeled as an unresolved successful read.
+
 ## Validation and tests
 Current validation coverage includes tests for:
 

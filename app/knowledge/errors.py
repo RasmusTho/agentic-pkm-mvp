@@ -18,6 +18,16 @@ class KnowledgeCapabilityError(KnowledgeError):
     """Raised when a selected adapter cannot perform an operation."""
 
 
+class KnowledgeAtomicExchangeNotApplied(KnowledgeCapabilityError):
+    """An initial atomic exchange was refused before either name changed.
+
+    This is deliberately narrower than a general capability or write error.  A
+    caller may only treat it as a read-path degradation after the initial
+    exchange syscall itself has refused the operation; verification, rollback,
+    and recovery failures remain indeterminate write outcomes.
+    """
+
+
 class KnowledgeDependencyError(KnowledgeError):
     """Raised when runtime dependencies for the selected adapter are missing."""
 
@@ -38,6 +48,7 @@ __all__ = [
     "KnowledgeError",
     "KnowledgeConfigError",
     "KnowledgeCapabilityError",
+    "KnowledgeAtomicExchangeNotApplied",
     "KnowledgeDependencyError",
     "KnowledgeTransportError",
     "KnowledgeWriteConflict",
