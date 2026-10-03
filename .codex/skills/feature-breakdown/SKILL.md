@@ -197,6 +197,11 @@ can_parallelize_with: [{task name list}]
 back into the frontmatter in the same delivery, so a filed task doc never carries an empty or
 stale value.
 
+Use `prerequisites` and `depends_on` only for concrete hard prerequisites, with the unavailable
+artifact/interface/precondition and reason in the task text. Keep preferred serial scheduling out
+of those edges. Apply `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion` to task
+specs as well as Issues; distinguish sourced boundaries from revisable engineering defaults.
+
 ### Task file structure
 
 Each task specification must contain these sections:
@@ -215,7 +220,8 @@ Each task specification must contain these sections:
 
 AC verifiability rule for task specs:
 
-- Every behavioral AC names the test that proves it (path and test name). New tests are acceptable — the name is the spec-level commitment.
+- Every behavioral AC names a concrete test (new tests are acceptable). The behavior and proof strength
+  are the commitment; maintain changed test paths/names under `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion`.
 - Every non-behavioral AC names a concrete observable target (doc writeback anchor, roadmap diff, runtime receipt).
 - When a behavioral AC claims an **enforcement guarantee** — a guard, gate, or invariant that must hold on the live runtime path (for example "unreviewed memory cannot authorize writeback") — the named test must assert the guard is **invoked from its production call site**, not only that the guard function returns the right value in isolation. "Module exists + unit-tested" does not satisfy an enforcement AC; "wired into the runtime path and asserted there" does. The matching `## How to Verify (Pre-Merge)` step must execute that call-site assertion.
 - If an AC cannot name either, the specification is still too coarse. Refine or split the task before creating issues.
@@ -251,7 +257,8 @@ creating issues.
 - Keep owner docs stable while evidence is still accumulating.
 - Open or update an owner-doc PR only when acceptance changes the supported truth the repo claims.
 - Keep implementation tasks independently mergeable. If a task cannot be verified on its own, the breakdown is still too coarse.
-- If the execution order cannot be explained as one flat ordered list, the source-level boundary is still too large or needs a plan before breaking down.
+- Explain a practical delivery order while keeping independent slices independently ready. A preferred
+  flat schedule is not a dependency contract; require a concrete reason for each blocking edge.
 - One task specification can map to many GitHub issues. The spec is the source of truth, not the issue.
 - Parent issues are validation hubs during delivery. After child delivery and repo-verifiable acceptance, close the parent and split future observation into a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work.
 

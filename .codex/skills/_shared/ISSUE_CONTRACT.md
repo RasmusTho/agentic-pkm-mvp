@@ -30,6 +30,49 @@ Issue bodies must contain exactly these sections:
 Parent feature issues additionally carry `## Implementation Tasks`, `## Verification Path`, and
 `## Validation / Acceptance Path` (see `feature-breakdown`).
 
+## Outcome and implementation discretion
+
+Make the required outcome precise without freezing the agent's engineering plan. Apply
+`AGENTS.md :: Agency default` and `decision-quality :: Current mandate and delegated choices`:
+
+- Preserve the requested outcome, meaningful acceptance, explicit user decisions/exclusions, and
+  applicable security, privacy, authority, persistence, compatibility, budget, and operator gates.
+  State the source and purpose of a restrictive constraint in the existing Issue sections.
+- Treat proposed internal files, helper structure, test names, decomposition, and execution order
+  as implementation defaults unless a governing source makes that particular choice necessary.
+  Optimize those choices for TCD, including owner time, rework, defects, and delay. A narrow file
+  list is not automatically an exhaustive write allowlist; an explicit authorized allowlist is.
+- Label engineering suggestions as such in `Scope`, `Constraints`, or `Suggested Validation`.
+  Do not invent owner-approval steps, single-attempt authorizations, exact implementation choices,
+  or extra acceptance gates merely because an agent preferred them while planning. Distinguish a
+  technical stop-loss budget from an authorization limit and from a ban on replaying an uncertain
+  effect. Existing explicit limits remain binding; fresh attempts require valid effect authority.
+- Authorship alone establishes neither permission nor disposability. An agent may have transcribed
+  an accepted requirement. For old unclassified wording, inspect the current mandate, cited owner
+  documents and relevant decision history; do not infer approval or revocation from account names,
+  labels, silence, missing provenance, or the phrase "owner decision" in an Issue.
+
+When evidence supports a necessary or lower-TCD implementation within the same outcome and
+authority, execute `issue-maintenance-change-control :: Repair technical constraints and resume`.
+Update a conflicting contract before implementation; this is not permission to ignore it. Preserve
+the outcome and proof strength, update affected source specifications through their owning workflow,
+and resume after validation/readback. A genuine expansion of outcome, authority, or reserved risk
+remains subject to its existing gate. Do not weaken acceptance to match an incomplete solution.
+
+### Dependencies and verification intent
+
+- A blocking dependency must name the unavailable artifact, interface, or precondition and explain
+  why this slice cannot be implemented and meaningfully verified without it. An open linked Issue,
+  parent/child relationship, planning order, or later enhancement is not sufficient. Keep preferred
+  serial scheduling separate from hard prerequisite edges and recheck each edge against live evidence.
+- Commit to the behavior and strength of proof. A guessed test path/name may be replaced through
+  maintenance by equivalent or stronger coverage of the same outcome and applicable production path;
+  update the AC's `Verify:` pointer and its execution commands together. Never remove a failing AC,
+  substitute a stub for required integration evidence, or waive required CI to make work pass.
+- At readiness, the supported new behavioral-test form may name a test to be implemented. At
+  closure, that target must exist and the required proof must actually pass. Non-test file targets
+  still follow the existing file-resolution rule below; this section adds no target grammar.
+
 ## Issue self-sufficiency rule
 
 An Issue must be self-sufficient on info and context. Every agent or human who picks it up must be
@@ -89,7 +132,8 @@ declaration. The parent→child direction is owned by the epic delivery ledger
 Every Acceptance Criterion declares its verification inline with a `Verify:` marker:
 
 - Behavioral AC → concrete test pointer: `Verify: \`tests/<path>::<test_name>\``. The test may be
-  new (to be written by the builder); the name is the spec-level commitment.
+  new (to be written by the builder); the behavior and proof are the commitment. Maintain a changed
+  path/name under `## Outcome and implementation discretion` before relying on its replacement.
 - Enforcement AC (a behavioral AC asserting a guard, gate, or invariant holds on the live path)
   → the `Verify:` test must exercise the **production call site**, not the guard in isolation:
   `Verify: \`tests/<path>::<test_name>\`` and the test asserts `<guard>` is invoked from
@@ -166,7 +210,7 @@ parent-validation authority, not to this closing slice.
 <1-2 sentences of background; link the governing doc, record, or PR>
 
 ## Scope
-<What changes. Name files and artifacts.>
+<Bounded outcome and expected files/artifacts; distinguish implementation defaults from explicit boundaries.>
 
 ## Source Anchors
 - `<path> :: <section or stable anchor ID>`
@@ -183,7 +227,7 @@ parent-validation authority, not to this closing slice.
 - Boundary risk: <the one thing that must not cross a boundary because of this change, or none>
 
 ## Constraints
-- <what must not change>
+- <required boundary, with source/purpose; label revisable engineering defaults separately>
 
 ## Acceptance Criteria
 - [ ] <bounded outcome>
