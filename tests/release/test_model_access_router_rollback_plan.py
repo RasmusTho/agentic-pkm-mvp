@@ -110,6 +110,7 @@ def _candidate(
     pinned: bool = True,
     path_policy_ref: str = "path.ygg_vlan_primary",
     verified_request: ModelResolutionRequest | None = None,
+    preflight_status: str = "passed",
 ) -> PinnedRouteVerification:
     return PinnedRouteVerification(
         route=_route(
@@ -120,6 +121,7 @@ def _candidate(
             system_prompt_channel=system_prompt_channel,
             deterministic_execution=deterministic_execution,
             embedding_dimension=embedding_dimension,
+            preflight_status=preflight_status,
         ),
         path_policy_ref=path_policy_ref,
         verification_receipt_ref=f"receipt.{model}",
@@ -169,6 +171,41 @@ def test_rollback_fails_closed_without_a_fresh_compatible_preflight() -> None:
         )
 
 
+def test_rollback_fails_closed_when_fresh_preflight_did_not_pass() -> None:
+    candidate = _candidate(
+        "preflight-not-run",
+        verified_minutes_ago=1,
+        preflight_status="not_run",
+    )
+
+    with pytest.raises(ModelAccessRollbackError, match="no fresh"):
+        plan_model_access_rollback(
+            [candidate],
+            current_request=_request(ModelCapabilityRequirements()),
+            embedding_identity=EmbeddingIdentity(
+                provider="ollama", model="nomic-embed-text", dim=768
+            ),
+            now=NOW,
+        )
+
+
+def test_rollback_fails_closed_for_ambiguous_latest_candidates() -> None:
+    candidates = [
+        _candidate("latest-a", verified_minutes_ago=1),
+        _candidate("latest-b", verified_minutes_ago=1),
+    ]
+
+    with pytest.raises(ModelAccessRollbackError, match="ambiguous"):
+        plan_model_access_rollback(
+            candidates,
+            current_request=_request(ModelCapabilityRequirements()),
+            embedding_identity=EmbeddingIdentity(
+                provider="ollama", model="nomic-embed-text", dim=768
+            ),
+            now=NOW,
+        )
+
+
 def test_rollback_binds_the_current_request_to_the_selected_route() -> None:
     verified_request = _request(ModelCapabilityRequirements())
     current_request = _request(ModelCapabilityRequirements(native_tools=True))
@@ -189,14 +226,14 @@ def test_rollback_binds_the_current_request_to_the_selected_route() -> None:
     assert plan.route.request.requirements.native_tools is True
 
 
-def test_rollback_rejects_a_route_verified_for_lower_intent_quality() -> None:
+def test_rollback_rejects_a_route_verified_for_lower_capability_tier() -> None:
     candidate = _candidate(
         "economy-low",
         verified_minutes_ago=1,
         verified_request=_request(
             ModelCapabilityRequirements(),
             capability_tier="economy",
-            reasoning_effort="minimal",
+            reasoning_effort="high",
         ),
     )
 
