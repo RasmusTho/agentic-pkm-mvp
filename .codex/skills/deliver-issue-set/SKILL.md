@@ -299,6 +299,12 @@ live repository/GitHub state whether a small, source-authorized remediation can 
 claimed, or continued. Typical examples include a malformed configuration issue, an omitted channel
 binding, or a validation precondition whose owning source already identifies the intended repair.
 
+Include overly restrictive engineering plans, stale `Verify:` pointers, and unsupported dependency
+edges in that diagnosis. Apply `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion`
+and execute `issue-maintenance-change-control :: Repair technical constraints and resume`; do not
+leave an agent-fixable item parked merely because a worker reported it blocked. Retain the current
+write owner and continue independent authorized slices while an actual prerequisite is unavailable.
+
 For any vault-binding remediation, run `owner-decision-brief :: Local vault-binding preflight` before
 creating, repairing, claiming, or continuing that remediation — even when no owner question is yet
 needed. A vault-binding repair may proceed only when that preflight independently establishes its
@@ -378,7 +384,7 @@ An issue may be made ready only when all are true:
 - non-behavioral ACs name concrete doc anchors, roadmap diffs, runtime receipts, or closure evidence
 - `Suggested Validation` executes the `Verify:` targets
 - its `## SBS Impact` block is present, complete, and consistent with the issue's Product/Runtime vs Builder System vs boundary classification, per `docs/architecture/SBS_OPERATING_MODEL.md` §5 (Definition of Ready) — every field resolved, with "none"/"unaffected" stated explicitly rather than left blank or as a template placeholder (see [SBS classification and impact gate](#sbs-classification-and-impact-gate))
-- no dependency, human decision, or authority ambiguity remains
+- no unsatisfied hard prerequisite, genuinely reserved human decision, or unresolved authority ambiguity remains
 - repo reality does not already satisfy the issue
 
 Parent feature issues remain validation hubs unless explicitly scoped as one executable slice.
@@ -515,7 +521,12 @@ For every issue, map each AC to:
 - whether proof is pre-merge slice verification or post-merge feature validation
 - owner-doc promotion condition, if any
 
-Do not mark an issue ready if any `Verify:` target is missing, unresolvable, skipped, xfailed, excluded from relevant CI, or disconnected from `Suggested Validation`.
+At readiness, require each AC to declare a grammar-resolvable `Verify:` target and connected
+`Suggested Validation`; the supported new behavioral-test form may name a file/test the builder will
+add, per `.codex/skills/_shared/ISSUE_CONTRACT.md :: Verify: marker rule`. Do not demand completed implementation
+as a pickup prerequisite. At closure, every required target must exist and its proof must pass;
+skipped, xfailed, disconnected, or excluded required coverage does not count. Repair stale target
+names through maintenance without weakening the outcome or applicable production-path/CI proof.
 
 ## Output Format
 

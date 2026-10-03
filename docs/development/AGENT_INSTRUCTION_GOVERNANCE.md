@@ -23,6 +23,10 @@ It governs development-time instruction surfaces only. It does not define runtim
   workflow entrypoints. Full skill discoverability belongs only in the linted Skill routing index.
 - The Skill routing section must contain an entry for every immediate repo-local skill directory.
 - Repo-local skills may summarize or sequence existing workflow steps, but they must not override Issue scope, acceptance criteria, PR linkage, or CI/validation requirements.
+- Within the current mandate, repair revisable engineering plans through `issue-maintenance-change-control`
+  before resuming; `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion` owns the
+  skill-facing distinction. Preserve required outcomes, sourced boundaries, proof strength, and
+  existing write ownership; agent authorship alone never makes a constraint disposable.
 - Keep repo-local skills narrowly scoped, reversible, and aligned with the existing GitHub issue-first delivery model.
 - Temporal-doc maintenance skills should prefer audit-first behavior, refresh owner/current-state docs before roadmap wording, and use explicit verification anchors rather than implied freshness.
 

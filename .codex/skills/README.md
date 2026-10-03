@@ -74,6 +74,10 @@ human involvement is reserved for genuine exceptions, not transitions between sk
    another effect, then execute its authorized recovery route; an operation stop is not automatically
    a session stop. Before suspending unfinished work, apply
    `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
+   For restrictive engineering plans or unsupported Issue dependencies, apply
+   `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion` and execute
+   `issue-maintenance-change-control :: Repair technical constraints and resume` before treating
+   the item as blocked. Preserve real outcome/authority boundaries and existing write ownership.
 7. Run `klart` only at the Builder session closeout boundary. End after the authorized outcome is
    verified, or preserve and report a documented stop-loss/explicit user stop. An actual authorized
    owner transfer must follow the existing lifecycle handoff contract and continue in the accepting

@@ -62,7 +62,8 @@ Use maintenance skills instead of this lane when the work is a repair, audit, or
 - Do not create micro-issues or churn Project state for routine maintenance notes that can be batched into one bounded repair item.
 - If a docs item is larger than one bounded implementation issue or clearly needs post-merge validation before owner docs should change, route it through `feature-breakdown` instead of flattening it into one issue.
 - Do not create Issues for vague aspirations, broad cleanup, philosophy, or already delivered work.
-- If an item is too large, split it into multiple bounded Issues with explicit dependency order.
+- If an item is too large, split it into bounded Issues; distinguish hard prerequisites from a
+  preferred delivery order under `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion`.
 
 For every candidate doc item, determine exactly one state:
 
@@ -132,6 +133,11 @@ issue.
 - Do not rely on unmerged inline doc edits as the primary backlog signal.
 
 Each new Issue must use the canonical contract shape from `.codex/skills/_shared/ISSUE_CONTRACT.md`: the title shape, the exact section list (including `## Applies learning (optional)`), and the `Verify:` marker rule, with labels only from `.codex/skills/_shared/LABEL_TAXONOMY.md`.
+
+Apply `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion` while drafting. State
+observable outcomes and sourced boundaries; label internal design/test/path choices as revisable
+defaults. Resolve ordinary technical choices under TCD instead of adding an owner-decision AC.
+Before creating a blocked item, try bounded contract repair and verify its actual prerequisite.
 
 Skill-specific rule: if an AC cannot carry a resolvable `Verify:` target, the AC is not crisp enough — refine the AC, split the Issue, or route the docs item through `feature-breakdown` before marking it `agent:ready`.
 

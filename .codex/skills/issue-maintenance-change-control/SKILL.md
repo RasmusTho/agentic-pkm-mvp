@@ -43,6 +43,7 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 ## Use this skill when
 
 - an Issue is stale, malformed, or too large
+- an agent-authored implementation restriction, dependency, or proof pointer obstructs the same authorized outcome
 - `Source Anchors` are wrong, missing, or too broad
 - docs changed and the Issue no longer matches them
 - the work is partially delivered already
@@ -162,6 +163,35 @@ If any of the above is missing or unclear, first try to resolve it from the SoT 
 - relabel with the canonical taxonomy from `.codex/skills/_shared/LABEL_TAXONOMY.md` only
 - when Project repair is explicitly in scope, add missing cards and reconcile Status through
   `.codex/skills/_shared/PROJECT_STATUS_OPERATIONS.md`
+
+## Repair technical constraints and resume
+
+Apply `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion` before reporting a
+contract defect, technical choice, or dependency as a blocker. This is bounded maintenance within
+the current task mandate, not permission to override an accepted requirement.
+
+1. Read the live Issue, governing source passages, relevant decision history, and active owner/claim.
+   Identify the required outcome and the source/purpose of the disputed restriction. Resolve accessible
+   facts first; a planner's label or unsupported "owner must decide" sentence does not establish a gate.
+2. Choose a proportionate engineering resolution under TCD. Reuse existing coverage, adjust internal
+   paths/helpers, repair missing or stale proof pointers, or remove a disproven dependency when this
+   preserves the outcome, evidence strength, explicit exclusions, and authority/risk boundaries. Make
+   the technical choice as the delegated agent; do not ask the owner to repeat it. If no safe choice
+   is yet supported, investigate or escalate capability within the existing stop-loss budget.
+3. Record the old restriction, its source, evidence for the change, chosen replacement, and preserved
+   outcome/proof in the existing Issue/PR maintenance receipt. Keep this short; add no new schema,
+   approval round, tracking Issue, or decision registry for routine plan repair. Amend source specs
+   through their owning workflow when they carry the restriction; Issue wording cannot overrule them.
+4. Re-read immediately before writing, preserve unrelated edits, and stop a conflicting rewrite if
+   the live body or ownership changed. Respect foreign claims: coordinate through the current owner
+   or return a concrete amendment to that owner instead of taking over the work. Submit a file-backed
+   body update and verify it under `## Authoritative Issue body edits and verification`. Only add
+   `agent:ready` for unclaimed executable work after strict validation; retain a valid active claim
+   during its owner's repair and resume without re-claiming or ready-label churn.
+5. Resume the suspended implementation or issue-set step now. If a real prerequisite remains absent,
+   use the existing blocker/action receipt with its concrete next recovery action. Apply the canonical
+   escalation classifier only to the residual gap; human involvement requires an actual reserved
+   decision or missing authority, not an inconvenient plan or exhausted technical attempt count.
 
 ## Authoritative Issue body edits and verification
 
