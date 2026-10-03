@@ -82,31 +82,34 @@ Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`,
 ### Provider-neutral capability health and network paths (accepted target)
 
 Model choice and cross-host network path are separate configuration layers. The Product client now
-resolves `profile.codex_remote_host` through the ordered profiles in
-`config/model_access/executor_network_paths.yaml`: `ygg_vlan_primary`, then
-`tailscale_fallback`. The profile order and host-local environment-variable references are checked
-in; endpoint values, host identities, CA bundles, and client certificates remain on the host.
-Provider/model policy does not choose an endpoint or network adapter.
+resolves `profile.codex_remote_host` through the configured profiles in
+`config/model_access/executor_network_paths.yaml`. The active Ygg profile contains only
+`ygg_vlan_primary`; no Tailscale endpoint, Serve setup, or fallback is required for acceptance or
+rollout. Host-local environment-variable references are checked in; endpoint values, host
+identities, CA bundles, and client certificates remain on the host. Provider/model policy does not
+choose an endpoint or network adapter.
 
 Before completion, the path router runs no-inference catalog and route-preflight requests. It may
 advance to the next configured path only for `PATH_UNAVAILABLE`, `CONNECT_TIMEOUT`,
 `PREFLIGHT_TIMEOUT`, or `PATH_AUTHENTICATION_FAILED`. Common Product authorization denial, malformed
 requests, route/capability mismatch, and missing path configuration fail closed. Once a non-200 HTTP
 status is received, a stalled, disconnected, or oversized error body preserves that status; only a
-fully decoded explicit path-local error code can authorize another path. The VLAN ingress
-uses mutually authenticated HTTPS to a host-local RFC1918 IPv4 or IPv6 unique-local address literal;
-DNS names are rejected so a public endpoint cannot receive completion content. Its gateway must map
-the authenticated caller to the same Product channel/action capability contract used by Tailscale
-Serve, strip caller-supplied capability headers, and inject the trusted claim. The executor backend
-remains loopback-bound.
+fully decoded explicit path-local error code can authorize another configured path. The active Ygg
+profile has no second path, so VLAN failure is terminal. The VLAN ingress uses mutually
+authenticated HTTPS to a host-local RFC1918 IPv4 or IPv6 unique-local address literal; DNS names
+are rejected so a public endpoint cannot receive completion content. Its gateway maps the
+authenticated caller to the Product channel/action capability contract, strips caller-supplied
+capability headers, and injects the trusted claim. The executor backend remains loopback-bound.
 After preflight, exactly one completion uses the selected path. An ambiguous completion cannot retry
 over another path or switch providers. Provider/model fallback remains a separate explicit policy
 decision.
 
-This is code and configuration-schema support, not live TARS activation. Host-local VLAN/Tailscale
-settings, gateway authorization, the designated-host acceptance receipt, and the release-channel
-rollout remain separate operational gates. The model route can use Luna through the Codex CLI once
-its Product policy selects that route and those gates pass.
+This is code and configuration support, not persistent Product-route or release-channel activation.
+The designated Ygg development-host VLAN settings, gateway authorization, Luna/Codex CLI route, and
+sanitized acceptance receipt are verified by Issue #5624. That receipt proves the bounded dev-host
+path only; release-channel rollout remains a separate operational gate. Optional generic multi-path
+adapters do not make Tailscale a current Ygg dependency. Product policy can select Luna through the
+Codex CLI, but a PR merge or host acceptance alone does not change the deployed Product default.
 
 System health reports whether the configured workload's logical capabilities are available, not
 whether an unselected provider is installed or reachable. Adapter readiness and declared

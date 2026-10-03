@@ -289,7 +289,7 @@ else:
             "slug", "tool_mode", "shell_type", "apply_patch_tool_type",
             "supports_search_tool", "experimental_supported_tools",
             "multi_agent_version", "node_repl_disabled",
-            "node_repl_auto_review_required", "web_search_tool_type",
+            "node_repl_auto_review_required",
             "model_messages",
             "include_apps_usage_instructions", "include_plugin_usage_instructions",
             "include_skills_usage_instructions",
@@ -1188,7 +1188,7 @@ def test_execution_is_ephemeral_pinned_bounded_and_single_target(
         assert surface["multi_agent_version"] is None
         assert surface["node_repl_disabled"] is True
         assert surface["node_repl_auto_review_required"] is False
-        assert surface["web_search_tool_type"] is None
+        assert "web_search_tool_type" not in surface
         assert surface["include_apps_usage_instructions"] is False
         assert surface["include_plugin_usage_instructions"] is False
         assert surface["include_skills_usage_instructions"] is False
@@ -1490,6 +1490,7 @@ def test_current_cli_bundled_descriptor_schema_passes_no_inference_preflight(
     assert safe_descriptor["shell_type"] == "disabled"
     assert safe_descriptor["experimental_supported_tools"] == []
     assert safe_descriptor["model_messages"] == {}
+    assert "web_search_tool_type" not in safe_descriptor
 
     binary = _fake_cli(
         tmp_path / "codex-0.158.0",

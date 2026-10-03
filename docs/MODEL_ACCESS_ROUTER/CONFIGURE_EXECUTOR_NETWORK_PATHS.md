@@ -1,6 +1,6 @@
 ---
-name: Configure VLAN-primary and Tailscale-fallback executor paths
-description: Specify config-driven VLAN-first executor routing with private Tailscale fallback, independent of model/provider selection.
+name: Configure executor network paths
+description: Define the VLAN-only Ygg executor path and retain optional config-driven path adapters independently of model/provider selection.
 task_id: MARR-09
 source_anchor: docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: D2, D3
 parent_capability: MODEL_ACCESS_ROUTER
@@ -12,18 +12,19 @@ depends_on: [MARR-01, MARR-02, MARR-05, MARR-08]
 ## Purpose
 
 Separate how Product reaches a remote model executor from which model/provider the executor uses.
-For the Ygg deployment, select the designated macOS executor over the shared VLAN first and use the
-configured private Tailscale path only when a no-inference connectivity or preflight check shows
-that the VLAN path is unavailable.
+The current Ygg deployment selects the designated macOS executor over the shared VLAN. VLAN is the
+only configured or required path; Tailscale is not part of current acceptance or rollout.
 
 ## Contract
 
 - A logical executor profile is independent of network transport, endpoint address, and model
   provider. Product model policy names the logical executor and exact route; deployment config names
   an ordered list of network path profiles.
-- The Ygg environment configures the VLAN profile first and Tailscale Serve profile second. Both
-  resolve through the same path-adapter interface. Concrete addresses, host identities, and secrets
-  remain in host-local config and do not enter Product settings, source code, or receipts.
+- The checked-in Ygg environment configures only `ygg_vlan_primary`. The shared path-adapter
+  interface can accept additional paths when a future deployment explicitly configures them; no
+  Tailscale endpoint, Serve profile, grant, or fallback is required here. Concrete addresses, host
+  identities, and secrets remain in host-local config and do not enter Product settings, source
+  code, or receipts.
 - The path adapter checks connectivity and performs route-bound preflight without inference. It may
   advance to the next configured path only before completion and only for the same logical executor,
   exact model, reasoning effort, and capability intent. Failover is limited to these typed,
@@ -34,10 +35,11 @@ that the VLAN path is unavailable.
   capability, route mismatch, missing or invalid path configuration, and common-policy
   authorization failure cannot be hidden by trying another path. The decision and reason code
   distinguish path authentication from common Product authorization.
-- Every path authenticates the caller and authorizes the same Product channel and operation-specific
-  action. VLAN membership, source IP, or request-body claims alone do not authorize the request.
-  The Tailscale adapter validates its configured Serve-forwarded application capability. The
-  executor backend remains loopback-bound; Funnel and public ingress are forbidden.
+- Every configured path authenticates the caller and authorizes the same Product channel and
+  operation-specific action. VLAN membership, source IP, or request-body claims alone do not
+  authorize the request. An optional Tailscale adapter, when explicitly configured, validates its
+  Serve-forwarded application capability. The executor backend remains loopback-bound; public
+  ingress is forbidden.
 - The VLAN private-HTTPS adapter accepts only an HTTPS origin using a literal IPv4 address in
   RFC1918 space or a literal IPv6 unique-local address. DNS names are rejected so a host-local
   endpoint typo cannot send completion content to a public host. Tailscale Serve uses its separate
@@ -50,42 +52,39 @@ that the VLAN path is unavailable.
 - Invalid common authorization, mismatched preflight, or an exhausted path list fails closed with a
   sanitized reason code.
 
-Illustrative configuration shape (schema and filenames are implementation work):
+The active Ygg profile is VLAN-only. Its checked-in shape is:
 
 ```yaml
 executor_path_policies:
-  product_codex:
-    order: [ygg_vlan_primary, tailscale_fallback]
+  profile.codex_remote_host:
+    order: [ygg_vlan_primary]
 
 path_profiles:
   ygg_vlan_primary:
     adapter: private_https_ingress
     endpoint_ref: host_config.ygg_codex_vlan
-    authentication_profile_ref: host_config.ygg_vlan_auth
-    caller_policy_ref: policy.product_channel_actions
-  tailscale_fallback:
-    adapter: tailscale_serve_https
-    endpoint_ref: host_config.ygg_codex_tailnet
-    authentication_profile_ref: host_config.ygg_tailscale_auth
+    authentication_profile_ref: host_config.ygg_vlan_mutual_tls
     caller_policy_ref: policy.product_channel_actions
 ```
 
 The references above are logical placeholders, not checked-in endpoint or credential values.
+Additional adapter profiles and ordered failover remain generic capabilities, but must be configured
+explicitly before use; they are not implicit Ygg dependencies.
 
 ## Acceptance Criteria
 
 - [ ] Configuration can order multiple named path profiles for one logical executor without adding
   transport or endpoint branches to model/provider policy.
   - Verify: `tests/model_access/test_executor_network_policy.py::test_path_order_is_configuration_driven`
-- [ ] Typed VLAN `PATH_UNAVAILABLE`, `CONNECT_TIMEOUT`, `PREFLIGHT_TIMEOUT`, or
-  `PATH_AUTHENTICATION_FAILED` selects the configured Tailscale path while preserving the exact
-  executor, model, effort, and capability intent.
+- [ ] The generic path router uses the next path only when an additional compatible path is
+  explicitly configured and a typed path-local failure occurs before completion; the current Ygg
+  profile contains no second path.
   - Verify: `tests/model_access/test_executor_network_policy.py::test_only_typed_path_local_failures_use_next_path`
 - [ ] Common authorization denial, malformed request, route mismatch, missing path configuration,
   and capability mismatch fail closed without trying another path.
   - Verify: `tests/model_access/test_executor_network_authorization.py::test_terminal_preflight_failures_do_not_use_another_path`
-- [ ] Both VLAN and Tailscale paths enforce the same Product channel/action authorization contract;
-  source IP or VLAN membership alone is rejected.
+- [ ] Every configured path enforces the same Product channel/action authorization contract; the
+  current VLAN-only profile rejects source-IP or VLAN-membership-only authorization.
   - Verify: `tests/model_access/test_executor_network_authorization.py::test_paths_require_channel_and_action_authorization`
 - [ ] An ambiguous completion result does not retry over another path or dispatch a second model
   completion.
@@ -96,7 +95,7 @@ The references above are logical placeholders, not checked-in endpoint or creden
 
 ## Out of Scope
 
-- Activating VLAN listeners, Tailscale grants, Serve, host services, or firewalls.
+- Activating host services, listeners, or firewall policy.
 - Provisioning credentials or changing Product/model policy.
 - Selecting a different model/provider after a path failure.
 - Production deployment or release-pointer changes.

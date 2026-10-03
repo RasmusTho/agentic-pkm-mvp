@@ -1,4 +1,4 @@
-State: Accepted target-state decision (owner request, 2026-09-22; D2 and D3 amended by owner direction on 2026-09-27). Architecture and delivery authority only; the described router, transports, discovery, Product migration, host profile, and rollout are not shipped by this ADR.
+State: Accepted target-state decision (owner request, 2026-09-22; D2 and D3 amended by owner direction on 2026-10-02). Architecture and delivery authority only; the described router, transports, discovery, Product migration, host profile, and rollout are not shipped by this ADR.
 Doc role: Decision record (ADR)
 Authority: Extends ADR-0063 and ADR-0064 for shared routing contracts, Codex CLI subscription access from Product, configurable network-path selection, and provider-neutral capability health. Does not merge Product and Builder policy, credential, registry, receipt, or execution authority.
 Owner: Architecture spine / LLM boundary
@@ -8,7 +8,7 @@ Source of truth: This ADR plus the [capability specification](../MODEL_ACCESS_RO
 # ADR-0066: Shared model-access facade with separate policy authorities and governed catalog discovery
 
 **Date:** 2026-09-22
-**Status:** Accepted target state (owner-directed 2026-09-22; amended 2026-09-27)
+**Status:** Accepted target state (owner-directed 2026-09-22; amended 2026-09-27 and 2026-10-02)
 
 ## Context
 
@@ -40,33 +40,33 @@ The Product runtime remains on its designated Linux hosts. It does not start a C
 those hosts and does not depend on SSH into the macOS host. Product Codex requests reach a
 single-purpose executor on the designated macOS host; that executor invokes the host's
 already-authenticated Codex CLI subscription session. Ygg Product VMs and the designated macOS executor share a
-VLAN, so the VLAN path is primary. A configured private Tailscale path may be used as fallback when
-the VLAN path fails its no-inference connectivity/preflight check. This remains target state until
-host acceptance is complete. The executor is not a Product API, Product gateway, or general-purpose
-BuilderOps service.
+VLAN, so the current Ygg profile uses VLAN as its sole network path. Tailscale, Serve, and a second
+path are not prerequisites for host acceptance or rollout. The designated Ygg development-host
+acceptance is verified by the sanitized MARR-06 receipt in Issue #5624; persistent Product route
+activation and release-channel rollout remain separate gates. The executor is not a Product API,
+Product gateway, or general-purpose BuilderOps service.
 
 The model route and network path are separate configuration dimensions. Product policy selects the
 logical executor and exact model/capability intent; deployment configuration supplies an ordered
-set of named path profiles, for example `ygg_vlan_primary` followed by
-`tailscale_fallback`. Each profile resolves its endpoint and transport outside model policy and
-application code. Concrete addresses, machine identities, and credentials remain host-local and
-are not committed. Path selection must not silently change the model, provider, reasoning effort,
-or requested capability.
+set of named path profiles. The current Ygg configuration contains only `ygg_vlan_primary`. The
+generic path adapter may support additional profiles, including Tailscale, when a deployment
+explicitly configures them; no such profile is active or required for Ygg. Each profile resolves its
+endpoint and transport outside model policy and application code. Concrete addresses, machine
+identities, and credentials remain host-local and are not committed. Path selection must not
+silently change the model, provider, reasoning effort, or requested capability.
 
-Each path must authenticate the caller and authorize the same Product channel and operation-specific
-actions (`complete`, `preflight`, or `catalog`). The VLAN's presence on a private segment is not
-caller authorization. The VLAN ingress uses its configured authenticated identity mechanism and
-maps it to the common channel/action capability contract. The Tailscale fallback uses a narrowly
-scoped application-capability grant forwarded by Serve; Serve strips caller-supplied capability
-headers and injects only the granted capability selected for forwarding. The supported Serve
-version must include app-capability forwarding (currently documented for Tailscale v1.92+). Each
-ingress rejects missing, malformed, or wrong-channel/action authorization. Ingress proxies may
-expose their configured private listeners, but the executor backend remains bound exclusively to
-loopback. Funnel and public listeners are forbidden. Host-local processes remain inside the
-executor host's trust boundary. The network profiles, identity mapping, service activation, and
-endpoint bindings are operator-owned host configuration and are not checked into Git. If neither
-configured path can establish authorization, the route fails closed; no source-IP-only trust or
-unscoped shared bearer token is substituted.
+Each configured path must authenticate the caller and authorize the same Product channel and
+operation-specific actions (`complete`, `preflight`, or `catalog`). The VLAN's presence on a private
+segment is not caller authorization. The VLAN ingress uses its configured authenticated identity
+mechanism and maps it to the common channel/action capability contract. If a deployment later
+explicitly configures the optional Tailscale adapter, it uses a narrowly scoped Serve-forwarded
+application-capability grant. Each configured ingress rejects missing, malformed, or wrong-channel/
+action authorization. Ingress proxies may expose their configured private listeners, but the
+executor backend remains bound exclusively to loopback. Public listeners are forbidden. Host-local
+processes remain inside the executor host's trust boundary. The active VLAN profile, identity
+mapping, service activation, and endpoint bindings are operator-owned host configuration and are
+not checked into Git. If the configured path cannot establish authorization, the route fails closed;
+no source-IP-only trust or unscoped shared bearer token is substituted.
 
 The executor exposes only bounded, versioned catalog, preflight, and model-execution operations. It
 does not accept arbitrary argv, shell commands, workspace paths, files, MCP servers, or caller-chosen
@@ -100,13 +100,14 @@ The existing codex_subscription adapter name remains a compatibility alias for M
 
 ### D3 — Network-path failover is preflight-only and preserves the selected route
 
-Before completion, the client may test configured network paths in order using no-inference
-connectivity and route preflight. A failed VLAN path may select the configured Tailscale path only
-for the same executor, model, and capability intent. The path change is recorded as transport
-provenance, not provider/model fallback. The Product acceptance profile uses Luna through the
-Codex CLI; Ollama health, installation, model download, or fallback is not a prerequisite for this
-route. Provider or model fallback is a separate owner policy and remains disabled unless explicitly
-configured and authorized.
+Before completion, the client may test explicitly configured network paths in order using
+no-inference connectivity and route preflight. It may select another path only when one is
+configured and the failure is typed and path-local, preserving the same executor, model, and
+capability intent. The current Ygg profile contains one VLAN path, so it has no network-path
+fallback. Path selection is transport provenance, not provider/model fallback. The Product
+acceptance profile uses Luna through the Codex CLI; Tailscale and Ollama health, installation, model
+download, or fallback are not prerequisites for this route. Provider or model fallback is a
+separate owner policy and remains disabled unless explicitly configured and authorized.
 
 Path unavailability, connect/preflight timeout, and failure of the path-specific authentication
 mechanism may advance to the next configured profile before completion. A caller denied by the
@@ -186,7 +187,7 @@ Embedding identity remains in its existing subsystem and is not routed through t
 1. Amend this ADR only through the normal docs-authoring/PR path and publish the linked capability specifications.
 2. Implement contract, facade, local Codex executor, configured network-path adapters, catalog, capability-oriented health, and Product migration slices in dependency order with fake-provider tests.
 3. Keep host paths and sessions out of Git; do not download Ollama models or provision API credentials as part of these slices.
-4. Under a separately authorized host/network operation, produce a designated-host acceptance receipt covering VLAN-primary reachability, configured Tailscale fallback, equivalent channel/action authorization on both paths, loopback-only executor backend, Codex version/auth in the interactive login session, Luna route, capability-oriented health, trusted-instruction channel mapping, and rejected tool-capability requests. The receipt must show that typed, recoverable VLAN path failures select the Tailscale path for the same route before completion, terminal common-policy/request/capability failures do not fail over, and an ambiguous completion never retries.
+4. Under the current owner authorization recorded on Issue #5624, produce a designated-host receipt for the current VLAN-only profile. It covers VLAN mTLS authorization, loopback-only executor backend, Codex version/auth in the interactive login session, Luna route, capability-oriented health, trusted-instruction channel mapping, and rejected tool-capability requests. The exact configured/selected path is `[ygg_vlan_primary]`; no Tailscale, Serve, or fallback evidence is required. Each distinct acceptance request requires a fresh no-inference catalog and exact-route preflight, is sent once, and is never replayed or automatically retried; no provider/path fallback occurs after dispatch.
 5. Plan and execute dev → test → prod only through the release-channel skills and their operator-acknowledged gates. A config rollback restores the last pinned route; this ADR authorizes no deployment by itself.
 
 ## Related decisions and owner docs

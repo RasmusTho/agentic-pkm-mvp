@@ -155,6 +155,122 @@ def test_acceptance_receipt_is_route_bound_and_secret_free(
         validate_acceptance_receipt(json.dumps(endpoint_model), json.dumps(expected))
 
 
+def test_vlan_only_receipt_validates_without_tailscale_evidence() -> None:
+    expected = _expected_route()
+    expected["configured_path_profiles"] = ["ygg_vlan_primary"]
+    receipt = _passed_receipt()
+    receipt["configured_path_profiles"] = ["ygg_vlan_primary"]
+    receipt["path_authorization"] = [
+        {
+            "path_profile": "ygg_vlan_primary",
+            "channel_authorized": True,
+            "action_authorized": True,
+        }
+    ]
+    receipt.pop("fallback_preflight")
+
+    result = validate_acceptance_receipt(json.dumps(receipt), json.dumps(expected))
+
+    assert result.status == "passed"
+    assert result.missing_prerequisites == ()
+
+
+def test_configured_unavailable_vlan_is_incomplete_only_before_completion() -> None:
+    expected = _expected_route()
+    expected["configured_path_profiles"] = ["ygg_vlan_primary"]
+    receipt = {
+        "receipt_type": "model_access_router.macos_executor_acceptance.v3",
+        "status": "incomplete",
+        "route": expected["route"],
+        "catalog_snapshot_hash": _CATALOG_HASH,
+        "executor_profile": "product_codex_executor",
+        "configured_path_profiles": ["ygg_vlan_primary"],
+        "selected_path_profile": None,
+        "path_selection_reason": "not_selected",
+        "completion_dispatched": False,
+        "missing_prerequisites": ["vlan_path_unavailable"],
+    }
+
+    result = validate_acceptance_receipt(json.dumps(receipt), json.dumps(expected))
+
+    assert result.status == "incomplete"
+    assert result.missing_prerequisites == ("vlan_path_unavailable",)
+
+    receipt["completion_dispatched"] = True
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(json.dumps(receipt), json.dumps(expected))
+
+
+def test_incomplete_vlan_only_receipt_rejects_unconfigured_fallback_evidence() -> None:
+    expected = _expected_route()
+    expected["configured_path_profiles"] = ["ygg_vlan_primary"]
+    receipt = {
+        "receipt_type": "model_access_router.macos_executor_acceptance.v3",
+        "status": "incomplete",
+        "route": expected["route"],
+        "catalog_snapshot_hash": _CATALOG_HASH,
+        "executor_profile": "product_codex_executor",
+        "configured_path_profiles": ["ygg_vlan_primary"],
+        "selected_path_profile": None,
+        "path_selection_reason": "not_selected",
+        "completion_dispatched": False,
+        "missing_prerequisites": ["codex_cli_unavailable"],
+    }
+
+    receipt_with_fallback_preflight = {
+        **receipt,
+        "fallback_preflight": _passed_receipt()["fallback_preflight"],
+    }
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(
+            json.dumps(receipt_with_fallback_preflight), json.dumps(expected)
+        )
+
+    receipt_with_unconfigured_selection = {
+        **receipt,
+        "selected_path_profile": "tailscale_fallback",
+    }
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(
+            json.dumps(receipt_with_unconfigured_selection), json.dumps(expected)
+        )
+
+    receipt_with_unconfigured_authorization = {
+        **receipt,
+        "path_authorization": [
+            {
+                "path_profile": "tailscale_fallback",
+                "channel_authorized": True,
+                "action_authorized": True,
+            }
+        ],
+    }
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(
+            json.dumps(receipt_with_unconfigured_authorization), json.dumps(expected)
+        )
+
+
+def test_incomplete_fallback_receipt_rejects_unconfigured_attempted_path() -> None:
+    expected = _expected_route()
+    receipt = {
+        "receipt_type": "model_access_router.macos_executor_acceptance.v3",
+        "status": "incomplete",
+        "route": expected["route"],
+        "catalog_snapshot_hash": _CATALOG_HASH,
+        "executor_profile": "product_codex_executor",
+        "configured_path_profiles": ["tailscale_fallback"],
+        "selected_path_profile": "tailscale_fallback",
+        "path_selection_reason": "typed_vlan_failure",
+        "completion_dispatched": False,
+        "missing_prerequisites": ["vlan_path_unavailable"],
+        "fallback_preflight": _passed_receipt()["fallback_preflight"],
+    }
+
+    with pytest.raises(ReceiptValidationError, match="receipt_invalid"):
+        validate_acceptance_receipt(json.dumps(receipt), json.dumps(expected))
+
+
 def test_duplicate_json_keys_cannot_hide_unsafe_receipt_or_route_fields(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -326,14 +442,15 @@ def test_missing_host_prerequisite_is_reported_without_mutation(
         "completion_dispatched": False,
         "missing_prerequisites": [
             "codex_cli_unavailable",
-            "tailscale_path_unconfigured",
             "catalog_snapshot_unavailable",
         ],
     }
     receipt_path = tmp_path / "incomplete-receipt.json"
     expected_path = tmp_path / "expected-route.json"
     receipt_bytes = json.dumps(receipt).encode("utf-8")
-    expected_bytes = json.dumps(_expected_route()).encode("utf-8")
+    expected = _expected_route()
+    expected["configured_path_profiles"] = ["ygg_vlan_primary"]
+    expected_bytes = json.dumps(expected).encode("utf-8")
     receipt_path.write_bytes(receipt_bytes)
     expected_path.write_bytes(expected_bytes)
 
@@ -346,8 +463,7 @@ def test_missing_host_prerequisite_is_reported_without_mutation(
 
     assert main(["--input", str(receipt_path), "--expected-route", str(expected_path)]) == 1
     assert capsys.readouterr().out == (
-        "incomplete missing=codex_cli_unavailable,tailscale_path_unconfigured,"
-        "catalog_snapshot_unavailable\n"
+        "incomplete missing=codex_cli_unavailable,catalog_snapshot_unavailable\n"
     )
     assert receipt_path.read_bytes() == receipt_bytes
     assert expected_path.read_bytes() == expected_bytes

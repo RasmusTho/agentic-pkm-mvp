@@ -1,6 +1,6 @@
 ---
-name: Add Tailscale Codex Executor Transport
-description: Add one bounded Product completion API/client over a private Tailscale Serve endpoint, dispatching an exact declared Codex CLI or Ollama route.
+name: Add authenticated cross-host Codex executor API
+description: Add one bounded Product completion API/client over an authenticated private ingress; Tailscale Serve is optional, and the active Ygg path is VLAN mTLS.
 task_id: MARR-08
 github_issue: 5635
 source_anchor: docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: D2
@@ -37,13 +37,15 @@ request with separate `system` and `user` messages. No provider is selected impl
 The MARR-08 slice exposes only `/v1/complete`; docs, OpenAPI, health, catalog, and preflight routes
 are disabled in this slice. MARR-03 separately adds an authenticated no-inference `/v1/preflight`
 operation so Product can verify remote readiness before completion without making the executor a
-policy authority. The service binds only to loopback and requires the configured Serve-forwarded
-`Tailscale-App-Capabilities` claim for `channel=product` and `actions=["complete"]`. It does not
-authorize from request-body claims or ordinary identity headers. Tailscale Serve 1.92 or later is
-required to forward app capabilities. The Uvicorn runner disables proxy-header rewriting so the
-loopback guard sees the local Serve connection rather than the remote peer in `X-Forwarded-For`.
-No Funnel/public endpoint, direct LAN listener, shared bearer token, or unencrypted fallback is
-allowed. The grant, endpoint, Codex safe-profile path, CLI environment, and Ollama endpoint remain
+policy authority. The service binds only to loopback and requires a trusted ingress claim named
+`Tailscale-App-Capabilities` for `channel=product` and `actions=["complete"]`. This legacy header
+name does not require a Tailscale network: an authenticated ingress must strip caller-supplied
+values and inject the claim only after verifying its caller. The active Ygg path uses VLAN mTLS
+ingress to do so. Tailscale Serve is an optional ingress and requires v1.92 or later only when that
+adapter is chosen. The Uvicorn runner disables proxy-header rewriting so the loopback guard sees the
+local ingress connection rather than the remote peer in `X-Forwarded-For`. No public endpoint,
+direct unauthenticated LAN listener, shared bearer token, or unencrypted fallback is allowed. The
+ingress grant, endpoint, Codex safe-profile path, CLI environment, and Ollama endpoint remain
 operator-owned host configuration, not Git policy.
 
 Bound request/response bytes, adapter concurrency, and execution time. Do not log prompts, output,
@@ -56,11 +58,12 @@ live host/Tailscale activation.
 
 ## Concretely
 
-The MARR-08 Product completion client calls a configured private Tailscale Serve HTTPS origin. Serve injects the
-authorized app-capability claim into the loopback request; the Product client does not create or
-send that header itself. Tests use fake Codex CLI and Ollama adapters and fake HTTP/Tailscale
-boundaries to prove exact routing, channel separation, loopback/auth enforcement, and no retry after
-an ambiguous completion.
+The MARR-08 Product completion client calls a configured authenticated private HTTPS ingress. A
+VLAN mTLS gateway may inject the authorized app-capability claim into the loopback request; Tailscale
+Serve may do the same when explicitly configured. The Product client does not create or send that
+header itself. Tests use fake Codex CLI and Ollama adapters and fake HTTP/ingress boundaries to
+prove exact routing, channel separation, loopback/auth enforcement, and no retry after an ambiguous
+completion.
 
 ## Why This Matters
 
@@ -73,7 +76,7 @@ reusing its local user identity as a shared credential.
 
 - [ ] The API accepts only a bounded resolved route and dispatches one declared Codex CLI or Ollama completion.
   - Verify: `tests/model_access/test_codex_executor_service.py::test_complete_dispatches_one_declared_transport`
-- [ ] The executor is loopback-only and refuses requests without the configured Product Serve capability; request data cannot self-authorize or widen the operation surface.
+- [ ] The executor is loopback-only and refuses requests without the configured trusted-ingress Product capability claim; request data cannot self-authorize or widen the operation surface. VLAN mTLS may supply that claim; Tailscale Serve is optional.
   - Verify: `tests/model_access/test_codex_executor_service.py::test_complete_requires_loopback_and_served_app_capability`
 - [ ] Codex uses the exact requested model, preserves trusted/user channels, and rejects tool intent.
   - Verify: `tests/model_access/test_codex_executor_service.py::test_codex_complete_preserves_channels_and_rejects_tools`

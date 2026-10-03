@@ -1,12 +1,12 @@
-State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-09-27 for VLAN-primary/Tailscale-fallback paths and provider-neutral capability health. MARR-01–05, the MARR-08 completion API, and MARR-09 configured path selection are delivered. MARR-10 provider-neutral capability health is delivered by this change; designated-host acceptance and staged rollout remain pending. Parent validation Issue #5618 is open and blocked.
+State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-10-03 for the VLAN-only Ygg host profile, provider-neutral capability health, and distinct one-shot acceptance attempts. MARR-01–05, the MARR-08 completion API, generic MARR-09 path selection, and MARR-10 provider-neutral capability health are delivered. VLAN-only MARR-06 designated-host acceptance has a validator-accepted v3 receipt in Issue #5624; staged MARR-07 rollout remains pending. Parent validation Issue #5618 is open and blocked for the remaining integrated capability and rollout gates.
 Doc role: Capability specification
 Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, and ADR-0066 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
 Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its isolated compatibility path
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: ADR-0066, child Issues, implementation, and acceptance receipts
-Last reviewed: 2026-09-27
-Last verified against: ADR-0066, the checked-in MARR task specifications, and live Issues #5618, #5624, #5625, #5688, #5689, and #5694.
+Last reviewed: 2026-10-03
+Last verified against: the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066, and the checked-in MARR task specifications.
 Parent issue: #5618 (open, agent:blocked); validation hub, never a pickup task.
 
 # Model Access Router
@@ -26,10 +26,10 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 - MARR-05 preserves caller output-token limits explicitly. The current Codex CLI executor rejects a per-call output-token-limit requirement during no-inference preflight; a policy-approved low-reasoning Ollama fallback may run only if its own preflight passes. Ollama receives the limit as `options.num_predict`. If fallback is not allowed or capable, the call fails before inference; after completion starts there is no retry or provider switch.
 - Model Inquiry's `codex_subscription` remains a compatibility alias for the shared local Codex executor; its current single-target and no-fallback semantics do not change. Host activation still requires an exact-version no-tools profile outside Git.
 - Embeddings remain in the embedding identity subsystem and are outside the chat/completion migration.
-- Product runtime remains on Linux. The delivered Product client supports the executor API, and MARR-09 delivers configured VLAN-first/Tailscale-fallback path selection. The designated Mac profile, live network paths, and Codex subscription session have not been activated or accepted.
-- The accepted target keeps the model route and network path independent. Deployment configuration supplies ordered logical path-profile references; host-local configuration resolves the VLAN endpoint and Tailscale Serve endpoint. Neither path may be hard-coded into Product model policy or source code.
-- Both paths must authenticate and authorize the same Product channel and operation-specific action. VLAN membership alone is not authorization. The executor backend remains loopback-bound behind configured ingress; public listeners and Funnel are forbidden. Concrete endpoints and identity material remain outside Git.
-- Product health reports required logical capability status through the provider-neutral MARR-10 contract and separately reports configured network-path reachability, including pre-completion fallback use. The public `/api/health` projection omits model-access provider, model, transport, endpoint, and selected-path identity; local CLI diagnostics may retain selected-route detail. This code does not activate a host route or change the Product model default.
+- Product runtime remains on Linux. The delivered Product client supports the executor API, and MARR-09 delivers generic configured path selection. The checked-in Ygg profile selects only `ygg_vlan_primary`; Tailscale is neither configured nor required for acceptance or rollout. The designated Mac profile, VLAN path, Luna route, and interactive Codex subscription session passed the MARR-06 dev-host acceptance in Issue #5624. This receipt does not activate a persistent Product route or release channel.
+- The accepted target keeps the model route and network path independent. Deployment configuration supplies ordered logical path-profile references; the current Ygg profile resolves only the host-local VLAN endpoint. The generic path interface may support additional explicit profiles, but no Tailscale endpoint or Serve setup is a Ygg dependency.
+- Each configured path must authenticate and authorize the same Product channel and operation-specific action. VLAN membership alone is not authorization. The executor backend remains loopback-bound behind configured ingress; public listeners are forbidden. Concrete endpoints and identity material remain outside Git.
+- Product health reports required logical capability status through the provider-neutral MARR-10 contract and separately reports configured network-path reachability. The public `/api/health` projection omits model-access provider, model, transport, endpoint, and selected-path identity; local CLI diagnostics may retain selected-route detail. This code does not activate a host route or change the Product model default.
 - The Product target uses Luna through the Codex CLI. Ollama is not a prerequisite or default fallback for this route. Existing Ollama adapter/fallback support remains separate implementation capability and does not authorize its activation here.
 - MARR-06 separates offline validation of an already-sanitized receipt (#5694) from live host acceptance (#5624); only the latter can clear the host/network acceptance gate.
 - No API credentials, host credentials, model downloads, or release-channel changes are part of the repository implementation slices. Live host/network activation requires its explicit operational gate.
@@ -45,7 +45,7 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 
 The accepted target request flow is:
 
-Product reads or refreshes a bounded catalog snapshot → Product policy selects the exact logical model route and required capabilities → Product client resolves configured network path profiles in order (`ygg_vlan_primary`, then `tailscale_fallback`) → the selected ingress authenticates the caller and authorizes the Product channel/action → a no-inference `POST /v1/preflight` verifies that same route → after successful preflight, Product sends exactly one `POST /v1/complete` → one selected model adapter executes the completion → the result and internal receipt retain route and path provenance.
+Product reads or refreshes a bounded catalog snapshot → Product policy selects the exact logical model route and required capabilities → Product client resolves the current Ygg VLAN-only profile (`ygg_vlan_primary`) → the VLAN ingress authenticates the caller and authorizes the Product channel/action → a no-inference `POST /v1/preflight` verifies that same route → each distinct completion request is preceded by a fresh preflight and sends exactly one `POST /v1/complete` → one selected model adapter executes the completion → the result and internal receipt retain route and path provenance.
 
 Builder continues through its own resolver/profile and adapters. The shared facade does not make
 Product and Builder share policy or credentials.
@@ -64,10 +64,11 @@ sanitized readiness; catalog returns the snapshot's provider, descriptors, sourc
 freshness, and content hash.
 
 The current executor API is exposed behind its configured authenticated ingress and remains
-loopback-bound. The target supports an ordered VLAN-primary profile and private Tailscale Serve
-fallback profile. Both path adapters enforce the same Product channel and operation-specific
-authorization contract; the Tailscale adapter uses the configured Serve-forwarded application
-capability (Serve 1.92 or later). Endpoint and identity material remain host-local configuration.
+loopback-bound. The current Ygg profile contains only the authenticated VLAN path. The generic path
+adapter can support explicitly configured additional transports, including Tailscale, but no such
+profile or Serve setup is required for Ygg acceptance or rollout. Each configured path enforces the
+same Product channel and operation-specific authorization contract. Endpoint and identity material
+remain host-local configuration.
 The Codex CLI profile path, `CODEX_HOME`, and subscription session also remain host-local.
 
 The completion endpoint dispatches exactly once to the named adapter and performs no fallback or
@@ -95,7 +96,7 @@ transport before the pure latest-compatible selector can use it.
 
 1. Policy ownership: the facade accepts Product or Builder policy explicitly. If the neutral contract lands before either profile mapper, existing route behavior stays unchanged; no default policy is guessed.
 2. Model Inquiry isolation: the Codex alias continues to resolve exactly one target with fallback_forbidden. Product's Ollama fallback cannot enter Model Inquiry, including when shared adapter code is reused.
-3. Cross-host identity: configured VLAN and Tailscale paths both authenticate a caller and authorize the same Product channel/action contract. VLAN membership, source IP, user identity headers, or request-body claims alone are not authorization. Tailscale Serve is private-only and forwards its scoped app-capability grant; the executor backend remains loopback-only. No public listener, Funnel, unscoped shared bearer token, or generic execution endpoint is allowed.
+3. Cross-host identity: every configured path authenticates a caller and authorizes the same Product channel/action contract. The current Ygg profile contains only VLAN. VLAN membership, source IP, user identity headers, or request-body claims alone are not authorization. An optional Tailscale adapter, if explicitly configured later, must forward only its scoped app-capability grant. The executor backend remains loopback-only; no public listener or unscoped shared bearer token is allowed.
 4. Codex host isolation: Product Codex execution uses a dedicated empty cwd, read-only sandbox, ignored ambient user/project config, and an exact version-reviewed no-tools profile. It disables shell/execution and every other model-callable file, browser/computer, app, MCP, plugin, and agent capability. A new or unknown CLI tool/profile fails closed. Host authentication uses the existing interactive login session, never fresh non-interactive SSH.
 5. Prompt-channel preservation: trusted Product system-instruction content and untrusted user content remain separate end-to-end; the CLI maps them only to its distinct developer-instructions and user-prompt channels. No flattening or concatenation. The route does not assert literal system-role equivalence.
 6. Retry boundary: each completion sends one HTTP request. Any ambiguous completion result is terminal and does not retry the path or trigger a second provider call. Preflight is a distinct no-inference operation and may precede the single completion. Path failover preserves the exact logical executor, model, and capability intent.
@@ -103,19 +104,19 @@ transport before the pure latest-compatible selector can use it.
 8. Catalog boundary: catalog responses are read-only, sanitized, and content-hash-bound. Only caller policy may accept a new descriptor; unordered, stale, deprecated, or capability-incomplete candidates cannot replace the pinned target. Model Inquiry never consumes the Product catalog.
 9. Provider compatibility: existing declared DeepSeek Product routing remains supported through an explicit `deepseek_api` adapter and pinned registry descriptor unless a separate reviewed change retires it. This migration cannot silently remove an existing provider.
 10. Partial Product migration: unmigrated Product callers continue through the legacy facade. Migrated callers go through one shared route and one adapter; no dual execution/shadow inference is permitted.
-11. Host and rollout gates: missing VLAN profile, unavailable configured fallback, missing required authorization, executor/login, or failed acceptance leaves the parent blocked. Ollama health, installation, model, and fallback are not prerequisites for Luna acceptance. No model download, API key creation, host credential change, or production deployment is used to make the receipt pass. Production remains behind the release-channel operator-acknowledgment gate.
+11. Host and rollout gates: missing VLAN profile, missing required authorization, executor/login, or failed acceptance leaves the parent blocked. There is no configured fallback prerequisite for the current Ygg profile. Ollama or Tailscale health, installation, model, Serve, and fallback are not prerequisites for Luna acceptance. No model download, API key creation, host credential change, or production deployment is used to make the receipt pass. Production remains behind the release-channel operator-acknowledgment gate.
 
 ## Implementation Tasks
 
 1. [Establish shared route and provenance contracts](ESTABLISH_SHARED_ROUTE_AND_PROVENANCE_CONTRACTS.md) — MARR-01
 2. [Build the adapter registry and local Codex CLI executor](BUILD_ADAPTER_REGISTRY_AND_CODEX_CLI_TRANSPORT.md) — MARR-02; depends on MARR-01
-3. [Add the authenticated Tailscale executor transport](ADD_TAILSCALE_CODEX_EXECUTOR_TRANSPORT.md) — MARR-08 / #5635; base completion endpoint and client, with no fallback or catalog API in that slice
+3. [Add the authenticated cross-host Codex executor API](ADD_TAILSCALE_CODEX_EXECUTOR_TRANSPORT.md) — MARR-08 / #5635; provides the bounded completion endpoint and client over a trusted private ingress. Tailscale Serve is optional; the current Ygg profile uses VLAN mTLS.
 4. [Formalize Ollama and preflight-only fallback](FORMALIZE_OLLAMA_AND_PREFLIGHT_FALLBACK.md) — MARR-03; extends the base API with no-inference preflight and capability-preserving fallback policy
 5. [Discover and select from fresh model catalogs](DISCOVER_FRESH_MODEL_CATALOGS.md) — MARR-04; adds bounded discovery/freshness and explicit policy-gated selection
 6. [Migrate Product LLM callers to the shared facade](MIGRATE_PRODUCT_LLM_CALLERS.md) — MARR-05; depends on MARR-01–04 and MARR-08
-7. [Configure VLAN-primary and Tailscale-fallback executor paths](CONFIGURE_EXECUTOR_NETWORK_PATHS.md) — MARR-09; specifies path configuration and no-inference failover independently of model/provider selection
+7. [Configure executor network paths](CONFIGURE_EXECUTOR_NETWORK_PATHS.md) — MARR-09; provides generic path configuration and no-inference failover independently of model/provider selection; the active Ygg profile is VLAN-only
 8. [Report provider-neutral capability health](REPORT_CAPABILITY_HEALTH.md) — MARR-10; specifies health through logical capability contracts, independent of provider identity
-9. [Prove configured macOS executor paths and Luna acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06 / #5624; depends on MARR-01–05, MARR-08, MARR-09, and MARR-10. The live Issue now matches the v3 acceptance contract; separate operator authorization and host/network activation remain prerequisites.
+9. [Prove VLAN-only macOS executor and Luna acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06 / #5624; depends on MARR-01–05, MARR-08, MARR-09, and MARR-10. The live Issue now matches the VLAN-only v3 acceptance contract; every distinct acceptance request requires a fresh no-inference catalog/preflight and is sent once without replay, automatic retry, or provider/path fallback.
 10. [Roll out through release channels with config rollback](ROLLOUT_WITH_CONFIG_ROLLBACK.md) — MARR-07; depends on MARR-06 and explicit release-channel operator acknowledgment
 
 ## Capability Acceptance
@@ -125,10 +126,10 @@ This parent-level acceptance remains separate from merging the MARR-08 thin API 
 - [ ] MARR-08 is verified by its slice tests and merged; this proves code exists, not live host activation.
 - [ ] Product caller migration is delivered by MARR-05 through the shared facade; this does not activate the designated host or change the checked-in default route.
 - [ ] MARR-04 delivers read-only catalog discovery and latest-compatible selection primitives; MARR-05 separately adopts them in Product callers. Catalog refresh never changes MARR-08's one-shot completion behavior.
-- [ ] A separate operator-authorized host acceptance is required before claiming the Mac executor or either configured path is live.
-- [ ] MARR-09 verifies VLAN-first path selection and Tailscale fallback using the same route and channel/action authorization contract.
+- [x] The authorized VLAN-only Mac executor acceptance is verified by the validator-accepted v3 receipt in Issue #5624; this proves the designated dev-host path, not persistent Product activation.
+- [ ] MARR-09 retains generic multi-path selection tests, while the checked-in Ygg profile configures only VLAN and has no Tailscale dependency.
 - [x] MARR-10 verifies health reports configured logical capability status separately from neutral network-path reachability and does not require an unselected provider.
-- [ ] The designated-host receipt proves Luna through Codex CLI over VLAN, Tailscale fallback only for typed recoverable path-local failures before completion, provider-neutral capability health, refusal of unsupported capability intent before inference, and no retry after an ambiguous completion. Common policy, request, route, configuration, and capability failures remain terminal. Ollama is not required.
+- [x] The designated-host receipt in Issue #5624 proves Luna through Codex CLI over VLAN, provider-neutral capability health, refusal of unsupported capability intent before inference, and no retry after an ambiguous completion. Its configured path is exactly `[ygg_vlan_primary]`; no Tailscale or Ollama proof is required.
 - [ ] The parent validation issue remains open until all child receipts, integrated host acceptance, authorized rollout evidence, and owner-doc reconciliation are complete.
 
 ## Relationship to GitHub Issues
