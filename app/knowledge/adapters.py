@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 from typing import Callable, NamedTuple, Sequence
 
 from app.knowledge.contracts import NoteLocator, SearchHit, WriteReceipt
-from app.knowledge.errors import KnowledgeCapabilityError, KnowledgeDependencyError, KnowledgeTransportError, KnowledgeWriteConflict
+from app.knowledge.errors import KnowledgeAtomicExchangeNotApplied, KnowledgeCapabilityError, KnowledgeDependencyError, KnowledgeTransportError, KnowledgeWriteConflict
 from app.knowledge.locators import make_note_locator
 from app.knowledge.obsidian_cli_scope import scoped_cli_args
 from app.knowledge.multiwriter import (
@@ -977,7 +977,22 @@ class FsVaultAdapter:
                 )
                 try:
                     _atomic_exchange_at(parent_fd, target.name, parent_fd, staged_name)
+                except KnowledgeCapabilityError as exc:
+                    # This is the initial linearization attempt.  A capability
+                    # refusal here proves that no exchange occurred, unlike
+                    # any failure after this call returns.
+                    raise KnowledgeAtomicExchangeNotApplied(
+                        f"atomic exchange is unavailable for rewritten note {locator.path}"
+                    ) from exc
                 except OSError as exc:
+                    # Linux renameat2(RENAME_EXCHANGE) returns EINVAL on
+                    # mounts that reject this capability (for example sshfs).
+                    # The syscall did not exchange either name, so this one
+                    # proven refusal has a typed, safe read-path outcome.
+                    if exc.errno == errno.EINVAL:
+                        raise KnowledgeAtomicExchangeNotApplied(
+                            f"atomic exchange is unavailable for rewritten note {locator.path}"
+                        ) from exc
                     raise KnowledgeWriteConflict(
                         f"version mismatch for rewritten note {locator.path}: "
                         "atomic exchange failed"

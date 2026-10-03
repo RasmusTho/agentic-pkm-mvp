@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import os
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -10,10 +12,12 @@ from fastapi.testclient import TestClient
 
 import app.api.routes.canvas as canvas_module
 import app.api.routes.companion as companion_module
+import app.knowledge.adapters as adapters_module
 import app.panel.confirmation as confirm_module
 from app.api.app import app
 from app.chat.session_log import SessionLog
 from app.events.panel import NoteRef, PanelInfo, PanelIntentEvent, PanelIntentPayload
+from app.knowledge.errors import KnowledgeAtomicExchangeNotApplied, KnowledgeWriteConflict
 from app.panel.confirmation import StagedProposal
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard, WritesBlockedError
 from tests.api._vault_test_helpers import bind_initialized_vault, bind_selected_vault
@@ -260,11 +264,11 @@ def test_workspace_missing_uuid_unresolved_state_has_no_hash_artifact_id(
     note.write_text("# Blocked\n\nBody.\n", encoding="utf-8")
     bind_selected_vault(monkeypatch, tmp_path)
 
-    def _blocked(_path: Path, *, vault_root: Path) -> str:
-        raise WritesBlockedError("blocked", "write guard active", "ensure uuid")
+    def _exchange_not_applied(_path: Path, *, vault_root: Path) -> str:
+        raise KnowledgeAtomicExchangeNotApplied("atomic exchange unavailable")
 
-    monkeypatch.setattr(companion_module, "ensure_note_uuid", _blocked, raising=False)
-    monkeypatch.setattr("app.services.artifact_identity.ensure_note_uuid", _blocked)
+    monkeypatch.setattr(companion_module, "ensure_note_uuid", _exchange_not_applied, raising=False)
+    monkeypatch.setattr("app.services.artifact_identity.ensure_note_uuid", _exchange_not_applied)
 
     resp = _workspace(client, "notes/blocked.md")
 
@@ -274,6 +278,78 @@ def test_workspace_missing_uuid_unresolved_state_has_no_hash_artifact_id(
     assert artifact["identity_source"] == "missing"
     assert artifact["identity_state"] == "unresolved_missing_uuid"
     assert artifact["artifact_id"] != companion_module._content_hash("notes/blocked.md")
+
+
+def test_workspace_missing_uuid_exchange_failure_reads_with_unresolved_identity(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note = tmp_path / "notes" / "exchange-refused.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    original = "---\ntitle: Exchange refused\n---\n\n# Note\n"
+    note.write_text(original, encoding="utf-8")
+    bind_initialized_vault(monkeypatch, tmp_path)
+
+    def refuse_exchange(*_args: object) -> None:
+        raise OSError(errno.EINVAL, "operation not supported")
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", refuse_exchange)
+
+    resp = _workspace(client, "notes/exchange-refused.md")
+
+    assert resp.status_code == 200
+    artifact = resp.json()["artifact"]
+    assert artifact["artifact_id"] is None
+    assert artifact["identity_state"] == "unresolved_missing_uuid"
+    assert note.read_text(encoding="utf-8") == original
+
+
+def test_workspace_missing_uuid_indeterminate_initial_exchange_failure_propagates(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note = tmp_path / "notes" / "exchange-io-error.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("# Note\n", encoding="utf-8")
+    bind_initialized_vault(monkeypatch, tmp_path)
+
+    def indeterminate_exchange(*_args: object) -> None:
+        raise OSError(errno.EIO, "I/O error")
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", indeterminate_exchange)
+
+    with pytest.raises(KnowledgeWriteConflict, match="atomic exchange failed"):
+        _workspace(client, "notes/exchange-io-error.md")
+
+
+def test_workspace_missing_uuid_post_exchange_failure_propagates(
+    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    note = tmp_path / "notes" / "post-exchange-error.md"
+    note.parent.mkdir(parents=True, exist_ok=True)
+    note.write_text("# Note\n", encoding="utf-8")
+    bind_initialized_vault(monkeypatch, tmp_path)
+
+    real_exchange = adapters_module._atomic_exchange_at
+
+    def competing_post_exchange_write(
+        first_dir_fd: int,
+        first_name: str,
+        second_dir_fd: int,
+        second_name: str,
+    ) -> None:
+        real_exchange(first_dir_fd, first_name, second_dir_fd, second_name)
+        fd = os.open(first_name, os.O_WRONLY | os.O_TRUNC, dir_fd=first_dir_fd)
+        try:
+            os.write(fd, b"concurrent writer after exchange\n")
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    monkeypatch.setattr(adapters_module, "_atomic_exchange_at", competing_post_exchange_write)
+
+    with pytest.raises(KnowledgeWriteConflict, match="target content changed after atomic exchange"):
+        _workspace(client, "notes/post-exchange-error.md")
+
+    assert note.read_text(encoding="utf-8") == "concurrent writer after exchange\n"
 
 
 def test_workspace_companion_note_has_no_path_hash_identity(
