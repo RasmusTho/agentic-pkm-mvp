@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,6 +34,7 @@ def _request(
     determinism_required: bool = False,
     capability_tier: str = "frontier",
     reasoning_effort: str = "high",
+    independence: str = "none",
 ) -> ModelResolutionRequest:
     return ModelResolutionRequest(
         intent=ModelAccessIntent(
@@ -40,7 +42,7 @@ def _request(
             reasoning_effort=reasoning_effort,
             determinism_required=determinism_required,
             output_schema_ref=output_schema_ref,
-            independence="none",
+            independence=independence,
             fallback_requirement="fallback_forbidden",
             side_effect_class="none",
         ),
@@ -135,15 +137,20 @@ def test_rollback_restores_last_pinned_capability_compatible_route() -> None:
     identity = EmbeddingIdentity(
         provider="ollama", model="nomic-embed-text", dim=768, normalize=True
     )
-    latest = _candidate("luna-current", verified_minutes_ago=1)
+    current_request = _request(ModelCapabilityRequirements(native_tools=True))
+    latest = _candidate("luna-current", verified_minutes_ago=1, verified_request=current_request)
     plan = plan_model_access_rollback(
         [
-            _candidate("luna-older", verified_minutes_ago=10),
+            _candidate("luna-older", verified_minutes_ago=10, verified_request=current_request),
             latest,
-            _candidate("no-tools", verified_minutes_ago=0, native_tools=False),
-            _candidate("not-pinned", verified_minutes_ago=0, pinned=False),
+            _candidate(
+                "not-pinned",
+                verified_minutes_ago=0,
+                pinned=False,
+                verified_request=current_request,
+            ),
         ],
-        current_request=_request(ModelCapabilityRequirements(native_tools=True)),
+        current_request=current_request,
         embedding_identity=identity,
         now=NOW,
     )
@@ -163,7 +170,7 @@ def test_rollback_fails_closed_without_a_fresh_compatible_preflight() -> None:
     with pytest.raises(ModelAccessRollbackError, match="no fresh"):
         plan_model_access_rollback(
             [candidate],
-            current_request=_request(ModelCapabilityRequirements(native_tools=True)),
+            current_request=candidate.route.request,
             embedding_identity=EmbeddingIdentity(
                 provider="ollama", model="nomic-embed-text", dim=768
             ),
@@ -206,13 +213,32 @@ def test_rollback_fails_closed_for_ambiguous_latest_candidates() -> None:
         )
 
 
-def test_rollback_binds_the_current_request_to_the_selected_route() -> None:
+def test_rollback_rejects_preflight_from_a_different_capability_intent() -> None:
     verified_request = _request(ModelCapabilityRequirements())
-    current_request = _request(ModelCapabilityRequirements(native_tools=True))
+    current_request = _request(ModelCapabilityRequirements(), output_schema_ref="schema.reply.v1")
     candidate = _candidate(
-        "verified-without-tools-required",
+        "preflighted-without-structured-output",
         verified_minutes_ago=1,
         verified_request=verified_request,
+    )
+
+    with pytest.raises(ModelAccessRollbackError, match="no fresh"):
+        plan_model_access_rollback(
+            [candidate],
+            current_request=current_request,
+            embedding_identity=EmbeddingIdentity(
+                provider="ollama", model="nomic-embed-text", dim=768
+            ),
+            now=NOW,
+        )
+
+
+def test_rollback_keeps_a_preflight_bound_to_the_exact_current_request() -> None:
+    current_request = _request(ModelCapabilityRequirements(), output_schema_ref="schema.reply.v1")
+    candidate = _candidate(
+        "structured-output-current",
+        verified_minutes_ago=1,
+        verified_request=current_request,
     )
 
     plan = plan_model_access_rollback(
@@ -223,7 +249,28 @@ def test_rollback_binds_the_current_request_to_the_selected_route() -> None:
     )
 
     assert plan.route.request == current_request
-    assert plan.route.request.requirements.native_tools is True
+    assert plan.route.request.intent.output_schema_ref == "schema.reply.v1"
+
+
+def test_rollback_rejects_a_request_requiring_a_distinct_effective_target() -> None:
+    current_request = _request(
+        ModelCapabilityRequirements(), independence="distinct_effective_target"
+    )
+    candidate = _candidate(
+        "single-candidate",
+        verified_minutes_ago=1,
+        verified_request=current_request,
+    )
+
+    with pytest.raises(ModelAccessRollbackError, match="no fresh"):
+        plan_model_access_rollback(
+            [candidate],
+            current_request=current_request,
+            embedding_identity=EmbeddingIdentity(
+                provider="ollama", model="nomic-embed-text", dim=768
+            ),
+            now=NOW,
+        )
 
 
 def test_rollback_rejects_a_route_verified_for_lower_capability_tier() -> None:
@@ -263,8 +310,12 @@ def test_rollback_rejects_an_unverified_reasoning_effort() -> None:
 
 
 def test_rollback_rejects_developer_mapping_for_literal_system_requirement() -> None:
-    candidate = _candidate("developer-channel", verified_minutes_ago=1)
     current_request = _request(ModelCapabilityRequirements(literal_system_role_required=True))
+    candidate = _candidate("developer-channel", verified_minutes_ago=1)
+    candidate = replace(
+        candidate,
+        route=candidate.route.model_copy(update={"request": current_request}),
+    )
 
     with pytest.raises(ModelAccessRollbackError, match="no fresh"):
         plan_model_access_rollback(
@@ -306,8 +357,11 @@ def test_rollback_fails_closed_when_a_required_capability_is_missing(
     current_request: ModelResolutionRequest,
     route_options: dict[str, object],
 ) -> None:
+    # Bypass the route model's construction validator to exercise the planner's
+    # fail-closed guard against an inconsistent persisted candidate record.
+    route = _route("incompatible", **route_options).model_copy(update={"request": current_request})
     candidate = PinnedRouteVerification(
-        route=_route("incompatible", **route_options),
+        route=route,
         path_policy_ref="path.ygg_vlan_primary",
         verification_receipt_ref="receipt.incompatible",
         verified_at=NOW - timedelta(minutes=1),

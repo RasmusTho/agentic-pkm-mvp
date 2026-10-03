@@ -17,7 +17,6 @@ from llm_contract import ModelAccessRoute, ModelCapabilities, ModelResolutionReq
 
 _LOGICAL_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,255}$")
 PREFLIGHT_MAX_AGE = timedelta(seconds=30)
-_CAPABILITY_TIER_RANK = {"economy": 0, "standard": 1, "frontier": 2}
 
 
 class ModelAccessRollbackError(ValueError):
@@ -94,35 +93,6 @@ def _satisfies(
     )
 
 
-def _supports_intent_quality(
-    route: ModelAccessRoute,
-    request: ModelResolutionRequest,
-) -> bool:
-    verified = route.request.intent
-    requested = request.intent
-    if (
-        _CAPABILITY_TIER_RANK[verified.capability_tier]
-        < _CAPABILITY_TIER_RANK[requested.capability_tier]
-    ):
-        return False
-    if verified.reasoning_effort != requested.reasoning_effort:
-        return False
-    # A single candidate cannot prove that it differs from a second effective target.
-    return requested.independence != "distinct_effective_target"
-
-
-def _bind_current_request(
-    route: ModelAccessRoute,
-    request: ModelResolutionRequest,
-) -> ModelAccessRoute | None:
-    try:
-        return ModelAccessRoute.model_validate(
-            {**route.model_dump(), "request": request.model_dump()}
-        )
-    except ValueError:
-        return None
-
-
 def plan_model_access_rollback(
     candidates: Sequence[PinnedRouteVerification],
     *,
@@ -153,7 +123,13 @@ def plan_model_access_rollback(
     for candidate in candidates:
         if not isinstance(candidate, PinnedRouteVerification):
             raise ValueError("rollback candidates must be validated pinned-route records")
-        if not candidate.pinned or candidate.route.preflight_status != "passed":
+        if not candidate.pinned:
+            continue
+        try:
+            route = ModelAccessRoute.model_validate(candidate.route.model_dump())
+        except ValueError:
+            continue
+        if route.preflight_status != "passed":
             continue
         verified_at = candidate.verified_at.astimezone(timezone.utc)
         preflight_at = candidate.preflight_at.astimezone(timezone.utc)
@@ -161,14 +137,18 @@ def plan_model_access_rollback(
             continue
         if instant - preflight_at > preflight_max_age:
             continue
-        if not _supports_intent_quality(candidate.route, current_request):
+        # A passed preflight attests only the exact request it evaluated. Do not
+        # rebind that historical receipt to a stronger or otherwise different
+        # capability intent, even when the route's declared capability flags fit.
+        if route.request != current_request:
             continue
-        if not _satisfies(candidate.route.capabilities, current_request):
+        # A single candidate cannot prove that it differs from a second effective
+        # target in the same current resolution group.
+        if current_request.intent.independence == "distinct_effective_target":
             continue
-        rebound_route = _bind_current_request(candidate.route, current_request)
-        if rebound_route is None:
+        if not _satisfies(route.capabilities, current_request):
             continue
-        eligible.append((candidate, rebound_route))
+        eligible.append((candidate, route))
 
     if not eligible:
         raise ModelAccessRollbackError(
