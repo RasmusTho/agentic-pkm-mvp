@@ -5,9 +5,9 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-09-29
-Last live runtime verification: 2026-08-22 (new-host topology; no authoritative SSH/deploy path was available from this workstation)
-Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`. This is not fresh host qualification, residency, deployment, health, or SSH evidence from this workstation.
+Last reviewed: 2026-10-04
+Last live runtime verification: 2026-10-03 UTC (read-only `dev`/`test` host, API, and route-configuration checks from Demerzel over VLAN; `prod` was not queried)
+Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903). This does not establish a qualified candidate deployment, migration, or production state.
 Verification update (2026-09-25): also checked `.github/workflows/app-image-build.yml`, `.github/workflows/integration-nightly.yaml`, `scripts/deploy_channel.sh`, and `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`; the repository workflow set has no caller of the deploy script. This remains repository inspection, not fresh host qualification or deployment evidence.
 Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). This establishes repository support only; live VM installation and qualification remain separate gates under #5667.
 
@@ -86,31 +86,36 @@ health/version, data, backup, and rollback identities must come from a fresh,
 redaction-safe `product_tars_channel_topology.v1` qualification input; unknown values remain explicit
 gaps and do not authorize a channel operation.
 
-Demerzel/Mac mini is a control, development, client, and operator computer only for Product Runtime
-placement purposes. It is not the `dev`, `test`, or `prod` Product Runtime host; local Compose/Colima
-is an explicitly non-authoritative development fallback. TARS VM `bob-1` (VM ID `102`) is the
-separate complete Builder System / Dev System target, running guest/system `builder-system`, and
-must not be used as a Product Runtime channel VM or engine. BuilderOps and Product Runtime placement
-therefore remain separate authority boundaries.
+Demerzel/Mac mini is not the `dev`, `test`, or `prod` Product API host. It is also the designated
+Codex CLI model executor for the Model Access Router, reached over the accepted VLAN-only mTLS path;
+Tailscale is not a prerequisite for that route. Local Compose/Colima is an explicitly
+non-authoritative development fallback. TARS VM `bob-1` (VM ID `102`) is the separate complete
+Builder System / Dev System target, running guest/system `builder-system`, and must not be used as a
+Product Runtime channel VM or engine. BuilderOps and Product Runtime placement therefore remain
+separate authority boundaries.
 
 Provider and model selection is resolved by capability configuration. Neither this placement profile
 nor the topology qualification input encodes a provider, model, or Codex-only runtime architecture.
 
 ## Current live runtime posture
 
-The intended live split is now: a dedicated Ollama host for Ollama only, and the Product Runtime
-channels on the TARS-hosted isolated Linux VM topology reached through private ingress. The latest
-dated Builder Vault operator evidence, from 2026-09-07, records restored strict access for `ygg-dev`,
-`ygg-test`, and `ygg-prod`; completed DEV upgrade/readiness evidence; healthy TEST/PROD containers
-after access repair; unavailable external TEST/PROD UI endpoints; and degraded PROD application
-readiness. Those records are execution-host-specific and do not provide this workstation with SSH or
-deployment authority, nor do they prove a deployable promotion chain.
+The latest read-only check from Demerzel (2026-10-03 UTC) reached `ygg-dev` and `ygg-test` over VLAN;
+it was not a deployment run. `ygg-dev` runs image
+`8cb453986944b98b7dac483973aae67e8c5e64e7`, reports `required_ok=true`, and enforces
+`ollama/llama3.2:3b`; its current health response still checks Ollama and does not yet report
+`llm_access`. `ygg-test` runs `dev-local`, reports unknown application SHA and `required_ok=false`,
+uses `LLM_PROVIDER=mock`, and has only API and DB containers (no worker or watcher). Product
+containers on both channels lack the Model Access VLAN caller settings. The existing test checkout
+was stale and dirty and was left untouched.
 
-The repository does not yet contain an authoritative deployment/startup handoff for these new hosts,
-and this workstation has no usable SSH/deploy authority for them. Do not use the old local Compose
-projects or the local Compose matrix below as evidence for the new-host runtime. The required sequence
-remains exact candidate identity → dev verification → test deployment and verification → prod promotion
-and verification.
+The accepted MARR-06 receipt proves one Luna completion through the active, loopback-bound Mac mini
+Codex CLI executor over VLAN mTLS; it does not prove persistent Product routing. The merged candidate
+is not running on either channel, and its pending migrations have not been applied. The read-only SSH
+path does not establish the qualified deployment executor or Linux caller-secret qualification
+tracked by #5667. No candidate-bound backup or staged-rollout receipt was created. Do not use the old
+local Compose projects or matrix below as evidence for the new-host runtime. The remaining authorized
+sequence is exact candidate identity and backup/migration review → dev deployment and verification →
+test deployment and verification. Production was not contacted and remains out of scope.
 
 ### CI deployment automation posture
 
@@ -140,7 +145,9 @@ This document is the canonical spec that epic #2655 (deployment + environment-se
 ## Environment matrix
 
 The contract spans three channels: `dev`, `test`, and `prod`. The local Compose fallback can run them in
-parallel on one host; the intended live topology assigns them to isolated Linux/Tailscale hosts. They
+parallel on one host; the intended live topology assigns them to isolated Linux hosts. Their ingress
+and operator access are governed by the qualified deployment profile; this document does not make
+Tailscale a Model Access prerequisite. They
 are isolated by DB name, vault binding, ports, and runtime-artifact paths — see `docs/ENVIRONMENTS.md`
 for the environment-selection contract these values implement.
 

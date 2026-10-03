@@ -5,9 +5,9 @@ Doc role: Core SoT
 Authority: Canonical environment contract for the current baseline and forward-line work; defines what `dev`, `test`, and `prod` mean, what must remain invariant, and what may vary. Architecture, operations, testing, status, and component docs should reference this document instead of restating environment policy. Release-channel semantics (channel identity, DB-per-channel, promotion, rollback) are owned by `docs/RELEASE_CHANNELS/README.md`.
 Temporal class: operational
 Review cadence: as environment/channel posture changes
-Last reviewed: 2026-09-11
-Last live runtime verification: 2026-09-07 (Builder Vault operator receipts from Demerzel; this workstation did not perform a fresh channel readback)
-Last verified against: docs/RELEASE_CHANNELS/README.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/deployment/profiles/TARS_PROXMOX.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md; Builder Vault dated evidence `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`
+Last reviewed: 2026-10-04
+Last live runtime verification: 2026-10-03 UTC (read-only dev/test host and API checks from Demerzel; prod was not queried)
+Last verified against: docs/RELEASE_CHANNELS/README.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, app/release_channels/promotion_receipt.py, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/deployment/profiles/TARS_PROXMOX.md, config/platform/product_tars_channel_topology.v1.schema.json, app/ops/product_tars_channel_topology.py, docker-compose.full-host-vault.yml, scripts/lib/deploy_channel_compose.sh, docs/STATUS.md (§Cognitive Expansion — activation status), ops/promotions/2026-06-13-cc3ce65d.md; Builder Vault dated evidence `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live dev/test evidence in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903)
 
 ## Overview
 
@@ -21,22 +21,25 @@ Reading rule:
 
 ## Current live runtime topology
 
-The intended Product Runtime placement is the TARS-hosted Linux VM topology, with private
-Linux/Tailscale ingress for `dev`, `test`, and `prod`. The Mac mini is a control, development, client,
-and operator computer only for Product Runtime placement; its legacy `pkm-*` Compose stacks are not
-runtime evidence. The following is the latest dated operator evidence reviewed from Builder Vault,
-captured on 2026-09-07; it is not a fresh readback from this workstation:
+The Product Runtime channels are intended to run on TARS-hosted Linux VMs. The Mac mini is not a
+Product API channel host; it is the designated Codex CLI model executor, reached over the VLAN-only
+mTLS path. Tailscale is not a prerequisite for this Model Access route. The Mac mini's legacy `pkm-*`
+Compose stacks are not Product Runtime evidence. The following is the latest read-only live check
+from Demerzel, performed on 2026-10-03 UTC. The `prod` row remains based on the last dated Builder
+Vault evidence from 2026-09-07 and was not rechecked in this pass.
 
 | Environment | Live endpoint evidence | Current state | Artifact identity |
 | --- | --- | --- | --- |
-| `dev` (`ygg-dev`) | API `:18001` and Companion UI `:8111` passed the dated final acceptance | Builder Vault reports the upgraded API/worker/watcher and required readiness checks green; use the dated upgrade receipt for exact image and remaining warnings | Image `565de061cfb5d3b8a675e5addaeffc424dd868b7` |
-| `test` (`ygg-test`) | Strict SSH/sudo/Docker and normal-boot cleanup passed; external UI remained unavailable | API/DB containers were healthy after access repair, but no green staged-verification or promotion receipt exists | Candidate identity remains unproven for promotion |
-| `prod` (`ygg-prod`) | Strict SSH/sudo and normal-boot cleanup passed; API liveness responded; UI `:8113` remained unavailable | Existing containers were healthy, but application readiness remained degraded; no prod promotion or acceptance is claimed | Existing runtime identity was preserved; no new candidate promotion |
+| `dev` (`ygg-dev`) | API `:18001`; API, worker, watcher, and Companion UI containers are running and Docker-healthy | `/version` reports `8cb453986944b98b7dac483973aae67e8c5e64e7`; API `required_ok=true`; enforced route is `ollama/llama3.2:3b`. The current health response still has an Ollama check and no `llm_access` check. No `MODEL_ACCESS_CODEX_VLAN_*` settings are passed to the Product containers. | Image `8cb453986944b98b7dac483973aae67e8c5e64e7` |
+| `test` (`ygg-test`) | API `:18002`; only API and DB containers are running and Docker-healthy | `/version` reports an unknown build and API `required_ok=false`; `LLM_PROVIDER=mock`; worker and watcher are absent. No `MODEL_ACCESS_CODEX_VLAN_*` settings are passed to the Product containers. | Image tag `dev-local`; candidate identity is not running |
+| `prod` (`ygg-prod`) | Not queried on 2026-10-03 | The latest reviewed evidence remains the dated Builder Vault report from 2026-09-07; this pass makes no new health, deployment, or acceptance claim. | No new runtime identity verified |
 
-This table is runtime evidence, not a replacement for the environment contract below. Promotion is
-blocked until the new host deployment path is authoritative, the candidate has an exact immutable
-identity, `test` is reachable, and the test verification receipt is green. Until then, local Compose
-commands are a fallback for development/testing only and must not be reported as promotion evidence.
+The accepted MARR-06 receipt in Issue #5624 proves one Luna completion through the Mac mini's VLAN
+Codex CLI executor; it does not prove persistent Product routing. The running dev/test Product
+containers still lack the VLAN caller settings, and the merged candidate is not running on either
+channel. Promotion remains blocked until caller mTLS configuration, an exact-SHA staged deployment,
+and a green test verification receipt are established. No production host was contacted or changed.
+Local Compose commands remain a development/testing fallback and are not promotion evidence.
 
 TARS guest roles remain separate: VM 100 (`ygg-dev`), VM 104 (`ygg-test`), and VM 101 (`ygg-prod`)
 are Product Runtime channels; VM 102 (`bob-1`, guest/system `builder-system`) is the separate Builder
@@ -398,18 +401,21 @@ Repository availability is not a live promotion-test or prod-activation receipt.
 
 <a id="prod-ollama-topology"></a>
 
-### Ollama topology
+### Ollama topology (embedding identity; separate from Model Access)
 
-The live host boundary reserves the Mac mini for Ollama/model serving only. The product runtime must
-reach that service through an explicitly configured Tailscale-reachable endpoint; it must not assume a
-co-resident Compose sidecar, `host.docker.internal`, or a local `ollama` service name on the Linux
-runtime host. The exact endpoint, authentication posture, model inventory, and embedding identity are
-deployment inputs that still require host-side qualification.
+The accepted Ollama-primary policy and dimension-matched Gemini fallback apply to embeddings, as
+specified by [ADR-0023](adr/ADR-0023-embedding-egress-gemini-fallback.md) and
+[`docs/EMBEDDINGS.md`](EMBEDDINGS.md). They do not make Ollama a prerequisite for the Product text
+route or its provider-neutral `llm_access` health. The Model Access Router's accepted Ygg path is the
+VLAN mTLS connection to the loopback-bound Mac mini Codex CLI executor; Tailscale is not a prerequisite
+for that route. The Mac mini is not reserved exclusively for Ollama.
 
-The local Compose overlays retain an Ollama sidecar as a fallback for local development/testing. That
-fallback is not the live production topology and its project-scoped cache is not evidence that the Mac
-mini or a new Linux host has the required models. Never change the provider/model/dimension identity or
-start a rebuild/download as part of a transport-only runtime repair.
+This section does not assert that an Ollama service or endpoint is currently running or reachable. If
+an embedding deployment selects a network Ollama endpoint, its exact endpoint, authentication, and
+private network path require separate host-side qualification; do not infer a Tailscale dependency
+from this document. Local Compose overlays retain an Ollama sidecar for development/testing, but that
+does not prove a remote service or model inventory is available. Never change embedding provider/model/
+dimension identity or start a rebuild/download as part of a transport-only runtime repair.
 
 ## Runtime Control Surface
 
