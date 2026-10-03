@@ -89,8 +89,12 @@ def test_paths_require_channel_and_action_authorization() -> None:
     )
     path_profiles = policy["path_profiles"]
     vlan_policy = path_profiles["ygg_vlan_primary"]["caller_policy_ref"]
-    tailnet_policy = path_profiles["tailscale_fallback"]["caller_policy_ref"]
-    assert vlan_policy == tailnet_policy == "policy.product_channel_actions"
+    configured_order = policy["executor_path_policies"][
+        "profile.codex_remote_host"
+    ]["order"]
+    assert vlan_policy == "policy.product_channel_actions"
+    assert configured_order == ["ygg_vlan_primary"]
+    assert set(path_profiles) == {"ygg_vlan_primary"}
 
     payload = _preflight_payload()
     with TestClient(_executor_app(), client=("127.0.0.1", 12345)) as client:

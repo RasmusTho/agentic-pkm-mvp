@@ -3,9 +3,6 @@ version: 1
 endpoint_references:
   ygg_codex_vlan:
     endpoint_env: MODEL_ACCESS_CODEX_VLAN_ENDPOINT
-  ygg_codex_tailnet:
-    # Kept as a compatibility environment key while host configuration migrates.
-    endpoint_env: MODEL_ACCESS_CODEX_REMOTE_ENDPOINT
 
 authentication_profiles:
   ygg_vlan_mutual_tls:
@@ -13,8 +10,6 @@ authentication_profiles:
     ca_bundle_env: MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE
     client_certificate_env: MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT
     client_key_env: MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY
-  ygg_tailscale_serve:
-    mode: tailscale_serve_app_capability
 
 path_profiles:
   ygg_vlan_primary:
@@ -22,12 +17,6 @@ path_profiles:
     endpoint_ref: host_config.ygg_codex_vlan
     authentication_profile_ref: host_config.ygg_vlan_mutual_tls
     caller_policy_ref: policy.product_channel_actions
-  tailscale_fallback:
-    adapter: tailscale_serve_https
-    endpoint_ref: host_config.ygg_codex_tailnet
-    authentication_profile_ref: host_config.ygg_tailscale_serve
-    caller_policy_ref: policy.product_channel_actions
-
 executor_path_policies:
   profile.codex_remote_host:
-    order: [ygg_vlan_primary, tailscale_fallback]
+    order: [ygg_vlan_primary]

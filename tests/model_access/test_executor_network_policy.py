@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from app.model_access.codex_remote_transport import (
     RemoteCatalogError,
@@ -142,7 +143,28 @@ def _router(
         transports[path.path_profile] = transport
         return transport
 
-    policy_path = Path(__file__).resolve().parents[2] / DEFAULT_EXECUTOR_NETWORK_POLICY_PATH
+    policy_source = (
+        Path(__file__).resolve().parents[2] / DEFAULT_EXECUTOR_NETWORK_POLICY_PATH
+    )
+    policy = yaml.safe_load(policy_source.read_text(encoding="utf-8"))
+    policy["endpoint_references"]["ygg_codex_tailnet"] = {
+        "endpoint_env": "MODEL_ACCESS_CODEX_REMOTE_ENDPOINT"
+    }
+    policy["authentication_profiles"]["ygg_tailscale_serve"] = {
+        "mode": "tailscale_serve_app_capability"
+    }
+    policy["path_profiles"]["tailscale_fallback"] = {
+        "adapter": "tailscale_serve_https",
+        "endpoint_ref": "host_config.ygg_codex_tailnet",
+        "authentication_profile_ref": "host_config.ygg_tailscale_serve",
+        "caller_policy_ref": "policy.product_channel_actions",
+    }
+    policy["executor_path_policies"]["profile.codex_remote_host"]["order"] = [
+        "ygg_vlan_primary",
+        "tailscale_fallback",
+    ]
+    policy_path = tmp_path / "executor_network_paths.yaml"
+    policy_path.write_text(yaml.safe_dump(policy), encoding="utf-8")
     router = ExecutorNetworkPathRouter(
         policy_path=policy_path,
         environment=env,

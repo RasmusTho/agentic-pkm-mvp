@@ -1,4 +1,4 @@
-State: Open parent validation hub Issue #5618; lifecycle agent:blocked. Its contract was reconciled on 2026-09-27 to the ten-slice ledger and amended ADR-0066. It remains blocked until child delivery, separately authorized host acceptance, and rollout evidence are complete.
+State: Open parent validation hub Issue #5618; lifecycle agent:blocked. Its contract was reconciled on 2026-10-02 to the ten-slice ledger and VLAN-only Ygg host profile. It remains blocked until child delivery, authorized VLAN host acceptance, and rollout evidence are complete.
 
 # Model Access Router Parent Feature Issue
 
@@ -15,11 +15,11 @@ Initial state: agent:blocked; the parent waits on child work and host acceptance
 
 - Keep the child issue ledger and dependencies aligned with README.md.
 - Record each merged child's validation receipt.
-- Hold the integrated Product-Linux-to-Mac-mini proof, VLAN-primary/Tailscale-fallback path contract, common channel/action authorization, Codex CLI Luna route, provider-neutral capability health, and sanitized runtime receipt.
+- Hold the integrated Product-Linux-to-Mac-mini proof, VLAN-only Ygg path contract, common channel/action authorization, Codex CLI Luna route, provider-neutral capability health, and sanitized runtime receipt. Generic additional path adapters are optional and are not part of current acceptance.
 - Keep current-state owner docs unchanged until the capability acceptance gate passes.
 - Hand off production rollout to the release-channel workflow; do not treat a PR merge as deployment approval.
 - Close only after acceptance is complete and owner-doc writeback is resolved.
 
 ## Parent Closure Gate
 
-The parent closes only when the capability acceptance checklist in README.md is satisfied, all ten child-slice receipts are linked, and the cross-host designated-executor v3 receipt proves VLAN-first access, configured Tailscale fallback for typed path-local failures, equivalent channel/action authorization, Luna through Codex CLI, provider-neutral capability health, unsupported-capability refusal before inference, and a loopback-only service without leaking host identity or secrets. Ollama is not a Luna acceptance prerequisite. Authorized release-channel verification must be complete, and owner-doc changes must state only what is actually shipped. The parent remains blocked until these gates pass.
+The parent closes only when the capability acceptance checklist in README.md is satisfied, all ten child-slice receipts are linked, and the cross-host designated-executor v3 receipt proves VLAN-only access with `configured_path_profiles` exactly `[ygg_vlan_primary]`, VLAN channel/action authorization, Luna through Codex CLI, provider-neutral capability health, unsupported-capability refusal before inference, and a loopback-only service without leaking host identity or secrets. No Tailscale/Serve/fallback evidence or Ollama prerequisite applies. Every distinct acceptance request requires a fresh no-inference catalog and exact-route preflight and is sent once; an ambiguous request is never retried or replayed. Authorized release-channel verification must be complete, and owner-doc changes must state only what is actually shipped. The parent remains blocked until these gates pass.

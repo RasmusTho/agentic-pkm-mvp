@@ -14,11 +14,11 @@ can_parallelize_with: []
 
 ## Purpose
 
-Make rollout and rollback explicit so a new Codex route is enabled only after host acceptance and each release-channel gate has durable evidence. Rollback does not assume that any particular provider or local model runtime is installed.
+Make rollout and rollback explicit so a new Codex route is enabled only after VLAN-only host acceptance and each release-channel gate has durable evidence. The current Ygg path policy contains only `ygg_vlan_primary`; Tailscale is not a rollout prerequisite. Rollback does not assume that any particular provider or local model runtime is installed.
 
 ## What This Task Does
 
-Prepare the dev → test → prod rollout under the existing release-channel skills. Each stage verifies route health and declared capabilities before advancing. Rollback is a config change to the last verified, pinned Product route and network-path policy that satisfies the current required capability intent. The candidate must pass no-inference health/preflight before it is restored; if no pinned route satisfies the intent, rollback fails closed and requires an operator decision. Rollback does not imply Ollama availability, weaken policy, or change embedding identity.
+Prepare the dev → test → prod rollout under the existing release-channel skills. Each stage verifies route health and declared capabilities before advancing, using the checked-in VLAN-only path policy for the Mac executor. Rollback is a config change to the last verified, pinned Product route and path policy that satisfies the current required capability intent. The candidate must pass no-inference health/preflight before it is restored; if no pinned route satisfies the intent, rollback fails closed and requires an operator decision. Rollback does not imply Tailscale or Ollama availability, weaken policy, or change embedding identity.
 
 Actual test/prod channel mutations, deployment, and rollback use the established operator-acknowledged release workflow. This task does not embed deployment into the Model Access Router code PR.
 
