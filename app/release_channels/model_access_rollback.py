@@ -18,15 +18,6 @@ from llm_contract import ModelAccessRoute, ModelCapabilities, ModelResolutionReq
 _LOGICAL_REF = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,255}$")
 PREFLIGHT_MAX_AGE = timedelta(seconds=30)
 _CAPABILITY_TIER_RANK = {"economy": 0, "standard": 1, "frontier": 2}
-_REASONING_EFFORT_RANK = {
-    "minimal": 0,
-    "low": 1,
-    "medium": 2,
-    "high": 3,
-    "xhigh": 4,
-    "max": 5,
-    "ultra": 6,
-}
 
 
 class ModelAccessRollbackError(ValueError):
@@ -114,10 +105,7 @@ def _supports_intent_quality(
         < _CAPABILITY_TIER_RANK[requested.capability_tier]
     ):
         return False
-    if (
-        _REASONING_EFFORT_RANK[verified.reasoning_effort]
-        < _REASONING_EFFORT_RANK[requested.reasoning_effort]
-    ):
+    if verified.reasoning_effort != requested.reasoning_effort:
         return False
     # A single candidate cannot prove that it differs from a second effective target.
     return requested.independence != "distinct_effective_target"

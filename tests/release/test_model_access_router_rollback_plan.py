@@ -211,6 +211,20 @@ def test_rollback_rejects_a_route_verified_for_lower_intent_quality() -> None:
         )
 
 
+def test_rollback_rejects_an_unverified_reasoning_effort() -> None:
+    candidate = _candidate("verified-high-effort", verified_minutes_ago=1)
+
+    with pytest.raises(ModelAccessRollbackError, match="no fresh"):
+        plan_model_access_rollback(
+            [candidate],
+            current_request=_request(ModelCapabilityRequirements(), reasoning_effort="minimal"),
+            embedding_identity=EmbeddingIdentity(
+                provider="ollama", model="nomic-embed-text", dim=768
+            ),
+            now=NOW,
+        )
+
+
 def test_rollback_rejects_developer_mapping_for_literal_system_requirement() -> None:
     candidate = _candidate("developer-channel", verified_minutes_ago=1)
     current_request = _request(ModelCapabilityRequirements(literal_system_role_required=True))
