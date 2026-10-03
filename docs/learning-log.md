@@ -336,3 +336,9 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The first candidate compared only explicit `PlanStep.agent_id` even though V1/V2 resolve the effective execution actor through step metadata, plan context, or flow default, and the verified base advanced before publication so the branch-truth gate stopped the stale candidate pending governed base-drift recovery.
 **Upstream artifact:** `app/orchestrator/admission.py :: _check_r2_governed_effects`; `app/orchestrator/runtime.py :: _resolve_step_agent_id`; `app/orchestrator/v2_runtime.py :: _resolve_step_agent_id`; `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Post-validation base-drift evidence reuse`; `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure`
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: the documented CLI could not import because the canonical virtual environment has incompatible `pydantic`/`pydantic-core` versions (`pydantic` requires core 2.46.5, installed core is 2.41.1). No BuilderOps store write was attempted; convert this entry to a LearningSignal when the CLI can load.
+
+## 2026-10-03 — #5625 (refresh Model Access current-state evidence)
+**Source:** temporal-doc-governance during PR validation
+**Diverged:** The current-state checkpoint still described Model Access as Ollama-only and recorded no live acceptance, while merged PR #5759 and accepted Issue #5624 contain a newer VLAN-only Codex CLI Luna host receipt.
+**Upstream artifact:** `docs/STATUS.md`; the candidate now preserves the dated repository checkpoint and records the later scoped acceptance without implying persistent Product routing or channel rollout.
+**Compatibility fallback:** BuilderOps LearningSignal write unavailable: the configured local SQLite store rejected the write as read-only. No LearningSignal was stored; convert this entry when the BuilderOps store is writable.
