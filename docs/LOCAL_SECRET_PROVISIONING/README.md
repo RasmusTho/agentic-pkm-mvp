@@ -92,8 +92,9 @@ or live channel qualification. Parent #5667 remains open until those owner gates
 The existing BWS-backed value-free declarations are `heimdal.raw-store-key`, `heimdal.archive-pass`, `openai.api-key`,
 `anthropic.api-key`, `github.token`, and `discord.webhook`, their child bindings, validation kinds, and whether each is optional. The
 raw-store key is granted to `heimdal-capture-watch`, `heimdal-api-ingress`, and the one-shot
-`heimdal-raw-migrate` transformer; both model-provider identifiers are granted only to
-`builderops-model-inquiry`, with exact `fable` and `gpt_codex` role requirements. These pre-existing grants are
+`heimdal-raw-migrate` transformer. The existing `openai.api-key` grants are `builderops-model-inquiry`
+with the `model_inquiry` role and `builderops-ckm-semantic` with the `ckm_semantic` role;
+`anthropic.api-key` remains a declared identity without a consumer grant. These pre-existing grants are
 declared for `dev`, `test`, and `prod` in
 `config/secrets/host_secret_contract.json`; no value or host path is stored in that file. This is the
 ADR-0064 declared-API-key scope. It declares the credential boundary but does not authorize provider
