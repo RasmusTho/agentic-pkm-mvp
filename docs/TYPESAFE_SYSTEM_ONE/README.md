@@ -1,10 +1,10 @@
-State: Capability specification linked to parent Issue #5764; TSO-00/#5769 and TSO-01/#5765 are delivered; TSO-02..05 remain open, and direct-agent TSO-06/#5778 is in progress. No TypeSafe runtime support or live provider acceptance is shipped. Owner authorization: user request on 2026-10-04 to use Jev in Product and Builder paths and direct development calls from Codex and Claude. The first bounded consumers are Product canvas intent classification and Builder CKM semantic association.
+State: Capability specification linked to parent Issue #5764; TSO-00/#5769 and TSO-01/#5765 are delivered; TSO-02..05 remain open, and direct-agent TSO-06/#5778 is delivered (local Codex/Claude installation and synthetic Jev call verified). No TypeSafe Product/Builder runtime support or Product/Builder live-call acceptance is shipped. Owner authorization: user request on 2026-10-04 to use Jev in Product and Builder paths and direct development calls from Codex and Claude. The first bounded consumers are Product canvas intent classification and Builder CKM semantic association.
 Doc role: Capability specification
 Authority: Defines the target contract for bounded TypeSafe System One judgments in Yggdrasil. Product and Builder keep separate policy, adapters, credentials, and acceptance.
 Owner: Capability subsystem; Product LLM Runtime/MARR and Builder System/CES are collaborators.
 Temporal class: strategic
 Source of truth: this specification, the linked owner documents, implementation, and live Issues/receipts
-Last reviewed: 2026-10-04
+Last reviewed: 2026-10-05
 
 # TypeSafe System One Judgments
 
