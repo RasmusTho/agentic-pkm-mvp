@@ -564,6 +564,7 @@ def run_reasoning(
                 trace_id=trace_id,
                 object_uuids=list(object_ids),
                 result={"answer": answer_text},
+                llm_route=_route_payload(route),
                 status="ok",
             )
         user_lines = [f"Question: {question}"]
