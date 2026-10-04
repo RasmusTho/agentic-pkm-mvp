@@ -37,6 +37,10 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
       # Enables the BuilderOps cockpit's opt-in `github-live` plane on the dev
       # channel only (#4484). Dev is the channel whose port is the plane's own
       # stated acceptance form -- `localhost:18001/api/cockpit/registry`
@@ -65,9 +69,6 @@ services:
       # are textually referenced in the compose file.
     # The mock-default channel may run before host identity is provisioned.
     # Creating an empty source directory preserves that route; it is not an identity.
-    env_file:
-      - path: /etc/yggdrasil/model-access/runtime.env
-        required: false
     volumes:
       - type: bind
         source: /etc/yggdrasil/model-access/codex-client
@@ -82,11 +83,12 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
       # See the `api` service comment above: no VAULT_ROOT / VAULT_ROOT_DEV
       # keys here so the governed env_file chain supplies the binding.
-    env_file:
-      - path: /etc/yggdrasil/model-access/runtime.env
-        required: false
     volumes:
       - type: bind
         source: /etc/yggdrasil/model-access/codex-client
@@ -101,11 +103,12 @@ services:
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
       # See the `api` service comment above: no VAULT_ROOT / VAULT_ROOT_DEV
       # keys here so the governed env_file chain supplies the binding.
-    env_file:
-      - path: /etc/yggdrasil/model-access/runtime.env
-        required: false
     volumes:
       - type: bind
         source: /etc/yggdrasil/model-access/codex-client

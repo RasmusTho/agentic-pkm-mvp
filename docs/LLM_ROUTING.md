@@ -60,13 +60,21 @@ Product `api`, `worker`, and `watcher` callers, defaulting to `mock` when the ch
 provider selection. Those overlays also accept the optional host-local
 `/etc/yggdrasil/model-access/runtime.env` path-reference file and mount
 `/etc/yggdrasil/model-access/codex-client` read-only for those callers only. The host-managed file
-is expected to contain only the four `MODEL_ACCESS_CODEX_VLAN_*` endpoint/file-path references;
-because Compose passes env-file entries through, operators must not put credentials or unrelated
-settings there. The file selects no model and activates no route. If the client directory is absent,
-Compose may create an empty host directory so the mock-default channel can still start; this does
-not provision an identity. Any selected Codex route still requires successful no-inference preflight.
-Product model selection remains in `vault/settings/llm_routing.md` and its compiled settings. Base
-Compose and production receive no MARR binding from this dev/test support.
+may contain only `MODEL_ACCESS_CODEX_VLAN_ENDPOINT` and the three CA/certificate/key path
+references. The deploy wrapper fails closed on duplicate, malformed, or additional keys; it accepts
+only an HTTPS endpoint without URL credentials and absolute file paths, then exports just those
+four values. Compose does not read the raw file as a service `env_file`, so unrelated settings or
+credentials cannot leak into Product containers. The file selects no model and activates no route.
+The deploy entrypoint validates this separation before acquiring the channel lock or preparing
+migrations/state. Immediately before a dev/test Compose invocation, it snapshots the governed
+runtime env into a private mode-0600 temporary file and passes that stable snapshot as the normal
+service `env_file`; the snapshot is removed when Compose exits. This prevents a later path swap
+from making Compose read the MARR file through the generic runtime-env layer.
+If the client directory is absent, Compose may create an empty host directory so the mock-default
+channel can still start; this does not provision an identity. Any selected Codex route still
+requires successful no-inference preflight. Product model selection remains in
+`vault/settings/llm_routing.md` and its compiled settings. Base Compose and production receive no
+MARR binding from this dev/test support.
 
 For embeddings, a blank compiled task target also permits the operator activation seam
 `EMBED_PROFILE` to select one complete named identity (provider, model, dimension, and

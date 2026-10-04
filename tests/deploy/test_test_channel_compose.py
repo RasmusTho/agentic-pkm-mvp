@@ -20,6 +20,12 @@ TEST_ENV = REPO_ROOT / "config/deploy/test.env"
 MODEL_ACCESS_ENV_FILE = "/etc/yggdrasil/model-access/runtime.env"
 MODEL_ACCESS_HOST_IDENTITY = "/etc/yggdrasil/model-access/codex-client"
 MODEL_ACCESS_CONTAINER_IDENTITY = "/run/model-access/codex-client"
+MODEL_ACCESS_ENV_KEYS = (
+    "MODEL_ACCESS_CODEX_VLAN_ENDPOINT",
+    "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE",
+    "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT",
+    "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
+)
 pytestmark = pytest.mark.skipif(
     shutil.which("docker") is None,
     reason="docker executable not found on PATH",
@@ -31,6 +37,7 @@ def _merged_compose(
     *,
     explicit_vault: Path | None = None,
     llm_provider: str | None = None,
+    model_access_bindings: dict[str, str] | None = None,
 ) -> dict[str, object]:
     env = os.environ.copy()
     for key in (
@@ -40,6 +47,7 @@ def _merged_compose(
         "VAULT_HOST_ROOT",
         "VAULT_ROOT",
         "VAULT_ROOT_TEST",
+        *MODEL_ACCESS_ENV_KEYS,
     ):
         env.pop(key, None)
     env["WATCHER_ENABLE"] = "1" if explicit_vault is None else "0"
@@ -47,6 +55,8 @@ def _merged_compose(
     env["WATCHER_RUNTIME_ENV_FILE"] = str(runtime_env)
     if llm_provider is not None:
         env["LLM_PROVIDER"] = llm_provider
+    if model_access_bindings is not None:
+        env.update(model_access_bindings)
     env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"] = str(
         runtime_env.parent / "instance-ownership"
     )
@@ -116,17 +126,6 @@ def _mount_source(service: dict[str, object], target: str) -> str | None:
     return None
 
 
-def _has_optional_env_file(service: dict[str, object], path: str) -> bool:
-    env_files = service.get("env_file", [])
-    assert isinstance(env_files, list)
-    return any(
-        isinstance(entry, dict)
-        and entry.get("path") == path
-        and entry.get("required") is False
-        for entry in env_files
-    )
-
-
 def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
     tmp_path: Path,
 ) -> None:
@@ -138,8 +137,18 @@ def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
 
     for name in ("api", "worker", "watcher"):
         service = services[name]
-        assert _has_optional_env_file(
-            overlay_services[name], MODEL_ACCESS_ENV_FILE
+        overlay_service = overlay_services[name]
+        overlay_environment = overlay_service.get("environment")
+        assert isinstance(overlay_environment, dict)
+        assert set(MODEL_ACCESS_ENV_KEYS).issubset(overlay_environment)
+        for key in MODEL_ACCESS_ENV_KEYS:
+            assert overlay_environment[key] == f"${{{key}:-}}"
+        env_files = overlay_service.get("env_file", [])
+        assert isinstance(env_files, list)
+        assert not any(
+            (entry.get("path") if isinstance(entry, dict) else entry)
+            == MODEL_ACCESS_ENV_FILE
+            for entry in env_files
         )
         mount_targets = _mount_targets(service)
         assert MODEL_ACCESS_CONTAINER_IDENTITY in mount_targets
@@ -168,6 +177,9 @@ def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
     for name, service in overlay_services.items():
         if name in {"api", "worker", "watcher"}:
             continue
+        environment = service.get("environment", {})
+        assert isinstance(environment, dict)
+        assert not set(MODEL_ACCESS_ENV_KEYS).intersection(environment), name
         env_files = service.get("env_file", [])
         assert isinstance(env_files, list)
         assert not any(
@@ -175,6 +187,21 @@ def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
             == MODEL_ACCESS_ENV_FILE
             for entry in env_files
         ), name
+
+    runtime_env.write_text("", encoding="utf-8")
+    expected_bindings = {
+        "MODEL_ACCESS_CODEX_VLAN_ENDPOINT": "https://192.0.2.25:8443",
+        "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE": "/run/model-access/codex-client/ca.pem",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT": "/run/model-access/codex-client/client.pem",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY": "/run/model-access/codex-client/client.key",
+    }
+    configured_services = _services(
+        _merged_compose(runtime_env, model_access_bindings=expected_bindings)
+    )
+    for name in ("api", "worker", "watcher"):
+        configured_environment = _environment(configured_services[name])
+        for key, value in expected_bindings.items():
+            assert configured_environment[key] == value
 
 
 def test_test_runtime_services_use_configured_provider_with_mock_default(

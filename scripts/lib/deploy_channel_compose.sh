@@ -40,6 +40,227 @@ _deploy_channel_resolve_runtime_env_file() {
   esac
 }
 
+_deploy_channel_model_access_config_blocked() {
+  local reason="${1:?reason required}"
+  echo "model-access runtime env preflight: blocked reason=${reason}" >&2
+  return 78
+}
+
+deploy_channel_model_access_runtime_env_preflight() {
+  local runtime_env_file="${1:?model-access runtime env file required}"
+  local bindings assignment key value
+  local -a model_access_keys=(
+    MODEL_ACCESS_CODEX_VLAN_ENDPOINT
+    MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE
+    MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT
+    MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY
+  )
+
+  # Never let inherited shell values bypass this file's allowlist, including
+  # when the optional host-local file is absent.
+  for key in "${model_access_keys[@]}"; do
+    unset "${key}"
+  done
+
+  if [ ! -e "${runtime_env_file}" ] && [ ! -L "${runtime_env_file}" ]; then
+    echo "model-access runtime env preflight: ok status=optional_missing" >&2
+    return 0
+  fi
+  if [ ! -f "${runtime_env_file}" ]; then
+    _deploy_channel_model_access_config_blocked invalid_file
+    return $?
+  fi
+
+  if ! bindings="$(
+    RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON:-python3}" - 2>/dev/null <<'PY'
+from __future__ import annotations
+
+import os
+from pathlib import PurePosixPath
+import sys
+from urllib.parse import urlsplit
+
+
+allowed = {
+    "MODEL_ACCESS_CODEX_VLAN_ENDPOINT",
+    "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE",
+    "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT",
+    "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
+}
+
+
+def refuse() -> None:
+    raise SystemExit(2)
+
+
+try:
+    with open(os.environ["RUNTIME_ENV_FILE"], "rb") as stream:
+        raw_content = stream.read(65537)
+    if len(raw_content) > 65536:
+        refuse()
+    content = raw_content.decode("utf-8")
+except (OSError, UnicodeError):
+    refuse()
+
+values: dict[str, str] = {}
+for line in content.splitlines():
+    if not line.strip() or line.lstrip().startswith("#"):
+        continue
+    if "=" not in line:
+        refuse()
+    key, value = line.split("=", 1)
+    if key not in allowed or key in values:
+        refuse()
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        refuse()
+    if key == "MODEL_ACCESS_CODEX_VLAN_ENDPOINT":
+        try:
+            endpoint = urlsplit(value)
+            hostname = endpoint.hostname
+        except ValueError:
+            refuse()
+        if (
+            endpoint.scheme != "https"
+            or not endpoint.netloc
+            or not hostname
+            or endpoint.username is not None
+            or endpoint.password is not None
+        ):
+            refuse()
+    elif value and not PurePosixPath(value).is_absolute():
+        refuse()
+    values[key] = value
+
+for key in sorted(allowed):
+    sys.stdout.write(f"{key}={values.get(key, '')}\n")
+PY
+  )"; then
+    _deploy_channel_model_access_config_blocked invalid_contents
+    return $?
+  fi
+
+  while IFS= read -r assignment; do
+    key="${assignment%%=*}"
+    value="${assignment#*=}"
+    case "${key}" in
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT|MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE|MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT|MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY)
+        export "${key}=${value}"
+        ;;
+      *)
+        _deploy_channel_model_access_config_blocked invalid_parser_output
+        return $?
+        ;;
+    esac
+  done <<< "${bindings}"
+
+  echo "model-access runtime env preflight: ok status=allowlist_validated" >&2
+}
+
+_deploy_channel_runtime_env_aliases_model_access_file() {
+  local runtime_env_file="${1:?runtime env file required}"
+  local model_access_env_file="${2:?model-access env file required}"
+  [ -e "${runtime_env_file}" ] \
+    && [ -e "${model_access_env_file}" ] \
+    && [ "${runtime_env_file}" -ef "${model_access_env_file}" ]
+}
+
+deploy_channel_model_access_preflight() {
+  local runtime_env_file="${1:?governed runtime env file required}"
+  local model_access_env_file="${2:?model-access env file required}"
+
+  if _deploy_channel_runtime_env_aliases_model_access_file \
+    "${runtime_env_file}" "${model_access_env_file}"; then
+    _deploy_channel_model_access_config_blocked runtime_env_alias
+    return $?
+  fi
+  deploy_channel_model_access_runtime_env_preflight "${model_access_env_file}"
+}
+
+_deploy_channel_snapshot_runtime_env_file() {
+  local runtime_env_file="${1:?runtime env file required}"
+  local model_access_env_file="${2:?model-access env file required}"
+  local snapshot_file="${3:?private runtime env snapshot required}"
+
+  if ! RUNTIME_ENV_SOURCE="${runtime_env_file}" \
+    MODEL_ACCESS_ENV_SOURCE="${model_access_env_file}" \
+    RUNTIME_ENV_SNAPSHOT="${snapshot_file}" \
+    "${PYTHON:-python3}" - 2>/dev/null <<'PY'
+from __future__ import annotations
+
+import os
+import shutil
+import stat
+
+
+def refuse() -> None:
+    raise SystemExit(2)
+
+
+try:
+    source_fd = os.open(
+        os.environ["RUNTIME_ENV_SOURCE"], os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    )
+except FileNotFoundError:
+    # Preserve the existing optional env_file behavior while pinning absence:
+    # Compose receives an empty private file, so a later path replacement is
+    # never picked up during this deployment.
+    raise SystemExit(0)
+except OSError:
+    refuse()
+
+try:
+    before = os.fstat(source_fd)
+    if not stat.S_ISREG(before.st_mode):
+        refuse()
+    try:
+        model_access_stat = os.stat(os.environ["MODEL_ACCESS_ENV_SOURCE"])
+    except FileNotFoundError:
+        model_access_stat = None
+    if model_access_stat is not None and (before.st_dev, before.st_ino) == (
+        model_access_stat.st_dev,
+        model_access_stat.st_ino,
+    ):
+        refuse()
+
+    snapshot_fd = os.open(
+        os.environ["RUNTIME_ENV_SNAPSHOT"],
+        os.O_WRONLY | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+    )
+    try:
+        os.fchmod(snapshot_fd, 0o600)
+        with os.fdopen(os.dup(source_fd), "rb") as source, os.fdopen(
+            snapshot_fd, "wb"
+        ) as snapshot:
+            snapshot_fd = -1
+            shutil.copyfileobj(source, snapshot)
+            snapshot.flush()
+        after = os.fstat(source_fd)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            refuse()
+    finally:
+        if snapshot_fd >= 0:
+            os.close(snapshot_fd)
+finally:
+    os.close(source_fd)
+PY
+  then
+    _deploy_channel_model_access_config_blocked runtime_env_snapshot
+    return $?
+  fi
+}
+
 _deploy_channel_tts_config_blocked() {
   local reason="${1:?reason required}"
   local path_class="${2:?path class required}"
@@ -481,23 +702,27 @@ deploy_channel_compose() {
   local channel_env_file="${5:?channel env file required}"
   shift 5
 
-  resolve_instance_ownership_host_state_dir || return $?
-
   local runtime_env_ref runtime_env_file llm_provider runtime_llm_provider
   local vault_host_root vault_container_root receipt_host_dir
+  local model_access_env_file="/etc/yggdrasil/model-access/runtime.env"
   local -a compose_args
   compose_args=(-f "${root}/docker-compose.yaml" -f "${root}/${compose_overlay}")
 
-  # Resolve the governed runtime env file path. It is used below ONLY to read
-  # VAULT_HOST_ROOT for the overlay decision, to pin WATCHER_RUNTIME_ENV_FILE
-  # for the service `env_file:` layer, and to resolve the non-secret
-  # LLM_PROVIDER selector. It is NEVER passed to Compose as a CLI `--env-file`:
-  # that would expose its DSNs and other values to Compose interpolation (#3875
-  # — a previous dead `env_args` block here looked like it did exactly that; do
-  # not reintroduce it).
   _deploy_channel_resolve_runtime_env_file "${root}" "${channel}" "${channel_env_file}"
   runtime_env_ref="${DEPLOY_CHANNEL_RUNTIME_ENV_REF}"
   runtime_env_file="${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}"
+
+  if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; then
+    deploy_channel_model_access_preflight \
+      "${runtime_env_file}" "${model_access_env_file}" || return $?
+  fi
+
+  resolve_instance_ownership_host_state_dir || return $?
+
+  # The governed runtime env file supplies Product's normal runtime settings.
+  # It must remain distinct from the MARR path-reference file validated above;
+  # otherwise base Compose's service env_file chain would forward every MARR
+  # entry and bypass the explicit four-key environment mapping.
 
   llm_provider="$(_deploy_channel_env_value "${channel_env_file}" LLM_PROVIDER)"
   runtime_llm_provider=""
@@ -616,22 +841,35 @@ deploy_channel_compose() {
     # form), so a private temp file does not weaken the runtime env ownership
     # boundary the earlier in-memory-only comment protected.
     local signboard_override_file compose_stdout_file compose_stderr_file compose_rc
+    local runtime_env_snapshot_file
     signboard_override_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-signboard-override.XXXXXX")"
     compose_stdout_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stdout.XXXXXX")"
     compose_stderr_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stderr.XXXXXX")"
+    if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; then
+      runtime_env_snapshot_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-runtime-env.XXXXXX")"
+    else
+      runtime_env_snapshot_file=""
+    fi
     # EXIT here is scoped to this `( ... )` subshell only (traps set inside a
     # subshell do not leak into the parent shell), so this fires exactly once
     # when the subshell running the actual Compose invocation exits, on every
     # path including an early `exit 1` above or a failing Compose command.
-    trap 'rm -f -- "${signboard_override_file}" "${compose_stdout_file}" "${compose_stderr_file}"' EXIT
+    trap 'rm -f -- "${signboard_override_file}" "${compose_stdout_file}" "${compose_stderr_file}"; if [ -n "${runtime_env_snapshot_file}" ]; then rm -f -- "${runtime_env_snapshot_file}"; fi' EXIT
     _deploy_channel_signboard_override_document > "${signboard_override_file}"
     compose_args+=(-f "${signboard_override_file}")
 
     # Compose gives the caller shell precedence over --env-file values. Pin the
     # governed selectors here so a stale parent shell cannot swap the selected
-    # runtime env, provider selector, or vault after the decisions above. The
-    # runtime env itself stays a service env_file; passing it as a CLI --env-file
-    # would expose its DSNs and other values to Compose interpolation.
+    # runtime env, provider selector, or vault after the decisions above. For
+    # dev/test, pass a private point-in-time copy of the already-distinct runtime
+    # env file: Compose cannot then follow a path replacement back to the
+    # model-access file between preflight and reading its env_file. The copy is
+    # a service env_file, never a CLI --env-file, so DSNs are not interpolated.
+    if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; then
+      _deploy_channel_snapshot_runtime_env_file \
+        "${runtime_env_file}" "${model_access_env_file}" "${runtime_env_snapshot_file}" || return $?
+      runtime_env_ref="${runtime_env_snapshot_file}"
+    fi
     export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
     if [ "${DEPLOY_TTS_CONFIG_GOVERNED:-0}" = "1" ]; then
       export TTS_ENABLED="${DEPLOY_TTS_ENABLED}"

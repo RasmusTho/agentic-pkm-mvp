@@ -28,6 +28,12 @@ RUNTIME_SERVICES = ("api", "worker", "watcher")
 MODEL_ACCESS_ENV_FILE = "/etc/yggdrasil/model-access/runtime.env"
 MODEL_ACCESS_HOST_IDENTITY = "/etc/yggdrasil/model-access/codex-client"
 MODEL_ACCESS_CONTAINER_IDENTITY = "/run/model-access/codex-client"
+MODEL_ACCESS_ENV_KEYS = (
+    "MODEL_ACCESS_CODEX_VLAN_ENDPOINT",
+    "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE",
+    "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT",
+    "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
+)
 VAULT_BINDING_KEYS = ("VAULT_ROOT", "VAULT_ROOT_DEV")
 requires_docker = pytest.mark.skipif(
     shutil.which("docker") is None,
@@ -334,6 +340,7 @@ deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev-signboard-contrac
         "VAULT_HOST_ROOT",
         "VAULT_ROOT",
         "WATCHER_RUNTIME_ENV_FILE",
+        *MODEL_ACCESS_ENV_KEYS,
     ):
         env.pop(key, None)
     env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"] = str(tmp_path / "instance-ownership")
@@ -396,15 +403,6 @@ def _env_file_entries(service: dict[str, object]) -> list[object]:
     env_files = service.get("env_file", [])
     assert isinstance(env_files, list)
     return env_files
-
-
-def _has_optional_env_file(service: dict[str, object], path: str) -> bool:
-    return any(
-        isinstance(entry, dict)
-        and entry.get("path") == path
-        and entry.get("required") is False
-        for entry in _env_file_entries(service)
-    )
 
 
 @pytest.fixture
@@ -602,8 +600,16 @@ def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
     for name in RUNTIME_SERVICES:
         service = services[name]
         assert isinstance(service, dict)
-        assert _has_optional_env_file(
-            overlay_services[name], MODEL_ACCESS_ENV_FILE
+        overlay_service = overlay_services[name]
+        overlay_environment = overlay_service.get("environment")
+        assert isinstance(overlay_environment, dict)
+        assert set(MODEL_ACCESS_ENV_KEYS).issubset(overlay_environment)
+        for key in MODEL_ACCESS_ENV_KEYS:
+            assert overlay_environment[key] == f"${{{key}:-}}"
+        assert not any(
+            (entry.get("path") if isinstance(entry, dict) else entry)
+            == MODEL_ACCESS_ENV_FILE
+            for entry in _env_file_entries(overlay_service)
         )
         mount = _rendered_mount(service, MODEL_ACCESS_CONTAINER_IDENTITY)
         assert mount is not None
@@ -616,6 +622,9 @@ def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
     for name, service in overlay_services.items():
         if name in RUNTIME_SERVICES:
             continue
+        service_environment = service.get("environment", {})
+        assert isinstance(service_environment, dict)
+        assert not set(MODEL_ACCESS_ENV_KEYS).intersection(service_environment), name
         assert not any(
             (entry.get("path") if isinstance(entry, dict) else entry)
             == MODEL_ACCESS_ENV_FILE

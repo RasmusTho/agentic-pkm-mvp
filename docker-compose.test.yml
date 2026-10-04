@@ -48,9 +48,6 @@ services:
         read_only: true
         bind:
           create_host_path: true
-    env_file:
-      - path: /etc/yggdrasil/model-access/runtime.env
-        required: false
     environment:
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       API_HEALTHCHECK_URL: http://host.docker.internal:18002/readyz
@@ -58,6 +55,10 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
       # Keep the universal TEST overlay fail-closed when no vault overlay is
       # selected. The explicit legacy-vault overlay comes later and restores
       # the operator-selected /app/vault watcher binding.
@@ -82,15 +83,16 @@ services:
         read_only: true
         bind:
           create_host_path: true
-    env_file:
-      - path: /etc/yggdrasil/model-access/runtime.env
-        required: false
     environment:
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
       WATCHER_ENABLE: "0"
       WATCHER_VAULT_PATH: ""
       WATCHER_STATE_DIR: tmp-test
@@ -112,15 +114,16 @@ services:
         read_only: true
         bind:
           create_host_path: true
-    env_file:
-      - path: /etc/yggdrasil/model-access/runtime.env
-        required: false
     environment:
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
       WATCHER_ENABLE: "0"
       WATCHER_VAULT_PATH: ""
       WATCHER_STATE_DIR: tmp-test
