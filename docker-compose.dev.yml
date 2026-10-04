@@ -1,4 +1,10 @@
 services:
+  instance-state-init:
+    environment:
+      # The base service inherits LLM_PROVIDER for app import-time safety; keep
+      # non-caller bootstrap work pinned to mock in the dev channel.
+      LLM_PROVIDER: mock
+
   migrate:
     environment:
       PKM_ENVIRONMENT: dev

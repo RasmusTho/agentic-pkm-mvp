@@ -3,6 +3,8 @@ services:
     volumes:
       - "runtime-tmp:/app/tmp-test"
     environment:
+      # Keep the non-caller bootstrap service isolated from channel routing.
+      LLM_PROVIDER: mock
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
 
   migrate:

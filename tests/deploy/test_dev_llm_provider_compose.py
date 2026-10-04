@@ -78,7 +78,7 @@ def test_dev_runtime_services_use_configured_provider_with_mock_default(
         assert _environment(default_service)["LLM_PROVIDER"] == "mock"
         assert _environment(configured_service)["LLM_PROVIDER"] == "governed-provider"
 
-    for name in ("migrate", "heimdal-capture-watch"):
+    for name in ("instance-state-init", "migrate", "heimdal-capture-watch"):
         default_service = default_services[name]
         configured_service = configured_services[name]
         assert isinstance(default_service, dict)
