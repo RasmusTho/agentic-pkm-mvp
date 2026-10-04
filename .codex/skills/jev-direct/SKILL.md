@@ -9,7 +9,7 @@ Use Jev for a bounded development-time choice, score, or yes/no judgment when th
 the current task. Jev returns typed answers; it is not a chat or code-completion model and does not
 change the model that powers Codex or Claude.
 
-The direct route is a local development tool on Demerzel. Send a small JSON object on stdin with
+The direct route is a local development tool on the current Mac. Send a small JSON object on stdin with
 only `state` and `questions`; the command fixes the provider model and endpoint. For example:
 
     printf '%s' '{"state":{"candidate_count":2},"questions":{"best":{"type":"choice","instructions":"Which option best fits the stated goal?","criteria":{"a":"Option A","b":"Option B"}}}}' | "$HOME/.local/bin/jev-direct"

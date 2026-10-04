@@ -14,7 +14,7 @@ can_parallelize_with: [DEFINE_SYSTEM_ONE_JUDGMENT_CONTRACT.md, ADD_TYPESAFE_TO_M
 
 ## State
 
-Target-state task. User authorized direct one-shot Jev calls from Codex and Claude on Demerzel on 2026-10-04. Product and Builder runtime credential bindings remain separate.
+Target-state task. User authorized direct one-shot Jev calls from Codex and Claude on the local development host on 2026-10-04. Product and Builder runtime credential bindings remain separate.
 
 ## Purpose
 
@@ -25,9 +25,9 @@ Let Codex and Claude request bounded typed Jev judgments during development thro
 - Add a standard-library command that accepts bounded JSON on stdin, obtains `typesafe.api-key` by invoking the existing `ygg-secret` helper internally, and sends one request to the fixed TypeSafe System One endpoint using `jev-latest`.
 - Validate the request size and typed question shapes before dispatch; validate that the response has exactly one matching typed answer per question.
 - Require score rubrics to be ordered, unique, non-empty string labels and require the provider legend to match that rubric exactly. Bound secret-helper output to a single small key value and discard helper diagnostics.
-- Return only validated answer JSON and non-secret usage metadata. Never print or persist the API key, authorization header, request state, or raw provider error.
+- Return only validated answer JSON and non-secret usage metadata. The output reports the fixed requested model alias and never forwards provider-controlled model metadata. Never print or persist the API key, authorization header, request state, or raw provider error.
 - Do not retry, fall back, or replay after timeout, process exit, or another ambiguous send outcome; if no validated result returns after dispatch, the outcome is indeterminate.
-- Install one shared executable at `~/.local/bin/jev-direct` and copy the `jev-direct` skill into both `~/.codex/skills/jev-direct/` and `~/.claude/skills/jev-direct/` for the current user on Demerzel. No VM install or remote configuration.
+- Install one shared executable at `~/.local/bin/jev-direct` and copy the `jev-direct` skill into both `~/.codex/skills/jev-direct/` and `~/.claude/skills/jev-direct/` for the current user on the local development host. No VM install or remote configuration.
 - Keep API-key resolution separate from the MARR runtime host-secret contract. Do not change BWS projects, machine accounts, reader scope, or key provisioning.
 
 ## Acceptance Criteria

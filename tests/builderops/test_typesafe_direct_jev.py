@@ -29,10 +29,10 @@ def _request_bytes() -> bytes:
     ).encode("utf-8")
 
 
-def _response_bytes() -> bytes:
+def _response_bytes(*, model: str = "jev-1.13.0") -> bytes:
     return json.dumps(
         {
-            "model": "jev-1.13.0",
+            "model": model,
             "answers": {
                 "best": {
                     "type": "choice",
@@ -132,7 +132,9 @@ def test_cli_makes_one_validated_request_without_emitting_credential(
             assert sent["model"] == "jev-latest"
             assert sent["state"] == {"candidate_count": 2, "source": "synthetic"}
             assert set(sent) == {"state", "model", "questions"}
-            return _FakeResponse(_response_bytes())
+            # A provider-controlled metadata field must never be reflected to stdout,
+            # even if it happens to equal the credential.
+            return _FakeResponse(_response_bytes(model=api_key))
 
     monkeypatch.setattr(ygg_jev.subprocess, "Popen", fake_secret_run)
     def fake_build_opener(*handlers: Any) -> _FakeOpener:
@@ -157,7 +159,7 @@ def test_cli_makes_one_validated_request_without_emitting_credential(
     assert opener_handlers[1] is ygg_jev._NoRedirectHandler
     returned = json.loads(captured.out)
     assert returned == {
-        "model": "jev-1.13.0",
+        "model": "jev-latest",
         "answers": {
             "best": {
                 "type": "choice",

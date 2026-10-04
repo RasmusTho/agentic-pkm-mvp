@@ -244,7 +244,9 @@ def validate_provider_response(raw: bytes, questions: dict[str, Any]) -> dict[st
             if not _finite_number(answer["confidence"]) or not 0 <= answer["confidence"] <= 1:
                 raise InvalidResponse()
 
-    return {"model": model, "answers": answers, "usage": usage}
+    # The provider controls `model` in its response. Report our fixed request alias
+    # instead so arbitrary provider text cannot be reflected to agent stdout.
+    return {"model": MODEL, "answers": answers, "usage": usage}
 
 
 def _stop_secret_helper(process: subprocess.Popen[bytes]) -> None:
