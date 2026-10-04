@@ -27,6 +27,15 @@ Product MARR and Builder adapters need the same typed meaning for `Choice`, `Sco
 
 A request contains one bounded state object and a finite set of typed questions. The response must contain exactly the matching answer IDs and answer type for each question. Invalid or partial responses fail closed.
 
+## Neutral Contract Limits and Answer Mapping
+
+- State is one JSON string, object, or array. The complete serialized request is limited to 16 KiB; it carries 1–16 questions, each with a unique ID of at most 128 characters. Each Choice/Score rubric has 1–64 criteria.
+- The complete serialized response is limited to 16 KiB. It carries exactly one answer for every question, with no duplicate or unknown IDs and the same answer kind as the question.
+- Choice returns the selected label, its confidence, and probabilities for exactly the submitted labels. Score returns the expected score, confidence, a contiguous zero-based legend matching the submitted ordered rubric, and probabilities for every rubric level. Each distribution must sum to 1 within 0.01; every probability and confidence is finite and in `[0, 1]`.
+- Noul returns the probability that its yes/true condition holds, finite and in `[0, 1]`. Noul has no separate confidence field; values near 0.5 express uncertainty.
+- Every response carries provider and returned model provenance. Validation is local and pure: it does not call a provider, perform routing, resolve credentials, or select fallback.
+- Limits count canonical compact UTF-8 JSON bytes after serialization. Consumer-specific allowlists and smaller limits remain owned by each caller.
+
 ## Why This Matters
 
 Without a neutral contract, Product and Builder could interpret confidence, missing answers, or question meaning differently and accidentally couple their authority boundaries.

@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import ipaddress
+import json
+import math
 import re
 from typing import Annotated, Any, Literal, Protocol, runtime_checkable
 
@@ -21,6 +23,7 @@ from pydantic import (
     ConfigDict,
     Field,
     StringConstraints,
+    field_validator,
     model_validator,
 )
 from referencing import Registry
@@ -770,12 +773,296 @@ def validate_resolved_group(
     return resolution_tuple
 
 
+# Bounded typed judgments are neutral data contracts. Consumer-specific request
+# allowlists remain in Product MARR and Builder CKM, which compose these models.
+MAX_SYSTEM_ONE_REQUEST_BYTES = 16 * 1024
+MAX_SYSTEM_ONE_RESPONSE_BYTES = 16 * 1024
+MAX_SYSTEM_ONE_QUESTIONS = 16
+MAX_SYSTEM_ONE_CRITERIA = 64
+PROBABILITY_SUM_TOLERANCE = 0.01
+
+_Probability = Annotated[
+    float,
+    Field(ge=0.0, le=1.0, allow_inf_nan=False),
+]
+_ScoreValue = Annotated[
+    float,
+    Field(ge=0.0, allow_inf_nan=False),
+]
+_QuestionId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+]
+_ChoiceId = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+]
+_JsonContent = str | dict[str, Any] | list[Any]
+
+
+def _validate_probability_distribution(
+    values: Mapping[Any, float], *, field_name: str
+) -> None:
+    if not values:
+        raise ValueError(f"{field_name} must not be empty")
+    if not math.isclose(
+        math.fsum(values.values()),
+        1.0,
+        rel_tol=0.0,
+        abs_tol=PROBABILITY_SUM_TOLERANCE,
+    ):
+        raise ValueError(
+            f"{field_name} probabilities must sum to 1 within "
+            f"{PROBABILITY_SUM_TOLERANCE}"
+        )
+
+
+def _serialized_json_size(value: object, *, field_name: str) -> int:
+    try:
+        serialized = json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must contain only finite JSON values") from exc
+    return len(serialized)
+
+
+class _StrictJudgmentModel(_StrictFrozenModel):
+    """Strict immutable leaf model for System One request/answer data."""
+
+
+class NoulQuestion(_StrictJudgmentModel):
+    question_id: _QuestionId
+    kind: Literal["noul"]
+    instructions: _JsonContent
+    criteria: dict[Literal["true", "false"], _JsonContent | None] | None = None
+
+    @model_validator(mode="after")
+    def _validate_criteria(self) -> "NoulQuestion":
+        if self.criteria is not None and not self.criteria:
+            raise ValueError("noul criteria must not be empty when supplied")
+        return self
+
+
+class ChoiceQuestion(_StrictJudgmentModel):
+    question_id: _QuestionId
+    kind: Literal["choice"]
+    instructions: _JsonContent
+    criteria: dict[_ChoiceId, _JsonContent | None] = Field(
+        min_length=1, max_length=MAX_SYSTEM_ONE_CRITERIA
+    )
+
+
+class ScoreQuestion(_StrictJudgmentModel):
+    question_id: _QuestionId
+    kind: Literal["score"]
+    instructions: _JsonContent
+    criteria: tuple[_JsonContent, ...] = Field(
+        min_length=1, max_length=MAX_SYSTEM_ONE_CRITERIA
+    )
+
+    @field_validator("criteria", mode="before")
+    @classmethod
+    def _accept_json_array(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+
+SystemOneQuestion = Annotated[
+    NoulQuestion | ChoiceQuestion | ScoreQuestion,
+    Field(discriminator="kind"),
+]
+
+
+class ChoiceJudgmentAnswer(_StrictJudgmentModel):
+    question_id: _QuestionId
+    kind: Literal["choice"]
+    choice: _ChoiceId
+    confidence: _Probability
+    probabilities: dict[_ChoiceId, _Probability] = Field(
+        min_length=1, max_length=MAX_SYSTEM_ONE_CRITERIA
+    )
+
+    @model_validator(mode="after")
+    def _validate_probabilities(self) -> "ChoiceJudgmentAnswer":
+        _validate_probability_distribution(
+            self.probabilities, field_name="choice answer"
+        )
+        if self.choice not in self.probabilities:
+            raise ValueError("selected choice must have a probability")
+        return self
+
+
+class ScoreJudgmentAnswer(_StrictJudgmentModel):
+    question_id: _QuestionId
+    kind: Literal["score"]
+    score: _ScoreValue
+    confidence: _Probability
+    legend: dict[int, _JsonContent] = Field(
+        min_length=1, max_length=MAX_SYSTEM_ONE_CRITERIA
+    )
+    probabilities: dict[int, _Probability] = Field(
+        min_length=1, max_length=MAX_SYSTEM_ONE_CRITERIA
+    )
+
+    @field_validator("legend", "probabilities", mode="before")
+    @classmethod
+    def _accept_json_object_keys(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized: dict[int, Any] = {}
+        for key, item in value.items():
+            if isinstance(key, int) and not isinstance(key, bool):
+                normalized[key] = item
+                continue
+            if isinstance(key, str) and key.isdecimal() and str(int(key)) == key:
+                normalized[int(key)] = item
+                continue
+            return value
+        return normalized
+
+    @model_validator(mode="after")
+    def _validate_probabilities(self) -> "ScoreJudgmentAnswer":
+        _validate_probability_distribution(
+            self.probabilities, field_name="score answer"
+        )
+        if set(self.legend) != set(self.probabilities):
+            raise ValueError("score legend and probabilities must have the same levels")
+        if set(self.legend) != set(range(len(self.legend))):
+            raise ValueError("score levels must be contiguous and start at zero")
+        if self.score > len(self.legend) - 1:
+            raise ValueError("score exceeds the highest requested level")
+        return self
+
+
+class NoulJudgmentAnswer(_StrictJudgmentModel):
+    question_id: _QuestionId
+    kind: Literal["noul"]
+    # Noul is a yes-probability; unlike Choice and Score, it has no separate
+    # confidence value in TypeSafe's primitive contract.
+    noul: _Probability
+
+
+SystemOneJudgmentAnswer = Annotated[
+    ChoiceJudgmentAnswer | ScoreJudgmentAnswer | NoulJudgmentAnswer,
+    Field(discriminator="kind"),
+]
+
+
+class JudgmentProvenance(_StrictJudgmentModel):
+    provider: NonEmptyString
+    model: NonEmptyString
+
+
+class SystemOneJudgmentRequest(_StrictJudgmentModel):
+    state: _JsonContent
+    questions: tuple[SystemOneQuestion, ...] = Field(
+        min_length=1, max_length=MAX_SYSTEM_ONE_QUESTIONS
+    )
+
+    @field_validator("questions", mode="before")
+    @classmethod
+    def _accept_json_array(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def _validate_question_ids_and_size(self) -> "SystemOneJudgmentRequest":
+        ids = [question.question_id for question in self.questions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("question IDs must be unique")
+        size = _serialized_json_size(
+            self.model_dump(mode="json"), field_name="request"
+        )
+        if size > MAX_SYSTEM_ONE_REQUEST_BYTES:
+            raise ValueError(
+                f"request exceeds {MAX_SYSTEM_ONE_REQUEST_BYTES} serialized UTF-8 bytes"
+            )
+        return self
+
+
+class SystemOneJudgmentResponse(_StrictJudgmentModel):
+    answers: tuple[SystemOneJudgmentAnswer, ...] = Field(
+        min_length=1, max_length=MAX_SYSTEM_ONE_QUESTIONS
+    )
+    provenance: JudgmentProvenance
+
+    @field_validator("answers", mode="before")
+    @classmethod
+    def _accept_json_array(cls, value: Any) -> Any:
+        return tuple(value) if isinstance(value, list) else value
+
+    @model_validator(mode="after")
+    def _validate_answer_ids_and_size(self) -> "SystemOneJudgmentResponse":
+        ids = [answer.question_id for answer in self.answers]
+        if len(ids) != len(set(ids)):
+            raise ValueError("answer IDs must be unique")
+        size = _serialized_json_size(
+            self.model_dump(mode="json"), field_name="response"
+        )
+        if size > MAX_SYSTEM_ONE_RESPONSE_BYTES:
+            raise ValueError(
+                f"response exceeds {MAX_SYSTEM_ONE_RESPONSE_BYTES} serialized UTF-8 bytes"
+            )
+        return self
+
+    def validate_against(
+        self, request: SystemOneJudgmentRequest
+    ) -> "SystemOneJudgmentResponse":
+        """Require one answer of the declared kind for every submitted question."""
+        questions = {question.question_id: question for question in request.questions}
+        answers = {answer.question_id: answer for answer in self.answers}
+        if answers.keys() != questions.keys():
+            raise ValueError("answer IDs must exactly match request question IDs")
+        for question_id, question in questions.items():
+            answer = answers[question_id]
+            if answer.kind != question.kind:
+                raise ValueError(
+                    f"answer type for {question_id!r} does not match its question"
+                )
+            if isinstance(question, ChoiceQuestion):
+                assert isinstance(answer, ChoiceJudgmentAnswer)
+                expected = set(question.criteria)
+                if set(answer.probabilities) != expected:
+                    raise ValueError(
+                        f"choice probability IDs for {question_id!r} must match criteria"
+                    )
+            elif isinstance(question, ScoreQuestion):
+                assert isinstance(answer, ScoreJudgmentAnswer)
+                expected_score_levels: set[int] = set(range(len(question.criteria)))
+                if (
+                    set(answer.probabilities) != expected_score_levels
+                    or set(answer.legend) != expected_score_levels
+                ):
+                    raise ValueError(
+                        f"score levels for {question_id!r} must match the requested rubric"
+                    )
+        return self
+
+
+def validate_system_one_judgment_response(
+    request: SystemOneJudgmentRequest,
+    response: SystemOneJudgmentResponse,
+) -> SystemOneJudgmentResponse:
+    """Validate the response against the exact request that produced it."""
+    return response.validate_against(request)
+
+
 __all__ = (
     "ADAPTER_FAILURE_CLASSES",
     "FALLBACK_REQUIREMENTS",
+    "MAX_SYSTEM_ONE_CRITERIA",
+    "MAX_SYSTEM_ONE_QUESTIONS",
+    "MAX_SYSTEM_ONE_REQUEST_BYTES",
+    "MAX_SYSTEM_ONE_RESPONSE_BYTES",
+    "PROBABILITY_SUM_TOLERANCE",
     "AdapterResult",
     "AdapterId",
     "AuthenticationScheme",
+    "ChoiceJudgmentAnswer",
+    "ChoiceQuestion",
     "CapabilityProvenance",
     "CapabilityTier",
     "CatalogSnapshotRef",
@@ -785,6 +1072,7 @@ __all__ = (
     "FallbackRequirement",
     "FallbackReasonCode",
     "IndependenceRequirement",
+    "JudgmentProvenance",
     "LogicalProfileRef",
     "ModelAccessIntent",
     "ModelAccessAdapterDescriptor",
@@ -797,6 +1085,8 @@ __all__ = (
     "ModelCapabilityRequirements",
     "ModelResolutionRequest",
     "ModelTurnAdapter",
+    "NoulJudgmentAnswer",
+    "NoulQuestion",
     "PreflightFailureCode",
     "PreflightStatus",
     "ProviderId",
@@ -806,11 +1096,18 @@ __all__ = (
     "RouteDegradationCode",
     "SchemaValidationError",
     "SchemaValidator",
+    "ScoreJudgmentAnswer",
+    "ScoreQuestion",
     "Sha256Digest",
     "ScopeIdentifier",
+    "SystemOneJudgmentAnswer",
+    "SystemOneJudgmentRequest",
+    "SystemOneJudgmentResponse",
+    "SystemOneQuestion",
     "TrustedInstructionMapping",
     "TransportId",
     "validate_adapter_failure_class",
     "validate_resolved_group",
+    "validate_system_one_judgment_response",
     "validate_schema_payload",
 )
