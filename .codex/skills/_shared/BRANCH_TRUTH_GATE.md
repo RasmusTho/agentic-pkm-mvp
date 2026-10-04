@@ -48,9 +48,39 @@ At the publish boundary the tree is intentionally dirty, so pass `--allow-dirty`
 worktree drift still fail the gate. At issue pickup (clean tree expected), run the same wrapper
 without `--allow-dirty`; `scripts/issue_pickup_claim.sh` does this automatically.
 
+For an authorized additive merge of `origin/main`, a pending `MERGE_HEAD` cannot
+pass ordinary preflight. Capture `INTEGRATION_TARGET` as the exact full
+`origin/main` SHA before starting that merge; preserve the declared branch and
+worktree identities. After resolving and reviewing the working files, use the
+two explicit integration steps below. The staging step permits the still
+unmerged index; the commit step requires the resolved index to match the
+working files. Both prove the exact pending target is still the fresh remote
+`main`, retain lease checks, and refuse other operations or unknown state.
+
+```bash
+# Use the wrapper from an approved merged source checkout. Its --cwd binds the
+# worktree being checked even when that checkout's older script lacks this path.
+APPROVED_PREFLIGHT="<absolute-approved-checkout>/scripts/agent_workspace_preflight.sh"
+"$APPROVED_PREFLIGHT" --cwd "$EXPECTED_WORKTREE" \
+  --expected-branch "$EXPECTED_BRANCH" --expected-worktree "$EXPECTED_WORKTREE" \
+  --base-branch main --allow-dirty \
+  --integration-merge-target "$INTEGRATION_TARGET" --integration-step stage || exit 1
+# Stage only the reviewed resolution paths, then run this before git commit:
+"$APPROVED_PREFLIGHT" --cwd "$EXPECTED_WORKTREE" \
+  --expected-branch "$EXPECTED_BRANCH" --expected-worktree "$EXPECTED_WORKTREE" \
+  --base-branch main --allow-dirty \
+  --integration-merge-target "$INTEGRATION_TARGET" --integration-step commit || exit 1
+```
+
+This opt-in path is limited to pre-staging and pre-commit. It cannot authorize
+an outdated merge target, an octopus merge, or shared-root work, including with
+`PKM_ALLOW_SHARED_ROOT=1`. A stale pending merge returns to `pr-integration` for
+resolution backup and normal merge recovery; do not edit Git metadata, change
+the captured target to match a refusal, or copy scripts into the pending merge.
+
 **Pre-push (mandatory before `git push`)** [branch-truth-gate]:
 
-Re-run the same preflight — the commit you just made could be on the wrong branch if the workspace
+Re-run ordinary preflight without either integration flag — the commit you just made could be on the wrong branch if the workspace
 drifted between the gates. Non-zero exit => STOP, do not push; relocate the commit to the correct
 branch (for example cherry-pick onto `$EXPECTED_BRANCH` and reset the drifted branch) before
 pushing.

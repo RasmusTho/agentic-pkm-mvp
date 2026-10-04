@@ -141,7 +141,7 @@ def run_git(args: list[str], cwd: Path) -> str:
         capture_output=True,
         text=True,
         env=_sanitized_git_environment(),
-        timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base"} else None,
+        timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base", "ls-remote"} else None,
     )
     return result.stdout.strip()
 
@@ -154,7 +154,7 @@ def run_git_result(args: list[str], cwd: Path) -> subprocess.CompletedProcess[st
         capture_output=True,
         text=True,
         env=_sanitized_git_environment(),
-        timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base"} else None,
+        timeout=GIT_PROBE_TIMEOUT_SECONDS if args[0] in {"status", "merge-base", "ls-remote"} else None,
     )
 
 
@@ -274,7 +274,10 @@ def _base_branch_status(cwd: Path, base_branch: str | None) -> dict[str, Any]:
             head_contains_remote = _is_ancestor(cwd, remote_ref, "HEAD")
 
     if status == "current":
-        mismatch = False
+        head_contains_remote = _is_ancestor(cwd, remote_ref, "HEAD")
+        if head_contains_remote is None:
+            status = "unavailable"
+        mismatch = not head_contains_remote
     elif status == "behind":
         mismatch = not head_contains_remote
     else:
@@ -361,6 +364,93 @@ def in_shared_root(cwd: str | None = None) -> bool:
     return _resolve(raw_git) == _resolve(raw_common)
 
 
+def _integration_merge_status(
+    cwd: Path,
+    *,
+    target: str | None,
+    step: str | None,
+    expected_branch: str | None,
+    expected_worktree: str | None,
+    base_branch: str | None,
+    branch: str,
+    worktree: str,
+    operations: list[str],
+    base_status: dict[str, Any],
+    allow_dirty: bool,
+    require_dedicated_worktree: bool,
+) -> dict[str, Any]:
+    """Prove only an exact pending remote-base merge at the staging/commit boundary."""
+    report: dict[str, Any] = {"ok": False, "target": target, "step": step}
+
+    def refuse(reason: str) -> dict[str, Any]:
+        return {**report, "reason": reason}
+
+    if (
+        not expected_branch or not expected_worktree or base_branch != "main"
+        or not allow_dirty or not require_dedicated_worktree
+        or step not in {"stage", "commit"}
+        or not target or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", target) is None
+    ):
+        return refuse("integration_inputs_required")
+    if branch != expected_branch or Path(worktree).resolve() != Path(expected_worktree).resolve():
+        return refuse("integration_identity_mismatch")
+    if operations != ["merge"] or base_status["status"] not in {"current", "behind", "ahead", "diverged"}:
+        return refuse("integration_state_invalid")
+
+    try:
+        git_dir = _git_dir(cwd).resolve()
+        if git_dir == _git_common_dir(cwd):
+            return refuse("integration_shared_root")
+        if any((git_dir / marker).exists() for marker in ("sequencer", "BISECT_LOG", "MERGE_AUTOSTASH")):
+            return refuse("integration_state_invalid")
+        head = run_git(["rev-parse", "--verify", "HEAD^{commit}"], cwd)
+        merge_head = (git_dir / "MERGE_HEAD").read_text(encoding="ascii").strip()
+        orig_head = (git_dir / "ORIG_HEAD").read_text(encoding="ascii").strip()
+        merge_mode = (git_dir / "MERGE_MODE").read_text(encoding="ascii").strip()
+        if merge_head != target or orig_head != head or merge_mode not in {"", "no-ff"}:
+            return refuse("integration_target_or_head_drift")
+        if run_git(["rev-parse", "--verify", f"{target}^{{commit}}"], cwd) != target:
+            return refuse("integration_target_invalid")
+        contains_target = _is_ancestor(cwd, target, head)
+        if contains_target is not False:
+            return refuse("integration_ancestry_invalid")
+
+        remote_ref = f"refs/heads/{base_branch}"
+        tracking_ref = f"refs/remotes/origin/{base_branch}"
+        run_git(["check-ref-format", remote_ref], cwd)
+
+        def fresh_base() -> bool:
+            # Do not expose transport diagnostics or URLs; only the exact ref/SHA is authority.
+            remote = run_git(["ls-remote", "--exit-code", "--refs", "origin", remote_ref], cwd)
+            tracking = run_git(["rev-parse", "--verify", f"{tracking_ref}^{{commit}}"], cwd)
+            return remote.splitlines() == [f"{target}\t{remote_ref}"] and tracking == target
+
+        if base_status.get("remote_sha") != target or not fresh_base():
+            return refuse("integration_remote_base_drift")
+        run_git(["diff", "--check"], cwd)
+        run_git(["diff", "--cached", "--check"], cwd)
+        if step == "commit":
+            if run_git(["ls-files", "--unmerged"], cwd):
+                return refuse("integration_index_unmerged")
+            run_git(["diff", "--quiet"], cwd)
+
+        if (
+            run_git(["branch", "--show-current"], cwd) != branch
+            or run_git(["rev-parse", "--show-toplevel"], cwd) != worktree
+            or run_git(["rev-parse", "--verify", "HEAD^{commit}"], cwd) != head
+            or (git_dir / "MERGE_HEAD").read_text(encoding="ascii").strip() != target
+            or (git_dir / "ORIG_HEAD").read_text(encoding="ascii").strip() != head
+            or (git_dir / "MERGE_MODE").read_text(encoding="ascii").strip() != merge_mode
+            or _in_progress_operations(cwd) != ["merge"]
+            or any((git_dir / marker).exists() for marker in ("sequencer", "BISECT_LOG", "MERGE_AUTOSTASH"))
+            or not fresh_base()
+        ):
+            return refuse("integration_state_drift")
+    except (OSError, RuntimeError, UnicodeError, subprocess.SubprocessError):
+        return refuse("integration_probe_or_content_failed")
+    return {**report, "ok": True, "head": head, "remote_ref": remote_ref}
+
+
 def preflight_report(
     cwd: Path,
     *,
@@ -373,6 +463,8 @@ def preflight_report(
     allow_dirty: bool = False,
     now: float | None = None,
     require_dedicated_worktree: bool = False,
+    integration_merge_target: str | None = None,
+    integration_step: str | None = None,
 ) -> dict[str, Any]:
     active_leases = active_leases or []
     resource_ids = resource_ids or set()
@@ -384,6 +476,16 @@ def preflight_report(
     base_status = _base_branch_status(cwd, base_branch)
 
     shared_root = in_shared_root(str(cwd)) if require_dedicated_worktree else False
+    integration = None
+    if integration_merge_target is not None or integration_step is not None:
+        integration = _integration_merge_status(
+            cwd, target=integration_merge_target, step=integration_step,
+            expected_branch=expected_branch, expected_worktree=expected_worktree,
+            base_branch=base_branch, branch=branch, worktree=worktree,
+            operations=operations, base_status=base_status, allow_dirty=allow_dirty,
+            require_dedicated_worktree=require_dedicated_worktree,
+        )
+    integration_ok = bool(integration and integration["ok"])
 
     checks = {
         "dirty_tree": bool(status),
@@ -399,14 +501,17 @@ def preflight_report(
         "lease_conflicts": conflicts,
         "shared_root_worktree": shared_root,
     }
+    if integration is not None:
+        checks["integration_merge"] = integration
     ok = not (
         (checks["dirty_tree"] and not allow_dirty)
-        or checks["in_progress_operations"]
+        or (checks["in_progress_operations"] and not integration_ok)
         or checks["branch_mismatch"]
         or checks["worktree_mismatch"]
-        or base_status["mismatch"]
+        or (base_status["mismatch"] and not integration_ok)
         or checks["lease_conflicts"]
         or (require_dedicated_worktree and shared_root)
+        or (integration is not None and not integration_ok)
     )
     return {"ok": ok, "checks": checks}
 
@@ -4505,6 +4610,11 @@ def main(argv: list[str] | None = None) -> int:
     preflight.add_argument("--resource-id", action="append", default=[])
     preflight.add_argument("--execution-id")
     preflight.add_argument(
+        "--integration-merge-target",
+        help="Exact full origin/main SHA expected in a pending MERGE_HEAD (never use before push).",
+    )
+    preflight.add_argument("--integration-step", choices=("stage", "commit"))
+    preflight.add_argument(
         "--allow-dirty",
         action="store_true",
         help="Do not fail on a dirty working tree (use at the publish boundary, "
@@ -4544,6 +4654,8 @@ def main(argv: list[str] | None = None) -> int:
             execution_id=args.execution_id,
             allow_dirty=args.allow_dirty,
             require_dedicated_worktree=args.require_dedicated_worktree,
+            integration_merge_target=args.integration_merge_target,
+            integration_step=args.integration_step,
         )
         _print_json(report)
         return 0 if report["ok"] else 1

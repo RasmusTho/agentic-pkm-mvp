@@ -16,6 +16,29 @@ and active lease conflicts before a local mutation. Dedicated worktrees use
 the remote base as publication authority, so a stale shared local base ref is
 advisory only when the dedicated `HEAD` already contains the remote head.
 
+Ordinary preflight refuses every pending Git operation, including a merge, and
+requires `HEAD` to contain `origin/main` even when local `main` equals that ref.
+For an authorized additive integration of `main`, the explicit
+`--integration-merge-target <full-SHA> --integration-step stage|commit` path
+admits only one pending merge in the declared dedicated branch/worktree.
+Both steps require `--expected-branch`, `--expected-worktree`, `--base-branch main`,
+`--allow-dirty`, and `--require-dedicated-worktree`. The target captured before
+the merge must equal `MERGE_HEAD`, the local `refs/remotes/origin/main`, and the
+fresh exact `refs/heads/main` read from `origin`. `ORIG_HEAD` must still equal
+`HEAD`. Other operations, autostash, malformed/unknown probes, and identity or
+ref drift fail closed; existing lease-conflict checks still apply.
+
+The `stage` step checks resolved working content and previously staged content
+for conflict markers and whitespace errors while allowing an unmerged index.
+The `commit` step additionally requires a resolved index and no unstaged tracked
+changes, so the commit uses the checked resolution. Re-run it after staging.
+Neither step permits push: use ordinary preflight without integration flags
+after the merge commit. The wrapper resolves its Python entrypoint beside its
+own source, so an approved merged wrapper can use `--cwd <exact-worktree>` to
+check a pending integration whose older checkout lacks this interface. This
+does not waive target freshness; preserve resolutions and restart an outdated
+pending merge through the integration workflow before using the new gate.
+
 ## Janitor
 
 The `janitor` command defaults to report-only planning. It identifies stale

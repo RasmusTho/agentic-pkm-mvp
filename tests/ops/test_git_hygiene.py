@@ -3009,6 +3009,276 @@ def test_advisory_behind_not_reported_as_failure(
     assert base["reason"] == "advisory_stale_local_ref"
 
 
+def _integration_git(cwd, *args, check=True):
+    return subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True, check=check,
+        env=git_hygiene._sanitized_git_environment(),
+    )
+
+
+@pytest.fixture
+def pending_integration_repo(tmp_path):
+    repo, remote, worktree = (tmp_path / name for name in ("repo", "origin.git", "worktree"))
+    _integration_git(tmp_path, "init", "--initial-branch=main", str(repo))
+    _integration_git(tmp_path, "init", "--bare", str(remote))
+    _integration_git(repo, "config", "user.name", "Integration Test")
+    _integration_git(repo, "config", "user.email", "integration@example.invalid")
+    _integration_git(repo, "config", "commit.gpgsign", "false")
+    _integration_git(repo, "config", "core.hooksPath", "/dev/null")
+    (repo / "note.md").write_text("base\n")
+    _integration_git(repo, "add", "note.md")
+    _integration_git(repo, "commit", "-m", "base")
+    _integration_git(repo, "remote", "add", "origin", str(remote))
+    _integration_git(repo, "push", "origin", "main")
+    _integration_git(repo, "worktree", "add", "-b", "codex/integrate", str(worktree), "HEAD")
+    (worktree / "note.md").write_text("feature\n")
+    _integration_git(worktree, "add", "note.md")
+    _integration_git(worktree, "commit", "-m", "feature")
+    head = _integration_git(worktree, "rev-parse", "HEAD").stdout.strip()
+    (repo / "note.md").write_text("main\n")
+    _integration_git(repo, "add", "note.md")
+    _integration_git(repo, "commit", "-m", "main advances")
+    _integration_git(repo, "push", "origin", "main")
+    target = _integration_git(repo, "rev-parse", "origin/main").stdout.strip()
+    assert _integration_git(worktree, "merge", "--no-commit", target, check=False).returncode == 1
+    assert _integration_git(worktree, "ls-files", "--unmerged").stdout
+    (worktree / "note.md").write_text("feature\nmain\n")
+    return {"repo": repo, "remote": remote, "worktree": worktree, "target": target, "head": head}
+
+
+def _integration_report(state, *, step="stage", **overrides):
+    options = {
+        "expected_branch": "codex/integrate", "expected_worktree": str(state["worktree"]),
+        "base_branch": "main", "allow_dirty": True, "require_dedicated_worktree": True,
+        "integration_merge_target": state["target"], "integration_step": step,
+    }
+    options.update(overrides)
+    return git_hygiene.preflight_report(state["worktree"], **options)
+
+
+def test_integration_stage_then_commit_real_resolved_conflict(pending_integration_repo):
+    state = pending_integration_repo
+    stage = _integration_report(state)
+    assert stage["ok"] is True
+    assert stage["checks"]["base_branch"]["mismatch"] is True
+    assert _integration_git(state["worktree"], "ls-files", "--unmerged").stdout
+    assert _integration_report(state, step="commit")["ok"] is False
+    _integration_git(state["worktree"], "add", "note.md")
+    assert _integration_report(state, step="commit")["ok"] is True
+    assert git_hygiene.preflight_report(
+        state["worktree"], base_branch="main", allow_dirty=True
+    )["ok"] is False  # The ordinary pre-push path still refuses MERGE_HEAD.
+    _integration_git(state["worktree"], "commit", "-m", "integrate main")
+    parents = _integration_git(state["worktree"], "rev-list", "--parents", "-n", "1", "HEAD").stdout.split()
+    assert parents[1:] == [state["head"], state["target"]]
+    assert _integration_git(state["worktree"], "show", "HEAD:note.md").stdout == "feature\nmain\n"
+    assert git_hygiene.preflight_report(state["worktree"], base_branch="main")["ok"] is True
+    assert _integration_report(state)["ok"] is False  # A completed merge is not an integration exception.
+
+
+@pytest.mark.parametrize("step", ["stage", "commit"])
+def test_integration_rejects_unresolved_content(pending_integration_repo, step):
+    state = pending_integration_repo
+    (state["worktree"] / "note.md").write_text("<<<<<<< HEAD\nfeature\n=======\nmain\n>>>>>>> main\n")
+    if step == "commit":
+        _integration_git(state["worktree"], "add", "note.md")
+    report = _integration_report(state, step=step)
+    assert report["ok"] is False
+    assert report["checks"]["integration_merge"]["reason"] == "integration_probe_or_content_failed"
+
+
+def test_integration_commit_requires_the_resolved_staged_content(pending_integration_repo):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "add", "note.md")
+    (state["worktree"] / "note.md").write_text("a different resolution\n")
+    assert _integration_report(state, step="stage")["ok"] is True
+    assert _integration_report(state, step="commit")["ok"] is False
+
+
+@pytest.mark.parametrize("step", ["stage", "commit"])
+def test_integration_rejects_staged_markers_even_after_worktree_resolution(pending_integration_repo, step):
+    state = pending_integration_repo
+    note = state["worktree"] / "note.md"
+    note.write_text("<<<<<<< HEAD\nfeature\n=======\nmain\n>>>>>>> main\n")
+    _integration_git(state["worktree"], "add", "note.md")
+    note.write_text("feature\nmain\n")
+    assert _integration_git(state["worktree"], "diff", "--check").returncode == 0
+    assert _integration_report(state, step=step)["ok"] is False
+
+
+@pytest.mark.parametrize("overrides", [
+    {"expected_branch": "codex/other"}, {"expected_worktree": "/wrong/worktree"},
+    {"expected_branch": None}, {"expected_worktree": None}, {"base_branch": None},
+    {"base_branch": "dev"},
+    {"allow_dirty": False}, {"require_dedicated_worktree": False},
+    {"integration_merge_target": "abc123"}, {"integration_merge_target": "a" * 40},
+    {"integration_merge_target": None}, {"integration_step": None},
+])
+def test_integration_requires_exact_explicit_identity(pending_integration_repo, overrides):
+    assert _integration_report(pending_integration_repo, **overrides)["ok"] is False
+
+
+@pytest.mark.parametrize("marker", [
+    "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer",
+    "BISECT_LOG", "MERGE_AUTOSTASH",
+])
+def test_integration_rejects_other_git_operations(pending_integration_repo, marker):
+    state = pending_integration_repo
+    path = git_hygiene._git_dir(state["worktree"]) / marker
+    if marker in {"rebase-merge", "rebase-apply", "sequencer"}:
+        path.mkdir()
+    else:
+        path.write_text(state["target"] + "\n")
+    assert _integration_report(state)["ok"] is False
+
+
+@pytest.mark.parametrize("marker,content", [
+    ("ORIG_HEAD", "a" * 40), ("MERGE_HEAD", "a" * 40),
+    ("MERGE_HEAD", "{target}\n{target}"), ("MERGE_MODE", "unknown-mode"),
+])
+def test_integration_rejects_merge_metadata_drift(pending_integration_repo, marker, content):
+    state = pending_integration_repo
+    (git_hygiene._git_dir(state["worktree"]) / marker).write_text(content.format(**state) + "\n")
+    assert _integration_report(state)["ok"] is False
+
+
+def test_integration_rejects_live_remote_drift_even_with_stale_tracking(pending_integration_repo):
+    state = pending_integration_repo
+    (state["repo"] / "note.md").write_text("main moves again\n")
+    _integration_git(state["repo"], "add", "note.md")
+    _integration_git(state["repo"], "commit", "-m", "remote drift")
+    _integration_git(state["repo"], "push", "origin", "main")
+    _integration_git(state["repo"], "update-ref", "refs/remotes/origin/main", state["target"])
+    report = _integration_report(state)
+    assert report["ok"] is False
+    assert report["checks"]["integration_merge"]["reason"] == "integration_remote_base_drift"
+
+
+@pytest.mark.parametrize("drift", ["HEAD", "branch", "MERGE_HEAD", "ORIG_HEAD", "tracking", "operation"])
+def test_integration_rechecks_state_after_content_proof(pending_integration_repo, monkeypatch, drift):
+    state = pending_integration_repo
+    original = git_hygiene.run_git
+
+    def drifting_git(args, cwd):
+        result = original(args, cwd)
+        if args == ["diff", "--cached", "--check"]:
+            if drift == "HEAD":
+                _integration_git(cwd, "update-ref", "HEAD", state["target"])
+            elif drift == "branch":
+                _integration_git(cwd, "symbolic-ref", "HEAD", "refs/heads/main")
+            elif drift == "tracking":
+                _integration_git(cwd, "update-ref", "refs/remotes/origin/main", state["head"])
+            elif drift == "operation":
+                (git_hygiene._git_dir(cwd) / "sequencer").mkdir()
+            else:
+                changed = state["target"] if drift == "ORIG_HEAD" else state["head"]
+                (git_hygiene._git_dir(cwd) / drift).write_text(changed + "\n")
+        return result
+
+    monkeypatch.setattr(git_hygiene, "run_git", drifting_git)
+    assert _integration_report(state)["ok"] is False
+
+
+@pytest.mark.parametrize("error", [
+    subprocess.CalledProcessError(128, ["git", "ls-remote"], stderr="https://user:secret@example.invalid"),
+    subprocess.TimeoutExpired(["git", "ls-remote"], 10, stderr="secret"),
+    OSError("secret"),
+])
+def test_integration_unknown_remote_probe_is_redacted(pending_integration_repo, monkeypatch, error):
+    original = git_hygiene.run_git
+
+    def unavailable(args, cwd):
+        if args[0] == "ls-remote":
+            raise error
+        return original(args, cwd)
+
+    monkeypatch.setattr(git_hygiene, "run_git", unavailable)
+    report = _integration_report(pending_integration_repo)
+    assert report["ok"] is False
+    assert "secret" not in json.dumps(report)
+    assert report["checks"]["integration_merge"]["reason"] == "integration_probe_or_content_failed"
+
+
+def test_integration_unknown_ancestry_is_not_approval(pending_integration_repo, monkeypatch):
+    monkeypatch.setattr(git_hygiene, "_is_ancestor", lambda *_: None)
+    assert _integration_report(pending_integration_repo)["ok"] is False
+
+
+def test_integration_does_not_bypass_lease_conflict(pending_integration_repo):
+    assert _integration_report(
+        pending_integration_repo, resource_ids={"issue:5770"}, execution_id="owner", now=10,
+        active_leases=[{"resource_id": "issue:5770", "execution_id": "other", "expires_at": 20}],
+    )["ok"] is False
+
+
+@pytest.mark.parametrize("entrypoint", ["wrapper", "compatibility", "cli"])
+def test_integration_real_entrypoints_and_strict_push(pending_integration_repo, entrypoint):
+    state = pending_integration_repo
+    source_root = Path(git_hygiene.__file__).resolve().parents[1]
+    script = source_root / "scripts" / {
+        "wrapper": "agent_workspace_preflight.sh", "compatibility": "git_hygiene_preflight.py",
+        "cli": "git_hygiene.py",
+    }[entrypoint]
+    command = [str(script)] if entrypoint == "wrapper" else [sys.executable, str(script)]
+    command += ["--cwd", str(state["worktree"])]
+    if entrypoint == "cli":
+        command += ["preflight"]
+    command += ["--expected-branch", "codex/integrate", "--expected-worktree", str(state["worktree"]),
+                "--base-branch", "main", "--allow-dirty"]
+    if entrypoint != "wrapper":
+        command += ["--require-dedicated-worktree"]
+    integration = ["--integration-merge-target", state["target"], "--integration-step", "stage"]
+    result = subprocess.run(command + integration, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["ok"] is True
+    assert _integration_git(state["worktree"], "ls-files", "--unmerged").stdout
+    assert subprocess.run(command, capture_output=True, text=True).returncode == 1
+    _integration_git(state["worktree"], "add", "note.md")
+    integration[-1] = "commit"
+    assert subprocess.run(command + integration, capture_output=True, text=True).returncode == 0
+
+
+def test_integration_wrapper_cannot_opt_into_shared_root(pending_integration_repo):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "merge", "--abort")
+    _integration_git(state["repo"], "switch", "-c", "codex/root-integrate", state["head"])
+    assert _integration_git(state["repo"], "merge", "--no-commit", state["target"], check=False).returncode == 1
+    (state["repo"] / "note.md").write_text("feature\nmain\n")
+    wrapper = Path(git_hygiene.__file__).with_name("agent_workspace_preflight.sh")
+    result = subprocess.run(
+        [str(wrapper), "--cwd", str(state["repo"]), "--expected-branch", "codex/root-integrate",
+         "--expected-worktree", str(state["repo"]), "--allow-dirty",
+         "--integration-merge-target", state["target"], "--integration-step", "stage"],
+        capture_output=True, text=True, env={**os.environ, "PKM_ALLOW_SHARED_ROOT": "1"},
+    )
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["checks"]["shared_root_worktree"] is True
+
+
+def test_preflight_current_local_base_still_requires_head_coverage(pending_integration_repo):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "merge", "--abort")
+    report = git_hygiene.preflight_report(state["worktree"], base_branch="main")
+    assert report["ok"] is False
+    assert report["checks"]["base_branch"]["status"] == "current"
+    assert report["checks"]["base_branch"]["head_contains_remote"] is False
+
+
+def test_integration_accepts_clean_pending_merge(pending_integration_repo):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "merge", "--abort")
+    (state["repo"] / "note.md").write_text("base\n")
+    (state["repo"] / "main-only.md").write_text("main addition\n")
+    _integration_git(state["repo"], "add", "note.md", "main-only.md")
+    _integration_git(state["repo"], "commit", "-m", "nonconflicting main")
+    _integration_git(state["repo"], "push", "origin", "main")
+    state["target"] = _integration_git(state["repo"], "rev-parse", "origin/main").stdout.strip()
+    _integration_git(state["worktree"], "merge", "--no-commit", state["target"])
+    assert not _integration_git(state["worktree"], "ls-files", "--unmerged").stdout
+    assert _integration_report(state)["ok"] is True
+    assert _integration_report(state, step="commit")["ok"] is True
+
+
 def test_janitor_report_respects_active_lease_and_reports_candidates(
     tmp_path, monkeypatch
 ) -> None:
