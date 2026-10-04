@@ -323,6 +323,11 @@ def test_product_vault_markdown_is_not_repository_documentation(tmp_path: Path) 
             id="git-hygiene-paired-doc",
         ),
         pytest.param(
+            "scripts/agent_workspace_preflight.sh",
+            "docs/development/GIT_HYGIENE.md",
+            id="workspace-preflight-paired-doc",
+        ),
+        pytest.param(
             "scripts/select_pr_tests.py",
             "docs/development/TEST_STRATEGY_HOT_PATH.md",
             id="select_pr_tests-paired-doc",
@@ -452,6 +457,33 @@ def test_docs_guard_requires_its_specific_paired_doc(tmp_path: Path) -> None:
 
 def test_docs_guard_logic_requires_its_specific_paired_doc(tmp_path: Path) -> None:
     _assert_governance_script_rejects_unrelated_doc(tmp_path, "docs_guard_logic.py")
+
+
+def test_workspace_preflight_requires_its_specific_paired_doc(tmp_path: Path) -> None:
+    _assert_governance_script_rejects_unrelated_doc(tmp_path, "agent_workspace_preflight.sh")
+
+
+@pytest.mark.parametrize("extra_path", ["app/runtime.py", "config/runtime.toml"])
+@pytest.mark.parametrize("temporal_writeback", [False, True])
+def test_workspace_preflight_pairing_preserves_mixed_temporal_requirement(
+    tmp_path: Path, extra_path: str, temporal_writeback: bool
+) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "scripts/agent_workspace_preflight.sh").write_text("# governance\n", encoding="utf-8")
+    (repo / "docs/development/GIT_HYGIENE.md").write_text("governance writeback\n", encoding="utf-8")
+    extra = repo / extra_path
+    extra.parent.mkdir(parents=True, exist_ok=True)
+    extra.write_text("changed = true\n", encoding="utf-8")
+    if temporal_writeback:
+        (repo / "docs/STATUS.md").write_text("temporal writeback\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "mixed-wrapper-governance"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == (0 if temporal_writeback else 1), result.stdout + result.stderr
+    if not temporal_writeback:
+        assert "temporal code/config changed" in result.stdout
 
 
 def test_git_hygiene_requires_its_specific_paired_doc(tmp_path: Path) -> None:
