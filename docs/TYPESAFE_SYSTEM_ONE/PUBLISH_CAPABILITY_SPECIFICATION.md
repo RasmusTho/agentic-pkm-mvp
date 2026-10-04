@@ -13,13 +13,13 @@ can_parallelize_with: []
 
 ## Purpose
 
-Make the target-state capability contract, four bounded task specifications, and their GitHub issue map reviewable in the canonical repository before any runtime implementation is picked up.
+Make the target-state capability contract, five bounded implementation task specifications, and their GitHub issue map reviewable in the canonical repository before any runtime implementation is picked up.
 
 ## What This Task Does
 
-- Publish the capability README, four implementation task specifications, parent pointer, and DOCS_INDEX row.
+- Publish the capability README, five implementation task specifications, parent pointer, and DOCS_INDEX row.
 - Keep target-state text distinct from shipped runtime behavior.
-- Bind parent Issue #5764 and child Issues #5765–#5768 to the local specification.
+- Bind parent Issue #5764 and task Issues #5765–#5770 (including the credential scope gate) to the local specification.
 
 ## Acceptance Criteria
 
