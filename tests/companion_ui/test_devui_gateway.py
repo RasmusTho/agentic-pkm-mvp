@@ -60,6 +60,7 @@ def _handler(*, declared_host: str = "127.0.0.1") -> tuple[type, _Client]:
         client=client,  # type: ignore[arg-type]
         api_base_url="http://127.0.0.1:18000",
         production_profile=True,
+        runtime_git_sha="unknown",
         devui_external_bind_host=declared_host,
     )
     return handler, client
