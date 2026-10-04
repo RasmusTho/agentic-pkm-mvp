@@ -689,10 +689,21 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "app/orchestration/",
             "tests/orchestrator/",
             "tests/orchestration/",
+            # These execution/planner regressions exercise the orchestration
+            # admission boundary directly. Keep their exact test files owned
+            # so a focused fix cannot fail closed before pytest selection.
+            "tests/execution/test_execution_request.py",
+            "tests/planner/test_mock_planner.py",
             "tests/e2e/test_pipe_graph.py",
             "tests/e2e/test_runtime_contract_regressions.py",
         ),
-        ("tests/orchestrator", "tests/orchestration", *E2E_TARGETS["orchestration"]),
+        (
+            "tests/orchestrator",
+            "tests/orchestration",
+            "tests/execution/test_execution_request.py",
+            "tests/planner/test_mock_planner.py",
+            *E2E_TARGETS["orchestration"],
+        ),
     ),
     (
         "memory_retrieval",

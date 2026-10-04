@@ -80,6 +80,21 @@ def test_mcp_planner_producers_select_orchestration_and_changed_contract_tests(
     assert planner_test in selection.targets
 
 
+def test_append_plan_regressions_select_orchestration_targets() -> None:
+    changed = [
+        "tests/execution/test_execution_request.py",
+        "tests/planner/test_mock_planner.py",
+    ]
+
+    selection = select_tests(changed)
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("orchestration",)
+    assert selection.unowned_paths == ()
+    assert set(changed) <= set(selection.targets)
+    assert "tests/orchestrator" in selection.targets
+
+
 def test_static_web_surface_is_owned_by_builder_system_and_companion_ui() -> None:
     selection = select_tests(["app/web/static/cockpit.html", "app/web/static/signboard.js"])
 
