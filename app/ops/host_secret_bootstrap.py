@@ -769,9 +769,13 @@ def run_with_host_secrets(
         # optional secret must never be able to trigger it: that would let a
         # misconfigured optional credential silently de-provision a *required*
         # one declared for the same consumer (#4489). Only a required
-        # credential's unavailability is something a caller may opt into
-        # running without.
-        if selected_contract.is_optional(exc.credential_identity_ref):
+        # credential's unavailability may enter the typed-receipt handoff.
+        # A local-only provider key is required for consumer launch even when
+        # that handoff is enabled.
+        if (
+            selected_contract.is_optional(exc.credential_identity_ref)
+            or exc.credential_identity_ref in selected_contract.keychain_only_secrets
+        ):
             raise
         # Model Inquiry owns the durable typed terminal receipt. This opt-in
         # handoff carries only the declared logical identifier, never a value,

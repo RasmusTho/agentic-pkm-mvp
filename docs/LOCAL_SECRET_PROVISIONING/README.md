@@ -105,6 +105,8 @@ It grants exactly `marr-server-dev` on `dev` and resolves only on Mac through th
 service/account mechanism. Its required `TYPESAFE_API_KEY` binding has API-key validation and no
 shared key domain. The production resolver and bootstrap refuse Linux, test, prod, and unauthorized
 consumers before lookup or launch; BWS selection is refused before reader or controller admission.
+Missing or malformed TypeSafe material also refuses launch with
+`--run-on-credential-unavailable`; Model Inquiry's existing typed-receipt handoff remains available.
 It has no BWS identity or reader grant and leaves the two projects, three machine accounts, and all
 existing BWS grants unchanged. Product and Builder keep distinct caller policies, caller credentials,
 and owner model profiles; neither receives or resolves the MARR server's provider key. Codex and
