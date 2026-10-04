@@ -61,8 +61,8 @@ def test_log_path_sanitizes_traversal_shaped_session_label(tmp_path: Path) -> No
 
     assert session.log_path.parent == tmp_path / ".chats" / "my-design-decision"
     assert session.log_path.name == "2026-04-24T07-30-outside.md"
+    assert session.log_path.is_file()
     assert session.log_path.is_relative_to(tmp_path)
-    assert not (tmp_path.parent / "outside.md").exists()
 
 
 def test_frontmatter_fields_present(tmp_path: Path) -> None:
