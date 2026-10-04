@@ -216,6 +216,9 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
   - retain the separately governed Model Inquiry contract and launch exactly once through its
     sanctioned host-local boundary; this is not the active issue-worker carrier path and its
     provider/auth work is governed separately by #5203
+- `jev-direct`
+  - run one bounded, typed development-time Jev call through the local helper; the provider key
+    stays inside that helper, and the tool does not change Codex/Claude models or runtime routes
 - `issue-maintenance-change-control`
   - repair stale or false Issue / PR / label state before or during execution, plus optional
     Project projection when explicitly in scope
@@ -335,6 +338,7 @@ or design-provenance material and do not authorize invocation.
 | `resume-work` | principle-only | Resumes the same authority and may reapply TCD without inventing a route. |
 | `rollback-promotion` | unaffected | Executes governed release recovery. |
 | `start-model-inquiry` | unaffected | Retains its separate role-specific model-access contract; it is not the active issue-worker carrier. |
+| `jev-direct` | unaffected | Runs one bounded typed judgment without changing coding-agent model or execution routing. |
 | `temporal-doc-governance` | principle-only | Uses TCD normally; temporal authority routing is unchanged. |
 | `verification-and-closure` | principle-only | Verification capability may vary under TCD, but routing cannot weaken its gates. |
 | `verify-promotion` | unaffected | Verifies release-channel state independently of execution routing. |
