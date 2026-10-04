@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from app.agents.base.audit import _audit_ring_snapshot
 from app.execution.execution_request import (
     CONTRACT_VERSION,
     ExecutionRequest,
@@ -12,7 +13,8 @@ from app.execution.execution_request import (
 )
 from app.governance.governed_write import DecisionToken
 from app.orchestrator.runtime import Orchestrator
-from app.planner.schema import Plan, PlanMetadata, PlanStep
+from app.planner.provider import build_vault_append_steps
+from app.planner.schema import Plan, PlanMetadata
 
 pytestmark = pytest.mark.not_pg
 
@@ -192,20 +194,23 @@ def test_wrapped_vault_append_still_writes_and_carries_trace(tmp_path: Path) -> 
             created_by="tester",
             trace_id="trace-exe-1",
         ),
-        steps=[
-            PlanStep(
-                id="step-1",
-                kind="tool_call",
-                description="Write vault note",
-                tool="mcp.vault.append_note",
-                tool_args={"title": "Ask Summary", "body": "Hello world"},
-            )
-        ],
+        steps=build_vault_append_steps(
+            step_id="step-1",
+            description="Write vault note",
+            tool_args={"title": "Ask Summary", "body": "Hello world"},
+            reason="Persist the summary back to the note",
+        ),
     )
 
+    before = _audit_ring_snapshot()
     results = orchestrator.run_plan(plan)
+    after = _audit_ring_snapshot()
 
-    assert len(results) == 1
-    assert results[0]["status"] == "ok"
-    note_path = Path(results[0]["result"]["result"]["note_path"])
+    assert len(results) == 3
+    assert all(result["status"] == "ok" for result in results)
+    append_result = results[1]["result"]
+    note_path = Path(append_result["result"]["note_path"])
     assert note_path.is_file()
+    new_events = [event for event in after if event not in before]
+    assert new_events
+    assert all(event.get("trace_id") == "trace-exe-1" for event in new_events)
