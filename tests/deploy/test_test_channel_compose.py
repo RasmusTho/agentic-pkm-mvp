@@ -8,6 +8,8 @@ import subprocess
 
 import pytest
 
+from app.release_channels.channel_isolation_preflight import _load_compose
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BASE_COMPOSE = REPO_ROOT / "docker-compose.yaml"
@@ -15,6 +17,9 @@ TEST_COMPOSE = REPO_ROOT / "docker-compose.test.yml"
 EXPLICIT_VAULT_COMPOSE = REPO_ROOT / "docker-compose.legacy-vault.yml"
 TEST_VAULT_COMPOSE = REPO_ROOT / "docker-compose.test-vault.yml"
 TEST_ENV = REPO_ROOT / "config/deploy/test.env"
+MODEL_ACCESS_ENV_FILE = "/etc/yggdrasil/model-access/runtime.env"
+MODEL_ACCESS_HOST_IDENTITY = "/etc/yggdrasil/model-access/codex-client"
+MODEL_ACCESS_CONTAINER_IDENTITY = "/run/model-access/codex-client"
 pytestmark = pytest.mark.skipif(
     shutil.which("docker") is None,
     reason="docker executable not found on PATH",
@@ -25,6 +30,7 @@ def _merged_compose(
     runtime_env: Path,
     *,
     explicit_vault: Path | None = None,
+    llm_provider: str | None = None,
 ) -> dict[str, object]:
     env = os.environ.copy()
     for key in (
@@ -39,6 +45,8 @@ def _merged_compose(
     env["WATCHER_ENABLE"] = "1" if explicit_vault is None else "0"
     env["WATCHER_VAULT_PATH"] = "/hostile-inherited-vault"
     env["WATCHER_RUNTIME_ENV_FILE"] = str(runtime_env)
+    if llm_provider is not None:
+        env["LLM_PROVIDER"] = llm_provider
     env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"] = str(
         runtime_env.parent / "instance-ownership"
     )
@@ -106,6 +114,90 @@ def _mount_source(service: dict[str, object], target: str) -> str | None:
             source = volume.get("source")
             return str(source) if source is not None else None
     return None
+
+
+def _has_optional_env_file(service: dict[str, object], path: str) -> bool:
+    env_files = service.get("env_file", [])
+    assert isinstance(env_files, list)
+    return any(
+        isinstance(entry, dict)
+        and entry.get("path") == path
+        and entry.get("required") is False
+        for entry in env_files
+    )
+
+
+def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
+    tmp_path: Path,
+) -> None:
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text("", encoding="utf-8")
+    services = _services(_merged_compose(runtime_env))
+    overlay_services = _load_compose(TEST_COMPOSE)["services"]
+    assert isinstance(overlay_services, dict)
+
+    for name in ("api", "worker", "watcher"):
+        service = services[name]
+        assert _has_optional_env_file(
+            overlay_services[name], MODEL_ACCESS_ENV_FILE
+        )
+        mount_targets = _mount_targets(service)
+        assert MODEL_ACCESS_CONTAINER_IDENTITY in mount_targets
+        assert (
+            _mount_source(service, MODEL_ACCESS_CONTAINER_IDENTITY)
+            == MODEL_ACCESS_HOST_IDENTITY
+        )
+        mounts = service.get("volumes", [])
+        assert isinstance(mounts, list)
+        identity_mount = next(
+            volume
+            for volume in mounts
+            if isinstance(volume, dict)
+            and volume.get("target") == MODEL_ACCESS_CONTAINER_IDENTITY
+        )
+        assert identity_mount["read_only"] is True
+        bind = identity_mount.get("bind")
+        assert isinstance(bind, dict)
+        assert bind["create_host_path"] is True
+
+    for name, service in services.items():
+        if name in {"api", "worker", "watcher"}:
+            continue
+        assert MODEL_ACCESS_CONTAINER_IDENTITY not in _mount_targets(service), name
+
+    for name, service in overlay_services.items():
+        if name in {"api", "worker", "watcher"}:
+            continue
+        env_files = service.get("env_file", [])
+        assert isinstance(env_files, list)
+        assert not any(
+            (entry.get("path") if isinstance(entry, dict) else entry)
+            == MODEL_ACCESS_ENV_FILE
+            for entry in env_files
+        ), name
+
+
+def test_test_runtime_services_use_configured_provider_with_mock_default(
+    tmp_path: Path,
+) -> None:
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text("", encoding="utf-8")
+
+    default_services = _services(_merged_compose(runtime_env))
+    configured_services = _services(
+        _merged_compose(runtime_env, llm_provider="governed-provider")
+    )
+
+    for name in ("api", "worker", "watcher"):
+        assert _environment(default_services[name])["LLM_PROVIDER"] == "mock"
+        assert (
+            _environment(configured_services[name])["LLM_PROVIDER"]
+            == "governed-provider"
+        )
+
+    for name in ("migrate", "heimdal-capture-watch"):
+        assert _environment(default_services[name])["LLM_PROVIDER"] == "mock"
+        assert _environment(configured_services[name])["LLM_PROVIDER"] == "mock"
 
 
 def test_test_migrate_uses_app_test_dsn(tmp_path: Path) -> None:

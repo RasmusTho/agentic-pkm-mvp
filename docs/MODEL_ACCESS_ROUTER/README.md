@@ -5,8 +5,8 @@ Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its i
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: ADR-0066, child Issues, implementation, and acceptance receipts
-Last reviewed: 2026-10-03
-Last verified against: the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066, and the checked-in MARR task specifications.
+Last reviewed: 2026-10-04
+Last verified against: Issue #5772 dev/test Compose integration tests, the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066, and the checked-in MARR task specifications.
 Parent issue: #5618 (open, agent:blocked); validation hub, never a pickup task.
 
 # Model Access Router
@@ -30,6 +30,7 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 - The accepted target keeps the model route and network path independent. Deployment configuration supplies ordered logical path-profile references; the current Ygg profile resolves only the host-local VLAN endpoint. The generic path interface may support additional explicit profiles, but no Tailscale endpoint or Serve setup is a Ygg dependency.
 - Each configured path must authenticate and authorize the same Product channel and operation-specific action. VLAN membership alone is not authorization. The executor backend remains loopback-bound behind configured ingress; public listeners are forbidden. Concrete endpoints and identity material remain outside Git.
 - Product health reports required logical capability status through the provider-neutral MARR-10 contract and separately reports configured network-path reachability. The public `/api/health` projection omits model-access provider, model, transport, endpoint, and selected-path identity; local CLI diagnostics may retain selected-route detail. This code does not activate a host route or change the Product model default.
+- The dev/test Compose overlays support an optional host-local MARR path-reference env file and a read-only Codex client-identity mount for Product `api`, `worker`, and `watcher` only. The channel `LLM_PROVIDER` remains governed separately and defaults to `mock` when unset; Product model selection remains in its `llm_routing` settings. This binding support does not provision host identity or activate a persistent route. Base Compose and production have no MARR binding from this change.
 - The Product target uses Luna through the Codex CLI. Ollama is not a prerequisite or default fallback for this route. Existing Ollama adapter/fallback support remains separate implementation capability and does not authorize its activation here.
 - MARR-06 separates offline validation of an already-sanitized receipt (#5694) from live host acceptance (#5624); only the latter can clear the host/network acceptance gate.
 - No API credentials, host credentials, model downloads, or release-channel changes are part of the repository implementation slices. Live host/network activation requires its explicit operational gate.

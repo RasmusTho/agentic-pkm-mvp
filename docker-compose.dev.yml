@@ -27,7 +27,7 @@ services:
     ports: !override
       - "18001:8000"
     environment:
-      LLM_PROVIDER: mock
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
@@ -57,24 +57,56 @@ services:
       # as a side effect a stale parent-shell VAULT_ROOT/VAULT_ROOT_DEV can no
       # longer leak in either, since Compose only interpolates variables that
       # are textually referenced in the compose file.
+    # The mock-default channel may run before host identity is provisioned.
+    # Creating an empty source directory preserves that route; it is not an identity.
+    env_file:
+      - path: /etc/yggdrasil/model-access/runtime.env
+        required: false
+    volumes:
+      - type: bind
+        source: /etc/yggdrasil/model-access/codex-client
+        target: /run/model-access/codex-client
+        read_only: true
+        bind:
+          create_host_path: true
 
   worker:
     environment:
-      LLM_PROVIDER: mock
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
       # See the `api` service comment above: no VAULT_ROOT / VAULT_ROOT_DEV
       # keys here so the governed env_file chain supplies the binding.
+    env_file:
+      - path: /etc/yggdrasil/model-access/runtime.env
+        required: false
+    volumes:
+      - type: bind
+        source: /etc/yggdrasil/model-access/codex-client
+        target: /run/model-access/codex-client
+        read_only: true
+        bind:
+          create_host_path: true
 
   watcher:
     environment:
-      LLM_PROVIDER: mock
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
       PKM_ENVIRONMENT: dev
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_dev
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_dev
       # See the `api` service comment above: no VAULT_ROOT / VAULT_ROOT_DEV
       # keys here so the governed env_file chain supplies the binding.
+    env_file:
+      - path: /etc/yggdrasil/model-access/runtime.env
+        required: false
+    volumes:
+      - type: bind
+        source: /etc/yggdrasil/model-access/codex-client
+        target: /run/model-access/codex-client
+        read_only: true
+        bind:
+          create_host_path: true
 
   heimdal-capture-watch:
     # The host-secret env_file layer (HOST_SECRET_RUNTIME_ENV_FILE) now lives

@@ -1,6 +1,11 @@
 State: SoT v5.5 Reality-MVP baseline locked.
 Doc role: Reference
 Authority: Canonical routing and fabric contract for LLM chat and embedding access in the current runtime; operational provider configuration lives here, while broader provider usage lives in `docs/LLM.md`.
+Temporal class: operational
+Review cadence: event-driven
+Source of truth: routing code, compiled Product settings, channel Compose, and acceptance receipts
+Last reviewed: 2026-10-04
+Last verified against: Issue #5772 Compose integration tests and the MARR-06 acceptance receipt in Issue #5624.
 
 # LLM Routing Contract (Router + Fabric)
 
@@ -50,6 +55,19 @@ Routing is intentionally deterministic and single-source:
 3. **Environment defaults** — env vars fill in provider/model defaults when the task policy leaves them blank.
 4. **Built-in defaults** — used when no settings or env override is present.
 
+For the dev and test channels, Compose forwards the governed `LLM_PROVIDER` value to only the
+Product `api`, `worker`, and `watcher` callers, defaulting to `mock` when the channel has no
+provider selection. Those overlays also accept the optional host-local
+`/etc/yggdrasil/model-access/runtime.env` path-reference file and mount
+`/etc/yggdrasil/model-access/codex-client` read-only for those callers only. The host-managed file
+is expected to contain only the four `MODEL_ACCESS_CODEX_VLAN_*` endpoint/file-path references;
+because Compose passes env-file entries through, operators must not put credentials or unrelated
+settings there. The file selects no model and activates no route. If the client directory is absent,
+Compose may create an empty host directory so the mock-default channel can still start; this does
+not provision an identity. Any selected Codex route still requires successful no-inference preflight.
+Product model selection remains in `vault/settings/llm_routing.md` and its compiled settings. Base
+Compose and production receive no MARR binding from this dev/test support.
+
 For embeddings, a blank compiled task target also permits the operator activation seam
 `EMBED_PROFILE` to select one complete named identity (provider, model, dimension, and
 normalization) before the generic `EMBED_MODEL` / `OLLAMA_EMBED_MODEL` environment fallback is
@@ -69,7 +87,7 @@ model gains `:latest`, while an invalid forced provider degrades coherently to
 `mock/mock-embedding`. The fabric consumes the attached identity without resolving it again.
 
 Current state:
-- The neutral route/provenance contract and policy-agnostic `ModelAccessRouter` seam are available, but this Product router and fabric remain the current execution path. The facade carries owner-resolver fallback lineage, preserves the `fallback_forbidden`, `human_decision_required`, and `fallback_same_identity` requirements, distinguishes source fallback cause from selected-target preflight status, and rejects resolved capability claims outside the selected adapter descriptor's declared support. No Product caller has migrated and this seam does not change route selection here.
+- The neutral route/provenance contract and policy-agnostic `ModelAccessRouter` seam are available. Product chat/completion callers continue to enter through the Product router and fabric, with the selected target resolved through the shared facade before adapter execution. The facade carries owner-resolver fallback lineage, preserves the `fallback_forbidden`, `human_decision_required`, and `fallback_same_identity` requirements, distinguishes source fallback cause from selected-target preflight status, and rejects resolved capability claims outside the selected adapter descriptor's declared support. Product route policy remains settings-owned; the facade does not create a separate model-selection authority.
 - `app.model_access.adapter_factory.ModelAccessAdapterFactory` loads the strict transport declarations in `docs/settings/models/adapters.yaml` and binds an already-resolved provider/model to the provider census. It describes `codex_cli`, `ollama_http`, `openai_api`, `anthropic_api`, `deepseek_api`, and `mock`; this descriptor registration does not claim that Product's API/Ollama transports have migrated or that these adapters now select routes.
 - The bounded local Codex CLI executor is available for the Model Inquiry compatibility bridge. It uses an isolated empty working directory, read-only sandbox, ephemeral execution, separate developer/user channels, output bounds, and a version-pinned no-tools profile. No designated-host profile or Product caller is activated by this change; missing or unrecognized host profile fails before inference. Model Inquiry still owns its separate single-target, fallback-forbidden policy.
 - Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices.
