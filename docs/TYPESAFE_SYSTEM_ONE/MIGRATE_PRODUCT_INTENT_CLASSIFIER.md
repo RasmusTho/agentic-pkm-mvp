@@ -5,8 +5,8 @@ task_id: TSO-03
 github_issue: 5767
 source_anchor: app/components/llm/intent_classifier.py :: IntentClassifierCognition.classify
 parent_capability: TYPESAFE_SYSTEM_ONE
-prerequisites: [TSO-01, TSO-02]
-depends_on: [DEFINE_SYSTEM_ONE_JUDGMENT_CONTRACT.md, ADD_TYPESAFE_TO_MAC_EXECUTOR.md]
+prerequisites: [TSO-01, TSO-02, TSO-05]
+depends_on: [DEFINE_SYSTEM_ONE_JUDGMENT_CONTRACT.md, ADD_TYPESAFE_TO_MAC_EXECUTOR.md, DEFINE_TYPESAFE_CREDENTIAL_BINDINGS.md]
 can_parallelize_with: [TSO-04 after TSO-01]
 ---
 
@@ -20,7 +20,7 @@ The canvas classifier currently asks a general completion model to return a smal
 
 - Replace the current constrained completion at the canvas intent-classifier call site with the Product-selected MARR System One operation.
 - Use closed Choice sets for intent class and governance-action category; include a no-match/unknown outcome.
-- Keep request state bounded to the user intent and the minimum necessary current-canvas context. Never send the full note body for this pilot.
+- Send only `intent_text` (≤2,000 UTF-8 bytes; serialized request ≤4 KiB). Do not send `current_body`, note title, vault path, prior conversation, or full prompt. Reject unknown fields and oversize input before MARR dispatch.
 - Map service failure, malformed output, or evaluated low confidence to the existing `UNKNOWN` result.
 - Keep confirmation, Apply authorization, WriteGuard, and all durable write boundaries unchanged.
 
@@ -34,8 +34,8 @@ The current consumer's output is a closed semantic choice, not generated prose. 
 
 ## Acceptance Criteria
 
-- [ ] The production classifier uses the Product-owned MARR judgment client and sends only its bounded request fields. Verify: `tests/components/llm/test_intent_classifier_typesafe.py::test_production_classifier_uses_marr_and_minimal_state`.
-- [ ] Service errors and low-confidence answers map to `UNKNOWN` and never enter a mutation-capable class. Verify: `tests/components/llm/test_intent_classifier_typesafe.py::test_uncertain_judgment_remains_unknown_without_authorizing_write`.
+- [ ] The production classifier uses the Product-owned MARR client and transmits only `intent_text` within the declared size limit; `current_body` never crosses the adapter. Verify: `tests/components/llm/test_intent_classifier_typesafe.py::test_production_classifier_uses_marr_and_minimal_state`.
+- [ ] Unknown fields and oversize intent fail before provider dispatch; service errors and low-confidence answers map to `UNKNOWN`. Verify: `tests/components/llm/test_intent_classifier_typesafe.py::test_disallowed_or_oversize_state_fails_closed` and `tests/components/llm/test_intent_classifier_typesafe.py::test_uncertain_judgment_remains_unknown_without_authorizing_write`.
 - [ ] Existing confirmation and write-guard call sites remain required for governance-bearing outputs. Verify: `tests/components/llm/test_intent_classifier_typesafe.py::test_governance_judgment_still_requires_confirmation_and_write_guard`.
 - [ ] The supported Product owner docs describe this as a dev-accepted route only until staged rollout acceptance. Verify: doc writeback at `docs/LLM_ROUTING.md :: Current policy and future work`.
 
