@@ -236,6 +236,24 @@ def test_llm_contract_kernel_is_covered_by_import_boundary() -> None:
     assert _module_list(section["forbidden_modules"]) == {"app"}
 
 
+def test_system_one_contract_is_policy_and_provider_neutral() -> None:
+    contract_path = REPO_ROOT / "llm_contract" / "__init__.py"
+    imported_modules = _imported_modules(contract_path)
+    forbidden_prefixes = (
+        "app",
+        "typesafe_sdk",
+        "httpx",
+        "requests",
+    )
+    forbidden = sorted(
+        module
+        for module in imported_modules
+        if any(module == prefix or module.startswith(prefix + ".") for prefix in forbidden_prefixes)
+    )
+
+    assert not forbidden, f"neutral judgment contract imported policy/provider modules: {forbidden}"
+
+
 def test_shared_model_access_router_stays_policy_neutral() -> None:
     section = _model_access_router_contract_section()
     assert section["type"] == "forbidden"

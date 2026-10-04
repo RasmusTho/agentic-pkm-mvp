@@ -66,7 +66,7 @@ These pilots do not make TypeSafe the default chat/completion provider. Product 
 GitHub parent validation hub: [Issue #5764](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5764). This specification is the stable intent; task Issues are the implementation contracts and the parent remains open for end-to-end acceptance.
 
 1. [Publish the capability specification](PUBLISH_CAPABILITY_SPECIFICATION.md) — TSO-00; [Issue #5769](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5769); publish the issue map and owner boundaries.
-2. [Define the typed System One contract](DEFINE_SYSTEM_ONE_JUDGMENT_CONTRACT.md) — TSO-01; [Issue #5765](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5765); provider-neutral request/response contract and validators.
+2. [Define the typed System One contract](DEFINE_SYSTEM_ONE_JUDGMENT_CONTRACT.md) — TSO-01; [Issue #5765](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5765) is the task authority; provider-neutral request/response contract and validators.
 3. [Define TypeSafe credential consumer bindings](DEFINE_TYPESAFE_CREDENTIAL_BINDINGS.md) — TSO-05; [Issue #5770](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5770); blocked pending owner decision on Bitwarden access scope.
 4. [Add TypeSafe to the Mac Model Access Router](ADD_TYPESAFE_TO_MAC_EXECUTOR.md) — TSO-02; [Issue #5766](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5766); bounded Product-side operation and Keychain credential binding.
 5. [Use Jev for Product canvas intent classification](MIGRATE_PRODUCT_INTENT_CLASSIFIER.md) — TSO-03; [Issue #5767](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5767); preserve `UNKNOWN`, confirmation, and write-guard behavior.
