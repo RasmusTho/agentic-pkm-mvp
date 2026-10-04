@@ -184,7 +184,11 @@ def test_get_routes_do_not_write_durably(
             lambda: {"state": blocked, "reason": "property test lock"},
         )
 
-    client = TestClient(app)
+    # Route handlers may raise while the fixture intentionally denies a
+    # registered heal. The route walk must observe that as a 5xx response so
+    # it can continue exercising every enumerated route and run the durable
+    # write assertions.
+    client = TestClient(app, raise_server_exceptions=False)
     paths = _enumerate_get_routes()
     assert paths, "expected at least one GET route on the real app"
 
