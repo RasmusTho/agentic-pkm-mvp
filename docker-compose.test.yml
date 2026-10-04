@@ -3,6 +3,8 @@ services:
     volumes:
       - "runtime-tmp:/app/tmp-test"
     environment:
+      # Keep the non-caller bootstrap service isolated from channel routing.
+      LLM_PROVIDER: mock
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
 
   migrate:
@@ -36,15 +38,27 @@ services:
     # per-project named runtime-tmp volume at that path so api/worker/watcher
     # share the test-channel runtime surface too — otherwise the #2991
     # cross-container-visibility fix would not extend to the test channel.
+    # The mock-default channel may run before host identity is provisioned.
+    # Creating an empty source directory preserves that route; it is not an identity.
     volumes:
       - "runtime-tmp:/app/tmp-test"
+      - type: bind
+        source: /etc/yggdrasil/model-access/codex-client
+        target: /run/model-access/codex-client
+        read_only: true
+        bind:
+          create_host_path: true
     environment:
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       API_HEALTHCHECK_URL: http://host.docker.internal:18002/readyz
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
-      LLM_PROVIDER: mock
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
       # Keep the universal TEST overlay fail-closed when no vault overlay is
       # selected. The explicit legacy-vault overlay comes later and restores
       # the operator-selected /app/vault watcher binding.
@@ -63,12 +77,22 @@ services:
   worker:
     volumes:
       - "runtime-tmp:/app/tmp-test"
+      - type: bind
+        source: /etc/yggdrasil/model-access/codex-client
+        target: /run/model-access/codex-client
+        read_only: true
+        bind:
+          create_host_path: true
     environment:
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
-      LLM_PROVIDER: mock
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
       WATCHER_ENABLE: "0"
       WATCHER_VAULT_PATH: ""
       WATCHER_STATE_DIR: tmp-test
@@ -84,12 +108,22 @@ services:
   watcher:
     volumes:
       - "runtime-tmp:/app/tmp-test"
+      - type: bind
+        source: /etc/yggdrasil/model-access/codex-client
+        target: /run/model-access/codex-client
+        read_only: true
+        bind:
+          create_host_path: true
     environment:
       DESIGN_HANDOFF_APP_LOCAL_SETTINGS: ${DESIGN_HANDOFF_APP_LOCAL_SETTINGS:-/app/tmp-test/agentic-pkm/app-local.md}
       PKM_ENVIRONMENT: test
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
-      LLM_PROVIDER: mock
+      LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
       WATCHER_ENABLE: "0"
       WATCHER_VAULT_PATH: ""
       WATCHER_STATE_DIR: tmp-test

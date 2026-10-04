@@ -47,6 +47,30 @@ def _environment(service: dict[str, object]) -> dict[str, str]:
     return normalized
 
 
+def _has_model_access_binding(service: dict[str, object]) -> bool:
+    env_files = service.get("env_file", [])
+    assert isinstance(env_files, list)
+    for entry in env_files:
+        path = entry.get("path") if isinstance(entry, dict) else entry
+        if path == "/etc/yggdrasil/model-access/runtime.env":
+            return True
+
+    volumes = service.get("volumes", [])
+    assert isinstance(volumes, list)
+    for volume in volumes:
+        if isinstance(volume, dict):
+            if volume.get("source") == "/etc/yggdrasil/model-access/codex-client":
+                return True
+            if volume.get("target") == "/run/model-access/codex-client":
+                return True
+        elif isinstance(volume, str) and (
+            volume.startswith("/etc/yggdrasil/model-access/codex-client:")
+            or volume.endswith(":/run/model-access/codex-client")
+        ):
+            return True
+    return False
+
+
 def _render_channel_with_synthetic_runtime_env(
     tmp_path: Path,
     *,
@@ -170,6 +194,30 @@ def test_devui_vm102_receipt_source_rejects_writable_host_alias() -> None:
 
 
 @requires_docker
+def test_model_access_identity_is_not_bound_by_base_compose(
+    tmp_path: Path,
+) -> None:
+    base_services = _load_compose(BASE_COMPOSE)["services"]
+    assert isinstance(base_services, dict)
+    for name, service in base_services.items():
+        assert not _has_model_access_binding(service), name
+
+    prod_overlay_services = _load_compose(
+        REPO_ROOT / "docker-compose.prod.yml"
+    )["services"]
+    assert isinstance(prod_overlay_services, dict)
+    for name, service in prod_overlay_services.items():
+        assert not _has_model_access_binding(service), name
+
+    prod_services = _render_channel_with_synthetic_runtime_env(
+        tmp_path, channel="prod"
+    )["services"]
+    assert isinstance(prod_services, dict)
+    for name, service in prod_services.items():
+        assert not _has_model_access_binding(service), name
+
+
+@requires_docker
 def test_base_watcher_retains_llm_provider_cli_forwarding() -> None:
     watcher = _load_compose(BASE_COMPOSE)["services"]["watcher"]
     assert _environment(watcher)["LLM_PROVIDER"] == "${LLM_PROVIDER}"
@@ -262,7 +310,7 @@ def test_test_deploy_render_uses_channel_runtime_env_default(
     watcher = _environment(services["watcher"])
     capture = _environment(services["heimdal-capture-watch"])
 
-    assert watcher["LLM_PROVIDER"] == "mock"
+    assert watcher["LLM_PROVIDER"] == "synthetic-provider"
     assert capture["HEIMDAL_CAPTURE_WATCH_DIR"] == "/synthetic/capture/inbox"
     assert capture["HEIMDAL_CAPTURE_INTERVAL_SECONDS"] == "17"
     assert capture["HEIMDAL_RAW_STORE_KEY"] == "a" * 64

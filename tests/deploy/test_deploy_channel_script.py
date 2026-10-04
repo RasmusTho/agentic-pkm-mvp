@@ -113,6 +113,17 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert "--ack-forward-only" in text
     assert "forward-only migrations require" in text
     assert "migration gate blocked before recreate" in text
+    runtime_env_resolve = text.index(
+        "_deploy_channel_resolve_runtime_env_file", text.index("pin_file=")
+    )
+    model_access_preflight = text.index("deploy_channel_model_access_preflight \\\n")
+    migration_call = text.index(
+        'migration_gate "${migration_from_sha}" "${target_sha}"'
+    )
+    instance_state_setup = text.index("\nprepare_instance_ownership_host_state_dir\n")
+    assert runtime_env_resolve < model_access_preflight < migration_call
+    assert model_access_preflight < instance_state_setup
+
     run_block = text.split('echo "deploy plan:', 1)[1]
     assert run_block.index("migration_gate") < run_block.index("write_pin")
     assert run_block.index("migration_gate") < run_block.index(

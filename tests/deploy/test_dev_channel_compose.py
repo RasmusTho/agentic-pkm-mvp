@@ -25,6 +25,15 @@ DEPLOY_COMPOSE_WRAPPER = REPO_ROOT / "scripts/lib/deploy_channel_compose.sh"
 DEV_DSN = "postgresql+psycopg://app:app@db:5432/app_dev"
 
 RUNTIME_SERVICES = ("api", "worker", "watcher")
+MODEL_ACCESS_ENV_FILE = "/etc/yggdrasil/model-access/runtime.env"
+MODEL_ACCESS_HOST_IDENTITY = "/etc/yggdrasil/model-access/codex-client"
+MODEL_ACCESS_CONTAINER_IDENTITY = "/run/model-access/codex-client"
+MODEL_ACCESS_ENV_KEYS = (
+    "MODEL_ACCESS_CODEX_VLAN_ENDPOINT",
+    "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE",
+    "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT",
+    "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
+)
 VAULT_BINDING_KEYS = ("VAULT_ROOT", "VAULT_ROOT_DEV")
 requires_docker = pytest.mark.skipif(
     shutil.which("docker") is None,
@@ -331,6 +340,7 @@ deploy_channel_compose "$2" dev docker-compose.dev.yml pkm-dev-signboard-contrac
         "VAULT_HOST_ROOT",
         "VAULT_ROOT",
         "WATCHER_RUNTIME_ENV_FILE",
+        *MODEL_ACCESS_ENV_KEYS,
     ):
         env.pop(key, None)
     env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"] = str(tmp_path / "instance-ownership")
@@ -374,6 +384,25 @@ def _rendered_mount_source(service: dict[str, object], target: str) -> str | Non
             source = volume.get("source")
             return str(source) if source is not None else None
     return None
+
+
+def _rendered_mount(service: dict[str, object], target: str) -> dict[str, object] | None:
+    volumes = service.get("volumes", [])
+    assert isinstance(volumes, list)
+    return next(
+        (
+            volume
+            for volume in volumes
+            if isinstance(volume, dict) and volume.get("target") == target
+        ),
+        None,
+    )
+
+
+def _env_file_entries(service: dict[str, object]) -> list[object]:
+    env_files = service.get("env_file", [])
+    assert isinstance(env_files, list)
+    return env_files
 
 
 @pytest.fixture
@@ -552,6 +581,60 @@ def test_dev_runtime_services_forward_deploy_vault_bindings() -> None:
             f"{service} lost the WATCHER_RUNTIME_ENV_FILE env_file layer that "
             "carries the vault binding"
         )
+
+
+@requires_docker
+def test_model_access_bindings_are_optional_and_scoped_to_product_callers(
+    tmp_path: Path,
+) -> None:
+    compose, _, _ = _render_signboard_deploy_compose(
+        tmp_path / "model-access-render",
+        signboard_host_root=None,
+        vault_host_root=None,
+    )
+    services = compose["services"]
+    assert isinstance(services, dict)
+    overlay_services = _load_compose(DEV_COMPOSE)["services"]
+    assert isinstance(overlay_services, dict)
+
+    for name in RUNTIME_SERVICES:
+        service = services[name]
+        assert isinstance(service, dict)
+        overlay_service = overlay_services[name]
+        overlay_environment = overlay_service.get("environment")
+        assert isinstance(overlay_environment, dict)
+        assert set(MODEL_ACCESS_ENV_KEYS).issubset(overlay_environment)
+        for key in MODEL_ACCESS_ENV_KEYS:
+            assert overlay_environment[key] == f"${{{key}:-}}"
+        assert not any(
+            (entry.get("path") if isinstance(entry, dict) else entry)
+            == MODEL_ACCESS_ENV_FILE
+            for entry in _env_file_entries(overlay_service)
+        )
+        mount = _rendered_mount(service, MODEL_ACCESS_CONTAINER_IDENTITY)
+        assert mount is not None
+        assert mount["source"] == MODEL_ACCESS_HOST_IDENTITY
+        assert mount["read_only"] is True
+        bind = mount.get("bind")
+        assert isinstance(bind, dict)
+        assert bind["create_host_path"] is True
+
+    for name, service in overlay_services.items():
+        if name in RUNTIME_SERVICES:
+            continue
+        service_environment = service.get("environment", {})
+        assert isinstance(service_environment, dict)
+        assert not set(MODEL_ACCESS_ENV_KEYS).intersection(service_environment), name
+        assert not any(
+            (entry.get("path") if isinstance(entry, dict) else entry)
+            == MODEL_ACCESS_ENV_FILE
+            for entry in _env_file_entries(service)
+        ), name
+
+    for name, service in services.items():
+        if name in RUNTIME_SERVICES:
+            continue
+        assert _rendered_mount(service, MODEL_ACCESS_CONTAINER_IDENTITY) is None, name
 
 
 def test_deploy_channel_preserves_runtime_env_vault_bindings(tmp_path: Path) -> None:

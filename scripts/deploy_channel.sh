@@ -127,6 +127,16 @@ promotion_dir="${ROOT}/ops/promotions"
 image_repository="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}"
 health_timeout="${DEPLOY_HEALTH_TIMEOUT_SECONDS:-90}"
 
+# Gate dev/test MARR bindings before creating the channel lock, materializing
+# migration files, or preparing host deployment state. The Compose helper
+# repeats the check immediately before it snapshots the runtime env for Compose.
+if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; then
+  _deploy_channel_resolve_runtime_env_file "${ROOT}" "${channel}" "${pin_file}"
+  deploy_channel_model_access_preflight \
+    "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" \
+    "/etc/yggdrasil/model-access/runtime.env" || exit $?
+fi
+
 # Resolve the effective instance-state-init legacy setting before creating the
 # channel lock, pin markers, volumes, pulling an image, or touching Compose.
 # The ordinary one-shot has no host-side mount/receipt handoff for this input,
