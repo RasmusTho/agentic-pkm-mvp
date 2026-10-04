@@ -69,6 +69,27 @@ Every independent non-trivial Issue gets a fresh issue agent even when the queue
 resume that agent only for the same Issue while its authority remains current. Deterministic scripts
 and existing inline-local-cheaper classifications are the only coordinator-inline execution paths.
 
+## Bounded Jev assistance
+
+Use an available Jev development call when a repeated or ambiguous semantic judgment would help the
+coordinator choose a useful next step within the current mandate. Read
+[JEV_ASSISTANCE.md](JEV_ASSISTANCE.md) only when using this optional support. It provides the tested
+Choice questions in [jev-questions.json](jev-questions.json) for three existing workflow points:
+
+- **No-progress final gate:** `blocker_route` distinguishes an in-scope repair, temporary backoff,
+  technical hold, unresolved owner requirement, or insufficient evidence.
+- **Ready Pool Rule / Issue Review Procedure:** `workflow_route` suggests the existing skill for
+  source-supported contract repair, a bounded new issue, feature breakdown, or an owner brief.
+- **Verification Ledger:** `proof_relation` checks whether a specific source supports, contradicts,
+  or fails to establish a claimed outcome.
+
+Codex reviews each answer against current sources and the mandate, connects the evidence, and owns
+the readiness diagnosis, pickup plan, and next authorized action. Jev probabilities never establish
+permission, `agent:ready`, merge, closure, or delivery. Exact lifecycle/CI/head/lease checks, Verify
+syntax and target execution, dependency ordering, slot arithmetic, and file/contract overlap stay
+with the existing tools. If Jev is unavailable, indeterminate, uncertain, or disagrees with the
+evidence, continue with Codex's assessment and the owning workflow; this adds no owner approval gate.
+
 ## Modes
 
 ### Independent-Issue Fast Lane
