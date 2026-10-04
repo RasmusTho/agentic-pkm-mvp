@@ -22,7 +22,7 @@ CKM currently asks a general model to generate free-form proposal JSON. Jev can 
 - Use the Builder-owned resolver/adapter path and `fallback_forbidden`; the production Builder call site does not name a provider or import Product MARR policy.
 - Use a Choice with an explicit no-match option. Reject answers outside the submitted candidate set.
 - Preserve inferred/candidate provenance, the existing confidence floor, stable edge identity, snapshot revalidation, watermark transaction, explicit `confirm-edge` receipt, and visible zero-edge skip on unavailable/degraded results.
-- Resolve the credential through a dedicated Builder CKM dev consumer binding declared in TSO-05. Keep it unavailable until the owner-approved Bitwarden access scope is provisioned. Do not widen the shared non-prod reader or grant test/prod access.
+- Authenticate to the bounded MARR operation with a separate Builder caller credential and policy. TSO-05 grants `typesafe.api-key` only to the Mac `marr-server-dev` consumer; CKM and Linux never resolve or receive it. Keep the Builder route unavailable pending its own dev acceptance; do not widen any BWS reader or grant test/prod access.
 
 ## Concretely
 
@@ -44,7 +44,7 @@ Free-form JSON can invent IDs or output fields. Restricting the judgment to know
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/builderops/ckm/test_semantic_typesafe.py tests/builderops/ckm/test_semantic.py`
-- `pytest -q tests/ops/test_host_secret_contract.py::test_typesafe_key_is_builder_ckm_dev_only`
+- `pytest -q tests/ops/test_host_secret_contract.py::test_typesafe_key_is_dev_only_and_agent_processes_cannot_resolve_it`
 - `lint-imports --config importlinter.ini`
 - `git diff --check`
 
@@ -54,7 +54,7 @@ Free-form JSON can invent IDs or output fields. Restricting the judgment to know
 
 ## Development Acceptance Gate
 
-The Builder route remains unavailable after code merge until the parent Issue records `typesafe.system_one.builder_dev_acceptance.v1` from one synthetic dev call using the owner-approved credential scope. This receipt does not activate any Product route or test/prod environment.
+The Builder route remains unavailable after code merge until the parent Issue records `typesafe.system_one.builder_dev_acceptance.v1` from one explicitly authorized synthetic dev call through MARR using the separate Builder caller credential, after owner-confirmed provider-key rotation and scoped MARR dev host installation. This receipt does not activate any Product route or test/prod environment.
 
 ## Related Docs
 

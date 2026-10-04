@@ -1,8 +1,11 @@
 import json
 from pathlib import Path
+import traceback
+from unittest.mock import Mock
 
 import pytest
 
+from app.ops import host_secret_bootstrap
 from app.ops.host_secret_contract import (
     HostSecretContract,
     UndeclaredSecretConsumerError,
@@ -256,6 +259,13 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "optional": False,
             "shared_key_domain": False,
         },
+        {
+            "logical_id": "typesafe.api-key",
+            "child_binding": "TYPESAFE_API_KEY",
+            "kind": "api-key",
+            "optional": False,
+            "shared_key_domain": False,
+        },
     ]
     assert payload["consumers"] == [
         {
@@ -302,6 +312,12 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "consumer": "heimdal-external-alerts",
             "channels": ["dev", "test", "prod"],
             "secrets": ["discord.webhook"],
+            "role_requirements": {},
+        },
+        {
+            "consumer": "marr-server-dev",
+            "channels": ["dev"],
+            "secrets": ["typesafe.api-key"],
             "role_requirements": {},
         },
     ]
@@ -474,7 +490,10 @@ def test_existing_consumer_environment_grants_are_unchanged() -> None:
         "builderops-ckm-semantic": {"openai.api-key"},
         "heimdal-external-alerts": {"discord.webhook"},
     }
-    assert contract.allowed == frozenset(
+    bws_grants = frozenset(
+        grant for grant in contract.allowed if grant[2] not in contract.keychain_only_secrets
+    )
+    assert bws_grants == frozenset(
         (channel, consumer, secret)
         for channel in ("dev", "test", "prod")
         for consumer, secrets in expected.items()
@@ -544,3 +563,155 @@ def test_bws_identity_scope_is_closed_and_consumer_grants_are_preserved(
     path.write_text(json.dumps(payload))
     with pytest.raises(ValueError):
         load_host_secret_contract(path)
+
+
+_TYPESAFE_CANARY = "fixture-typesafe-never-in-diagnostics"
+
+
+def test_typesafe_key_consumer_bindings_are_separate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
+    contract = load_host_secret_contract()
+    payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text())
+    assert contract.keychain_only_secrets == frozenset({"typesafe.api-key"})
+    assert {grant for grant in contract.allowed if grant[2] == "typesafe.api-key"} == {
+        ("dev", "marr-server-dev", "typesafe.api-key")
+    }
+    assert payload["bws"]["channel_projects"] == {
+        "dev": "non-prod", "test": "non-prod", "prod": "prod"
+    }
+    assert payload["bws"]["machine_accounts"] == {
+        "admin": ["non-prod", "prod"], "non-prod-reader": ["non-prod"], "prod-reader": ["prod"]
+    }
+    assert "typesafe.api-key" not in {
+        item["logical_id"] for item in payload["bws"]["identities"]
+    }
+    with pytest.raises(UndeclaredSecretConsumerError):
+        contract.bws_identity(channel="dev", consumer="marr-server-dev", secret="typesafe.api-key")
+
+    calls: list[tuple[str, str]] = []
+
+    def lookup(service: str, account: str) -> str:
+        calls.append((service, account))
+        return _TYPESAFE_CANARY
+
+    assert host_secret_bootstrap.resolve_host_secret_values(
+        channel="dev", consumer="marr-server-dev", provider="keychain", keychain_lookup=lookup
+    ) == {"typesafe.api-key": _TYPESAFE_CANARY}
+    assert calls == [("yggdrasil.host-secrets", "dev:marr-server-dev:typesafe.api-key")]
+
+
+@pytest.mark.parametrize(
+    ("platform", "channel", "consumer"),
+    [
+        ("darwin", "dev", "product-marr-dev"),
+        ("darwin", "dev", "product-linux-runtime"),
+        ("darwin", "dev", "builder-ckm-dev"),
+        ("darwin", "dev", "builderops-ckm-semantic"),
+        ("darwin", "dev", "builderops-model-inquiry"),
+        ("darwin", "dev", "codex-agent-dev"),
+        ("darwin", "dev", "claude-agent-dev"),
+        ("darwin", "test", "marr-server-dev"),
+        ("darwin", "prod", "marr-server-dev"),
+        ("linux", "dev", "marr-server-dev"),
+    ],
+)
+def test_typesafe_key_is_dev_only_and_agent_processes_cannot_resolve_it(
+    monkeypatch: pytest.MonkeyPatch, platform: str, channel: str, consumer: str
+) -> None:
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", platform)
+    calls: list[str] = []
+
+    def lookup(_service: str, account: str) -> str:
+        calls.append(account)
+        assert not account.endswith(":typesafe.api-key")
+        return "fixture-unrelated-provider-credential"
+
+    if consumer in {"builderops-ckm-semantic", "builderops-model-inquiry"}:
+        # Existing Builder grants remain usable; the MARR provider key never joins them.
+        assert host_secret_bootstrap.resolve_host_secret_values(
+            channel=channel, consumer=consumer, provider="keychain", keychain_lookup=lookup
+        ) == {"openai.api-key": "fixture-unrelated-provider-credential"}
+    else:
+        with pytest.raises(host_secret_bootstrap.HostSecretBootstrapError):
+            host_secret_bootstrap.resolve_host_secret_values(
+                channel=channel, consumer=consumer, provider="keychain", keychain_lookup=lookup
+            )
+        assert calls == []
+
+    # Even the declared server cannot select BWS. Refuse before reader/admission effects.
+    reader, controller = Mock(), Mock()
+    with pytest.raises(host_secret_bootstrap.HostSecretBootstrapError):
+        host_secret_bootstrap.resolve_host_secret_values(
+            channel="dev", consumer="marr-server-dev", provider="bws",
+            bws_reader=reader, controller=controller, keychain_lookup=lookup,
+        )
+    reader.lookup.assert_not_called()
+    controller.admit.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing", "malformed", "short", "backend", "binding", "undeclared",
+        "test-channel", "second-consumer", "optional", "shared-domain", "bws",
+        "missing-local-scope", "malformed-local-scope", "duplicate-local-scope",
+    ],
+)
+def test_typesafe_key_missing_or_unauthorized_binding_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture, fault: str,
+) -> None:
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
+    payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text())
+    secret = next(item for item in payload["secrets"] if item["logical_id"] == "typesafe.api-key")
+    consumer = next(item for item in payload["consumers"] if item["consumer"] == "marr-server-dev")
+    configuration_fault = fault not in {"missing", "malformed", "short", "backend"}
+    if fault == "binding":
+        secret["child_binding"] = _TYPESAFE_CANARY
+    elif fault == "undeclared":
+        payload["secrets"].remove(secret)
+    elif fault == "test-channel":
+        consumer["channels"].append("test")
+    elif fault == "second-consumer":
+        payload["consumers"].append({**consumer, "consumer": "codex-agent-dev"})
+    elif fault == "optional":
+        secret["optional"] = True
+    elif fault == "shared-domain":
+        secret["shared_key_domain"] = True
+    elif fault == "bws":
+        payload["bws"]["identities"].append({"logical_id": "typesafe.api-key", "scope": "shared"})
+    elif fault == "missing-local-scope":
+        del payload["keychain_only_secrets"]
+    elif fault == "malformed-local-scope":
+        payload["keychain_only_secrets"] = {"value": _TYPESAFE_CANARY}
+    elif fault == "duplicate-local-scope":
+        payload["keychain_only_secrets"].append("typesafe.api-key")
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(payload))
+    monkeypatch.setattr(host_secret_bootstrap, "load_host_secret_contract", lambda: load_host_secret_contract(path))
+    calls: list[str] = []
+
+    def lookup(_service: str, account: str) -> str:
+        calls.append(account)
+        if fault == "missing":
+            raise LookupError(_TYPESAFE_CANARY)
+        if fault == "backend":
+            raise RuntimeError(_TYPESAFE_CANARY)
+        return "short" if fault == "short" else _TYPESAFE_CANARY + "\n"
+
+    with pytest.raises(host_secret_bootstrap.HostSecretBootstrapError) as error:
+        host_secret_bootstrap.resolve_host_secret_values(
+            channel="dev", consumer="marr-server-dev", provider="keychain", keychain_lookup=lookup
+        )
+    if configuration_fault:
+        assert calls == []
+    else:
+        assert calls == ["dev:marr-server-dev:typesafe.api-key"]
+        assert host_secret_bootstrap.resolve_host_secret_values(
+            channel="dev", consumer="builderops-ckm-semantic", provider="keychain",
+            keychain_lookup=lambda _service, _account: "fixture-unrelated-provider-credential",
+        ) == {"openai.api-key": "fixture-unrelated-provider-credential"}
+    output = capsys.readouterr()
+    diagnostics = output.out + output.err + caplog.text + "".join(traceback.format_exception(error.value))
+    assert _TYPESAFE_CANARY not in diagnostics
+    assert error.value.__suppress_context__

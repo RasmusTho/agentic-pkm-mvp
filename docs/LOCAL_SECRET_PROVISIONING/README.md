@@ -89,15 +89,32 @@ or live channel qualification. Parent #5667 remains open until those owner gates
 
 ### Declared identifier contract
 
-The value-free contract declares `heimdal.raw-store-key`, `heimdal.archive-pass`, `openai.api-key`,
+The existing BWS-backed value-free declarations are `heimdal.raw-store-key`, `heimdal.archive-pass`, `openai.api-key`,
 `anthropic.api-key`, `github.token`, and `discord.webhook`, their child bindings, validation kinds, and whether each is optional. The
 raw-store key is granted to `heimdal-capture-watch`, `heimdal-api-ingress`, and the one-shot
 `heimdal-raw-migrate` transformer; both model-provider identifiers are granted only to
-`builderops-model-inquiry`, with exact `fable` and `gpt_codex` role requirements. Every grant is
+`builderops-model-inquiry`, with exact `fable` and `gpt_codex` role requirements. These pre-existing grants are
 declared for `dev`, `test`, and `prod` in
 `config/secrets/host_secret_contract.json`; no value or host path is stored in that file. This is the
 ADR-0064 declared-API-key scope. It declares the credential boundary but does not authorize provider
 selection, calls, CKM access, or fallback.
+
+The additional `typesafe.api-key` declaration is explicitly listed in `keychain_only_secrets`.
+It grants exactly `marr-server-dev` on `dev` and resolves only on Mac through the existing Keychain
+service/account mechanism. Its required `TYPESAFE_API_KEY` binding has API-key validation and no
+shared key domain. The production resolver and bootstrap refuse Linux, test, prod, and unauthorized
+consumers before lookup or launch; BWS selection is refused before reader or controller admission.
+It has no BWS identity or reader grant and leaves the two projects, three machine accounts, and all
+existing BWS grants unchanged. Product and Builder keep distinct caller policies, caller credentials,
+and owner model profiles; neither receives or resolves the MARR server's provider key. Codex and
+Claude runtime consumers have no grant; direct development calls are separately governed under #5778.
+
+This is a repository declaration verified with fake sources, not host provisioning or activation.
+Any live use requires owner confirmation of rotation after the earlier exposure, scoped MARR dev
+host installation, explicit one-call authorization with synthetic input, and a redacted receipt.
+Product and Builder routes remain off pending their separate post-merge dev acceptance on #5764.
+No rotation, Keychain read/import, installation, live provider call, or channel activation occurred
+as part of this repository slice.
 
 The Discord binding is granted only to the Heimdal-owned `heimdal-external-alerts` consumer on
 `dev`, `test`, and `prod`, and is one-way notification transport only. Creating, rotating, deleting,

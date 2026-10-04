@@ -447,6 +447,8 @@ def _resolve_consumer_environment(
             channel=channel,
             consumer=consumer,
         ):
+            if secret in contract.keychain_only_secrets and sys.platform != "darwin":
+                raise HostSecretBootstrapError("host secret provider unavailable")
             env_name = contract.binding_for(secret)
             kind = contract.kind_for(secret)
             account = contract.keychain_account(
@@ -516,6 +518,12 @@ def resolve_host_secret_values(
                     _declared_secrets(selected, channel=channel, consumer=consumer)
                     if selected.binding_for(secret) in values}
         if provider != "bws" or bws_reader is None:
+            raise HostSecretBootstrapError("host secret provider unavailable")
+        if any(
+            secret in selected.keychain_only_secrets
+            for declared_channel, declared_consumer, secret in selected.allowed
+            if declared_channel == channel and declared_consumer == consumer
+        ):
             raise HostSecretBootstrapError("host secret provider unavailable")
         if operation is not None:
             operation.require_active(channel)

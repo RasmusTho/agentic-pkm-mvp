@@ -14,14 +14,14 @@ can_parallelize_with: []
 
 ## Purpose
 
-Product requests need to reach Jev without exposing the TypeSafe API key to Product Linux, Codex, or Claude. The Mac executor is the only Product-facing place that owns this external credential.
+Product and Builder requests need to reach Jev through separate caller authorization without exposing the TypeSafe provider key to either caller, Linux, Codex, or Claude. One MARR Mac dev server owns that runtime credential.
 
 ## What This Task Does
 
 - Add a bounded System One judgment operation to the MARR service and Product client, reusing existing authenticated admission and channel/action authorization.
 - Accept only the typed contract and the closed Product allowlist: `intent_text` up to 2,000 UTF-8 bytes; serialized request ≤4 KiB. Reject `current_body`, note titles, vault paths, prior turns, and unknown fields before dispatch.
 - Execute one request with SDK retries disabled. Classify `unavailable_before_send`, `outcome_unknown_after_dispatch`, `provider_rejected`, `response_invalid`, and `success`; every state is terminal. A timeout after dispatch may have begun is `outcome_unknown_after_dispatch`, and the same request is never replayed.
-- Resolve `typesafe.api-key` only for the dedicated Mac-executor consumer through the host-local Keychain contract. Missing credentials fail closed.
+- Resolve `typesafe.api-key` only for `marr-server-dev` on `dev` through the Mac Keychain-only contract. Product and Builder keep separate caller credentials and policies; neither receives the provider key. Missing or unauthorized server bindings fail closed.
 - Do not retry a request after a send may have reached TypeSafe; do not fall back to Codex or Ollama after inference may have started.
 
 ## Concretely
@@ -30,7 +30,7 @@ Product sends a typed judgment request through the existing authenticated execut
 
 ## Why This Matters
 
-Sending the key to Product Linux or a coding-agent process would widen the credential boundary and bypass the chosen Mac-executor path.
+Sending the runtime key to Product, Builder, Linux, or a coding-agent process would widen the credential boundary and bypass the chosen Mac-executor path.
 
 ## Acceptance Criteria
 
@@ -38,13 +38,13 @@ Sending the key to Product Linux or a coding-agent process would widen the crede
 - [ ] Missing or malformed Keychain credentials fail before the provider request and never enter logs, responses, or receipts. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_missing_typesafe_credential_fails_before_provider_call`.
 - [ ] The SDK transport performs one attempt and maps pre-send failure, ambiguous post-dispatch timeout, provider rejection, and invalid response to distinct terminal outcomes. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_provider_outcomes_are_terminal_and_never_retried`.
 - [ ] The executor rejects disallowed fields and over-limit serialized requests before network dispatch. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_request_allowlist_and_size_limit_fail_before_dispatch`.
-- [ ] The TypeSafe binding is limited to the dedicated executor consumer and does not grant it to unrelated consumers or channels. Verify: `tests/ops/test_host_secret_contract.py::test_typesafe_key_is_executor_scoped`.
+- [ ] The TypeSafe binding is limited to the `marr-server-dev` Mac dev server consumer and does not grant it to unrelated consumers or channels. Verify: `tests/ops/test_host_secret_contract.py::test_typesafe_key_is_dev_only_and_agent_processes_cannot_resolve_it`.
 - [ ] MARR owner docs distinguish typed judgments from generic completions and state the supported behavior accurately. Verify: doc writeback at `docs/MODEL_ACCESS_ROUTER/README.md :: Current State and Boundary`.
 
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/model_access/test_typesafe_judgment_executor.py`
-- `pytest -q tests/ops/test_host_secret_contract.py::test_typesafe_key_is_executor_scoped`
+- `pytest -q tests/ops/test_host_secret_contract.py::test_typesafe_key_is_dev_only_and_agent_processes_cannot_resolve_it`
 - `pytest -q tests/model_access/test_executor_api.py tests/model_access/test_remote_contract.py`
 - `git diff --check`
 
@@ -54,11 +54,11 @@ Sending the key to Product Linux or a coding-agent process would widen the crede
 
 ## Development Acceptance Gate
 
-The Product route remains disabled/unavailable after code merge until the parent Issue records `typesafe.system_one.product_dev_acceptance.v1` from one synthetic dev call on the designated Mac executor. The host receipt is not a CI test and does not activate test/prod.
+The Product route remains disabled/unavailable after code merge until the parent Issue records `typesafe.system_one.product_dev_acceptance.v1` from one explicitly authorized synthetic dev call through the designated MARR Mac server, after owner confirmation of rotation and scoped host installation. The server owns the provider key and the Product caller uses its separate caller credential. The host receipt is not a CI test and does not activate test/prod.
 
 ## Related Docs
 
 - `docs/TYPESAFE_SYSTEM_ONE/README.md`
 - `docs/MODEL_ACCESS_ROUTER/README.md`
-- `docs/LOCAL_SECRET_PROVISIONING/README.md :: Mac Keychain`
+- `docs/LOCAL_SECRET_PROVISIONING/README.md :: Declared identifier contract`
 - `docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md`

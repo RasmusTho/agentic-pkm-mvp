@@ -19,7 +19,7 @@ Make the target-state capability contract, five bounded implementation task spec
 
 - Publish the capability README, five implementation task specifications, parent pointer, and DOCS_INDEX row.
 - Keep target-state text distinct from shipped runtime behavior.
-- Bind parent Issue #5764 and task Issues #5765–#5770 (including the credential scope gate) to the local specification.
+- Bind parent Issue #5764 and task Issues #5765–#5770 (including the server-only provider-key binding and later live operator gates) to the local specification.
 
 ## Acceptance Criteria
 
