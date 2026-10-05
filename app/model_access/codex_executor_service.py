@@ -23,6 +23,11 @@ from app.model_access.catalog import CatalogError
 from app.model_access.catalog_discovery import OllamaCatalogDiscovery, codex_catalog_snapshot
 from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpError
+from app.model_access.product_judgment_contract import (
+    PRODUCT_JUDGMENT_REQUEST_BYTES, ProductJudgmentResult, validate_product_request,
+)
+from app.model_access.typesafe_judgment_executor import ProductTypeSafeExecutor
+from llm_contract import SystemOneJudgmentRequest
 from app.model_access.remote_contract import (
     CompletionCapabilityIntent,
     CompletionRequest,
@@ -116,7 +121,7 @@ def _require_serve_capability(
             continue
         actions = grant.get("actions")
         if not isinstance(actions, list) or any(
-            not isinstance(value, str) or value not in {"complete", "preflight", "catalog"}
+            not isinstance(value, str) or value not in {"complete", "preflight", "catalog", "judgment"}
             for value in actions
         ):
             continue
@@ -277,6 +282,7 @@ def create_codex_executor_app(
     max_request_bytes: int = MAX_REQUEST_BYTES,
     max_output_bytes: int = MAX_OUTPUT_BYTES,
     max_concurrency: int = DEFAULT_CONCURRENCY,
+    product_judgment_executor: ProductTypeSafeExecutor | None = None,
 ) -> FastAPI:
     """Build bounded preflight/completion operations; route policy stays with callers."""
 
@@ -304,6 +310,29 @@ def create_codex_executor_app(
         lifespan=lifespan,
     )
     slots = threading.BoundedSemaphore(max_concurrency)
+
+    @app.post("/v1/judgment", response_model=ProductJudgmentResult)
+    async def judgment(request: Request) -> JSONResponse:
+        try:
+            _require_loopback_peer(request)
+            _require_serve_capability(request, serve_capability_name, action="judgment")
+            body = await _read_bounded_body(request, max_bytes=PRODUCT_JUDGMENT_REQUEST_BYTES)
+            try:
+                typed_request = validate_product_request(SystemOneJudgmentRequest.model_validate(_decode_json_object(body)))
+            except (ValidationError, ValueError, TypeError, UnicodeError):
+                raise _RequestFailure(422, "invalid_request") from None
+            if product_judgment_executor is None:
+                result = ProductJudgmentResult(outcome="unavailable_before_send")
+            else:
+                if not slots.acquire(blocking=False):
+                    raise _RequestFailure(429, "executor_busy")
+                try:
+                    result = await run_in_threadpool(product_judgment_executor.execute, typed_request)
+                finally:
+                    slots.release()
+            return JSONResponse(content=result.model_dump(mode="json"))
+        except _RequestFailure as exc:
+            return JSONResponse(status_code=exc.status_code, content={"error": {"code": exc.code}})
 
     @app.post("/v1/preflight", response_model=PreflightResponse)
     async def preflight(request: Request) -> JSONResponse:
@@ -534,6 +563,7 @@ def main() -> None:
         ollama_adapter=ollama_adapter,
         adapter_factory=factory,
         serve_capability_name=capability_name,
+        product_judgment_executor=ProductTypeSafeExecutor.from_host_environment(),
     )
     serve_executor(app, host="127.0.0.1", port=port)
 

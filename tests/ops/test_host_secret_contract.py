@@ -568,6 +568,22 @@ def test_bws_identity_scope_is_closed_and_consumer_grants_are_preserved(
 _TYPESAFE_CANARY = "fixture-typesafe-never-in-diagnostics"
 
 
+def test_typesafe_key_is_executor_scoped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Product operation's exact binding cannot become a Product caller grant."""
+    contract = load_host_secret_contract()
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
+    lookup = Mock(return_value=_TYPESAFE_CANARY)
+    assert host_secret_bootstrap.resolve_host_secret_values(
+        channel="dev", consumer="marr-server-dev", provider="keychain", keychain_lookup=lookup,
+    ) == {"typesafe.api-key": _TYPESAFE_CANARY}
+    lookup.assert_called_once_with("yggdrasil.host-secrets", "dev:marr-server-dev:typesafe.api-key")
+    for consumer in ("product", "product-canvas", "builderops-ckm-semantic", "codex", "claude"):
+        with pytest.raises(UndeclaredSecretConsumerError):
+            contract.require_declared(channel="dev", consumer=consumer, secret="typesafe.api-key")
+    assert contract.consumers_declared_for(channel="dev", secret="typesafe.api-key") == frozenset({"marr-server-dev"})
+    assert contract.consumers_declared_for(channel="prod", secret="typesafe.api-key") == frozenset()
+
+
 def test_typesafe_key_consumer_bindings_are_separate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
     contract = load_host_secret_contract()
