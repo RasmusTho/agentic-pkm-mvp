@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from importlib.metadata import PackageNotFoundError
 import json
 import logging
 from pathlib import Path
+import socket
+import ssl
 from typing import Any
 
 from fastapi.testclient import TestClient
 import httpx
 import httpx2
 import pytest
+import truststore
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.codex_executor_service import create_codex_executor_app
@@ -106,6 +110,7 @@ def _app(
     mode: str = "accepted_dev",
     profile_path: Path = PRODUCT_TYPESAFE_PROFILE_PATH,
     runtime_channel: str = "dev",
+    adapter: TypeSafeAdapter | None = None,
 ):
     monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
     lookups = []
@@ -118,7 +123,9 @@ def _app(
         mode=mode,
         runtime_channel=runtime_channel,
         profile_path=profile_path,
-        adapter=TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(provider.handle)),
+        adapter=adapter or TypeSafeAdapter(
+            transport_factory=lambda: httpx2.MockTransport(provider.handle)
+        ),
         keychain_lookup=lookup,
     )
     root = Path(__file__).resolve().parents[2]
@@ -195,6 +202,68 @@ def test_missing_typesafe_credential_fails_before_provider_call(monkeypatch, cap
     assert INTENT not in response.text + caplog.text
     if key:
         assert key not in response.text + caplog.text
+
+
+@pytest.mark.parametrize("mode", ["accepted_dev", "acceptance_once"])
+@pytest.mark.parametrize("stage", ["metadata", "factory", "tls", "http_client", "sdk_client"])
+def test_adapter_setup_failure_is_presend_and_closes_owned_transport(
+    monkeypatch, caplog, mode, stage
+) -> None:
+    """GH5791-R4180661727: default TLS setup is before the possible-send boundary."""
+    provider = Provider()
+    calls = {"factory": 0, "failure": 0, "close": 0, "network": 0}
+
+    def fail(*args, **kwargs):
+        calls["failure"] += 1
+        error = PackageNotFoundError if stage == "metadata" else ssl.SSLError
+        raise error(FAKE_KEY + INTENT)
+
+    def close():
+        calls["close"] += 1
+
+    def factory():
+        calls["factory"] += 1
+        if stage == "factory":
+            fail()
+        transport = httpx2.MockTransport(provider.handle)
+        monkeypatch.setattr(transport, "close", close)
+        return transport
+
+    def forbidden_network(*args, **kwargs):
+        calls["network"] += 1
+        pytest.fail("setup regression must never open a socket")
+
+    monkeypatch.setattr(socket, "create_connection", forbidden_network)
+    if stage == "tls":
+        # Keep the real default HTTPTransport constructor; replace its OS TLS seam.
+        monkeypatch.setattr(truststore, "SSLContext", fail)
+        adapter = TypeSafeAdapter()
+    else:
+        adapter = TypeSafeAdapter(transport_factory=factory)
+    targets = {
+        "metadata": "app.model_access.typesafe_adapter.version",
+        "http_client": "app.model_access.typesafe_adapter.httpx2.Client",
+        "sdk_client": "app.model_access.typesafe_adapter.TypeSafeClient",
+    }
+    if stage in targets:
+        monkeypatch.setattr(targets[stage], fail)
+    app, lookups, _ = _app(provider, monkeypatch, mode=mode, adapter=adapter)
+    with caplog.at_level(logging.DEBUG):
+        response = _call(app)
+        assert response.status_code == 200
+        assert response.json()["outcome"] == "unavailable_before_send"
+        if mode == "acceptance_once":
+            # Even a pre-send setup failure consumes the explicit one-call allowance.
+            assert _call(app).json()["outcome"] == "unavailable_before_send"
+    assert calls == {
+        "factory": int(stage not in {"metadata", "tls"}),
+        "failure": 1,
+        "close": int(stage in {"http_client", "sdk_client"}),
+        "network": 0,
+    }
+    assert len(lookups) == 1 and provider.calls == []
+    assert FAKE_KEY not in response.text + caplog.text
+    assert INTENT not in response.text + caplog.text
 
 
 @pytest.mark.parametrize(

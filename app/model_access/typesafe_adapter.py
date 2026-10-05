@@ -55,6 +55,7 @@ class _SingleAttemptTransport(httpx2.BaseTransport):
     def __init__(self, inner: httpx2.BaseTransport) -> None:
         self.inner = inner
         self.attempted = False
+        self._closed = False
 
     def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         if self.attempted:
@@ -88,7 +89,9 @@ class _SingleAttemptTransport(httpx2.BaseTransport):
             response.close()
 
     def close(self) -> None:
-        self.inner.close()
+        if not self._closed:
+            self._closed = True
+            self.inner.close()
 
 
 class TypeSafeAdapter:
@@ -108,19 +111,21 @@ class TypeSafeAdapter:
         model: str,
         api_key: str,
     ) -> tuple[SystemOneJudgmentResponse, JudgmentUsage]:
-        if version("typesafe-sdk") != TYPESAFE_SDK_VERSION:
-            raise TypeSafeAdapterError("unavailable_before_send")
-        # Parent.disabled does not suppress descendant records or their handlers.
-        # Disable each logger used by the pinned SDK/HTTP transport, pre-creating
-        # lazy protocol/proxy loggers too. Never restore between concurrent calls.
-        for name in (
-            "typesafe_sdk", "httpx2", "httpcore2", "httpcore2.connection",
-            "httpcore2.http11", "httpcore2.http2", "httpcore2.proxy", "httpcore2.socks",
-        ):
-            logging.getLogger(name).disabled = True
-        transport = _SingleAttemptTransport(self._transport_factory())
+        transport = None
         try:
-            with httpx2.Client(
+            if version("typesafe-sdk") != TYPESAFE_SDK_VERSION:
+                raise TypeSafeAdapterError("unavailable_before_send")
+            # Parent.disabled does not suppress descendant records or their handlers.
+            # Disable each logger used by the pinned SDK/HTTP transport, pre-creating
+            # lazy protocol/proxy loggers too. Never restore between concurrent calls.
+            for name in (
+                "typesafe_sdk", "httpx2", "httpcore2", "httpcore2.connection",
+                "httpcore2.http11", "httpcore2.http2", "httpcore2.proxy", "httpcore2.socks",
+            ):
+                logging.getLogger(name).disabled = True
+            transport = _SingleAttemptTransport(self._transport_factory())
+            # Own transport teardown before HTTP-client construction can fail.
+            with transport, httpx2.Client(
                 transport=transport, timeout=30.0, trust_env=False, follow_redirects=False
             ) as http_client:
                 with TypeSafeClient(
@@ -171,13 +176,15 @@ class TypeSafeAdapter:
             raise TypeSafeAdapterError("provider_rejected") from None
         except (ValueError, KeyError, TypeError):
             outcome: JudgmentOutcome = (
-                "response_invalid" if transport.attempted else "unavailable_before_send"
+                "response_invalid"
+                if transport is not None and transport.attempted
+                else "unavailable_before_send"
             )
             raise TypeSafeAdapterError(outcome) from None
         except Exception:
             outcome = (
                 "outcome_unknown_after_dispatch"
-                if transport.attempted
+                if transport is not None and transport.attempted
                 else "unavailable_before_send"
             )
             raise TypeSafeAdapterError(outcome) from None
