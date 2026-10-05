@@ -41,22 +41,28 @@ covers retrieval only (audit **CW-7**, §5.2).
 
 ## LLM-mode decision (state explicitly)
 
-The runner stays deterministic in CI. This eval needs the **real classifier path**, so specify two
-modes, grounded in how `tests/eval/test_ask_deepeval.py` reads `EVAL_LLM_MODE` via
-`app/eval/llm_client.py::configure_eval_openai_env`:
-1. **Live mode** (opt-in, `@pytest.mark.eval`, skipped unless `EVAL_LLM_MODE != skip`): runs cases
-   against the real classifier + live LLM. Not in the PR gate.
-2. **Deterministic CI mode** (default, in `not pg` gate): runs cases against the classifier's
-   constrained-output validation layer (KERNEL-07's structured decoding) using a **replay fixture**
-   of recorded model outputs per case. The confusion matrix and the hard gate are computed here.
+The runner stays deterministic in CI. After TSO-03/#5767 the two targets are explicit:
 
-The hard mutation-side gate is asserted in deterministic mode so CI blocks without live LLM access.
+1. **Live mode** (`EVAL_LLM_MODE=run`, explicit `EVAL_LLM_MODEL` and
+   `EVAL_LLM_TRANSPORT=openai_api`): retains the legacy completion comparator through the
+   Product eval facade. Its receipt identifies `legacy_completion_comparator`, the selected
+   OpenAI model, returned model and billing evidence. It does not attest the TypeSafe classifier.
+2. **Deterministic CI mode** (default): the authored label fixture is translated into synthetic
+   typed Product results, then passed through the actual `IntentClassifierCognition.classify`
+   validator and mapper. Placeholder identities, deterministic probabilities and zero usage are
+   fixture data, not measured provider output. The scorecard identifies
+   `product_typed_mapping_fixture`; its confusion matrix and mutation-side hard gate remain.
+
+Missing/orphan fixtures fail loudly. Live comparator outputs never enter the synthetic Product
+adapter or provide a runtime fallback. Actual Product/MARR/SDK and confidence-boundary proofs
+live in `tests/components/llm/test_intent_classifier_typesafe.py`; separate one-call dev acceptance
+remains governed by #5764. No new evaluation campaign is a prerequisite.
 
 ## Concretely
 
 ```bash
 pytest -q tests/eval/test_classification_golden.py           # deterministic CI mode
-EVAL_LLM_MODE=live pytest -q -m eval tests/eval/test_classification_golden.py   # opt-in live
+EVAL_LLM_MODE=run EVAL_LLM_MODEL=<configured-eval-model> EVAL_LLM_TRANSPORT=openai_api pytest -q -m eval tests/eval/test_classification_golden.py   # opt-in live
 ```
 
 ## Why This Matters

@@ -11,10 +11,10 @@ import re
 from typing import Any
 
 from app.components.llm.constrained import registered_schema, validate_payload
-from app.components.llm.intent_classifier import INTENT_CLASSIFICATION_SCHEMA_REF
 from app.components.settings.models_loader import load_models
 from app.eval.classification import (
     CLASSIFICATION_GOLDEN_PATH,
+    INTENT_CLASSIFICATION_SCHEMA_REF,
     evaluate_classification_golden_set,
     load_classification_cases,
 )
@@ -179,6 +179,7 @@ def run_live_classification(cfg: EvalLLMConfig | None = None) -> dict[str, Any]:
         }
     return {
         "schema_version": "classification_live_run.v1",
+        "target": "legacy_completion_comparator",
         "complete": complete,
         "recorded_at": datetime.now(timezone.utc).isoformat(),
         "route": {

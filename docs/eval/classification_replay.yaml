@@ -1,20 +1,14 @@
 # Replay fixture for the intent-classification golden set (KERNEL-13, #2775).
 #
-# `completions` maps every case id in docs/eval/classification_golden.yaml to
-# a RECORDED raw model completion string. Deterministic CI mode replays these
-# through the injectable completion seam of
-# app/components/llm/intent_classifier.py::IntentClassifierCognition, so KERNEL-07's
-# constrained-output validation layer (schema validation, explicit-UNKNOWN
-# degrade, governance action mapping) runs for real — only the network call
-# is replayed. See app/eval/classification.py and
-# docs/RUNTIME_CORRECTNESS_KERNEL/INTENT_CLASSIFICATION_GOLDEN_SET.md.
+# `completions` retains the authored deterministic label fixture format for
+# compatibility. app.eval.classification.ClassificationReplayClient translates
+# valid labels into synthetic typed Product results (placeholder model/SDK IDs,
+# deterministic probabilities, zero usage). The real classifier validates and
+# maps those results. These values are not measured confidence or TypeSafe output.
+# Invalid labels become a typed response-invalid result and exercise UNKNOWN.
 #
-# Provenance: authored deterministic baseline (the completion a correct
-# classifier run emits for each case; expected-unknown cases carry
-# schema-INVALID outputs — prose, off-enum, wrong types, missing keys, empty —
-# so the real validation layer produces the UNKNOWN safe-fail). Refresh from
-# a live run via EVAL_LLM_MODE (opt-in @pytest.mark.eval path); scorecard
-# baseline-vs-candidate comparison is KERNEL-14.
+# The separate opt-in OpenAI evaluation remains a legacy completion comparator;
+# its live outputs never populate this synthetic Product adapter or attest MARR.
 #
 # Coverage invariant: every golden case id must be present — a partially
 # covered dataset is a false-green (cross-task invariant #6); the loader and

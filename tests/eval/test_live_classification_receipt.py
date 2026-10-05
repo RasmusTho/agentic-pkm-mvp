@@ -50,6 +50,7 @@ def test_receipt_binds_exact_route_dataset_coverage_and_cost_evidence() -> None:
     receipt = live.run_live_classification(config(Client()))
     n = len(load_classification_cases())
     assert receipt["complete"]
+    assert receipt["target"] == receipt["metrics"]["target"] == "legacy_completion_comparator"
     assert receipt["route"] == {
         "provider": "openai",
         "model": "gpt-5.6-luna",

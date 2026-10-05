@@ -4,8 +4,8 @@ Covers the LLM-backed cognition that labels a canvas co-authoring *intent*
 (not the generated body) as co-authoring / governance-bearing / exploratory,
 and — when governance-bearing — into the correct ``GovernanceActionType``.
 
-The cognition is pure: it runs a schema-constrained completion through the
-shared utility (``app/components/llm/constrained.py``) and returns a typed
+The cognition is pure: it runs a typed Product judgment through the
+existing Product MARR client and returns a typed
 label. It never mutates a note, calls ``CanvasWriter``, or stages a Panel
 intent. A degraded/mock/unvalidated completion must never fabricate a
 routing; it yields the explicit ``UNKNOWN`` class (KERNEL-07, #2769 — the
@@ -20,6 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from app.eval.classification import ClassificationReplayClient
 
 from app.components.llm.intent_classifier import (
     GovernanceActionType,
@@ -29,36 +30,22 @@ from app.components.llm.intent_classifier import (
 )
 
 
-class _CompletionStub:
-    """Deterministic raw-completion stub returning a fixed label.
-
-    Records calls so tests can assert the cognition consulted the completion
-    with the intent, and nothing else. Raises when ``fail=True`` to simulate a
-    failed provider run.
-    """
-
+class _JudgmentStub(ClassificationReplayClient):
     def __init__(self, label: str, *, fail: bool = False) -> None:
-        self._label = label
-        self._fail = fail
-        self.calls: list[dict[str, object]] = []
+        super().__init__(label)
+        self.fail = fail
+        self.calls: list[str] = []
 
-    def __call__(
-        self,
-        *,
-        system: str,
-        user: str,
-        trace_id: str | None = None,
-        max_tokens: int | None = None,
-    ) -> str:
-        self.calls.append({"system": system, "user": user, "trace_id": trace_id})
-        if self._fail:
+    def judge_product_intent(self, intent_text):
+        self.calls.append(intent_text)
+        if self.fail:
             raise RuntimeError("provider failed")
-        return self._label
+        return super().judge_product_intent(intent_text)
 
 
 def _classify(label: str, intent: str, *, fail: bool = False) -> IntentClassification:
-    completion = _CompletionStub(label, fail=fail)
-    cognition = IntentClassifierCognition(completion=completion)
+    completion = _JudgmentStub(label, fail=fail)
+    cognition = IntentClassifierCognition(judgment_client=completion)
     return cognition.classify(intent=intent)
 
 
@@ -104,17 +91,13 @@ def test_cross_note_intent_classified() -> None:
     assert result.action_type is GovernanceActionType.CROSS_NOTE
 
 
-def test_governance_with_null_action_falls_back_to_frontmatter() -> None:
-    # Schema-valid governance classification with a null action subtype keeps
-    # the governance signal (routing to the gated pipeline is safe) with the
-    # conservative frontmatter bucket.
+def test_governance_without_action_remains_unknown() -> None:
     result = _classify(
-        '{"intent_class": "governance_bearing", "action_type": null}',
-        intent="promote this note",
+        '{"intent_class": "governance_bearing", "action_type": null}', intent="promote this note",
     )
-    assert result.intent_class is IntentClass.GOVERNANCE_BEARING
-    assert result.action_type is GovernanceActionType.FRONTMATTER_UPDATE
-    assert result.classified is True
+    assert result.intent_class is IntentClass.UNKNOWN
+    assert result.action_type is None
+    assert result.classified is False
 
 
 # ---------------------------------------------------------------------------
@@ -177,21 +160,20 @@ def test_classifier_is_pure_no_writes(tmp_path: Path) -> None:
     original = "---\nuuid: u1\n---\n\n# Hello\n\nBody.\n"
     note.write_text(original, encoding="utf-8")
 
-    completion = _CompletionStub('{"intent_class": "co_authoring", "action_type": null}')
-    cognition = IntentClassifierCognition(completion=completion)
+    completion = _JudgmentStub('{"intent_class": "co_authoring", "action_type": null}')
+    cognition = IntentClassifierCognition(judgment_client=completion)
     result = cognition.classify(
         intent="tighten the intro",
-        current_body=note.read_text(encoding="utf-8"),
         trace_id="trace-pure-1",
     )
 
     assert isinstance(result, IntentClassification)
     # The note on disk is untouched — the cognition performs no writes.
     assert note.read_text(encoding="utf-8") == original
-    # Only the injected completion was consulted, exactly once, with the intent.
+    # Only the injected judgment client was consulted, exactly once, with the intent.
     assert len(completion.calls) == 1
-    assert "tighten the intro" in str(completion.calls[0]["user"])
-    assert completion.calls[0]["trace_id"] == "trace-pure-1"
+    assert completion.calls == ["tighten the intro"]
+    assert result.trace_id == "trace-pure-1"
 
     # Structurally pure: the module imports no writer / Panel-pipeline symbol
     # into its namespace (checked on bound names, not docstring prose).

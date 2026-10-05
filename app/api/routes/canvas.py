@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.services.artifact_identity import resolve_note_artifact_identity
 from app.chat.canvas_writer import CanvasWriter, GovernanceBearingMutationError
@@ -29,11 +29,11 @@ from app.text.helpers import content_hash as _content_hash, split_frontmatter as
 from app.write_guard import WritesBlockedError
 from app.chat.coauthoring_cognition import CoAuthoringCognition, CoAuthoringUnavailableError
 from app.chat.governance_router import GovernanceActionType, GovernanceRouter
-from app.components.llm.constrained import CompletionFn
 from app.components.llm.intent_classifier import (
     IntentClass,
     IntentClassification,
     IntentClassifierCognition,
+    ProductIntentJudgmentClient,
 )
 from app.chat.session_log import SessionLog, SessionLogWriter
 from app.api.routes.vault_resolution import (
@@ -115,15 +115,8 @@ def _coauthor_facade_factory() -> ReasoningModeFacade:
     return get_reasoning_mode_facade()
 
 
-def _intent_classifier_completion() -> CompletionFn | None:
-    """Raw LLM completion override used by the intent-classifier cognition.
-
-    ``None`` routes through the shared constrained-completion utility's real
-    provider path (schema-constrained ``ChatClient``). Indirected through a
-    module-level function so tests can substitute a deterministic completion
-    stub without a live LLM provider, mirroring ``_coauthor_facade_factory``.
-    Schema validation runs below this seam either way (KERNEL-07).
-    """
+def _intent_classifier_judgment_client() -> ProductIntentJudgmentClient | None:
+    """Optional test injection; None uses the configured, authenticated Product client."""
     return None
 
 
@@ -155,6 +148,8 @@ class EditResponse(BaseModel):
 
 
 class CoAuthorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     intent: str
     change_summary: str | None = None
 
@@ -566,14 +561,14 @@ def coauthor(session_id: str, req: CoAuthorRequest) -> CoAuthorResponse | JSONRe
     # -----------------------------------------------------------------------
     # Intent classification (Phase 4): classify the *intent* before generation.
     #
-    # The classification is schema-validated at the LLM boundary (KERNEL-07):
-    # an unavailable provider or an untrusted/invalid completion yields the
+    # The classification is a typed Product judgment validated at the boundary:
+    # an unavailable provider or an invalid/uncertain judgment yields the
     # explicit ``UNKNOWN`` class, which lands read-only with a re-ask
     # affordance below. Only a schema-validated classification can route to a
     # mutation-capable path.
     # -----------------------------------------------------------------------
-    classifier = IntentClassifierCognition(completion=_intent_classifier_completion())
-    classification = classifier.classify(intent=req.intent, current_body=current_body)
+    classifier = IntentClassifierCognition(judgment_client=_intent_classifier_judgment_client())
+    classification = classifier.classify(intent=req.intent)
 
     if classification.intent_class is IntentClass.UNKNOWN:
         # Explicit UNKNOWN landing surface: degrade to read-only handling plus
