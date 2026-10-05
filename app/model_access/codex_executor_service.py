@@ -27,6 +27,10 @@ from app.model_access.product_judgment_contract import (
     PRODUCT_JUDGMENT_REQUEST_BYTES, ProductJudgmentResult, validate_product_request,
 )
 from app.model_access.typesafe_judgment_executor import ProductTypeSafeExecutor
+from app.model_access.ckm_judgment_executor import BuilderTypeSafeExecutor
+from app.model_access.ckm_judgment_contract import (
+    CKM_JUDGMENT_REQUEST_BYTES, BuilderJudgmentResult, validate_ckm_request,
+)
 from llm_contract import SystemOneJudgmentRequest
 from app.model_access.remote_contract import (
     CompletionCapabilityIntent,
@@ -99,6 +103,7 @@ def _require_serve_capability(
     capability_name: str,
     *,
     action: str,
+    channel: str = "product",
 ) -> None:
     value = request.headers.get("tailscale-app-capabilities")
     if value is None or len(value.encode("utf-8")) > MAX_CAPABILITY_HEADER_BYTES:
@@ -121,12 +126,12 @@ def _require_serve_capability(
             continue
         actions = grant.get("actions")
         if not isinstance(actions, list) or any(
-            not isinstance(value, str) or value not in {"complete", "preflight", "catalog", "judgment"}
+            not isinstance(value, str) or value not in {"complete", "preflight", "catalog", "judgment", "ckm_judgment"}
             for value in actions
         ):
             continue
         if (
-            grant.get("channel") == "product"
+            grant.get("channel") == channel
             and bool(actions)
             and len(actions) == len(set(actions))
             and action in actions
@@ -283,6 +288,7 @@ def create_codex_executor_app(
     max_output_bytes: int = MAX_OUTPUT_BYTES,
     max_concurrency: int = DEFAULT_CONCURRENCY,
     product_judgment_executor: ProductTypeSafeExecutor | None = None,
+    builder_judgment_executor: BuilderTypeSafeExecutor | None = None,
 ) -> FastAPI:
     """Build bounded preflight/completion operations; route policy stays with callers."""
 
@@ -310,6 +316,29 @@ def create_codex_executor_app(
         lifespan=lifespan,
     )
     slots = threading.BoundedSemaphore(max_concurrency)
+
+    @app.post("/v1/ckm-judgment", response_model=BuilderJudgmentResult)
+    async def ckm_judgment(request: Request) -> JSONResponse:
+        try:
+            _require_loopback_peer(request)
+            _require_serve_capability(request, serve_capability_name, action="ckm_judgment", channel="builder")
+            body = await _read_bounded_body(request, max_bytes=CKM_JUDGMENT_REQUEST_BYTES)
+            try:
+                typed_request = validate_ckm_request(SystemOneJudgmentRequest.model_validate(_decode_json_object(body)))
+            except (ValidationError, ValueError, TypeError, UnicodeError):
+                raise _RequestFailure(422, "invalid_request") from None
+            if builder_judgment_executor is None:
+                result = BuilderJudgmentResult(outcome="unavailable_before_send")
+            else:
+                if not slots.acquire(blocking=False):
+                    raise _RequestFailure(429, "executor_busy")
+                try:
+                    result = await run_in_threadpool(builder_judgment_executor.execute, typed_request)
+                finally:
+                    slots.release()
+            return JSONResponse(content=result.model_dump(mode="json"))
+        except _RequestFailure as exc:
+            return JSONResponse(status_code=exc.status_code, content={"error": {"code": exc.code}})
 
     @app.post("/v1/judgment", response_model=ProductJudgmentResult)
     async def judgment(request: Request) -> JSONResponse:
@@ -564,6 +593,7 @@ def main() -> None:
         adapter_factory=factory,
         serve_capability_name=capability_name,
         product_judgment_executor=ProductTypeSafeExecutor.from_host_environment(),
+        builder_judgment_executor=BuilderTypeSafeExecutor.from_host_environment(),
     )
     serve_executor(app, host="127.0.0.1", port=port)
 

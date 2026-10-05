@@ -18,17 +18,27 @@ Extend evidence coverage to artifacts no mechanical rule can place (a doc that d
 ## What This Task Does
 
 - Implements `app/builderops/ckm/semantic.py`: takes the unlinked-artifact backlog from CKM-05,
-  batches artifact summaries against the capability registry (names + definitions), and submits a
-  provider-free `ModelAccessIntent` through the Builder-owned resolver and neutral
-  `ModelTurnAdapter` contract. The request declares `fallback_forbidden`; provider, model, adapter,
-  effective identity, and credential identity are resolver outputs rather than caller fields.
-- The production path uses only the declared metered credential contract. Under ADR-0064's
-  2026-07-30 owner-cost ruling those credentials are intentionally unprovisioned, so the current
-  expected outcome is a visible `skipped` result with zero proposals and zero edge writes. Product
-  LLM policy, Model Inquiry's sanctioned subscription session, mock/fake/deterministic identities,
-  and degraded Builder routes are not fallback paths.
+  sorts by stable public identity, and projects at most 8 candidates and 8 capabilities into opaque
+  IDs, enumerated kinds and curated excerpts of at most 500 UTF-8 bytes each. Only ingestion's
+  `payload_summary` or GitHub `title` is eligible artifact metadata; source references and raw
+  provenance stay local. Fixed Choice questions select a submitted candidate or `no_match` for
+  each capability. The complete request is capped at 12 KiB; unknown fields, arbitrary prompts,
+  invalid kinds/IDs and oversize payloads fail before dispatch.
+- The production path submits provider-free `fallback_forbidden` intent through
+  `app/builderops/ckm/judgment.py`, its separate dev-only authenticated Builder client, and MARR's
+  `POST /v1/ckm-judgment`. The server validates its Builder-owned pinned model profile and alone
+  resolves `dev/marr-server-dev/typesafe.api-key` from Mac Keychain. CKM never receives that key.
+  Product policy/client/profile, Model Inquiry's subscription, and degraded routes are not fallback
+  paths. Supported model swaps change the Builder profile configuration; SDK changes stay inside
+  the neutral adapter and its conformance proof.
+- TSO-04/#5768 supplies repository implementation and fake-backed production-path proof. The
+  runtime route remains disabled pending its separate approved synthetic dev acceptance on #5764,
+  including confirmed rotation and scoped host installation. Current unavailable behavior is a
+  visible zero-edge skip; repository tests do not claim a live call or enable test/prod access.
 - Every proposed edge is written with `extraction_method=inferred`, lifecycle `candidate` (OD-K5 / INV-CKM-3), model+provider provenance, and the rationale as `basis`.
-- Threshold discipline: proposals under a configurable confidence floor (default 0.6) are **discarded, not stored** — a low-confidence guess in the store is noise that projections would have to caveat forever.
+- Threshold discipline: any answer under the configurable confidence floor (default 0.6), including
+  an uncertain abstention in a mixed batch, rejects the whole batch. No edges or watermark are
+  written. An all-no-match batch likewise leaves freshness unchanged.
 - Fail-closed unavailable behavior (NFR-6): when the declared credential or an acceptable Builder
   route is unavailable, the stage names the safe reason, reports `proposals=0`, and exits 0 — the
   pipeline is complete without semantic inference and coverage is simply lower. It never writes
@@ -47,8 +57,8 @@ Extend evidence coverage to artifacts no mechanical rule can place (a doc that d
 
 ```bash
 python -m app.builderops ckm associate --limit 200
-# → "skipped: declared credential unavailable: openai.api-key; proposals=0"
-# Provider-backed proposal output is not claimed while metered credentials remain absent.
+# → "skipped: Builder dev judgment unavailable or request invalid; proposals=0"
+# Missing Builder binding is a safe skip; the server also defaults to disabled.
 python -m app.builderops ckm confirm-edge 8123
 # → "edge 8123 confirmed; receipt builderops://receipts/<id>"
 ```
@@ -70,11 +80,13 @@ This is where the CKM could silently rot (Critical Review §8.2): unlabeled infe
 
 ## How to Verify (Pre-Merge)
 
-- `python -m pytest tests/builderops/ckm/test_semantic.py -q` (injected adapter contract; no live
-  provider call and no mock provider identity)
-- Run the production CLI with intentionally absent metered credentials and verify the visible
-  zero-proposal skip. Do not provision or retry provider keys for this check.
-- Full `pytest -m "not pg"` before PR.
+- `python -m pytest tests/builderops/ckm/test_semantic.py tests/builderops/ckm/test_semantic_typesafe.py -q`
+  exercises the store contract and actual CKM → Builder client → MARR → pinned SDK with fake HTTP
+  and fake server-secret boundaries; no sockets or real Keychain access.
+- Run the production CLI with intentionally absent Builder binding and verify the visible
+  zero-proposal skip. Separate dev acceptance follows
+  `docs/TYPESAFE_SYSTEM_ONE/MIGRATE_BUILDER_CKM_ASSOCIATION.md :: Development Acceptance Gate`.
+- Run the affected-subsystem and development validation baseline for the actual diff.
 
 ## Out of Scope
 

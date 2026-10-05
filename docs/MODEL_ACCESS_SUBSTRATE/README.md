@@ -102,8 +102,12 @@ Product policy:
 - CKM submits provider-free intent through the Builder-owned resolver with `fallback_forbidden`;
   Product policy, Model Inquiry's subscription session, mock identities, and degraded Builder routes
   cannot execute the task;
-- the intentionally unprovisioned metered credential produces a visible zero-edge skip, so no active
-  provider-backed CKM inference is claimed; and
+- TSO-04/#5768 replaces the direct metered-provider CKM path with fixed typed candidate choices
+  through its own Builder resolver, dev caller binding and MARR operation. The independently
+  owned Builder profile pins the model; only the MARR Mac server resolves the TypeSafe key.
+  Missing binding or the default disabled server mode produces a visible zero-edge skip, preserving
+  the prior semantic watermark. The separate Builder dev acceptance on #5764 is still required,
+  so no active provider-backed CKM inference is claimed; and
 - the Product imports and single MAS-02 transition exemption were removed together.
 
 #4169 belongs to the separate deterministic-delivery capability and is not part of this breakdown.
@@ -211,7 +215,7 @@ the per-task criteria live in the task files.
       Verify: `docs/adr/ADR-0064-model-access-substrate.md :: Amendment 2026-07-30 — owner cost ruling on the model-inquiry path`
 - [ ] CKM resolves its semantic-association model through a Builder-side adapter, and a Product policy
       fallback cannot execute the Builder task.
-      Verify: `tests/builderops/ckm/test_semantic.py::test_product_fallback_cannot_execute_builder_task`
+      Verify: `tests/architecture/test_typesafe_runtime_boundary.py::test_product_and_builder_keep_separate_typesafe_authorities`
 - [ ] No `app.builderops -> app.components.llm` import remains, and the `importlinter` contract passes
       with zero exemptions.
       Verify: `tests/architecture/test_import_boundary.py::test_builder_does_not_import_product_llm_without_exemption`
