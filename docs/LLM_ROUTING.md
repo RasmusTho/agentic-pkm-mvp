@@ -246,6 +246,25 @@ Tests: `tests/e2e/test_llm_routing_e2e.py::test_force_override_affects_ask_api`
 
 ## Current policy and future work
 
+- Canvas intent classification has repository support for the bounded Product MARR judgment
+  operation (`IntentClassifierCognition.classify` -> `CodexRemoteTransport.judge_product_intent`).
+  Only `intent_text` crosses this boundary: at most 2,000 UTF-8 bytes and 4 KiB serialized request.
+  No current body, title, vault path or prior turn is sent; undeclared fields are rejected.
+  Product's server-owned TypeSafe profile is independent of clone-local `llmRoutingProfile` and
+  generic chat/reasoning/eval defaults. The SDK pin remains separate from the model release.
+- Typed intent selection requires confidence and selected-choice probability of at least 0.8;
+  governance also requires a non-unknown action meeting both floors. Contradictory actions,
+  invalid responses and unavailable/uncertain judgments remain `UNKNOWN` with read-only re-ask.
+  This floor has deterministic boundary proof, not a live semantic-calibration claim. Existing
+  confirmation, APPLY and WriteGuard remain required; judgments grant no execution authority.
+- This is dormant repository support: the normal MARR operation stays unavailable pending the
+  separate Product dev acceptance on #5764. No live call, installation or test/prod activation
+  is attested by fake-backed tests. The [actual-consumer one-call plan](TYPESAFE_SYSTEM_ONE/MIGRATE_PRODUCT_INTENT_CLASSIFIER.md#development-acceptance-gate)
+  owns its invocation and redacted receipt. There is no retry or completion fallback after send.
+- The existing opt-in OpenAI classification evaluator remains an explicitly identified legacy
+  completion comparator with its original exact model and billing gates. Offline authored
+  fixtures exercise the typed Product mapper; neither path attests a live TypeSafe judgment.
+
 - Task-aware routing is implemented for the current task classes through the compiled settings file.
 - Generic chat/reasoning fallback can remain local or mock when the task policy allows it.
 - Embeddings are stricter: if the configured provider/model implies a different identity, startup must fail or require rebuild instead of silently degrading. The one sanctioned exception is the **dimension-matched (768/L2)** Gemini fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; its write is mixed-identity (carries the Gemini identity) and reconcilable, the query path uses the primary identity, and a mixed-identity index triggers `index reconcile`, not silent degradation (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3).

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from app.eval.classification import ClassificationReplayClient
+
 import json
 from pathlib import Path
 
@@ -40,26 +42,6 @@ class _StubFacade:
             trace_id=trace_id,
             error=None,
         )
-
-
-def _classifier_completion(label: str):
-    """Deterministic raw-completion stub for the intent classifier.
-
-    Returns the given label as the raw completion; the classifier's
-    schema-constrained utility parses and validates it into the appropriate
-    ``IntentClassification`` (or explicit UNKNOWN on validation failure).
-    """
-
-    def complete(
-        *,
-        system: str,
-        user: str,
-        trace_id: str | None = None,
-        max_tokens: int | None = None,
-    ) -> str:
-        return label
-
-    return complete
 
 
 def _co_authoring_label() -> str:
@@ -124,9 +106,9 @@ def _make_client(
     )
     if classifier_label is None:
         classifier_label = _co_authoring_label()
-    classifier_complete = _classifier_completion(classifier_label)
+    classifier_client = ClassificationReplayClient(classifier_label)
     monkeypatch.setattr(
-        canvas_module, "_intent_classifier_completion", lambda: classifier_complete
+        canvas_module, "_intent_classifier_judgment_client", lambda: classifier_client
     )
     return TestClient(app)
 

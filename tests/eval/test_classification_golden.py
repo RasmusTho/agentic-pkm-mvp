@@ -29,6 +29,7 @@ from app.components.llm.intent_classifier import IntentClass, IntentClassifierCo
 from app.eval import run as eval_run
 from app.eval.classification import (
     ACTION_CAPABLE_CLASSES,
+    ClassificationReplayClient,
     CLASSIFICATION_GOLDEN_PATH,
     CLASSIFICATION_REPLAY_PATH,
     EMITTABLE_CLASSES,
@@ -167,7 +168,7 @@ def test_mutation_side_confusion_is_blocking(monkeypatch, tmp_path) -> None:
     # completion is schema-valid, so IntentClassifierCognition.classify
     # (KERNEL-07 validation layer included) yields the action-capable class.
     result = IntentClassifierCognition(
-        completion=lambda **_: completions[exploratory_id]
+        judgment_client=ClassificationReplayClient(completions[exploratory_id])
     ).classify(intent=by_id[exploratory_id].utterance)
     assert result.intent_class is IntentClass.CO_AUTHORING
     assert result.classified is True

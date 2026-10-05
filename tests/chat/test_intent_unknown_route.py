@@ -30,10 +30,10 @@ import app.api.routes.canvas as canvas_module
 import app.components.llm.constrained as constrained_module
 from app.api.app import app
 from app.components.llm.intent_classifier import (
-    INTENT_CLASSIFICATION_SCHEMA_REF,
     IntentClass,
     IntentClassifierCognition,
 )
+from app.eval.classification import ClassificationReplayClient, INTENT_CLASSIFICATION_SCHEMA_REF
 from app.components.llm.constrained import (
     ConstrainedCompletionError,
     constrained_completion,
@@ -61,7 +61,7 @@ def _stub_completion(raw: str):
 
 
 def _classify(raw: str, intent: str = "promote this note to evergreen"):
-    cognition = IntentClassifierCognition(completion=_stub_completion(raw))
+    cognition = IntentClassifierCognition(judgment_client=ClassificationReplayClient(raw))
     return cognition.classify(intent=intent)
 
 
@@ -185,8 +185,8 @@ def test_unknown_degrades_read_only_and_reask(monkeypatch, tmp_path: Path) -> No
     monkeypatch.setattr(canvas_module, "_get_vault_root_or_picker", lambda **_: tmp_path)
     monkeypatch.setattr(
         canvas_module,
-        "_intent_classifier_completion",
-        lambda: _stub_completion("not a classification"),
+        "_intent_classifier_judgment_client",
+        lambda: ClassificationReplayClient("not a classification"),
     )
 
     def _fail_generation() -> None:  # pragma: no cover - must never run
@@ -286,30 +286,28 @@ def test_apply_path_requires_validated_co_authoring(monkeypatch, tmp_path: Path)
 
 
 def test_validation_invoked_from_classify(monkeypatch) -> None:
-    validated: list[tuple[str, object]] = []
-    real_validate = constrained_module.validate_payload
+    from types import SimpleNamespace
+    from app.model_access.product_judgment_contract import ProductJudgmentResult
 
-    def _spy(schema_ref: str, payload: object):
-        validated.append((schema_ref, payload))
-        return real_validate(schema_ref, payload)
+    valid = ClassificationReplayClient(
+        '{"intent_class":"exploratory","action_type":null}'
+    ).judge_product_intent("compare")
+    validated = []
+    real_validate = ProductJudgmentResult.model_validate
 
-    monkeypatch.setattr(constrained_module, "validate_payload", _spy)
+    def spy(payload):
+        validated.append(payload)
+        return real_validate(payload)
 
-    # Valid output: classify() routes through the utility and validation runs.
-    valid = json.dumps(
-        {"intent_class": "exploratory", "action_type": None}
+    monkeypatch.setattr(ProductJudgmentResult, "model_validate", spy)
+    cognition = IntentClassifierCognition(
+        judgment_client=SimpleNamespace(judge_product_intent=lambda _: valid)
     )
-    result = _classify(valid, intent="what does this note argue?")
-    assert result.intent_class is IntentClass.EXPLORATORY
-    assert result.classified is True
+    assert cognition.classify(intent="compare").intent_class is IntentClass.EXPLORATORY
     assert len(validated) == 1
-    assert validated[0][0] == INTENT_CLASSIFICATION_SCHEMA_REF
-
-    # Invalid output on the same production entrypoint: validation runs and its
-    # failure is what produces UNKNOWN (not a bypass, not a regex fallback).
-    result = _classify('{"intent_class": "governance_bearing"}')
-    assert result.intent_class is IntentClass.UNKNOWN
-    assert result.classified is False
+    # Mutated nested models must be revalidated, including at injected boundaries.
+    valid.judgment.answers[0].probabilities.clear()
+    assert cognition.classify(intent="compare").intent_class is IntentClass.UNKNOWN
     assert len(validated) == 2
 
 

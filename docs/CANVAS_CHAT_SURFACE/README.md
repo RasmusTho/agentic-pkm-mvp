@@ -175,8 +175,9 @@ body* for a frontmatter block — the "known limitation" recorded in
 the **intent** with an LLM-backed `IntentClassifierCognition` before any body is generated.
 Governance-bearing natural-language intents (e.g. "promote this note to evergreen") route to the
 gated Panel pipeline with the correct `GovernanceActionType` — the note is never touched. Exploratory
-intents return a non-mutating read-only response. Co-authoring intents and a degraded classifier fall
-through to the existing generate-and-apply path unchanged. The body-frontmatter check is kept as
+intents return a non-mutating read-only response. Only validated co-authoring intents reach
+the existing generate-and-apply path. A degraded, invalid or uncertain classifier returns explicit
+`UNKNOWN` with read-only re-ask; it never falls through to generation. The body-frontmatter check is kept as
 defense-in-depth. Agentic Lab, gated behind `CANVAS_ENABLED`; Core Runtime defaults unchanged.
 
 | Order | Task File | Issue | What It Builds | Status |
@@ -190,13 +191,20 @@ CLASSIFY_COAUTHORING_INTENT
 ROUTE_GOVERNANCE_INTENT_ON_COAUTHOR
 ```
 
+TSO-03/#5767 replaces the completion classifier with bounded Product MARR typed choices. Only
+intent text is transmitted; body context remains local for later co-authoring generation. The
+normal TypeSafe route stays unavailable until separately approved Product dev acceptance. The
+existing guarded UNKNOWN failure-capture candidate is still allowed; UNKNOWN authorizes no body
+edit or governance proposal. See [Product routing](../LLM_ROUTING.md#current-policy-and-future-work)
+for confidence and acceptance boundaries.
+
 Phase 4 parent feature issue: **#1742** — validation hub (closed after both child slices delivered).
 
 Phase 4 acceptance (validated on the parent feature issue — **delivered**):
 
 - [x] A natural-language governance intent through `/coauthor` routes to the gated Panel pipeline with the correct `action_type`, body unchanged, no body generated.
 - [x] Co-authoring intents still generate and apply in place; exploratory intents are read-only and never mutate the note.
-- [x] A degraded/unavailable classifier falls through to the existing behavior (no regression, no fabricated routing); the body-frontmatter backstop remains.
+- [x] A degraded/unavailable classifier returns UNKNOWN and read-only re-ask; the body-frontmatter backstop remains for classified co-authoring.
 - [x] The gated-execution invariant and Panel-as-primary-command-surface posture hold; Core Runtime defaults unchanged.
 - [x] The UAT runbook §4 "Known limitation" note is replaced with a deterministic natural-language routing walkthrough.
 

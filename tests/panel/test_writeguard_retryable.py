@@ -17,6 +17,8 @@ and the real ``/api/canvas`` HTTP routes).
 
 from __future__ import annotations
 
+from app.eval.classification import ClassificationReplayClient
+
 import json
 from pathlib import Path
 
@@ -129,21 +131,6 @@ def test_writeguard_block_keeps_proposal_staged_and_retryable(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 
 
-def _classifier_completion(label: str):
-    """Returns a fixed intent-classification label as the raw JSON completion."""
-
-    def complete(
-        *,
-        system: str,
-        user: str,
-        trace_id: str | None = None,
-        max_tokens: int | None = None,
-    ) -> str:
-        return label
-
-    return complete
-
-
 def _governance_label(action_type: str = "maturity_transition") -> str:
     return json.dumps({"intent_class": "governance_bearing", "action_type": action_type})
 
@@ -173,9 +160,9 @@ def _make_client(monkeypatch, vault: Path, classifier_label: str) -> TestClient:
     monkeypatch.setenv("CANVAS_ENABLED", "1")
     monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: vault)
     monkeypatch.setattr(canvas_module, "_get_vault_root_or_picker", lambda **_: vault)
-    classifier_complete = _classifier_completion(classifier_label)
+    classifier_client = ClassificationReplayClient(classifier_label)
     monkeypatch.setattr(
-        canvas_module, "_intent_classifier_completion", lambda: classifier_complete
+        canvas_module, "_intent_classifier_judgment_client", lambda: classifier_client
     )
     return TestClient(app)
 

@@ -16,6 +16,8 @@ Spec: docs/RUNTIME_CORRECTNESS_KERNEL/FAILURE_TO_EVAL_CAPTURE_LOOP.md
 
 from __future__ import annotations
 
+from app.eval.classification import ClassificationReplayClient
+
 from pathlib import Path
 
 import pytest
@@ -207,7 +209,7 @@ def test_unknown_drafts_classification_case(
     monkeypatch.setattr(canvas_module, "_get_vault_root", lambda: _canvas_vault)
     monkeypatch.setattr(canvas_module, "_get_vault_root_or_picker", lambda **_: _canvas_vault)
     monkeypatch.setattr(
-        canvas_module, "_intent_classifier_completion", lambda: _degraded_completion
+        canvas_module, "_intent_classifier_judgment_client", lambda: ClassificationReplayClient("invalid")
     )
 
     client = TestClient(app)

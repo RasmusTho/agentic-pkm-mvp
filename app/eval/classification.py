@@ -6,18 +6,14 @@ against the real classifier path `app.components.llm.intent_classifier`
 (`IntentClassifierCognition.classify`), per
 `docs/RUNTIME_CORRECTNESS_KERNEL/INTENT_CLASSIFICATION_GOLDEN_SET.md`.
 
-Two modes:
+Two explicitly different targets:
 
-- **Deterministic CI mode** (default): each case replays a recorded raw model
-  completion (`docs/eval/classification_replay.yaml`) through the injectable
-  completion seam. KERNEL-07's constrained-output validation layer
-  (`app/components/llm/constrained.py`) always runs below the injection point,
-  so schema validation, the explicit-``UNKNOWN`` degrade, and governance
-  action mapping are all exercised for real — only the network call is
-  replayed.
-- **Live mode** (opt-in, never in the PR gate): the injected completion binds
-  one exact evaluation model and transport through the Product facade. See
-  `app.eval.live_classification` and the opt-in `@pytest.mark.eval` test.
+- Deterministic CI replays authored labels as synthetic typed Product results.
+  The real classifier validates and maps them, including UNKNOWN and confidence
+  handling. This is mapping/contract proof, not measured provider quality.
+- Live mode is the opt-in legacy completion comparator using the existing exact
+  OpenAI eval route. Its model, billing and content gates are unchanged. It never
+  impersonates TypeSafe or supplies a fallback for the Product classifier.
 
 Scoring semantics (from the dataset header, binding):
 
@@ -35,14 +31,19 @@ Scoring semantics (from the dataset header, binding):
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Mapping
+from typing import Any, Dict, List, Mapping
 
 import yaml
+from llm_contract import ChoiceQuestion
 
-from app.components.llm.intent_classifier import IntentClass, IntentClassifierCognition
-from app.components.llm.constrained import CompletionFn
+from app.components.llm.intent_classifier import GovernanceActionType, IntentClass, IntentClassifierCognition
+from app.model_access.product_judgment_contract import ProductJudgmentResult, product_intent_request
+from app.components.llm.constrained import (
+    CompletionFn, ConstrainedCompletionError, constrained_completion, register_schema, validate_payload,
+)
 
 CLASSIFICATION_GOLDEN_PATH = Path("docs") / "eval" / "classification_golden.yaml"
 CLASSIFICATION_REPLAY_PATH = Path("docs") / "eval" / "classification_replay.yaml"
@@ -192,17 +193,109 @@ def load_replay_completions(path: Path = CLASSIFICATION_REPLAY_PATH) -> Dict[str
     return out
 
 
-def _replay_completion_fn(raw: str):
-    def complete(
-        *,
-        system: str,
-        user: str,
-        trace_id: str | None = None,
-        max_tokens: int | None = None,
-    ) -> str:
-        return raw
+# Retained only for the explicitly separate, opt-in legacy OpenAI comparator
+# and authored replay-label compatibility. Product never imports this module.
+INTENT_CLASSIFICATION_SCHEMA_REF = "chat.intent_classification.v1"
 
-    return complete
+_INTENT_CLASSIFICATION_SCHEMA: dict[str, Any] = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "intent_class": {
+            "enum": [
+                IntentClass.CO_AUTHORING.value,
+                IntentClass.GOVERNANCE_BEARING.value,
+                IntentClass.EXPLORATORY.value,
+            ]
+        },
+        "action_type": {
+            "enum": [
+                GovernanceActionType.MATURITY_TRANSITION.value,
+                GovernanceActionType.FRONTMATTER_UPDATE.value,
+                GovernanceActionType.NOTE_LIFECYCLE.value,
+                GovernanceActionType.CROSS_NOTE.value,
+                None,
+            ]
+        },
+        "rationale": {"type": ["string", "null"]},
+    },
+    "required": ["intent_class", "action_type"],
+}
+
+register_schema(INTENT_CLASSIFICATION_SCHEMA_REF, _INTENT_CLASSIFICATION_SCHEMA)
+
+
+_SYSTEM_PROMPT = (
+    "You are classifying a single user intent during an active canvas "
+    "co-authoring session. Classify the intent into exactly one class and "
+    "return ONLY a JSON object, no commentary:\n"
+    '{"intent_class": "<co_authoring|governance_bearing|exploratory>", '
+    '"action_type": "<maturity_transition|frontmatter_update|note_lifecycle'
+    '|cross_note|null>"}\n\n'
+    "Classes:\n"
+    "- co_authoring: edit the body of the currently open note "
+    "(rewrite/expand/tighten/restructure prose). action_type = null.\n"
+    "- governance_bearing: change classification, frontmatter/metadata with "
+    "policy meaning, maturity/promotion state, note lifecycle "
+    "(create/delete/rename/archive), or cross-note state. Set action_type to "
+    "the closest match: maturity_transition (promote/demote/evergreen/"
+    "seedling), frontmatter_update (tags/classification/properties/metadata), "
+    "note_lifecycle (create/delete/rename/archive/split), cross_note "
+    "(link/move/merge across notes).\n"
+    "- exploratory: reason/compare/plan/draft/orient without mutating durable "
+    "state. action_type = null."
+)
+
+
+class ClassificationReplayClient:
+    """Translate authored label fixtures into synthetic typed Product results.
+
+    The all-or-nothing probabilities are fixture values, not measured confidence.
+    This exercises Product validation/mapping without claiming a TypeSafe call.
+    Live comparator output must never enter this adapter.
+    """
+
+    def __init__(self, raw: str) -> None:
+        self.raw = raw
+
+    def judge_product_intent(self, intent_text: str) -> ProductJudgmentResult:
+        try:
+            payload = json.loads(self.raw)
+            validate_payload(INTENT_CLASSIFICATION_SCHEMA_REF, payload)
+            request = product_intent_request(intent_text)
+            answers = []
+            for question in request.questions:
+                assert isinstance(question, ChoiceQuestion)
+                value = payload[question.question_id] or "unknown"
+                answers.append({
+                    "question_id": question.question_id, "kind": "choice", "choice": value,
+                    "confidence": 1.0,
+                    "probabilities": {key: float(key == value) for key in question.criteria},
+                })
+            return ProductJudgmentResult.model_validate({
+                "outcome": "success",
+                "selection": {"model": "jev-0.0.0", "sdk_version": "0.0.0"},
+                "judgment": {
+                    "answers": answers,
+                    "provenance": {"provider": "typesafe", "model": "jev-0.0.0"},
+                },
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            })
+        except (TypeError, ValueError, ConstrainedCompletionError):
+            return ProductJudgmentResult(outcome="response_invalid")
+
+
+def _legacy_comparator(intent: str, completion: CompletionFn, trace_id: str) -> str:
+    """Preserve the old eval model's completion semantics, never a Product fallback."""
+    try:
+        payload = constrained_completion(
+            INTENT_CLASSIFICATION_SCHEMA_REF, system=_SYSTEM_PROMPT,
+            user=f"User intent: {intent.strip()}", task_kind="decide", trace_id=trace_id,
+            complete=completion,
+        )
+    except ConstrainedCompletionError:
+        return IntentClass.UNKNOWN.value
+    return str(payload["intent_class"])
 
 
 def classify_cases(
@@ -211,7 +304,7 @@ def classify_cases(
     *,
     live_completion: CompletionFn | None = None,
 ) -> Dict[str, str]:
-    """Run every case through the real classifier path; return case_id -> predicted class.
+    """Run authored fixtures through Product mapping, or the explicit legacy comparator.
 
     ``completions`` maps case ids to recorded raw model output (deterministic
     replay). ``None`` requires an explicitly bound ``live_completion``. A case
@@ -233,7 +326,11 @@ def classify_cases(
     predictions: Dict[str, str] = {}
     for case in cases:
         if completions is None:
-            cognition = IntentClassifierCognition(completion=live_completion)
+            assert live_completion is not None
+            predictions[case.id] = _legacy_comparator(
+                case.utterance, live_completion, f"eval-cls-{case.id}",
+            )
+            continue
         else:
             raw = completions.get(case.id)
             if raw is None:
@@ -241,7 +338,7 @@ def classify_cases(
                     f"replay fixture has no completion for case {case.id!r}; "
                     "every golden case must be covered"
                 )
-            cognition = IntentClassifierCognition(completion=_replay_completion_fn(raw))
+            cognition = IntentClassifierCognition(judgment_client=ClassificationReplayClient(raw))
         result = cognition.classify(intent=case.utterance, trace_id=f"eval-cls-{case.id}")
         predictions[case.id] = result.intent_class.value
     return predictions
@@ -368,6 +465,7 @@ def evaluate_classification_golden_set(
     result["dataset"] = str(cases_path)
     result["replay"] = None if live else str(replay_path)
     result["mode"] = "live" if live else "replay"
+    result["target"] = "legacy_completion_comparator" if live else "product_typed_mapping_fixture"
     return result
 
 
