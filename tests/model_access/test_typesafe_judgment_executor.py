@@ -144,11 +144,18 @@ def _app(
 
 
 def _call(app, payload: dict[str, Any] | None = None, **kwargs: Any):
+    # Match the Product client's UTF-8 wire representation. HTTPX's json= defaults
+    # can escape Unicode, crossing the wire limit before the intent-byte check.
+    body = json.dumps(
+        payload or product_intent_request(INTENT).model_dump(mode="json"),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         return client.post(
             "/v1/judgment",
-            json=payload or product_intent_request(INTENT).model_dump(mode="json"),
-            headers=kwargs.pop("headers", _headers()),
+            content=body,
+            headers={"Content-Type": "application/json", **kwargs.pop("headers", _headers())},
             **kwargs,
         )
 
