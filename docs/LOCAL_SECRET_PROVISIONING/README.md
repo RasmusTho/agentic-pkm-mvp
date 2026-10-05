@@ -107,13 +107,13 @@ shared key domain. The production resolver and bootstrap refuse Linux, test, pro
 consumers before lookup or launch; BWS selection is refused before reader or controller admission.
 Missing or malformed TypeSafe material also refuses launch with
 `--run-on-credential-unavailable`; Model Inquiry's existing typed-receipt handoff remains available.
-It has no BWS identity or reader grant and leaves the two projects, three machine accounts, and all
+This runtime declaration adds no BWS identity or reader grant and leaves the two projects, three machine accounts, and all
 existing BWS grants unchanged. Product and Builder keep distinct caller policies, caller credentials,
 and owner model profiles; neither receives or resolves the MARR server's provider key. Codex and
 Claude runtime consumers have no grant; direct development calls are separately governed under #5778.
 
 This is a repository declaration verified with fake sources, not host provisioning or activation.
-Any live use requires owner confirmation of rotation after the earlier exposure, scoped MARR dev
+Any live MARR runtime use requires owner confirmation of rotation after the earlier exposure, scoped MARR dev
 host installation, explicit one-call authorization with synthetic input, and a redacted receipt.
 Product and Builder routes remain off pending their separate post-merge dev acceptance on #5764.
 No rotation, Keychain read/import, installation, live provider call, or channel activation occurred

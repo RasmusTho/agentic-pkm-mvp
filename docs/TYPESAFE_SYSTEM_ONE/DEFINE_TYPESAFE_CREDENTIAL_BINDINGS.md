@@ -25,7 +25,7 @@ Keep the runtime TypeSafe provider key on one dedicated MARR development server 
 - Declare `typesafe.api-key` for exactly `marr-server-dev` on `dev`, through the existing Mac Keychain resolver. The explicit `keychain_only_secrets` declaration keeps it out of the BWS identity and grant map.
 - Product and Builder are separate authenticated callers of the bounded MARR operation. Neither caller resolves or receives the server's provider key; caller policy, credentials, and model profiles remain separate.
 - Refuse missing, malformed, unauthorized, Linux, test, and prod bindings through the production resolver before any provider dispatch. Codex and Claude runtime consumers receive no grant.
-- Preserve the existing two BWS projects, three machine accounts, shared non-prod reader, and secret grants. The TypeSafe key is not added to either BWS project.
+- Preserve the existing two BWS projects, three machine accounts, shared non-prod reader, and secret grants. This runtime declaration adds no item to either BWS project; the separate direct-agent path under #5778 is outside its grants.
 - Use injected fake credential sources for repository verification. Values never enter code, logs, prompts, or receipts.
 - Live use requires owner confirmation of rotation after the earlier exposure, a scoped MARR dev host binding, explicit one-call authorization with synthetic input, and a redacted receipt. Separate Product and Builder dev acceptance on #5764 precedes their route activation.
 - Direct coding-agent calls are a separately governed one-shot development path (#5778); this runtime binding grants them no access.
