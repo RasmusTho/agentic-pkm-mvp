@@ -56,6 +56,24 @@ two explicit integration steps below. The staging step permits the still
 unmerged index; the commit step requires the resolved index to match the
 working files. Both prove the exact pending target is still the fresh remote
 `main`, retain lease checks, and refuse other operations or unknown state.
+They also recompute builtin `ort` in a disposable bare repository with isolated
+configuration and objects, selecting versioned attributes only from exact
+`HEAD` with `--attr-source` (unsupported Git refuses). Outside its actual conflict paths, the complete
+index and tracked working files must preserve the automatic result, including
+additions, deletions, renames and modes. Only those conflict paths may be
+manually resolved or remain unmerged before staging. The oracle cannot run
+custom merge drivers, clean/process filters or external diff/textconv, and
+writes no source Git state. Working proof uses physical bytes and modes;
+marker/whitespace checks use temporary trees, never source status/diff.
+Only syntax proof neutralizes diff/binary/whitespace suppression; it retains
+the actual `HEAD` marker width, while ort keeps its immutable `HEAD` attributes.
+If removing syntax suppression changes an effective marker width through an
+attribute macro, the unsupported state refuses integration.
+Unsupported index hints/conversions, gitlinks and special files refuse
+integration. NUL-containing physical or staged manual conflict resolutions
+also refuse; unchanged automatic binary paths remain eligible.
+The dirty census is not run in this explicitly dirty lane.
+An unavailable oracle, `ours` merge or discarded automatic content is a refusal.
 
 ```bash
 # Use the wrapper from an approved merged source checkout. Its --cwd binds the

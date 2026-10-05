@@ -2,6 +2,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -3036,7 +3038,8 @@ def pending_integration_repo(tmp_path):
     _integration_git(worktree, "commit", "-m", "feature")
     head = _integration_git(worktree, "rev-parse", "HEAD").stdout.strip()
     (repo / "note.md").write_text("main\n")
-    _integration_git(repo, "add", "note.md")
+    (repo / "main-only.md").write_text("main addition\n")
+    _integration_git(repo, "add", "note.md", "main-only.md")
     _integration_git(repo, "commit", "-m", "main advances")
     _integration_git(repo, "push", "origin", "main")
     target = _integration_git(repo, "rev-parse", "origin/main").stdout.strip()
@@ -3157,11 +3160,11 @@ def test_integration_rejects_live_remote_drift_even_with_stale_tracking(pending_
 @pytest.mark.parametrize("drift", ["HEAD", "branch", "MERGE_HEAD", "ORIG_HEAD", "tracking", "operation"])
 def test_integration_rechecks_state_after_content_proof(pending_integration_repo, monkeypatch, drift):
     state = pending_integration_repo
-    original = git_hygiene.run_git
+    original = git_hygiene._integration_content_preserved
 
-    def drifting_git(args, cwd):
-        result = original(args, cwd)
-        if args == ["diff", "--cached", "--check"]:
+    def drifting_content(cwd, *args):
+        result = original(cwd, *args)
+        if result:
             if drift == "HEAD":
                 _integration_git(cwd, "update-ref", "HEAD", state["target"])
             elif drift == "branch":
@@ -3175,7 +3178,7 @@ def test_integration_rechecks_state_after_content_proof(pending_integration_repo
                 (git_hygiene._git_dir(cwd) / drift).write_text(changed + "\n")
         return result
 
-    monkeypatch.setattr(git_hygiene, "run_git", drifting_git)
+    monkeypatch.setattr(git_hygiene, "_integration_content_preserved", drifting_content)
     assert _integration_report(state)["ok"] is False
 
 
@@ -3277,6 +3280,498 @@ def test_integration_accepts_clean_pending_merge(pending_integration_repo):
     assert not _integration_git(state["worktree"], "ls-files", "--unmerged").stdout
     assert _integration_report(state)["ok"] is True
     assert _integration_report(state, step="commit")["ok"] is True
+
+
+@pytest.mark.parametrize("method", ["ours", "index-reset"])
+@pytest.mark.parametrize("step", ["stage", "commit"])
+def test_integration_rejects_discarded_upstream_merge_content(pending_integration_repo, method, step):
+    state = pending_integration_repo
+    if method == "ours":
+        _integration_git(state["worktree"], "merge", "--abort")
+        _integration_git(state["worktree"], "merge", "--no-commit", "-s", "ours", state["target"])
+    else:
+        _integration_git(state["worktree"], "restore", "--source=HEAD", "--staged", "--worktree", ".")
+    assert not (state["worktree"] / "main-only.md").exists()
+    report = _integration_report(state, step=step)
+    assert report["ok"] is False
+    assert report["checks"]["integration_merge"]["reason"] == "integration_content_not_preserved"
+
+
+@pytest.mark.parametrize("tamper", ["missing-index-path", "missing-working-path", "mode", "extra-path"])
+@pytest.mark.parametrize("step", ["stage", "commit"])
+def test_integration_preserves_entire_automatic_path_set(pending_integration_repo, tamper, step):
+    state = pending_integration_repo
+    if tamper == "missing-index-path":
+        _integration_git(state["worktree"], "rm", "--cached", "main-only.md")
+    elif tamper == "missing-working-path":
+        (state["worktree"] / "main-only.md").unlink()
+    elif tamper == "mode":
+        _integration_git(state["worktree"], "update-index", "--chmod=+x", "main-only.md")
+    else:
+        (state["worktree"] / "extra.md").write_text("unreviewed addition\n")
+        _integration_git(state["worktree"], "add", "extra.md")
+    assert _integration_report(state, step=step)["ok"] is False
+
+
+@pytest.mark.parametrize("stage_rollback", [False, True])
+def test_integration_preserves_clean_two_sided_file_merge(pending_integration_repo, stage_rollback):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "merge", "--abort")
+    (state["worktree"] / "note.md").write_text("feature\nbase\n")
+    _integration_git(state["worktree"], "add", "note.md")
+    _integration_git(state["worktree"], "commit", "-m", "feature inserts before base")
+    state["head"] = _integration_git(state["worktree"], "rev-parse", "HEAD").stdout.strip()
+    (state["repo"] / "note.md").write_text("base\nmain\n")
+    _integration_git(state["repo"], "add", "note.md")
+    _integration_git(state["repo"], "commit", "-m", "main inserts after base")
+    _integration_git(state["repo"], "push", "origin", "main")
+    state["target"] = _integration_git(state["repo"], "rev-parse", "origin/main").stdout.strip()
+    _integration_git(state["worktree"], "merge", "--no-commit", state["target"])
+    assert not _integration_git(state["worktree"], "ls-files", "--unmerged").stdout
+    assert (state["worktree"] / "note.md").read_bytes() == b"feature\nbase\nmain\n"
+    assert _integration_report(state)["ok"] is True
+    assert _integration_report(state, step="commit")["ok"] is True
+    (state["worktree"] / "note.md").write_bytes(b"feature\nbase\n")
+    if stage_rollback:
+        _integration_git(state["worktree"], "add", "note.md")
+    assert _integration_report(state)["ok"] is False
+    assert _integration_report(state, step="commit")["ok"] is False
+
+
+@pytest.mark.parametrize("stage_rollback", [False, True])
+def test_integration_preserves_builtin_union_from_immutable_head_attributes(
+    pending_integration_repo, stage_rollback,
+):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "merge", "--abort")
+    (state["worktree"] / ".gitattributes").write_text("note.md merge=union\n")
+    _integration_git(state["worktree"], "add", ".gitattributes")
+    _integration_git(state["worktree"], "commit", "-m", "use builtin union")
+    state["head"] = _integration_git(state["worktree"], "rev-parse", "HEAD").stdout.strip()
+    _integration_git(state["worktree"], "merge", "--no-commit", state["target"])
+    assert (state["worktree"] / "note.md").read_bytes() == b"feature\nmain\n"
+    assert not _integration_git(state["worktree"], "ls-files", "--unmerged").stdout
+    assert _integration_report(state)["ok"] is True
+    assert _integration_report(state, step="commit")["ok"] is True
+    (state["worktree"] / "note.md").write_bytes(b"feature\n")
+    if stage_rollback:
+        _integration_git(state["worktree"], "add", "note.md")
+    assert _integration_report(state)["ok"] is False
+    assert _integration_report(state, step="commit")["ok"] is False
+
+
+@pytest.mark.parametrize("tamper", ["drop-renamed", "restore-deleted", "mode"])
+def test_integration_preserves_clean_rename_delete_and_mode(pending_integration_repo, tamper):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "merge", "--abort")
+    (state["repo"] / "note.md").write_text("base\n")
+    _integration_git(state["repo"], "mv", "note.md", "renamed.md")
+    (state["repo"] / "main-only.md").chmod(0o755)
+    _integration_git(state["repo"], "add", "renamed.md", "main-only.md")
+    _integration_git(state["repo"], "commit", "-m", "main renames and changes mode")
+    _integration_git(state["repo"], "push", "origin", "main")
+    state["target"] = _integration_git(state["repo"], "rev-parse", "origin/main").stdout.strip()
+    _integration_git(state["worktree"], "merge", "--no-commit", state["target"])
+    assert not (state["worktree"] / "note.md").exists()
+    assert (state["worktree"] / "renamed.md").read_bytes() == b"feature\n"
+    assert _integration_report(state)["ok"] is True
+    assert _integration_report(state, step="commit")["ok"] is True
+    if tamper == "drop-renamed":
+        _integration_git(state["worktree"], "rm", "--cached", "renamed.md")
+        (state["worktree"] / "renamed.md").unlink()
+    elif tamper == "restore-deleted":
+        _integration_git(state["worktree"], "restore", "--source=HEAD", "--staged", "--worktree", "note.md")
+    else:
+        _integration_git(state["worktree"], "update-index", "--chmod=-x", "main-only.md")
+    assert _integration_report(state)["ok"] is False
+    assert _integration_report(state, step="commit")["ok"] is False
+
+
+def test_integration_oracle_is_read_only_and_never_executes_drivers(pending_integration_repo, monkeypatch):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "merge", "--abort")
+    (state["worktree"] / ".gitattributes").write_text("note.md merge=canary diff=canary\n")
+    _integration_git(state["worktree"], "add", ".gitattributes")
+    _integration_git(state["worktree"], "commit", "-m", "name custom drivers")
+    state["head"] = _integration_git(state["worktree"], "rev-parse", "HEAD").stdout.strip()
+    assert _integration_git(state["worktree"], "merge", "--no-commit", state["target"], check=False).returncode == 1
+    (state["worktree"] / "note.md").write_text("feature\nmain\n")
+    canary = state["repo"].parent / "driver-executed"
+    driver = shlex.join([sys.executable, "-c", f"from pathlib import Path; Path({str(canary)!r}).write_text('executed')"])
+    global_config = state["repo"].parent / "global.gitconfig"
+    template = state["repo"].parent / "template"
+    template.mkdir()
+    for args in [[], ["--file", str(global_config)], ["--file", str(template / "config")]]:
+        for key, value in [
+            ("merge.canary.driver", driver), ("merge.default", "canary"),
+            ("diff.canary.command", driver), ("init.templateDir", str(template)),
+        ]:
+            _integration_git(state["repo"], "config", *args, key, value)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_config))
+    monkeypatch.setenv("GIT_CONFIG_SYSTEM", str(global_config))
+    monkeypatch.setenv("GIT_CONFIG_PARAMETERS", "'merge.default=canary'")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "2")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "merge.canary.driver")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", driver)
+    monkeypatch.setenv("GIT_CONFIG_KEY_1", "init.templateDir")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_1", str(template))
+    monkeypatch.setenv("GIT_DIR", str(template))
+
+    def snapshot():
+        roots = [git_hygiene._git_common_dir(state["worktree"]), state["worktree"]]
+        return {
+            (str(root), str(path.relative_to(root))): (path.read_bytes(), path.stat().st_mode)
+            for root in roots for path in root.rglob("*") if path.is_file()
+        }
+
+    before = snapshot()
+    assert _integration_report(state)["ok"] is True
+    assert not canary.exists()
+    assert snapshot() == before
+    _integration_git(state["worktree"], "add", "note.md")
+    before = snapshot()
+    assert _integration_report(state, step="commit")["ok"] is True
+    assert not canary.exists()
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("hint", ["--assume-unchanged", "--skip-worktree"])
+@pytest.mark.parametrize("step", ["stage", "commit"])
+def test_integration_rejects_hidden_physical_content(pending_integration_repo, hint, step):
+    state = pending_integration_repo
+    if step == "commit":
+        _integration_git(state["worktree"], "add", "note.md")
+    _integration_git(state["worktree"], "update-index", hint, "main-only.md")
+    (state["worktree"] / "main-only.md").write_bytes(b"automatic upstream content discarded\n")
+    assert _integration_git(state["worktree"], "diff", "--", "main-only.md").stdout == ""
+    assert _integration_git(state["worktree"], "show", ":main-only.md").stdout == "main addition\n"
+    assert _integration_report(state, step=step)["ok"] is False
+
+
+@pytest.mark.parametrize("step", ["stage", "commit"])
+def test_integration_checks_physical_mode_despite_filemode_config(pending_integration_repo, step):
+    state = pending_integration_repo
+    if step == "commit":
+        _integration_git(state["worktree"], "add", "note.md")
+    _integration_git(state["worktree"], "config", "core.filemode", "false")
+    (state["worktree"] / "main-only.md").chmod(0o755)
+    assert _integration_git(state["worktree"], "diff", "--", "main-only.md").stdout == ""
+    assert _integration_report(state, step=step)["ok"] is False
+
+
+@pytest.mark.parametrize("filter_kind", ["clean", "process"])
+@pytest.mark.parametrize("case", ["stage", "commit", "identity-refusal", "index-refusal"])
+def test_integration_never_executes_source_filters_before_proof_or_refusal(
+    pending_integration_repo, filter_kind, case,
+):
+    state = pending_integration_repo
+    step = "commit" if case == "commit" else "stage"
+    if step == "commit":
+        _integration_git(state["worktree"], "add", "note.md")
+    if case == "index-refusal":
+        _integration_git(state["worktree"], "update-index", "--skip-worktree", "main-only.md")
+    canary = state["repo"].parent / "filter-executed"
+    driver = shlex.join([
+        sys.executable, "-c", f"from pathlib import Path; Path({str(canary)!r}).write_text('executed')",
+    ])
+    common = git_hygiene._git_common_dir(state["worktree"])
+    (common / "info/attributes").write_text("* filter=canary\n")
+    _integration_git(state["repo"], "config", f"filter.canary.{filter_kind}", driver)
+    # Force a normal Git status/diff to visit conversion, even though physical
+    # bytes remain correct. The preflight must never run that source probe.
+    (state["worktree"] / "main-only.md").write_bytes(b"main addition\n")
+
+    def snapshot():
+        roots = [common, state["worktree"]]
+        return {
+            (str(root), str(path.relative_to(root))): (path.read_bytes(), path.stat().st_mode)
+            for root in roots for path in root.rglob("*") if path.is_file()
+        }
+
+    before = snapshot()
+    if case in {"stage", "commit"}:
+        assert git_hygiene._integration_content_preserved(
+            state["worktree"], state["head"], state["target"], step,
+        ) is True
+    overrides = {"expected_branch": "codex/wrong"} if case == "identity-refusal" else {}
+    report = _integration_report(state, step=step, **overrides)
+    assert report["ok"] is (case in {"stage", "commit"})
+    assert report["checks"]["dirty_tree"] is None  # No source status census in this explicit dirty lane.
+    assert not canary.exists()
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("step", ["stage", "commit"])
+def test_integration_rejects_intent_to_add_in_a_resolution(pending_integration_repo, step):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "rm", "--cached", "--force", "note.md")
+    (state["worktree"] / "note.md").write_bytes(b"")
+    _integration_git(state["worktree"], "add", "--intent-to-add", "note.md")
+    assert _integration_report(state, step=step)["ok"] is False
+
+
+@pytest.mark.parametrize("content", [b"main addition", b"main addition\r\n", b"main addition\n\n"])
+def test_integration_compares_raw_working_bytes(pending_integration_repo, content):
+    state = pending_integration_repo
+    (state["worktree"] / "main-only.md").write_bytes(content)
+    assert _integration_report(state)["ok"] is False
+
+
+@pytest.mark.parametrize("tamper", ["target", "type"])
+def test_integration_preserves_physical_symlinks_without_reading_targets(pending_integration_repo, tamper):
+    state = pending_integration_repo
+    _integration_git(state["worktree"], "merge", "--abort")
+    (state["repo"] / "main-link").symlink_to("main-only.md")
+    _integration_git(state["repo"], "add", "main-link")
+    _integration_git(state["repo"], "commit", "-m", "main adds symlink")
+    _integration_git(state["repo"], "push", "origin", "main")
+    state["target"] = _integration_git(state["repo"], "rev-parse", "origin/main").stdout.strip()
+    assert _integration_git(state["worktree"], "merge", "--no-commit", state["target"], check=False).returncode == 1
+    (state["worktree"] / "note.md").write_bytes(b"feature\nmain\n")
+    (state["worktree"] / "unrelated-untracked").write_bytes(b"not part of the tracked proof\n")
+    assert _integration_report(state)["ok"] is True
+    _integration_git(state["worktree"], "add", "note.md")
+    assert _integration_report(state, step="commit")["ok"] is True
+    link = state["worktree"] / "main-link"
+    link.unlink()
+    if tamper == "target":
+        link.symlink_to("missing-or-external-target")
+    else:
+        link.write_bytes(b"main-only.md")
+    assert _integration_report(state)["ok"] is False
+    assert _integration_report(state, step="commit")["ok"] is False
+
+
+def test_integration_refuses_special_working_files_without_opening_them(pending_integration_repo):
+    state = pending_integration_repo
+    special = state["worktree"] / "main-only.md"
+    special.unlink()
+    os.mkfifo(special)
+    assert _integration_report(state)["ok"] is False
+
+
+@pytest.mark.parametrize("failure", ["timeout", "spawn", "bad-exit", "bad-oid", "missing-nul", "unexpected-conflicts", "duplicate-conflicts", "unsupported-attr-source"])
+def test_integration_oracle_unknown_state_is_redacted(pending_integration_repo, monkeypatch, failure):
+    original = subprocess.run
+    oid = b"a" * 40
+
+    def unavailable(command, *args, **kwargs):
+        if "merge-tree" in command:
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(command, 10, stderr="secret")
+            if failure == "spawn":
+                raise OSError("secret")
+            code, output = {
+                "bad-exit": (128, b""), "unsupported-attr-source": (129, b""),
+                "bad-oid": (0, b"invalid\0"),
+                "missing-nul": (0, oid), "unexpected-conflicts": (0, oid + b"\0note.md\0"),
+                "duplicate-conflicts": (1, oid + b"\0note.md\0note.md\0"),
+            }[failure]
+            return subprocess.CompletedProcess(command, code, output, b"secret")
+        return original(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    report = _integration_report(pending_integration_repo)
+    assert report["ok"] is False
+    assert "secret" not in json.dumps(report)
+    assert report["checks"]["integration_merge"]["reason"] == "integration_probe_or_content_failed"
+
+
+def test_integration_cli_refuses_git_without_explicit_attribute_source(pending_integration_repo):
+    state = pending_integration_repo
+    real_git = shutil.which("git")
+    assert real_git is not None
+    proxy_dir = state["repo"].parent / "old-git"
+    proxy_dir.mkdir()
+    proxy = proxy_dir / "git"
+    proxy.write_text(
+        f"#!{sys.executable}\nimport os, sys\n"
+        "if any(arg.startswith('--attr-source=') for arg in sys.argv[1:]):\n"
+        "    print('secret unsupported option diagnostics', file=sys.stderr)\n"
+        "    sys.exit(129)\n"
+        f"os.execv({real_git!r}, [{real_git!r}, *sys.argv[1:]])\n"
+    )
+    proxy.chmod(0o755)
+    result = subprocess.run(
+        [sys.executable, git_hygiene.__file__, "--cwd", str(state["worktree"]), "preflight",
+         "--expected-branch", "codex/integrate", "--expected-worktree", str(state["worktree"]),
+         "--base-branch", "main", "--allow-dirty", "--require-dedicated-worktree",
+         "--integration-merge-target", state["target"], "--integration-step", "stage"],
+        capture_output=True, text=True,
+        env=os.environ | {"PATH": str(proxy_dir) + os.pathsep + os.environ.get("PATH", os.defpath)},
+    )
+    assert result.returncode == 1
+    report = json.loads(result.stdout)
+    assert report["ok"] is False
+    assert report["checks"]["integration_merge"]["reason"] == "integration_probe_or_content_failed"
+    assert "secret" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("attributes", [
+    "-diff merge=text", "binary merge=text", "whitespace=-trailing-space merge=text",
+    "diff=canary conflict-marker-size=20 merge=text",
+    "[attr]diff conflict-marker-size=1\nnote.md -diff conflict-marker-size=20 merge=text",
+])
+def test_integration_wrapper_checks_raw_syntax_despite_head_presentation_attributes(
+    pending_integration_repo, attributes,
+):
+    state = pending_integration_repo
+    wt = state["worktree"]
+    _integration_git(wt, "merge", "--abort")
+    (wt / ".gitattributes").write_text(
+        (attributes if attributes.startswith("[attr]") else "note.md " + attributes) + "\n",
+    )
+    _integration_git(wt, "add", ".gitattributes")
+    _integration_git(wt, "commit", "-m", "tracked syntax attributes")
+    state["head"] = _integration_git(wt, "rev-parse", "HEAD").stdout.strip()
+    assert _integration_git(wt, "merge", "--no-commit", state["target"], check=False).returncode == 1
+    width = 20 if "conflict-marker-size=20" in attributes else 7
+    assert (wt / "note.md").read_bytes().startswith(b"<" * width + b" HEAD\n")
+    assert _integration_git(wt, "ls-files", "--unmerged").stdout
+    canary = state["repo"].parent / "presentation-driver-executed"
+    driver = shlex.join([
+        sys.executable, "-c", f"from pathlib import Path; Path({str(canary)!r}).write_text('executed')",
+    ])
+    _integration_git(wt, "config", "diff.canary.command", driver)
+    common = git_hygiene._git_common_dir(wt)
+    wrapper = Path(git_hygiene.__file__).with_name("agent_workspace_preflight.sh")
+
+    def snapshot():
+        roots = [common, wt]
+        return {
+            (str(root), str(path.relative_to(root))): (path.read_bytes(), path.stat().st_mode)
+            for root in roots for path in root.rglob("*") if path.is_file()
+        }
+
+    def check(step, expected):
+        before = snapshot()
+        result = subprocess.run(
+            [str(wrapper), "--cwd", str(wt), "--expected-branch", "codex/integrate",
+             "--expected-worktree", str(wt), "--base-branch", "main", "--allow-dirty",
+             "--integration-merge-target", state["target"], "--integration-step", step],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == (0 if expected else 1), result.stderr
+        assert json.loads(result.stdout)["ok"] is expected
+        assert not canary.exists()
+        assert snapshot() == before
+
+    check("stage", False)  # Actual unresolved merge with a UU index.
+    _integration_git(wt, "add", "note.md")
+    check("stage", False)
+    check("commit", False)
+    (wt / "note.md").write_bytes(b"feature\nmain\n")
+    check("stage", False)  # Physical resolution cannot excuse staged markers.
+    check("commit", False)
+    _integration_git(wt, "add", "note.md")
+    check("stage", True)
+    check("commit", True)
+    (wt / "note.md").write_bytes(b"feature\nmain \n")
+    check("stage", False)  # Raw whitespace proof cannot be disabled by attributes.
+    _integration_git(wt, "add", "note.md")
+    check("stage", False)
+    check("commit", False)
+
+
+@pytest.mark.parametrize("nul_position", ["before-markers", "after-markers"])
+def test_integration_wrapper_refuses_nul_conflict_resolutions_and_preserves_automatic_binary(
+    pending_integration_repo, nul_position,
+):
+    state = pending_integration_repo
+    wt = state["worktree"]
+    _integration_git(wt, "merge", "--abort")
+    binary = b"automatic\0main\xff\n"
+    (state["repo"] / "automatic.bin").write_bytes(binary)
+    _integration_git(state["repo"], "add", "automatic.bin")
+    _integration_git(state["repo"], "commit", "-m", "main adds binary content")
+    _integration_git(state["repo"], "push", "origin", "main")
+    state["target"] = _integration_git(state["repo"], "rev-parse", "origin/main").stdout.strip()
+    assert _integration_git(wt, "merge", "--no-commit", state["target"], check=False).returncode == 1
+    note = wt / "note.md"
+    markers = note.read_bytes()
+    assert markers.startswith(b"<<<<<<< HEAD\n") and b"=======\n" in markers
+    assert _integration_git(wt, "ls-files", "--unmerged").stdout
+    common = git_hygiene._git_common_dir(wt)
+    wrapper = Path(git_hygiene.__file__).with_name("agent_workspace_preflight.sh")
+
+    def snapshot():
+        roots = [common, wt]
+        return {
+            (str(root), str(path.relative_to(root))): (path.read_bytes(), path.stat().st_mode)
+            for root in roots for path in root.rglob("*") if path.is_file()
+        }
+
+    def check(step, expected):
+        before = snapshot()
+        result = subprocess.run(
+            [str(wrapper), "--cwd", str(wt), "--expected-branch", "codex/integrate",
+             "--expected-worktree", str(wt), "--base-branch", "main", "--allow-dirty",
+             "--integration-merge-target", state["target"], "--integration-step", step],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == (0 if expected else 1), result.stderr
+        assert json.loads(result.stdout)["ok"] is expected
+        assert (wt / "automatic.bin").read_bytes() == binary
+        assert snapshot() == before
+
+    check("stage", False)  # Ordinary text markers are the negative control.
+    note.write_bytes(b"\0" + markers if nul_position == "before-markers" else markers + b"\0")
+    check("stage", False)  # UU index with actual markers and NUL in physical bytes.
+    _integration_git(wt, "add", "note.md")
+    check("stage", False)
+    check("commit", False)
+    note.write_bytes(b"feature\nmain\n")
+    check("stage", False)  # Working-only resolution cannot excuse the staged NUL blob.
+    check("commit", False)
+    _integration_git(wt, "add", "note.md")
+    check("stage", True)
+    check("commit", True)  # Unchanged automatic binary content is still admissible.
+    note.write_bytes(b"feature\nmain \n\0")
+    check("stage", False)
+    _integration_git(wt, "add", "note.md")
+    check("stage", False)
+    check("commit", False)
+    note.write_bytes(b"feature\nmain\n\0")
+    _integration_git(wt, "add", "note.md")
+    check("stage", False)  # Even a marker-free binary manual resolution is unsupported.
+    check("commit", False)
+
+
+def test_integration_refuses_syntax_override_that_changes_head_macro_marker_width(pending_integration_repo):
+    state = pending_integration_repo
+    wt = state["worktree"]
+    _integration_git(wt, "merge", "--abort")
+    (wt / ".gitattributes").write_text(
+        "[attr]whitespace conflict-marker-size=20\nnote.md whitespace -diff merge=text\n",
+    )
+    _integration_git(wt, "add", ".gitattributes")
+    _integration_git(wt, "commit", "-m", "marker width from whitespace macro")
+    state["head"] = _integration_git(wt, "rev-parse", "HEAD").stdout.strip()
+    assert _integration_git(wt, "merge", "--no-commit", state["target"], check=False).returncode == 1
+    assert (wt / "note.md").read_bytes().startswith(b"<" * 20 + b" HEAD\n")
+    assert _integration_report(state)["ok"] is False
+    (wt / "note.md").write_bytes(b"feature\nmain\n")
+    _integration_git(wt, "add", "note.md")
+    assert _integration_report(state, step="commit")["ok"] is False  # Explicitly unsupported macro interaction.
+
+
+@pytest.mark.parametrize("failure", ["missing", "mismatched", "timeout"])
+def test_integration_marker_attribute_probe_unknown_is_redacted(pending_integration_repo, monkeypatch, failure):
+    original = subprocess.run
+
+    def unavailable(command, *args, **kwargs):
+        if "check-attr" in command:
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(command, 10, stderr="secret")
+            output = b"" if failure == "missing" else b"wrong-path\0diff\0unspecified\0"
+            return subprocess.CompletedProcess(command, 0, output, b"secret")
+        return original(command, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+    report = _integration_report(pending_integration_repo)
+    assert report["ok"] is False
+    assert report["checks"]["integration_merge"]["reason"] == "integration_probe_or_content_failed"
+    assert "secret" not in json.dumps(report)
 
 
 def test_janitor_report_respects_active_lease_and_reports_candidates(

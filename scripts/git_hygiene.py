@@ -14,6 +14,7 @@ import math
 import os
 import re
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -364,6 +365,269 @@ def in_shared_root(cwd: str | None = None) -> bool:
     return _resolve(raw_git) == _resolve(raw_common)
 
 
+@contextmanager
+def _integration_merge_tree(
+    cwd: Path, head: str, target: str,
+) -> Iterator[tuple[
+    dict[bytes, tuple[bytes, bytes]], set[bytes], Callable[[list[str], bytes | None], bytes], str, Path,
+]]:
+    """Recompute builtin ort in a disposable ODB, never in the source checkout."""
+    object_format = run_git(["rev-parse", "--show-object-format"], cwd)
+    if object_format not in {"sha1", "sha256"}:
+        raise RuntimeError("unknown object format")
+    oid_pattern = rb"[0-9a-f]{40}" if object_format == "sha1" else rb"[0-9a-f]{64}"
+    objects = os.fsencode(_git_common_dir(cwd) / "objects")
+    if b"\n" in objects or b"\r" in objects:
+        raise RuntimeError("unsupported object-store path")
+    # No source, global, system, template or ambient command configuration reaches
+    # the oracle. Unknown attribute drivers fall back to builtin merging; no
+    # custom driver, remote, replacement ref or lazy fetch exists in this repo.
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath), "LC_ALL": "C",
+        "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1", "GIT_ATTR_NOSYSTEM": "1",
+        "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
+    with tempfile.TemporaryDirectory(prefix="git-integration-oracle-") as temporary:
+        scratch = Path(temporary) / "oracle.git"
+        subprocess.run(
+            ["git", "init", "--bare", "--template=", f"--object-format={object_format}", str(scratch)],
+            cwd=temporary, env=env, check=True, capture_output=True,
+            timeout=GIT_PROBE_TIMEOUT_SECONDS,
+        )
+        (scratch / "objects/info/alternates").write_bytes(objects + b"\n")
+        command = [
+            "git", "--git-dir", str(scratch), f"--attr-source={head}", "-c", "gc.auto=0",
+            "-c", "maintenance.auto=false", "-c", f"core.hooksPath={os.devnull}",
+            "-c", f"core.attributesFile={os.devnull}", "-c", "core.fsmonitor=false",
+        ]
+
+        def scratch_read(args: list[str], data: bytes | None = None) -> bytes:
+            return subprocess.run(
+                command + args, cwd=temporary, env=env, check=True,
+                input=data, capture_output=True, timeout=GIT_PROBE_TIMEOUT_SECONDS,
+            ).stdout
+
+        merged = subprocess.run(
+            command + ["merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", head, target],
+            cwd=temporary, env=env, capture_output=True, timeout=GIT_PROBE_TIMEOUT_SECONDS,
+        )
+        records = merged.stdout.split(b"\0")
+        if (
+            merged.returncode not in {0, 1} or records[-1] != b""
+            or re.fullmatch(oid_pattern, records[0]) is None
+        ):
+            raise RuntimeError("merge oracle unavailable")
+        tree, paths = records[0], records[1:-1]
+        if (merged.returncode == 0 and paths) or (merged.returncode == 1 and not paths):
+            raise RuntimeError("merge oracle conflict state invalid")
+        conflicts = set(paths)
+        if len(conflicts) != len(paths) or any(not _integration_valid_path(path) for path in conflicts):
+            raise RuntimeError("merge oracle paths invalid")
+        expected = _integration_tree_entries(
+            scratch_read(["ls-tree", "-r", "-z", tree.decode("ascii")]), oid_pattern,
+        )
+        yield expected, conflicts, scratch_read, object_format, scratch / "info/attributes"
+
+
+def _integration_tree_entries(output: bytes, oid_pattern: bytes) -> dict[bytes, tuple[bytes, bytes]]:
+    entries: dict[bytes, tuple[bytes, bytes]] = {}
+    for record in _integration_nul_records(output):
+        header, separator, path = record.partition(b"\t")
+        fields = header.split(b" ")
+        if not separator or len(fields) != 3:
+            raise RuntimeError("merge oracle tree invalid")
+        mode, kind, oid = fields
+        if (
+            mode not in {b"100644", b"100755", b"120000"} or kind != b"blob"
+            or re.fullmatch(oid_pattern, oid) is None
+            or not _integration_valid_path(path) or path in entries
+        ):
+            raise RuntimeError("merge oracle tree unsupported")
+        entries[path] = (mode, oid)
+    return entries
+
+
+def _integration_valid_path(path: bytes) -> bool:
+    return bool(path) and not path.startswith(b"/") and all(
+        part not in {b"", b".", b".."} and part.lower() != b".git" for part in path.split(b"/")
+    )
+
+
+def _integration_nul_records(output: bytes) -> list[bytes]:
+    if not output:
+        return []
+    records = output.split(b"\0")
+    if records[-1] != b"" or any(not record for record in records[:-1]):
+        raise RuntimeError("invalid NUL records")
+    return records[:-1]
+
+
+def _integration_working_entry(
+    cwd: Path, path: bytes, object_format: str,
+) -> tuple[bytes, bytes, bytes] | None:
+    """Read physical bytes/mode without Git stat hints, conversions or filters."""
+    physical = os.fsencode(cwd)
+    parts = path.split(b"/")
+    for part in parts[:-1]:
+        physical = os.path.join(physical, part)
+        try:
+            parent = os.lstat(physical)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISDIR(parent.st_mode):
+            raise RuntimeError("integration working parent unsupported")
+    physical = os.path.join(physical, parts[-1])
+    try:
+        before = os.lstat(physical)
+    except FileNotFoundError:
+        return None
+
+    def stamp(value: os.stat_result) -> tuple[int, ...]:
+        return (value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+    if stat.S_ISDIR(before.st_mode):
+        return None  # An old tracked file may have become a directory after a rename.
+    if stat.S_ISLNK(before.st_mode):
+        mode, data = b"120000", os.readlink(physical)
+    elif stat.S_ISREG(before.st_mode):
+        mode = b"100755" if before.st_mode & stat.S_IXUSR else b"100644"
+        with os.fdopen(os.open(physical, os.O_RDONLY | os.O_NOFOLLOW), "rb") as stream:
+            if stamp(os.fstat(stream.fileno())) != stamp(before):
+                raise RuntimeError("integration working file changed")
+            data = stream.read()
+            if stamp(os.fstat(stream.fileno())) != stamp(before):
+                raise RuntimeError("integration working file changed")
+    else:
+        raise RuntimeError("integration working file unsupported")
+    if stamp(os.lstat(physical)) != stamp(before):
+        raise RuntimeError("integration working file changed")
+    oid = hashlib.new(object_format, b"blob " + str(len(data)).encode("ascii") + b"\0" + data)
+    return mode, oid.hexdigest().encode("ascii"), data
+
+
+def _integration_content_preserved(cwd: Path, head: str, target: str, step: str) -> bool:
+
+    def source_read(args: list[str]) -> bytes:
+        return subprocess.run(
+            ["git", "-c", "core.fsmonitor=false", *args], cwd=cwd, check=True,
+            capture_output=True, env=_sanitized_git_environment() | {
+                "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_LAZY_FETCH": "1",
+            },
+            timeout=GIT_PROBE_TIMEOUT_SECONDS,
+        ).stdout
+
+    index_args = ["ls-files", "--stage", "--debug", "--sparse", "-z"]
+    index = source_read(index_args)
+    # Refuse extended index states (including intent-to-add and sparse entries).
+    # They cannot silently become an ordinary stage-0 commit entry.
+    index_record = re.compile(
+        rb"(100644|100755|120000) ([0-9a-f]{40}|[0-9a-f]{64}) ([0-3])\t([^\0]+)\0"
+        rb"  ctime: [0-9]+:[0-9]+\n  mtime: [0-9]+:[0-9]+\n"
+        rb"  dev: [0-9]+\tino: [0-9]+\n  uid: [0-9]+\tgid: [0-9]+\n"
+        rb"  size: [0-9]+\tflags: ([0-9a-f]+)\n"
+    )
+    actual: dict[bytes, tuple[bytes, bytes]] = {}
+    stages: dict[bytes, set[int]] = {}
+    position = 0
+    for match in index_record.finditer(index):
+        mode, oid, stage_raw, path, flags = match.groups()
+        stage = int(stage_raw)
+        if (
+            match.start() != position or not _integration_valid_path(path)
+            or int(flags, 16) != stage << 12 or stage in stages.get(path, set())
+        ):
+            raise RuntimeError("integration index unsupported")
+        position = match.end()
+        stages.setdefault(path, set()).add(stage)
+        if stage == 0:
+            actual[path] = (mode, oid)
+    if position != len(index) or any(0 in values and len(values) != 1 for values in stages.values()):
+        raise RuntimeError("integration index invalid")
+
+    with _integration_merge_tree(cwd, head, target) as (
+        expected, conflicts, scratch_read, object_format, syntax_attributes,
+    ):
+        oid_pattern = rb"[0-9a-f]{40}" if object_format == "sha1" else rb"[0-9a-f]{64}"
+        original = _integration_tree_entries(scratch_read(["ls-tree", "-r", "-z", head]), oid_pattern)
+        unmerged = {path for path, values in stages.items() if values != {0}}
+        if unmerged - conflicts or (step == "commit" and unmerged):
+            return False
+        if {path: entry for path, entry in actual.items() if path not in conflicts} != {
+            path: entry for path, entry in expected.items() if path not in conflicts
+        }:
+            return False
+
+        paths = set(expected) | set(original) | set(stages) | conflicts
+        physical = {path: _integration_working_entry(cwd, path, object_format) for path in paths}
+        for path, entry in physical.items():
+            if path not in conflicts or step == "commit":
+                if (entry[:2] if entry is not None else None) != actual.get(path):
+                    return False
+
+        # Git's diff --check can skip NUL-containing content even with --text.
+        # Refuse unsupported manual resolutions, without rejecting automatic
+        # binary merge content outside the oracle's actual conflict paths.
+        for path in conflicts:
+            entry, staged_entry = physical[path], actual.get(path)
+            if (entry is not None and b"\0" in entry[2]) or (
+                staged_entry is not None and b"\0" in scratch_read(
+                    ["cat-file", "blob", staged_entry[1].decode("ascii")],
+                )
+            ):
+                raise RuntimeError("integration binary conflict resolution unsupported")
+
+        def proof_tree(entries: dict[bytes, tuple[bytes, bytes]]) -> str:
+            scratch_read(["read-tree", "--empty"])
+            scratch_read(["update-index", "-z", "--index-info"], b"".join(
+                mode + b" " + oid + b"\t" + path + b"\0"
+                for path, (mode, oid) in sorted(entries.items())
+            ))
+            tree = scratch_read(["write-tree"])
+            if re.fullmatch(oid_pattern + rb"\n", tree) is None:
+                raise RuntimeError("integration proof tree invalid")
+            return tree[:-1].decode("ascii")
+
+        staged = actual | {path: original[path] for path in unmerged if path in original}
+        working = {path: entry for path, entry in actual.items() if path not in conflicts}
+        for path in conflicts:
+            entry = physical[path]
+            if entry is not None:
+                mode, oid, data = entry
+                if scratch_read(["hash-object", "--no-filters", "-w", "--stdin"], data) != oid + b"\n":
+                    raise RuntimeError("integration raw blob invalid")
+                working[path] = (mode, oid)
+        def marker_widths() -> list[bytes]:
+            ordered = sorted(paths)
+            records = _integration_nul_records(scratch_read(
+                ["check-attr", "-z", "conflict-marker-size", "--stdin"],
+                b"".join(path + b"\0" for path in ordered),
+            ))
+            if len(records) != 3 * len(ordered) or any(
+                records[3 * position:3 * position + 2] != [path, b"conflict-marker-size"]
+                for position, path in enumerate(ordered)
+            ):
+                raise RuntimeError("integration marker attributes unknown")
+            return records[2::3]
+
+        widths = marker_widths()
+        syntax_attributes.parent.mkdir(exist_ok=True)
+        # A string value avoids activating a HEAD macro named "diff". Refuse
+        # other macro interactions that change the oracle's effective widths.
+        syntax_attributes.write_bytes(
+            b"* diff=default whitespace=blank-at-eol,blank-at-eof,space-before-tab\n"
+        )
+        if marker_widths() != widths:
+            raise RuntimeError("integration syntax attributes unsupported")
+        # Tree-to-tree checks never visit source worktree conversion/filter paths.
+        for entries in (staged, working):
+            scratch_read(["diff", "--text", "--no-ext-diff", "--no-textconv", "--check", head, proof_tree(entries)])
+        return source_read(index_args) == index and all(
+            _integration_working_entry(cwd, path, object_format) == entry for path, entry in physical.items()
+        )
+
+
 def _integration_merge_status(
     cwd: Path,
     *,
@@ -427,12 +691,8 @@ def _integration_merge_status(
 
         if base_status.get("remote_sha") != target or not fresh_base():
             return refuse("integration_remote_base_drift")
-        run_git(["diff", "--check"], cwd)
-        run_git(["diff", "--cached", "--check"], cwd)
-        if step == "commit":
-            if run_git(["ls-files", "--unmerged"], cwd):
-                return refuse("integration_index_unmerged")
-            run_git(["diff", "--quiet"], cwd)
+        if not _integration_content_preserved(Path(worktree), head, target, step):
+            return refuse("integration_content_not_preserved")
 
         if (
             run_git(["branch", "--show-current"], cwd) != branch
@@ -468,7 +728,10 @@ def preflight_report(
 ) -> dict[str, Any]:
     active_leases = active_leases or []
     resource_ids = resource_ids or set()
-    status = run_git(["status", "--porcelain"], cwd)
+    integration_requested = integration_merge_target is not None or integration_step is not None
+    # Integration permits dirty work explicitly. Its physical proof below must
+    # run without source status/diff, which may execute configured clean filters.
+    status = None if integration_requested else run_git(["status", "--porcelain"], cwd)
     branch = run_git(["branch", "--show-current"], cwd)
     worktree = run_git(["rev-parse", "--show-toplevel"], cwd)
     operations = _in_progress_operations(cwd)
@@ -477,7 +740,7 @@ def preflight_report(
 
     shared_root = in_shared_root(str(cwd)) if require_dedicated_worktree else False
     integration = None
-    if integration_merge_target is not None or integration_step is not None:
+    if integration_requested:
         integration = _integration_merge_status(
             cwd, target=integration_merge_target, step=integration_step,
             expected_branch=expected_branch, expected_worktree=expected_worktree,
@@ -488,7 +751,7 @@ def preflight_report(
     integration_ok = bool(integration and integration["ok"])
 
     checks = {
-        "dirty_tree": bool(status),
+        "dirty_tree": bool(status) if status is not None else None,
         "dirty_tree_enforced": not allow_dirty,
         "in_progress_operations": operations,
         "branch": branch,
