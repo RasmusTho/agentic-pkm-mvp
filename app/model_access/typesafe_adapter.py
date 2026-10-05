@@ -52,8 +52,9 @@ class _WireResponse(BaseModel):
 class _SingleAttemptTransport(httpx2.BaseTransport):
     """Bound bytes before the SDK eagerly buffers/logs/parses a response."""
 
-    def __init__(self, inner: httpx2.BaseTransport) -> None:
+    def __init__(self, inner: httpx2.BaseTransport, *, max_request_bytes: int = 4096) -> None:
         self.inner = inner
+        self.max_request_bytes = max_request_bytes
         self.attempted = False
         self._closed = False
 
@@ -63,7 +64,7 @@ class _SingleAttemptTransport(httpx2.BaseTransport):
         if (
             request.method != "POST"
             or str(request.url) != TYPESAFE_API_ROOT + "/v1/systemone"
-            or len(request.content) > 4096
+            or len(request.content) > self.max_request_bytes
         ):
             raise TypeSafeAdapterError("unavailable_before_send")
         self.attempted = True
@@ -98,8 +99,12 @@ class TypeSafeAdapter:
     """Only this module knows SDK configuration, wire types and exception behavior."""
 
     def __init__(
-        self, *, transport_factory: Callable[[], httpx2.BaseTransport] | None = None
+        self, *, transport_factory: Callable[[], httpx2.BaseTransport] | None = None,
+        max_request_bytes: int = 4096,
     ) -> None:
+        if type(max_request_bytes) is not int or max_request_bytes not in {4096, 12 * 1024}:
+            raise ValueError("unsupported judgment request bound")
+        self._max_request_bytes = max_request_bytes
         self._transport_factory = transport_factory or (
             lambda: httpx2.HTTPTransport(retries=0, trust_env=False)
         )
@@ -123,7 +128,9 @@ class TypeSafeAdapter:
                 "httpcore2.http11", "httpcore2.http2", "httpcore2.proxy", "httpcore2.socks",
             ):
                 logging.getLogger(name).disabled = True
-            transport = _SingleAttemptTransport(self._transport_factory())
+            transport = _SingleAttemptTransport(
+                self._transport_factory(), max_request_bytes=self._max_request_bytes,
+            )
             # Own transport teardown before HTTP-client construction can fail.
             with transport, httpx2.Client(
                 transport=transport, timeout=30.0, trust_env=False, follow_redirects=False

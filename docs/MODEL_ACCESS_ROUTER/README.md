@@ -17,6 +17,15 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 
 ## Current State and Boundary
 
+- TSO-04 (#5768) adds repository support for the separate dev-only Builder `POST /v1/ckm-judgment`
+  operation. Its authenticated ingress grant requires channel `builder` and action `ckm_judgment`;
+  Product grants cannot use it. CKM owns its provider-free intent and caller credential references,
+  while the server validates `config/model_access/builder_typesafe_profile.json` before resolving
+  the existing dev Mac MARR key. Fixed candidate-only Choice requests are capped at 8 candidates,
+  8 capabilities, 500 UTF-8 bytes per excerpt and 12 KiB total, including the actual SDK wire.
+  Product retains its separate 4 KiB limit and profile/allowance. Builder defaults to disabled and
+  requires its own parent #5764 dev acceptance; the repository proof uses fake HTTP only. See
+  [TSO-04](../TYPESAFE_SYSTEM_ONE/MIGRATE_BUILDER_CKM_ASSOCIATION.md) for the actual-consumer plan.
 - TSO-02 (#5766) adds repository support for the dev-only Product `POST /v1/judgment` operation and `CodexRemoteTransport.judge_product_intent`, with fixed canvas questions, a 2,000-byte intent-only state, and 4 KiB request ceiling. Product's server-owned validated profile pins the exact TypeSafe release independently of the SDK package; the response validates and preserves selected/returned provider/model identity. The server alone resolves the `dev/marr-server-dev/typesafe.api-key` Mac Keychain binding. Product `judgment` authorization is required, SDK retries/body logging are disabled, and every post-dispatch outcome is terminal. The normal route stays unavailable pending separate Product dev acceptance on #5764; a separately authorized temporary `acceptance_once` process permits one actual-consumer synthetic call without activating that normal route. This adds no generic completion/default-model change, Builder authorization, live key read, installation or provider acceptance. See [TSO-02](../TYPESAFE_SYSTEM_ONE/ADD_TYPESAFE_TO_MAC_EXECUTOR.md) for profile/SDK update paths and the operator acceptance plan.
 - Product routes chat/completion calls through app/components/llm/router.py, app/components/llm/fabric.py, and app/services/llm.py.
 - Builder model access resolves independently through app/builderops/model_access_resolver.py and app/builderops/model_inquiry_adapters.py.
@@ -54,8 +63,11 @@ Product and Builder share policy or credentials.
 
 The shared facade remains policy-agnostic: Product resolves the route, and the executor API neither picks a model nor joins Product and Builder authority. Completion requests and responses carry exact provider, model, and transport identity. Preflight carries only that route and capability intent; it returns readiness or a sanitized typed failure and performs no inference. Catalog discovery likewise performs no inference; latest-compatible selection is a pure Product-side operation over a snapshot and caller-supplied policy allowlist.
 
-The service exposes only three bounded operations: `POST /v1/complete`, `POST /v1/preflight`, and
-`POST /v1/catalog`. Completion supplies one declared provider/model/transport, optional reasoning
+The completion/catalog service exposes `POST /v1/complete`, `POST /v1/preflight`, and
+`POST /v1/catalog`. Its additional bounded System One operations are Product `POST /v1/judgment`
+and Builder `POST /v1/ckm-judgment`, each with a separate fixed payload, caller authorization and
+server-owned profile. They add no completion fallback or model-selection authority to callers.
+Completion supplies one declared provider/model/transport, optional reasoning
 effort, output schema, and output-token limit, a capability intent, trusted instructions, and user
 content as distinct fields. Preflight supplies only one declared provider/model/transport and
 capability intent. Catalog
@@ -69,7 +81,7 @@ The current executor API is exposed behind its configured authenticated ingress 
 loopback-bound. The current Ygg profile contains only the authenticated VLAN path. The generic path
 adapter can support explicitly configured additional transports, including Tailscale, but no such
 profile or Serve setup is required for Ygg acceptance or rollout. Each configured path enforces the
-same Product channel and operation-specific authorization contract. Endpoint and identity material
+same caller-owned channel and operation-specific authorization contract. Endpoint and identity material
 remain host-local configuration.
 The Codex CLI profile path, `CODEX_HOME`, and subscription session also remain host-local.
 
