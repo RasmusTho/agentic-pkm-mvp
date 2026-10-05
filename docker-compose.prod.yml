@@ -32,6 +32,11 @@ services:
 
   api:
     environment:
+      # Product task policy selects the route (Luna for chat/planning and
+      # Ollama for embeddings). Keep a harmless import-time default while
+      # allowing those explicit per-task routes to cross providers.
+      LLM_PROVIDER: mock
+      LLM_PROVIDER_ENFORCE: "0"
       API_HEALTHCHECK_URL: http://host.docker.internal:18000/readyz
       PKM_ENVIRONMENT: prod
       MIGRATION_GATE_TOKEN_ONLY: "0"
@@ -44,12 +49,25 @@ services:
       # `ollama` service is inside the host trust boundary, and this line
       # is the operator declaring exactly that (HEIM-12).
       HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS: ollama
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
+    volumes:
+      - type: bind
+        source: /etc/yggdrasil/model-access/codex-client
+        target: /run/model-access/codex-client
+        read_only: true
+        bind:
+          create_host_path: true
     depends_on:
       ollama:
         condition: service_healthy
 
   worker:
     environment:
+      LLM_PROVIDER: mock
+      LLM_PROVIDER_ENFORCE: "0"
       PKM_ENVIRONMENT: prod
       DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}}
       DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}}
@@ -59,15 +77,39 @@ services:
       # `ollama` service is inside the host trust boundary, and this line
       # is the operator declaring exactly that (HEIM-12).
       HEIMDAL_SCREEN_VISION_HOST_LOCAL_HOSTS: ollama
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
+    volumes:
+      - type: bind
+        source: /etc/yggdrasil/model-access/codex-client
+        target: /run/model-access/codex-client
+        read_only: true
+        bind:
+          create_host_path: true
     depends_on:
       ollama:
         condition: service_healthy
 
   watcher:
     environment:
+      LLM_PROVIDER: mock
+      LLM_PROVIDER_ENFORCE: "0"
       PKM_ENVIRONMENT: prod
       DATABASE_URL: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}}
       DB_DSN: ${DATABASE_URL:-${DB_DSN:-postgresql+psycopg://app:app@db:5432/app}}
+      MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
+      MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
+      MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}
+    volumes:
+      - type: bind
+        source: /etc/yggdrasil/model-access/codex-client
+        target: /run/model-access/codex-client
+        read_only: true
+        bind:
+          create_host_path: true
 
   heimdal-capture-watch:
     environment:

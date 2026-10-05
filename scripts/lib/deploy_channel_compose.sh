@@ -167,12 +167,31 @@ _deploy_channel_runtime_env_aliases_model_access_file() {
 deploy_channel_model_access_preflight() {
   local runtime_env_file="${1:?governed runtime env file required}"
   local model_access_env_file="${2:?model-access env file required}"
+  local key
+  local -a model_access_keys=(
+    MODEL_ACCESS_CODEX_VLAN_ENDPOINT
+    MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE
+    MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT
+    MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY
+  )
 
   if _deploy_channel_runtime_env_aliases_model_access_file \
     "${runtime_env_file}" "${model_access_env_file}"; then
     _deploy_channel_model_access_config_blocked runtime_env_alias
     return $?
   fi
+
+  # Rollback must remain available when optional new-route configuration is
+  # absent or malformed. Do not consume those references during recovery, and
+  # clear ambient values so a previous-good mock image receives no MARR path.
+  if [ "${action:-deploy}" = "rollback" ]; then
+    for key in "${model_access_keys[@]}"; do
+      export "${key}="
+    done
+    echo "model-access runtime env preflight: skipped reason=rollback" >&2
+    return 0
+  fi
+
   deploy_channel_model_access_runtime_env_preflight "${model_access_env_file}"
 }
 
@@ -712,7 +731,7 @@ deploy_channel_compose() {
   runtime_env_ref="${DEPLOY_CHANNEL_RUNTIME_ENV_REF}"
   runtime_env_file="${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}"
 
-  if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; then
+  if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
     deploy_channel_model_access_preflight \
       "${runtime_env_file}" "${model_access_env_file}" || return $?
   fi
@@ -845,7 +864,7 @@ deploy_channel_compose() {
     signboard_override_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-signboard-override.XXXXXX")"
     compose_stdout_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stdout.XXXXXX")"
     compose_stderr_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-compose-stderr.XXXXXX")"
-    if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; then
+    if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
       runtime_env_snapshot_file="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-runtime-env.XXXXXX")"
     else
       runtime_env_snapshot_file=""
@@ -861,11 +880,11 @@ deploy_channel_compose() {
     # Compose gives the caller shell precedence over --env-file values. Pin the
     # governed selectors here so a stale parent shell cannot swap the selected
     # runtime env, provider selector, or vault after the decisions above. For
-    # dev/test, pass a private point-in-time copy of the already-distinct runtime
+    # Product channels, pass a private point-in-time copy of the already-distinct runtime
     # env file: Compose cannot then follow a path replacement back to the
     # model-access file between preflight and reading its env_file. The copy is
     # a service env_file, never a CLI --env-file, so DSNs are not interpolated.
-    if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; then
+    if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
       _deploy_channel_snapshot_runtime_env_file \
         "${runtime_env_file}" "${model_access_env_file}" "${runtime_env_snapshot_file}" || return $?
       runtime_env_ref="${runtime_env_snapshot_file}"

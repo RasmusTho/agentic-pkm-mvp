@@ -194,9 +194,10 @@ def test_devui_vm102_receipt_source_rejects_writable_host_alias() -> None:
 
 
 @requires_docker
-def test_model_access_identity_is_not_bound_by_base_compose(
+def test_model_access_identity_is_bound_only_to_prod_product_callers(
     tmp_path: Path,
 ) -> None:
+    product_callers = {"api", "worker", "watcher"}
     base_services = _load_compose(BASE_COMPOSE)["services"]
     assert isinstance(base_services, dict)
     for name, service in base_services.items():
@@ -207,14 +208,14 @@ def test_model_access_identity_is_not_bound_by_base_compose(
     )["services"]
     assert isinstance(prod_overlay_services, dict)
     for name, service in prod_overlay_services.items():
-        assert not _has_model_access_binding(service), name
+        assert _has_model_access_binding(service) is (name in product_callers), name
 
     prod_services = _render_channel_with_synthetic_runtime_env(
         tmp_path, channel="prod"
     )["services"]
     assert isinstance(prod_services, dict)
     for name, service in prod_services.items():
-        assert not _has_model_access_binding(service), name
+        assert _has_model_access_binding(service) is (name in product_callers), name
 
 
 @requires_docker
@@ -250,7 +251,7 @@ def test_base_watcher_retains_llm_provider_cli_forwarding() -> None:
 
 
 @requires_docker
-def test_prod_watcher_effective_render_preserves_runtime_env_and_defaults(
+def test_prod_watcher_uses_mock_default_and_preserves_other_runtime_env_values(
     tmp_path: Path,
 ) -> None:
     rendered = _render_channel_with_synthetic_runtime_env(
@@ -260,13 +261,14 @@ def test_prod_watcher_effective_render_preserves_runtime_env_and_defaults(
     assert isinstance(services, dict)
     watcher = _environment(services["watcher"])
 
-    assert watcher["LLM_PROVIDER"] == "synthetic-provider"
+    assert watcher["LLM_PROVIDER"] == "mock"
+    assert watcher["LLM_PROVIDER_ENFORCE"] == "0"
     assert watcher["WATCHER_STATE_DIR"] == "tmp"
     assert watcher["WATCHER_MAX_SCANNED_FILES_PER_TICK"] == "500"
 
 
 @requires_docker
-def test_prod_image_only_pin_no_vault_render_preserves_exported_provider(
+def test_prod_image_only_pin_no_vault_render_keeps_mock_default(
     tmp_path: Path,
 ) -> None:
     rendered = _render_channel_with_synthetic_runtime_env(
@@ -277,8 +279,8 @@ def test_prod_image_only_pin_no_vault_render_preserves_exported_provider(
 
     for service_name in ("api", "worker", "watcher"):
         service_environment = _environment(services[service_name])
-        assert service_environment["LLM_PROVIDER"] == "synthetic-no-vault-provider"
-        assert service_environment["LLM_PROVIDER_ENFORCE"] == "1"
+        assert service_environment["LLM_PROVIDER"] == "mock"
+        assert service_environment["LLM_PROVIDER_ENFORCE"] == "0"
     assert _environment(services["watcher"])["WATCHER_ENABLE"] == "0"
 
 

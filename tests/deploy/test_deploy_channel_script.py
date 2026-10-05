@@ -153,6 +153,45 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_prod_model_access_preflight_runs_before_channel_mutation(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    model_access_env = tmp_path / "model-access-runtime.env"
+    unsafe_value = "do-not-log-this-value"
+    model_access_env.write_text(
+        f"UNSUPPORTED_KEY={unsafe_value}\n",
+        encoding="utf-8",
+    )
+    for relative in (
+        "scripts/deploy_channel.sh",
+        "scripts/lib/deploy_channel_compose.sh",
+    ):
+        script_path = root / relative
+        script = script_path.read_text(encoding="utf-8")
+        script_path.write_text(
+            script.replace(
+                "/etc/yggdrasil/model-access/runtime.env",
+                str(model_access_env),
+            ),
+            encoding="utf-8",
+        )
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode == 78
+    assert "model-access runtime env preflight: blocked reason=invalid_contents" in result.stderr
+    assert unsafe_value not in result.stdout + result.stderr
+    assert not Path(tmp_path / "docker-called").exists()
+    assert _deploy_events(env) == ["archive-preflight prod"]
+    assert not (root / "config/deploy/prod.env.lock").exists()
+    assert not (root / "config/deploy/prod.env").exists()
+    assert not (root / "config/deploy/prod.previous.env").exists()
+    assert not (root / "config/deploy/prod.migration-pending.env").exists()
+    assert not (root / "ops/deployments/prod-latest.json").exists()
+    assert not Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"]).exists()
+
+
 def test_receipt_preflight_is_skipped_for_rollback() -> None:
     text = (REPO_ROOT / "scripts/lib/deploy_channel_compose.sh").read_text(encoding="utf-8")
     receipt_block = text.split('receipt_host_dir="$(_deploy_channel_env_value', 1)[1]
@@ -911,6 +950,166 @@ def test_prod_rollback_ensures_external_volume_without_instance_state_authority(
     assert not any("deployment-finish" in event for event in events)
     assert not any("docker ps --no-trunc" in event for event in events)
     assert not any("exit-code-from migrate" in event for event in events)
+
+
+def test_prod_rollback_ignores_invalid_optional_model_access_config(
+    tmp_path: Path,
+) -> None:
+    root, env, rollback_sha = _deploy_harness(tmp_path)
+    pre_rollback_sha = _commit_prefloor_successor(root, "prod rollback with invalid MARR")
+    _seed_previous_pin(root, pre_rollback_sha, channel="prod")
+    model_access_env = tmp_path / "model-access-runtime.env"
+    model_access_env.write_text("UNSUPPORTED_KEY=fixture-invalid-value\n", encoding="utf-8")
+    for relative in (
+        "scripts/deploy_channel.sh",
+        "scripts/lib/deploy_channel_compose.sh",
+    ):
+        script_path = root / relative
+        script = script_path.read_text(encoding="utf-8")
+        script_path.write_text(
+            script.replace(
+                "/etc/yggdrasil/model-access/runtime.env",
+                str(model_access_env),
+            ),
+            encoding="utf-8",
+        )
+
+    # Record only the four exported references at the Compose boundary. The
+    # inherited canaries must be cleared for previous-good rollback.
+    docker_path = Path(env["PATH"].split(os.pathsep)[0]) / "docker"
+    docker_script = docker_path.read_text(encoding="utf-8")
+    capture = '''if [[ "$*" == compose* ]]; then
+  printf 'model-access-bindings %s|%s|%s|%s\\n' \\
+    "${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}" \\
+    "${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}" \\
+    "${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}" \\
+    "${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}" \\
+    >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+fi
+'''
+    docker_path.write_text(
+        docker_script.replace("set -eu\n", "set -eu\n" + capture, 1),
+        encoding="utf-8",
+    )
+    for key in (
+        "MODEL_ACCESS_CODEX_VLAN_ENDPOINT",
+        "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT",
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY",
+    ):
+        env[key] = "inherited-canary"
+
+    result = _run_rollback(root, env, rollback_sha, channel="prod")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    compose_events = [event for event in events if event.startswith("docker compose ")]
+    assert compose_events
+    bindings = [event for event in events if event.startswith("model-access-bindings ")]
+    assert bindings
+    assert all(event == "model-access-bindings |||" for event in bindings)
+    assert any(
+        "up -d --force-recreate api worker watcher" in compose_event
+        and index > 0
+        and events[index - 1] == "model-access-bindings |||"
+        for index, compose_event in enumerate(events)
+    )
+    assert str(model_access_env) not in "\n".join(events)
+    assert "fixture-invalid-value" not in result.stdout + result.stderr + "\n".join(events)
+
+
+def test_prod_automatic_recovery_ignores_marr_config_invalidated_during_deploy(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    (root / "target.txt").write_text("new candidate\n", encoding="utf-8")
+    subprocess.run(["git", "add", "target.txt"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "new candidate"], cwd=root, check=True)
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env["FAKE_SHA"] = target_sha
+
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    model_access_env = tmp_path / "model-access-runtime.env"
+    endpoint = "https://marr.example.test"
+    ca_bundle = "/synthetic/marr-ca.pem"
+    client_cert = "/synthetic/marr-client.pem"
+    client_key = "/synthetic/marr-client-key.pem"
+    model_access_env.write_text(
+        "\n".join(
+            (
+                f"MODEL_ACCESS_CODEX_VLAN_ENDPOINT={endpoint}",
+                f"MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE={ca_bundle}",
+                f"MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT={client_cert}",
+                f"MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY={client_key}",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    for relative in (
+        "scripts/deploy_channel.sh",
+        "scripts/lib/deploy_channel_compose.sh",
+    ):
+        script_path = root / relative
+        script = script_path.read_text(encoding="utf-8")
+        script_path.write_text(
+            script.replace(
+                "/etc/yggdrasil/model-access/runtime.env",
+                str(model_access_env),
+            ),
+            encoding="utf-8",
+        )
+
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    invalidated_marker = tmp_path / "model-access-invalidated"
+    env["FAKE_MODEL_ACCESS_ENV_FILE"] = str(model_access_env)
+    env["FAKE_MODEL_ACCESS_INVALIDATED"] = str(invalidated_marker)
+
+    # Capture only the service recreation boundary, then corrupt the optional
+    # file during the first recreation and fail that deploy attempt once.
+    # Automatic previous-good recovery must pass through Docker with all four
+    # references cleared despite the now-invalid source file.
+    docker_path = Path(env["PATH"].split(os.pathsep)[0]) / "docker"
+    docker_script = docker_path.read_text(encoding="utf-8")
+    injection = '''if [[ "$*" == *"up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"* ]]; then
+  printf 'model-access-bindings %s|%s|%s|%s\\n' \\
+    "${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}" \\
+    "${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}" \\
+    "${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}" \\
+    "${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}" \\
+    >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  if [ ! -e "${FAKE_MODEL_ACCESS_INVALIDATED:?}" ]; then
+    printf '%s\\n' 'UNSUPPORTED_KEY=fixture-invalid-value' > "${FAKE_MODEL_ACCESS_ENV_FILE:?}"
+    touch "${FAKE_MODEL_ACCESS_INVALIDATED}"
+    exit 24
+  fi
+fi
+'''
+    docker_path.write_text(
+        docker_script.replace("set -eu\n", "set -eu\n" + injection, 1),
+        encoding="utf-8",
+    )
+
+    result = _run_deploy(root, env, target_sha, channel="prod")
+
+    assert result.returncode == 24, result.stdout + result.stderr
+    assert invalidated_marker.exists()
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    bindings = [event for event in events if event.startswith("model-access-bindings ")]
+    assert bindings == [
+        f"model-access-bindings {endpoint}|{ca_bundle}|{client_cert}|{client_key}",
+        "model-access-bindings |||",
+    ]
+    assert str(model_access_env) not in "\n".join(events) + result.stdout + result.stderr
+    assert "fixture-invalid-value" not in "\n".join(events) + result.stdout + result.stderr
 
 
 def test_failed_manual_rollback_before_recreate_restores_pre_rollback_state(

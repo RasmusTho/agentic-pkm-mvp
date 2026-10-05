@@ -67,9 +67,12 @@ For Product chat, reasoning, and eval tasks, a non-default clone-local `llmRouti
 the primary target after the shared task policy is loaded. Profile definitions remain shared
 configuration; the selected profile name remains local to each clone and is not committed.
 
-For the dev and test channels, Compose forwards the governed `LLM_PROVIDER` value to only the
+For the dev, test, and prod channels, Compose forwards the governed `LLM_PROVIDER` value to only the
 Product `api`, `worker`, and `watcher` callers, defaulting to `mock` when the channel has no
-provider selection. Those overlays also accept the optional host-local
+provider selection. Production pins that import-time default to `mock` and sets
+`LLM_PROVIDER_ENFORCE=0` for those callers, allowing explicit `llm_routing` task policies to use
+their configured provider. The value `mock` remains the fallback when a task has no explicit policy.
+These overlays also accept the optional host-local
 `/etc/yggdrasil/model-access/runtime.env` path-reference file and mount
 `/etc/yggdrasil/model-access/codex-client` read-only for those callers only. The host-managed file
 may contain only `MODEL_ACCESS_CODEX_VLAN_ENDPOINT` and the three CA/certificate/key path
@@ -78,15 +81,18 @@ only an HTTPS endpoint without URL credentials and absolute file paths, then exp
 four values. Compose does not read the raw file as a service `env_file`, so unrelated settings or
 credentials cannot leak into Product containers. The file selects no model and activates no route.
 The deploy entrypoint validates this separation before acquiring the channel lock or preparing
-migrations/state. Immediately before a dev/test Compose invocation, it snapshots the governed
+migrations/state. Immediately before a Product-channel Compose invocation, it snapshots the governed
 runtime env into a private mode-0600 temporary file and passes that stable snapshot as the normal
 service `env_file`; the snapshot is removed when Compose exits. This prevents a later path swap
 from making Compose read the MARR file through the generic runtime-env layer.
 If the client directory is absent, Compose may create an empty host directory so the mock-default
 channel can still start; this does not provision an identity. Any selected Codex route still
-requires successful no-inference preflight. Product model selection remains in
-`vault/settings/llm_routing.md` and its compiled settings. Base Compose and production receive no
-MARR binding from this dev/test support.
+requires successful no-inference preflight. Product model selection remains in the owner-managed
+`vault/settings/llm_routing.md` and its compiled settings. Production code support does not prove
+its host identity, live route policy, provider availability, or release is active.
+
+The owner-approved Product target is Luna through the Codex CLI for chat/planning and Ollama for
+embeddings. These capabilities have separate route policies and health requirements.
 
 For embeddings, a blank compiled task target also permits the operator activation seam
 `EMBED_PROFILE` to select one complete named identity (provider, model, dimension, and

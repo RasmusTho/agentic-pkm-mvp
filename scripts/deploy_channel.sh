@@ -127,10 +127,11 @@ promotion_dir="${ROOT}/ops/promotions"
 image_repository="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}"
 health_timeout="${DEPLOY_HEALTH_TIMEOUT_SECONDS:-90}"
 
-# Gate dev/test MARR bindings before creating the channel lock, materializing
-# migration files, or preparing host deployment state. The Compose helper
-# repeats the check immediately before it snapshots the runtime env for Compose.
-if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; then
+# Gate Product-channel MARR bindings before creating the channel lock, materializing
+# migration files, or preparing host deployment state. Rollback keeps recovery
+# available by pinning the optional MARR references empty; the Compose helper
+# repeats that action or deploy validation before it snapshots the runtime env.
+if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
   _deploy_channel_resolve_runtime_env_file "${ROOT}" "${channel}" "${pin_file}"
   deploy_channel_model_access_preflight \
     "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" \
@@ -1129,8 +1130,14 @@ rollback_failed_startup() {
       # durable record of an ambiguous migration state.
       rm -f "${migration_pending_file}"
     fi
-    if ! MVR01C_SCALAR_ROLLBACK=0 INSTANCE_STATE_LEGACY_ROLLBACK=1 \
-      compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui; then
+    # Treat automatic previous-good recovery as rollback for optional route
+    # configuration too. The failed deploy may have observed a path file that
+    # later became invalid; recovery must clear MARR bindings and stay usable.
+    if ! (
+      action=rollback
+      MVR01C_SCALAR_ROLLBACK=0 INSTANCE_STATE_LEGACY_ROLLBACK=1 \
+        compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
+    ); then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
     fi
   else
