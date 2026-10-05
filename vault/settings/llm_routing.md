@@ -99,6 +99,7 @@ tasks:
 ## Notes
 - Chat/reasoning tasks may choose a local fallback.
 - Embeddings must keep a compatible identity. Endpoint repair is allowed; incompatible model fallback is not.
+- Optional named Product chat profiles can be declared under profiles in the settings block. A clone selects one through llmRoutingProfile in its gitignored settings/local.md; profile targets use model-registry IDs and inherit the shared fallback policy.
 
 <!-- BEGIN:settings:reference -->
 ### Reference — LLM routing
@@ -114,4 +115,5 @@ tasks:
 | `default_embedding` | `TaskPolicy` | `PydanticUndefined` | `` | Default task policy for embeddings and retrieval/index identity. |
 | `default_eval` | `TaskPolicy` | `PydanticUndefined` | `` | Default task policy for eval tooling. |
 | `tasks` | `Dict` | `PydanticUndefined` | `` | Per task_kind routing policies. |
+| `profiles` | `Dict` | `PydanticUndefined` | `` | Named Product model-target profiles selected clone-locally by the vault-local llmRoutingProfile setting. Shared fallback policy is retained. |
 <!-- END:settings:reference -->

@@ -1080,6 +1080,7 @@ def _initial_settings_files(
                 "allowWritesToVault": machine_role != "readOnlySatellite",
                 "allowSharedSettingsEdits": machine_role in {"primary", "automationNode", "testNode"},
                 "allowLocalSettingsEdits": True,
+                "llmRoutingProfile": "default",
                 "localExportPath": None,
                 "youtubeSync.runnerEnabled": False,
             },

@@ -256,6 +256,18 @@ SETTING_DEFINITIONS: tuple[SettingDefinition, ...] = (
     SettingDefinition("allowWritesToVault", "boolean", True, "Allow local writes to vault project files.", "vault-local", "gitignore", True, True, True, "local.md"),
     SettingDefinition("allowSharedSettingsEdits", "boolean", True, "Allow editing shared settings from this clone.", "vault-local", "gitignore", True, True, True, "local.md"),
     SettingDefinition("allowLocalSettingsEdits", "boolean", True, "Allow editing local settings from this clone.", "vault-local", "gitignore", True, True, True, "local.md"),
+    SettingDefinition(
+        "llmRoutingProfile",
+        "string",
+        "default",
+        "Clone-local Product model profile declared in shared llm_routing settings.",
+        "vault-local",
+        "gitignore",
+        True,
+        True,
+        True,
+        "local.md",
+    ),
     # youtubeSync.* (YSS-01, #3916): docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md :: Settings model.
     # Product default posture: visible, overridable. youtubeSync.enabled and
     # youtubeSync.runnerEnabled are RUNTIME_GATING_SETTINGS (see above).

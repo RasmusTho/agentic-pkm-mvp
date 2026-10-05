@@ -4,8 +4,8 @@ Authority: Canonical routing and fabric contract for LLM chat and embedding acce
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: routing code, compiled Product settings, channel Compose, and acceptance receipts
-Last reviewed: 2026-10-04
-Last verified against: Issue #5772 Compose integration tests and the MARR-06 acceptance receipt in Issue #5624.
+Last reviewed: 2026-10-05
+Last verified against: Issue #5794 clone-local profile tests, Issue #5772 Compose integration tests, and the MARR-06 acceptance receipt in Issue #5624.
 
 # LLM Routing Contract (Router + Fabric)
 
@@ -39,6 +39,14 @@ Related docs:
   `runtime/settings/llm_routing.yaml`.
 - **Model-first settings**: The settings note selects `model_id` values from the model registry. The compiler derives
   `provider` and `model` from that registry so users do not need to keep both in sync by hand.
+- **Clone-local model profiles**: `llm_routing.md` may declare named profiles containing registry-backed
+  chat targets. Each clone selects one with `llmRoutingProfile` in its gitignored `settings/local.md`;
+  omit it or use `default` to retain the shared task policy. A work satellite can select `work` while
+  another clone remains on `default`. Profile targets replace only the primary chat/reasoning/eval
+  model; shared task fallbacks and capability checks remain in force. Embedding identity and Builder
+  Model Inquiry are not affected. Unknown profile names and invalid profile model IDs fail closed.
+  For example, declare `profiles.work.default_chat.model_id` using a chat ID from
+  `docs/settings/models/registry.yaml`, then put `llmRoutingProfile: work` in that clone's local.md.
 - **Embedding identity protection**: embed tasks may auto-repair transport/endpoints, but must not silently switch
   to an incompatible embedding identity when `require_compatible_identity=true`.
 - **Default route reporting**: The fabric exposes `describe_default_routes()` and
@@ -54,6 +62,10 @@ Routing is intentionally deterministic and single-source:
 2. **Compiled task policy settings** — `runtime/settings/llm_routing.yaml`, generated from `vault/@Settings/llm_routing.md`.
 3. **Environment defaults** — env vars fill in provider/model defaults when the task policy leaves them blank.
 4. **Built-in defaults** — used when no settings or env override is present.
+
+For Product chat, reasoning, and eval tasks, a non-default clone-local `llmRoutingProfile` overrides
+the primary target after the shared task policy is loaded. Profile definitions remain shared
+configuration; the selected profile name remains local to each clone and is not committed.
 
 For the dev, test, and prod channels, Compose forwards the governed `LLM_PROVIDER` value to only the
 Product `api`, `worker`, and `watcher` callers, defaulting to `mock` when the channel has no
