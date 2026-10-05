@@ -342,3 +342,5 @@ Resolution note (2026-05-06): verified `app/orchestrator/v2_runtime.py` now cont
 **Diverged:** The current-state checkpoint still described Model Access as Ollama-only and recorded no live acceptance, while merged PR #5759 and accepted Issue #5624 contain a newer VLAN-only Codex CLI Luna host receipt.
 **Upstream artifact:** `docs/STATUS.md`; the candidate now preserves the dated repository checkpoint and records the later scoped acceptance without implying persistent Product routing or channel rollout.
 **Compatibility fallback:** BuilderOps LearningSignal write unavailable: the configured local SQLite store rejected the write as read-only. No LearningSignal was stored; convert this entry when the BuilderOps store is writable.
+
+--- retro 2026-10-05: applied 10/10 proposals ---
