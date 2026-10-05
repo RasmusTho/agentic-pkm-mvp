@@ -153,6 +153,45 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_prod_model_access_preflight_runs_before_channel_mutation(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    model_access_env = tmp_path / "model-access-runtime.env"
+    unsafe_value = "do-not-log-this-value"
+    model_access_env.write_text(
+        f"UNSUPPORTED_KEY={unsafe_value}\n",
+        encoding="utf-8",
+    )
+    for relative in (
+        "scripts/deploy_channel.sh",
+        "scripts/lib/deploy_channel_compose.sh",
+    ):
+        script_path = root / relative
+        script = script_path.read_text(encoding="utf-8")
+        script_path.write_text(
+            script.replace(
+                "/etc/yggdrasil/model-access/runtime.env",
+                str(model_access_env),
+            ),
+            encoding="utf-8",
+        )
+
+    result = _run_deploy(root, env, sha, channel="prod")
+
+    assert result.returncode == 78
+    assert "model-access runtime env preflight: blocked reason=invalid_contents" in result.stderr
+    assert unsafe_value not in result.stdout + result.stderr
+    assert not Path(tmp_path / "docker-called").exists()
+    assert _deploy_events(env) == ["archive-preflight prod"]
+    assert not (root / "config/deploy/prod.env.lock").exists()
+    assert not (root / "config/deploy/prod.env").exists()
+    assert not (root / "config/deploy/prod.previous.env").exists()
+    assert not (root / "config/deploy/prod.migration-pending.env").exists()
+    assert not (root / "ops/deployments/prod-latest.json").exists()
+    assert not Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"]).exists()
+
+
 def test_receipt_preflight_is_skipped_for_rollback() -> None:
     text = (REPO_ROOT / "scripts/lib/deploy_channel_compose.sh").read_text(encoding="utf-8")
     receipt_block = text.split('receipt_host_dir="$(_deploy_channel_env_value', 1)[1]
