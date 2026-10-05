@@ -529,6 +529,7 @@ def test_executor_exposes_only_bounded_model_operations() -> None:
         ("/v1/preflight", ("POST",)),
         ("/v1/catalog", ("POST",)),
         ("/v1/judgment", ("POST",)),
+        ("/v1/ckm-judgment", ("POST",)),
     }
 
 
