@@ -77,7 +77,7 @@ def test_pinned_sdk_round_trips_all_neutral_primitives() -> None:
         )
 
     adapter = TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(send))
-    result, usage = adapter.execute(
+    result, usage = adapter.judge(
         request, model="jev-1.13.0", api_key="synthetic-conformance-key"
     )
     assert result.validate_against(request) == result
@@ -92,7 +92,7 @@ def test_sdk_version_mismatch_fails_before_transport_creation(monkeypatch) -> No
         pytest.fail("unreviewed SDK must not create transport")
 
     with pytest.raises(TypeSafeAdapterError) as exc:
-        TypeSafeAdapter(transport_factory=forbidden).execute(
+        TypeSafeAdapter(transport_factory=forbidden).judge(
             product_intent_request("synthetic"), model="jev-1.13.0", api_key="synthetic-key"
         )
     assert exc.value.outcome == "unavailable_before_send"
@@ -107,7 +107,7 @@ def test_provider_request_at_utf8_intent_limit_is_within_four_kibibytes() -> Non
         return httpx2.Response(429, json={"error": "synthetic"})
 
     with pytest.raises(TypeSafeAdapterError) as exc:
-        TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(send)).execute(
+        TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(send)).judge(
             product_intent_request("å" * 1000), model="jev-1.13.0", api_key="synthetic-key"
         )
     assert exc.value.outcome == "provider_rejected" and len(calls) == 1
@@ -171,7 +171,7 @@ def test_actual_http_transport_never_logs_raw_provider_diagnostics(
 
     def execute():
         with pytest.raises(TypeSafeAdapterError) as exc:
-            TypeSafeAdapter(transport_factory=make_transport).execute(
+            TypeSafeAdapter(transport_factory=make_transport).judge(
                 product_intent_request(intent), model="jev-1.13.0", api_key=key
             )
         return exc.value.outcome, str(exc.value)

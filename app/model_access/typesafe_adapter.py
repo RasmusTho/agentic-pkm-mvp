@@ -104,7 +104,7 @@ class TypeSafeAdapter:
             lambda: httpx2.HTTPTransport(retries=0, trust_env=False)
         )
 
-    def execute(
+    def judge(
         self,
         request: SystemOneJudgmentRequest,
         *,

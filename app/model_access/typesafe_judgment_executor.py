@@ -147,7 +147,7 @@ class ProductTypeSafeExecutor:
         except Exception:
             return unavailable
         try:
-            judgment, usage = self._adapter.execute(request, model=selection.model, api_key=api_key)
+            judgment, usage = self._adapter.judge(request, model=selection.model, api_key=api_key)
         except TypeSafeAdapterError as exc:
             return ProductJudgmentResult(outcome=exc.outcome, selection=selection)
         except Exception:
