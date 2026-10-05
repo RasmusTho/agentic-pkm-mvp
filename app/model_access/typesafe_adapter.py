@@ -110,9 +110,13 @@ class TypeSafeAdapter:
     ) -> tuple[SystemOneJudgmentResponse, JudgmentUsage]:
         if version("typesafe-sdk") != TYPESAFE_SDK_VERSION:
             raise TypeSafeAdapterError("unavailable_before_send")
-        # The pinned SDK uses this exact logger, including at debug level. Do not
-        # temporarily restore it: concurrent requests must never expose bodies.
-        for name in ("typesafe_sdk", "httpx2", "httpcore2"):
+        # Parent.disabled does not suppress descendant records or their handlers.
+        # Disable each logger used by the pinned SDK/HTTP transport, pre-creating
+        # lazy protocol/proxy loggers too. Never restore between concurrent calls.
+        for name in (
+            "typesafe_sdk", "httpx2", "httpcore2", "httpcore2.connection",
+            "httpcore2.http11", "httpcore2.http2", "httpcore2.proxy", "httpcore2.socks",
+        ):
             logging.getLogger(name).disabled = True
         transport = _SingleAttemptTransport(self._transport_factory())
         try:
