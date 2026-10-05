@@ -80,7 +80,9 @@ def judgment_path(monkeypatch, tmp_path):
             return httpx2.Response(200, content='{"model":"jev-0.0.0",' + json.dumps(result)[1:])
         return httpx2.Response(200, content=json.dumps(result))
 
-    monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
+    monkeypatch.setattr(
+        "app.ops.host_secret_bootstrap.sys", SimpleNamespace(platform="darwin")
+    )
 
     def lookup(service, account):
         lookups.append((service, account))
