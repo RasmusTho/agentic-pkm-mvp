@@ -14,6 +14,17 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
+JudgmentOutcome = Literal[
+    "unavailable_before_send", "outcome_unknown_after_dispatch",
+    "provider_rejected", "response_invalid", "success",
+]
+
+
+class JudgmentUsage(_StrictModel):
+    input_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    output_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+
+
 class CompletionRouteIdentity(_StrictModel):
     """The exact provider/model/transport already selected by Product policy."""
 

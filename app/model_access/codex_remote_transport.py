@@ -18,6 +18,10 @@ from app.model_access.remote_contract import (
     PreflightRequest,
     PreflightResponse,
 )
+from app.model_access.product_judgment_contract import (
+    PRODUCT_JUDGMENT_RESPONSE_BYTES, ProductJudgmentResult, encode_product_request,
+    product_intent_request,
+)
 
 
 MAX_REMOTE_RESPONSE_BYTES = 600_000
@@ -269,6 +273,7 @@ class CodexRemoteTransport:
             raise ValueError("unsupported executor path adapter")
         self._preflight_url = self._url.removesuffix("/v1/complete") + "/v1/preflight"
         self._catalog_url = self._url.removesuffix("/v1/complete") + "/v1/catalog"
+        self._judgment_url = self._url.removesuffix("/v1/complete") + "/v1/judgment"
         self._max_request_bytes = max_request_bytes
         self._max_response_bytes = max_response_bytes
         # HTTPX verifies TLS certificates by default; spell this out for the production
@@ -283,6 +288,35 @@ class CodexRemoteTransport:
             follow_redirects=False,
             trust_env=False,
         )
+
+    def judge_product_intent(self, intent_text: str) -> ProductJudgmentResult:
+        """One Product call; the server owns profile/model/SDK/credential selection."""
+        try:
+            request = product_intent_request(intent_text)
+            body = encode_product_request(request)
+        except (TypeError, ValueError, UnicodeError):
+            return ProductJudgmentResult(outcome="unavailable_before_send")
+        try:
+            with self._client.stream("POST", self._judgment_url, content=body,
+                                     headers={"Content-Type": "application/json"}) as response:
+                if response.status_code in {400, 403, 411, 413, 415, 422, 429}:
+                    return ProductJudgmentResult(outcome="unavailable_before_send")
+                if response.status_code != 200:
+                    return ProductJudgmentResult(outcome="outcome_unknown_after_dispatch")
+                raw = _read_bounded_response_body(response, max_bytes=PRODUCT_JUDGMENT_RESPONSE_BYTES)
+                if raw is None:
+                    return ProductJudgmentResult(outcome="response_invalid")
+            result = ProductJudgmentResult.model_validate(json.loads(raw, object_pairs_hook=_strict_object_pairs,
+                                                                      parse_constant=_reject_json_constant))
+            if result.judgment is not None:
+                result.judgment.validate_against(request)
+            return result
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+            return ProductJudgmentResult(outcome="unavailable_before_send")
+        except (ValueError, TypeError, UnicodeError, RecursionError):
+            return ProductJudgmentResult(outcome="response_invalid")
+        except Exception:
+            return ProductJudgmentResult(outcome="outcome_unknown_after_dispatch")
 
     def catalog(self, request: CatalogRequest) -> CatalogResponse:
         """Fetch a transport catalog without invoking a model."""

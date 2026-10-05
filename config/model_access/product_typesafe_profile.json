@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "owner": "product",
+  "selected_profile": "product.canvas_intent.v1",
+  "profiles": {
+    "product.canvas_intent.v1": {
+      "provider": "typesafe",
+      "model": "jev-1.13.0"
+    }
+  },
+  "supported_models": ["jev-1.13.0"]
+}

@@ -23,6 +23,8 @@ dependencies = [
     "markdown-it-py>=4.0,<5",
     "regex>=2026.5,<2027",
     "httpx>=0.27",
+    # SDK compatibility is pinned independently of Product's model profile.
+    "typesafe-sdk==0.7.2",
     "pydantic>=2.7",
     "rapidfuzz>=3.0",
     "orjson>=3.11.6",

@@ -26,7 +26,39 @@ Product and Builder requests need to reach Jev through separate caller authoriza
 
 ## Concretely
 
-Product sends a typed judgment request through the existing authenticated executor ingress. The executor resolves the declared provider credential from Keychain and returns one typed answer. An absent key or unsupported question produces a sanitized typed failure before any inference.
+The repository implementation provides `POST /v1/judgment` and
+`CodexRemoteTransport.judge_product_intent(intent_text)`. The client uses the existing configured
+HTTPS ingress and Product caller identity. Admission requires the loopback backend peer and the
+authenticated `product` channel's `judgment` action; a `complete` or Builder grant does not authorize
+this operation. `product_intent_request` constructs the two fixed Choice questions (`intent_class`
+and `action_type`), including `unknown`. The executor requires that exact template and only the
+`intent_text` state field. Caller-supplied question text, profile, model, endpoint, headers, keys and
+provider parameters are rejected. The neutral `llm_contract` and existing classifier behavior are
+unchanged; TSO-03 owns interpretation and confidence thresholds.
+
+The Product-owned `config/model_access/product_typesafe_profile.json` declares the selected
+`product.canvas_intent.v1` profile and its reviewed exact model allowlist. It currently pins
+`typesafe` / `jev-1.13.0`. A supported release update changes only that profile configuration
+(including its reviewed allowlist); it does not change the shared request, client or consumer.
+Unknown profiles, another owner, unsupported models and moving aliases such as `jev-latest` fail
+before credential lookup or dispatch. Profile-swap tests use a synthetic future release and do not
+establish its live availability.
+
+The separate package pin is `typesafe-sdk==0.7.2` in `pyproject.toml` and `requirements.txt`, checked
+by `typesafe_adapter.py`. SDK upgrades belong to that adapter and
+`tests/model_access/test_typesafe_sdk_conformance.py`; they do not change model selection. The adapter
+fixes the documented API root, explicitly supplies the key/model, disables SDK and HTTP retries,
+redirects and environment proxies, and disables SDK wire logging. It bounds the actual provider
+request to 4 KiB and the response to 16 KiB, rejects duplicate JSON keys, and validates answers
+against the exact request and returned model against the selected model. The result carries only
+typed answers, safe outcome, selected profile/provider/model/SDK, returned provider/model and bounded
+usage. No raw provider error crosses the boundary.
+
+Official conformance sources: [Python client](https://docs.typesafe.ai/sdk/python/api/clients/sync),
+[retry policy](https://docs.typesafe.ai/sdk/python/api/retries),
+[answer types](https://docs.typesafe.ai/sdk/python/api/types/responses), and
+[versioned models](https://docs.typesafe.ai/models). Repository proof uses the installed pinned SDK
+with injected fake HTTP transport; it is not live acceptance.
 
 ## Why This Matters
 
@@ -40,12 +72,16 @@ Sending the runtime key to Product, Builder, Linux, or a coding-agent process wo
 - [ ] The executor rejects disallowed fields and over-limit serialized requests before network dispatch. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_request_allowlist_and_size_limit_fail_before_dispatch`.
 - [ ] The TypeSafe binding is limited to the `marr-server-dev` Mac dev server consumer and does not grant it to unrelated consumers or channels. Verify: `tests/ops/test_host_secret_contract.py::test_typesafe_key_is_dev_only_and_agent_processes_cannot_resolve_it`.
 - [ ] MARR owner docs distinguish typed judgments from generic completions and state the supported behavior accurately. Verify: doc writeback at `docs/MODEL_ACCESS_ROUTER/README.md :: Current State and Boundary`.
+- [ ] Product profile swaps preserve the request/client contract and reject unknown, unpinned, unsupported or wrong-owner profiles before dispatch.
+  - Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_supported_model_profile_swap_keeps_request_contract`
+  - Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_unconfigured_model_profile_fails_before_dispatch`
 
 ## How to Verify (Pre-Merge)
 
 - `pytest -q tests/model_access/test_typesafe_judgment_executor.py`
 - `pytest -q tests/ops/test_host_secret_contract.py::test_typesafe_key_is_dev_only_and_agent_processes_cannot_resolve_it`
-- `pytest -q tests/model_access/test_executor_api.py tests/model_access/test_remote_contract.py`
+- `pytest -q tests/model_access/test_typesafe_sdk_conformance.py`
+- `pytest -q tests/model_access/test_codex_executor_service.py tests/model_access/test_codex_remote_transport.py tests/model_access/test_executor_network_authorization.py`
 - `git diff --check`
 
 ## Out of Scope
@@ -55,6 +91,36 @@ Sending the runtime key to Product, Builder, Linux, or a coding-agent process wo
 ## Development Acceptance Gate
 
 The Product route remains disabled/unavailable after code merge until the parent Issue records `typesafe.system_one.product_dev_acceptance.v1` from one explicitly authorized synthetic dev call through the designated MARR Mac server, after owner confirmation of rotation and scoped host installation. The server owns the provider key and the Product caller uses its separate caller credential. The host receipt is not a CI test and does not activate test/prod.
+
+The host entrypoint defaults `MODEL_ACCESS_PRODUCT_TYPESAFE_MODE` to `disabled`. It recognizes
+`acceptance_once` and `accepted_dev` only inside the existing `dev` / `marr-server-dev` bootstrap
+identity. A pending or malformed host configuration performs no key lookup. The server resolves
+the fixed Keychain-only tuple itself; ambient `TYPESAFE_API_KEY` is not a credential source.
+`acceptance_once` consumes one process-local allowance before credential lookup, atomically even
+under concurrent requests; a timeout or rejection never rearms it. Restart is not recovery or
+retry authority. `accepted_dev` is permitted only after the separate Product receipt is approved.
+There is no checked-in activation, production binding or installation in this slice.
+
+The later operator acceptance plan is:
+
+1. After confirmed rotation and separately authorized scoped installation, start a temporary
+   MARR process through the existing `dev` / `marr-server-dev` bootstrap in `acceptance_once` mode.
+   Keep the normal Product runtime route disabled. Use the existing authenticated Product ingress
+   with its explicit `judgment` action and Product caller credential, separately from Builder.
+2. Once TSO-03 has delivered its consumer, invoke `IntentClassifierCognition.classify` exactly once
+   with a synthetic intent (for example, asking to compare two plans without writing). Supply its
+   actual Product MARR client through the existing injection/configuration seam; the call must reach
+   `judge_product_intent` → authenticated `/v1/judgment` → this pinned SDK adapter. Do not substitute
+   a direct adapter/helper smoke. Do not print the input, judgment or exception.
+3. Build the redacted `typesafe.system_one.product_dev_acceptance.v1` receipt from that same result:
+   schema/consumer ID, logical Product caller/profile ownership, selected and returned provider/model,
+   separate SDK version, question IDs, terminal outcome, confidence bucket, bounded usage, input
+   UTF-8 byte count and SHA-256, and a random correlation ID. Exclude prompts, source text, answers,
+   credentials, endpoints, host identity and raw errors. Review the allowlisted receipt before
+   publishing it on parent #5764.
+4. Stop the temporary process. An ambiguous result ends that authorization with no replay/fallback.
+   Approve the receipt before any separate change to `accepted_dev`; this plan authorizes no call,
+   installation or route change by itself. TSO-03 must bind the final exact consumer invocation.
 
 ## Related Docs
 
