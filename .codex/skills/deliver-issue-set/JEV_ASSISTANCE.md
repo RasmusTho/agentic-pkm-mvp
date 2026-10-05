@@ -28,8 +28,8 @@ Use the installed `jev-direct` skill and command when they are available and the
 permits the bounded call. That command owns credential retrieval, endpoint/model selection, size
 bounds, typed response validation, and its one-request/no-replay contract. This reference does not
 install or replace that integration or grant runtime access. When it is unavailable, continue the
-owning workflow with Codex; do not create another provider transport or ask the owner solely to
-enable this optional check.
+owning workflow immediately with the current agent's ordinary configured LLM and the same permitted
+evidence; do not create another Jev transport or ask the owner solely to enable this optional check.
 
 Store minimal input in the task's scratch directory. The following assembles a request from a JSON
 state file and the selected questions; question IDs are application keys, so every catalog question
@@ -53,8 +53,15 @@ For a source check, the state includes `claim` and `source`. For blocker or work
 use the evidence fields in the table rather than copying a whole issue transcript. Keep the returned
 answer transient for Codex's review; durable coordination receipts retain source refs and the
 reviewed rationale under the existing redaction policy, not request state, credentials, or raw
-provider output. A timeout or other ambiguous send is indeterminate: do not replay it or switch
-providers; continue the original diagnosis with Codex.
+provider output. A timeout or other ambiguous send is indeterminate: do not retry or replay Jev.
+The current agent uses its ordinary configured LLM for the same bounded question and continues the
+original diagnosis. Use this fallback for missing access, no answer, invalid output, or an unusable
+judgment. Distinguish the LLM's conclusion from a Jev answer; do not invent Jev probabilities.
+
+Evaluate usefulness through ordinary work when production is operational. A separate benchmark or
+evaluation campaign is not an adoption prerequisite. Keep useful source refs, reviewed rationale,
+answer origin (`jev` or the ordinary LLM), and available non-secret usage in existing task receipts.
+Ordinary repository checks and release gates remain with their owning workflows.
 
 ## Review and resume the owning workflow
 
