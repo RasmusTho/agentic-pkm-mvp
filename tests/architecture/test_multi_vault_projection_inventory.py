@@ -1140,7 +1140,6 @@ def test_the_separate_schema_planes_hold_no_durable_statement() -> None:
     )
     assert invisible == {
         "app/builderops/ckm/query_service.py": 1,
-        "app/builderops/ckm/semantic.py": 1,
         "app/builderops/ckm/store.py": 5,
         "app/builderops/control_plane/store.py": 1,
         "app/builderops/design_agent_adapters.py": 1,
