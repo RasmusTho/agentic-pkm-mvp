@@ -87,8 +87,10 @@ Codex reviews each answer against current sources and the mandate, connects the 
 the readiness diagnosis, pickup plan, and next authorized action. Jev probabilities never establish
 permission, `agent:ready`, merge, closure, or delivery. Exact lifecycle/CI/head/lease checks, Verify
 syntax and target execution, dependency ordering, slot arithmetic, and file/contract overlap stay
-with the existing tools. If Jev is unavailable, indeterminate, uncertain, or disagrees with the
-evidence, continue with Codex's assessment and the owning workflow; this adds no owner approval gate.
+with the existing tools. If Jev is unavailable, does not answer, is indeterminate, or gives an
+unusable judgment, continue immediately with the ordinary configured LLM and the same permitted
+evidence in the owning workflow. Preserve uncertainty and source disagreements; this adds no owner
+approval gate or separate evaluation campaign.
 
 ## Modes
 
