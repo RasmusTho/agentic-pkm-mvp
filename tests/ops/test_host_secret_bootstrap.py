@@ -339,6 +339,7 @@ def test_unknown_secret_kind_still_fails_closed(tmp_path: Path) -> None:
             for logical_id, binding, kind in contract.secret_definitions
         ),
         role_requirements=contract.role_requirements,
+        keychain_only_secrets=contract.keychain_only_secrets,
     )
 
     with pytest.raises(
@@ -1888,10 +1889,91 @@ def test_bws_real_sdk_schema_is_used_without_live_network(tmp_path):
 
 
 def test_legacy_child_does_not_inherit_bws_credentials(monkeypatch):
-    for name in ("BWS_ACCESS_TOKEN", "BWS_ACCESS_TOKEN_FILE", "CREDENTIALS_DIRECTORY"):
+    for name in ("BWS_ACCESS_TOKEN", "BWS_ACCESS_TOKEN_FILE", "CREDENTIALS_DIRECTORY", "TYPESAFE_API_KEY"):
         monkeypatch.setenv(name, "fixture-sensitive-surface")
     env = host_secret_bootstrap._clean_child_environment(host_secret_bootstrap.load_host_secret_contract())
-    assert all(name not in env for name in ("BWS_ACCESS_TOKEN", "BWS_ACCESS_TOKEN_FILE", "CREDENTIALS_DIRECTORY"))
+    assert all(name not in env for name in ("BWS_ACCESS_TOKEN", "BWS_ACCESS_TOKEN_FILE", "CREDENTIALS_DIRECTORY", "TYPESAFE_API_KEY"))
+
+
+@pytest.mark.parametrize("run_on_credential_unavailable", [False, True])
+def test_typesafe_server_bootstrap_scopes_and_cleans_provider_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run_on_credential_unavailable: bool,
+) -> None:
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
+    monkeypatch.setenv("TYPESAFE_API_KEY", "fixture-ambient-key-must-not-be-inherited")
+    fixture_key = "fixture-typesafe-server-provider-key"
+    paths: list[Path] = []
+
+    def lookup(service: str, account: str) -> str:
+        assert service == "yggdrasil.host-secrets"
+        assert account == "dev:marr-server-dev:typesafe.api-key"
+        return fixture_key
+
+    def runner(command: list[str], env: dict[str, str]) -> int:
+        assert command == ["fixture-marr-server"]
+        assert "TYPESAFE_API_KEY" not in env
+        path = Path(env[HOST_SECRET_RUNTIME_ENV_FILE])
+        paths.append(path)
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+        assert load_runtime_secret_values(env) == {"TYPESAFE_API_KEY": fixture_key}
+        return 0
+
+    assert run_with_host_secrets(
+        channel="dev", consumer="marr-server-dev", command=["fixture-marr-server"],
+        keychain_lookup=lookup, runner=runner, directory=tmp_path,
+        run_on_credential_unavailable=run_on_credential_unavailable,
+    ) == 0
+    assert len(paths) == 1
+    assert not paths[0].exists()
+
+
+@pytest.mark.parametrize(
+    ("platform", "channel"), [("linux", "dev"), ("darwin", "test"), ("darwin", "prod")]
+)
+@pytest.mark.parametrize("run_on_credential_unavailable", [False, True])
+def test_typesafe_server_bootstrap_refuses_before_lookup_or_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str, channel: str,
+    run_on_credential_unavailable: bool,
+) -> None:
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", platform)
+
+    def lookup(_service: str, _account: str) -> str:
+        pytest.fail("unauthorized bootstrap must not read a secret")
+
+    def runner(_command: list[str], _env: dict[str, str]) -> int:
+        pytest.fail("unauthorized bootstrap must not launch a consumer")
+
+    with pytest.raises(HostSecretBootstrapError):
+        run_with_host_secrets(
+            channel=channel, consumer="marr-server-dev", command=["fixture-marr-server"],
+            keychain_lookup=lookup, runner=runner, directory=tmp_path,
+            run_on_credential_unavailable=run_on_credential_unavailable,
+        )
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("value", [None, "fixture-malformed-typesafe-key\nvalue"])
+def test_typesafe_server_unavailable_key_never_unlocks_credential_free_launch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None,
+) -> None:
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
+    launched: list[list[str]] = []
+
+    def lookup(_service: str, account: str) -> str:
+        assert account == "dev:marr-server-dev:typesafe.api-key"
+        if value is None:
+            raise OSError("fixture keychain item is absent")
+        return value
+
+    with pytest.raises(HostSecretBootstrapError):
+        run_with_host_secrets(
+            channel="dev", consumer="marr-server-dev", command=["fixture-marr-server"],
+            keychain_lookup=lookup,
+            runner=lambda command, _env: launched.append(command) or 0,
+            directory=tmp_path, run_on_credential_unavailable=True,
+        )
+    assert launched == []
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_malformed_journal_never_reopens_admission(tmp_path):

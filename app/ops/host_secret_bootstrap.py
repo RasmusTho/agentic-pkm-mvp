@@ -447,6 +447,8 @@ def _resolve_consumer_environment(
             channel=channel,
             consumer=consumer,
         ):
+            if secret in contract.keychain_only_secrets and sys.platform != "darwin":
+                raise HostSecretBootstrapError("host secret provider unavailable")
             env_name = contract.binding_for(secret)
             kind = contract.kind_for(secret)
             account = contract.keychain_account(
@@ -516,6 +518,12 @@ def resolve_host_secret_values(
                     _declared_secrets(selected, channel=channel, consumer=consumer)
                     if selected.binding_for(secret) in values}
         if provider != "bws" or bws_reader is None:
+            raise HostSecretBootstrapError("host secret provider unavailable")
+        if any(
+            secret in selected.keychain_only_secrets
+            for declared_channel, declared_consumer, secret in selected.allowed
+            if declared_channel == channel and declared_consumer == consumer
+        ):
             raise HostSecretBootstrapError("host secret provider unavailable")
         if operation is not None:
             operation.require_active(channel)
@@ -761,9 +769,13 @@ def run_with_host_secrets(
         # optional secret must never be able to trigger it: that would let a
         # misconfigured optional credential silently de-provision a *required*
         # one declared for the same consumer (#4489). Only a required
-        # credential's unavailability is something a caller may opt into
-        # running without.
-        if selected_contract.is_optional(exc.credential_identity_ref):
+        # credential's unavailability may enter the typed-receipt handoff.
+        # A local-only provider key is required for consumer launch even when
+        # that handoff is enabled.
+        if (
+            selected_contract.is_optional(exc.credential_identity_ref)
+            or exc.credential_identity_ref in selected_contract.keychain_only_secrets
+        ):
             raise
         # Model Inquiry owns the durable typed terminal receipt. This opt-in
         # handoff carries only the declared logical identifier, never a value,

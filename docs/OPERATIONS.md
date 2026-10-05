@@ -5,9 +5,10 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-09-24 (only YouTube discovery scheduling for #3921 / PR #5616; BuilderOps Issue-delivery retains its 2026-09-17 review and other sections their 2026-09-13 review)
+Last reviewed: 2026-10-04 (TypeSafe credential boundary for #5770 only; YouTube discovery scheduling retains its 2026-09-24 review, BuilderOps Issue-delivery its 2026-09-17 review, and other sections their 2026-09-13 review)
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
 Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, Issue #5442 / PR #5450, Issue #5511 / PR #5513, merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-13
+TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json, tests/ops/test_host_secret_contract.py, tests/ops/test_host_secret_bootstrap.py, and Issue #5770 on 2026-10-04; injected sources only, with no live host or provider verification.
 # Operations Playbook
 
 Use this document as the operator-facing starting point for runtime operations.
@@ -431,6 +432,13 @@ Companion docs:
   acceptance is complete, the Mac mini remains Ollama/model-serving only; no Product inference is
   routed through Codex CLI, and no host login, CLI profile, service, or tailnet grant is implied by
   a merged code change.
+- The repository declares `typesafe.api-key` only for `dev` / `marr-server-dev` on Mac Keychain,
+  outside the BWS identity/grant map. Product and Builder retain separate caller credentials,
+  policies, and profiles and receive no provider key. These are repository proofs with injected
+  sources. TypeSafe runtime activation remains gated by owner-confirmed rotation, scoped MARR dev
+  host binding, explicit synthetic single-call authorization, and separate redacted Product/Builder
+  acceptance receipts on #5764. Follow `docs/LOCAL_SECRET_PROVISIONING/README.md :: Declared identifier
+  contract` and `docs/TYPESAFE_SYSTEM_ONE/README.md :: Data and Credential Boundary` for the details.
 - Governed channel deploys obtain `TTS_ENABLED` and `TTS_HOST_ROOT` only from the selected generated
   runtime-env snapshot. The canonical exporter publishes that file atomically; deploy preflight
   fail-closes unreadable, malformed, duplicate, or invalid enabled configuration before migration,

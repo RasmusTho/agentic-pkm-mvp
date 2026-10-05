@@ -20,6 +20,7 @@ _CONTRACT_FIELDS = frozenset(
         "consumers",
         "bws",
         "file_secrets",
+        "keychain_only_secrets",
     }
 )
 # `optional` is required on every declaration rather than defaulted (#4489):
@@ -67,6 +68,8 @@ _ENVIRONMENT_GRANTS = {
     "builderops-ckm-semantic": {"openai.api-key"},
     "heimdal-external-alerts": {"discord.webhook"},
 }
+_KEYCHAIN_ONLY_SECRETS = frozenset({"typesafe.api-key"})
+_KEYCHAIN_ONLY_GRANTS = frozenset({("dev", "marr-server-dev", "typesafe.api-key")})
 
 
 class UndeclaredSecretConsumerError(ValueError):
@@ -97,6 +100,8 @@ class HostSecretContract:
     # (#4512). Kept beside `secret_definitions` for the same reason as
     # `optional_secrets`.
     shared_key_domain_secrets: frozenset[str] = frozenset()
+    # Local-only declarations never acquire a BWS identity or reader grant.
+    keychain_only_secrets: frozenset[str] = frozenset()
 
     def bws_identity(self, *, channel: str, consumer: str, secret: str) -> tuple[str, str]:
         if secret == "postgres.password":
@@ -321,7 +326,10 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
             role_requirements.append((consumer, role, required_secrets))
     if not allowed:
         raise ValueError("host secret contract declares no consumers")
-    _validate_bws_contract(payload, allowed, declared_secrets)
+    _validate_keychain_only_contract(payload, allowed)
+    _validate_bws_contract(
+        payload, allowed - _KEYCHAIN_ONLY_GRANTS, declared_secrets - _KEYCHAIN_ONLY_SECRETS
+    )
     return HostSecretContract(
         keychain_service=payload["keychain_service"],
         keychain_account_template=payload["keychain_account_template"],
@@ -330,7 +338,38 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
         role_requirements=tuple(role_requirements),
         optional_secrets=frozenset(optional_secrets),
         shared_key_domain_secrets=frozenset(shared_key_domain_secrets),
+        keychain_only_secrets=_KEYCHAIN_ONLY_SECRETS,
     )
+
+
+def _validate_keychain_only_contract(
+    payload: dict[str, object], allowed: set[tuple[str, str, str]]
+) -> None:
+    expected_secret = {
+        "logical_id": "typesafe.api-key",
+        "child_binding": "TYPESAFE_API_KEY",
+        "kind": "api-key",
+        "optional": False,
+        "shared_key_domain": False,
+    }
+    expected_consumer = {
+        "consumer": "marr-server-dev",
+        "channels": ["dev"],
+        "secrets": ["typesafe.api-key"],
+        "role_requirements": {},
+    }
+    secrets = payload["secrets"]
+    consumers = payload["consumers"]
+    if (
+        payload["keychain_only_secrets"] != ["typesafe.api-key"]
+        or not isinstance(secrets, list)
+        or expected_secret not in secrets
+        or not isinstance(consumers, list)
+        or expected_consumer not in consumers
+        or {grant for grant in allowed if grant[2] in _KEYCHAIN_ONLY_SECRETS}
+        != _KEYCHAIN_ONLY_GRANTS
+    ):
+        raise ValueError("invalid host secret Keychain-only contract")
 
 
 def _validate_bws_contract(
