@@ -16,6 +16,60 @@ and active lease conflicts before a local mutation. Dedicated worktrees use
 the remote base as publication authority, so a stale shared local base ref is
 advisory only when the dedicated `HEAD` already contains the remote head.
 
+Ordinary preflight refuses every pending Git operation, including a merge, and
+requires `HEAD` to contain `origin/main` even when local `main` equals that ref.
+For an authorized additive integration of `main`, the explicit
+`--integration-merge-target <full-SHA> --integration-step stage|commit` path
+admits only one pending merge in the declared dedicated branch/worktree.
+Both steps require `--expected-branch`, `--expected-worktree`, `--base-branch main`,
+`--allow-dirty`, and `--require-dedicated-worktree`. The target captured before
+the merge must equal `MERGE_HEAD`, the local `refs/remotes/origin/main`, and the
+fresh exact `refs/heads/main` read from `origin`. `ORIG_HEAD` must still equal
+`HEAD`. Other operations, autostash, malformed/unknown probes, and identity or
+ref drift fail closed; existing lease-conflict checks still apply.
+
+The `stage` step checks resolved working content and previously staged content
+for conflict markers and whitespace errors. Both steps recompute builtin `ort`
+from the exact `HEAD` and target in a disposable bare repository, using source
+objects only as a read alternate. Source/global/system/template configuration,
+custom drivers, external diff/textconv, remotes and lazy fetch cannot reach this
+oracle; it does not write source refs, index, working files or objects. Only
+versioned attributes from the exact `HEAD` are selected with `--attr-source`,
+so builtin drivers such as `union` keep their automatic content protected.
+Git must support this explicit attribute source; an unsupported or failed
+oracle refuses integration. The entire index must match
+its automatic result outside the actual conflict paths, including file modes,
+additions, deletions and renames. Working files are read as physical bytes and
+modes, without Git stat hints, clean/process filters or normalization. Marker
+and whitespace checks compare temporary trees in the isolated repository;
+their temporary presentation/whitespace attributes force raw text and default
+whitespace checks, while retaining `HEAD`'s actual conflict-marker width.
+The effective widths are rechecked; an attribute-macro interaction that changes
+them when syntax suppression is removed is unsupported and refuses integration.
+Binary/diff attributes cannot hide unresolved text markers or whitespace
+errors. NUL-containing manual resolutions are unsupported and refuse both
+physical and staged conflict content; unchanged automatic binary paths remain
+eligible. These syntax overrides are installed after the merge oracle runs;
+its exact `HEAD` attributes still classify automatic content and conflicts.
+Integration never runs source `status` or `diff`. Since this path explicitly
+requires dirty work to be allowed, its `dirty_tree` census is `null` rather than
+running a source status probe. Extended index states (including assume-unchanged,
+skip-worktree and intent-to-add), gitlinks, special files, unsupported paths and
+working conversions that differ from indexed bytes refuse integration.
+Tracked working changes are limited to the actual conflict paths. Only those
+paths may remain unmerged in `stage` or receive a
+manually reviewed resolution. An `ours` merge or reset that drops automatic
+upstream content therefore cannot pass either step.
+The `commit` step additionally requires a resolved index and physical working
+bytes/modes equal to that index, so the commit uses the checked resolution.
+Re-run it after staging.
+Neither step permits push: use ordinary preflight without integration flags
+after the merge commit. The wrapper resolves its Python entrypoint beside its
+own source, so an approved merged wrapper can use `--cwd <exact-worktree>` to
+check a pending integration whose older checkout lacks this interface. This
+does not waive target freshness; preserve resolutions and restart an outdated
+pending merge through the integration workflow before using the new gate.
+
 ## Janitor
 
 The `janitor` command defaults to report-only planning. It identifies stale
