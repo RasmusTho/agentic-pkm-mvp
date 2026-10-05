@@ -22,10 +22,18 @@ state to the information needed for the typed question.
 
 Each invocation sends one external request. If it times out, errors, or exits before returning a
 validated result, treat the outcome as indeterminate because the request may have reached TypeSafe.
-Do not retry or replay it; surface the unavailable result and continue with the normal development
-workflow. Do not treat Jev output as approval for a write, deployment, Issue transition, or other
+Do not retry or replay Jev. The current agent falls back immediately to its ordinary configured
+Codex/Claude LLM with the same permitted evidence and question, and continues the owning workflow.
+Use the same fallback for missing access or an invalid/unusable answer. The CLI reports failure;
+the agent performs the fallback without creating another provider transport or asking the owner
+solely because Jev failed. Keep the fallback's reasoning distinct from a Jev answer and do not invent
+Jev probabilities. Do not treat Jev output as approval for a write, deployment, Issue transition, or other
 authority-bearing action. The local command does not configure Product, Builder, MARR, VM, or
 production routes.
+
+Learn from ordinary use when production is operational; a separate benchmark or evaluation campaign
+is not an adoption prerequisite. Keep ordinary repository checks and deployment gates with their
+owning workflows. Record useful answer origin and non-secret usage in existing task receipts.
 
 ## Workflow continuation
 
