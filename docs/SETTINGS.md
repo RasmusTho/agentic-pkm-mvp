@@ -83,6 +83,11 @@ Runtime settings cover the panel action catalog, watcher policy, watcher cadence
 `python -m app.cli settings-explain` is a narrow operator-facing diagnostics surface for environment/database state plus panel-action and watcher provenance/gating; it also reports the effective watcher/tuning values with their compiled source origin and active tier. It is not a full dump of every compiled runtime YAML.
 Compiled bundle files such as `runtime/settings/llm_routing.yaml` remain the direct artifact for the broader runtime payload, while `python -m app.cli settings-validate` checks registries, panel/watcher source artifacts, and any compiled-runtime unresolved-secret sentinels visible locally.
 They also include task-specific LLM routing policy via `<vault>/settings/llm_routing.md` -> `runtime/settings/llm_routing.yaml`.
+Named Product model profiles are declared alongside that shared task policy, using model-registry IDs.
+Each clone selects its profile independently through `llmRoutingProfile` in its gitignored
+`<vault>/settings/local.md` (default: `default`). This lets a work satellite select different chat,
+reasoning, or eval models without changing another clone. The selection does not change embedding
+identity or Builder Model Inquiry routing.
 The provider-neutral reasoning path and `settings-explain` resolve the same compiled
 `default_reasoning` route. During this one-release compatibility window,
 `REASONING_MODEL` may replace that route's model only; it never selects or changes
@@ -226,6 +231,7 @@ The registry lists canonical event IDs, producers/consumers, and optional schema
 - Use `python -m app.cli settings-explain --json` to inspect environment/database resolution plus watcher/panel provenance and gate state.
 - When changing a registry or settings artifact, update the owning doc and validation expectations in the same change.
 - Treat `<vault>/settings/llm_routing.md` as the user-facing source of truth for chat, reasoning, embedding, and eval model choices. The compiler derives providers from the model registry.
+- Set `llmRoutingProfile` in clone-local `settings/local.md` to choose among named Product chat profiles declared in `llm_routing.md`; use `default` to preserve the shared policy. Do not put credentials or endpoint values in this selector.
 - Migrate an existing vault only through the explicit governed command:
   `python -m app.cli settings migrate-location --vault-root <path>`. The command
   checks WriteGuard before its first mutation, refuses canonical/legacy

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GlobalSettings(BaseModel):
@@ -122,6 +122,28 @@ class LLMRoutingSettings(BaseModel):
             description="Require fallback to preserve embedding identity compatibility.",
         )
 
+    class RoutingProfile(BaseModel):
+        """Clone-selectable Product model targets; shared fallback policy is inherited."""
+
+        model_config = ConfigDict(extra="forbid")
+
+        default_chat: "LLMRoutingSettings.RouteTarget | None" = Field(
+            default=None,
+            description="Optional primary-target override for ordinary chat/completion work.",
+        )
+        default_reasoning: "LLMRoutingSettings.RouteTarget | None" = Field(
+            default=None,
+            description="Optional primary-target override for reasoning-heavy work.",
+        )
+        default_eval: "LLMRoutingSettings.RouteTarget | None" = Field(
+            default=None,
+            description="Optional primary-target override for evaluation work.",
+        )
+        tasks: Dict[str, "LLMRoutingSettings.RouteTarget"] = Field(
+            default_factory=dict,
+            description="Per-task primary-target overrides; each target must use a registry model_id.",
+        )
+
     default_provider: str | None = Field(
         default=None,
         description="Default LLM provider override for router (vault-configurable).",
@@ -159,6 +181,13 @@ class LLMRoutingSettings(BaseModel):
     tasks: Dict[str, "LLMRoutingSettings.TaskPolicy"] = Field(
         default_factory=dict,
         description="Per task_kind routing policies.",
+    )
+    profiles: Dict[str, "LLMRoutingSettings.RoutingProfile"] = Field(
+        default_factory=dict,
+        description=(
+            "Named Product model-target profiles selected clone-locally by "
+            "the vault-local llmRoutingProfile setting. Shared fallback policy is retained."
+        ),
     )
 
 
@@ -531,6 +560,11 @@ class InstanceSettings(BaseModel):
     environment: Literal["dev", "prod", "test"] = Field(
         default="prod",
         description="Runtime environment; 'prod' is production-safe default, 'dev' enables development features.",
+    )
+    llm_routing_profile: str = Field(
+        default="default",
+        min_length=1,
+        description="Clone-local Product model profile compiled from llmRoutingProfile in settings/local.md.",
     )
     vault: VaultSettings = Field(
         default_factory=VaultSettings,

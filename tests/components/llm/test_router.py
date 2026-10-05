@@ -6,9 +6,9 @@ import pytest
 
 from app.components.llm.fabric import get_embeddings_client
 from app.components.embeddings.legacy import EmbeddingIdentity
-from app.components.llm.router import LLMRoute, LLMRouter, LLMTaskIntent
+from app.components.llm.router import LLMRoute, LLMRouteError, LLMRouter, LLMTaskIntent
 from app.config import llm as llm_config
-from app.settings.models import EmbeddingProfiles, LLMRoutingSettings, SettingsBundle
+from app.settings.models import EmbeddingProfiles, InstanceSettings, LLMRoutingSettings, SettingsBundle
 from llm_contract import (
     CapabilityProvenance,
     ModelAccessRoute,
@@ -604,6 +604,140 @@ def test_router_uses_settings_task_policy(monkeypatch, clean_llm_env) -> None:
     described = router.describe_intent(LLMTaskIntent(task_kind="plan"))
     assert described["policy"]["primary"]["model_id"] == "openai.chat.gpt_5_4"
     assert described["policy"]["fallback"]["model_id"] == "ollama.chat.llama3_1_8b"
+
+
+def test_instance_routing_profile_overrides_shared_policy(monkeypatch, clean_llm_env) -> None:
+    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
+    shared_policy = LLMRoutingSettings(
+        default_reasoning=LLMRoutingSettings.TaskPolicy(
+            primary=LLMRoutingSettings.RouteTarget(model_id="ollama.chat.llama3_1_8b")
+        ),
+        tasks={
+            "qa": LLMRoutingSettings.TaskPolicy(
+                primary=LLMRoutingSettings.RouteTarget(model_id="ollama.chat.llama3_1_8b"),
+                fallback=LLMRoutingSettings.FallbackPolicy(
+                    mode="local",
+                    model_id="ollama.chat.llama3_1_8b",
+                ),
+            )
+        },
+        profiles={
+            "work": LLMRoutingSettings.RoutingProfile(
+                default_chat=LLMRoutingSettings.RouteTarget(
+                    model_id="openai.chat.gpt_6_luna"
+                ),
+                default_reasoning=LLMRoutingSettings.RouteTarget(
+                    model_id="openai.chat.gpt_6_luna"
+                ),
+            )
+        },
+    )
+
+    default_router = LLMRouter(
+        settings=SettingsBundle(instance=InstanceSettings(), llm_routing=shared_policy)
+    )
+    work_router = LLMRouter(
+        settings=SettingsBundle(
+            instance=InstanceSettings(llm_routing_profile="work"),
+            llm_routing=shared_policy,
+        )
+    )
+    chat_intent = LLMTaskIntent(task_kind="qa")
+    reasoning_intent = LLMTaskIntent(task_kind="plan")
+    route = work_router.route(chat_intent)
+    candidates = work_router.candidate_routes(chat_intent)
+    described = work_router.describe_intent(chat_intent)
+
+    assert (default_router.route(chat_intent).provider, default_router.route(chat_intent).model) == (
+        "ollama",
+        "llama3.1:8b",
+    )
+    assert (route.provider, route.model) == ("openai", "gpt-6-luna")
+    assert route.reason == "settings-profile:work"
+    assert (default_router.route(reasoning_intent).provider, default_router.route(reasoning_intent).model) == (
+        "ollama",
+        "llama3.1:8b",
+    )
+    assert (work_router.route(reasoning_intent).provider, work_router.route(reasoning_intent).model) == (
+        "openai",
+        "gpt-6-luna",
+    )
+    assert [(item.provider, item.model) for item in candidates] == [
+        ("openai", "gpt-6-luna"),
+        ("ollama", "llama3.1:8b"),
+    ]
+    assert described["routing_profile"] == "work"
+    assert described["configured_via"] == "settings-profile:work"
+
+
+def test_unknown_instance_routing_profile_fails_closed(clean_llm_env) -> None:
+    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
+
+    router = LLMRouter(
+        settings=SettingsBundle(
+            instance=InstanceSettings(llm_routing_profile="typo-work")
+        )
+    )
+
+    with pytest.raises(LLMRouteError, match="Unknown Product routing profile"):
+        router.route(LLMTaskIntent(task_kind="chat"))
+
+
+def test_router_uses_compiled_instance_profile(clean_llm_env) -> None:
+    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
+    bundle = SettingsBundle(
+        instance=InstanceSettings(llm_routing_profile="work"),
+        llm_routing=LLMRoutingSettings(
+            profiles={
+                "work": LLMRoutingSettings.RoutingProfile(
+                    default_chat=LLMRoutingSettings.RouteTarget(
+                        model_id="openai.chat.gpt_6_luna"
+                    )
+                )
+            }
+        )
+    )
+
+    route = LLMRouter(settings=bundle).route(LLMTaskIntent(task_kind="chat"))
+
+    assert (route.provider, route.model) == ("openai", "gpt-6-luna")
+    assert route.reason == "settings-profile:work"
+
+
+def test_instance_profile_does_not_override_embedding_identity(clean_llm_env) -> None:
+    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
+    routing = LLMRoutingSettings(
+        profiles={
+            "work": LLMRoutingSettings.RoutingProfile(
+                default_chat=LLMRoutingSettings.RouteTarget(
+                    model_id="openai.chat.gpt_6_luna"
+                )
+            )
+        }
+    )
+    expected = LLMRouter(
+        settings=SettingsBundle(
+            instance=InstanceSettings(llm_routing_profile="default"),
+            llm_routing=routing,
+        )
+    ).route(
+        LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    )
+
+    route = LLMRouter(
+        settings=SettingsBundle(
+            instance=InstanceSettings(llm_routing_profile="work"),
+            llm_routing=routing,
+        )
+    ).route(
+        LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    )
+
+    assert (route.provider, route.model, route.embedding_identity) == (
+        expected.provider,
+        expected.model,
+        expected.embedding_identity,
+    )
 
 
 def test_router_prefers_selected_model_id_over_env_defaults(monkeypatch, clean_llm_env) -> None:

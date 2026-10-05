@@ -5,8 +5,17 @@ from __future__ import annotations
 import inspect
 
 import app.builderops.design_run_contract as design_run_contract
+import app.builderops.model_access_resolver as model_access_resolver
 from app.builderops.design_run_contract import CuratedDesignBrief, DesignSourceRef, parse_design_run_contract
 from app.builderops.model_inquiry_contract import ModelTurnResponse
+
+
+def test_product_routing_profile_does_not_change_model_inquiry_target() -> None:
+    source = inspect.getsource(model_access_resolver)
+
+    assert "llmRoutingProfile" not in source
+    assert "app.components.llm.router" not in source
+    assert "fallback_forbidden" in source
 
 
 def test_design_contract_reuses_hashing_without_inheriting_inquiry_roles() -> None:

@@ -465,13 +465,14 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "reaching this line. Line drifted 716 -> 841 -> 843 -> 924 -> 928 -> 934 -> 940 -> 944 (site unchanged) when "
         "#3452 added conflict-quarantine receipt policy above the manager."
     ),
-    ("app/vault/settings_service.py", 617): (
+    ("app/vault/settings_service.py", 629): (
         "guarded: SettingsService.update_setting asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(_SETTINGS_WRITE_ACTION) "
         "earlier in the same method before persist=True reaches this write. "
-        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 (site unchanged); re-pinned per this census's "
+        "Line drifted 348 -> 508 -> 589 -> 614 -> 616 -> 617 -> 629 (site unchanged); re-pinned per this census's "
         "own directly-related-repair convention when YSS-01 (#3916) added the "
-        "youtubeSync.* SettingDefinitions and the scaffold action constant "
+        "youtubeSync.* SettingDefinitions and the scaffold action constant, "
+        "then MARR-11 (#5794) added a clone-local model-profile definition "
         "earlier in the file."
     ),
     ("app/instance/vault_registry.py", 2977): (
@@ -502,9 +503,10 @@ WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "nested canonical prompt seed, #3452 added conflict-quarantine receipt policy, and "
         "SETTINGS-05C added the activation seam above the manager."
     ),
-    ("app/vault/settings_service.py", 696): (
+    ("app/vault/settings_service.py", 708): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
-        "assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) before the O_EXCL scaffold call."
+        "assert_writes_allowed(_SETTINGS_SCAFFOLD_ACTION) before the O_EXCL scaffold call. "
+        "Line moved by the MARR-11 (#5794) model-profile SettingDefinition."
     ),
 }
 
