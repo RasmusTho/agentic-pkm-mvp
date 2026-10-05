@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-03 (bounded MARR-06 host-acceptance and MARR-07 release-channel review; repository and accepted GitHub receipt evidence only, no dev/test/prod deployment or vault-data verification)
+Last reviewed: 2026-10-05 (owner decision and read-only channel/model-route readback; repository, GitHub receipt, and live runtime evidence; no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -23,7 +23,7 @@ or channel qualification was accessed.
 Last verified against (governed vault profile): accepted parent #4944 and PRs #5731, #5733, and
 #5735; exact child heads, merge SHAs, Verify coverage, CI, and receipts are recorded on the parent.
 Repository and GitHub evidence only; no live vault contents or deployed runtime were exercised.
-Last live runtime verification: 2026-08-22 (new-host topology; see `docs/ENVIRONMENTS.md`)
+Last live runtime verification: 2026-10-05 (read-only Product route/health readback; see Issue #5618; no provider call or live mutation)
 Last verified against (owner facts): Issue #5404, `app/builderops/owner_fact_producers.py`,
 `app/builderops/control_plane/store.py`, `tests/builderops/test_owner_fact_producers.py`
 and `tests/api/test_devui_owner_facts.py`; isolated PostgreSQL production-path proof, 2026-09-14.
@@ -54,6 +54,14 @@ Issue-specific external-agent handoff and explicitly governed PR observations th
 read-only fields. This does not activate browser launch/control or establish a deployed result;
 the current boundary is in [DevUI current state](DEVUI.md#current-state-and-target).
 Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md, docs/OPERATIONS.md, docs/HUMAN-FLOWS.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/CONCEPTS/MOMENT_ARTIFACT_CONTRACT.md, docs/CONCEPTS/RELEVANCE_EVALUATOR_CONTRACT.md, docs/CONCEPTS/REACHOUT_AND_SCARCITY_GATE_CONTRACT.md, docs/CONCEPTS/AGENT_MEMORY_AND_KNOWLEDGE_CONTRACT.md, docs/plans/CONTEXTUAL_RELEVANCE_ENGINE.md, docs/CKM_COCKPIT_DIRECTION_B/README.md, docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md, app/agent_memory/provisional_recall.py, app/agents/ask/graph.py, app/relevance/evaluator.py, app/relevance/materialization.py, app/relevance/attention_loop.py, app/relevance/now_surface.py, app/instance/filesystem_identity.py, app/instance/vault_registry.py, app/dispatcher/verification_api.py, app/dispatcher/verification_runtime.py, scripts/select_pr_tests.py, companion-ui/companion-app/companion_ui/workspace/now_surface.py, tests/agent_memory/test_provisional_memory_recall.py, tests/agent_memory/test_provisional_memory_call_sites.py, tests/relevance/test_vault_native_moments.py, tests/relevance/test_attention_loop_runtime.py, merged PRs #1948/#1977/#2092/#2097/#2098/#2115/#2119/#2127/#2128/#2129/#2131/#2133/#2135/#2137/#2140/#2142/#2636/#2642/#2643/#2645/#2656/#2678/#2686/#2689/#2692/#3730/#4224/#4244/#4420/#4424, issue #3720, PRs #3743/#4416, closed parent issue #4080, live issue #3603, and current repo state at `origin/main` `f0bafe6e79f3cc1a087b2c2fcbe40450c8302da2` on 2026-07-30; DevUI runtime/receipt boundary: Issue #5476, app/builderops/devui_runtime.py, app/ops/devui_vm102_runtime_receipts.py (2026-09-11, repository-only)
+
+### Production Model Access decision and readiness (2026-10-05)
+
+The owner decision recorded in [Issue #5618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5989039472) puts production in scope: Product chat/planning (`decide` and `plan`) should use the VLAN-only Model Access Router path to the Luna Codex CLI executor, with Ollama reserved for embeddings. This supersedes the 2026-10-04 note that production was excluded. It is the product outcome, not a finding that Luna is technically unsuitable. It does not qualify a production caller identity or replace the existing credential and release gates; live Product `llm_routing` settings remain the route authority.
+
+The same 2026-10-05 readback found that `ygg-prod` still reports `required_ok=false` and `mock` for `decide`, `plan`, and `embed`; its embedding index has 10 objects without vectors, and the production Ollama container has no model installed. No production MARR caller identity or binding was present. PR #5798 adds repository support for production caller binding, but does not activate a live route. `ygg-test` has only API and DB containers, with no worker or watcher, so candidate-bound test verification is not available. The latest dev readback reported container health only, not functional application health, and no MARR caller bindings.
+
+Production remains on the current `main`-tracking deployment baseline; the `stable` ref is dormant. Before promotion, qualify the production caller identity and BWS deployment boundary, obtain candidate-bound test verification (or follow the governed bypass procedure), and prepare the exact release plan. Forward-only migrations require acknowledgment for that exact plan. Ollama model installation and embedding-index rebuild are separate operational steps. The live readback and decision do not claim that any of these actions occurred.
 
 ### Live environment baseline (2026-08-22)
 
