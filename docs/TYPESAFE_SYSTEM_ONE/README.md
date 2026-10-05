@@ -1,10 +1,10 @@
-State: Capability specification linked to parent Issue #5764; neutral contract slice #5765 and server credential-binding slice #5770 have repository implementations. Consumer runtime integrations and live provider acceptance remain pending. Owner authorization: user request on 2026-10-04 to use Jev in both Product and Builder paths, with TypeSafe skills available to Codex and Claude Code. The first bounded consumers are Product canvas intent classification and Builder CKM semantic association.
+State: Capability specification linked to parent Issue #5764; TSO-00/#5769 and TSO-01/#5765 are delivered, and server credential-binding slice #5770 has a repository implementation. Consumer runtime integrations and Product/Builder live-call acceptance remain pending; direct-agent TSO-06/#5778 is delivered (local Codex/Claude installation and synthetic Jev call verified). Owner authorization: user request on 2026-10-04 to use Jev in Product and Builder paths and direct development calls from Codex and Claude. The first bounded consumers are Product canvas intent classification and Builder CKM semantic association.
 Doc role: Capability specification
 Authority: Defines the target contract for bounded TypeSafe System One judgments in Yggdrasil. MARR owns one runtime provider key; Product and Builder keep separate caller policy, adapters, caller credentials, model profiles, and acceptance.
 Owner: Capability subsystem; Product LLM Runtime/MARR and Builder System/CES are collaborators.
 Temporal class: strategic
 Source of truth: this specification, the linked owner documents, implementation, and live Issues/receipts
-Last reviewed: 2026-10-04
+Last reviewed: 2026-10-05
 
 # TypeSafe System One Judgments
 
@@ -18,7 +18,7 @@ Add a bounded way for Yggdrasil code to ask Jev typed semantic questions and rec
 - Product collaborator: Product LLM Runtime and the Model Access Router, which own Product route policy and the Mac-executor boundary.
 - Builder collaborator: Builder System / CES and CKM, which own Builder route policy and candidate-evidence writes.
 - Integration collaborator: host-secret contracts and the Mac Keychain provisioning owner; the existing Linux BWS scope is unchanged.
-- Codex and Claude Code: their TypeSafe skills support authoring without changing either coding agent's underlying LLM. A direct one-shot development call has separate authority and credential handoff (#5778); the runtime binding supplies neither.
+- Codex and Claude Code: their TypeSafe skill remains authoring guidance. TSO-06 adds a separate local one-shot development command; it does not change either coding agent's underlying LLM or grant a runtime credential binding.
 
 ## Capability Contract
 
@@ -48,9 +48,10 @@ These pilots do not make TypeSafe the default chat/completion provider. Product 
 - Both adapters reject disallowed fields and requests above their byte limits before dispatch. Tests cover payload allowlists, oversize rejection, and receipt redaction.
 - `typesafe.api-key` is declared for exactly `marr-server-dev` on `dev`, using the existing host-local Mac Keychain resolver. The explicit `keychain_only_secrets` declaration excludes it from BWS identities and grants. Production resolution refuses Linux, test, prod, Product, Builder, Codex, and Claude runtime access to this provider key.
 - Product and Builder retain separate caller policy, caller credentials, profile ownership, fallback behavior, and receipts. Neither resolves or receives the server-owned provider key.
-- The current Bitwarden contract fixes two projects and three machine accounts; the non-prod reader is shared by ygg-dev and ygg-test. The TypeSafe provider key stays outside both BWS projects and does not widen that reader or any existing grant. Plan, project, and account changes remain outside this capability.
-- Before any live use, require owner confirmation of rotation after the earlier exposure, a scoped MARR dev host binding, explicit one-call authorization, synthetic input, and a redacted receipt. Runtime routes stay off until the separate Product and Builder acceptance receipts are approved.
-- Codex and Claude Code use the installed TypeSafe skill to author integrations. Their runtime consumer identities have no TypeSafe provider-key grant. Tests use injected fakes. Optional direct calls require their separately governed one-shot development credential handoff.
+- The current Bitwarden contract fixes two projects and three machine accounts; the non-prod reader is shared by ygg-dev and ygg-test. The runtime TypeSafe declaration is excluded from the committed BWS identities and grants; it does not widen that reader or any existing grant. Plan, project, and account changes remain outside this capability.
+- Before any live runtime use, require owner confirmation of rotation after the earlier exposure, a scoped MARR dev host binding, explicit one-call authorization, synthetic input, and a redacted receipt. Runtime routes stay off until the separate Product and Builder acceptance receipts are approved.
+- The separate TSO-06/#5778 direct-agent record reports that on 2026-10-04, the existing `typesafe.api-key` item was confirmed readable from the local development host through that reader in the `non-prod` project. This task does not change BWS grants, create identities, or install the direct-agent tool on VMs. The shared project is a coarse access boundary, not per-consumer isolation; do not assume this helper prevents another process with the same BWS reader from resolving the item.
+- Codex and Claude use TSO-06's `jev-direct` skill with the shared `~/.local/bin/jev-direct` command; the skill is copied to `~/.codex/skills/jev-direct/` and `~/.claude/skills/jev-direct/`. The command resolves `typesafe.api-key` internally through the existing local secret helper and returns only validated typed answers. Their general agent environments receive no key. Tests use fake secret/provider boundaries; a deliberate live development call is separately initiated and redacted. This local tool is not installed on VMs.
 - TypeSafe's current public materials state input pricing of $42 per billion tokens and free output tokens; costs and credit terms must be checked against the account before live use. The specification does not authorize a plan upgrade.
 
 ## Cross-Task Invariants / Interaction Safety
@@ -60,7 +61,7 @@ These pilots do not make TypeSafe the default chat/completion provider. Product 
 3. Builder CKM supplies deterministic candidate IDs; an answer outside that candidate set is rejected. Provider failure, route mismatch, stale source snapshot, or low confidence produces zero new edges and no watermark advancement.
 4. A stored credential is not evidence of a configured route. A configured route is not evidence of a successful call. Repository tests use fakes; live provider receipts are separately redacted and dev-scoped.
 5. No runtime TypeSafe provider key is granted to Linux or a BWS reader. Missing or unauthorized MARR server binding makes the operation unavailable without broadening access or falling back.
-6. Codex/Claude skill installation is independent of app runtime configuration. An agent's use of the skill never changes the coding-agent model or grants the agent new tool authority.
+6. Codex/Claude skill installation is independent of app runtime configuration. TSO-06's local tool provides one bounded development judgment; it never changes the coding-agent model, returns the raw key, or configures Product, Builder, MARR, VM, or production routes.
 
 ## Implementation Tasks
 
@@ -72,6 +73,7 @@ GitHub parent validation hub: [Issue #5764](https://github.com/RasmusTho/agentic
 4. [Add TypeSafe to the Mac Model Access Router](ADD_TYPESAFE_TO_MAC_EXECUTOR.md) — TSO-02; [Issue #5766](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5766); bounded MARR server operation with separate Product and Builder caller policies; server-only Keychain credential binding.
 5. [Use Jev for Product canvas intent classification](MIGRATE_PRODUCT_INTENT_CLASSIFIER.md) — TSO-03; [Issue #5767](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5767); preserve `UNKNOWN`, confirmation, and write-guard behavior.
 6. [Use Jev for Builder CKM association](MIGRATE_BUILDER_CKM_ASSOCIATION.md) — TSO-04; [Issue #5768](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5768); deterministic candidate selection and Builder-owned caller policy/credentials; the provider key stays on MARR.
+7. [Enable direct Jev calls for Codex and Claude](ENABLE_DIRECT_AGENT_JEV_CALLS.md) — TSO-06; [Issue #5778](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5778); bounded local development command and user-level skills, independent of runtime routing.
 
 ## Capability Acceptance
 
@@ -79,14 +81,14 @@ GitHub parent validation hub: [Issue #5764](https://github.com/RasmusTho/agentic
 - [ ] The MARR Product operation dispatches exactly once to TypeSafe, rejects unsupported route/capability requests before inference, and never logs state or credentials. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_executor_dispatches_one_bounded_system_one_request`.
 - [ ] Product intent classification maps unavailable/uncertain answers to `UNKNOWN` and does not bypass confirmation or write guards. Verify: `tests/components/llm/test_intent_classifier_typesafe.py::test_uncertain_judgment_remains_unknown_without_authorizing_write`.
 - [ ] Builder CKM only selects supplied candidates; degraded, stale, or below-floor answers write zero edges. Verify: `tests/builderops/ckm/test_semantic_typesafe.py::test_invalid_or_low_confidence_choice_writes_zero_edges`.
-- [ ] Codex and Claude skill setup remains authoring guidance and does not configure either runtime key or replace either coding-agent model. Verify: doc writeback at `docs/TYPESAFE_SYSTEM_ONE/README.md :: Data and Credential Boundary`.
+- [ ] Codex and Claude retain their coding models; the separate local TSO-06 command returns only bounded typed answers and does not configure runtime routes or expose the key in agent output. Verify: doc writeback at `docs/TYPESAFE_SYSTEM_ONE/README.md :: Data and Credential Boundary`.
 - [ ] Product dev receipt records provider/model, outcome, confidence bucket, usage, and input size/hash without prompts, state text, answer values, credentials, endpoint, or host identity. Verify: runtime receipt: `typesafe.system_one.product_dev_acceptance.v1`.
 - [ ] Builder dev receipt records provider/model, outcome, confidence bucket, usage, and input size/hash without prompts, state text, answer values, credentials, endpoint, or host identity. Verify: runtime receipt: `typesafe.system_one.builder_dev_acceptance.v1`.
 - [ ] Product and Builder owner docs report supported behavior only after the corresponding code and live acceptance receipts. Verify: doc writeback at `docs/MODEL_ACCESS_ROUTER/README.md :: Current State and Boundary` and `docs/CAPABILITY_KNOWLEDGE_MODEL/SEMANTIC_EVIDENCE_ASSOCIATION.md :: What This Task Does`.
 
 ## Validation and Acceptance Path
 
-Each child proves its named contract with deterministic tests and posts a concise receipt to the parent validation Issue. Live TypeSafe calls are not part of ordinary PR tests. The parent remains open until the MARR dev host binding is installed after owner-confirmed rotation, both dev callers have separate policy, caller credential, and model-profile proofs, the two consumer pilots satisfy their current owner contracts, and the dev-only receipts pass secret/data redaction checks. Product release and production activation remain under the existing release-channel/operator gates.
+Each child proves its named contract with deterministic tests and posts a concise receipt to the parent validation Issue. Live TypeSafe calls are not part of ordinary PR tests. After TSO-06 is installed on the local development host, its separate direct-agent smoke is one synthetic development call with a redacted receipt; it does not replace or satisfy either runtime consumer acceptance. The parent remains open until the MARR dev host binding is installed after owner-confirmed rotation, both dev callers have separate policy, caller credential, and model-profile proofs, the two consumer pilots satisfy their current owner contracts, and the dev-only receipts pass secret/data redaction checks. Product release and production activation remain under the existing release-channel/operator gates.
 
 ### TypeSafe development host acceptance
 

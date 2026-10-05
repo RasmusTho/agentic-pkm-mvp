@@ -43,6 +43,7 @@ guard contract, and run `GITHUB_BASE_REF=origin/main python3
 scripts/docs_guard.py` before publishing changes to this enforcement surface.
 
 Git lifecycle enforcement in `scripts/git_hygiene.py`,
-`scripts/git_archive_retirement.py` and `scripts/agent_worktree.py` is paired with
+`scripts/git_archive_retirement.py`, `scripts/agent_worktree.py`, and the
+publication wrapper `scripts/agent_workspace_preflight.sh` is paired with
 `docs/development/GIT_HYGIENE.md`. Changes to these governance scripts require that
 owner document in the same diff; they do not imply Product/Runtime temporal changes.
