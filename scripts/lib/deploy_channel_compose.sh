@@ -167,12 +167,31 @@ _deploy_channel_runtime_env_aliases_model_access_file() {
 deploy_channel_model_access_preflight() {
   local runtime_env_file="${1:?governed runtime env file required}"
   local model_access_env_file="${2:?model-access env file required}"
+  local key
+  local -a model_access_keys=(
+    MODEL_ACCESS_CODEX_VLAN_ENDPOINT
+    MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE
+    MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT
+    MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY
+  )
 
   if _deploy_channel_runtime_env_aliases_model_access_file \
     "${runtime_env_file}" "${model_access_env_file}"; then
     _deploy_channel_model_access_config_blocked runtime_env_alias
     return $?
   fi
+
+  # Rollback must remain available when optional new-route configuration is
+  # absent or malformed. Do not consume those references during recovery, and
+  # clear ambient values so a previous-good mock image receives no MARR path.
+  if [ "${action:-deploy}" = "rollback" ]; then
+    for key in "${model_access_keys[@]}"; do
+      export "${key}="
+    done
+    echo "model-access runtime env preflight: skipped reason=rollback" >&2
+    return 0
+  fi
+
   deploy_channel_model_access_runtime_env_preflight "${model_access_env_file}"
 }
 

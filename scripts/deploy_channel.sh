@@ -128,8 +128,9 @@ image_repository="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}"
 health_timeout="${DEPLOY_HEALTH_TIMEOUT_SECONDS:-90}"
 
 # Gate Product-channel MARR bindings before creating the channel lock, materializing
-# migration files, or preparing host deployment state. The Compose helper
-# repeats the check immediately before it snapshots the runtime env for Compose.
+# migration files, or preparing host deployment state. Rollback keeps recovery
+# available by pinning the optional MARR references empty; the Compose helper
+# repeats that action or deploy validation before it snapshots the runtime env.
 if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
   _deploy_channel_resolve_runtime_env_file "${ROOT}" "${channel}" "${pin_file}"
   deploy_channel_model_access_preflight \
