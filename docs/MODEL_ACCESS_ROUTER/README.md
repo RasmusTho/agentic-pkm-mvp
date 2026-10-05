@@ -1,12 +1,12 @@
-State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-10-03 for the VLAN-only Ygg host profile, provider-neutral capability health, and distinct one-shot acceptance attempts. MARR-01–05, the MARR-08 completion API, generic MARR-09 path selection, and MARR-10 provider-neutral capability health are delivered. VLAN-only MARR-06 designated-host acceptance has a validator-accepted v3 receipt in Issue #5624; staged MARR-07 rollout remains pending. Parent validation Issue #5618 is open and blocked for the remaining integrated capability and rollout gates.
+State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-10-03 for the VLAN-only Ygg host profile, provider-neutral capability health, and distinct one-shot acceptance attempts. MARR-01–05, the MARR-08 completion API, generic MARR-09 path selection, MARR-10 provider-neutral capability health, and MARR-11 clone-local Product model profiles are delivered. VLAN-only MARR-06 designated-host acceptance has a validator-accepted v3 receipt in Issue #5624; staged MARR-07 rollout remains pending. Parent validation Issue #5618 is open and blocked for the remaining integrated capability and rollout gates.
 Doc role: Capability specification
 Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, and ADR-0066 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
 Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its isolated compatibility path
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: ADR-0066, child Issues, implementation, and acceptance receipts
-Last reviewed: 2026-10-04
-Last verified against: Issue #5772 dev/test Compose integration tests, the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066, and the checked-in MARR task specifications.
+Last reviewed: 2026-10-05
+Last verified against: Issue #5794 clone-local routing-profile tests, Issue #5772 dev/test Compose integration tests, the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066, and the checked-in MARR task specifications.
 Parent issue: #5618 (open, agent:blocked); validation hub, never a pickup task.
 
 # Model Access Router
@@ -33,6 +33,7 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 - MARR-01 adds neutral route/receipt provenance contracts and `app.model_access.router.ModelAccessRouter`, which composes a caller-supplied owner resolver/profile with a read-only adapter descriptor lookup. MARR-02 adds `app.model_access.adapter_factory.ModelAccessAdapterFactory`, driven by `docs/settings/models/adapters.yaml` and the provider census, plus the bounded `app.model_access.codex_cli.CodexCliExecutor`.
 - MARR-08 (#5635) adds the bounded `POST /v1/complete` executor API and Product-side client. MARR-03 adds authenticated, no-inference `POST /v1/preflight` for safe remote fallback. MARR-04 adds authenticated, read-only `POST /v1/catalog`; it returns sanitized Codex account or local Ollama descriptors and a content hash, never a model response.
 - MARR-05 moves Product chat, reasoning, reflection, constrained completion, evaluation, and health route inspection through the shared facade while retaining `LLMRoute` compatibility. The facade keeps settings as Product route authority, resolves latest-compatible Luna IDs only within an explicitly registered family, and binds the concrete model and snapshot hash. Builder and Model Inquiry continue to resolve independently.
+- MARR-11 (#5794) lets shared routing settings declare registry-backed Product chat profiles and lets each clone select a profile through gitignored `settings/local.md`. It replaces only primary chat/reasoning/eval targets, preserves shared fallback policy, and does not change embeddings or Builder Model Inquiry.
 - MARR-05 preserves caller output-token limits explicitly. The current Codex CLI executor rejects a per-call output-token-limit requirement during no-inference preflight; a policy-approved low-reasoning Ollama fallback may run only if its own preflight passes. Ollama receives the limit as `options.num_predict`. If fallback is not allowed or capable, the call fails before inference; after completion starts there is no retry or provider switch.
 - Model Inquiry's `codex_subscription` remains a compatibility alias for the shared local Codex executor; its current single-target and no-fallback semantics do not change. Host activation still requires an exact-version no-tools profile outside Git.
 - Embeddings remain in the embedding identity subsystem and are outside the chat/completion migration.
@@ -132,13 +133,15 @@ transport before the pure latest-compatible selector can use it.
 8. [Report provider-neutral capability health](REPORT_CAPABILITY_HEALTH.md) — MARR-10; specifies health through logical capability contracts, independent of provider identity
 9. [Prove VLAN-only macOS executor and Luna acceptance](PROVE_MAC_MINI_ACCEPTANCE.md) — MARR-06 / #5624; depends on MARR-01–05, MARR-08, MARR-09, and MARR-10. The live Issue now matches the VLAN-only v3 acceptance contract; every distinct acceptance request requires a fresh no-inference catalog/preflight and is sent once without replay, automatic retry, or provider/path fallback.
 10. [Roll out through release channels with config rollback](ROLLOUT_WITH_CONFIG_ROLLBACK.md) — MARR-07; depends on MARR-06 and explicit release-channel operator acknowledgment
+11. [Select Product model profiles per satellite](../LLM_ROUTING.md) — MARR-11 / #5794; shared profile definitions use registry IDs, while each clone selects its profile locally
 
 ## Capability Acceptance
 
-This parent-level acceptance remains separate from merging the MARR-08 thin API slice.
+This parent-level acceptance remains separate from merging individual MARR slices, including the MARR-08 thin API slice.
 
 - [ ] MARR-08 is verified by its slice tests and merged; this proves code exists, not live host activation.
 - [ ] Product caller migration is delivered by MARR-05 through the shared facade; this does not activate the designated host or change the checked-in default route.
+- [x] MARR-11 verifies clone-local Product profile selection and preserves shared fallback, embedding identity, and the isolated Builder Model Inquiry target.
 - [ ] MARR-04 delivers read-only catalog discovery and latest-compatible selection primitives; MARR-05 separately adopts them in Product callers. Catalog refresh never changes MARR-08's one-shot completion behavior.
 - [x] The authorized VLAN-only Mac executor acceptance is verified by the validator-accepted v3 receipt in Issue #5624; this proves the designated dev-host path, not persistent Product activation.
 - [ ] MARR-09 retains generic multi-path selection tests, while the checked-in Ygg profile configures only VLAN and has no Tailscale dependency.

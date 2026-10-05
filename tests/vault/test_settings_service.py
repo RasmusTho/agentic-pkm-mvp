@@ -97,6 +97,40 @@ def test_vault_shared_definition_file_binding(tmp_path: Path) -> None:
     assert default_view.source.endswith("companion-ui.md")
 
 
+def test_local_model_routing_profile_is_a_clone_local_setting(tmp_path: Path) -> None:
+    vault_root = tmp_path / "vault"
+    _init_shared_vault(
+        vault_root,
+        extra={
+            "local.md": (
+                "---\nschema: design-handoff.local.v1\nscope: vault-local\n"
+                "localInstanceId: l1\nmachineRole: satellite\nllmRoutingProfile: work\n---\n"
+            ),
+        },
+    )
+    context = VaultContext(
+        status="selected",
+        active_vault_path=str(vault_root),
+        settings_path=str(vault_root / "settings"),
+    )
+
+    service = SettingsService()
+    resolution = service.resolve(context)
+    profile = resolution.settings["llmRoutingProfile"]
+    definition = service.registry.get("llmRoutingProfile")
+
+    assert profile.value == "work"
+    assert profile.scope == "vault-local"
+    assert profile.source_file == str(vault_root / "settings" / "local.md")
+    assert definition is not None
+    assert (definition.file, definition.sync_policy, definition.default_value) == (
+        "local.md",
+        "gitignore",
+        "default",
+    )
+    assert not resolution.validation_errors
+
+
 def test_vault_local_can_override_shared_key_cross_scope(tmp_path: Path) -> None:
     """The file-binding guard must not block the documented cross-scope override:
     a vault-local file (local.md) overriding a vault-shared key (Codex #2030 P2)."""
