@@ -13,6 +13,7 @@ import pytest
 
 from llm_contract import SystemOneJudgmentRequest
 
+from app.model_access.ckm_judgment_contract import ckm_judgment_request
 from app.model_access.product_judgment_contract import product_intent_request
 from app.model_access.typesafe_adapter import (
     TypeSafeAdapter,
@@ -113,7 +114,38 @@ def test_provider_request_at_utf8_intent_limit_is_within_four_kibibytes() -> Non
     assert exc.value.outcome == "provider_rejected" and len(calls) == 1
 
 
+@pytest.mark.parametrize("bound", [4096, 12288])
+def test_actual_sdk_request_byte_guard_before_send(bound) -> None:
+    calls = []
+
+    def send(wire):
+        calls.append(wire)
+        return httpx2.Response(429)
+
+    adapter = TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(send), max_request_bytes=bound)
+
+    def execute(text):
+        request = SystemOneJudgmentRequest.model_validate({
+            "state": {"synthetic": text},
+            "questions": [{"question_id": "c", "kind": "choice", "instructions": "Choose",
+                           "criteria": {"a": None, "no_match": None}}],
+        })
+        with pytest.raises(TypeSafeAdapterError) as exc:
+            adapter.judge(request, model="jev-1.13.0", api_key="synthetic-key")
+        return exc.value.outcome
+
+    assert execute("") == "provider_rejected"
+    overhead = len(calls.pop().content)
+    remaining = bound - overhead
+    value = "å" * (remaining // 2) + "x" * (remaining % 2)
+    assert execute(value) == "provider_rejected"
+    assert len(calls.pop().content) == bound
+    assert execute(value + "x") == "unavailable_before_send"
+    assert calls == []
+
+
 @pytest.mark.parametrize("overlapping_calls", [1, 2])
+@pytest.mark.parametrize("caller", ["product", "builder"])
 @pytest.mark.parametrize(
     ("wire_case", "outcome"),
     [
@@ -122,7 +154,7 @@ def test_provider_request_at_utf8_intent_limit_is_within_four_kibibytes() -> Non
     ],
 )
 def test_actual_http_transport_never_logs_raw_provider_diagnostics(
-    monkeypatch, caplog, overlapping_calls, wire_case, outcome
+    monkeypatch, caplog, overlapping_calls, wire_case, outcome, caller
 ) -> None:
     """TSO02-R1-F1: MockTransport misses httpcore's headers/protocol DEBUG logs."""
     key = "synthetic-http-transport-key"
@@ -168,11 +200,16 @@ def test_actual_http_transport_never_logs_raw_provider_diagnostics(
         pytest.fail("transport conformance must never open a socket")
 
     monkeypatch.setattr(socket, "create_connection", forbidden_network)
+    request = product_intent_request(intent) if caller == "product" else ckm_judgment_request({
+        "candidates": [{"id": "candidate_1", "kind": "document", "excerpt": intent}],
+        "capabilities": [{"id": "capability_1", "kind": "capability", "excerpt": "Synthetic"}],
+    })
 
     def execute():
         with pytest.raises(TypeSafeAdapterError) as exc:
-            TypeSafeAdapter(transport_factory=make_transport).judge(
-                product_intent_request(intent), model="jev-1.13.0", api_key=key
+            TypeSafeAdapter(transport_factory=make_transport,
+                            max_request_bytes=4096 if caller == "product" else 12288).judge(
+                request, model="jev-1.13.0", api_key=key
             )
         return exc.value.outcome, str(exc.value)
 

@@ -13,8 +13,6 @@ from dataclasses import dataclass
 from hashlib import sha256
 import hmac
 import json
-import os
-import re
 from typing import Any, Callable, Protocol, Sequence
 
 from app.builderops.ckm.models import (
@@ -30,66 +28,17 @@ from app.builderops.ckm.store import (
     CkmStore,
     CkmWriteSnapshotChangedError,
 )
-from app.builderops.model_access_resolver import (
-    BUILDER_RUNTIME,
-    CKM_SEMANTIC_CONSUMER,
-    CKM_SEMANTIC_RESOLUTION_GROUP,
-    CKM_SEMANTIC_ROLE,
-    BuilderModelAccessResolver,
-    DeclaredCredentialUnavailableError,
-    ModelAccessResolutionError,
+from app.builderops.ckm.judgment import (
+    CKM_JUDGMENT_SCHEMA_REF, BuilderCkmJudgmentResolver,
+    ckm_judgment_intent,
 )
-from app.builderops.model_inquiry_adapters import (
-    AdapterExecutionError,
-    AdapterUnavailableError,
-    HttpModelAdapter,
-)
-from app.config.environment import active_environment
-from llm_contract import (
-    ModelAccessIntent,
-    ModelCapabilityRequirements,
-    ModelResolutionRequest,
-    ModelTurnAdapter,
-    ResolvedModelAccess,
-    SchemaValidationError,
-    validate_schema_payload,
-)
+from app.model_access.ckm_judgment_contract import BuilderJudgmentResult, ckm_judgment_request
+from llm_contract import ChoiceJudgmentAnswer
 
-SEMANTIC_SCHEMA_REF = "builderops.ckm.semantic-association.v1"
-_SEMANTIC_SIDE_EFFECT_CLASS = "derived_candidate_evidence"
-_NON_PROVIDER_IDENTITIES = frozenset({"mock", "fake", "deterministic", "test"})
-_SEMANTIC_HTTP_TIMEOUT_SECONDS = 120.0
-SEMANTIC_ASSOCIATION_SCHEMA: dict[str, Any] = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "type": "object",
-    "required": ["proposals"],
-    "additionalProperties": False,
-    "properties": {
-        "proposals": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": [
-                    "artifact_id",
-                    "capability_id",
-                    "evidence_kind",
-                    "maturity_dimension",
-                    "confidence",
-                    "rationale",
-                ],
-                "additionalProperties": False,
-                "properties": {
-                    "artifact_id": {"type": "string", "minLength": 1},
-                    "capability_id": {"type": "string", "minLength": 1},
-                    "evidence_kind": {"type": "string", "minLength": 1},
-                    "maturity_dimension": {"type": "string", "minLength": 1},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                    "rationale": {"type": "string", "minLength": 1},
-                },
-            },
-        }
-    },
-}
+SEMANTIC_SCHEMA_REF = CKM_JUDGMENT_SCHEMA_REF
+CKM_SEMANTIC_CONSUMER = "builderops-ckm-semantic"
+CKM_SEMANTIC_RESOLUTION_GROUP = "ckm-semantic-association"
+CKM_SEMANTIC_ROLE = "ckm_semantic"
 
 
 class SemanticAssociationError(RuntimeError):
@@ -127,6 +76,7 @@ class SemanticBatch:
     provider: str
     model: str
     proposals: list[SemanticProposal]
+    answer_confidences: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -152,189 +102,104 @@ class SemanticAssociator(Protocol):
     ) -> SemanticBatch: ...
 
 
-def _semantic_resolution_request() -> ModelResolutionRequest:
-    return ModelResolutionRequest(
-        intent=ModelAccessIntent(
-            capability_tier="frontier",
-            reasoning_effort="low",
-            determinism_required=False,
-            output_schema_ref=SEMANTIC_SCHEMA_REF,
-            independence="none",
-            fallback_requirement="fallback_forbidden",
-            side_effect_class=_SEMANTIC_SIDE_EFFECT_CLASS,
-        ),
-        role_profile=CKM_SEMANTIC_ROLE,
-        resolution_group_id=CKM_SEMANTIC_RESOLUTION_GROUP,
-        requirements=ModelCapabilityRequirements(
-            structured_output=True,
-            system_prompt_channel=True,
-        ),
-    )
-
-
-def _is_non_provider_identity(*values: str) -> bool:
-    return any(
-        _NON_PROVIDER_IDENTITIES.intersection(
-            token for token in re.split(r"[^a-z0-9]+", value.lower()) if token
-        )
-        for value in values
-    )
-
-
-def _http_adapter_factory(
-    resolved: ResolvedModelAccess,
-    endpoint: str,
-    credential: str,
-) -> ModelTurnAdapter:
-    """Build only the metered provider-API adapter selected by Builder policy.
-
-    The Model Inquiry subscription command adapter is deliberately unreachable
-    from this factory. Under the owner-cost ruling the declared credential is
-    absent, so production exits before this function runs.
-    """
-
-    return HttpModelAdapter(
-        adapter_id=resolved.adapter_id,
-        provider=resolved.provider,
-        model=resolved.model,
-        endpoint=endpoint,
-        api_key=credential,
-        intent=resolved.request.intent,
-        timeout_seconds=_SEMANTIC_HTTP_TIMEOUT_SECONDS,
-        required_reasoning_effort="low",
-        required_output_schema_ref=SEMANTIC_SCHEMA_REF,
-        required_side_effect_class=_SEMANTIC_SIDE_EFFECT_CLASS,
-    )
+def _curated_excerpt(value: str) -> str:
+    # Curate a single bounded metadata summary; never serialize a whole record.
+    normalized = " ".join(value.split())
+    return normalized.encode("utf-8", errors="strict")[:500].decode("utf-8", errors="ignore")
 
 
 class BuilderSemanticAssociator:
-    """CKM semantic adapter resolved only through Builder model authority."""
+    """Typed candidate selection through Builder intent and its separate MARR caller."""
+
+    provider = ""
+    model = ""
 
     def __init__(
-        self,
-        *,
-        resolver: BuilderModelAccessResolver | None = None,
+        self, *, resolver: BuilderCkmJudgmentResolver | None = None,
         env: dict[str, str] | None = None,
-        adapter_factory: Callable[
-            [ResolvedModelAccess, str, str], ModelTurnAdapter
-        ] = _http_adapter_factory,
     ) -> None:
-        source = dict(os.environ if env is None else env)
-        try:
-            selected = resolver or BuilderModelAccessResolver.from_declared_sources(env=source)
-            resolved = selected.resolve(
-                _semantic_resolution_request(),
-                runtime=BUILDER_RUNTIME,
-                channel=active_environment(source),
-                consumer=CKM_SEMANTIC_CONSUMER,
-            )
-        except (ModelAccessResolutionError, OSError, ValueError) as exc:
-            raise SemanticProviderUnavailable(str(exc)) from None
-        if _is_non_provider_identity(
-            resolved.provider,
-            resolved.model,
-            resolved.adapter_id,
-            resolved.effective_identity,
-        ):
-            raise SemanticProviderUnavailable(
-                "mock identity is forbidden for CKM semantic association",
-                provider=resolved.provider,
-                model=resolved.model,
-            )
-        if resolved.degraded:
-            raise SemanticProviderUnavailable(
-                "degraded Builder route: " + (resolved.degradation_reason or "reason unavailable"),
-                provider=resolved.provider,
-                model=resolved.model,
-            )
-        try:
-            credential = selected.credential_value(resolved)
-            endpoint = selected.endpoint_for(resolved)
-        except DeclaredCredentialUnavailableError as exc:
-            raise SemanticProviderUnavailable(
-                str(exc),
-                provider=resolved.provider,
-                model=resolved.model,
-            ) from None
-        except (ModelAccessResolutionError, OSError, ValueError) as exc:
-            raise SemanticProviderUnavailable(
-                str(exc),
-                provider=resolved.provider,
-                model=resolved.model,
-            ) from None
-        try:
-            adapter = adapter_factory(resolved, endpoint, credential)
-        except (AdapterUnavailableError, ModelAccessResolutionError, ValueError) as exc:
-            raise SemanticProviderUnavailable(
-                "Builder adapter unavailable",
-                provider=resolved.provider,
-                model=resolved.model,
-            ) from exc
-        self.provider = resolved.provider
-        self.model = resolved.model
-        self._adapter = adapter
+        self._resolver = resolver or BuilderCkmJudgmentResolver(environment=env)
 
     def propose(
-        self,
-        *,
-        artifacts: Sequence[CkmArtifact],
-        capabilities: Sequence[CkmCapability],
+        self, *, artifacts: Sequence[CkmArtifact], capabilities: Sequence[CkmCapability],
     ) -> SemanticBatch:
-        request = {
-            "system_prompt": (
-                "Associate only artifacts that clearly evidence an existing capability. "
-                "Return no proposal for uncertainty; never invent capabilities."
-            ),
-            "schema_ref": SEMANTIC_SCHEMA_REF,
-            "schema": SEMANTIC_ASSOCIATION_SCHEMA,
-            "artifacts": [
-                {
-                    "id": item.id,
-                    "public_id": item.public_id,
-                    "source_ref": item.source_ref,
-                    "artifact_kind": item.artifact_kind,
-                    "watermark": item.watermark,
-                    "provenance": item.provenance[:1000],
-                }
-                for item in artifacts
-            ],
-            "capabilities": [
-                {
-                    "id": item.id,
-                    "public_id": item.public_id,
-                    "name": item.name,
-                    "definition": item.definition,
-                }
-                for item in capabilities
-            ],
+        selected_artifacts: list[CkmArtifact] = []
+        records: list[dict[str, str]] = []
+        kinds = {
+            "requirement", "adr", "spec", "document", "source_file", "test",
+            "pull_request", "issue", "commit", "agent_session", "diagram",
+            "ci_result", "coverage", "benchmark", "learning_signal",
         }
+        for item in sorted(artifacts, key=lambda artifact: artifact.public_id):
+            if item.artifact_kind not in kinds:
+                continue
+            try:
+                provenance = json.loads(item.provenance)
+                summary = provenance.get("payload_summary", provenance.get("title"))
+                if not isinstance(summary, str) or not summary.strip() or item.source_ref in summary:
+                    continue
+                excerpt = _curated_excerpt(summary)
+            except (ValueError, TypeError, AttributeError, UnicodeError):
+                continue
+            selected_artifacts.append(item)
+            records.append({"id": f"candidate_{len(records) + 1}", "kind": item.artifact_kind, "excerpt": excerpt})
+            if len(records) == 8:
+                break
+        selected_capabilities = sorted(capabilities, key=lambda capability: capability.public_id)[:8]
+        if not records or not selected_capabilities:
+            raise SemanticProviderUnavailable("no curated CKM candidates available")
         try:
-            result = self._adapter.execute(request)
-        except AdapterUnavailableError as exc:
-            raise SemanticProviderUnavailable(
-                "Builder adapter unavailable",
-                provider=self.provider,
-                model=self.model,
-            ) from exc
-        except AdapterExecutionError as exc:
-            raise SemanticProviderUnavailable(
-                f"Builder adapter failed: {exc.failure_class}",
-                provider=self.provider,
-                model=self.model,
-            ) from None
+            request = ckm_judgment_request({
+                "candidates": records,
+                "capabilities": [
+                    {"id": f"capability_{index}", "kind": "capability",
+                     "excerpt": _curated_excerpt(f"{item.name}: {item.definition}")}
+                    for index, item in enumerate(selected_capabilities, 1)
+                ],
+            })
+            client = self._resolver.resolve(ckm_judgment_intent())
+            try:
+                result = client.judge(request)
+            finally:
+                client.close()
+        except Exception:
+            raise SemanticProviderUnavailable("Builder dev judgment unavailable or request invalid") from None
         try:
-            raw_payload = json.loads(result.response_text)
-            payload = validate_schema_payload(
-                SEMANTIC_SCHEMA_REF,
-                SEMANTIC_ASSOCIATION_SCHEMA,
-                raw_payload,
-            )
-            proposals = [SemanticProposal(**item) for item in payload["proposals"]]
-        except (json.JSONDecodeError, SchemaValidationError) as exc:
-            raise SemanticAssociationError(f"invalid semantic association response: {exc}") from exc
-        except (TypeError, ValueError, KeyError) as exc:
-            raise SemanticAssociationError(f"invalid semantic association response: {exc}") from exc
-        return SemanticBatch(provider=self.provider, model=self.model, proposals=proposals)
+            # Revalidate even injectable clients: only exact submitted IDs may become evidence.
+            result = BuilderJudgmentResult.model_validate(result.model_dump(mode="json"))
+            if result.outcome != "success":
+                raise SemanticProviderUnavailable("Builder judgment " + result.outcome)
+            assert result.judgment is not None and result.selection is not None
+            result.judgment.validate_against(request)
+        except (ValueError, TypeError, AssertionError, AttributeError):
+            raise SemanticProviderUnavailable("Builder judgment response invalid") from None
+        self.provider = result.selection.provider
+        self.model = result.selection.model
+        artifact_map = {f"candidate_{index}": item for index, item in enumerate(selected_artifacts, 1)}
+        capability_map = {f"capability_{index}": item for index, item in enumerate(selected_capabilities, 1)}
+        proposals: list[SemanticProposal] = []
+        answer_confidences: list[float] = []
+        for answer in result.judgment.answers:
+            if not isinstance(answer, ChoiceJudgmentAnswer):
+                raise SemanticProviderUnavailable("Builder judgment response invalid")
+            answer_confidences.append(answer.confidence)
+            if answer.choice == "no_match":
+                continue
+            artifact = artifact_map[answer.choice]
+            capability = capability_map[answer.question_id]
+            proposals.append(SemanticProposal(
+                artifact_id=artifact.id, capability_id=capability.id,
+                evidence_kind={"document": "doc", "source_file": "source", "issue": "requirement", "agent_session": "ai_session"}.get(artifact.artifact_kind, artifact.artifact_kind),
+                maturity_dimension={
+                    "test": "test_completeness", "issue": "requirement_coverage",
+                    "requirement": "requirement_coverage", "adr": "architectural_stability",
+                    "spec": "requirement_coverage", "document": "documentation_quality",
+                }.get(artifact.artifact_kind, "functional_completeness"),
+                confidence=answer.confidence,
+                rationale="Typed CKM match from curated metadata.",
+            ))
+        return SemanticBatch(provider=self.provider, model=self.model, proposals=proposals,
+                             answer_confidences=tuple(answer_confidences))
 
 
 def _unlinked_artifacts(store: CkmStore, limit: int) -> list[CkmArtifact]:
@@ -365,7 +230,7 @@ def _semantic_batch_watermark(
                     "source_ref": item.source_ref,
                     "artifact_kind": item.artifact_kind,
                     "watermark": item.watermark,
-                    "provenance": item.provenance[:1000],
+                    "provenance": item.provenance,
                 }
                 for item in artifacts
             ),
@@ -512,7 +377,8 @@ def associate_unlinked_artifacts(
         if not proposal.rationale.strip():
             raise SemanticAssociationError("proposal rationale must not be empty")
 
-    discarded = 0
+    # An uncertain abstention is still a below-floor judgment in a mixed batch.
+    discarded = sum(value < confidence_floor for value in batch.answer_confidences)
     matched_artifacts: set[str] = set()
     accepted: list[CkmEvidenceEdgeWrite] = []
     for proposal in batch.proposals:
@@ -521,7 +387,8 @@ def associate_unlinked_artifacts(
             raise SemanticAssociationError("validated artifact disappeared")
         matched_artifacts.add(proposal.artifact_id)
         if proposal.confidence < confidence_floor:
-            discarded += 1
+            if not batch.answer_confidences:
+                discarded += 1
             continue
         accepted.append(
             CkmEvidenceEdgeWrite(
@@ -540,6 +407,14 @@ def associate_unlinked_artifacts(
             )
         )
 
+    # A below-floor batch cannot assert semantic freshness, even if another
+    # selection was stronger. No-match and empty batches likewise write nothing.
+    if discarded or not accepted:
+        return SemanticAssociationResult(
+            status="ok", proposed=0, discarded=discarded,
+            no_match=len({item.id for item in artifacts} - matched_artifacts),
+            provider=batch.provider, model=batch.model,
+        )
     accepted = _canonicalize_accepted_writes(accepted)
     watermark = _semantic_batch_watermark(
         artifacts=artifacts,
