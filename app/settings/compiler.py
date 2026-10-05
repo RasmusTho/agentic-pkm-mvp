@@ -377,7 +377,84 @@ def _resolve_llm_routing_model_ids(payload: Dict[str, Any]) -> Dict[str, Any]:
             )
         resolved["tasks"] = task_resolved
 
+    profiles = resolved.get("profiles")
+    if isinstance(profiles, dict):
+        resolved_profiles: Dict[str, Any] = {}
+        for profile_id, profile_payload in profiles.items():
+            if not isinstance(profile_payload, dict):
+                raise ValueError(f"llm_routing profile {profile_id!r} must be a mapping")
+            profile = dict(profile_payload)
+            unknown_profile_keys = set(profile) - {
+                "default_chat",
+                "default_reasoning",
+                "default_eval",
+                "tasks",
+            }
+            if unknown_profile_keys:
+                unknown = ", ".join(sorted(str(key) for key in unknown_profile_keys))
+                raise ValueError(
+                    f"llm_routing profile {profile_id!r} has unsupported fields: {unknown}"
+                )
+            for key in ("default_chat", "default_reasoning", "default_eval"):
+                target = profile.get(key)
+                if target is not None:
+                    if not isinstance(target, dict) or not target.get("model_id"):
+                        raise ValueError(
+                            f"llm_routing profile {profile_id!r}.{key} must select a registry model_id"
+                        )
+                    profile[key] = _resolve_route_target_model_ids(
+                        target,
+                        models_by_id=models_by_id,
+                        expected_kind="chat",
+                    )
+            profile_tasks = profile.get("tasks")
+            if profile_tasks is not None:
+                if not isinstance(profile_tasks, dict):
+                    raise ValueError(f"llm_routing profile {profile_id!r}.tasks must be a mapping")
+                resolved_tasks: Dict[str, Any] = {}
+                for task_kind, target in profile_tasks.items():
+                    if not isinstance(target, dict) or not target.get("model_id"):
+                        raise ValueError(
+                            f"llm_routing profile {profile_id!r}.tasks.{task_kind} "
+                            "must select a registry model_id"
+                        )
+                    resolved_tasks[task_kind] = _resolve_route_target_model_ids(
+                        target,
+                        models_by_id=models_by_id,
+                        expected_kind="chat",
+                    )
+                profile["tasks"] = resolved_tasks
+            resolved_profiles[str(profile_id)] = profile
+        resolved["profiles"] = resolved_profiles
+
     return resolved
+
+
+def _resolve_local_llm_routing_profile(*, vault_root: Path, settings_dir: Path) -> str:
+    """Resolve the clone-local selector through the scoped Settings Spine."""
+    from app.vault.manager import VaultContext
+    from app.vault.settings_service import SettingsService
+
+    context = VaultContext(
+        status="selected",
+        active_vault_path=str(vault_root),
+        settings_path=str(settings_dir),
+    )
+    resolution = SettingsService().resolve(context)
+    local_path = str(settings_dir / "local.md")
+    profile_errors = [
+        error
+        for error in resolution.validation_errors
+        if error.source_file == local_path
+        and (error.key == "llmRoutingProfile" or error.key is None)
+    ]
+    if profile_errors:
+        raise ValueError("invalid clone-local Product model profile in settings/local.md")
+    setting = resolution.settings.get("llmRoutingProfile")
+    profile_id = setting.value if setting is not None else "default"
+    if not isinstance(profile_id, str) or not profile_id.strip():
+        raise ValueError("llmRoutingProfile in settings/local.md must be a non-empty string")
+    return profile_id.strip()
 
 
 def _update_reference(path: Path, title: str, model: Any, auto_heal: bool, *, vault_root: Path) -> None:
@@ -566,7 +643,13 @@ def compile_all(
             _update_reference(file_paths["yggdrasil"], "Yggdrasil", ygg_model, writeback_allowed(file_paths["yggdrasil"]), vault_root=resolved_vault_root)
 
     instance_payload = _merge_sections(file_sections.get("instance", {}))
-    bundle.instance = InstanceSettings(**instance_payload) if instance_payload else InstanceSettings()
+    local_routing_profile = _resolve_local_llm_routing_profile(
+        vault_root=resolved_vault_root,
+        settings_dir=settings_dir,
+    )
+    bundle.instance = InstanceSettings(
+        **{**instance_payload, "llm_routing_profile": local_routing_profile}
+    )
 
     agents_cfg: Dict[str, Any] = {}
     for agent_name, sections in agent_sections.items():

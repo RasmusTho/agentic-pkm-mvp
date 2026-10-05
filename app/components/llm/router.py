@@ -197,23 +197,64 @@ class LLMRouter:
                 self._settings = get_settings_bundle()
             except Exception:
                 self._settings = None
+        instance_settings = getattr(self._settings, "instance", None)
+        self._routing_profile_id = (
+            getattr(instance_settings, "llm_routing_profile", None) or "default"
+        )
+
+    def _profile_id_for(self, intent: LLMTaskIntent) -> str:
+        if intent.task_kind == "embed":
+            return "default"
+        return self._routing_profile_id
+
+    @staticmethod
+    def _profile_target(
+        routing: LLMRoutingSettings | None,
+        intent: LLMTaskIntent,
+        profile_id: str,
+    ) -> LLMRoutingSettings.RouteTarget | None:
+        if intent.task_kind == "embed" or profile_id == "default":
+            return None
+        if routing is None:
+            raise LLMRouteError(
+                f"Product routing profile {profile_id!r} is selected but no compiled LLM routing settings are available"
+            )
+        profile = routing.profiles.get(profile_id)
+        if profile is None:
+            raise LLMRouteError(f"Unknown Product routing profile selected in settings: {profile_id!r}")
+        task_target = profile.tasks.get(intent.task_kind)
+        if task_target is not None:
+            return task_target
+        if intent.task_kind in {"eval", "deepeval", "ragas"}:
+            return profile.default_eval
+        if "reason" in intent.task_kind or intent.task_kind == "plan":
+            return profile.default_reasoning or profile.default_chat
+        return profile.default_chat
 
     def _task_policy(self, intent: LLMTaskIntent) -> LLMRoutingSettings.TaskPolicy | None:
+        profile_id = self._profile_id_for(intent)
         if self._settings is None:
+            self._profile_target(None, intent, profile_id)
             return None
         routing = getattr(self._settings, "llm_routing", None)
         if routing is None:
+            self._profile_target(None, intent, profile_id)
             return None
         explicit = routing.tasks.get(intent.task_kind)
-        if explicit is not None:
-            return explicit
         if intent.task_kind == "embed":
-            return routing.default_embedding
-        if intent.task_kind in {"eval", "deepeval", "ragas"}:
-            return routing.default_eval
-        if "reason" in intent.task_kind or intent.task_kind in {"plan"}:
-            return routing.default_reasoning
-        return routing.default_chat
+            return explicit or routing.default_embedding
+        if explicit is not None:
+            policy = explicit
+        elif intent.task_kind in {"eval", "deepeval", "ragas"}:
+            policy = routing.default_eval
+        elif "reason" in intent.task_kind or intent.task_kind in {"plan"}:
+            policy = routing.default_reasoning
+        else:
+            policy = routing.default_chat
+        profile_target = self._profile_target(routing, intent, profile_id)
+        if profile_target is not None:
+            return policy.model_copy(update={"primary": profile_target})
+        return policy
 
     @staticmethod
     def _route_to_dict(route: LLMRoute) -> dict[str, Any]:
@@ -418,10 +459,18 @@ class LLMRouter:
                     candidates.append(fallback_route)
             return candidates
 
+        routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
+        profile_id = self._profile_id_for(intent)
+        profile_target = self._profile_target(routing, intent, profile_id)
+        route_reason = (
+            f"settings-profile:{profile_id}"
+            if profile_target is not None
+            else "settings" if policy is not None else self._default_reason
+        )
         primary_route = self._resolve_chat_route(
             getattr(policy, "primary", None),
             degraded=self._default_degraded,
-            reason="settings" if policy is not None else self._default_reason,
+            reason=route_reason,
         )
         candidates = [primary_route]
         fallback_target = self._default_fallback_target(intent, policy)
@@ -502,6 +551,9 @@ class LLMRouter:
     def route(self, intent: LLMTaskIntent) -> LLMRoute:
         if not isinstance(intent, LLMTaskIntent):
             raise TypeError("intent must be an LLMTaskIntent")
+        if intent.task_kind != "embed":
+            routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
+            self._profile_target(routing, intent, self._profile_id_for(intent))
         forced_provider = os.getenv("LLM_FORCE_PROVIDER")
         forced_model = os.getenv("LLM_FORCE_MODEL")
         if forced_provider or forced_model:
@@ -554,7 +606,10 @@ class LLMRouter:
                         degraded=cand.degraded,
                     )
         routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
-        has_explicit_task_policy = bool(routing and intent.task_kind in routing.tasks)
+        profile_target = self._profile_target(routing, intent, self._profile_id_for(intent))
+        has_explicit_task_policy = bool(
+            (routing and intent.task_kind in routing.tasks) or profile_target is not None
+        )
         if self._llm_provider_env is not None and intent.task_kind != "embed":
             enforce = _provider_enforced()
             # When a provider is set it must run the call. Under enforcement this
@@ -642,11 +697,19 @@ class LLMRouter:
     def describe_intent(self, intent: LLMTaskIntent) -> dict[str, Any]:
         policy = self._task_policy(intent)
         effective = self.route(intent)
+        routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
+        profile_id = self._profile_id_for(intent)
+        profile_target = self._profile_target(routing, intent, profile_id)
         payload: dict[str, Any] = {
             "task_kind": intent.task_kind,
             "intent": asdict(intent),
             "effective": self._route_to_dict(effective),
-            "configured_via": "settings" if policy is not None else "env",
+            "configured_via": (
+                f"settings-profile:{profile_id}"
+                if profile_target is not None
+                else "settings" if policy is not None else "env"
+            ),
+            "routing_profile": profile_id,
         }
 
         if policy is None:

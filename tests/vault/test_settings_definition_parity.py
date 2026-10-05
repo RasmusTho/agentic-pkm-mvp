@@ -31,6 +31,13 @@ def test_youtube_sync_initializer_seeds_match_registered_defaults() -> None:
         assert definition.file == expected_file
         assert initial_files[expected_file][definition.key] == definition.default_value
 
+    profile_definition = next(
+        definition for definition in SETTING_DEFINITIONS if definition.key == "llmRoutingProfile"
+    )
+    assert profile_definition.file == "local.md"
+    assert profile_definition.sync_policy == "gitignore"
+    assert initial_files["local.md"][profile_definition.key] == profile_definition.default_value
+
 
 def test_registered_owner_files_are_routable_by_scope() -> None:
     """Each registered vault owner file reaches its scoped service and watcher path."""
