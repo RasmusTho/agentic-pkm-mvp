@@ -106,8 +106,11 @@ Each `drain` invocation is one bounded pass and nothing more: it holds no schedu
 no schedule, and leaves no process running. YSS-06 (#3921) schedules discovery and enqueue only;
 queued requests are acquired only when an operator runs the drain command. While a claimed row is
 being acquired, the command refreshes its queue heartbeat with the attempt generation; a long live
-pipeline run therefore remains in progress, and a stopped process is still recovered after the
-stale threshold. Background acquisition remains a separate deferred slice.
+pipeline run therefore remains in progress. Once the heartbeat stops and the stale threshold passes,
+a scheduled tick with both accepted watcher gates open or a manual `youtube-inbox-dev sync` pass
+(with the shared master switch enabled) resets the claim to `pending`. In a manual-only setup, run
+`sync` before `drain` can claim that row again. Background acquisition remains a separate deferred
+slice.
 
 ## Troubleshooting
 
