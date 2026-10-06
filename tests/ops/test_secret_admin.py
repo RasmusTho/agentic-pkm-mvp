@@ -170,6 +170,43 @@ def test_typesafe_import_is_restricted_to_isolated_marr_project(setup, capsys):
     assert CANARY not in str(capsys.readouterr())
 
 
+def test_marr_import_records_genesis_before_one_send_and_blocks_ambiguous_recovery(setup):
+    admin, provider, controller = setup
+    observed: list[dict[str, object]] = []
+
+    def fail_after_history():
+        observed.extend(history(controller))
+        raise RuntimeError(CANARY)
+
+    provider.on_put = fail_after_history
+    with pytest.raises(SecretAdminError):
+        admin.import_stdin('dev', 'typesafe.api-key', StringIO(CANARY))
+    assert [(record['event'], record.get('project')) for record in observed[:3]] == [
+        ('snapshot', 'marr-dev'),
+        ('prepared', None),
+        ('sent', 'marr-dev'),
+    ]
+    assert observed[0]['previous_state'] == 'absent'
+    assert 'value' not in observed[0]
+    assert provider.calls == [
+        ('read', 'marr-dev', 'dev/typesafe.api-key'),
+        ('put', 'marr-dev', 'dev/typesafe.api-key'),
+    ]
+
+    calls = list(provider.calls)
+    provider.on_put = lambda: None
+    with pytest.raises(SecretAdminError):
+        admin.import_stdin('dev', 'typesafe.api-key', StringIO(PRIOR))
+    with pytest.raises(HostSecretAdmissionError):
+        with controller.admit('check', 'dev'):
+            pytest.fail('ambiguous MARR write must keep the controller locked')
+    assert provider.calls == calls
+    assert not any(
+        record['event'] in {'committed', 'rejected', 'terminal'}
+        for record in history(controller)
+    )
+
+
 def test_typesafe_admin_check_uses_only_marr_project_and_exact_consumer_grant(setup):
     admin, provider, _ = setup
     provider.seed('dev/typesafe.api-key', CANARY, ('marr-dev',))

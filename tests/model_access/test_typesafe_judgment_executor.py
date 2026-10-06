@@ -127,6 +127,7 @@ def _app(
     runtime_channel: str = "dev",
     adapter: TypeSafeAdapter | None = None,
     bws_reader=None,
+    acceptance_state_directory: Path | None = None,
 ):
     monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
     lookups = []
@@ -145,6 +146,7 @@ def _app(
         ),
         bws_reader=Reader() if bws_reader is None else bws_reader,
         secret_controller=_FakeSecretController(),
+        acceptance_state_directory=acceptance_state_directory,
     )
     root = Path(__file__).resolve().parents[2]
     factory = ModelAccessAdapterFactory.from_declared_sources(
@@ -248,7 +250,7 @@ def test_bws_lookup_failure_fails_before_provider_call(monkeypatch, caplog) -> N
 @pytest.mark.parametrize("mode", ["accepted_dev", "acceptance_once"])
 @pytest.mark.parametrize("stage", ["metadata", "factory", "tls", "http_client", "sdk_client"])
 def test_adapter_setup_failure_is_presend_and_closes_owned_transport(
-    monkeypatch, caplog, mode, stage
+    monkeypatch, tmp_path, caplog, mode, stage
 ) -> None:
     """GH5791-R4180661727: default TLS setup is before the possible-send boundary."""
     provider = Provider()
@@ -288,7 +290,13 @@ def test_adapter_setup_failure_is_presend_and_closes_owned_transport(
     }
     if stage in targets:
         monkeypatch.setattr(targets[stage], fail)
-    app, lookups, _ = _app(provider, monkeypatch, mode=mode, adapter=adapter)
+    app, lookups, _ = _app(
+        provider,
+        monkeypatch,
+        mode=mode,
+        adapter=adapter,
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
+    )
     with caplog.at_level(logging.DEBUG):
         response = _call(app)
         assert response.status_code == 200
@@ -462,9 +470,14 @@ def test_runtime_acceptance_gate_precedes_secret_and_provider(monkeypatch, mode,
     assert provider.calls == lookups == []
 
 
-def test_one_call_acceptance_is_consumed_atomically_even_on_timeout(monkeypatch) -> None:
+def test_one_call_acceptance_is_consumed_atomically_even_on_timeout(monkeypatch, tmp_path) -> None:
     provider = Provider("read_timeout")
-    _, lookups, executor = _app(provider, monkeypatch, mode="acceptance_once")
+    _, lookups, executor = _app(
+        provider,
+        monkeypatch,
+        mode="acceptance_once",
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
+    )
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(executor.execute, [product_intent_request(INTENT)] * 2))
     assert sorted(r.outcome for r in results) == [
@@ -472,6 +485,36 @@ def test_one_call_acceptance_is_consumed_atomically_even_on_timeout(monkeypatch)
         "unavailable_before_send",
     ]
     assert len(provider.calls) == len(lookups) == 1
+
+
+def test_acceptance_once_refuses_a_new_executor_after_restart(monkeypatch, tmp_path) -> None:
+    state = tmp_path / "typesafe-acceptance"
+    provider = Provider()
+    first, first_lookups, _ = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    assert _call(first).json()["outcome"] == "success"
+
+    second, second_lookups, _ = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    assert _call(second).json()["outcome"] == "unavailable_before_send"
+    assert len(first_lookups) == len(provider.calls) == 1
+    assert second_lookups == []
+
+
+def test_acceptance_marker_corruption_fails_closed_before_bws_lookup(monkeypatch, tmp_path) -> None:
+    state = tmp_path / "typesafe-acceptance"
+    state.mkdir(mode=0o700)
+    marker = state / "product.acceptance.json"
+    marker.write_text('{"state":"consumed"}', encoding="ascii")
+    marker.chmod(0o600)
+    provider = Provider()
+    app, lookups, _ = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    assert _call(app).json()["outcome"] == "unavailable_before_send"
+    assert lookups == [] and provider.calls == []
 
 
 def test_sdk_environment_cannot_override_owned_profile_or_log_bodies(monkeypatch, caplog) -> None:

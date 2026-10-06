@@ -84,8 +84,11 @@ synthetic actual-consumer call. Runtime stays disabled in this repository delive
 separate acceptance cannot satisfy Product's gate.
 
 Use a temporary foreground `dev/marr-server-dev` process with
-`MODEL_ACCESS_PRODUCT_TYPESAFE_MODE=acceptance_once`. Its atomic allowance is consumed before
-provider-key lookup, including setup failure. Never reset, rearm or restart to repeat the attempt.
+`MODEL_ACCESS_PRODUCT_TYPESAFE_MODE=acceptance_once` and an operator-selected persistent,
+owner-only `TYPESAFE_ACCEPTANCE_STATE_DIRECTORY`. Its Product-owned `product.acceptance.json`
+marker is created atomically and durably before provider-key lookup, including setup failure.
+Never reset, rearm, delete, or restart to repeat the attempt. A missing, malformed, or
+indeterminate marker state remains unavailable before lookup.
 The final consumer invocation is:
 
 ```python

@@ -82,7 +82,10 @@ The Builder route remains unavailable after code merge until the parent Issue re
 `acceptance_once` or `accepted_dev` only with `HOST_SECRET_BOOTSTRAP_CONSUMER=marr-server-dev` and
 `HOST_SECRET_BOOTSTRAP_CHANNEL=dev`. The server resolves its fixed Keychain tuple internally;
 ambient provider keys are ignored. One `acceptance_once` allowance is consumed atomically before
-credential lookup. No failure, timeout, rejection, concurrent call or process restart grants a retry.
+credential lookup. Configure the persistent, owner-only `TYPESAFE_ACCEPTANCE_STATE_DIRECTORY`;
+the Builder-owned `builder.acceptance.json` marker is atomically created and fsynced before that
+lookup. Missing, malformed, or indeterminate marker state fails closed. No failure, timeout,
+rejection, concurrent call or process restart grants a retry.
 `accepted_dev` requires the separate approved Builder receipt; no committed configuration enables it.
 
 The later operator plan, not executed by repository tests, is:

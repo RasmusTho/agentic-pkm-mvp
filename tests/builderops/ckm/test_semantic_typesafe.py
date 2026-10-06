@@ -134,6 +134,7 @@ def _rig(monkeypatch, tmp_path, *, provider=None, mode="accepted_dev", key=FAKE_
     executor = BuilderTypeSafeExecutor(
         mode=mode, profile_path=profile_path, bws_reader=Reader(),
         secret_controller=_FakeSecretController(),
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
         adapter=TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(provider.send),
                                 max_request_bytes=CKM_JUDGMENT_REQUEST_BYTES),
     )
@@ -378,6 +379,40 @@ def test_acceptance_once_is_atomic_for_competing_calls(monkeypatch, tmp_path):
             outcomes = list(pool.map(lambda _: executor.execute(request).outcome, range(2)))
         assert sorted(outcomes) == ["success", "unavailable_before_send"]
         assert len(provider.calls) == len(lookups) == 1
+
+
+def test_acceptance_once_refuses_a_new_executor_after_restart(monkeypatch, tmp_path):
+    request = ckm_judgment_request({
+        "candidates": [{"id": "candidate_1", "kind": "document", "excerpt": "Synthetic"}],
+        "capabilities": [{"id": "capability_1", "kind": "capability", "excerpt": "Synthetic"}],
+    })
+    state = tmp_path / "typesafe-acceptance"
+    with _rig(monkeypatch, tmp_path, mode="acceptance_once") as (
+        _, provider, lookups, _, _, _, _, first_executor
+    ):
+        assert first_executor.execute(request).outcome == "success"
+        assert len(provider.calls) == len(lookups) == 1
+
+        second_lookups = []
+
+        class Reader:
+            def lookup(self, project, identity):
+                second_lookups.append((project, identity))
+                return FAKE_KEY
+
+        second_provider = Provider()
+        second_executor = BuilderTypeSafeExecutor(
+            mode="acceptance_once",
+            bws_reader=Reader(),
+            secret_controller=_FakeSecretController(),
+            acceptance_state_directory=state,
+            adapter=TypeSafeAdapter(
+                transport_factory=lambda: httpx2.MockTransport(second_provider.send),
+                max_request_bytes=CKM_JUDGMENT_REQUEST_BYTES,
+            ),
+        )
+        assert second_executor.execute(request).outcome == "unavailable_before_send"
+        assert second_lookups == [] and second_provider.calls == []
 
 
 @pytest.mark.parametrize("case", ["unknown_key", "oversize", "kind", "duplicate_id", "prompt"])

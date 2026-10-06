@@ -103,9 +103,13 @@ The host entrypoint defaults `MODEL_ACCESS_PRODUCT_TYPESAFE_MODE` to `disabled`.
 `acceptance_once` and `accepted_dev` only inside the existing `dev` / `marr-server-dev` bootstrap
 identity. A pending or malformed host configuration performs no key lookup. The server resolves
 the fixed MARR-only provider binding itself; ambient `TYPESAFE_API_KEY` is not a credential source.
-`acceptance_once` consumes one process-local allowance before credential lookup, atomically even
-under concurrent requests; a timeout or rejection never rearms it. Restart is not recovery or
-retry authority. `accepted_dev` is permitted only after the separate Product receipt is approved.
+`acceptance_once` consumes one durable Product-owned allowance before credential lookup, using the
+operator-configured `TYPESAFE_ACCEPTANCE_STATE_DIRECTORY` and an owner-only
+`product.acceptance.json` marker. Creation writes the marker, fsyncs it and its containing
+directory, and only then permits lookup; a valid marker, malformed marker, marker-write failure,
+or missing state directory fails closed before BWS or provider access. A timeout, rejection,
+process restart, or new executor never rearms it. `accepted_dev` is permitted only after the
+separate Product receipt is approved.
 There is no checked-in activation, production binding or installation in this slice.
 
 The later operator acceptance plan is:

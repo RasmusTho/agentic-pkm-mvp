@@ -26,6 +26,11 @@ from app.model_access.typesafe_adapter import (
     TypeSafeAdapterError,
     strict_json_object,
 )
+from app.model_access.typesafe_acceptance_marker import (
+    PRODUCT_ACCEPTANCE_CONSUMER,
+    acceptance_state_directory_from_environment,
+    consume_acceptance_once,
+)
 from app.ops.bws_secret_reader import BwsSecretReader
 from app.ops.host_secret_bootstrap import (
     create_marr_typesafe_bws_reader,
@@ -93,6 +98,7 @@ class ProductTypeSafeExecutor:
         keychain_lookup: Callable[[str, str], str] | None = None,
         bws_reader: BwsSecretReader | None = None,
         secret_controller: HostSecretController | None = None,
+        acceptance_state_directory: Path | None = None,
         environment: Mapping[str, str] | None = None,
     ) -> None:
         self._mode = mode
@@ -105,7 +111,11 @@ class ProductTypeSafeExecutor:
         self._bws_reader = bws_reader
         self._secret_controller = secret_controller
         self._environment = os.environ if environment is None else dict(environment)
-        self._acceptance_used = False
+        self._acceptance_state_directory = (
+            acceptance_state_directory
+            if acceptance_state_directory is not None
+            else acceptance_state_directory_from_environment(self._environment)
+        )
         self._lock = Lock()
 
     @classmethod
@@ -140,11 +150,10 @@ class ProductTypeSafeExecutor:
             selection = resolve_product_typesafe_profile(self._profile_path)
             with self._lock:
                 if self._mode == "acceptance_once":
-                    if self._acceptance_used:
+                    if not consume_acceptance_once(
+                        PRODUCT_ACCEPTANCE_CONSUMER, self._acceptance_state_directory
+                    ):
                         return unavailable
-                    # Consume before credential lookup/dispatch. Failure never
-                    # rearms this server; restart requires fresh operator authority.
-                    self._acceptance_used = True
             bws_reader = self._bws_reader
             if bws_reader is None:
                 if self._keychain_lookup is None:
