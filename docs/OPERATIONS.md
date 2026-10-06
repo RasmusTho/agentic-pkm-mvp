@@ -433,13 +433,18 @@ Companion docs:
   acceptance is complete, the Mac mini remains Ollama/model-serving only; no Product inference is
   routed through Codex CLI, and no host login, CLI profile, service, or tailnet grant is implied by
   a merged code change.
-- The repository declares `typesafe.api-key` only for `dev` / `marr-server-dev` on Mac Keychain,
-  outside the BWS identity/grant map. Product and Builder retain separate caller credentials,
-  policies, and profiles and receive no provider key. These are repository proofs with injected
-  sources. TypeSafe runtime activation remains gated by owner-confirmed rotation, scoped MARR dev
-  host binding, explicit synthetic single-call authorization, and separate redacted Product/Builder
-  acceptance receipts on #5764. Follow `docs/LOCAL_SECRET_PROVISIONING/README.md :: Declared identifier
-  contract` and `docs/TYPESAFE_SYSTEM_ONE/README.md :: Data and Credential Boundary` for the details.
+- The repository resolves the MARR-only `typesafe.api-key` binding from the exact
+  `dev/typesafe.api-key` identity in isolated BWS project `marr-dev` through the dedicated
+  read-only `marr-server-dev-reader` account (#5801 / PR #5803). Its BWS reader token remains a
+  separate Mac Keychain bootstrap credential. The existing admin writer may access this project only
+  through the designated controller after #5667 qualification; Product, Builder, Linux channel
+  readers, Codex, and Claude receive no provider key. Fake-backed repository proofs do not establish
+  live entitlement or permissions. Verify the BWS entitlement and sole-writer boundary under #5667,
+  then the existing MARR host and separate caller bindings under #5764. The already-authorized
+  synthetic Product and Builder attempts remain single-shot and require separate redacted acceptance
+  receipts before either route is activated. Follow `docs/LOCAL_SECRET_PROVISIONING/README.md`
+  (`Declared identifier contract`) and `docs/TYPESAFE_SYSTEM_ONE/README.md`
+  (`Data and Credential Boundary`) for the details.
 - Builder CKM association has dormant repository support through its own authenticated
   `/v1/ckm-judgment` MARR operation and pinned Builder profile. Derived evidence remains
   candidate-only under the existing explicit confirmation and rebuild rules. The concrete
