@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-06 (owner decision, repository candidate, and GitHub contract readback; no host credentials, route settings, database, or deployment changed)
+Last reviewed: 2026-10-06 (owner decision, TypeSafe System One repository support merged by PR #5803, and GitHub contract readback; no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
