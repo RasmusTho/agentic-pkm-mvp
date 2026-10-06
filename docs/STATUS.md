@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-06 (owner decision, repository candidate, and GitHub contract readback; no host credentials, route settings, database, or deployment changed)
+Last reviewed: 2026-10-06 (owner decision, TypeSafe System One repository support merged by PR #5803, and GitHub contract readback; no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -48,21 +48,21 @@ and pre-inference refusal of unsupported native tools. This is designated-host a
 persistent Product routing and dev/test/prod rollout remain separate. Tailscale and Ollama were not
 used or required.
 
-### TypeSafe System One repository candidate (2026-10-06)
+### TypeSafe System One repository support (2026-10-06)
 
-The candidate tree represents repository support for typed Jev judgments in the Product canvas and
-Builder CKM, with an isolated `marr-dev` provider-key binding and a dedicated read-only MARR reader.
-Product and Builder remain separate owners with separate caller policy, credentials, profiles, and
-single-shot acceptance markers. This is candidate-tree truth only: parent #5764 and credential
-qualification #5667 remain blocked until verified three-project/four-account BWS entitlement and
-controller-only admin credential qualification, followed by the scoped existing MARR Mac host
-installation and separate redacted single-shot Product and Builder receipts. The ygg-dev VM is not
-valid for this contract. Routes remain off. No live BWS permission write, key import, host install,
-or Jev call is claimed.
+PR #5803 merged repository support for typed Jev judgments in the Product canvas and Builder CKM,
+including the isolated `marr-dev` provider-key lookup and its dedicated read-only MARR account.
+Product and Builder retain separate caller policy, credentials, pinned profiles, and durable
+single-shot acceptance markers. Parent #5764 remains open and credential qualification #5667 remains
+blocked pending verified three-project/four-account BWS entitlement and controller-only admin
+credential qualification. After those gates, the existing MARR Mac host and separate caller
+bindings must be verified before its bounded installation and redacted single-shot Product and
+Builder receipts. The ygg-dev VM is outside this contract. Runtime routes remain off. No live BWS
+permission write, key import, host installation, or Jev call is claimed.
 
 Source: Issues #5764, #5667, and #5801; `docs/TYPESAFE_SYSTEM_ONE/README.md`,
-`docs/CLOUD_SECRET_PROVISIONING/README.md`, and the TSO-07/#5801 implementation candidate
-(`65c054d52926550a277ca913f1ecfb3b9befce28`; later changes are docs-only).
+`docs/CLOUD_SECRET_PROVISIONING/README.md`, and PR #5803, merged at
+`cf2a8dbe0d670e120fedf85a347db0babf916fe3`.
 Last verified against (DevUI supervised continuity): Issue #5655,
 `app/builderops/devui_issue_work.py`, `app/builderops/devui_sources.py`, and
 `tests/builderops/test_devui_issue_work.py` on 2026-09-24. The managed Focus read carries an
