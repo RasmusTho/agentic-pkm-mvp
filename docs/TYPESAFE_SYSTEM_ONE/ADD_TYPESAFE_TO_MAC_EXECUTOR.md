@@ -16,12 +16,19 @@ can_parallelize_with: []
 
 Product and Builder requests need to reach Jev through separate caller authorization without exposing the TypeSafe provider key to either caller, Linux, Codex, or Claude. One MARR Mac dev server owns that runtime credential.
 
+## Credential-source supersession
+
+TSO-02 was delivered against the then-current Keychain-only provider-key binding from TSO-05.
+TSO-07 replaces that provider-key source with the isolated `marr-dev` BWS project and a dedicated
+read-only MARR account. The BWS reader token remains in the MARR host Keychain. Product keeps the
+same caller authorization and does not gain BWS access.
+
 ## What This Task Does
 
 - Add a bounded System One judgment operation to the MARR service and Product client, reusing existing authenticated admission and channel/action authorization.
 - Accept only the typed contract and the closed Product allowlist: `intent_text` up to 2,000 UTF-8 bytes; serialized request ≤4 KiB. Reject `current_body`, note titles, vault paths, prior turns, and unknown fields before dispatch.
 - Execute one request with SDK retries disabled. Classify `unavailable_before_send`, `outcome_unknown_after_dispatch`, `provider_rejected`, `response_invalid`, and `success`; every state is terminal. A timeout after dispatch may have begun is `outcome_unknown_after_dispatch`, and the same request is never replayed.
-- Resolve `typesafe.api-key` only for `marr-server-dev` on `dev` through the Mac Keychain-only contract. Product and Builder keep separate caller credentials and policies; neither receives the provider key. Missing or unauthorized server bindings fail closed.
+- Resolve `typesafe.api-key` only for `marr-server-dev` on `dev` through the host-secret contract. TSO-02 originally used its Mac Keychain-only binding; TSO-07 supersedes that source with the isolated BWS identity. Product and Builder keep separate caller credentials and policies; neither receives the provider key. Missing or unauthorized server bindings fail closed.
 - Do not retry a request after a send may have reached TypeSafe; do not fall back to Codex or Ollama after inference may have started.
 
 ## Concretely
@@ -67,7 +74,7 @@ Sending the runtime key to Product, Builder, Linux, or a coding-agent process wo
 ## Acceptance Criteria
 
 - [ ] The production MARR route authorizes the same Product channel/action as its peer operations and dispatches exactly one TypeSafe request. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_executor_dispatches_one_bounded_system_one_request`.
-- [ ] Missing or malformed Keychain credentials fail before the provider request and never enter logs, responses, or receipts. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_missing_typesafe_credential_fails_before_provider_call`.
+- [ ] Missing or malformed MARR provider credentials fail before the provider request and never enter logs, responses, or receipts. TSO-02 proved this with a fake Keychain source; TSO-07 adds the fake BWS/keychain-token path. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_missing_typesafe_credential_fails_before_provider_call`.
 - [ ] The SDK transport performs one attempt and maps pre-send failure, ambiguous post-dispatch timeout, provider rejection, and invalid response to distinct terminal outcomes. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_provider_outcomes_are_terminal_and_never_retried`.
 - [ ] The executor rejects disallowed fields and over-limit serialized requests before network dispatch. Verify: `tests/model_access/test_typesafe_judgment_executor.py::test_request_allowlist_and_size_limit_fail_before_dispatch`.
 - [ ] The TypeSafe binding is limited to the `marr-server-dev` Mac dev server consumer and does not grant it to unrelated consumers or channels. Verify: `tests/ops/test_host_secret_contract.py::test_typesafe_key_is_dev_only_and_agent_processes_cannot_resolve_it`.
@@ -95,7 +102,7 @@ The Product route remains disabled/unavailable after code merge until the parent
 The host entrypoint defaults `MODEL_ACCESS_PRODUCT_TYPESAFE_MODE` to `disabled`. It recognizes
 `acceptance_once` and `accepted_dev` only inside the existing `dev` / `marr-server-dev` bootstrap
 identity. A pending or malformed host configuration performs no key lookup. The server resolves
-the fixed Keychain-only tuple itself; ambient `TYPESAFE_API_KEY` is not a credential source.
+the fixed MARR-only provider binding itself; ambient `TYPESAFE_API_KEY` is not a credential source.
 `acceptance_once` consumes one process-local allowance before credential lookup, atomically even
 under concurrent requests; a timeout or rejection never rearms it. Restart is not recovery or
 retry authority. `accepted_dev` is permitted only after the separate Product receipt is approved.

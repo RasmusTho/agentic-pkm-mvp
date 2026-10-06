@@ -5,7 +5,7 @@ Owner: Architecture / operations
 Temporal class: strategic
 Review cadence: event-driven (task merge, host-topology change, or first CI/multi-host use)
 Source of truth: this directory for the proposed capability; GitHub parent/child issues are execution artifacts once filed
-Last reviewed: 2026-09-13
+Last reviewed: 2026-10-06
 
 # Local Secret Provisioning
 
@@ -13,7 +13,7 @@ Last reviewed: 2026-09-13
 
 Provide one small, host-local provisioning boundary for development and runtime processes without
 placing credentials in Git, iCloud, BuilderOps records, Mimer content, or ordinary deploy files.
-The current Mac-hosted implementation uses **macOS Keychain** as its secret source of truth. Linux BWS repository support is described below and in docs/CLOUD_SECRET_PROVISIONING/README.md; live qualification remains pending. Heimdal owns the
+The current Mac-hosted implementation uses **macOS Keychain** for its existing local secrets. Linux BWS repository support is described below and in docs/CLOUD_SECRET_PROVISIONING/README.md; live qualification remains pending. Owner direction on 2026-10-06 selects an isolated BWS project as the TypeSafe provider-key source for MARR; the MARR read-only BWS token remains in macOS Keychain. The merged TypeSafe resolver remains Keychain-based until TSO-07 is implemented. Heimdal owns the
 lifecycle of external-helper credentials, while a narrowly scoped
 bootstrap resolves only the secrets a channel/process needs through a temporary owner-readable
 runtime surface, cleans it up, and redacts all values from logs and receipts.
@@ -82,10 +82,11 @@ or live channel qualification. Parent #5667 remains open until those owner gates
    secret that guards a shipped lane.
 4. **Key material stays outside the raw volume and database.** This preserves Heimdal's raw-store
    trust boundary.
-5. **Mac Keychain remains the current Mac-hosted source.** The 2026-09-24 owner decision accepts
-   BWS for Linux channel VMs; that target is specified separately in docs/CLOUD_SECRET_PROVISIONING/README.md
-   and does not replace the Keychain path for Mac. The Linux target is not live-qualified until its
-   operator receipt is recorded.
+5. **Mac Keychain remains the source for existing Mac secrets and BWS bootstrap tokens.** The
+   TypeSafe provider key is moving to the dedicated `marr-dev` BWS project under TSO-07; the
+   provider-key Keychain binding remains the shipped path until that repository slice merges and
+   live MARR qualification passes. This does not change other Mac Keychain bindings or Linux channel
+   project mappings.
 
 ### Declared identifier contract
 
@@ -100,17 +101,19 @@ declared for `dev`, `test`, and `prod` in
 ADR-0064 declared-API-key scope. It declares the credential boundary but does not authorize provider
 selection, calls, CKM access, or fallback.
 
-The additional `typesafe.api-key` declaration is explicitly listed in `keychain_only_secrets`.
-It grants exactly `marr-server-dev` on `dev` and resolves only on Mac through the existing Keychain
-service/account mechanism. Its required `TYPESAFE_API_KEY` binding has API-key validation and no
-shared key domain. The production resolver and bootstrap refuse Linux, test, prod, and unauthorized
-consumers before lookup or launch; BWS selection is refused before reader or controller admission.
-Missing or malformed TypeSafe material also refuses launch with
-`--run-on-credential-unavailable`; Model Inquiry's existing typed-receipt handoff remains available.
-This runtime declaration adds no BWS identity or reader grant and leaves the two projects, three machine accounts, and all
-existing BWS grants unchanged. Product and Builder keep distinct caller policies, caller credentials,
-and owner model profiles; neither receives or resolves the MARR server's provider key. Codex and
-Claude runtime consumers have no grant; direct development calls are separately governed under #5778.
+The merged `typesafe.api-key` declaration from #5770 currently resolves from Keychain and grants
+exactly `marr-server-dev` on `dev`. TSO-07 changes the target to the single identity
+`dev/typesafe.api-key` in isolated BWS project `marr-dev`, with runtime read access only through a
+dedicated read-only `marr-server-dev-reader` account. The existing admin writer can read pre-state
+and write only through the designated controller. The project contains no other secret and is not
+accessible to the shared non-prod or production readers. The reader token is a separate Keychain
+bootstrap credential under service `yggdrasil.bws-reader`, account
+`marr-server-dev-reader.token`; it is not an admin credential and remains in the MARR process
+boundary. Until TSO-07 is implemented, code continues to use the existing Keychain provider-key
+binding. No live BWS permission or host installation is claimed. Product and Builder keep distinct
+caller policies, caller credentials, and owner model profiles; neither receives or resolves the MARR
+server's provider key. Codex and Claude runtime consumers have no grant; direct development calls
+are separately governed under #5778.
 
 This is a repository declaration verified with fake sources, not host provisioning or activation.
 Any live MARR runtime use requires owner confirmation of rotation after the earlier exposure, scoped MARR dev

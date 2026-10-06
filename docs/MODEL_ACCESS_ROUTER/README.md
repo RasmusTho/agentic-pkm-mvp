@@ -5,7 +5,7 @@ Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its i
 Temporal class: strategic
 Review cadence: event-driven
 Source of truth: ADR-0066, child Issues, implementation, and acceptance receipts
-Last reviewed: 2026-10-05
+Last reviewed: 2026-10-06
 Last verified against: Issue #5794 clone-local routing-profile tests, Issue #5772 dev/test Compose integration tests, the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066, and the checked-in MARR task specifications.
 Parent issue: #5618 (open, agent:blocked); validation hub, never a pickup task.
 
@@ -21,12 +21,12 @@ Deliver a thin Product API that hides the selected model harness behind one boun
   operation. Its authenticated ingress grant requires channel `builder` and action `ckm_judgment`;
   Product grants cannot use it. CKM owns its provider-free intent and caller credential references,
   while the server validates `config/model_access/builder_typesafe_profile.json` before resolving
-  the existing dev Mac MARR key. Fixed candidate-only Choice requests are capped at 8 candidates,
+  the MARR-owned dev provider key. Fixed candidate-only Choice requests are capped at 8 candidates,
   8 capabilities, 500 UTF-8 bytes per excerpt and 12 KiB total, including the actual SDK wire.
   Product retains its separate 4 KiB limit and profile/allowance. Builder defaults to disabled and
   requires its own parent #5764 dev acceptance; the repository proof uses fake HTTP only. See
   [TSO-04](../TYPESAFE_SYSTEM_ONE/MIGRATE_BUILDER_CKM_ASSOCIATION.md) for the actual-consumer plan.
-- TSO-02 (#5766) adds repository support for the dev-only Product `POST /v1/judgment` operation and `CodexRemoteTransport.judge_product_intent`, with fixed canvas questions, a 2,000-byte intent-only state, and 4 KiB request ceiling. Product's server-owned validated profile pins the exact TypeSafe release independently of the SDK package; the response validates and preserves selected/returned provider/model identity. The server alone resolves the `dev/marr-server-dev/typesafe.api-key` Mac Keychain binding. Product `judgment` authorization is required, SDK retries/body logging are disabled, and every post-dispatch outcome is terminal. The normal route stays unavailable pending separate Product dev acceptance on #5764; a separately authorized temporary `acceptance_once` process permits one actual-consumer synthetic call without activating that normal route. This adds no generic completion/default-model change, Builder authorization, live key read, installation or provider acceptance. See [TSO-02](../TYPESAFE_SYSTEM_ONE/ADD_TYPESAFE_TO_MAC_EXECUTOR.md) for profile/SDK update paths and the operator acceptance plan.
+- TSO-02 (#5766) adds repository support for the dev-only Product `POST /v1/judgment` operation and `CodexRemoteTransport.judge_product_intent`, with fixed canvas questions, a 2,000-byte intent-only state, and 4 KiB request ceiling. Product's server-owned validated profile pins the exact TypeSafe release independently of the SDK package; the response validates and preserves selected/returned provider/model identity. TSO-02 originally resolved the MARR-owned key through its Mac Keychain binding. TSO-07 supersedes that provider-key source with one isolated BWS project and one read-only MARR account; the BWS bootstrap token remains in the MARR host Keychain. Product `judgment` authorization is required, SDK retries/body logging are disabled, and every post-dispatch outcome is terminal. The normal route stays unavailable pending separate Product dev acceptance on #5764; a separately authorized temporary `acceptance_once` process permits one actual-consumer synthetic call without activating that normal route. This adds no generic completion/default-model change, Builder authorization, live key read, installation or provider acceptance. See [TSO-02](../TYPESAFE_SYSTEM_ONE/ADD_TYPESAFE_TO_MAC_EXECUTOR.md) for profile/SDK update paths and the operator acceptance plan.
 - Product routes chat/completion calls through app/components/llm/router.py, app/components/llm/fabric.py, and app/services/llm.py.
 - Builder model access resolves independently through app/builderops/model_access_resolver.py and app/builderops/model_inquiry_adapters.py.
 - llm_contract is the neutral, side-effect-free kernel. Builder may not import the Product router or fabric.

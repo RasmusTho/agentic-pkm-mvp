@@ -26,11 +26,14 @@ Extend evidence coverage to artifacts no mechanical rule can place (a doc that d
   invalid kinds/IDs and oversize payloads fail before dispatch.
 - The production path submits provider-free `fallback_forbidden` intent through
   `app/builderops/ckm/judgment.py`, its separate dev-only authenticated Builder client, and MARR's
-  `POST /v1/ckm-judgment`. The server validates its Builder-owned pinned model profile and alone
-  resolves `dev/marr-server-dev/typesafe.api-key` from Mac Keychain. CKM never receives that key.
-  Product policy/client/profile, Model Inquiry's subscription, and degraded routes are not fallback
-  paths. Supported model swaps change the Builder profile configuration; SDK changes stay inside
-  the neutral adapter and its conformance proof.
+  `POST /v1/ckm-judgment`. The server validates its Builder-owned pinned model profile. The currently
+  merged resolver reads `dev/marr-server-dev/typesafe.api-key` from Mac Keychain; TSO-07/#5801
+  replaces that source with the isolated MARR BWS project and its dedicated read-only account, while
+  keeping the BWS reader token in the MARR host Keychain. CKM receives neither credential. TSO-07
+  repository support and live permission qualification remain pending. Product policy/client/profile,
+  Model Inquiry's subscription, and degraded routes are not fallback paths. Supported model swaps
+  change the Builder profile configuration; SDK changes stay inside the neutral adapter and its
+  conformance proof.
 - TSO-04/#5768 supplies repository implementation and fake-backed production-path proof. The
   runtime route remains disabled pending its separate approved synthetic dev acceptance on #5764,
   including confirmed rotation and scoped host installation. Current unavailable behavior is a
