@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError
 import json
@@ -29,6 +30,20 @@ from app.model_access.typesafe_judgment_executor import (
 CAPABILITY = "model-access.example/cap/complete"
 FAKE_KEY = "synthetic-typesafe-test-credential-5766"
 INTENT = "Consider two possible plans without changing anything."
+MARR_BWS_IDENTITY = ("marr-dev", "dev/typesafe.api-key")
+
+
+class _FakeCheckOperation:
+    operation_id = "fixture-typesafe-check"
+
+    def finish(self, _evidence) -> None:
+        pass
+
+
+class _FakeSecretController:
+    @contextmanager
+    def admit(self, _operation: str, _channel: str):
+        yield _FakeCheckOperation()
 
 
 def _headers(channel: str = "product", action: str = "judgment") -> dict[str, str]:
@@ -111,13 +126,15 @@ def _app(
     profile_path: Path = PRODUCT_TYPESAFE_PROFILE_PATH,
     runtime_channel: str = "dev",
     adapter: TypeSafeAdapter | None = None,
+    bws_reader=None,
 ):
     monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
     lookups = []
 
-    def lookup(service: str, account: str) -> str:
-        lookups.append((service, account))
-        return key
+    class Reader:
+        def lookup(self, project: str, identity: str) -> str:
+            lookups.append((project, identity))
+            return key
 
     executor = ProductTypeSafeExecutor(
         mode=mode,
@@ -126,7 +143,8 @@ def _app(
         adapter=adapter or TypeSafeAdapter(
             transport_factory=lambda: httpx2.MockTransport(provider.handle)
         ),
-        keychain_lookup=lookup,
+        bws_reader=Reader() if bws_reader is None else bws_reader,
+        secret_controller=_FakeSecretController(),
     )
     root = Path(__file__).resolve().parents[2]
     factory = ModelAccessAdapterFactory.from_declared_sources(
@@ -188,7 +206,7 @@ def test_executor_dispatches_one_bounded_system_one_request(
     assert result.selection.provider == result.judgment.provenance.provider == "typesafe"
     assert result.selection.sdk_version == TYPESAFE_SDK_VERSION == "0.7.2"
     assert len(sent) == len(provider.calls) == len(lookups) == 1
-    assert lookups == [("yggdrasil.host-secrets", "dev:marr-server-dev:typesafe.api-key")]
+    assert lookups == [MARR_BWS_IDENTITY]
     wire = provider.calls[0]
     assert str(wire.url) == "https://api.typesafe.ai/v1/systemone"
     assert wire.headers["authorization"] == "Bearer " + FAKE_KEY
@@ -209,6 +227,22 @@ def test_missing_typesafe_credential_fails_before_provider_call(monkeypatch, cap
     assert INTENT not in response.text + caplog.text
     if key:
         assert key not in response.text + caplog.text
+
+
+def test_bws_lookup_failure_fails_before_provider_call(monkeypatch, caplog) -> None:
+    provider = Provider()
+
+    class FailingReader:
+        def lookup(self, _project: str, _identity: str) -> str:
+            raise RuntimeError(FAKE_KEY + INTENT)
+
+    app, lookups, _ = _app(provider, monkeypatch, bws_reader=FailingReader())
+    with caplog.at_level(logging.DEBUG):
+        response = _call(app)
+    assert response.json()["outcome"] == "unavailable_before_send"
+    assert len(lookups) == 0
+    assert provider.calls == []
+    assert FAKE_KEY + INTENT not in response.text + caplog.text
 
 
 @pytest.mark.parametrize("mode", ["accepted_dev", "acceptance_once"])

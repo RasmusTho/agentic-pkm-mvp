@@ -1594,6 +1594,102 @@ def test_bws_lookup_uses_scoped_active_identity(
     assert "fixture-machine-token" not in (controller.directory / "operations.jsonl").read_text()
 
 
+def test_typesafe_bws_lookup_uses_isolated_project_and_keychain_reader_token(
+    tmp_path, monkeypatch, capsys, caplog
+):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
+    provider_key = "fixture-typesafe-provider-key"
+    client = _BwsClient("marr-dev", "dev/typesafe.api-key", provider_key)
+    token_calls = []
+
+    def keychain_lookup(service, account):
+        token_calls.append((service, account))
+        return "fixture-machine-token"
+
+    reader = host_secret_bootstrap.create_marr_typesafe_bws_reader(
+        environment={
+            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_ORGANIZATION_ID": _BWS_ORG,
+        },
+        keychain_lookup=keychain_lookup,
+        client_factory=lambda: client,
+    )
+    controller = HostSecretController(tmp_path / "controller")
+    assert resolve_host_secret_values(
+        channel="dev",
+        consumer="marr-server-dev",
+        provider="bws",
+        bws_reader=reader,
+        controller=controller,
+    ) == {"typesafe.api-key": provider_key}
+
+    assert token_calls == [
+        ("yggdrasil.bws-reader", "marr-server-dev-reader.token")
+    ]
+    assert client.calls == [
+        ("login", None),
+        ("projects", _BWS_ORG),
+        ("list", _BWS_ORG),
+        ("get", _BWS_ITEM),
+    ]
+    journal = (controller.directory / "operations.jsonl").read_text()
+    assert provider_key not in journal and "fixture-machine-token" not in journal
+    diagnostics = capsys.readouterr().out + caplog.text
+    assert provider_key not in diagnostics and "fixture-machine-token" not in diagnostics
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {},
+        {"BWS_READER_PROJECT": "non-prod", "BWS_PROJECT_ID": _BWS_PROJECT, "BWS_ORGANIZATION_ID": _BWS_ORG},
+        {
+            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_ORGANIZATION_ID": _BWS_ORG,
+            "BWS_ACCESS_TOKEN": "forbidden-token-source",
+        },
+        {
+            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_ORGANIZATION_ID": _BWS_ORG,
+            "BWS_ACCESS_TOKEN_FILE": "/forbidden/token-file",
+        },
+    ],
+)
+def test_typesafe_bws_lookup_fails_closed_before_provider_dispatch(
+    tmp_path, monkeypatch, environment
+):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
+    client_factory_calls = []
+    token_calls = []
+
+    def keychain_lookup(service, account):
+        token_calls.append((service, account))
+        return "fixture-machine-token"
+
+    def client_factory():
+        client_factory_calls.append(True)
+        return _BwsClient("marr-dev", "dev/typesafe.api-key", "fixture-provider-key")
+
+    with pytest.raises(host_secret_bootstrap.HostSecretBootstrapError):
+        reader = host_secret_bootstrap.create_marr_typesafe_bws_reader(
+            environment=environment,
+            keychain_lookup=keychain_lookup,
+            client_factory=client_factory,
+        )
+        resolve_host_secret_values(
+            channel="dev",
+            consumer="marr-server-dev",
+            provider="bws",
+            bws_reader=reader,
+            controller=HostSecretController(tmp_path / "controller"),
+        )
+    assert token_calls == []
+    assert client_factory_calls == []
+
+
 @pytest.mark.parametrize(
     "fault",
     [
@@ -1895,36 +1991,34 @@ def test_legacy_child_does_not_inherit_bws_credentials(monkeypatch):
     assert all(name not in env for name in ("BWS_ACCESS_TOKEN", "BWS_ACCESS_TOKEN_FILE", "CREDENTIALS_DIRECTORY", "TYPESAFE_API_KEY"))
 
 
-@pytest.mark.parametrize("run_on_credential_unavailable", [False, True])
-def test_typesafe_server_bootstrap_scopes_and_cleans_provider_key(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, run_on_credential_unavailable: bool,
+def test_typesafe_server_bootstrap_attests_identity_without_materializing_provider_key(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
     monkeypatch.setenv("TYPESAFE_API_KEY", "fixture-ambient-key-must-not-be-inherited")
-    fixture_key = "fixture-typesafe-server-provider-key"
-    paths: list[Path] = []
-
-    def lookup(service: str, account: str) -> str:
-        assert service == "yggdrasil.host-secrets"
-        assert account == "dev:marr-server-dev:typesafe.api-key"
-        return fixture_key
+    environment = {
+        "BWS_READER_PROJECT": "marr-dev",
+        "BWS_PROJECT_ID": _BWS_PROJECT,
+        "BWS_ORGANIZATION_ID": _BWS_ORG,
+    }
+    observed = []
 
     def runner(command: list[str], env: dict[str, str]) -> int:
         assert command == ["fixture-marr-server"]
+        assert env[HOST_SECRET_BOOTSTRAP_CHANNEL] == "dev"
+        assert env[HOST_SECRET_BOOTSTRAP_CONSUMER] == "marr-server-dev"
+        assert HOST_SECRET_RUNTIME_ENV_FILE not in env
         assert "TYPESAFE_API_KEY" not in env
-        path = Path(env[HOST_SECRET_RUNTIME_ENV_FILE])
-        paths.append(path)
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
-        assert load_runtime_secret_values(env) == {"TYPESAFE_API_KEY": fixture_key}
+        assert "BWS_ACCESS_TOKEN" not in env
+        assert "BWS_ACCESS_TOKEN_FILE" not in env
+        assert "CREDENTIALS_DIRECTORY" not in env
+        observed.append(env)
         return 0
 
-    assert run_with_host_secrets(
-        channel="dev", consumer="marr-server-dev", command=["fixture-marr-server"],
-        keychain_lookup=lookup, runner=runner, directory=tmp_path,
-        run_on_credential_unavailable=run_on_credential_unavailable,
+    assert host_secret_bootstrap.run_marr_server_without_provider_key(
+        command=["fixture-marr-server"], runner=runner, environment=environment
     ) == 0
-    assert len(paths) == 1
-    assert not paths[0].exists()
+    assert len(observed) == 1
 
 
 @pytest.mark.parametrize(
@@ -1952,28 +2046,29 @@ def test_typesafe_server_bootstrap_refuses_before_lookup_or_launch(
     assert list(tmp_path.iterdir()) == []
 
 
-@pytest.mark.parametrize("value", [None, "fixture-malformed-typesafe-key\nvalue"])
-def test_typesafe_server_unavailable_key_never_unlocks_credential_free_launch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, value: str | None,
-) -> None:
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {},
+        {"BWS_READER_PROJECT": "non-prod", "BWS_PROJECT_ID": _BWS_PROJECT, "BWS_ORGANIZATION_ID": _BWS_ORG},
+        {
+            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_ORGANIZATION_ID": _BWS_ORG,
+            "BWS_ACCESS_TOKEN": "forbidden-token-source",
+        },
+    ],
+)
+def test_typesafe_server_launch_refuses_ambient_or_wrong_bws_scope(environment, monkeypatch):
     monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
-    launched: list[list[str]] = []
-
-    def lookup(_service: str, account: str) -> str:
-        assert account == "dev:marr-server-dev:typesafe.api-key"
-        if value is None:
-            raise OSError("fixture keychain item is absent")
-        return value
-
+    launched = []
     with pytest.raises(HostSecretBootstrapError):
-        run_with_host_secrets(
-            channel="dev", consumer="marr-server-dev", command=["fixture-marr-server"],
-            keychain_lookup=lookup,
+        host_secret_bootstrap.run_marr_server_without_provider_key(
+            command=["fixture-marr-server"],
+            environment=environment,
             runner=lambda command, _env: launched.append(command) or 0,
-            directory=tmp_path, run_on_credential_unavailable=True,
         )
     assert launched == []
-    assert list(tmp_path.iterdir()) == []
 
 
 def test_malformed_journal_never_reopens_admission(tmp_path):

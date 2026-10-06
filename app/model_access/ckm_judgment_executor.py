@@ -24,7 +24,13 @@ from app.model_access.ckm_judgment_contract import (
 from app.model_access.typesafe_adapter import (
     TYPESAFE_SDK_VERSION, TypeSafeAdapter, TypeSafeAdapterError, strict_json_object,
 )
-from app.ops.host_secret_bootstrap import resolve_host_secret_values, validate_secret_value
+from app.ops.bws_secret_reader import BwsSecretReader
+from app.ops.host_secret_bootstrap import (
+    create_marr_typesafe_bws_reader,
+    resolve_host_secret_values,
+    validate_secret_value,
+)
+from app.ops.host_secret_controller import HostSecretController
 
 
 BUILDER_TYPESAFE_PROFILE_PATH = (
@@ -79,12 +85,20 @@ class BuilderTypeSafeExecutor:
         profile_path: Path = BUILDER_TYPESAFE_PROFILE_PATH,
         adapter: TypeSafeAdapter | None = None,
         keychain_lookup: Callable[[str, str], str] | None = None,
+        bws_reader: BwsSecretReader | None = None,
+        secret_controller: HostSecretController | None = None,
+        environment: Mapping[str, str] | None = None,
     ) -> None:
         self._mode = mode
         self._runtime_channel = runtime_channel
         self._profile_path = profile_path
         self._adapter = adapter or TypeSafeAdapter(max_request_bytes=CKM_JUDGMENT_REQUEST_BYTES)
+        # This Keychain seam supplies the MARR BWS reader token only. The
+        # TypeSafe provider key comes from the isolated BWS project.
         self._keychain_lookup = keychain_lookup
+        self._bws_reader = bws_reader
+        self._secret_controller = secret_controller
+        self._environment = os.environ if environment is None else dict(environment)
         self._acceptance_used = False
         self._lock = Lock()
 
@@ -101,6 +115,7 @@ class BuilderTypeSafeExecutor:
             mode=env.get("MODEL_ACCESS_BUILDER_TYPESAFE_MODE", "disabled")
             if valid_server else "disabled",
             runtime_channel=env.get("HOST_SECRET_BOOTSTRAP_CHANNEL", ""),
+            environment=env,
         )
 
     def execute(self, request: SystemOneJudgmentRequest) -> BuilderJudgmentResult:
@@ -115,15 +130,24 @@ class BuilderTypeSafeExecutor:
                     if self._acceptance_used:
                         return unavailable
                     self._acceptance_used = True
-            if self._keychain_lookup is None:
-                secrets = resolve_host_secret_values(
-                    channel="dev", consumer="marr-server-dev", provider="keychain",
-                )
-            else:
-                secrets = resolve_host_secret_values(
-                    channel="dev", consumer="marr-server-dev", provider="keychain",
-                    keychain_lookup=self._keychain_lookup,
-                )
+            bws_reader = self._bws_reader
+            if bws_reader is None:
+                if self._keychain_lookup is None:
+                    bws_reader = create_marr_typesafe_bws_reader(
+                        environment=self._environment
+                    )
+                else:
+                    bws_reader = create_marr_typesafe_bws_reader(
+                        environment=self._environment,
+                        keychain_lookup=self._keychain_lookup,
+                    )
+            secrets = resolve_host_secret_values(
+                channel="dev",
+                consumer="marr-server-dev",
+                provider="bws",
+                bws_reader=bws_reader,
+                controller=self._secret_controller,
+            )
             api_key = secrets.get("typesafe.api-key", "")
             if not validate_secret_value("api-key", api_key):
                 return unavailable

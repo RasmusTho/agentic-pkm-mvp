@@ -2,6 +2,7 @@
 
 import ast
 import json
+from contextlib import contextmanager
 from pathlib import Path
 import socket
 
@@ -19,6 +20,22 @@ from app.model_access.typesafe_judgment_executor import PRODUCT_TYPESAFE_PROFILE
 from app.ops.host_secret_contract import UndeclaredSecretConsumerError, load_host_secret_contract
 
 
+MARR_BWS_IDENTITY = ("marr-dev", "dev/typesafe.api-key")
+
+
+class _FakeCheckOperation:
+    operation_id = "fixture-typesafe-check"
+
+    def finish(self, _evidence):
+        pass
+
+
+class _FakeSecretController:
+    @contextmanager
+    def admit(self, _operation, _channel):
+        yield _FakeCheckOperation()
+
+
 def _request():
     return ckm_judgment_request({
         "candidates": [{"id": "candidate_1", "kind": "document", "excerpt": "Synthetic evidence"}],
@@ -32,9 +49,10 @@ def _executors(monkeypatch):
     lookups, sent = [], []
     key = "synthetic-runtime-server-only-key"
 
-    def lookup(service, account):
-        lookups.append((service, account))
-        return key
+    class Reader:
+        def lookup(self, project, identity):
+            lookups.append((project, identity))
+            return key
 
     def provider(request):
         sent.append(request)
@@ -47,11 +65,13 @@ def _executors(monkeypatch):
         return httpx2.Response(200, json={"model": payload["model"], "usage": {}, "answers": answers})
 
     builder = BuilderTypeSafeExecutor(
-        mode="accepted_dev", keychain_lookup=lookup,
+        mode="accepted_dev", bws_reader=Reader(),
+        secret_controller=_FakeSecretController(),
         adapter=TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(provider), max_request_bytes=12288),
     )
     product = ProductTypeSafeExecutor(
-        mode="accepted_dev", keychain_lookup=lookup,
+        mode="accepted_dev", bws_reader=Reader(),
+        secret_controller=_FakeSecretController(),
         adapter=TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(provider)),
     )
     return builder, product, lookups, sent, key
@@ -65,7 +85,7 @@ def test_runtime_key_stays_on_marr_and_callers_keep_separate_policy(monkeypatch)
     builder, _, lookups, sent, key = _executors(monkeypatch)
     result = builder.execute(_request())
     assert result.outcome == "success" and len(sent) == len(lookups) == 1
-    assert lookups == [("yggdrasil.host-secrets", "dev:marr-server-dev:typesafe.api-key")]
+    assert lookups == [MARR_BWS_IDENTITY]
     assert key not in result.model_dump_json()
     assert result.selection.profile_id == "builder.ckm_association.v1"
     assert result.judgment.provenance.model == result.selection.model

@@ -158,6 +158,92 @@ def test_shared_import_updates_both_project_copies_without_output(setup, capsys)
     assert CANARY not in str(capsys.readouterr())
 
 
+def test_typesafe_import_is_restricted_to_isolated_marr_project(setup, capsys):
+    admin, provider, controller = setup
+    assert main(['import', 'dev', 'typesafe.api-key', '--stdin'], admin=admin,
+                stdin=StringIO(CANARY)) == 0
+    assert set(provider.values) == {('marr-dev', 'dev/typesafe.api-key')}
+    assert provider.values['marr-dev', 'dev/typesafe.api-key'].value == CANARY
+    records = history(controller)
+    assert {(record.get('project'), record.get('identity')) for record in records
+            if record['event'] == 'snapshot'} == {('marr-dev', 'dev/typesafe.api-key')}
+    assert CANARY not in str(capsys.readouterr())
+
+
+def test_typesafe_admin_check_uses_only_marr_project_and_exact_consumer_grant(setup):
+    admin, provider, _ = setup
+    provider.seed('dev/typesafe.api-key', CANARY, ('marr-dev',))
+    assert admin.check('dev', ['marr-server-dev']) == [
+        {'secret': 'typesafe.api-key', 'status': 'ok'}
+    ]
+    assert provider.calls == [('read', 'marr-dev', 'dev/typesafe.api-key')]
+    with pytest.raises(SecretAdminError):
+        admin.check('test', ['marr-server-dev'])
+    provider.calls.clear()
+    admin.check('dev', ['builderops-ckm-semantic'])
+    assert set(provider.calls) == {
+        ('read', 'non-prod', 'shared/openai.api-key'),
+        ('read', 'prod', 'shared/openai.api-key'),
+    }
+
+
+def test_typesafe_import_rejects_non_dev_scope_before_provider_access(setup):
+    admin, provider, _ = setup
+    with pytest.raises(SecretAdminError):
+        admin.import_stdin('test', 'typesafe.api-key', StringIO(CANARY))
+    assert provider.calls == []
+    assert provider.values == {}
+
+
+def test_marr_admin_project_is_opt_in_and_accepts_only_exact_typesafe_identity():
+    org, nonprod, prod, marr_dev = [str(uuid4()) for _ in range(4)]
+    current = BwsSecretAdmin(BwsAdminConfig(org, nonprod, prod), token_reader=lambda: CANARY)
+    assert current.config.projects() == {'non-prod': nonprod, 'prod': prod}
+    with pytest.raises(SecretAdminError):
+        current._scope('marr-dev', 'dev/typesafe.api-key')
+
+    enabled = BwsSecretAdmin(BwsAdminConfig(org, nonprod, prod, marr_dev), token_reader=lambda: CANARY)
+    assert enabled._scope('marr-dev', 'dev/typesafe.api-key') == marr_dev
+    for project, identity in (
+        ('non-prod', 'dev/typesafe.api-key'),
+        ('marr-dev', 'shared/openai.api-key'),
+        ('marr-dev', 'dev/openai.api-key'),
+    ):
+        with pytest.raises(SecretAdminError):
+            enabled._scope(project, identity)
+
+
+def test_admin_session_requires_the_exact_configured_project_inventory():
+    org, nonprod, prod, marr_dev = [str(uuid4()) for _ in range(4)]
+
+    def client_for(projects):
+        auth = NS(login_access_token=lambda *_: NS(
+            success=True, data=NS(authenticated=True)
+        ))
+        project_api = NS(list=lambda _organization: NS(
+            success=True,
+            data=NS(data=[NS(name=name, id=project_id, organization_id=org)
+                          for name, project_id in projects]),
+        ))
+        return NS(auth=lambda: auth, projects=lambda: project_api)
+
+    two_projects = client_for([('non-prod', nonprod), ('prod', prod)])
+    admin = BwsSecretAdmin(BwsAdminConfig(org, nonprod, prod),
+                           client_factory=lambda: two_projects, token_reader=lambda: CANARY)
+    assert admin._session() is two_projects
+
+    unexpected_marr_project = client_for(
+        [('non-prod', nonprod), ('prod', prod), ('marr-dev', marr_dev)]
+    )
+    admin_without_marr = BwsSecretAdmin(
+        BwsAdminConfig(org, nonprod, prod),
+        client_factory=lambda: unexpected_marr_project,
+        token_reader=lambda: CANARY,
+    )
+    with pytest.raises(SecretAdminError):
+        admin_without_marr._session()
+
+
 def test_shared_import_history_records_genesis_tombstone_before_first_provision(setup):
     admin, provider, controller = setup
     def check_history():
@@ -315,8 +401,8 @@ def test_admin_write_value_never_enters_argv_or_output(setup, monkeypatch, capsy
 
 def test_sdk_adapter_authenticates_without_cache_and_uses_request_body(monkeypatch):
     from bitwarden_sdk import BitwardenClient
-    org, nonprod, prod, item = [str(uuid4()) for _ in range(4)]
-    config = BwsAdminConfig(org, nonprod, prod)
+    org, nonprod, prod, marr_dev, item = [str(uuid4()) for _ in range(5)]
+    config = BwsAdminConfig(org, nonprod, prod, marr_dev)
     commands = []
     class Inner:
         def run_command(self, raw):
@@ -328,11 +414,12 @@ def test_sdk_adapter_authenticates_without_cache_and_uses_request_body(monkeypat
             elif 'projects' in command:
                 response['data'] = {'data': [{'id': pid, 'name': name, 'organizationId': org,
                     'creationDate': '2026-01-01T00:00:00Z', 'revisionDate': '2026-01-01T00:00:00Z'}
-                    for name, pid in [('non-prod', nonprod), ('prod', prod)]]}
+                    for name, pid in [('non-prod', nonprod), ('prod', prod), ('marr-dev', marr_dev)]]}
             else:
                 request = command['secrets']['create']
                 response['data'] = {'id': item, 'key': request['key'], 'value': request['value'],
-                    'note': request['note'], 'organizationId': org, 'projectId': nonprod,
+                    'note': request['note'], 'organizationId': org,
+                    'projectId': request['projectIds'][0],
                     'creationDate': '2026-01-01T00:00:00Z', 'revisionDate': '2026-01-01T00:00:00Z'}
             return json.dumps(response)
     # Exercise the real SDK serialization boundary without constructing its native client.
@@ -345,12 +432,16 @@ def test_sdk_adapter_authenticates_without_cache_and_uses_request_body(monkeypat
     assert 'stateFile' not in json.dumps(commands[0])
     assert commands[-1]['secrets']['create']['value'] == PRIOR
     assert commands[-1]['secrets']['create']['projectIds'] == [nonprod]
+    marr_copy = adapter.put('marr-dev', 'dev/typesafe.api-key', None, CANARY, 'marr owner note')
+    assert marr_copy.value == CANARY
+    assert commands[-1]['secrets']['create']['key'] == 'dev/typesafe.api-key'
+    assert commands[-1]['secrets']['create']['projectIds'] == [marr_dev]
 
 
 def test_sdk_exception_is_unknown_not_typed_rejection():
-    org, nonprod, prod = [str(uuid4()) for _ in range(3)]
+    org, nonprod, prod, marr_dev = [str(uuid4()) for _ in range(4)]
     client = NS(auth=lambda: NS(login_access_token=lambda *a: (_ for _ in ()).throw(RuntimeError(CANARY))))
-    adapter = BwsSecretAdmin(BwsAdminConfig(org, nonprod, prod),
+    adapter = BwsSecretAdmin(BwsAdminConfig(org, nonprod, prod, marr_dev),
                              client_factory=lambda: client, token_reader=lambda: CANARY)
     with pytest.raises(SecretAdminError) as error:
         adapter.put('non-prod', IDENTITY, None, PRIOR, 'note')

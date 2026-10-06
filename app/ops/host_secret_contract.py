@@ -50,6 +50,16 @@ BWS_IDENTITIES = {
     "anthropic.api-key": "shared",
     "github.token": "shared",
     "discord.webhook": "shared",
+    "typesafe.api-key": "isolated",
+}
+BWS_ISOLATED_IDENTITIES = {
+    "typesafe.api-key": ("marr-dev", "dev/typesafe.api-key"),
+}
+BWS_MACHINE_ACCOUNTS = {
+    "admin": ["non-prod", "prod", "marr-dev"],
+    "non-prod-reader": ["non-prod"],
+    "prod-reader": ["prod"],
+    "marr-server-dev-reader": ["marr-dev"],
 }
 DATABASE_CONSUMERS = {
     "postgres-db": "db",
@@ -68,8 +78,8 @@ _ENVIRONMENT_GRANTS = {
     "builderops-ckm-semantic": {"openai.api-key"},
     "heimdal-external-alerts": {"discord.webhook"},
 }
-_KEYCHAIN_ONLY_SECRETS = frozenset({"typesafe.api-key"})
-_KEYCHAIN_ONLY_GRANTS = frozenset({("dev", "marr-server-dev", "typesafe.api-key")})
+_KEYCHAIN_ONLY_SECRETS: frozenset[str] = frozenset()
+_KEYCHAIN_ONLY_GRANTS: frozenset[tuple[str, str, str]] = frozenset()
 
 
 class UndeclaredSecretConsumerError(ValueError):
@@ -110,7 +120,12 @@ class HostSecretContract:
             self.require_declared(channel=channel, consumer=consumer, secret=secret)
         if channel not in CHANNEL_PROJECTS or secret not in BWS_IDENTITIES:
             raise UndeclaredSecretConsumerError("undeclared host secret request")
-        prefix = "shared" if BWS_IDENTITIES[secret] == "shared" else channel
+        scope = BWS_IDENTITIES[secret]
+        if scope == "isolated":
+            if (channel, consumer, secret) != ("dev", "marr-server-dev", "typesafe.api-key"):
+                raise UndeclaredSecretConsumerError("undeclared host secret request")
+            return BWS_ISOLATED_IDENTITIES[secret]
+        prefix = "shared" if scope == "shared" else channel
         return CHANNEL_PROJECTS[channel], f"{prefix}/{secret}"
 
     def file_binding(self, *, channel: str, consumer: str, secret: str) -> tuple[str, str]:
@@ -345,29 +360,8 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
 def _validate_keychain_only_contract(
     payload: dict[str, object], allowed: set[tuple[str, str, str]]
 ) -> None:
-    expected_secret = {
-        "logical_id": "typesafe.api-key",
-        "child_binding": "TYPESAFE_API_KEY",
-        "kind": "api-key",
-        "optional": False,
-        "shared_key_domain": False,
-    }
-    expected_consumer = {
-        "consumer": "marr-server-dev",
-        "channels": ["dev"],
-        "secrets": ["typesafe.api-key"],
-        "role_requirements": {},
-    }
-    secrets = payload["secrets"]
-    consumers = payload["consumers"]
-    if (
-        payload["keychain_only_secrets"] != ["typesafe.api-key"]
-        or not isinstance(secrets, list)
-        or expected_secret not in secrets
-        or not isinstance(consumers, list)
-        or expected_consumer not in consumers
-        or {grant for grant in allowed if grant[2] in _KEYCHAIN_ONLY_SECRETS}
-        != _KEYCHAIN_ONLY_GRANTS
+    if payload["keychain_only_secrets"] != [] or any(
+        grant[2] in _KEYCHAIN_ONLY_SECRETS for grant in allowed
     ):
         raise ValueError("invalid host secret Keychain-only contract")
 
@@ -380,14 +374,10 @@ def _validate_bws_contract(
         for channel in CHANNEL_PROJECTS
         for consumer, secrets in _ENVIRONMENT_GRANTS.items()
         for secret in secrets
-    }
+    } | {("dev", "marr-server-dev", "typesafe.api-key")}
     expected_bws = {
         "channel_projects": CHANNEL_PROJECTS,
-        "machine_accounts": {
-            "admin": ["non-prod", "prod"],
-            "non-prod-reader": ["non-prod"],
-            "prod-reader": ["prod"],
-        },
+        "machine_accounts": BWS_MACHINE_ACCOUNTS,
         "identities": [
             {"logical_id": secret, "scope": scope} for secret, scope in BWS_IDENTITIES.items()
         ],
