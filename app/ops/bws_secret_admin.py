@@ -14,7 +14,9 @@ from uuid import UUID
 
 from app.ops.bws_secret_reader import _sdk_client
 from app.ops.host_secret_bootstrap import _security_framework_keychain_lookup
-from app.ops.host_secret_contract import BWS_IDENTITIES, CHANNEL_PROJECTS
+from app.ops.host_secret_contract import (
+    BWS_IDENTITIES, BWS_ISOLATED_IDENTITIES, CHANNEL_PROJECTS,
+)
 
 
 class SecretAdminError(RuntimeError):
@@ -45,25 +47,35 @@ class BwsAdminConfig:
     organization_id: str
     non_prod_project_id: str
     prod_project_id: str
+    marr_dev_project_id: str | None = None
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> BwsAdminConfig:
         try:
             cfg = cls(environment['BWS_ORGANIZATION_ID'],
-                      environment['BWS_NON_PROD_PROJECT_ID'], environment['BWS_PROD_PROJECT_ID'])
+                      environment['BWS_NON_PROD_PROJECT_ID'], environment['BWS_PROD_PROJECT_ID'],
+                      environment.get('BWS_MARR_DEV_PROJECT_ID'))
             cfg.validate()
             return cfg
         except Exception:
             raise SecretAdminError() from None
 
     def validate(self) -> None:
-        ids = (self.organization_id, self.non_prod_project_id, self.prod_project_id)
-        if len(set(ids)) != 3 or any(str(UUID(item)) != item for item in ids):
+        ids = [self.organization_id, self.non_prod_project_id, self.prod_project_id]
+        if self.marr_dev_project_id is not None:
+            ids.append(self.marr_dev_project_id)
+        if len(set(ids)) != len(ids) or any(str(UUID(item)) != item for item in ids):
             raise SecretAdminError()
 
     def projects(self) -> dict[str, str]:
         self.validate()
-        return {'non-prod': self.non_prod_project_id, 'prod': self.prod_project_id}
+        projects = {
+            'non-prod': self.non_prod_project_id,
+            'prod': self.prod_project_id,
+        }
+        if self.marr_dev_project_id is not None:
+            projects['marr-dev'] = self.marr_dev_project_id
+        return projects
 
 
 def _admin_token() -> str:
@@ -95,7 +107,7 @@ class BwsSecretAdmin:
         if not result.success or result.data is None or not result.data.authenticated:
             raise SecretAdminError()
         response = client.projects().list(self.config.organization_id)
-        if not response.success or len(response.data.data) != 2:
+        if not response.success or len(response.data.data) != len(self.config.projects()):
             raise SecretAdminError()
         projects = {item.name: str(item.id) for item in response.data.data
                     if str(item.organization_id) == self.config.organization_id}
@@ -106,12 +118,24 @@ class BwsSecretAdmin:
 
     def _scope(self, project: str, identity: str) -> str:
         prefix, _, logical = identity.partition('/')
-        if logical not in BWS_IDENTITIES or (
-            prefix != 'shared' if BWS_IDENTITIES[logical] == 'shared'
-            else CHANNEL_PROJECTS.get(prefix) != project
-        ):
+        scope = BWS_IDENTITIES.get(logical)
+        isolated = BWS_ISOLATED_IDENTITIES.get(logical)
+        configured_projects = self.config.projects()
+        if scope == 'isolated':
+            allowed = isolated == (project, identity)
+        elif scope == 'shared':
+            allowed = prefix == 'shared' and project in {'non-prod', 'prod'}
+        elif scope == 'channel':
+            allowed = CHANNEL_PROJECTS.get(prefix) == project
+        else:
+            allowed = False
+        allowed = allowed and project in configured_projects
+        if not allowed:
             raise SecretAdminError()
-        return self.config.projects()[project]
+        try:
+            return configured_projects[project]
+        except KeyError:
+            raise SecretAdminError() from None
 
     def _copy(self, response: Any, project_id: str, identity: str,
               expected_id: str | None = None) -> SecretCopy:

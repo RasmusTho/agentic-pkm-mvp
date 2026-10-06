@@ -26,14 +26,18 @@ class BwsReaderConfig:
     project: str
     project_id: str
     organization_id: str
-    credentials_directory: Path
-    token_file: Path
+    credentials_directory: Path | None
+    token_file: Path | None
+    token_source: str = "credential-file"
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> BwsReaderConfig:
         try:
+            project = environment["BWS_READER_PROJECT"]
+            if project not in {"non-prod", "prod"}:
+                raise BwsLookupError()
             return cls(
-                environment["BWS_READER_PROJECT"],
+                project,
                 environment["BWS_PROJECT_ID"],
                 environment["BWS_ORGANIZATION_ID"],
                 Path(environment["CREDENTIALS_DIRECTORY"]),
@@ -42,15 +46,59 @@ class BwsReaderConfig:
         except Exception:
             raise BwsLookupError() from None
 
+    @classmethod
+    def from_marr_server_environment(
+        cls, environment: Mapping[str, str]
+    ) -> BwsReaderConfig:
+        """Build the MARR-only configuration; its token is fetched from Keychain."""
+        try:
+            if (
+                environment["BWS_READER_PROJECT"] != "marr-dev"
+                or any(
+                    name in environment
+                    for name in (
+                        "BWS_ACCESS_TOKEN",
+                        "BWS_ACCESS_TOKEN_FILE",
+                        "CREDENTIALS_DIRECTORY",
+                    )
+                )
+            ):
+                raise BwsLookupError()
+            return cls(
+                "marr-dev",
+                environment["BWS_PROJECT_ID"],
+                environment["BWS_ORGANIZATION_ID"],
+                None,
+                None,
+                "keychain",
+            )
+        except Exception:
+            raise BwsLookupError() from None
+
     def validate(self, project: str) -> None:
-        if (
-            project not in {"non-prod", "prod"}
-            or self.project != project
-            or str(UUID(self.project_id)) != self.project_id
-            or str(UUID(self.organization_id)) != self.organization_id
-            or not self.credentials_directory.is_absolute()
-            or self.token_file != self.credentials_directory / "bws-machine-account-token"
-        ):
+        try:
+            valid_ids = (
+                str(UUID(self.project_id)) == self.project_id
+                and str(UUID(self.organization_id)) == self.organization_id
+            )
+        except (ValueError, TypeError, AttributeError):
+            valid_ids = False
+        valid_marr = (
+            project == self.project == "marr-dev"
+            and self.token_source == "keychain"
+            and self.credentials_directory is None
+            and self.token_file is None
+        )
+        valid_channel = (
+            project in {"non-prod", "prod"}
+            and self.project == project
+            and self.token_source == "credential-file"
+            and self.credentials_directory is not None
+            and self.credentials_directory.is_absolute()
+            and self.token_file
+            == self.credentials_directory / "bws-machine-account-token"
+        )
+        if not valid_ids or not (valid_marr or valid_channel):
             raise BwsLookupError()
 
 
@@ -61,6 +109,8 @@ def _sdk_client() -> Any:
 
 
 def _read_token(config: BwsReaderConfig) -> str:
+    if config.credentials_directory is None:
+        raise BwsLookupError()
     descriptor = directory_fd = None
     try:
         directory_fd = os.open(
@@ -106,10 +156,29 @@ def _read_token(config: BwsReaderConfig) -> str:
 
 class BwsSecretReader:
     def __init__(
-        self, config: BwsReaderConfig, *, client_factory: Callable[[], Any] = _sdk_client
+        self,
+        config: BwsReaderConfig,
+        *,
+        client_factory: Callable[[], Any] = _sdk_client,
+        keychain_token_lookup: Callable[[], str] | None = None,
     ) -> None:
         self.config = config
         self._client_factory = client_factory
+        self._keychain_token_lookup = keychain_token_lookup
+
+    @staticmethod
+    def _validate_token(token: str) -> str:
+        try:
+            encoded = token.encode("utf-8", errors="strict")
+        except (AttributeError, UnicodeError):
+            raise BwsLookupError() from None
+        if (
+            not encoded
+            or len(encoded) > 4096
+            or any(char.isspace() or not char.isprintable() for char in token)
+        ):
+            raise BwsLookupError()
+        return token
 
     def lookup(self, project: str, identity: str) -> str:
         """Validate scope before authentication and recheck selected response membership.
@@ -121,19 +190,35 @@ class BwsSecretReader:
             self.config.validate(project)
             # Even a direct caller cannot name an identity from a different channel/project.
             prefix, separator, logical_id = identity.partition("/")
-            from app.ops.host_secret_contract import BWS_IDENTITIES, CHANNEL_PROJECTS
+            from app.ops.host_secret_contract import (
+                BWS_IDENTITIES,
+                BWS_ISOLATED_IDENTITIES,
+                CHANNEL_PROJECTS,
+            )
 
+            scope = BWS_IDENTITIES.get(logical_id)
+            valid_isolated_identity = (
+                scope == "isolated"
+                and BWS_ISOLATED_IDENTITIES.get(logical_id) == (project, identity)
+            )
+            valid_channel_identity = (
+                scope == "channel" and CHANNEL_PROJECTS.get(prefix) == project
+            )
+            valid_shared_identity = scope == "shared" and prefix == "shared"
             if (
                 not separator
-                or logical_id not in BWS_IDENTITIES
-                or (BWS_IDENTITIES[logical_id] == "shared" and prefix != "shared")
-                or (
-                    BWS_IDENTITIES[logical_id] == "channel"
-                    and CHANNEL_PROJECTS.get(prefix) != project
-                )
+                or not (valid_isolated_identity or valid_channel_identity or valid_shared_identity)
+                or (project == "marr-dev" and not valid_isolated_identity)
+                or (project != "marr-dev" and valid_isolated_identity)
             ):
                 raise BwsLookupError()
-            token = _read_token(self.config)  # before constructing/accessing any provider
+            if self.config.token_source == "keychain":
+                if self._keychain_token_lookup is None:
+                    raise BwsLookupError()
+                token = self._validate_token(self._keychain_token_lookup())
+            else:
+                token = _read_token(self.config)
+            # Authenticate only after the project and exact identity were checked.
             client = self._client_factory()
             login = client.auth().login_access_token(token, None)
             del token

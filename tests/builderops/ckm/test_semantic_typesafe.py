@@ -23,16 +23,31 @@ from app.model_access.ckm_judgment_contract import (
 from app.model_access.ckm_judgment_executor import BUILDER_TYPESAFE_PROFILE_PATH, BuilderTypeSafeExecutor
 from app.model_access.codex_executor_service import create_codex_executor_app
 from app.model_access.typesafe_adapter import TypeSafeAdapter
+from app.ops.host_secret_bootstrap import create_marr_typesafe_bws_reader
 
 
 CAPABILITY = "model-access.example/cap/complete"
 FAKE_KEY = "synthetic-server-only-key-5768"
+MARR_BWS_IDENTITY = ("marr-dev", "dev/typesafe.api-key")
 ENV = {
     "PKM_ENVIRONMENT": "dev", "BUILDER_CKM_MARR_ENDPOINT": "https://ckm.example.internal",
     "BUILDER_CKM_MARR_CA_BUNDLE": "/synthetic/builder-ca.pem",
     "BUILDER_CKM_MARR_CLIENT_CERT": "/synthetic/builder-cert.pem",
     "BUILDER_CKM_MARR_CLIENT_KEY": "/synthetic/builder-key.pem",
 }
+
+
+class _FakeCheckOperation:
+    operation_id = "fixture-typesafe-check"
+
+    def finish(self, _evidence):
+        pass
+
+
+class _FakeSecretController:
+    @contextmanager
+    def admit(self, _operation, _channel):
+        yield _FakeCheckOperation()
 
 
 def _headers(channel="builder", action="ckm_judgment"):
@@ -97,7 +112,8 @@ class Provider:
 
 @contextmanager
 def _rig(monkeypatch, tmp_path, *, provider=None, mode="accepted_dev", key=FAKE_KEY,
-         profile_path=BUILDER_TYPESAFE_PROFILE_PATH, environment=None, mutate_reply=None):
+         profile_path=BUILDER_TYPESAFE_PROFILE_PATH, environment=None, mutate_reply=None,
+         fail_bws_lookup=False):
     provider = provider or Provider()
     lookups, tls_calls, intent_calls, sent = [], [], [], []
 
@@ -109,12 +125,17 @@ def _rig(monkeypatch, tmp_path, *, provider=None, mode="accepted_dev", key=FAKE_
     monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
     monkeypatch.setattr(socket, "create_connection", lambda *a, **kw: pytest.fail("no sockets in fake proof"))
 
-    def keychain(service, account):
-        lookups.append((service, account))
-        return key
+    class Reader:
+        def lookup(self, project, identity):
+            lookups.append((project, identity))
+            if fail_bws_lookup:
+                raise RuntimeError(FAKE_KEY + "Synthetic CKM input")
+            return key
 
     executor = BuilderTypeSafeExecutor(
-        mode=mode, profile_path=profile_path, keychain_lookup=keychain,
+        mode=mode, profile_path=profile_path, bws_reader=Reader(),
+        secret_controller=_FakeSecretController(),
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
         adapter=TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(provider.send),
                                 max_request_bytes=CKM_JUDGMENT_REQUEST_BYTES),
     )
@@ -169,7 +190,7 @@ def test_production_call_uses_builder_judgment_resolver(monkeypatch, tmp_path):
         )
         assert store.get_watermark("semantic_association")
         assert tls == [{"certfile": ENV["BUILDER_CKM_MARR_CLIENT_CERT"], "keyfile": ENV["BUILDER_CKM_MARR_CLIENT_KEY"]}]
-        assert lookups == [("yggdrasil.host-secrets", "dev:marr-server-dev:typesafe.api-key")]
+        assert lookups == [MARR_BWS_IDENTITY]
 
 
 @pytest.mark.parametrize("behavior", ["success", "no_match", "unknown_choice", "missing_answer", "extra_answer"])
@@ -266,6 +287,57 @@ def test_supported_model_profile_swap_preserves_candidate_contract(monkeypatch, 
     assert bodies[0] == bodies[1]
 
 
+def test_bws_lookup_failure_fails_before_provider_dispatch(monkeypatch, tmp_path):
+    with _rig(monkeypatch, tmp_path, fail_bws_lookup=True) as (store, provider, lookups, *_):
+        _artifact(store)
+        _capability(store)
+        store.set_watermark("semantic_association", "prior")
+        assert associate_unlinked_artifacts(store).proposed == 0
+        assert lookups == [("marr-dev", "dev/typesafe.api-key")]
+        assert provider.calls == []
+        assert store.list_evidence_edges() == []
+        assert store.get_watermark("semantic_association") == "prior"
+
+
+def test_exact_marr_reader_malformed_keychain_token_stops_builder_adapter(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
+    provider = Provider()
+    client_factory_calls = []
+
+    def client_factory():
+        client_factory_calls.append(True)
+        return object()
+
+    reader = create_marr_typesafe_bws_reader(
+        environment={
+            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_PROJECT_ID": "00000000-0000-4000-8000-000000000001",
+            "BWS_ORGANIZATION_ID": "00000000-0000-4000-8000-000000000002",
+        },
+        keychain_lookup=lambda _service, _account: "malformed token",
+        client_factory=client_factory,
+    )
+    request = ckm_judgment_request({
+        "candidates": [{"id": "candidate_1", "kind": "document", "excerpt": "Synthetic"}],
+        "capabilities": [{"id": "capability_1", "kind": "capability", "excerpt": "Synthetic"}],
+    })
+    executor = BuilderTypeSafeExecutor(
+        mode="accepted_dev",
+        bws_reader=reader,
+        secret_controller=_FakeSecretController(),
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
+        adapter=TypeSafeAdapter(
+            transport_factory=lambda: httpx2.MockTransport(provider.send),
+            max_request_bytes=CKM_JUDGMENT_REQUEST_BYTES,
+        ),
+    )
+    result = executor.execute(request)
+    assert result.outcome == "unavailable_before_send"
+    assert client_factory_calls == [] and provider.calls == []
+
+
 @pytest.mark.parametrize("case", ["unknown", "unpinned", "unsupported", "wrong_owner"])
 def test_unconfigured_model_profile_fails_before_dispatch(monkeypatch, tmp_path, case):
     policy = json.loads(BUILDER_TYPESAFE_PROFILE_PATH.read_text())
@@ -347,6 +419,40 @@ def test_acceptance_once_is_atomic_for_competing_calls(monkeypatch, tmp_path):
             outcomes = list(pool.map(lambda _: executor.execute(request).outcome, range(2)))
         assert sorted(outcomes) == ["success", "unavailable_before_send"]
         assert len(provider.calls) == len(lookups) == 1
+
+
+def test_acceptance_once_refuses_a_new_executor_after_restart(monkeypatch, tmp_path):
+    request = ckm_judgment_request({
+        "candidates": [{"id": "candidate_1", "kind": "document", "excerpt": "Synthetic"}],
+        "capabilities": [{"id": "capability_1", "kind": "capability", "excerpt": "Synthetic"}],
+    })
+    state = tmp_path / "typesafe-acceptance"
+    with _rig(monkeypatch, tmp_path, mode="acceptance_once") as (
+        _, provider, lookups, _, _, _, _, first_executor
+    ):
+        assert first_executor.execute(request).outcome == "success"
+        assert len(provider.calls) == len(lookups) == 1
+
+        second_lookups = []
+
+        class Reader:
+            def lookup(self, project, identity):
+                second_lookups.append((project, identity))
+                return FAKE_KEY
+
+        second_provider = Provider()
+        second_executor = BuilderTypeSafeExecutor(
+            mode="acceptance_once",
+            bws_reader=Reader(),
+            secret_controller=_FakeSecretController(),
+            acceptance_state_directory=state,
+            adapter=TypeSafeAdapter(
+                transport_factory=lambda: httpx2.MockTransport(second_provider.send),
+                max_request_bytes=CKM_JUDGMENT_REQUEST_BYTES,
+            ),
+        )
+        assert second_executor.execute(request).outcome == "unavailable_before_send"
+        assert second_lookups == [] and second_provider.calls == []
 
 
 @pytest.mark.parametrize("case", ["unknown_key", "oversize", "kind", "duplicate_id", "prompt"])

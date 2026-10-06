@@ -27,13 +27,19 @@ from app.ops.bws_secret_reader import (
     BwsSecretReader,
 )
 from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
-from app.ops.host_secret_contract import HostSecretContract, load_host_secret_contract
+from app.ops.host_secret_contract import (
+    BWS_ISOLATED_IDENTITIES,
+    HostSecretContract,
+    load_host_secret_contract,
+)
 
 
 HOST_SECRET_RUNTIME_ENV_FILE = "HOST_SECRET_RUNTIME_ENV_FILE"
 HOST_SECRET_BOOTSTRAP_FAILURE_REF = "HOST_SECRET_BOOTSTRAP_FAILURE_REF"
 HOST_SECRET_BOOTSTRAP_CHANNEL = "HOST_SECRET_BOOTSTRAP_CHANNEL"
 HOST_SECRET_BOOTSTRAP_CONSUMER = "HOST_SECRET_BOOTSTRAP_CONSUMER"
+MARR_BWS_TOKEN_KEYCHAIN_SERVICE = "yggdrasil.bws-reader"
+MARR_BWS_TOKEN_KEYCHAIN_ACCOUNT = "marr-server-dev-reader.token"
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _DISCORD_WEBHOOK_URL_PATTERN = re.compile(
     r"^https://(?:discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+$"
@@ -145,6 +151,8 @@ def _security_keychain_lookup(service: str, account: str) -> str:
         raise HostSecretBootstrapError(
             "host secret bootstrap failed for declared consumer"
         ) from exc
+
+
     if result.returncode != 0:
         raise HostSecretBootstrapError(
             "host secret bootstrap failed for declared consumer"
@@ -212,6 +220,35 @@ def _security_framework_keychain_lookup(service: str, account: str) -> str:
         raise HostSecretBootstrapError(
             "host secret bootstrap failed for declared consumer"
         ) from exc
+
+
+def create_marr_typesafe_bws_reader(
+    *,
+    environment: Mapping[str, str] | None = None,
+    keychain_lookup: KeychainLookup = _security_keychain_lookup,
+    client_factory: Callable[[], object] | None = None,
+) -> BwsSecretReader:
+    """Create the isolated MARR reader with a Keychain-held read-only token."""
+    if sys.platform != "darwin":
+        raise HostSecretBootstrapError("host secret provider unavailable")
+    try:
+        config = BwsReaderConfig.from_marr_server_environment(
+            os.environ if environment is None else environment
+        )
+        token_lookup = lambda: keychain_lookup(
+            MARR_BWS_TOKEN_KEYCHAIN_SERVICE, MARR_BWS_TOKEN_KEYCHAIN_ACCOUNT
+        )
+        if client_factory is None:
+            return BwsSecretReader(config, keychain_token_lookup=token_lookup)
+        return BwsSecretReader(
+            config,
+            keychain_token_lookup=token_lookup,
+            client_factory=client_factory,
+        )
+    except HostSecretBootstrapError:
+        raise
+    except Exception:
+        raise HostSecretBootstrapError("host secret provider unavailable") from None
 
 
 def _declared_secrets(
@@ -449,6 +486,8 @@ def _resolve_consumer_environment(
         ):
             if secret in contract.keychain_only_secrets and sys.platform != "darwin":
                 raise HostSecretBootstrapError("host secret provider unavailable")
+            if secret in BWS_ISOLATED_IDENTITIES:
+                raise HostSecretBootstrapError("host secret provider unavailable")
             env_name = contract.binding_for(secret)
             kind = contract.kind_for(secret)
             account = contract.keychain_account(
@@ -512,6 +551,12 @@ def resolve_host_secret_values(
     try:
         selected = contract or load_host_secret_contract()
         if provider == "keychain":
+            if any(
+                secret in BWS_ISOLATED_IDENTITIES
+                for declared_channel, declared_consumer, secret in selected.allowed
+                if declared_channel == channel and declared_consumer == consumer
+            ):
+                raise HostSecretBootstrapError("host secret provider unavailable")
             values = _resolve_consumer_environment(channel=channel, consumer=consumer,
                 contract=selected, keychain_lookup=keychain_lookup)
             return {secret: values[selected.binding_for(secret)] for secret in
@@ -523,6 +568,15 @@ def resolve_host_secret_values(
             secret in selected.keychain_only_secrets
             for declared_channel, declared_consumer, secret in selected.allowed
             if declared_channel == channel and declared_consumer == consumer
+        ):
+            raise HostSecretBootstrapError("host secret provider unavailable")
+        if any(
+            secret in BWS_ISOLATED_IDENTITIES
+            for declared_channel, declared_consumer, secret in selected.allowed
+            if declared_channel == channel and declared_consumer == consumer
+        ) and (
+            sys.platform != "darwin"
+            or (channel, consumer) != ("dev", "marr-server-dev")
         ):
             raise HostSecretBootstrapError("host secret provider unavailable")
         if operation is not None:
@@ -787,9 +841,43 @@ def run_with_host_secrets(
         return runner(selected_command, child_env)
 
 
-def _clean_child_environment(contract: HostSecretContract) -> dict[str, str]:
+def run_marr_server_without_provider_key(
+    *,
+    command: Sequence[str],
+    runner: CommandRunner = _subprocess_runner,
+    environment: Mapping[str, str] | None = None,
+    contract: HostSecretContract | None = None,
+) -> int:
+    """Launch only the authorized MARR dev identity; resolve its key per request."""
+    try:
+        if sys.platform != "darwin":
+            raise HostSecretBootstrapError("host secret provider unavailable")
+        selected_contract = contract or load_host_secret_contract()
+        selected_contract.require_declared(
+            channel="dev", consumer="marr-server-dev", secret="typesafe.api-key"
+        )
+        env = os.environ if environment is None else environment
+        BwsReaderConfig.from_marr_server_environment(env)
+        selected_command = list(command)
+        if not selected_command:
+            raise HostSecretBootstrapError("host secret provider unavailable")
+        child_env = _clean_child_environment(selected_contract, environment=env)
+        child_env[HOST_SECRET_BOOTSTRAP_CHANNEL] = "dev"
+        child_env[HOST_SECRET_BOOTSTRAP_CONSUMER] = "marr-server-dev"
+        return runner(selected_command, child_env)
+    except HostSecretBootstrapError:
+        raise
+    except Exception:
+        raise HostSecretBootstrapError("host secret provider unavailable") from None
+
+
+def _clean_child_environment(
+    contract: HostSecretContract,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> dict[str, str]:
     """Return ambient state with every bootstrap-owned surface removed."""
-    child_env = dict(os.environ)
+    child_env = dict(os.environ if environment is None else environment)
     child_env.pop(HOST_SECRET_RUNTIME_ENV_FILE, None)
     child_env.pop(HOST_SECRET_BOOTSTRAP_FAILURE_REF, None)
     child_env.pop(HOST_SECRET_BOOTSTRAP_CHANNEL, None)
@@ -845,12 +933,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 channel=args.channel,
                 consumer=args.consumer,
                 provider=args.provider,
-                bws_reader=BwsSecretReader(BwsReaderConfig.from_environment(os.environ))
+                bws_reader=(
+                    create_marr_typesafe_bws_reader()
+                    if (sys.platform, args.channel, args.consumer)
+                    == ("darwin", "dev", "marr-server-dev")
+                    else BwsSecretReader(BwsReaderConfig.from_environment(os.environ))
+                )
                 if args.provider == "bws"
                 else None,
             )
             return 0
         if args.provider == "bws":
+            if (sys.platform, args.channel, args.consumer) == (
+                "darwin", "dev", "marr-server-dev"
+            ):
+                return run_marr_server_without_provider_key(
+                    command=command,
+                    environment=os.environ,
+                )
             # BWS-04 owns deployment materialization and holds admission through
             # remote terminal readback. The old Mac launcher cannot bypass it.
             raise HostSecretBootstrapError("BWS launch requires governed deployment controller")
@@ -870,7 +970,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         guidance = (
             "verify the declared Keychain item and non-interactive access"
             if args.provider == "keychain"
-            else "verify the declared provider and file credential"
+            else (
+                "verify the isolated MARR BWS project and Keychain reader token"
+                if (sys.platform, args.channel, args.consumer)
+                == ("darwin", "dev", "marr-server-dev")
+                else "verify the declared provider and file credential"
+            )
         )
         print(
             f"{exc}; {guidance}",

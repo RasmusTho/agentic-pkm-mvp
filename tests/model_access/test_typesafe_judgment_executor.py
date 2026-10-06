@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError
 import json
@@ -24,11 +25,26 @@ from app.model_access.typesafe_judgment_executor import (
     PRODUCT_TYPESAFE_PROFILE_PATH,
     ProductTypeSafeExecutor,
 )
+from app.ops.host_secret_bootstrap import create_marr_typesafe_bws_reader
 
 
 CAPABILITY = "model-access.example/cap/complete"
 FAKE_KEY = "synthetic-typesafe-test-credential-5766"
 INTENT = "Consider two possible plans without changing anything."
+MARR_BWS_IDENTITY = ("marr-dev", "dev/typesafe.api-key")
+
+
+class _FakeCheckOperation:
+    operation_id = "fixture-typesafe-check"
+
+    def finish(self, _evidence) -> None:
+        pass
+
+
+class _FakeSecretController:
+    @contextmanager
+    def admit(self, _operation: str, _channel: str):
+        yield _FakeCheckOperation()
 
 
 def _headers(channel: str = "product", action: str = "judgment") -> dict[str, str]:
@@ -111,13 +127,16 @@ def _app(
     profile_path: Path = PRODUCT_TYPESAFE_PROFILE_PATH,
     runtime_channel: str = "dev",
     adapter: TypeSafeAdapter | None = None,
+    bws_reader=None,
+    acceptance_state_directory: Path | None = None,
 ):
     monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
     lookups = []
 
-    def lookup(service: str, account: str) -> str:
-        lookups.append((service, account))
-        return key
+    class Reader:
+        def lookup(self, project: str, identity: str) -> str:
+            lookups.append((project, identity))
+            return key
 
     executor = ProductTypeSafeExecutor(
         mode=mode,
@@ -126,7 +145,9 @@ def _app(
         adapter=adapter or TypeSafeAdapter(
             transport_factory=lambda: httpx2.MockTransport(provider.handle)
         ),
-        keychain_lookup=lookup,
+        bws_reader=Reader() if bws_reader is None else bws_reader,
+        secret_controller=_FakeSecretController(),
+        acceptance_state_directory=acceptance_state_directory,
     )
     root = Path(__file__).resolve().parents[2]
     factory = ModelAccessAdapterFactory.from_declared_sources(
@@ -188,7 +209,7 @@ def test_executor_dispatches_one_bounded_system_one_request(
     assert result.selection.provider == result.judgment.provenance.provider == "typesafe"
     assert result.selection.sdk_version == TYPESAFE_SDK_VERSION == "0.7.2"
     assert len(sent) == len(provider.calls) == len(lookups) == 1
-    assert lookups == [("yggdrasil.host-secrets", "dev:marr-server-dev:typesafe.api-key")]
+    assert lookups == [MARR_BWS_IDENTITY]
     wire = provider.calls[0]
     assert str(wire.url) == "https://api.typesafe.ai/v1/systemone"
     assert wire.headers["authorization"] == "Bearer " + FAKE_KEY
@@ -211,10 +232,60 @@ def test_missing_typesafe_credential_fails_before_provider_call(monkeypatch, cap
         assert key not in response.text + caplog.text
 
 
+def test_bws_lookup_failure_fails_before_provider_call(monkeypatch, caplog) -> None:
+    provider = Provider()
+
+    class FailingReader:
+        def lookup(self, _project: str, _identity: str) -> str:
+            raise RuntimeError(FAKE_KEY + INTENT)
+
+    app, lookups, _ = _app(provider, monkeypatch, bws_reader=FailingReader())
+    with caplog.at_level(logging.DEBUG):
+        response = _call(app)
+    assert response.json()["outcome"] == "unavailable_before_send"
+    assert len(lookups) == 0
+    assert provider.calls == []
+    assert FAKE_KEY + INTENT not in response.text + caplog.text
+
+
+def test_exact_marr_reader_malformed_keychain_token_stops_product_adapter(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
+    provider = Provider()
+    client_factory_calls = []
+
+    def client_factory():
+        client_factory_calls.append(True)
+        return object()
+
+    reader = create_marr_typesafe_bws_reader(
+        environment={
+            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_PROJECT_ID": "00000000-0000-4000-8000-000000000001",
+            "BWS_ORGANIZATION_ID": "00000000-0000-4000-8000-000000000002",
+        },
+        keychain_lookup=lambda _service, _account: "malformed token",
+        client_factory=client_factory,
+    )
+    executor = ProductTypeSafeExecutor(
+        mode="accepted_dev",
+        bws_reader=reader,
+        secret_controller=_FakeSecretController(),
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
+        adapter=TypeSafeAdapter(
+            transport_factory=lambda: httpx2.MockTransport(provider.handle)
+        ),
+    )
+    result = executor.execute(product_intent_request(INTENT))
+    assert result.outcome == "unavailable_before_send"
+    assert client_factory_calls == [] and provider.calls == []
+
+
 @pytest.mark.parametrize("mode", ["accepted_dev", "acceptance_once"])
 @pytest.mark.parametrize("stage", ["metadata", "factory", "tls", "http_client", "sdk_client"])
 def test_adapter_setup_failure_is_presend_and_closes_owned_transport(
-    monkeypatch, caplog, mode, stage
+    monkeypatch, tmp_path, caplog, mode, stage
 ) -> None:
     """GH5791-R4180661727: default TLS setup is before the possible-send boundary."""
     provider = Provider()
@@ -254,7 +325,13 @@ def test_adapter_setup_failure_is_presend_and_closes_owned_transport(
     }
     if stage in targets:
         monkeypatch.setattr(targets[stage], fail)
-    app, lookups, _ = _app(provider, monkeypatch, mode=mode, adapter=adapter)
+    app, lookups, _ = _app(
+        provider,
+        monkeypatch,
+        mode=mode,
+        adapter=adapter,
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
+    )
     with caplog.at_level(logging.DEBUG):
         response = _call(app)
         assert response.status_code == 200
@@ -428,9 +505,14 @@ def test_runtime_acceptance_gate_precedes_secret_and_provider(monkeypatch, mode,
     assert provider.calls == lookups == []
 
 
-def test_one_call_acceptance_is_consumed_atomically_even_on_timeout(monkeypatch) -> None:
+def test_one_call_acceptance_is_consumed_atomically_even_on_timeout(monkeypatch, tmp_path) -> None:
     provider = Provider("read_timeout")
-    _, lookups, executor = _app(provider, monkeypatch, mode="acceptance_once")
+    _, lookups, executor = _app(
+        provider,
+        monkeypatch,
+        mode="acceptance_once",
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
+    )
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(executor.execute, [product_intent_request(INTENT)] * 2))
     assert sorted(r.outcome for r in results) == [
@@ -438,6 +520,54 @@ def test_one_call_acceptance_is_consumed_atomically_even_on_timeout(monkeypatch)
         "unavailable_before_send",
     ]
     assert len(provider.calls) == len(lookups) == 1
+
+
+def test_acceptance_once_refuses_a_new_executor_after_restart(monkeypatch, tmp_path) -> None:
+    state = tmp_path / "typesafe-acceptance"
+    provider = Provider("read_timeout")
+    first, first_lookups, _ = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    assert _call(first).json()["outcome"] == "outcome_unknown_after_dispatch"
+
+    second, second_lookups, _ = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    assert _call(second).json()["outcome"] == "unavailable_before_send"
+    assert len(first_lookups) == len(provider.calls) == 1
+    assert second_lookups == []
+
+
+def test_acceptance_once_is_atomic_across_executor_instances(monkeypatch, tmp_path) -> None:
+    state = tmp_path / "typesafe-acceptance"
+    provider = Provider()
+    _, first_lookups, first_executor = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    _, second_lookups, second_executor = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    request = product_intent_request(INTENT)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda executor: executor.execute(request), (first_executor, second_executor)))
+    assert sorted(result.outcome for result in results) == [
+        "success", "unavailable_before_send",
+    ]
+    assert len(provider.calls) == len(first_lookups) + len(second_lookups) == 1
+
+
+def test_acceptance_marker_corruption_fails_closed_before_bws_lookup(monkeypatch, tmp_path) -> None:
+    state = tmp_path / "typesafe-acceptance"
+    state.mkdir(mode=0o700)
+    marker = state / "product.acceptance.json"
+    marker.write_text('{"state":"consumed"}', encoding="ascii")
+    marker.chmod(0o600)
+    provider = Provider()
+    app, lookups, _ = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    assert _call(app).json()["outcome"] == "unavailable_before_send"
+    assert lookups == [] and provider.calls == []
 
 
 def test_sdk_environment_cannot_override_owned_profile_or_log_bodies(monkeypatch, caplog) -> None:

@@ -22,7 +22,7 @@ from app.ops.bws_secret_admin import (
 from app.ops.bws_token_push import TokenPushAdmin, load_token_push_targets
 from app.ops.host_secret_bootstrap import validate_secret_value
 from app.ops.host_secret_contract import (
-    BWS_IDENTITIES, CHANNEL_PROJECTS, DATABASE_CONSUMERS, HostSecretContract,
+    BWS_IDENTITIES, BWS_ISOLATED_IDENTITIES, CHANNEL_PROJECTS, DATABASE_CONSUMERS, HostSecretContract,
     load_host_secret_contract,
 )
 from app.ops.host_secret_controller import (
@@ -131,6 +131,12 @@ class SecretAdmin:
     def _identity(self, channel: str, secret: str) -> tuple[str, tuple[str, ...]]:
         if channel not in CHANNEL_PROJECTS or secret not in BWS_IDENTITIES:
             raise SecretAdminError()
+        if BWS_IDENTITIES[secret] == 'isolated':
+            target = BWS_ISOLATED_IDENTITIES.get(secret)
+            if channel != 'dev' or target is None:
+                raise SecretAdminError()
+            project, identity = target
+            return identity, (project,)
         if BWS_IDENTITIES[secret] == 'shared':
             return 'shared/' + secret, ('non-prod', 'prod')
         return channel + '/' + secret, (CHANNEL_PROJECTS[channel],)
