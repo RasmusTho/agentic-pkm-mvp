@@ -27,7 +27,6 @@ from app.model_access.typesafe_adapter import (
     strict_json_object,
 )
 from app.model_access.typesafe_acceptance_marker import (
-    PRODUCT_ACCEPTANCE_CONSUMER,
     acceptance_state_directory_from_environment,
     consume_acceptance_once,
 )
@@ -151,7 +150,7 @@ class ProductTypeSafeExecutor:
             with self._lock:
                 if self._mode == "acceptance_once":
                     if not consume_acceptance_once(
-                        PRODUCT_ACCEPTANCE_CONSUMER, self._acceptance_state_directory
+                        "product", self._acceptance_state_directory
                     ):
                         return unavailable
             bws_reader = self._bws_reader
