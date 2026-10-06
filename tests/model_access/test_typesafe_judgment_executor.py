@@ -25,6 +25,7 @@ from app.model_access.typesafe_judgment_executor import (
     PRODUCT_TYPESAFE_PROFILE_PATH,
     ProductTypeSafeExecutor,
 )
+from app.ops.host_secret_bootstrap import create_marr_typesafe_bws_reader
 
 
 CAPABILITY = "model-access.example/cap/complete"
@@ -245,6 +246,40 @@ def test_bws_lookup_failure_fails_before_provider_call(monkeypatch, caplog) -> N
     assert len(lookups) == 0
     assert provider.calls == []
     assert FAKE_KEY + INTENT not in response.text + caplog.text
+
+
+def test_exact_marr_reader_malformed_keychain_token_stops_product_adapter(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
+    provider = Provider()
+    client_factory_calls = []
+
+    def client_factory():
+        client_factory_calls.append(True)
+        return object()
+
+    reader = create_marr_typesafe_bws_reader(
+        environment={
+            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_PROJECT_ID": "00000000-0000-4000-8000-000000000001",
+            "BWS_ORGANIZATION_ID": "00000000-0000-4000-8000-000000000002",
+        },
+        keychain_lookup=lambda _service, _account: "malformed token",
+        client_factory=client_factory,
+    )
+    executor = ProductTypeSafeExecutor(
+        mode="accepted_dev",
+        bws_reader=reader,
+        secret_controller=_FakeSecretController(),
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
+        adapter=TypeSafeAdapter(
+            transport_factory=lambda: httpx2.MockTransport(provider.handle)
+        ),
+    )
+    result = executor.execute(product_intent_request(INTENT))
+    assert result.outcome == "unavailable_before_send"
+    assert client_factory_calls == [] and provider.calls == []
 
 
 @pytest.mark.parametrize("mode", ["accepted_dev", "acceptance_once"])
@@ -489,11 +524,11 @@ def test_one_call_acceptance_is_consumed_atomically_even_on_timeout(monkeypatch,
 
 def test_acceptance_once_refuses_a_new_executor_after_restart(monkeypatch, tmp_path) -> None:
     state = tmp_path / "typesafe-acceptance"
-    provider = Provider()
+    provider = Provider("read_timeout")
     first, first_lookups, _ = _app(
         provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
     )
-    assert _call(first).json()["outcome"] == "success"
+    assert _call(first).json()["outcome"] == "outcome_unknown_after_dispatch"
 
     second, second_lookups, _ = _app(
         provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
@@ -501,6 +536,24 @@ def test_acceptance_once_refuses_a_new_executor_after_restart(monkeypatch, tmp_p
     assert _call(second).json()["outcome"] == "unavailable_before_send"
     assert len(first_lookups) == len(provider.calls) == 1
     assert second_lookups == []
+
+
+def test_acceptance_once_is_atomic_across_executor_instances(monkeypatch, tmp_path) -> None:
+    state = tmp_path / "typesafe-acceptance"
+    provider = Provider()
+    _, first_lookups, first_executor = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    _, second_lookups, second_executor = _app(
+        provider, monkeypatch, mode="acceptance_once", acceptance_state_directory=state
+    )
+    request = product_intent_request(INTENT)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda executor: executor.execute(request), (first_executor, second_executor)))
+    assert sorted(result.outcome for result in results) == [
+        "success", "unavailable_before_send",
+    ]
+    assert len(provider.calls) == len(first_lookups) + len(second_lookups) == 1
 
 
 def test_acceptance_marker_corruption_fails_closed_before_bws_lookup(monkeypatch, tmp_path) -> None:

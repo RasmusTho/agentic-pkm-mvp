@@ -23,6 +23,7 @@ from app.model_access.ckm_judgment_contract import (
 from app.model_access.ckm_judgment_executor import BUILDER_TYPESAFE_PROFILE_PATH, BuilderTypeSafeExecutor
 from app.model_access.codex_executor_service import create_codex_executor_app
 from app.model_access.typesafe_adapter import TypeSafeAdapter
+from app.ops.host_secret_bootstrap import create_marr_typesafe_bws_reader
 
 
 CAPABILITY = "model-access.example/cap/complete"
@@ -296,6 +297,45 @@ def test_bws_lookup_failure_fails_before_provider_dispatch(monkeypatch, tmp_path
         assert provider.calls == []
         assert store.list_evidence_edges() == []
         assert store.get_watermark("semantic_association") == "prior"
+
+
+def test_exact_marr_reader_malformed_keychain_token_stops_builder_adapter(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr("app.ops.host_secret_bootstrap.sys.platform", "darwin")
+    provider = Provider()
+    client_factory_calls = []
+
+    def client_factory():
+        client_factory_calls.append(True)
+        return object()
+
+    reader = create_marr_typesafe_bws_reader(
+        environment={
+            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_PROJECT_ID": "00000000-0000-4000-8000-000000000001",
+            "BWS_ORGANIZATION_ID": "00000000-0000-4000-8000-000000000002",
+        },
+        keychain_lookup=lambda _service, _account: "malformed token",
+        client_factory=client_factory,
+    )
+    request = ckm_judgment_request({
+        "candidates": [{"id": "candidate_1", "kind": "document", "excerpt": "Synthetic"}],
+        "capabilities": [{"id": "capability_1", "kind": "capability", "excerpt": "Synthetic"}],
+    })
+    executor = BuilderTypeSafeExecutor(
+        mode="accepted_dev",
+        bws_reader=reader,
+        secret_controller=_FakeSecretController(),
+        acceptance_state_directory=tmp_path / "typesafe-acceptance",
+        adapter=TypeSafeAdapter(
+            transport_factory=lambda: httpx2.MockTransport(provider.send),
+            max_request_bytes=CKM_JUDGMENT_REQUEST_BYTES,
+        ),
+    )
+    result = executor.execute(request)
+    assert result.outcome == "unavailable_before_send"
+    assert client_factory_calls == [] and provider.calls == []
 
 
 @pytest.mark.parametrize("case", ["unknown", "unpinned", "unsupported", "wrong_owner"])
