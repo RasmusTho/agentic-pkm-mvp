@@ -13,7 +13,7 @@ Last reviewed: 2026-10-06
 
 Provide one small, host-local provisioning boundary for development and runtime processes without
 placing credentials in Git, iCloud, BuilderOps records, Mimer content, or ordinary deploy files.
-The current Mac-hosted implementation uses **macOS Keychain** for its existing local secrets. Linux BWS repository support is described below and in docs/CLOUD_SECRET_PROVISIONING/README.md; live qualification remains pending. Owner direction on 2026-10-06 selects an isolated BWS project as the TypeSafe provider-key source for MARR; the MARR read-only BWS token remains in macOS Keychain. The merged TypeSafe resolver now reads the provider key through the isolated BWS path, while live qualification remains gated. Heimdal owns the
+The current Mac-hosted implementation uses **macOS Keychain** for its existing local secrets. Linux BWS repository support is described below and in docs/CLOUD_SECRET_PROVISIONING/README.md; live qualification remains pending. Owner direction on 2026-10-06 selects an isolated BWS project as the TypeSafe provider-key source for MARR; the MARR read-only BWS token remains in macOS Keychain. The TypeSafe resolver path is scoped to read the provider key through the isolated BWS path, while repository delivery and live qualification remain gated. Heimdal owns the
 lifecycle of external-helper credentials, while a narrowly scoped
 bootstrap resolves only the secrets a channel/process needs through a temporary owner-readable
 runtime surface, cleans it up, and redacts all values from logs and receipts.
