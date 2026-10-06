@@ -16,6 +16,13 @@ can_parallelize_with: []
 
 The repository declares and tests the single server-only dev binding with fake secret sources. No credential has been installed or provisioned and no runtime route is activated. Live use remains gated on the separate parent #5764 acceptance path.
 
+## Credential-source supersession
+
+This delivered TSO-05 slice records the original Keychain-only implementation. TSO-07 supersedes
+the provider-key source with an isolated BWS project and a dedicated read-only MARR account while
+preserving the logical `dev/marr-server-dev` consumer grant. Keychain remains the bootstrap source
+for the BWS reader token.
+
 ## Purpose
 
 Keep the runtime TypeSafe provider key on one dedicated MARR development server while Product and Builder retain separate caller authorization, caller credentials, owner profiles, and acceptance.
