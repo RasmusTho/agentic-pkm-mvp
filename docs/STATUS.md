@@ -61,8 +61,8 @@ valid for this contract. Routes remain off. No live BWS permission write, key im
 or Jev call is claimed.
 
 Source: Issues #5764, #5667, and #5801; `docs/TYPESAFE_SYSTEM_ONE/README.md`,
-`docs/CLOUD_SECRET_PROVISIONING/README.md`, and the candidate implementation at
-`65c054d52926550a277ca913f1ecfb3b9befce28`.
+`docs/CLOUD_SECRET_PROVISIONING/README.md`, and the candidate tree at
+`653bc34b2ccf0773a89b4644187a176039455025`.
 Last verified against (DevUI supervised continuity): Issue #5655,
 `app/builderops/devui_issue_work.py`, `app/builderops/devui_sources.py`, and
 `tests/builderops/test_devui_issue_work.py` on 2026-09-24. The managed Focus read carries an
