@@ -13,7 +13,7 @@ Last reviewed: 2026-10-06
 
 Provide one small, host-local provisioning boundary for development and runtime processes without
 placing credentials in Git, iCloud, BuilderOps records, Mimer content, or ordinary deploy files.
-The current Mac-hosted implementation uses **macOS Keychain** for its existing local secrets. Linux BWS repository support is described below and in docs/CLOUD_SECRET_PROVISIONING/README.md; live qualification remains pending. Owner direction on 2026-10-06 selects an isolated BWS project as the TypeSafe provider-key source for MARR; the MARR read-only BWS token remains in macOS Keychain. The TypeSafe resolver path is scoped to read the provider key through the isolated BWS path, while repository delivery and live qualification remain gated. Heimdal owns the
+The merged #5770 baseline uses **macOS Keychain** for its existing local secrets and MARR provider-key binding. Linux BWS repository support is described below and in docs/CLOUD_SECRET_PROVISIONING/README.md; live qualification remains pending. Owner direction on 2026-10-06 makes the isolated BWS project the TSO-07 candidate target for the TypeSafe provider key; the MARR read-only BWS token remains in macOS Keychain. The TypeSafe resolver path is scoped to read the candidate provider key through the isolated BWS path, while repository delivery and live qualification remain gated. Heimdal owns the
 lifecycle of external-helper credentials, while a narrowly scoped
 bootstrap resolves only the secrets a channel/process needs through a temporary owner-readable
 runtime surface, cleans it up, and redacts all values from logs and receipts.
@@ -82,8 +82,8 @@ or live channel qualification. Parent #5667 remains open until those owner gates
    secret that guards a shipped lane.
 4. **Key material stays outside the raw volume and database.** This preserves Heimdal's raw-store
    trust boundary.
-5. **Mac Keychain remains the source for existing Mac secrets and BWS bootstrap tokens.** The
-   TypeSafe provider key is moving to the dedicated `marr-dev` BWS project under TSO-07; the
+5. **The merged #5770 baseline uses Mac Keychain for existing Mac secrets and BWS bootstrap tokens.** The
+   TypeSafe provider key targets the dedicated `marr-dev` BWS project under candidate TSO-07; the
    live MARR qualification remains gated. This does not change other Mac Keychain bindings or Linux channel
    project mappings.
 
