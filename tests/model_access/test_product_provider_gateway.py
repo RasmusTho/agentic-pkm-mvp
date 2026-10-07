@@ -66,6 +66,8 @@ def _catalog_payload(provider: str) -> dict[str, Any]:
             "data": [
                 {"id": "gpt-4.1", "created": 1_760_000_000},
                 {"id": "gpt-4.1-mini", "created": 1_760_000_001},
+                {"id": "gpt-6-luna", "created": 1_760_000_002},
+                {"id": "gpt-5.3-codex-spark", "created": 1_760_000_003},
             ]
         }
     if provider == "anthropic":
@@ -444,6 +446,56 @@ def test_provider_explicitly_disabling_reasoning_blocks_inference() -> None:
     assert completion.status_code == 422
     assert completion.json() == expected
     assert all(request.method == "GET" for request in sent)
+
+
+@pytest.mark.parametrize("model_id", ["gpt-4.1", "gpt-5.3-codex-spark"])
+def test_openai_reasoning_requires_model_declared_efforts(model_id: str) -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        return httpx.Response(200, json=_api_response("openai"))
+
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    payload["route"]["model"] = model_id
+    payload["reasoning_effort"] = "high"
+    with _local_test_client(app) as client:
+        _bind_catalog_snapshot(client, payload)
+        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/complete", json=payload)
+
+    expected = {"error": {"code": "reasoning_effort_unavailable"}}
+    assert preflight.status_code == 422
+    assert preflight.json() == expected
+    assert completion.status_code == 422
+    assert completion.json() == expected
+    assert all(request.method == "GET" for request in sent)
+
+
+def test_declared_openai_luna_reasoning_effort_passes_preflight_and_dispatch() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        return httpx.Response(200, json=_api_response("openai"))
+
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    payload["route"]["model"] = "gpt-6-luna"
+    payload["reasoning_effort"] = "high"
+    with _local_test_client(app) as client:
+        _bind_catalog_snapshot(client, payload)
+        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/complete", json=payload)
+
+    assert preflight.status_code == 200
+    assert completion.status_code == 200
+    assert sum(request.method == "POST" for request in sent) == 1
 
 
 def test_default_output_limit_is_checked_against_provider_catalog() -> None:

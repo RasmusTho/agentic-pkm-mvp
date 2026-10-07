@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from app.model_access.adapter_factory import ModelAccessAdapterFactory
+from app.model_access.adapter_factory import AdapterRegistryError, ModelAccessAdapterFactory
 from app.model_access.catalog import (
     CatalogCache,
     CatalogError,
@@ -47,7 +47,9 @@ _OFFICIAL_HOSTS = {
     "anthropic": "api.anthropic.com",
     "deepseek": "api.deepseek.com",
 }
-_OPENAI_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh", "max"})
+_OPENAI_EFFORTS = frozenset(
+    {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+)
 _ANTHROPIC_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
@@ -220,6 +222,7 @@ class ProductProviderApiAdapter:
         snapshot: CatalogSnapshot,
         model_id: str,
         reasoning_effort: str | None,
+        declared_reasoning_efforts: frozenset[str] | None,
     ) -> CatalogModelDescriptor:
         model = next((item for item in snapshot.models if item.model == model_id), None)
         if model is None:
@@ -237,9 +240,20 @@ class ProductProviderApiAdapter:
             and reasoning_effort not in model.reasoning_efforts
         ):
             raise ProviderApiError("reasoning_effort_unavailable")
-        if model.reasoning_efforts and reasoning_effort not in model.reasoning_efforts:
+        if declared_reasoning_efforts is not None:
+            if reasoning_effort not in declared_reasoning_efforts:
+                raise ProviderApiError("reasoning_effort_unavailable")
+        elif not model.reasoning_effort_attested:
             raise ProviderApiError("reasoning_effort_unavailable")
         return model
+
+    def _model_reasoning_efforts(
+        self, provider: str, model: str
+    ) -> frozenset[str] | None:
+        try:
+            return self._factory.model_reasoning_efforts(provider, model)
+        except AdapterRegistryError:
+            raise ProviderApiError("provider_model_unavailable") from None
 
     @staticmethod
     def _require_catalog_capabilities(
@@ -278,8 +292,15 @@ class ProductProviderApiAdapter:
         self._endpoint(provider)
         snapshot = self._catalog_snapshot(provider, request.route.transport_id, api_key)
         self._require_snapshot_match(request.route, snapshot)
+        declared_reasoning_efforts = self._model_reasoning_efforts(
+            provider, request.route.model
+        )
         model = self._validated_model(
-            provider, snapshot, request.route.model, request.reasoning_effort
+            provider,
+            snapshot,
+            request.route.model,
+            request.reasoning_effort,
+            declared_reasoning_efforts,
         )
         self._require_catalog_capabilities(model, request.capability_intent)
 
@@ -296,8 +317,15 @@ class ProductProviderApiAdapter:
         endpoint = self._endpoint(provider)
         snapshot = self._catalog_snapshot(provider, request.route.transport_id, api_key)
         self._require_snapshot_match(request.route, snapshot)
+        declared_reasoning_efforts = self._model_reasoning_efforts(
+            provider, request.route.model
+        )
         model = self._validated_model(
-            provider, snapshot, request.route.model, request.reasoning_effort
+            provider,
+            snapshot,
+            request.route.model,
+            request.reasoning_effort,
+            declared_reasoning_efforts,
         )
         self._require_catalog_capabilities(
             model,

@@ -299,3 +299,17 @@ class ModelAccessAdapterFactory:
     def provider_api_endpoint(self, provider: str) -> str | None:
         """Return a provider-owned endpoint from the checked-in census."""
         return self.provider_entry(provider).api_endpoint
+
+    def model_reasoning_efforts(
+        self, provider: str, model: str
+    ) -> frozenset[str] | None:
+        """Return a model's declared effort allowlist; None means unknown."""
+        provider_entry = self.provider_entry(provider)
+        census_model = next(
+            (item for item in provider_entry.models if item.id == model), None
+        )
+        if census_model is None or "chat" not in provider_entry.kinds:
+            raise AdapterRegistryError("resolved chat model is not declared for this provider")
+        if census_model.reasoning_efforts is None:
+            return None
+        return frozenset(census_model.reasoning_efforts)

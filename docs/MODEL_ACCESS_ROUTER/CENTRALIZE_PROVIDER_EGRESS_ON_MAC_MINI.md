@@ -33,7 +33,9 @@ Provider-reported structured-output and reasoning-effort metadata can confirm or
 Product allowlist. If a provider catalog omits a field, that value remains unknown rather than an
 explicit negative; unknown metadata does not authorize newly discovered models or effort values for
 automatic promotion. OpenAI's list endpoint supplies model IDs and creation times but no per-model
-capability metadata, so its existing pinned Product allowlist remains the capability authority.
+capability metadata, so the pinned Product census carries its per-model reasoning-effort allowlist.
+A missing allowlist means unknown and denies a requested effort; an empty list explicitly declares a
+non-reasoning model. Provider attestations, when present, can only narrow the declared allowlist.
 
 The current census in `docs/settings/models/providers.yaml` is the scope boundary; adding a new
 provider is not part of this task. Local Ollama remains optional and is not a readiness prerequisite
@@ -62,8 +64,11 @@ dispatch, the result is no longer bound to the model selected in settings.
   its host-local adapter and does not accept arbitrary transport commands, endpoints, or credentials.
   - Verify: `tests/model_access/test_product_provider_gateway.py::test_dispatches_exact_declared_route_without_caller_credentials`
 - [ ] OpenAI and Anthropic discovery updates a snapshot only from verifiable provider metadata; stale,
-  unsupported, or capability-incompatible descriptors are not promoted.
+  unsupported, or capability-incompatible descriptors are not promoted, and requested reasoning
+  effort is checked against the selected model's declared capability before inference. Unknown and
+  explicitly unsupported effort sets fail closed.
   - Verify: `tests/model_access/test_product_provider_gateway.py::test_catalog_refresh_uses_verifiable_provider_metadata`
+  - Verify: `tests/model_access/test_product_provider_gateway.py::test_openai_reasoning_requires_model_declared_efforts`
 - [ ] One inference request causes at most one provider dispatch; preflight failure is typed and a
   post-dispatch failure is terminal, with secret-free route provenance.
   - Verify: `tests/model_access/test_product_provider_gateway.py::test_dispatch_failure_is_terminal_and_receipt_is_secret_free`
