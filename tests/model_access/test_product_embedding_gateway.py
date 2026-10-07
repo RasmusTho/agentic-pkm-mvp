@@ -79,8 +79,14 @@ def test_product_api_dispatches_declared_embedding_once_with_host_provenance() -
         adapter_factory=_factory(),
     )
     with _client(app) as client:
+        catalog = client.post(
+            "/v1/product/catalog",
+            json={"provider": "gemini", "model": "gemini-embedding-001"},
+        )
         response = client.post("/v1/product/embed", json=_request())
 
+    assert catalog.status_code == 200
+    assert catalog.json()["snapshot"]["transport_id"] == "gemini_api"
     assert response.status_code == 200
     body = response.json()
     assert body["route"]["provider"] == "gemini"

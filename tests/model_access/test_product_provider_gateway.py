@@ -68,6 +68,7 @@ def _catalog_payload(provider: str) -> dict[str, Any]:
                 {"id": "gpt-4.1-mini", "created": 1_760_000_001},
                 {"id": "gpt-6-luna", "created": 1_760_000_002},
                 {"id": "gpt-5.3-codex-spark", "created": 1_760_000_003},
+                {"id": "gpt-5.6-sol", "created": 1_760_000_004},
             ]
         }
     if provider == "anthropic":
@@ -486,7 +487,7 @@ def test_reasoning_requires_static_model_declared_efforts(
 
 
 @pytest.mark.parametrize("effort", ["high", "none"])
-def test_declared_openai_luna_reasoning_effort_passes_preflight_and_dispatch(
+def test_declared_openai_api_reasoning_effort_passes_preflight_and_dispatch(
     effort: str,
 ) -> None:
     sent: list[httpx.Request] = []
@@ -499,7 +500,7 @@ def test_declared_openai_luna_reasoning_effort_passes_preflight_and_dispatch(
 
     app = _gateway(respond)
     payload = _payload("openai_api")
-    payload["model"] = "gpt-6-luna"
+    payload["model"] = "gpt-5.6-sol"
     payload["reasoning_effort"] = effort
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)

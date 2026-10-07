@@ -43,13 +43,21 @@ class FakeCodexExecutor:
         self.catalog_calls += 1
         return [
             {
+                "model": "gpt-6-luna",
+                "hidden": False,
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "xhigh"},
+                ],
+            },
+            {
                 "model": "gpt-5.6-luna",
                 "hidden": False,
                 "supportedReasoningEfforts": [
                     {"reasoningEffort": "low"},
                     {"reasoningEffort": "xhigh"},
                 ],
-            }
+            },
         ]
 
 
@@ -326,14 +334,6 @@ def test_product_api_resolves_transport_and_snapshot_on_host() -> None:
     factory = _factory()
     codex = FakeCodexExecutor()
     ollama = FakeOllamaAdapter()
-    original_default = factory.default_adapter_id
-
-    def codex_default(provider: str) -> str:
-        if provider == "openai":
-            return "codex_cli"
-        return original_default(provider)
-
-    factory.default_adapter_id = codex_default  # type: ignore[method-assign]
     app = create_codex_executor_app(
         codex_executor=codex,  # type: ignore[arg-type]
         ollama_adapter=ollama,  # type: ignore[arg-type]
@@ -341,14 +341,17 @@ def test_product_api_resolves_transport_and_snapshot_on_host() -> None:
     )
     request = {
         "provider": "openai",
-        "model": "gpt-5.6-luna",
+        "model": "gpt-6-luna",
         "reasoning_effort": "low",
         "capability_intent": {},
         "trusted_instructions": "Keep it concise.",
         "user_input": "Say hello.",
     }
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
-        catalog = client.post("/v1/product/catalog", json={"provider": "openai"})
+        catalog = client.post(
+            "/v1/product/catalog",
+            json={"provider": "openai", "model": "gpt-6-luna"},
+        )
         preflight = client.post(
             "/v1/product/preflight",
             json={key: value for key, value in request.items() if key not in {"trusted_instructions", "user_input"}},
@@ -365,7 +368,7 @@ def test_product_api_resolves_transport_and_snapshot_on_host() -> None:
     assert completion.status_code == 200
     route = completion.json()["route"]
     assert route["provider"] == "openai"
-    assert route["model"] == "gpt-5.6-luna"
+    assert route["model"] == "gpt-6-luna"
     assert route["transport_id"] == "codex_cli"
     assert route["catalog_snapshot_ref"] == "catalog.openai_codex_cli"
     assert route["catalog_snapshot_hash"] == catalog.json()["snapshot"]["snapshot_hash"]
@@ -373,6 +376,7 @@ def test_product_api_resolves_transport_and_snapshot_on_host() -> None:
     assert caller_selects_transport.json() == {"error": {"code": "invalid_request"}}
     assert len(codex.preflight_calls) == 1
     assert len(codex.calls) == 1
+    assert ollama.calls == []
 
 
 def test_complete_requires_loopback_not_tailscale_capability() -> None:

@@ -581,6 +581,30 @@ def test_product_catalog_selects_provider_without_a_transport_field() -> None:
     assert catalog.snapshot.transport_id == "codex_cli"
 
 
+def test_product_catalog_can_bind_provider_catalog_to_logical_model() -> None:
+    request = ProductCatalogRequest(provider="openai", model="gpt-6-luna")
+    response_payload = _catalog_response("codex_cli")
+
+    def respond(http_request: httpx.Request) -> httpx.Response:
+        assert str(http_request.url) == ENDPOINT + "/v1/product/catalog"
+        assert json.loads(http_request.content) == {
+            "provider": "openai",
+            "model": "gpt-6-luna",
+        }
+        return httpx.Response(200, json=response_payload)
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        catalog = transport.catalog(request)
+    finally:
+        transport.close()
+
+    assert catalog.snapshot.transport_id == "codex_cli"
+
+
 def test_remote_complete_timeout_is_indeterminate_and_never_retries() -> None:
     request = _request()
     calls = 0

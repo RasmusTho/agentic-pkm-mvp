@@ -96,6 +96,29 @@ def test_product_codex_transport_is_remote_and_has_no_native_tools(
     assert factory.default_adapter_id("ollama") == "ollama_http"
 
 
+def test_host_adapter_binding_selects_codex_cli_for_luna_model_family(
+    factory: ModelAccessAdapterFactory,
+) -> None:
+    assert factory.adapter_id_for("openai", "gpt-6-luna") == "codex_cli"
+    assert factory.adapter_id_for("openai", "gpt-5.6-luna") == "codex_cli"
+    assert factory.adapter_id_for("openai", "gpt-5.6-sol") == "openai_api"
+
+
+def test_invalid_model_family_adapter_binding_fails_closed(tmp_path: Path) -> None:
+    declarations_path = tmp_path / "adapters.yaml"
+    declarations = yaml.safe_load(
+        Path("docs/settings/models/adapters.yaml").read_text(encoding="utf-8")
+    )
+    declarations["model_routes"][0]["adapter_id"] = "anthropic_api"
+    declarations_path.write_text(yaml.safe_dump(declarations), encoding="utf-8")
+
+    with pytest.raises(AdapterRegistryError, match="does not serve"):
+        ModelAccessAdapterFactory.from_declared_sources(
+            adapters_path=declarations_path,
+            provider_census_path=Path("docs/settings/models/providers.yaml"),
+        )
+
+
 def test_product_ollama_fallback_transport_is_remote_and_constrained(
     factory: ModelAccessAdapterFactory,
 ) -> None:

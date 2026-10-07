@@ -117,9 +117,15 @@ class ProductPreflightRequest(ProductModelTarget):
 
 
 class ProductCatalogRequest(_StrictModel):
-    """Ask the host for the configured catalog of one Product provider."""
+    """Ask the host for the catalog bound to a logical Product target."""
 
     provider: Literal["openai", "anthropic", "deepseek", "gemini", "ollama", "mock"]
+    model: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+    )
 
 
 class EmbeddingRouteIdentity(_StrictModel):

@@ -126,9 +126,27 @@ class _AdapterDeclaration(_StrictConfig):
         return self
 
 
+class _ModelRouteBinding(_StrictConfig):
+    """A host-local adapter rule for a logical Product model family."""
+
+    provider: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
+    model_kind: Literal["chat", "embedding"]
+    model_prefix: str = Field(min_length=1, max_length=64)
+    model_suffix: str = Field(min_length=1, max_length=64)
+    adapter_id: str = Field(pattern=r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+
+    def matches(self, model: str) -> bool:
+        return (
+            model.startswith(self.model_prefix)
+            and model.endswith(self.model_suffix)
+            and len(model) > len(self.model_prefix) + len(self.model_suffix)
+        )
+
+
 class _AdapterDeclarations(_StrictConfig):
     version: Literal[1]
     adapters: list[_AdapterDeclaration] = Field(min_length=1)
+    model_routes: list[_ModelRouteBinding] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _unique_and_complete(self) -> "_AdapterDeclarations":
@@ -143,6 +161,17 @@ class _AdapterDeclarations(_StrictConfig):
         providers = {adapter.provider for adapter in self.adapters}
         if set(defaults) != providers or len(defaults) != len(set(defaults)):
             raise ValueError("each adapter provider must declare exactly one default transport")
+        route_keys = [
+            (
+                route.provider,
+                route.model_kind,
+                route.model_prefix,
+                route.model_suffix,
+            )
+            for route in self.model_routes
+        ]
+        if len(route_keys) != len(set(route_keys)):
+            raise ValueError("model route declarations contain duplicate rules")
         return self
 
 
@@ -163,6 +192,55 @@ class ModelAccessAdapterFactory:
             adapter.id: adapter for adapter in declarations.adapters
         }
         self._provider_census = provider_census
+        self._model_routes = tuple(declarations.model_routes)
+        self._validate_model_routes()
+
+    def _validate_model_routes(self) -> None:
+        """Fail closed on invalid or ambiguous model-family adapter rules."""
+        for route in self._model_routes:
+            adapter = self._declarations.get(route.adapter_id)
+            if (
+                adapter is None
+                or adapter.provider != route.provider
+                or route.model_kind not in adapter.model_kinds
+            ):
+                raise AdapterRegistryError(
+                    "model route adapter does not serve its declared provider and kind"
+                )
+            try:
+                provider_entry = self._provider_census.provider(route.provider)
+            except KeyError as exc:
+                raise AdapterRegistryError(
+                    "model route provider is not in the provider census"
+                ) from exc
+            if route.model_kind not in provider_entry.kinds:
+                raise AdapterRegistryError(
+                    "model route kind is not declared for its provider"
+                )
+            if not any(
+                route.matches(model.id)
+                and self.model_kind_for(route.provider, model.id) == route.model_kind
+                for model in provider_entry.models
+            ):
+                raise AdapterRegistryError(
+                    "model route rule does not match a provider-census model"
+                )
+
+        for provider in {route.provider for route in self._model_routes}:
+            provider_entry = self._provider_census.provider(provider)
+            for model in provider_entry.models:
+                model_kind = self.model_kind_for(provider, model.id)
+                matches = [
+                    route
+                    for route in self._model_routes
+                    if route.provider == provider
+                    and route.model_kind == model_kind
+                    and route.matches(model.id)
+                ]
+                if len(matches) > 1:
+                    raise AdapterRegistryError(
+                        "model route rules overlap for a provider-census model"
+                    )
 
     @classmethod
     def from_declared_sources(
@@ -323,6 +401,46 @@ class ModelAccessAdapterFactory:
         if len(matches) != 1:
             raise AdapterRegistryError("provider has no unique default transport")
         return matches[0].id
+
+    def adapter_id_for(
+        self,
+        provider: str,
+        model: str,
+        *,
+        model_kind: Literal["chat", "embedding"] = "chat",
+    ) -> str:
+        """Resolve a host adapter by model family, then by provider default."""
+        matches = [
+            route
+            for route in self._model_routes
+            if route.provider == provider
+            and route.model_kind == model_kind
+            and route.matches(model)
+        ]
+        if len(matches) > 1:
+            raise AdapterRegistryError("model has ambiguous host adapter bindings")
+        return matches[0].adapter_id if matches else self.default_adapter_id(provider)
+
+    def model_kind_for(self, provider: str, model: str) -> Literal["chat", "embedding"]:
+        """Infer a census model kind for model-bound catalog lookup."""
+        provider_entry = self.provider_entry(provider)
+        census_model = next(
+            (item for item in provider_entry.models if item.id == model), None
+        )
+        if census_model is None:
+            raise AdapterRegistryError("resolved model is not in the provider census")
+        if provider_entry.kinds == {"embedding"}:
+            return "embedding"
+        if (
+            "embedding" in provider_entry.kinds
+            and census_model.capabilities.embedding_dimensions is not None
+        ):
+            return "embedding"
+        if "chat" in provider_entry.kinds:
+            return "chat"
+        if "embedding" in provider_entry.kinds:
+            return "embedding"
+        raise AdapterRegistryError("resolved model has no declared kind")
 
     def provider_entry(self, provider: str) -> ProviderEntry:
         """Return declared provider metadata without exposing credentials."""

@@ -38,8 +38,10 @@ different profile in its local settings. The Product router resolves that choice
 capabilities. The Product wire request names the logical provider/model and bounded task payload,
 not a caller-selected transport or catalog snapshot. The Mac portal maps that exact provider/model
 to an allowed host-local adapter and returns resolved transport/catalog provenance; it does not
-silently substitute an unselected model. Exact-route compatibility operations remain distinct from
-the logical Product API. A
+silently substitute an unselected model. Host-local adapter mapping may be model-family-specific;
+the Luna family uses Codex CLI subscription auth while other OpenAI models retain the declared API
+default. Catalog, preflight, and inference resolve the same model-family mapping. Exact-route
+compatibility operations remain distinct from the logical Product API. A
 profile may opt into a latest-compatible model family only when the catalog provides verifiable
 release ordering and the descriptor satisfies the profile's capability allowlist.
 

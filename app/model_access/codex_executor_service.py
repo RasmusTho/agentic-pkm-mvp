@@ -425,7 +425,7 @@ def create_codex_executor_app(
     ) -> CompletionRouteIdentity:
         """Resolve provider/model to the adapter configured on the Mac host."""
         try:
-            adapter_id = adapter_factory.default_adapter_id(provider)
+            adapter_id = adapter_factory.adapter_id_for(provider, model)
             descriptor = adapter_factory.describe(
                 adapter_id, provider=provider, model=model
             )
@@ -487,7 +487,9 @@ def create_codex_executor_app(
         request: ProductEmbeddingRequest,
     ) -> EmbeddingRouteIdentity:
         try:
-            adapter_id = adapter_factory.default_adapter_id(request.provider)
+            adapter_id = adapter_factory.adapter_id_for(
+                request.provider, request.model, model_kind="embedding"
+            )
             descriptor = adapter_factory.describe(
                 adapter_id,
                 provider=request.provider,
@@ -679,7 +681,27 @@ def create_codex_executor_app(
             if not slots.acquire(blocking=False):
                 raise _RequestFailure(429, "executor_busy")
             try:
-                adapter_id = adapter_factory.default_adapter_id(catalog_request.provider)
+                model_kind = None
+                if catalog_request.model is not None:
+                    model_kind = adapter_factory.model_kind_for(
+                        catalog_request.provider, catalog_request.model
+                    )
+                    adapter_id = adapter_factory.adapter_id_for(
+                        catalog_request.provider,
+                        catalog_request.model,
+                        model_kind=model_kind,
+                    )
+                else:
+                    adapter_id = adapter_factory.default_adapter_id(
+                        catalog_request.provider
+                    )
+                if catalog_request.model is not None:
+                    adapter_factory.describe(
+                        adapter_id,
+                        provider=catalog_request.provider,
+                        model=catalog_request.model,
+                        model_kind=model_kind or "chat",
+                    )
                 snapshot = await run_in_threadpool(
                     catalog_snapshot_for,
                     adapter_id,

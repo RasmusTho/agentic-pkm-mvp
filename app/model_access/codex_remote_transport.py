@@ -339,7 +339,10 @@ class CodexRemoteTransport:
         """Fetch a transport catalog without invoking a model."""
         try:
             request_body = json.dumps(
-                request.model_dump(mode="json"),
+                request.model_dump(
+                    mode="json",
+                    exclude_none=isinstance(request, ProductCatalogRequest),
+                ),
                 ensure_ascii=False,
                 separators=(",", ":"),
                 allow_nan=False,

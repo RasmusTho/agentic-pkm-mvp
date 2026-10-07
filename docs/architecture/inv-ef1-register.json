@@ -2529,6 +2529,13 @@
       "issue": "#5819"
     },
     {
+      "artifact": "docs/MODEL_ACCESS_ROUTER/CONFIGURE_EXECUTOR_NETWORK_PATHS.md",
+      "category": "iii",
+      "why_load_bearing": "The network-path guide names the owner-selected Mac mini executor; host endpoint and authentication configuration remain local.",
+      "disposition": "stay",
+      "issue": "#5819"
+    },
+    {
       "artifact": "docs/MODEL_ACCESS_ROUTER/ROUTE_PRODUCT_CHAT_AND_EMBEDDINGS_THROUGH_MAC_PORTAL.md",
       "category": "iii",
       "why_load_bearing": "The Product integration task binds its shared portal target to the owner-selected Mac mini without disclosing host configuration.",
