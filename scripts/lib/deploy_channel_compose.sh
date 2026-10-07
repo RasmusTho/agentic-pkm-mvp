@@ -442,23 +442,37 @@ import os
 import sys
 
 selector = sys.argv[1]
-roots = ("/Users", "/Volumes")
+mac_host_roots = ("/Users", "/Volumes")
+linux_vault_root = "/srv"
 
 
-def under_full_host_root(path: str) -> bool:
-    return any(path == root or path.startswith(f"{root}/") for root in roots)
+def under_mac_host_root(path: str) -> bool:
+    return any(path == root or path.startswith(f"{root}/") for root in mac_host_roots)
+
+
+def is_canonical_linux_vault() -> bool:
+    return (
+        selector == lexical_path == resolved_path
+        and lexical_path.startswith(f"{linux_vault_root}/")
+    )
 
 
 # Runtime consumers receive the selector string, not its host-side realpath.
-# Both views must stay under a same-path mount: this rejects relative selectors,
-# outside symlinks into /Users, and /Users symlinks that escape the mounts.
+# Keep the established Mac rule separate from Linux: Mac selectors and their
+# resolved paths must both remain beneath a Mac host root. Linux selectors must
+# already be normalized and resolve to themselves, so aliases and `..` paths do
+# not gain a same-path bind. The /srv parent itself is never mounted.
 # `instance-state-init` never receives this selector or a selected-vault mount;
 # it validates the host-produced opaque receipt through its bounded mounts.
 lexical_path = os.path.normpath(selector) if os.path.isabs(selector) else ""
 resolved_path = os.path.realpath(selector)
 raise SystemExit(
     0
-    if under_full_host_root(lexical_path) and under_full_host_root(resolved_path)
+    if (
+        under_mac_host_root(lexical_path)
+        and under_mac_host_root(resolved_path)
+    )
+    or is_canonical_linux_vault()
     else 1
 )
 PY

@@ -334,6 +334,78 @@ def test_full_host_vault_does_not_add_deadlocking_duplicate_legacy_mount(
 
 
 @requires_docker
+def test_deploy_channel_linux_srv_vault_uses_exact_host_path_overlay(
+    tmp_path: Path,
+) -> None:
+    selected_vault = Path("/srv/ygg-dev/vault/Bifrost")
+    services = _services(
+        _render_deploy_compose(
+            tmp_path,
+            channel="dev",
+            explicit_vault=True,
+            selected_vault=selected_vault,
+        )
+    )
+
+    for service_name in ("api", "worker", "watcher"):
+        service = services[service_name]
+        env = _environment(service)
+        assert _mount_source(service, str(selected_vault)) == str(selected_vault)
+        assert _mount_source(service, "/srv") is None
+        assert _mount_source(service, "/app/vault") is None
+        assert env["VAULT_ROOT"] == str(selected_vault)
+        assert env["VAULT_ROOT_DEV"] == str(selected_vault)
+        assert env["WATCHER_VAULT_PATH"] == str(selected_vault)
+
+    finalizer = services["instance-state-init"]
+    assert _mount_source(finalizer, str(selected_vault)) is None
+    assert _mount_source(finalizer, "/srv") is None
+
+
+@requires_docker
+def test_deploy_channel_noncanonical_aliases_keep_legacy_vault_overlay(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical_root = "/srv/ygg-dev/vault/Bifrost"
+    pythonpath = tmp_path / "pythonpath"
+    pythonpath.mkdir()
+    (pythonpath / "sitecustomize.py").write_text(
+        "import os\n"
+        "_realpath = os.path.realpath\n"
+        f"_aliases = {{'/srv/alias': {canonical_root!r}, "
+        f"'/Users/selected-vault': {canonical_root!r}, "
+        f"'/Volumes/selected-vault': {canonical_root!r}}}\n"
+        "def _realpath_with_aliases(path, *args, **kwargs):\n"
+        "    return _aliases.get(os.fspath(path), _realpath(path, *args, **kwargs))\n"
+        "os.path.realpath = _realpath_with_aliases\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(pythonpath))
+
+    selectors = (
+        "/srv/alias",
+        "/Users/selected-vault",
+        "/Volumes/selected-vault",
+        "/srv/ygg-dev/vault/../vault/Bifrost",
+    )
+    for index, selector in enumerate(selectors):
+        services = _services(
+            _render_deploy_compose(
+                tmp_path / str(index),
+                channel="dev",
+                explicit_vault=True,
+                selected_vault=Path(selector),
+            )
+        )
+        api = services["api"]
+        env = _environment(api)
+        assert _mount_source(api, "/app/vault") == selector
+        assert _mount_source(api, canonical_root) is None
+        assert env["VAULT_ROOT"] == "/app/vault"
+
+
+@requires_docker
 def test_scalar_rollback_overrides_full_host_environment_selectors(
     tmp_path: Path,
 ) -> None:
