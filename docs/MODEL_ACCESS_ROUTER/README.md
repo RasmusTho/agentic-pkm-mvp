@@ -84,22 +84,31 @@ Product reads or refreshes a bounded catalog snapshot → Product policy selects
 Builder continues through its own resolver/profile and adapters. The shared facade does not make
 Product and Builder share policy or credentials.
 
-The shared facade remains policy-agnostic: Product resolves the route, and the executor API neither picks a model nor joins Product and Builder authority. Completion requests and responses carry exact provider, model, and transport identity. Preflight carries only that route and capability intent; it returns readiness or a sanitized typed failure and performs no inference. Catalog discovery likewise performs no inference; latest-compatible selection is a pure Product-side operation over a snapshot and caller-supplied policy allowlist.
+The shared facade remains policy-agnostic: Product resolves the logical route, and the executor API neither picks a model nor joins Product and Builder authority. A Product wire request carries the selected provider/model and task payload, but not a caller-selected transport or catalog proof; the Mac resolves those from its checked-in adapter/census and host catalog. Successful responses and internal receipts bind the resolved provider, model, transport, host, and catalog snapshot. The legacy exact-route `/v1/complete` and `/v1/preflight` compatibility operations still carry transport/provenance explicitly and are not the Product logical-route contract. Preflight returns readiness or a sanitized typed failure and performs no inference. Catalog discovery likewise performs no inference; latest-compatible selection is a pure Product-side operation over a snapshot and caller-supplied policy allowlist.
 
 The completion/catalog service exposes `POST /v1/complete`, `POST /v1/preflight`, and
-`POST /v1/catalog`. Its additional bounded System One operations are Product `POST /v1/judgment`
+`POST /v1/catalog`. The logical Product surface exposes `POST /v1/product/catalog`,
+`POST /v1/product/preflight`, `POST /v1/product/complete`, and `POST /v1/product/embed`; each
+resolves its host transport from a Product provider/model request and returns the actual route
+identity. Embedding requests additionally bind one declared input and required vector dimension;
+responses return one dimension-checked vector without echoing input. Their host adapter performs one
+provider inference request, with no post-dispatch retry or provider switch. Its additional bounded System One operations are Product `POST /v1/judgment`
 and Builder `POST /v1/ckm-judgment`, each with a separate fixed payload and server-owned profile.
 VLAN ingress authentication applies to the API; no Tailscale claim or per-action capability header
 is required. They add no completion fallback or model-selection authority to callers.
 Completion supplies one declared provider/model/transport, optional reasoning
 effort, output schema, and output-token limit, a capability intent, trusted instructions, and user
 content as distinct fields. Preflight supplies only one declared provider/model/transport and
-capability intent. Catalog supplies only a declared transport (`codex_cli`, `ollama_http`,
-`openai_api`, `anthropic_api`, or `deepseek_api`) and returns a sanitized snapshot.
-None accepts commands, argv, paths, arbitrary environment, tools, MCP servers, provider endpoints,
-or credentials. Completion returns the exact route and result; preflight returns the exact route and
-sanitized readiness; catalog returns the snapshot's provider, descriptors, source/fetch metadata,
-freshness, and content hash.
+capability intent. The legacy exact-route catalog request supplies only one declared transport
+(`codex_cli`, `ollama_http`, `openai_api`, `anthropic_api`, or `deepseek_api`). Logical Product
+catalog requests supply only a provider; the Mac resolves its default declared adapter, including
+the pinned Gemini/mock embedding catalogs and the installed Ollama catalog. None accepts commands,
+argv, paths, arbitrary environment, tools, MCP servers, provider endpoints, or credentials.
+Completion and embedding return the exact host-resolved route and result; preflight returns the exact
+route and sanitized readiness; catalog returns the snapshot's provider, descriptors, source/fetch
+metadata, freshness, and content hash. Product embedding is a single-item request at the API
+boundary; any existing chunking/batching stays explicit in the Product caller and therefore each
+item has its own exact route receipt.
 
 The current executor API is exposed behind its configured VLAN mTLS ingress and remains
 loopback-bound. The current Ygg profile contains only this VLAN path; Tailscale and Serve are not

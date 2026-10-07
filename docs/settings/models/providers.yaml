@@ -28,6 +28,7 @@ providers:
     kinds: [embedding]
     tier: paid
     capabilities: {embedding_dimensions: 768}
+    api_endpoint: https://generativelanguage.googleapis.com/v1beta/models
     paid_eligible_task_kinds: []
     credential_identifiers: [gemini.api-key]
     excluded_model_families: []
@@ -68,7 +69,7 @@ providers:
         capabilities: {}
       - id: nomic-embed-text:latest
         effective_identity: ollama/nomic-embed-text:latest
-        capabilities: {}
+        capabilities: {embedding_dimensions: 768}
   - id: openai
     kinds: [chat]
     tier: paid

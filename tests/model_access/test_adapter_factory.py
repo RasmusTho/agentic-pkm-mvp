@@ -29,11 +29,17 @@ def test_factory_resolves_only_declared_adapter_ids(
         "anthropic_api": ("anthropic", "claude-fable-5"),
         "deepseek_api": ("deepseek", "deepseek-chat"),
         "mock": ("mock", "mock-chat"),
+        "gemini_api": ("gemini", "gemini-embedding-001"),
     }
 
     assert set(targets) == SUPPORTED_ADAPTER_IDS
     for adapter_id, (provider, model) in targets.items():
-        descriptor = factory.describe(adapter_id, provider=provider, model=model)
+        descriptor = factory.describe(
+            adapter_id,
+            provider=provider,
+            model=model,
+            model_kind="embedding" if adapter_id == "gemini_api" else "chat",
+        )
         assert descriptor.adapter_id == adapter_id
         assert (descriptor.provider, descriptor.model) == (provider, model)
         assert descriptor.transport_id == adapter_id
@@ -100,6 +106,28 @@ def test_product_ollama_fallback_transport_is_remote_and_constrained(
     assert descriptor.execution_boundary == "private_network_https"
     assert descriptor.authentication_scheme == "executor_path_authentication"
     assert descriptor.supported_capabilities.native_tools is False
+
+
+def test_embedding_adapters_require_registry_dimensions_and_declared_kind(
+    factory: ModelAccessAdapterFactory,
+) -> None:
+    descriptor = factory.describe(
+        "gemini_api",
+        provider="gemini",
+        model="gemini-embedding-001",
+        model_kind="embedding",
+    )
+
+    assert descriptor.transport_id == "gemini_api"
+    assert descriptor.supported_capabilities.embedding_dimension == 768
+    assert factory.default_adapter_id("gemini") == "gemini_api"
+    with pytest.raises(AdapterRegistryError, match="not declared for this provider"):
+        factory.describe(
+            "gemini_api",
+            provider="gemini",
+            model="gemini-embedding-001",
+            model_kind="chat",
+        )
 
 
 def test_codex_declaration_cannot_raise_tool_capability_or_change_auth_boundary(

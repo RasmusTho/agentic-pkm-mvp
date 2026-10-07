@@ -19,7 +19,12 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
-from app.model_access.catalog import CatalogCache, CatalogError, CatalogSnapshot
+from app.model_access.catalog import (
+    CatalogCache,
+    CatalogError,
+    CatalogModelDescriptor,
+    CatalogSnapshot,
+)
 from app.model_access.catalog_discovery import OllamaCatalogDiscovery, codex_catalog_snapshot
 from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpError
@@ -32,7 +37,7 @@ from app.model_access.ckm_judgment_executor import BuilderTypeSafeExecutor
 from app.model_access.ckm_judgment_contract import (
     CKM_JUDGMENT_REQUEST_BYTES, BuilderJudgmentResult, validate_ckm_request,
 )
-from llm_contract import SystemOneJudgmentRequest
+from llm_contract import ModelCapabilities, SystemOneJudgmentRequest
 from app.model_access.remote_contract import (
     CompletionCapabilityIntent,
     CompletionRequest,
@@ -44,6 +49,9 @@ from app.model_access.remote_contract import (
     PreflightResponse,
     ProductCatalogRequest,
     ProductCompletionRequest,
+    ProductEmbeddingRequest,
+    ProductEmbeddingResponse,
+    EmbeddingRouteIdentity,
     ProductPreflightRequest,
     validate_inline_schema,
 )
@@ -227,15 +235,27 @@ def _adapter_failure(exc: Exception) -> _RequestFailure:
             return _RequestFailure(422, exc.failure_code)
         return _RequestFailure(503, exc.failure_code)
     if isinstance(exc, OllamaHttpError):
-        if exc.failure_code == "ollama_schema_violation":
+        if exc.failure_code in {
+            "ollama_schema_violation",
+            "ollama_embedding_unavailable",
+            "ollama_request_invalid",
+        }:
             return _RequestFailure(422, exc.failure_code)
-        if exc.failure_code == "ollama_output_too_large":
+        if exc.failure_code in {
+            "ollama_output_too_large",
+            "ollama_embedding_dimension_mismatch",
+        }:
             return _RequestFailure(502, exc.failure_code)
         return _RequestFailure(503, exc.failure_code)
     if isinstance(exc, ProviderApiError):
-        if exc.code in {"provider_response_invalid", "provider_schema_violation", "provider_response_too_large"}:
+        if exc.code in {
+            "provider_response_invalid",
+            "provider_schema_violation",
+            "provider_response_too_large",
+            "provider_embedding_dimension_mismatch",
+        }:
             return _RequestFailure(502, exc.code)
-        if exc.code == "provider_schema_invalid":
+        if exc.code in {"provider_schema_invalid", "embedding_dimension_unavailable"}:
             return _RequestFailure(422, exc.code)
         if exc.code == "catalog_snapshot_mismatch":
             return _RequestFailure(409, exc.code)
@@ -293,6 +313,38 @@ def create_codex_executor_app(
     slots = threading.BoundedSemaphore(max_concurrency)
     local_catalog_cache = CatalogCache()
 
+    def census_embedding_snapshot(
+        provider: str, transport_id: str, fetched_at: datetime
+    ) -> CatalogSnapshot:
+        try:
+            census_provider = adapter_factory.provider_entry(provider)
+        except (KeyError, ValueError) as exc:
+            raise _RequestFailure(422, "route_not_declared") from exc
+        models: list[CatalogModelDescriptor] = []
+        for declared_model in census_provider.models:
+            dimensions = declared_model.capabilities.embedding_dimensions
+            if dimensions is None:
+                dimensions = census_provider.capabilities.embedding_dimensions
+            if dimensions is None:
+                continue
+            models.append(
+                CatalogModelDescriptor(
+                    provider=provider,
+                    model=declared_model.id,
+                    transports=(transport_id,),
+                    capabilities=ModelCapabilities(embedding_dimension=dimensions),
+                )
+            )
+        if not models:
+            raise _RequestFailure(422, "embedding_model_unavailable")
+        return CatalogSnapshot.create(
+            provider=provider,
+            transport_id=transport_id,
+            source_id="provider_census_embeddings_v1",
+            fetched_at=fetched_at,
+            models=models,
+        )
+
     def catalog_snapshot_for(transport_id: str) -> CatalogSnapshot:
         if transport_id == "codex_cli":
             return local_catalog_cache.get(
@@ -311,6 +363,22 @@ def create_codex_executor_app(
                 loader=lambda fetched_at: OllamaCatalogDiscovery(
                     ollama_adapter
                 ).discover(fetched_at=fetched_at),
+            )
+        if transport_id == "gemini_api":
+            return local_catalog_cache.get(
+                provider="gemini",
+                transport_id=transport_id,
+                loader=lambda fetched_at: census_embedding_snapshot(
+                    "gemini", transport_id, fetched_at
+                ),
+            )
+        if transport_id == "mock":
+            return local_catalog_cache.get(
+                provider="mock",
+                transport_id=transport_id,
+                loader=lambda fetched_at: census_embedding_snapshot(
+                    "mock", transport_id, fetched_at
+                ),
             )
         if provider_api_adapter is None:
             raise _RequestFailure(503, "provider_adapter_unavailable")
@@ -386,6 +454,61 @@ def create_codex_executor_app(
             ),
         )
         return bind_host_catalog(route)
+
+    def bind_embedding_catalog(
+        route: EmbeddingRouteIdentity,
+    ) -> EmbeddingRouteIdentity:
+        try:
+            snapshot = catalog_snapshot_for(route.transport_id)
+        except _RequestFailure:
+            raise
+        except Exception as exc:
+            raise _adapter_failure(exc) from exc
+        if snapshot.freshness != "fresh":
+            raise _RequestFailure(503, "catalog_stale")
+        descriptor = next(
+            (item for item in snapshot.models if item.model == route.model), None
+        )
+        now = datetime.now(timezone.utc)
+        if (
+            descriptor is None
+            or descriptor.deprecated
+            or (descriptor.sunset_at is not None and descriptor.sunset_at <= now)
+        ):
+            raise _RequestFailure(422, "provider_model_unavailable")
+        return route.model_copy(
+            update={
+                "catalog_snapshot_ref": snapshot.snapshot_ref,
+                "catalog_snapshot_hash": snapshot.snapshot_hash,
+            }
+        )
+
+    def resolve_product_embedding_route(
+        request: ProductEmbeddingRequest,
+    ) -> EmbeddingRouteIdentity:
+        try:
+            adapter_id = adapter_factory.default_adapter_id(request.provider)
+            descriptor = adapter_factory.describe(
+                adapter_id,
+                provider=request.provider,
+                model=request.model,
+                model_kind="embedding",
+            )
+        except (KeyError, ValueError) as exc:
+            raise _RequestFailure(422, "route_not_declared") from exc
+        if descriptor.supported_capabilities.embedding_dimension != request.dimensions:
+            raise _RequestFailure(422, "embedding_dimension_unavailable")
+        if descriptor.transport_id not in {"gemini_api", "ollama_http", "mock"}:
+            raise _RequestFailure(422, "route_not_declared")
+        route = EmbeddingRouteIdentity(
+            provider=request.provider,
+            model=request.model,
+            transport_id=cast(
+                Literal["gemini_api", "ollama_http", "mock"],
+                descriptor.transport_id,
+            ),
+        )
+        return bind_embedding_catalog(route)
 
     def validate_legacy_route(route: CompletionRouteIdentity) -> CompletionRouteIdentity:
         # The old exact-route wire shape remains only for Codex CLI/Ollama
@@ -553,6 +676,8 @@ def create_codex_executor_app(
                 )
             except ValidationError as exc:
                 raise _RequestFailure(422, "invalid_request") from exc
+            if not slots.acquire(blocking=False):
+                raise _RequestFailure(429, "executor_busy")
             try:
                 adapter_id = adapter_factory.default_adapter_id(catalog_request.provider)
                 snapshot = await run_in_threadpool(
@@ -563,6 +688,8 @@ def create_codex_executor_app(
                 raise
             except Exception as exc:
                 raise _adapter_failure(exc) from exc
+            finally:
+                slots.release()
             if snapshot.freshness != "fresh":
                 raise _RequestFailure(503, "catalog_stale")
             response = CatalogResponse(snapshot=snapshot)
@@ -792,6 +919,85 @@ def create_codex_executor_app(
             return JSONResponse(
                 content=response.model_dump(mode="json", exclude_none=True)
             )
+        except _RequestFailure as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": {"code": exc.code}},
+            )
+
+    @app.post("/v1/product/embed", response_model=ProductEmbeddingResponse)
+    async def product_embed(request: Request) -> JSONResponse:
+        try:
+            _require_loopback_peer(request)
+            body = await _read_bounded_body(request, max_bytes=max_request_bytes)
+            try:
+                product_request = ProductEmbeddingRequest.model_validate(
+                    _decode_json_object(body)
+                )
+            except ValidationError as exc:
+                raise _RequestFailure(422, "invalid_request") from exc
+
+            if not slots.acquire(blocking=False):
+                raise _RequestFailure(429, "executor_busy")
+            try:
+                route = await run_in_threadpool(
+                    resolve_product_embedding_route, product_request
+                )
+                if route.transport_id == "gemini_api":
+                    if provider_api_adapter is None:
+                        raise _RequestFailure(503, "provider_adapter_unavailable")
+                    await run_in_threadpool(
+                        provider_api_adapter.preflight_embedding, product_request
+                    )
+                    vector = await run_in_threadpool(
+                        provider_api_adapter.embed_product, product_request
+                    )
+                elif route.transport_id == "ollama_http":
+                    if ollama_adapter is None:
+                        raise _RequestFailure(503, "ollama_unavailable")
+                    await run_in_threadpool(
+                        ollama_adapter.preflight_embedding, model=product_request.model
+                    )
+                    vector = await run_in_threadpool(
+                        ollama_adapter.embed,
+                        model=product_request.model,
+                        input_text=product_request.input_text,
+                        dimensions=product_request.dimensions,
+                    )
+                else:
+                    from app.llm.embeddings import _mock_embed_one
+
+                    vector = await run_in_threadpool(
+                        _mock_embed_one,
+                        product_request.input_text,
+                        model=product_request.model,
+                        dim=product_request.dimensions,
+                        timeout=0.0,
+                    )
+            except _RequestFailure:
+                raise
+            except Exception as exc:
+                raise _adapter_failure(exc) from exc
+            finally:
+                slots.release()
+
+            if len(vector) != product_request.dimensions:
+                raise _RequestFailure(502, "embedding_response_dimension_mismatch")
+            response = ProductEmbeddingResponse(
+                route=route,
+                dimensions=product_request.dimensions,
+                vector=vector,
+            )
+            response_json = response.model_dump(mode="json", exclude_none=True)
+            encoded = json.dumps(
+                response_json,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(encoded) > max_output_bytes:
+                raise _RequestFailure(502, "embedding_response_too_large")
+            return JSONResponse(content=response_json)
         except _RequestFailure as exc:
             return JSONResponse(
                 status_code=exc.status_code,

@@ -35,8 +35,11 @@ deterministic tests.
 
 Product shared settings declare registry-backed models/profiles, and each clone may select a
 different profile in its local settings. The Product router resolves that choice and required
-capabilities. The Mac portal maps the exact provider/model route to an allowed host-local adapter
-and returns exact route provenance; it does not silently substitute an unselected model. A
+capabilities. The Product wire request names the logical provider/model and bounded task payload,
+not a caller-selected transport or catalog snapshot. The Mac portal maps that exact provider/model
+to an allowed host-local adapter and returns resolved transport/catalog provenance; it does not
+silently substitute an unselected model. Exact-route compatibility operations remain distinct from
+the logical Product API. A
 profile may opt into a latest-compatible model family only when the catalog provides verifiable
 release ordering and the descriptor satisfies the profile's capability allowlist.
 

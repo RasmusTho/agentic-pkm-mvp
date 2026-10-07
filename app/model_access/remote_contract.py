@@ -119,7 +119,67 @@ class ProductPreflightRequest(ProductModelTarget):
 class ProductCatalogRequest(_StrictModel):
     """Ask the host for the configured catalog of one Product provider."""
 
-    provider: Literal["openai", "anthropic", "deepseek", "ollama"]
+    provider: Literal["openai", "anthropic", "deepseek", "gemini", "ollama", "mock"]
+
+
+class EmbeddingRouteIdentity(_StrictModel):
+    """The exact embedding route resolved by the Mac host."""
+
+    provider: Literal["gemini", "ollama", "mock"]
+    model: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+    )
+    transport_id: Literal["gemini_api", "ollama_http", "mock"]
+    catalog_snapshot_ref: str | None = Field(
+        default=None, pattern=r"^catalog\.[a-z][a-z0-9_]*$"
+    )
+    catalog_snapshot_hash: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+
+    @model_validator(mode="after")
+    def _provider_matches_transport(self) -> "EmbeddingRouteIdentity":
+        expected_provider = {
+            "gemini_api": "gemini",
+            "ollama_http": "ollama",
+            "mock": "mock",
+        }[self.transport_id]
+        if self.provider != expected_provider:
+            raise ValueError("provider and embedding transport do not form an allowed route")
+        if (self.catalog_snapshot_ref is None) != (self.catalog_snapshot_hash is None):
+            raise ValueError("catalog snapshot reference and hash must be supplied together")
+        return self
+
+
+class ProductEmbeddingRequest(_StrictModel):
+    """One bounded logical Product embedding request; transport and credentials are host-owned."""
+
+    provider: Literal["gemini", "ollama", "mock"]
+    model: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+    )
+    dimensions: int = Field(ge=1, le=4096)
+    input_text: str = Field(min_length=1, max_length=64_000)
+
+
+class ProductEmbeddingResponse(_StrictModel):
+    """One exact host-resolved embedding route and its dimension-bounded vector."""
+
+    route: EmbeddingRouteIdentity
+    dimensions: int = Field(ge=1, le=4096)
+    vector: tuple[float, ...] = Field(min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def _vector_matches_declared_dimensions(self) -> "ProductEmbeddingResponse":
+        if self.route.catalog_snapshot_ref is None or self.route.catalog_snapshot_hash is None:
+            raise ValueError("embedding response must include host catalog provenance")
+        if len(self.vector) != self.dimensions:
+            raise ValueError("embedding vector length must match declared dimensions")
+        return self
 
 
 class CompletionRequest(_StrictModel):

@@ -5,8 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 import json
+import math
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -26,6 +27,7 @@ from app.model_access.remote_contract import (
     CompletionCapabilityIntent,
     CompletionRequest,
     PreflightRequest,
+    ProductEmbeddingRequest,
     inline_schema_validator,
 )
 
@@ -37,15 +39,17 @@ _TRANSPORT_PROVIDER = {
     "anthropic_api": "anthropic",
     "deepseek_api": "deepseek",
 }
-_CREDENTIAL_ENV = {
-    "openai.api-key": "OPENAI_API_KEY",
-    "anthropic.api-key": "ANTHROPIC_API_KEY",
-    "deepseek.api-key": "DEEPSEEK_API_KEY",
+_CREDENTIAL_ENV: dict[str, tuple[str, ...]] = {
+    "openai.api-key": ("OPENAI_API_KEY",),
+    "anthropic.api-key": ("ANTHROPIC_API_KEY",),
+    "deepseek.api-key": ("DEEPSEEK_API_KEY",),
+    "gemini.api-key": ("GEMINI_API_KEY", "GOOGLE_API_KEY"),
 }
 _OFFICIAL_HOSTS = {
     "openai": "api.openai.com",
     "anthropic": "api.anthropic.com",
     "deepseek": "api.deepseek.com",
+    "gemini": "generativelanguage.googleapis.com",
 }
 _OPENAI_EFFORTS = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
@@ -156,6 +160,8 @@ class ProductProviderApiAdapter:
                 raise ValueError
             if provider == "deepseek" and parsed.path != "/chat/completions":
                 raise ValueError
+            if provider == "gemini" and parsed.path != "/v1beta/models":
+                raise ValueError
         except (TypeError, ValueError):
             raise ProviderApiError("provider_endpoint_not_declared") from None
         return endpoint
@@ -168,18 +174,16 @@ class ProductProviderApiAdapter:
         if len(provider_entry.credential_identifiers) != 1:
             raise ProviderApiError("credential_unavailable")
         credential_id = provider_entry.credential_identifiers[0]
-        environment_name = _CREDENTIAL_ENV.get(credential_id)
-        if environment_name is None:
+        environment_names = _CREDENTIAL_ENV.get(credential_id)
+        if environment_names is None:
             raise ProviderApiError("credential_unavailable")
         # Only the host process can resolve these environment references; no value
         # is accepted from a request or included in errors, logs, or receipts.
-        value = self._credential_resolver(environment_name)
-        if not isinstance(value, str):
-            raise ProviderApiError("credential_unavailable")
-        normalized = value.strip()
-        if not normalized:
-            raise ProviderApiError("credential_unavailable")
-        return normalized
+        for environment_name in environment_names:
+            value = self._credential_resolver(environment_name)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        raise ProviderApiError("credential_unavailable")
 
     def _catalog(
         self, provider: str, api_key: str, fetched_at: datetime
@@ -378,6 +382,88 @@ class ProductProviderApiAdapter:
             except Exception:
                 raise ProviderApiError("provider_schema_violation") from None
         return content
+
+    def preflight_embedding(self, request: ProductEmbeddingRequest) -> None:
+        """Check census binding, endpoint, and host credential without inference."""
+        if request.provider != "gemini":
+            raise ProviderApiError("route_not_declared")
+        try:
+            descriptor = self._factory.describe(
+                "gemini_api",
+                provider="gemini",
+                model=request.model,
+                model_kind="embedding",
+            )
+        except (AdapterRegistryError, KeyError, ValueError):
+            raise ProviderApiError("provider_model_unavailable") from None
+        if descriptor.supported_capabilities.embedding_dimension != request.dimensions:
+            raise ProviderApiError("embedding_dimension_unavailable")
+        self._api_key("gemini")
+        self._endpoint("gemini")
+
+    def embed_product(self, request: ProductEmbeddingRequest) -> tuple[float, ...]:
+        """Send one Gemini embedding request using only Mac-resolved host credentials."""
+        if request.provider != "gemini":
+            raise ProviderApiError("route_not_declared")
+        try:
+            descriptor = self._factory.describe(
+                "gemini_api",
+                provider="gemini",
+                model=request.model,
+                model_kind="embedding",
+            )
+        except (AdapterRegistryError, KeyError, ValueError):
+            raise ProviderApiError("provider_model_unavailable") from None
+        if descriptor.supported_capabilities.embedding_dimension != request.dimensions:
+            raise ProviderApiError("embedding_dimension_unavailable")
+
+        api_key = self._api_key("gemini")
+        endpoint = self._endpoint("gemini")
+        model_path = quote(request.model, safe="-_.")
+        body = {
+            "model": f"models/{request.model}",
+            "content": {"parts": [{"text": request.input_text}]},
+            "embedContentConfig": {"outputDimensionality": request.dimensions},
+        }
+        try:
+            with self._client.stream(
+                "POST",
+                f"{endpoint}/{model_path}:embedContent",
+                json=body,
+                headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
+            ) as response:
+                status = response.status_code
+                raw = _bounded_body(response)
+        except ProviderApiError:
+            raise
+        except (httpx.HTTPError, OSError):
+            raise ProviderApiError("provider_unavailable") from None
+
+        if status != 200:
+            if status in {401, 403}:
+                raise ProviderApiError("provider_auth_failed")
+            if status == 404:
+                raise ProviderApiError("provider_model_unavailable")
+            if status in {408, 429} or status >= 500:
+                raise ProviderApiError("provider_unavailable")
+            raise ProviderApiError("provider_request_rejected")
+
+        payload = _json_object(raw)
+        embedding = payload.get("embedding")
+        values = embedding.get("values") if isinstance(embedding, dict) else None
+        if not isinstance(values, list) or not values:
+            raise ProviderApiError("provider_response_invalid")
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in values
+        ):
+            raise ProviderApiError("provider_response_invalid")
+        vector = tuple(float(value) for value in values)
+        if len(vector) != request.dimensions:
+            raise ProviderApiError("provider_embedding_dimension_mismatch")
+        return vector
 
     @staticmethod
     def _request_body(provider: str, request: CompletionRequest) -> dict[str, Any]:

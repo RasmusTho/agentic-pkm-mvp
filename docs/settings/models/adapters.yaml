@@ -31,6 +31,7 @@ adapters:
     provider: ollama
     model_source: provider_census
     transport_id: ollama_http
+    model_kinds: [chat, embedding]
     supported_capabilities: {structured_output: true, native_tools: false, system_prompt_channel: true, deterministic_execution: false}
     execution_host_profile: profile.ollama_local_http
     execution_boundary: local_http
@@ -71,9 +72,21 @@ adapters:
     provider: mock
     model_source: provider_census
     transport_id: mock
+    model_kinds: [chat, embedding]
     supported_capabilities: {structured_output: true, native_tools: false, system_prompt_channel: true, deterministic_execution: true}
     execution_host_profile: profile.mock_in_process
     execution_boundary: in_process
     authentication_scheme: none
+    instruction_mapping_ref: profile.instructions_separate_v1
+    default_for_provider: true
+  - id: gemini_api
+    provider: gemini
+    model_source: provider_census
+    transport_id: gemini_api
+    model_kinds: [embedding]
+    supported_capabilities: {structured_output: false, native_tools: false, system_prompt_channel: false, deterministic_execution: false}
+    execution_host_profile: profile.gemini_provider_api
+    execution_boundary: provider_https
+    authentication_scheme: provider_credential_ref
     instruction_mapping_ref: profile.instructions_separate_v1
     default_for_provider: true

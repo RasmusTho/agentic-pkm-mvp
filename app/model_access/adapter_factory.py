@@ -37,6 +37,7 @@ SUPPORTED_ADAPTER_IDS = frozenset(
         "openai_api",
         "anthropic_api",
         "deepseek_api",
+        "gemini_api",
         "mock",
     }
 )
@@ -53,6 +54,12 @@ _CODEX_CLI_CAPABILITY_CEILING = {
     "deterministic_execution": False,
 }
 _CODEX_ADAPTERS = frozenset({"codex_cli", "codex_cli_tailscale"})
+
+
+def _default_model_kinds() -> list[Literal["chat", "embedding"]]:
+    return ["chat"]
+
+
 _TRUSTED_INSTRUCTION_CHANNELS: dict[
     str, Literal["system", "developer_instructions"]
 ] = {
@@ -81,11 +88,15 @@ class _AdapterDeclaration(_StrictConfig):
         "openai_api",
         "anthropic_api",
         "deepseek_api",
+        "gemini_api",
         "mock",
     ]
     provider: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,63}$")
     model_source: Literal["provider_census"]
     transport_id: str = Field(pattern=r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$")
+    model_kinds: list[Literal["chat", "embedding"]] = Field(
+        default_factory=_default_model_kinds, min_length=1
+    )
     default_for_provider: bool = False
     supported_capabilities: _DeclaredCapabilities
     execution_host_profile: str = Field(pattern=r"^profile\.[a-z][a-z0-9_]*$")
@@ -110,6 +121,8 @@ class _AdapterDeclaration(_StrictConfig):
     def _adapter_is_its_declared_transport(self) -> "_AdapterDeclaration":
         if self.transport_id != self.id:
             raise ValueError("adapter id and transport id must match")
+        if len(self.model_kinds) != len(set(self.model_kinds)):
+            raise ValueError("adapter model kinds must be unique")
         return self
 
 
@@ -174,6 +187,7 @@ class ModelAccessAdapterFactory:
         *,
         provider: str,
         model: str,
+        model_kind: Literal["chat", "embedding"] = "chat",
     ) -> ModelAccessAdapterDescriptor:
         declaration = self._declarations.get(adapter_id)
         if declaration is None:
@@ -225,14 +239,34 @@ class ModelAccessAdapterFactory:
             raise AdapterRegistryError("resolved provider is not in the provider census") from exc
         census_model = next((item for item in census_provider.models if item.id == model), None)
         if adapter_id == "mock" and provider == "mock" and census_model is None:
-            # Mock execution is model-agnostic; retain legacy Product model aliases
-            # while deriving only its deterministic capabilities from mock-chat.
+            # Mock execution is model-agnostic; keep chat and embedding descriptors
+            # separate so their capability surfaces cannot be conflated.
             census_model = next(
-                (item for item in census_provider.models if item.id == "mock-chat"),
+                (
+                    item
+                    for item in census_provider.models
+                    if item.id == ("mock-chat" if model_kind == "chat" else "mock-embed")
+                ),
                 None,
             )
-        if census_model is None or "chat" not in census_provider.kinds:
-            raise AdapterRegistryError("resolved chat model is not declared for this provider")
+        if (
+            census_model is None
+            or model_kind not in census_provider.kinds
+            or model_kind not in declaration.model_kinds
+        ):
+            raise AdapterRegistryError(
+                f"resolved {model_kind} model is not declared for this provider or adapter"
+            )
+        embedding_dimension = None
+        if model_kind == "embedding":
+            embedding_dimension = (
+                census_model.capabilities.embedding_dimensions
+                or census_provider.capabilities.embedding_dimensions
+            )
+            if embedding_dimension is None:
+                raise AdapterRegistryError(
+                    "resolved embedding model has no declared dimensions"
+                )
         trusted_channel = _TRUSTED_INSTRUCTION_CHANNELS.get(
             declaration.instruction_mapping_ref
         )
@@ -256,7 +290,8 @@ class ModelAccessAdapterFactory:
                     else True
                 )
                 for name in _CAPABILITY_FIELDS
-            }
+            },
+            embedding_dimension=embedding_dimension,
         )
         return ModelAccessAdapterDescriptor(
             adapter_id=declaration.id,

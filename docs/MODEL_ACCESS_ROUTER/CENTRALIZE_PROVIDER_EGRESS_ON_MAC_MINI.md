@@ -7,7 +7,7 @@ source_anchor: docs/adr/ADR-0067-mac-mini-product-model-access-portal.md :: D1-D
 parent_feature: Mac mini Product model-access portal (#5819)
 prerequisites: []
 depends_on: []
-can_parallelize_with: [Route Product chat and embeddings through the portal]
+can_parallelize_with: []
 ---
 
 # Centralize Product provider egress on the Mac mini
@@ -21,17 +21,18 @@ onto the Mac.
 
 ## What This Task Does
 
-Extend the Mac-hosted Model Access API with a bounded Product request containing only provider,
-model, capability intent, and prompt/schema data. The Product surface is `POST /v1/product/catalog`,
-`POST /v1/product/preflight`, and `POST /v1/product/complete`; it contains neither `transport_id`
-nor catalog provenance. The API resolves the provider's configured host adapter and credentials,
-then returns the exact transport and host-loaded catalog hash. Callers do not select a harness,
-supply an endpoint, or send credentials. The legacy exact-route `/v1` operations remain only for
-Codex CLI/Ollama compatibility; provider API inference must use the Product surface.
+Extend the Mac-hosted Model Access API with bounded logical Product requests containing provider,
+model, task capability/input, and no caller-selected transport or catalog provenance. The Product
+surface is `POST /v1/product/catalog`, `POST /v1/product/preflight`, `POST /v1/product/complete`,
+and `POST /v1/product/embed`. The API resolves the provider's configured host adapter and
+credentials, then returns the exact transport and host-loaded catalog hash. Callers do not select a
+harness, supply an endpoint, or send credentials. The legacy exact-route `/v1` operations remain
+for compatibility; provider API and embedding inference use the logical Product surface.
 Discovery covers the current provider census using provider-supplied metadata, including OpenAI and
-Anthropic updates. Unsupported, unconfigured, or stale routes fail before inference. The request and
-receipt bind the exact provider, model, transport, capabilities, and catalog snapshot without
-secrets.
+Anthropic updates; pinned embedding models are intersected with their declared provider census and
+must be present/usable in the host catalog. Unsupported, unconfigured, stale, or dimension-incompatible
+routes fail before inference. The request and receipt bind the exact provider, model, transport,
+capabilities, and catalog snapshot without secrets.
 
 Provider-reported structured-output and reasoning-effort metadata can confirm or veto the checked-in
 Product allowlist. If a provider catalog omits a field, that value remains unknown rather than an
@@ -46,6 +47,15 @@ that snapshot as a bounded availability aid for read-only callers.
 The current census in `docs/settings/models/providers.yaml` is the scope boundary; adding a new
 provider is not part of this task. Local Ollama remains optional and is not a readiness prerequisite
 for Codex CLI or API-provider routes.
+
+Embedding requests are one text item and one exact provider dispatch. The current Product
+embedding census is `gemini/gemini-embedding-001`, `ollama/nomic-embed-text:latest`, and the
+deterministic `mock/mock-embed` test route. The gateway verifies the declared embedding capability
+and requested dimensions before dispatch, bounds and validates exactly one returned vector, and
+never retries through a different endpoint/provider. Ollama uses its single `/api/embed` endpoint;
+the legacy local client's `/v1/embeddings` fallback is not used by the Mac portal. Gemini key lookup
+is host-local. The returned vector remains subject to the existing Product normalization and
+embedding-identity guards before any index write.
 
 Structured-output schemas are bounded inline JSON Schema only. `$ref`, `$dynamicRef`, and
 `$recursiveRef` are rejected recursively, and the response validator cannot retrieve remote schema
@@ -87,6 +97,11 @@ dispatch, the result is no longer bound to the model selected in settings.
   - Verify: `tests/model_access/test_product_provider_gateway.py::test_dispatch_failure_is_terminal_and_receipt_is_secret_free`
 - [ ] Missing Ollama does not fail preflight or health for a selected healthy Codex/API route.
   - Verify: `tests/model_access/test_capability_health.py::test_unselected_provider_absence_does_not_fail_health`
+- [ ] The real Mac Product API accepts only declared embedding provider/model/dimension/input,
+  binds a fresh host route/catalog, dispatches once, returns one validated vector, and rejects
+  unsupported dimensions/capabilities before provider inference.
+  - Verify: `tests/model_access/test_product_embedding_gateway.py::test_product_api_dispatches_declared_embedding_once_with_host_provenance`
+  - Verify: `tests/model_access/test_product_embedding_gateway.py::test_dimension_mismatch_fails_before_embedding_dispatch`
 - [ ] Caller-supplied schema references are rejected before provider access, and result validation
   cannot retrieve caller-controlled schema resources.
   - Verify: `tests/model_access/test_product_provider_gateway.py::test_reference_schema_is_rejected_before_provider_or_schema_egress`
@@ -99,8 +114,8 @@ dispatch, the result is no longer bound to the model selected in settings.
 
 ## Out of Scope
 
-- Product call-site migration, clone-local profile changes, embeddings transport, or live host
-  deployment; those are tracked by the sibling MARR task and parent acceptance.
+- Product call-site migration, clone-local profile changes, or live host deployment; those are
+  tracked by the dependent MARR task and parent acceptance.
 - Provider accounts, API-key creation, model downloads, Tailscale, or per-channel credentials.
 - Builder scheduler/policy changes or Model Inquiry fallback.
 
@@ -110,6 +125,8 @@ dispatch, the result is no longer bound to the model selected in settings.
 - [Model Access Router](README.md)
 - [Provider census](../settings/models/providers.yaml)
 - [Catalog discovery spec](DISCOVER_FRESH_MODEL_CATALOGS.md)
+- [Gemini embedContent API](https://ai.google.dev/api/embeddings)
+- [Ollama embed API](https://docs.ollama.com/api/embed)
 
 ## Related GitHub Issues
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime
 import re
@@ -151,6 +152,103 @@ class OllamaHttpAdapter:
             structured_output_supported=True,
             native_tools_supported=False,
         )
+
+    def preflight_embedding(self, *, model: str) -> None:
+        """Verify a local model declares embedding capability without inference."""
+        if not isinstance(model, str) or not _MODEL_ID.fullmatch(model):
+            raise OllamaHttpError("ollama_model_unavailable")
+        tags = self._metadata_request(
+            "GET", f"{self._api_root}/api/tags", failure_code="ollama_unavailable"
+        )
+        models = tags.get("models")
+        if not isinstance(models, list) or len(models) > 4_096:
+            raise OllamaHttpError("ollama_response_invalid")
+        if not any(
+            isinstance(item, dict)
+            and (item.get("name") == model or item.get("model") == model)
+            for item in models
+        ):
+            raise OllamaHttpError("ollama_model_unavailable")
+        details = self._metadata_request(
+            "POST",
+            f"{self._api_root}/api/show",
+            payload={"model": model},
+            failure_code="ollama_model_unavailable",
+        )
+        capabilities = details.get("capabilities")
+        if (
+            not isinstance(capabilities, list)
+            or any(not isinstance(value, str) or not value for value in capabilities)
+            or len(capabilities) > 64
+        ):
+            raise OllamaHttpError("ollama_model_capabilities_unavailable")
+        if "embedding" not in capabilities:
+            raise OllamaHttpError("ollama_embedding_unavailable")
+
+    def embed(
+        self,
+        *,
+        model: str,
+        input_text: str,
+        dimensions: int,
+    ) -> tuple[float, ...]:
+        """Dispatch exactly once to Ollama's current `/api/embed` endpoint."""
+        if (
+            not isinstance(model, str)
+            or not _MODEL_ID.fullmatch(model)
+            or not input_text
+            or not 1 <= dimensions <= 4096
+        ):
+            raise OllamaHttpError("ollama_request_invalid")
+        payload = {
+            "model": model,
+            "input": input_text,
+            "dimensions": dimensions,
+            "truncate": False,
+        }
+        try:
+            with self._client.stream(
+                "POST", f"{self._api_root}/api/embed", json=payload
+            ) as response:
+                if response.status_code != 200:
+                    raise OllamaHttpError("ollama_embedding_request_failed")
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    if len(body) + len(chunk) > self._max_output_bytes:
+                        raise OllamaHttpError("ollama_output_too_large")
+                    body.extend(chunk)
+        except OllamaHttpError:
+            raise
+        except httpx.TimeoutException as exc:
+            raise OllamaHttpError("ollama_timeout") from exc
+        except httpx.HTTPError as exc:
+            raise OllamaHttpError("ollama_unavailable") from exc
+
+        try:
+            result = json.loads(
+                bytes(body).decode("utf-8", errors="strict"),
+                object_pairs_hook=_strict_json_object_pairs,
+                parse_constant=_reject_json_constant,
+            )
+        except (UnicodeError, ValueError, json.JSONDecodeError, RecursionError) as exc:
+            raise OllamaHttpError("ollama_response_invalid") from exc
+        if not isinstance(result, dict) or result.get("model") != model:
+            raise OllamaHttpError("ollama_response_invalid")
+        embeddings = result.get("embeddings")
+        if not isinstance(embeddings, list) or len(embeddings) != 1:
+            raise OllamaHttpError("ollama_response_invalid")
+        raw_vector = embeddings[0]
+        if not isinstance(raw_vector, list) or not raw_vector or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in raw_vector
+        ):
+            raise OllamaHttpError("ollama_response_invalid")
+        vector = tuple(float(value) for value in raw_vector)
+        if len(vector) != dimensions:
+            raise OllamaHttpError("ollama_embedding_dimension_mismatch")
+        return vector
 
     def list_models(self) -> tuple[OllamaHttpCatalogModel, ...]:
         """List installed local model metadata without calling inference or `/api/show`."""

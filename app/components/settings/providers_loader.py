@@ -56,7 +56,7 @@ class ProviderCapabilities(BaseModel):
     native_tools: bool = False
     system_prompt_channel: bool = False
     deterministic_execution: bool = False
-    embedding_dimensions: int | None = None
+    embedding_dimensions: int | None = Field(default=None, ge=1, le=4096)
 
 
 class DeclaredModel(BaseModel):
