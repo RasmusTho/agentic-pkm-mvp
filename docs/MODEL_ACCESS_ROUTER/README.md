@@ -1,12 +1,12 @@
-State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-10-03 for the VLAN-only Ygg host profile, provider-neutral capability health, and distinct one-shot acceptance attempts. MARR-01–05, the MARR-08 completion API, generic MARR-09 path selection, MARR-10 provider-neutral capability health, and MARR-11 clone-local Product model profiles are delivered. VLAN-only MARR-06 designated-host acceptance has a validator-accepted v3 receipt in Issue #5624; staged MARR-07 rollout remains pending. Parent validation Issue #5618 is open and blocked for the remaining integrated capability and rollout gates.
+State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-10-03 for the VLAN-only Ygg host profile, provider-neutral capability health, and distinct one-shot acceptance attempts. MARR-01–05, the MARR-08 completion API, generic MARR-09 path selection, MARR-10 provider-neutral capability health, and MARR-11 clone-local Product chat profiles are delivered. VLAN-only MARR-06 designated-host acceptance has a validator-accepted v3 receipt in Issue #5624; staged MARR-07 rollout remains pending. The owner-approved universal Product portal target is recorded in ADR-0067 and parent Issue #5819; its provider-egress and Product embedding/profile tasks remain undelivered. Parent validation Issue #5618 remains separate and open for its original Luna rollout gates.
 Doc role: Capability specification
-Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, and ADR-0066 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
+Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, ADR-0066, and ADR-0067 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
 Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its isolated compatibility path
 Temporal class: strategic
 Review cadence: event-driven
-Source of truth: ADR-0066, child Issues, implementation, and acceptance receipts
-Last reviewed: 2026-10-06
-Last verified against: Issue #5794 clone-local routing-profile tests, Issue #5772 dev/test Compose integration tests, the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066, and the checked-in MARR task specifications.
+Source of truth: ADR-0066/ADR-0067, implementation task Issues, implementation, and acceptance receipts
+Last reviewed: 2026-10-07
+Last verified against: Issue #5794 clone-local routing-profile tests, Issue #5772 dev/test Compose integration tests, the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066/ADR-0067, and the checked-in MARR task specifications.
 Parent issue: #5618 (open, agent:blocked); validation hub, never a pickup task.
 
 # Model Access Router
@@ -42,9 +42,31 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 - Each configured path must authenticate and authorize the same Product channel and operation-specific action. VLAN membership alone is not authorization. The executor backend remains loopback-bound behind configured ingress; public listeners are forbidden. Concrete endpoints and identity material remain outside Git.
 - Product health reports required logical capability status through the provider-neutral MARR-10 contract and separately reports configured network-path reachability. The public `/api/health` projection omits model-access provider, model, transport, endpoint, and selected-path identity; local CLI diagnostics may retain selected-route detail. This code does not activate a host route or change the Product model default.
 - The dev/test/prod Compose overlays support an optional host-local MARR path-reference env file and a read-only Codex client-identity mount for Product `api`, `worker`, and `watcher` only. The governed deploy wrapper validates the exact endpoint/file-path allowlist before lock/migration/state preparation, then exports those values explicitly; Compose never consumes the raw MARR file as a service `env_file`. Immediately before each Product-channel Compose invocation, the ordinary governed runtime env is copied into a private mode-0600 temporary snapshot and that stable snapshot is used as the service `env_file`, closing the path-swap window; cleanup occurs when Compose exits. Production pins the import-time `LLM_PROVIDER` default to `mock` and disables cross-task provider enforcement for those Product callers, so explicit task policy can select a different provider. The model-access file supplies network path references only; Product model selection remains in its owner-managed `llm_routing` settings. This binding support does not provision host identity or activate a persistent route. Base Compose and release-channel activation remain separate gates.
-- The owner-approved Product routing target is Luna through the Codex CLI for chat/planning and Ollama for embeddings. These are separate capabilities: Luna does not serve embeddings, and Ollama does not replace the chat/planning route. Code support or the dev-host Luna acceptance receipt does not prove that the production identity, live task policy, embedding model, or release is active.
+- The currently verified Product route is Luna through the Codex CLI for the designated dev-host chat/planning acceptance; embeddings still use the separate embedding identity subsystem. The owner-approved target is broader: Mac mini mediates every registry-declared Product model capability, including embeddings, while Product settings select the model/profile per clone (ADR-0067). The current gateway does not yet serve every provider or embeddings; Issues #5819 and its MARR-12/MARR-13 tasks track that gap. This target does not prove that a production identity, task policy, embedding model, or release is active.
 - MARR-06 separates offline validation of an already-sanitized receipt (#5694) from live host acceptance (#5624); only the latter can clear the host/network acceptance gate.
 - No API credentials, host credentials, model downloads, or release-channel changes are part of the repository implementation slices. Live host/network activation requires its explicit operational gate.
+
+## Accepted Universal Product Portal Target
+
+ADR-0067 records the owner's 2026-10-07 decision: the Mac mini is the single model-access portal for
+Product chat/completion and embeddings; shared settings declare compatible models/profiles, and
+each Product clone or satellite selects its own profile locally. The Product router retains route
+selection authority; the Mac API hides provider harnesses and resolves host-local provider
+credentials. Product and Builder policies remain separate. The VLAN path is the active Ygg path;
+Tailscale is not required, and Ollama is optional rather than a universal health prerequisite.
+
+This is accepted target state, not shipped truth. MARR-12 adds provider adapters/catalog egress at
+the Mac API. MARR-13 routes Product model kinds, including embeddings, through that API and extends
+clone-local selection. The planned delivery order is server/API first, then Product integration, to
+keep one stable request contract. Neither task alone can claim the portal complete: Product clients
+send one exact selected route, the gateway performs one dispatch, and embedding identity/dimension
+changes fail explicitly before index writes. Parent #5819 owns integrated acceptance and current-state
+doc promotion; original Luna rollout gates remain under #5618.
+
+Implementation task specifications:
+
+- [MARR-12: Centralize Product provider egress on the Mac mini](CENTRALIZE_PROVIDER_EGRESS_ON_MAC_MINI.md)
+- [MARR-13: Route Product chat and embeddings through the Mac portal](ROUTE_PRODUCT_CHAT_AND_EMBEDDINGS_THROUGH_MAC_PORTAL.md)
 
 ## Existing Backlog Reconciliation
 
