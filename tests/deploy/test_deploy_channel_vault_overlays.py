@@ -337,7 +337,7 @@ def test_full_host_vault_does_not_add_deadlocking_duplicate_legacy_mount(
 def test_deploy_channel_linux_srv_vault_uses_exact_host_path_overlay(
     tmp_path: Path,
 ) -> None:
-    selected_vault = Path("/srv/ygg-dev/vault/Bifrost")
+    selected_vault = Path("/srv/ygg-dev/vault/selected-vault")
     services = _services(
         _render_deploy_compose(
             tmp_path,
@@ -367,7 +367,7 @@ def test_deploy_channel_noncanonical_aliases_keep_legacy_vault_overlay(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    canonical_root = "/srv/ygg-dev/vault/Bifrost"
+    canonical_root = "/srv/ygg-dev/vault/selected-vault"
     pythonpath = tmp_path / "pythonpath"
     pythonpath.mkdir()
     (pythonpath / "sitecustomize.py").write_text(
@@ -387,7 +387,7 @@ def test_deploy_channel_noncanonical_aliases_keep_legacy_vault_overlay(
         "/srv/alias",
         "/Users/selected-vault",
         "/Volumes/selected-vault",
-        "/srv/ygg-dev/vault/../vault/Bifrost",
+        "/srv/ygg-dev/vault/../vault/selected-vault",
     )
     for index, selector in enumerate(selectors):
         services = _services(
