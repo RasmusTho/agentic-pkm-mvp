@@ -687,8 +687,15 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "app/orchestrator/",
             "app/orchestration/",
+            # The real-tool effect spine crosses CAO, EXE, and GOV. Keep
+            # these exact adapters on the orchestration contract lane so
+            # an effect-boundary change cannot fail closed before its
+            # real-tool invariant tests run.
+            "app/execution/execution_request.py",
+            "app/governance/governed_write.py",
             "tests/orchestrator/",
             "tests/orchestration/",
+            "tests/invariants/test_governed_effect_spine.py",
             # These execution/planner regressions exercise the orchestration
             # admission boundary directly. Keep their exact test files owned
             # so a focused fix cannot fail closed before pytest selection.
@@ -700,7 +707,9 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
         (
             "tests/orchestrator",
             "tests/orchestration",
+            "tests/invariants/test_governed_effect_spine.py",
             "tests/execution/test_execution_request.py",
+            "tests/governance/test_governed_write.py",
             "tests/planner/test_mock_planner.py",
             *E2E_TARGETS["orchestration"],
         ),
