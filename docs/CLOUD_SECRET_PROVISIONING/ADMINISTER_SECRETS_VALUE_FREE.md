@@ -100,10 +100,10 @@ through stdin, without a trailing newline. No command accepts a value argument.
 
 The agent-host adapter uses the pinned Bitwarden Python SDK's in-process authenticated
 request bodies, with no SDK state cache. Non-secret project identifiers are supplied by
-`BWS_ORGANIZATION_ID`, `BWS_NON_PROD_PROJECT_ID` and `BWS_PROD_PROJECT_ID`. The optional
-`BWS_MARR_DEV_PROJECT_ID` enables the exact isolated `marr-dev` scope for the TypeSafe key;
-without it, the admin adapter accepts only the two existing channel projects. Configure this
-identifier only after the #5667 sole-writer and entitlement gates pass. The existing admin token
+`BWS_ORGANIZATION_ID`, `BWS_NON_PROD_PROJECT_ID` and `BWS_PROD_PROJECT_ID`; the admin
+inventory contains only those two existing projects. The TypeSafe key uses the existing
+non-prod project and remains restricted to the `dev/marr-server-dev` consumer in code.
+The existing admin token
 must be provisioned separately in the agent-host macOS Keychain under service
 `yggdrasil.bws-admin`, account `admin.token`. This command does not create accounts/tokens,
 install VM credentials, or qualify a live controller. The VM's project-only BWS reader

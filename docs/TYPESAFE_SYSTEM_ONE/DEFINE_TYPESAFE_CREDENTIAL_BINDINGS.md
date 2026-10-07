@@ -19,7 +19,7 @@ The repository declares and tests the single server-only dev binding with fake s
 ## Credential-source supersession
 
 This delivered TSO-05 slice records the original Keychain-only implementation. TSO-07 supersedes
-the provider-key source with an isolated BWS project and a dedicated read-only MARR account while
+the provider-key source with the existing non-prod BWS project and reader identity while
 preserving the logical `dev/marr-server-dev` consumer grant. Keychain remains the bootstrap source
 for the BWS reader token.
 

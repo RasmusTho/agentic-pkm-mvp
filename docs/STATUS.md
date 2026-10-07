@@ -51,11 +51,10 @@ used or required.
 ### TypeSafe System One repository support (2026-10-06)
 
 PR #5803 merged repository support for typed Jev judgments in the Product canvas and Builder CKM,
-including the isolated `marr-dev` provider-key lookup and its dedicated read-only MARR account.
+including the existing `non-prod` provider-key lookup and its MARR-only consumer binding.
 Product and Builder retain separate caller policy, credentials, pinned profiles, and durable
 single-shot acceptance markers. Parent #5764 remains open and credential qualification #5667 remains
-blocked pending verified three-project/four-account BWS entitlement and controller-only admin
-credential qualification. After those gates, the existing MARR Mac host and separate caller
+blocked pending controller-only admin credential qualification. After those gates, the existing MARR Mac host and separate caller
 bindings must be verified before its bounded installation and redacted single-shot Product and
 Builder receipts. The ygg-dev VM is outside this contract. Runtime routes remain off. No live BWS
 permission write, key import, host installation, or Jev call is claimed.

@@ -28,7 +28,7 @@ from app.ops.host_secret_bootstrap import create_marr_typesafe_bws_reader
 
 CAPABILITY = "model-access.example/cap/complete"
 FAKE_KEY = "synthetic-server-only-key-5768"
-MARR_BWS_IDENTITY = ("marr-dev", "dev/typesafe.api-key")
+MARR_BWS_IDENTITY = ("non-prod", "dev/typesafe.api-key")
 ENV = {
     "PKM_ENVIRONMENT": "dev", "BUILDER_CKM_MARR_ENDPOINT": "https://ckm.example.internal",
     "BUILDER_CKM_MARR_CA_BUNDLE": "/synthetic/builder-ca.pem",
@@ -293,7 +293,7 @@ def test_bws_lookup_failure_fails_before_provider_dispatch(monkeypatch, tmp_path
         _capability(store)
         store.set_watermark("semantic_association", "prior")
         assert associate_unlinked_artifacts(store).proposed == 0
-        assert lookups == [("marr-dev", "dev/typesafe.api-key")]
+        assert lookups == [("non-prod", "dev/typesafe.api-key")]
         assert provider.calls == []
         assert store.list_evidence_edges() == []
         assert store.get_watermark("semantic_association") == "prior"
@@ -312,7 +312,7 @@ def test_exact_marr_reader_malformed_keychain_token_stops_builder_adapter(
 
     reader = create_marr_typesafe_bws_reader(
         environment={
-            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_READER_PROJECT": "non-prod",
             "BWS_PROJECT_ID": "00000000-0000-4000-8000-000000000001",
             "BWS_ORGANIZATION_ID": "00000000-0000-4000-8000-000000000002",
         },
