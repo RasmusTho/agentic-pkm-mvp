@@ -7,12 +7,14 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.catalog import CatalogCache, CatalogSnapshot
 from app.model_access.codex_executor_service import create_codex_executor_app
 from app.model_access.provider_api import ProductProviderApiAdapter
+import app.model_access.remote_contract as remote_contract
 
 
 KEY = "synthetic-provider-key-never-return"
@@ -293,6 +295,45 @@ def test_invalid_provider_schema_output_is_terminal_after_one_dispatch() -> None
     assert response.status_code == 502
     assert response.json() == {"error": {"code": "provider_schema_violation"}}
     assert len([request for request in sent if request.method == "POST"]) == 1
+
+
+def test_reference_schema_is_rejected_before_provider_or_schema_egress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[httpx.Request] = []
+    retrievals: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        raise AssertionError("invalid schema must be rejected before provider access")
+
+    reject_schema_retrieval = remote_contract._reject_schema_retrieval
+
+    def record_schema_retrieval(uri: Any) -> None:
+        retrievals.append(str(uri))
+        reject_schema_retrieval(uri)
+
+    monkeypatch.setattr(remote_contract, "_reject_schema_retrieval", record_schema_retrieval)
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    payload["capability_intent"]["structured_output"] = True
+    payload["output_schema"] = {
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string",
+                "$dynamicRef": "https://caller.example/schema.json#answer",
+            }
+        },
+    }
+
+    with _local_test_client(app) as client:
+        response = client.post("/v1/complete", json=payload)
+
+    assert response.status_code == 422
+    assert response.json() == {"error": {"code": "output_schema_invalid"}}
+    assert sent == []
+    assert retrievals == []
 
 
 def test_catalog_refresh_uses_verifiable_provider_metadata() -> None:

@@ -39,6 +39,10 @@ The current census in `docs/settings/models/providers.yaml` is the scope boundar
 provider is not part of this task. Local Ollama remains optional and is not a readiness prerequisite
 for Codex CLI or API-provider routes.
 
+Structured-output schemas are bounded inline JSON Schema only. `$ref`, `$dynamicRef`, and
+`$recursiveRef` are rejected recursively, and the response validator cannot retrieve remote schema
+resources. Caller-controlled schema URLs must never create a second egress path from the portal.
+
 ## Concretely
 
 Product policy resolves `openai/gpt-6-luna` from its selected profile. The caller sends the exact
@@ -65,6 +69,9 @@ dispatch, the result is no longer bound to the model selected in settings.
   - Verify: `tests/model_access/test_product_provider_gateway.py::test_dispatch_failure_is_terminal_and_receipt_is_secret_free`
 - [ ] Missing Ollama does not fail preflight or health for a selected healthy Codex/API route.
   - Verify: `tests/model_access/test_capability_health.py::test_unselected_provider_absence_does_not_fail_health`
+- [ ] Caller-supplied schema references are rejected before provider access, and result validation
+  cannot retrieve caller-controlled schema resources.
+  - Verify: `tests/model_access/test_product_provider_gateway.py::test_reference_schema_is_rejected_before_provider_or_schema_egress`
 
 ## How to Verify (Pre-Merge)
 

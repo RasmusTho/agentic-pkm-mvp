@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -172,7 +172,7 @@ def validate_inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
             if nodes > 2_048 or depth > 32:
                 raise ValueError("schema complexity limit exceeded")
             if isinstance(value, dict):
-                if "$ref" in value:
+                if {"$ref", "$dynamicRef", "$recursiveRef"}.intersection(value):
                     raise ValueError("schema references are not supported")
                 stack.extend((child, depth + 1) for child in value.values())
             elif isinstance(value, list):
@@ -184,6 +184,25 @@ def validate_inline_schema(schema: dict[str, Any]) -> dict[str, Any]:
     return schema
 
 
+def _reject_schema_retrieval(uri: Any) -> None:
+    from referencing.exceptions import NoSuchResource
+
+    raise NoSuchResource(uri)
+
+
+def inline_schema_validator(schema: dict[str, Any]) -> Any:
+    """Build a validator whose registry cannot retrieve caller-controlled resources."""
+
+    from jsonschema import Draft202012Validator
+    from referencing import Registry
+
+    validate_inline_schema(schema)
+    return Draft202012Validator(
+        schema,
+        registry=cast(Any, Registry)(retrieve=_reject_schema_retrieval),
+    )
+
+
 __all__ = [
     "CompletionCapabilityIntent",
     "CompletionRequest",
@@ -193,5 +212,6 @@ __all__ = [
     "CatalogResponse",
     "PreflightRequest",
     "PreflightResponse",
+    "inline_schema_validator",
     "validate_inline_schema",
 ]

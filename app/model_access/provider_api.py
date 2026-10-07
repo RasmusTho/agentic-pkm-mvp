@@ -9,7 +9,6 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from jsonschema import Draft202012Validator
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.catalog import (
@@ -27,7 +26,7 @@ from app.model_access.remote_contract import (
     CompletionCapabilityIntent,
     CompletionRequest,
     PreflightRequest,
-    validate_inline_schema,
+    inline_schema_validator,
 )
 
 
@@ -285,6 +284,13 @@ class ProductProviderApiAdapter:
         self._require_catalog_capabilities(model, request.capability_intent)
 
     def complete(self, request: CompletionRequest) -> str:
+        schema_validator = None
+        if request.output_schema is not None:
+            try:
+                schema_validator = inline_schema_validator(request.output_schema)
+            except ValueError:
+                raise ProviderApiError("provider_schema_invalid") from None
+
         provider = self._provider(request.route.transport_id)
         api_key = self._api_key(provider)
         endpoint = self._endpoint(provider)
@@ -329,13 +335,14 @@ class ProductProviderApiAdapter:
         content = self._extract_content(provider, payload)
         if request.output_schema is not None:
             try:
-                validate_inline_schema(request.output_schema)
                 structured = json.loads(
                     content,
                     object_pairs_hook=_unique_pairs,
                     parse_constant=_reject_constant,
                 )
-                Draft202012Validator(request.output_schema).validate(structured)
+                if schema_validator is None:
+                    raise ValueError("structured-output validator is unavailable")
+                schema_validator.validate(structured)
             except Exception:
                 raise ProviderApiError("provider_schema_violation") from None
         return content

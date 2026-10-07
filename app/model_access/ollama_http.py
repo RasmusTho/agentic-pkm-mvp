@@ -11,9 +11,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from jsonschema import Draft202012Validator
-
-from app.model_access.remote_contract import validate_inline_schema
+from app.model_access.remote_contract import inline_schema_validator
 
 
 MAX_OLLAMA_METADATA_BYTES = 256_000
@@ -232,8 +230,12 @@ class OllamaHttpAdapter:
         literal_system_role_required: bool,
         max_output_tokens: int | None = None,
     ) -> str:
+        schema_validator = None
         if output_schema is not None:
-            validate_inline_schema(output_schema)
+            try:
+                schema_validator = inline_schema_validator(output_schema)
+            except ValueError as exc:
+                raise OllamaHttpError("ollama_schema_violation") from exc
         payload: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -291,7 +293,9 @@ class OllamaHttpAdapter:
                     object_pairs_hook=_strict_json_object_pairs,
                     parse_constant=_reject_json_constant,
                 )
-                Draft202012Validator(output_schema).validate(value)
+                if schema_validator is None:
+                    raise ValueError("structured-output validator is unavailable")
+                schema_validator.validate(value)
             except Exception as exc:
                 raise OllamaHttpError("ollama_schema_violation") from exc
         # Ollama's chat endpoint always maps trusted instructions to the explicit system role.

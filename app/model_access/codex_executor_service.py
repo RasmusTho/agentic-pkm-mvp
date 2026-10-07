@@ -232,6 +232,8 @@ def _adapter_failure(exc: Exception) -> _RequestFailure:
     if isinstance(exc, ProviderApiError):
         if exc.code in {"provider_response_invalid", "provider_schema_violation", "provider_response_too_large"}:
             return _RequestFailure(502, exc.code)
+        if exc.code == "provider_schema_invalid":
+            return _RequestFailure(422, exc.code)
         if exc.code == "catalog_snapshot_mismatch":
             return _RequestFailure(409, exc.code)
         if exc.code in {
