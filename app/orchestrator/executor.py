@@ -670,7 +670,13 @@ def _persisted_authority_receipt(
     return matched
 
 
-def _persisted_notification(effect_id: str, outbox_path: Path) -> bool:
+def _persisted_notification(
+    effect_id: str,
+    outbox_path: Path,
+    *,
+    effect_result: Mapping[str, Any],
+    authority_receipt: Any,
+) -> bool:
     try:
         records = read_jsonl_outbox_records(outbox_path, read_only=True)
     except FileNotFoundError as exc:
@@ -681,12 +687,44 @@ def _persisted_notification(effect_id: str, outbox_path: Path) -> bool:
         raise _EffectReconciliationConflict(
             f"durable outbox notification cannot be read while recovering {effect_id}"
         ) from exc
-    return any(
-        record.get("event") == _MCP_APPEND_EVENT
-        and isinstance(record.get("payload"), dict)
-        and record["payload"].get("effect_id") == effect_id
-        for record in records
-    )
+    expected_event_id = _event_id(effect_id, "notification")
+    expected_note_path = effect_result.get("note_path")
+    if (
+        not isinstance(expected_note_path, str)
+        or not expected_note_path
+        or not isinstance(authority_receipt, dict)
+    ):
+        raise _EffectReconciliationConflict(
+            f"durable notification linkage is unavailable while recovering {effect_id}"
+        )
+    matched = False
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        event_id = record.get("event_id")
+        payload = record.get("payload")
+        payload_effect_id = payload.get("effect_id") if isinstance(payload, dict) else None
+        known_notification = event_id == expected_event_id or (
+            record.get("event") == _MCP_APPEND_EVENT and payload_effect_id == effect_id
+        )
+        if not known_notification:
+            continue
+        if record.get("event") != _MCP_APPEND_EVENT or event_id != expected_event_id:
+            raise _EffectReconciliationConflict(
+                f"known notification event for {effect_id} has inconsistent identity"
+            )
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"effect_id", "note_path", "authority_receipt"}
+            or payload.get("effect_id") != effect_id
+            or payload.get("note_path") != expected_note_path
+            or payload.get("authority_receipt") != authority_receipt
+        ):
+            raise _EffectReconciliationConflict(
+                f"known notification event for {effect_id} has inconsistent linkage"
+            )
+        matched = True
+    return matched
 
 
 def _event_id(effect_id: str, stage: str) -> str:
@@ -1107,7 +1145,12 @@ class MockPlanExecutor(PlanExecutor):
                     error_type="receipt_missing",
                 )
             try:
-                notification_persisted = _persisted_notification(effect_id, outbox_path)
+                notification_persisted = _persisted_notification(
+                    effect_id,
+                    outbox_path,
+                    effect_result=effect_result,
+                    authority_receipt=persisted.get("authority_receipt"),
+                )
             except _EffectReconciliationConflict as exc:
                 raise StepExecutionError(
                     f"effect reconciliation is indeterminate: {exc}",

@@ -132,6 +132,42 @@ def _rewrite_authority_event(
     )
 
 
+def _append_notification_event(
+    outbox_path: Path,
+    mutate: Callable[[dict[str, Any]], None] | None = None,
+) -> None:
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    authority_event = next(
+        record
+        for record in records
+        if record["event"] == "governance.authority_receipt.recorded"
+    )
+    authority_payload = authority_event["payload"]
+    effect_id = authority_payload["effect_id"]
+    notification = {
+        "event": "mcp.vault.append_note",
+        "event_id": executor_module._event_id(effect_id, "notification"),
+        "trace_id": authority_event["trace_id"],
+        "source": "orchestrator.runtime",
+        "payload": {
+            "effect_id": effect_id,
+            "note_path": authority_payload["execution_result"]["effect_result"]["note_path"],
+            "authority_receipt": json.loads(json.dumps(authority_payload["authority_receipt"])),
+        },
+    }
+    if mutate is not None:
+        mutate(notification)
+    records.append(notification)
+    outbox_path.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+
 def test_orchestrator_real_tool_requires_prevalidated_decision_token(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -934,6 +970,45 @@ def test_persisted_receipt_mutated_accountability_linkage_is_indeterminate(
         _prepare_notification_replay_case(monkeypatch, tmp_path, f"Mutated {mutation_id}")
     )
     _rewrite_authority_event(outbox_path, mutate)
+
+    with pytest.raises(StepExecutionError, match="reconciliation is indeterminate"):
+        executor._run_vault_append(args, _context(tmp_path, grant=grant), step_id="append")
+
+    assert len(append_calls) == 1
+    assert moved_note.is_file()
+    assert write_attempts[0] == 2
+
+
+@pytest.mark.parametrize(
+    ("mutation_id", "mutate"),
+    [
+        (
+            "mismatched_event_id",
+            lambda event: event.update(event_id="forged-notification-event"),
+        ),
+        (
+            "mismatched_note_path",
+            lambda event: event["payload"].update(note_path="/never-written.md"),
+        ),
+        (
+            "mismatched_authority_receipt",
+            lambda event: event["payload"]["authority_receipt"].update(
+                receipt_id="forged-receipt"
+            ),
+        ),
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_persisted_notification_mutated_linkage_is_indeterminate(
+    mutation_id: str,
+    mutate: Callable[[dict[str, Any]], None],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    executor, args, grant, append_calls, outbox_path, moved_note, write_attempts = (
+        _prepare_notification_replay_case(monkeypatch, tmp_path, f"Mutated {mutation_id}")
+    )
+    _append_notification_event(outbox_path, mutate)
 
     with pytest.raises(StepExecutionError, match="reconciliation is indeterminate"):
         executor._run_vault_append(args, _context(tmp_path, grant=grant), step_id="append")
