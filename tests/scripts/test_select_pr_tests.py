@@ -95,6 +95,28 @@ def test_append_plan_regressions_select_orchestration_targets() -> None:
     assert "tests/orchestrator" in selection.targets
 
 
+@pytest.mark.parametrize(
+    "effect_spine_path",
+    (
+        "app/execution/execution_request.py",
+        "app/governance/governed_write.py",
+        "tests/invariants/test_governed_effect_spine.py",
+    ),
+)
+def test_governed_effect_spine_paths_select_orchestration_targets(
+    effect_spine_path: str,
+) -> None:
+    selection = select_tests([effect_spine_path])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("orchestration",)
+    assert selection.unowned_paths == ()
+    if effect_spine_path.startswith("tests/"):
+        assert effect_spine_path in selection.targets
+    assert "tests/invariants/test_governed_effect_spine.py" in selection.targets
+    assert "tests/governance/test_governed_write.py" in selection.targets
+
+
 def test_static_web_surface_is_owned_by_builder_system_and_companion_ui() -> None:
     selection = select_tests(["app/web/static/cockpit.html", "app/web/static/signboard.js"])
 

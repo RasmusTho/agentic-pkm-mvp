@@ -118,7 +118,7 @@ at the EXE seam, and refuses to call the vault writer when the token is missing
 or mismatched. The effect is assigned a stable identity. Its factual
 `ExecutionResult` and distinct `AuthorityReceipt` are persisted through the
 existing outbox before success is returned. Recovery replays an effect only
-after resolving the same configured vault root used by the writer and parsing
+after resolving the same configured writer destination and parsing
 the writer's line-delimited frontmatter format losslessly: delimiter substrings
 inside a title and intentional leading blank body lines are preserved. It then
 requires one note whose frontmatter metadata, title, tags, body, and `_mcp`
