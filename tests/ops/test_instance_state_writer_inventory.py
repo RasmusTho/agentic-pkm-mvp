@@ -19,6 +19,7 @@ refusal to carry a domain, a source, and (where a root is involved) a redacted
 identifier for it -- while still never emitting the raw host path.
 """
 
+import hashlib
 import io
 import json
 import os
@@ -311,6 +312,134 @@ def test_established_ledger_enriches_owner_receipt_with_binding_ids(
     assert snapshot["source_evidence"]["owner_identities"][0][
         "vault_binding_id"
     ] == "binding-established"
+
+
+def test_pending_mvr05_inventory_captures_retired_root_identity(
+    tmp_path, monkeypatch
+):
+    """The fenced producer receipt binds the identity of retired roots too."""
+    active_root = tmp_path / "active-vault"
+    retired_root = tmp_path / "retired-vault"
+    active_root.mkdir()
+    retired_root.mkdir()
+    ownership = tmp_path / "ownership"
+    ownership.mkdir()
+    monkeypatch.setattr(
+        writer_inventory,
+        "_docker_legacy_owner_sources",
+        lambda: ([], ["docker:empty"]),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_config_legacy_owner_sources",
+        lambda repo_root, *, active_channel: ([], ["config:stable"]),
+    )
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", str(ownership))
+
+    from app.instance.ownership_ledger import (
+        LEGACY_LEDGER_SCHEMA,
+        ROTATION_SCHEMA,
+        OwnershipLedger,
+    )
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    ledger = OwnershipLedger(ownership)
+    for binding_id, root in (
+        ("binding-active", active_root),
+        ("binding-retired", retired_root),
+    ):
+        ledger.reserve(
+            channel_id="dev",
+            vault_binding_id=binding_id,
+            root=root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        ledger.activate(binding_id, _capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.release_to_tombstone(
+        "binding-retired", _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    legacy_payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    legacy_payload["schema"] = LEGACY_LEDGER_SCHEMA
+    rotation_journal = {
+        "schema": ROTATION_SCHEMA,
+        "key": json.loads(ledger.key_path.read_text(encoding="utf-8")),
+        "ledger": legacy_payload,
+    }
+    ledger.rotation_path.write_text(json.dumps(rotation_journal) + "\n", encoding="utf-8")
+    ledger.rotation_path.chmod(0o600)
+
+    snapshot = writer_inventory._legacy_owner_snapshot(
+        Path.cwd(), active_channel="dev"
+    )
+    identity, ancestors, legacy_ancestors = writer_inventory._owner_identity_material(
+        retired_root, domain="dev", source="test"
+    )
+
+    assert snapshot["source_evidence"]["retired_owner_identities"] == [
+        {
+            "channel_id": "dev",
+            "vault_binding_id": "binding-retired",
+            "root": str(retired_root.resolve()),
+            "identity": identity,
+            "ancestor_identities": sorted(ancestors),
+            "legacy_ancestor_identities": list(legacy_ancestors),
+        }
+    ]
+    assert snapshot["source_digest"] == hashlib.sha256(
+        json.dumps(
+            snapshot["source_evidence"], sort_keys=True, separators=(",", ":")
+        ).encode()
+    ).hexdigest()
+
+
+def test_pending_mvr05_inventory_rejects_missing_retired_root(tmp_path, monkeypatch):
+    active_root = tmp_path / "active-vault"
+    retired_root = tmp_path / "retired-vault"
+    active_root.mkdir()
+    retired_root.mkdir()
+    ownership = tmp_path / "ownership"
+    ownership.mkdir()
+    monkeypatch.setattr(
+        writer_inventory,
+        "_docker_legacy_owner_sources",
+        lambda: ([], ["docker:empty"]),
+    )
+    monkeypatch.setattr(
+        writer_inventory,
+        "_config_legacy_owner_sources",
+        lambda repo_root, *, active_channel: ([], ["config:stable"]),
+    )
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", str(ownership))
+
+    from app.instance.ownership_ledger import LEGACY_LEDGER_SCHEMA, OwnershipLedger
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    ledger = OwnershipLedger(ownership)
+    for binding_id, root in (
+        ("binding-active", active_root),
+        ("binding-retired", retired_root),
+    ):
+        ledger.reserve(
+            channel_id="dev",
+            vault_binding_id=binding_id,
+            root=root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        ledger.activate(binding_id, _capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.release_to_tombstone(
+        "binding-retired", _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    legacy_payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    legacy_payload["schema"] = LEGACY_LEDGER_SCHEMA
+    ledger.path.write_text(json.dumps(legacy_payload) + "\n", encoding="utf-8")
+    ledger.path.chmod(0o600)
+    retired_root.rmdir()
+    ledger_before = ledger.path.read_bytes()
+
+    with pytest.raises(InventoryError, match="legacy owner root is missing or invalid"):
+        writer_inventory._legacy_owner_snapshot(Path.cwd(), active_channel="dev")
+
+    assert ledger.path.read_bytes() == ledger_before
 
 
 def test_legacy_bootstrap_without_established_ledger_does_not_mint_binding_id(
