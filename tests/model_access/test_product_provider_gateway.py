@@ -51,6 +51,13 @@ def _factory() -> ModelAccessAdapterFactory:
     )
 
 
+def _local_test_client(app: Any) -> TestClient:
+    return TestClient(
+        app,
+        client=("127.0.0.1", 12345),
+    )
+
+
 def _catalog_payload(provider: str) -> dict[str, Any]:
     if provider == "openai":
         return {
@@ -192,7 +199,7 @@ def test_dispatches_exact_declared_route_without_caller_credentials() -> None:
         return httpx.Response(200, json=_api_response(provider))
 
     app = _gateway(respond)
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         for transport_id, (provider, _) in _ROUTES.items():
             payload = _payload(transport_id)
             _bind_catalog_snapshot(client, payload)
@@ -252,7 +259,7 @@ def test_provider_native_json_schema_is_sent_and_validated() -> None:
         payload = _payload(transport_id)
         payload["capability_intent"]["structured_output"] = True
         payload["output_schema"] = schema
-        with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        with _local_test_client(app) as client:
             _bind_catalog_snapshot(client, payload)
             preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
             assert preflight.status_code == 200
@@ -279,7 +286,7 @@ def test_invalid_provider_schema_output_is_terminal_after_one_dispatch() -> None
     payload = _payload("openai_api")
     payload["capability_intent"]["structured_output"] = True
     payload["output_schema"] = schema
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
         response = client.post("/v1/complete", json=payload)
 
@@ -304,7 +311,7 @@ def test_catalog_refresh_uses_verifiable_provider_metadata() -> None:
 
     app = _gateway(respond)
     snapshots = {}
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         for transport_id, (provider, _) in _ROUTES.items():
             response = client.post("/v1/catalog", json={"transport_id": transport_id})
             assert response.status_code == 200
@@ -359,7 +366,7 @@ def test_catalog_capability_contradiction_blocks_preflight_and_completion() -> N
         "required": ["ok"],
         "additionalProperties": False,
     }
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
         preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
         completion = client.post("/v1/complete", json=payload)
@@ -385,7 +392,7 @@ def test_provider_explicitly_disabling_reasoning_blocks_inference() -> None:
     app = _gateway(respond)
     payload = _payload("anthropic_api")
     payload["reasoning_effort"] = "high"
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
         preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
         completion = client.post("/v1/complete", json=payload)
@@ -411,7 +418,7 @@ def test_default_output_limit_is_checked_against_provider_catalog() -> None:
 
     app = _gateway(respond)
     payload = _payload("anthropic_api")
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
         response = client.post("/v1/complete", json=payload)
 
@@ -433,7 +440,7 @@ def test_model_missing_from_provider_catalog_is_rejected_before_inference() -> N
 
     app = _gateway(respond)
     payload = _payload("anthropic_api")
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
         response = client.post("/v1/preflight", json=_preflight_payload(payload))
 
@@ -485,7 +492,7 @@ def test_completion_rejects_route_when_catalog_changes_after_preflight() -> None
 
     app = _gateway(respond, catalog_cache=_RefreshOnThirdCatalogRead())
     payload = _payload("openai_api")
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
         preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
         completion = client.post("/v1/complete", json=payload)
@@ -508,7 +515,7 @@ def test_dispatch_failure_is_terminal_and_receipt_is_secret_free() -> None:
 
     app = _gateway(fail)
     payload = _payload("openai_api")
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
         preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
         assert preflight.status_code == 200
@@ -535,7 +542,7 @@ def test_preflight_requires_host_credential_and_exact_provider_model() -> None:
         "reasoning_effort": None,
         "capability_intent": payload["capability_intent"],
     }
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         response = client.post("/v1/preflight", json=preflight)
 
     assert response.status_code == 503
@@ -552,7 +559,7 @@ def test_preflight_rejects_unverified_snapshot_before_inference() -> None:
 
     app = _gateway(respond)
     payload = _payload("openai_api")
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
         payload["route"]["catalog_snapshot_hash"] = "sha256:" + "f" * 64
         response = client.post("/v1/preflight", json=_preflight_payload(payload))
@@ -566,6 +573,6 @@ def test_snapshot_provenance_pair_is_validated() -> None:
     payload = _payload("openai_api")
     payload["route"]["catalog_snapshot_hash"] = None
     app = _gateway(lambda _request: httpx.Response(500))
-    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+    with _local_test_client(app) as client:
         response = client.post("/v1/complete", json=payload)
     assert response.status_code == 422

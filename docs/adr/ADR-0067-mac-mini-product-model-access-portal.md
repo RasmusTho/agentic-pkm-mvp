@@ -70,6 +70,17 @@ Builder Model Inquiry retains its own resolver, policy, receipt, single-target b
 `fallback_forbidden` invariant. It may reuse a Mac-hosted transport through its existing compatibility
 seam, but Product settings and Product route authority do not configure Builder.
 
+### D7 — Use one operator-controlled ingress boundary
+
+For the current single-operator Ygg deployment, VLAN mTLS at the ingress and the loopback-only
+executor are the caller boundary. Do not add separate credentials or application-level
+channel/action claims solely to distinguish Product, Builder, dev, test, and prod callers. This
+means an mTLS-admitted caller may invoke the fixed executor operations exposed by the ingress; that
+is an accepted operational risk for this one-operator system, not a reason to merge Product and
+Builder policy resolvers, profiles, credentials, or receipts. Revisit this boundary before adding
+multiple operators or untrusted tenants. This decision supersedes ADR-0066's per-channel/action
+ingress-claim requirement for the current Ygg profile; VLAN mTLS and loopback remain required.
+
 ## Options considered
 
 - **Product instances call providers directly:** rejected for the Product target; it duplicates
@@ -98,7 +109,7 @@ seam, but Product settings and Product route authority do not configure Builder.
   model identity; this decision changes Product provider egress location.
 - [ADR-0066](./ADR-0066-shared-model-access-router-and-catalogs.md) continues to govern the shared
   route contract, path and catalog constraints, except for the Product embedding execution target
-  clarified here.
+  and single-operator ingress boundary clarified by D5 and D7 here.
 - [Model Access Router](../MODEL_ACCESS_ROUTER/README.md) records implementation state and the
   bounded delivery tasks.
 - [LLM Routing](../LLM_ROUTING.md) remains authoritative for current Product behavior.

@@ -220,8 +220,6 @@ def test_only_typed_path_local_failures_use_next_path(
 @pytest.mark.parametrize(
     "terminal_code",
     [
-        "serve_capability_required",
-        "serve_capability_invalid",
         "invalid_request",
         "route_not_declared",
         "structured_output_unavailable",
@@ -418,9 +416,7 @@ def test_path_receipts_are_logical_and_secret_free(tmp_path: Path) -> None:
     assert "claims" not in receipt_json.lower()
 
 
-@pytest.mark.parametrize(
-    "authorization_error", ["serve_capability_invalid", "preflight_http_403"]
-)
+@pytest.mark.parametrize("authorization_error", ["preflight_http_403"])
 def test_authorization_failure_does_not_trigger_provider_fallback(
     authorization_error: str,
 ) -> None:

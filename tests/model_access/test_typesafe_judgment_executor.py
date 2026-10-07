@@ -46,8 +46,8 @@ class _FakeSecretController:
         yield _FakeCheckOperation()
 
 
-def _headers(_channel: str = "product", _action: str = "judgment") -> dict[str, str]:
-    """The VLAN mTLS ingress authenticates callers; no Tailscale claim is sent."""
+def _headers() -> dict[str, str]:
+    """The executor relies on the VLAN mTLS ingress and loopback boundary."""
     return {}
 
 
@@ -427,10 +427,10 @@ def test_request_allowlist_and_size_limit_fail_before_dispatch(monkeypatch, fiel
     assert provider.calls == lookups == []
 
 
-def test_product_judgment_needs_no_tailscale_claim_over_vlan_ingress(monkeypatch) -> None:
+def test_product_judgment_uses_loopback_service_without_tailscale_claim(monkeypatch) -> None:
     provider = Provider()
     app, lookups, _ = _app(provider, monkeypatch)
-    assert _call(app, headers={}).status_code == 200
+    assert _call(app).status_code == 200
     with TestClient(app, client=("192.168.50.5", 12345)) as client:
         assert (
             client.post(

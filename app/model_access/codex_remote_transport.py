@@ -37,8 +37,6 @@ _PRIVATE_INGRESS_NETWORKS = (
 )
 _PREFLIGHT_ERROR_CODES = frozenset(
     {
-        "serve_capability_required",
-        "serve_capability_invalid",
         "loopback_only",
         "invalid_json",
         "request_too_large",

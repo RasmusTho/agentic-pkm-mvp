@@ -1,6 +1,6 @@
 ---
 name: Add authenticated cross-host Codex executor API
-description: Add one bounded Product completion API/client over an authenticated private ingress; Tailscale Serve is optional, and the active Ygg path is VLAN mTLS.
+description: Add one bounded Product completion API/client over the VLAN mTLS ingress; Tailscale is not required.
 task_id: MARR-08
 github_issue: 5635
 source_anchor: docs/adr/ADR-0066-shared-model-access-router-and-catalogs.md :: D2
@@ -37,19 +37,17 @@ request with separate `system` and `user` messages. No provider is selected impl
 The MARR-08 slice exposes only `/v1/complete`; docs, OpenAPI, health, catalog, and preflight routes
 are disabled in this slice. MARR-03 separately adds an authenticated no-inference `/v1/preflight`
 operation so Product can verify remote readiness before completion without making the executor a
-policy authority. The service binds only to loopback and requires a trusted ingress claim named
-`Tailscale-App-Capabilities` for `channel=product` and `actions=["complete"]`. This legacy header
-name does not require a Tailscale network: an authenticated ingress must strip caller-supplied
-values and inject the claim only after verifying its caller. The active Ygg path uses VLAN mTLS
-ingress to do so. Tailscale Serve is an optional ingress and requires v1.92 or later only when that
-adapter is chosen. The Uvicorn runner disables proxy-header rewriting so the loopback guard sees the
-local ingress connection rather than the remote peer in `X-Forwarded-For`. No public endpoint,
-direct unauthenticated LAN listener, shared bearer token, or unencrypted fallback is allowed. The
-ingress grant, endpoint, Codex safe-profile path, CLI environment, and Ollama endpoint remain
-operator-owned host configuration, not Git policy.
+policy authority. The service binds only to loopback. The configured VLAN ingress authenticates the
+caller with mutual TLS; for this single-operator deployment, the executor does not require a second
+per-channel/action claim or shared bearer token. Tailscale and Serve are not configured or required.
+The Uvicorn runner disables proxy-header rewriting so the loopback guard sees the local ingress
+connection rather than the remote peer in `X-Forwarded-For`. No public endpoint, direct unauthenticated
+LAN listener, or unencrypted fallback is allowed. The ingress endpoint and client identity,
+Codex safe-profile path, CLI environment, and Ollama endpoint remain operator-owned host
+configuration, not Git policy.
 
 Bound request/response bytes, adapter concurrency, and execution time. Do not log prompts, output,
-capability claims, endpoint identity, or raw adapter output. The MARR-08 completion client uses
+caller credentials, endpoint identity, or raw adapter output. The MARR-08 completion client uses
 verified HTTPS, performs one POST, validates that the response route matches the request, and never
 retries or switches provider after an ambiguous result. MARR-03 adds the separate no-inference
 preflight client operation; it does not change this completion retry boundary. This slice adds no
@@ -58,12 +56,11 @@ live host/Tailscale activation.
 
 ## Concretely
 
-The MARR-08 Product completion client calls a configured authenticated private HTTPS ingress. A
-VLAN mTLS gateway may inject the authorized app-capability claim into the loopback request; Tailscale
-Serve may do the same when explicitly configured. The Product client does not create or send that
-header itself. Tests use fake Codex CLI and Ollama adapters and fake HTTP/ingress boundaries to
-prove exact routing, channel separation, loopback/auth enforcement, and no retry after an ambiguous
-completion.
+The MARR-08 Product completion client calls the configured VLAN mTLS ingress. The ingress
+authenticates the caller, then forwards to the loopback-only executor; it does not inject a
+per-channel/action capability header. Product and Builder still use separate policy resolvers and
+server-owned judgment profiles. Tests use fake Codex CLI and Ollama adapters and fake HTTPS/ingress
+boundaries to prove exact routing, loopback enforcement, and no retry after an ambiguous completion.
 
 ## Why This Matters
 
@@ -76,8 +73,8 @@ reusing its local user identity as a shared credential.
 
 - [ ] The API accepts only a bounded resolved route and dispatches one declared Codex CLI or Ollama completion.
   - Verify: `tests/model_access/test_codex_executor_service.py::test_complete_dispatches_one_declared_transport`
-- [ ] The executor is loopback-only and refuses requests without the configured trusted-ingress Product capability claim; request data cannot self-authorize or widen the operation surface. VLAN mTLS may supply that claim; Tailscale Serve is optional.
-  - Verify: `tests/model_access/test_codex_executor_service.py::test_complete_requires_loopback_and_served_app_capability`
+- [ ] The executor is loopback-only; the configured VLAN mTLS ingress authenticates callers, with no Tailscale claim or per-action header required. Request data cannot widen the fixed operation surface.
+  - Verify: `tests/model_access/test_codex_executor_service.py::test_complete_requires_loopback_not_tailscale_capability`
 - [ ] Codex uses the exact requested model, preserves trusted/user channels, and rejects tool intent.
   - Verify: `tests/model_access/test_codex_executor_service.py::test_codex_complete_preserves_channels_and_rejects_tools`
 - [ ] The Product client uses verified HTTPS, returns the exact resolved route identity, and sends no retry or provider switch after an ambiguous execution result.
@@ -88,8 +85,8 @@ reusing its local user identity as a shared credential.
 ## How to Verify (Pre-Merge)
 
 - Run `pytest -q tests/model_access/test_codex_executor_service.py tests/model_access/test_codex_remote_transport.py`.
-- Use fake HTTP/Tailscale capability headers, fake Codex CLI, and fake Ollama HTTP; do not alter a live tailnet, start a host service, read host credentials, or invoke a live model.
-- Test absent/malformed/wrong-channel capability claims, non-loopback peer/bind refusal, request schema abuse, TLS endpoint validation, bounded bodies, timeout ambiguity, and single execution.
+- Use fake VLAN mTLS/HTTPS boundaries, fake Codex CLI, and fake Ollama HTTP; do not alter network policy, start a host service, read host credentials, or invoke a live model.
+- Test loopback peer/bind refusal, request schema abuse, TLS endpoint validation, bounded bodies, timeout ambiguity, and single execution.
 
 ## Out of Scope
 

@@ -83,8 +83,7 @@ def test_configured_mtls_vlan_path_is_the_only_executor_path() -> None:
 
     payload = _preflight_payload()
     with TestClient(_executor_app(), client=("127.0.0.1", 12345)) as client:
-        # The external VLAN ingress authenticates the client certificate; the
-        # loopback-only backend does not depend on Tailscale-injected claims.
+        # VLAN mTLS is terminated at the private ingress; the service itself is loopback-only.
         local_backend = client.post("/v1/preflight", json=payload)
 
     assert local_backend.status_code == 200
