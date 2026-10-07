@@ -1268,6 +1268,59 @@ def _enrich_established_owner_bindings(
     return enriched_rows, enriched_identities
 
 
+def _retired_owner_identity_rows(
+    ownership_root: Path | None = None,
+) -> list[dict[str, object]]:
+    """Capture retired-root identity only while a fenced ledger conversion is pending."""
+
+    if ownership_root is None:
+        ownership_root_text = os.getenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", "").strip()
+        if not ownership_root_text:
+            return []
+        ownership_root = Path(ownership_root_text)
+    if not ownership_root.is_absolute():
+        raise InventoryError("established ownership ledger root must be absolute")
+    ownership_root = ownership_root.expanduser().resolve(strict=False)
+    ledger_path = ownership_root / "ownership-ledger.json"
+    key_path = ownership_root / "ownership-key.json"
+    if not ledger_path.exists() and not key_path.exists():
+        return []
+    if not ledger_path.is_file() or not key_path.is_file():
+        raise InventoryError("established ownership ledger artifacts are incomplete")
+
+    try:
+        from app.instance.ownership_ledger import LedgerError, OwnershipLedger
+
+        ledger = OwnershipLedger(ownership_root)
+        if not ledger.needs_fenced_registry_consistency():
+            return []
+        retired_roots = ledger.retired_owner_roots(allow_legacy=True)
+        rows: list[dict[str, object]] = []
+        for channel_id, binding_id, root in retired_roots:
+            identity, ancestors, legacy_ancestors = _owner_identity_material(
+                root,
+                domain=channel_id,
+                source="retired_ownership_ledger",
+            )
+            rows.append(
+                {
+                    "channel_id": channel_id,
+                    "vault_binding_id": binding_id,
+                    "root": str(root),
+                    "identity": identity,
+                    "ancestor_identities": sorted(ancestors),
+                    "legacy_ancestor_identities": list(legacy_ancestors),
+                }
+            )
+    except InventoryError:
+        raise
+    except (LedgerError, OSError) as exc:
+        raise InventoryError(
+            "retired ownership root identity is unavailable"
+        ) from exc
+    return sorted(rows, key=lambda item: (str(item["channel_id"]), str(item["vault_binding_id"])))
+
+
 def _legacy_owner_snapshot(
     repo_root: Path,
     *,
@@ -1284,11 +1337,13 @@ def _legacy_owner_snapshot(
     owner_rows, owner_identities = _enrich_established_owner_bindings(
         owners, owner_identities, ownership_root=ownership_root
     )
+    retired_owner_identities = _retired_owner_identity_rows(ownership_root)
     source_evidence = {
         "docker": docker_fingerprints,
         "config": config_fingerprints,
         "owners": owner_rows,
         "owner_identities": owner_identities,
+        "retired_owner_identities": retired_owner_identities,
     }
     source_digest = hashlib.sha256(
         json.dumps(

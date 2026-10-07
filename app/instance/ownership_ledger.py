@@ -475,6 +475,58 @@ class OwnershipLedger:
                 )
             return tuple(resolved)
 
+    def retired_owner_roots(
+        self,
+        *,
+        allow_legacy: bool = False,
+    ) -> tuple[tuple[str, str, Path], ...]:
+        """Read retired owner locators without creating or changing ledger state.
+
+        The deployment host uses these sealed locators to capture physical root
+        identity in the existing quiescence-bound owner receipt. The locators
+        alone do not authenticate a tombstone; the consumer must still match
+        the resulting receipt evidence to its registry tombstones or transfer
+        lineage before it admits a legacy-ledger migration.
+        """
+
+        self._assert_existing_artifacts()
+        with self._locked(allow_legacy_rotation=allow_legacy):
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(
+                key,
+                allow_create=False,
+                allow_legacy=allow_legacy,
+            )
+            journal = self._load_legacy_rotation_journal_locked(key)
+            if journal is not None and current.schema == LEGACY_LEDGER_SCHEMA:
+                self._assert_legacy_rotation_journal_matches_locked(current, key)
+            retired = (
+                journal.tombstones
+                if journal is not None and current.schema != LEGACY_LEDGER_SCHEMA
+                else current.tombstones
+            )
+            roots: list[tuple[str, str, Path]] = []
+            for binding_id, lease in retired.items():
+                if (
+                    binding_id != lease.vault_binding_id
+                    or lease.state != "retired"
+                    or not lease.channel_id.strip()
+                ):
+                    raise LedgerError("ownership ledger contains an invalid retired owner")
+                try:
+                    root_text = self._open_root(lease.sealed_root, key)
+                except (LedgerError, UnicodeError, ValueError) as exc:
+                    raise LedgerError(
+                        "ownership ledger contains an invalid retired owner locator"
+                    ) from exc
+                root = Path(root_text).expanduser().resolve(strict=False)
+                if not root.is_absolute():
+                    raise LedgerError(
+                        "ownership ledger contains an invalid retired owner locator"
+                    )
+                roots.append((lease.channel_id, binding_id, root))
+            return tuple(roots)
+
     def capture_backup_artifacts(
         self,
         *,
@@ -512,6 +564,7 @@ class OwnershipLedger:
         tombstones: Mapping[str, Path | None],
         transfer_lineage: Sequence[Mapping[str, str]],
         global_live_owners: Sequence[LegacyOwner],
+        global_retired_owners: Sequence[LegacyOwner] = (),
         require_materialized_roots: bool = True,
         pending_legacy_owners: Sequence[LegacyOwner] = (),
     ) -> LedgerSnapshot:
@@ -543,6 +596,7 @@ class OwnershipLedger:
                     tombstones=tombstones,
                     transfer_lineage=transfer_lineage,
                     global_live_owners=global_live_owners,
+                    global_retired_owners=global_retired_owners,
                     require_materialized_roots=require_materialized_roots,
                 )
                 current = self._migrate_legacy_ledger(
@@ -559,6 +613,7 @@ class OwnershipLedger:
                     tombstones=tombstones,
                     transfer_lineage=transfer_lineage,
                     global_live_owners=global_live_owners,
+                    global_retired_owners=global_retired_owners,
                     require_materialized_roots=require_materialized_roots,
                 )
 
@@ -2410,6 +2465,7 @@ class OwnershipLedger:
         tombstones: Mapping[str, Path | None],
         transfer_lineage: Sequence[Mapping[str, str]],
         global_live_owners: Sequence[LegacyOwner],
+        global_retired_owners: Sequence[LegacyOwner],
         require_materialized_roots: bool,
     ) -> None:
         """Authenticate v1 owner fields before cross-namespace migration."""
@@ -2420,12 +2476,34 @@ class OwnershipLedger:
         }
         if len(live_authority) != len(global_live_owners):
             raise LedgerError("legacy owner authority repeats a binding identity")
+        retired_authority = {
+            (owner.channel_id, owner.vault_binding_id): owner
+            for owner in global_retired_owners
+        }
+        if len(retired_authority) != len(global_retired_owners):
+            raise LedgerError("legacy retired-owner authority repeats a binding identity")
+        ledger_retired_keys = {
+            (lease.channel_id, binding_id)
+            for binding_id, lease in current.tombstones.items()
+        }
+        if (
+            (not require_materialized_roots or retired_authority)
+            and set(retired_authority) != ledger_retired_keys
+        ):
+            raise LedgerError(
+                "legacy retired-owner authority does not match the ownership ledger"
+            )
 
-        def root_matches(lease: OwnershipLease, root: Path | None) -> bool:
+        def root_matches(
+            lease: OwnershipLease,
+            root: Path | None,
+            *,
+            identity_owner: LegacyOwner | None = None,
+        ) -> bool:
             if root is None:
                 return False
             if not require_materialized_roots:
-                owner = live_authority.get((lease.channel_id, lease.vault_binding_id))
+                owner = identity_owner
                 if owner is None or owner.root_identity is None or not owner.ancestor_identities:
                     return False
                 try:
@@ -2495,7 +2573,7 @@ class OwnershipLedger:
                 binding_id != lease.vault_binding_id
                 or lease.state != "active"
                 or owner is None
-                or not root_matches(lease, owner.root)
+                or not root_matches(lease, owner.root, identity_owner=owner)
             ):
                 raise LedgerError(
                     "legacy ownership ledger owner fields are not registry-authenticated"
@@ -2516,6 +2594,9 @@ class OwnershipLedger:
 
         for binding_id, retired in current.tombstones.items():
             expected_root = None
+            identity_owner = retired_authority.get(
+                (retired.channel_id, retired.vault_binding_id)
+            )
             if retired.channel_id == channel_id:
                 expected_root = current_channel_tombstones.get(binding_id)
             else:
@@ -2528,10 +2609,22 @@ class OwnershipLedger:
                         expected_root = Path(
                             self._open_root(destination.sealed_root, key)
                         )
+            if identity_owner is not None and expected_root is not None:
+                if (
+                    identity_owner.root.expanduser().resolve(strict=False)
+                    != Path(expected_root).expanduser().resolve(strict=False)
+                ):
+                    raise LedgerError(
+                        "legacy ownership ledger tombstone fields are not registry-authenticated"
+                    )
             if (
                 binding_id != retired.vault_binding_id
                 or retired.state != "retired"
-                or not root_matches(retired, expected_root)
+                or not root_matches(
+                    retired,
+                    expected_root,
+                    identity_owner=identity_owner,
+                )
             ):
                 raise LedgerError(
                     "legacy ownership ledger tombstone fields are not registry-authenticated"
@@ -2565,16 +2658,24 @@ class OwnershipLedger:
 
         for binding_id, root in registrations.items():
             registered_lease = current.leases.get(binding_id)
-            if not require_materialized_roots and registered_lease is not None:
-                owner = live_authority.get(
+            owner = (
+                live_authority.get(
                     (registered_lease.channel_id, registered_lease.vault_binding_id)
                 )
+                if registered_lease is not None
+                else None
+            )
+            if not require_materialized_roots and registered_lease is not None:
                 root = owner.root if owner is not None else None
             if (
                 registered_lease is None
                 or registered_lease.channel_id != channel_id
                 or registered_lease.vault_binding_id != binding_id
-                or not root_matches(registered_lease, root)
+                or not root_matches(
+                    registered_lease,
+                    root,
+                    identity_owner=owner,
+                )
             ):
                 raise LedgerError(
                     "legacy ownership ledger registration fields are not authenticated"
