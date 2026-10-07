@@ -4,7 +4,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.release_channels.fleet_model_fitness import (
+    FleetModelInspectionError,
     check_fleet_model_fitness,
 )
 
@@ -26,6 +29,7 @@ def _inspect(
     image_tag: str = PIN,
     app_bind: bool = False,
     state: str = "running",
+    capture_watch_dir: str | None = "/fixture/capture-inbox",
 ) -> dict[str, Any]:
     mounts = [{"Type": "volume", "Source": "runtime-tmp", "Destination": "/app/tmp"}]
     if app_bind:
@@ -38,7 +42,14 @@ def _inspect(
         )
     return {
         "Name": f"/pkm-prod-{service}-1",
-        "Config": {"Image": f"ghcr.io/rasmustho/pkm-app:{image_tag}"},
+        "Config": {
+            "Image": f"ghcr.io/rasmustho/pkm-app:{image_tag}",
+            "Env": (
+                [f"HEIMDAL_CAPTURE_WATCH_DIR={capture_watch_dir}"]
+                if capture_watch_dir is not None
+                else []
+            ),
+        },
         "State": {"Status": state, "Health": {"Status": "healthy"}},
         "Mounts": mounts,
     }
@@ -50,7 +61,8 @@ def _docker_runner(inspections: dict[str, dict[str, Any]]):
 
     def run(args: list[str]) -> str:
         if args[:3] == ["compose", "-p", "pkm-prod"] and args[3:5] == ["ps", "-q"]:
-            return cid_by_service[args[5]] + "\n"
+            service = args[5]
+            return f"{cid_by_service[service]}\n" if service in cid_by_service else ""
         if args[:1] == ["inspect"]:
             service = service_by_cid[args[1]]
             return json.dumps([inspections[service]])
@@ -168,6 +180,79 @@ def test_checkout_model_reports_without_failing(tmp_path: Path) -> None:
     assert result.ok
     assert result.model == "checkout"
     assert result.to_receipt()["model"] == "checkout"
+
+
+def test_unconfigured_capture_watch_is_optional(tmp_path: Path) -> None:
+    root = _root_with_pin(tmp_path)
+    inspections = _all_services(api={"capture_watch_dir": ""})
+    inspections.pop("heimdal-capture-watch")
+
+    result = check_fleet_model_fitness(
+        "prod",
+        root=root,
+        require_pinned=True,
+        capture_watch_configured=False,
+        docker_runner=_docker_runner(inspections),
+        http_get_json=_http_runner(),
+    )
+
+    assert result.ok
+    assert {service.service for service in result.services} == {
+        "api",
+        "worker",
+        "watcher",
+        "companion-ui",
+    }
+
+
+def test_configured_capture_watch_remains_required(tmp_path: Path) -> None:
+    root = _root_with_pin(tmp_path)
+    inspections = _all_services()
+    inspections.pop("heimdal-capture-watch")
+
+    with pytest.raises(FleetModelInspectionError, match="heimdal-capture-watch.*not found"):
+        check_fleet_model_fitness(
+            "prod",
+            root=root,
+            capture_watch_configured=True,
+            docker_runner=_docker_runner(inspections),
+            http_get_json=_http_runner(),
+        )
+
+
+def test_direct_guard_infers_capture_from_api_env(tmp_path: Path) -> None:
+    root = _root_with_pin(tmp_path)
+    inspections = _all_services(api={"capture_watch_dir": "/fixture/capture-inbox"})
+    inspections.pop("heimdal-capture-watch")
+
+    with pytest.raises(FleetModelInspectionError, match="heimdal-capture-watch.*not found"):
+        check_fleet_model_fitness(
+            "prod",
+            root=root,
+            docker_runner=_docker_runner(inspections),
+            http_get_json=_http_runner(),
+        )
+
+
+def test_checkout_model_uses_selected_app_services(tmp_path: Path) -> None:
+    root = _root_with_pin(tmp_path)
+    inspections = _all_services(
+        api={"image_tag": "dev-local", "app_bind": True, "capture_watch_dir": ""},
+        worker={"image_tag": "dev-local", "app_bind": True, "capture_watch_dir": ""},
+        watcher={"image_tag": "dev-local", "app_bind": True, "capture_watch_dir": ""},
+    )
+    inspections.pop("heimdal-capture-watch")
+
+    result = check_fleet_model_fitness(
+        "prod",
+        root=root,
+        capture_watch_configured=False,
+        docker_runner=_docker_runner(inspections),
+        http_get_json=_http_runner(api_sha="not-checked"),
+    )
+
+    assert result.ok
+    assert result.model == "checkout"
 
 
 def test_mixed_pinned_checkout_fleet_fails(tmp_path: Path) -> None:

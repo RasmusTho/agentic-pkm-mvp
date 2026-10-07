@@ -24,8 +24,8 @@ from typing import Any
 
 
 APP_CODE_SERVICES = ("api", "worker", "watcher", "heimdal-capture-watch")
+CORE_APP_CODE_SERVICES = ("api", "worker", "watcher")
 GATEWAY_SERVICE = "companion-ui"
-ALL_SERVICES = (*APP_CODE_SERVICES, GATEWAY_SERVICE)
 
 CHANNEL_SPECS = {
     "dev": {"compose_project": "pkm-dev", "api_port": 18001, "gateway_port": 8111},
@@ -50,6 +50,7 @@ class ServiceFitness:
     app_bind_mount_sources: tuple[str, ...] = ()
     state: str | None = None
     health: str | None = None
+    capture_watch_configured: bool | None = None
 
     @property
     def has_app_bind_mount(self) -> bool:
@@ -159,6 +160,29 @@ def _matches_pin(image: str, pin: str) -> bool:
     return image == pin or _image_tag(image) == pin
 
 
+def _capture_watch_configured_from_env(raw_env: Any) -> bool:
+    if raw_env is None:
+        raise FleetModelInspectionError(
+            "API container environment could not be inspected for capture-watch configuration"
+        )
+    if not isinstance(raw_env, (list, tuple)):
+        raise FleetModelInspectionError(
+            "API container environment could not be inspected for capture-watch configuration"
+        )
+
+    key = "HEIMDAL_CAPTURE_WATCH_DIR"
+    values = [
+        entry.split("=", 1)[1]
+        for entry in raw_env
+        if isinstance(entry, str) and entry.startswith(f"{key}=")
+    ]
+    if len(values) > 1:
+        raise FleetModelInspectionError(
+            "API container has duplicate HEIMDAL_CAPTURE_WATCH_DIR entries"
+        )
+    return bool(values and values[0] != "")
+
+
 def _inspect_service(
     service: str,
     compose_project: str,
@@ -184,7 +208,8 @@ def _inspect_service(
             f"docker inspect for service '{service}' returned no container data"
         )
     info = inspected[0]
-    image = str((info.get("Config") or {}).get("Image") or info.get("Image") or "")
+    config = info.get("Config") or {}
+    image = str(config.get("Image") or info.get("Image") or "")
     mounts = info.get("Mounts") or []
     app_bind_sources = tuple(
         str(mount.get("Source") or "")
@@ -203,6 +228,11 @@ def _inspect_service(
         app_bind_mount_sources=app_bind_sources,
         state=state.get("Status"),
         health=health.get("Status"),
+        capture_watch_configured=(
+            _capture_watch_configured_from_env(config.get("Env"))
+            if service == "api"
+            else None
+        ),
     )
 
 
@@ -228,6 +258,7 @@ def check_fleet_model_fitness(
     *,
     root: Path | str = Path.cwd(),
     require_pinned: bool = False,
+    capture_watch_configured: bool | None = None,
     docker_runner: DockerRunner = _default_docker_runner,
     http_get_json: HttpJsonGetter = _default_http_get_json,
 ) -> FleetModelFitnessResult:
@@ -238,20 +269,50 @@ def check_fleet_model_fitness(
     root_path = Path(root)
     spec = CHANNEL_SPECS[channel]
     pin = _read_channel_pin(root_path, channel)
-    services = tuple(
+    core_services = tuple(
         _inspect_service(
             service,
             str(spec["compose_project"]),
             docker_runner=docker_runner,
         )
-        for service in ALL_SERVICES
+        for service in CORE_APP_CODE_SERVICES
     )
-    app_services = tuple(service for service in services if service.service in APP_CODE_SERVICES)
+    api_service = next(service for service in core_services if service.service == "api")
+    if capture_watch_configured is None:
+        if api_service.capture_watch_configured is None:
+            raise FleetModelInspectionError(
+                "cannot determine capture-watch configuration from API container"
+            )
+        capture_watch_configured = api_service.capture_watch_configured
+
+    selected_app_code_services = (
+        APP_CODE_SERVICES if capture_watch_configured else CORE_APP_CODE_SERVICES
+    )
+    optional_capture_service = (
+        (
+            _inspect_service(
+                "heimdal-capture-watch",
+                str(spec["compose_project"]),
+                docker_runner=docker_runner,
+            ),
+        )
+        if capture_watch_configured
+        else ()
+    )
+    gateway_service = _inspect_service(
+        GATEWAY_SERVICE,
+        str(spec["compose_project"]),
+        docker_runner=docker_runner,
+    )
+    services = (*core_services, *optional_capture_service, gateway_service)
+    app_services = tuple(
+        service for service in services if service.service in selected_app_code_services
+    )
     app_bind_services = tuple(service for service in app_services if service.has_app_bind_mount)
     bind_services = tuple(service for service in services if service.has_app_bind_mount)
     if not bind_services:
         model = "pinned-image"
-    elif len(app_bind_services) == len(APP_CODE_SERVICES):
+    elif len(app_bind_services) == len(selected_app_code_services):
         model = "checkout"
     else:
         model = "mixed"
@@ -294,7 +355,6 @@ def check_fleet_model_fitness(
                 f"expected channel pin '{pin}'"
             )
 
-    gateway_service = next(service for service in services if service.service == GATEWAY_SERVICE)
     gateway_sha = gateway_service.image_tag
     if not _matches_pin(gateway_service.image, pin):
         violations.append(
@@ -372,6 +432,20 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Fail when the observed fleet model is checkout. Used by deploy receipts.",
     )
+    capture_group = parser.add_mutually_exclusive_group()
+    capture_group.add_argument(
+        "--capture-watch-configured",
+        dest="capture_watch_configured",
+        action="store_true",
+        help="Require the capture watcher (deployment preflight result).",
+    )
+    capture_group.add_argument(
+        "--capture-watch-disabled",
+        dest="capture_watch_configured",
+        action="store_false",
+        help="Allow the capture watcher to be absent (deployment preflight result).",
+    )
+    parser.set_defaults(capture_watch_configured=None)
     return parser
 
 
@@ -382,6 +456,7 @@ def main(argv: list[str] | None = None) -> int:
             args.channel,
             root=args.root,
             require_pinned=args.require_pinned,
+            capture_watch_configured=args.capture_watch_configured,
         )
     except FleetModelInspectionError as exc:
         print(f"fleet-model-fitness: ERROR - {exc}", file=sys.stderr)

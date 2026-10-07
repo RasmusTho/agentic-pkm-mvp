@@ -487,6 +487,9 @@ if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "pytest" ]; then
   exit 0
 fi
 if [ "${{1:-}}" = "-m" ] && [ "${{2:-}}" = "app.release_channels.fleet_model_fitness" ]; then
+  if [ -n "${{FAKE_FLEET_MODEL_FITNESS_ARGS_FILE:-}}" ]; then
+    printf '%s\n' "$@" >"${{FAKE_FLEET_MODEL_FITNESS_ARGS_FILE}}"
+  fi
   if [ "${{FAKE_FLEET_MODEL_FITNESS:-pass}}" = "fail" ]; then
     echo 'fake fleet-model fitness diagnostic' >&2
     exit "${{FAKE_FLEET_MODEL_FITNESS_RC:-41}}"
