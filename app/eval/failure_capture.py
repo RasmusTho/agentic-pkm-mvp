@@ -638,6 +638,7 @@ def _persist_disposition_authority_receipt(
                         outbox_event.event_id,
                         EVENT_ID_FINGERPRINT,
                     ),
+                    required_db=backend == "pg" or bool(db_url),
                 )
                 emitted = emitted or bool(stored_id)
             except Exception:
