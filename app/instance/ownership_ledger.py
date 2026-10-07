@@ -142,6 +142,66 @@ class OwnershipLedger:
             key = self._load_or_create_key_locked(allow_create=False)
             return self._load_or_create_ledger_locked(key, allow_create=False)
 
+    def needs_fenced_registry_consistency(self) -> bool:
+        """Return whether an established ledger needs the fenced v1 migration seam.
+
+        This validates the protected key and complete ledger before reporting its
+        schema.  It does not create or migrate ledger authority; callers must hold
+        the deployment fences and provide the owner inventory before using the
+        registry-consistency path to migrate a legacy ledger.  The normal locked
+        recovery path may finish an already-journaled key rotation.
+        """
+
+        self._assert_existing_artifacts()
+        with self._locked(allow_legacy_rotation=True):
+            key = self._load_or_create_key_locked(allow_create=False)
+            current = self._load_or_create_ledger_locked(
+                key,
+                allow_create=False,
+                allow_legacy=True,
+            )
+            return (
+                current.schema == LEGACY_LEDGER_SCHEMA
+                or self._load_legacy_rotation_journal_locked(key) is not None
+            )
+
+    def _load_legacy_rotation_journal_locked(
+        self,
+        key: _KeyMaterial,
+    ) -> LedgerSnapshot | None:
+        """Read a legacy rotation snapshot that is bound to the active key."""
+
+        if not self.rotation_path.exists():
+            return None
+        _assert_private_file(self.rotation_path)
+        try:
+            journal = json.loads(self.rotation_path.read_text(encoding="utf-8"))
+            if journal.get("schema") != ROTATION_SCHEMA:
+                raise ValueError
+            journal_key = self._parse_key_value(journal["key"])
+            journal_ledger = self._parse_ledger_value(journal["ledger"])
+            if (
+                len(journal_key.secret) != 32
+                or journal_ledger.key_id != journal_key.key_id
+                or journal_ledger.generation != journal_key.generation
+            ):
+                raise ValueError
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise LedgerKeyError("ownership key rotation journal is invalid") from exc
+        if journal_key != key:
+            raise LedgerKeyError(
+                "legacy ownership rotation journal does not match the protected key"
+            )
+        if journal_ledger.schema != LEGACY_LEDGER_SCHEMA:
+            return None
+        return journal_ledger
+
     def authenticate_scalar_rollback_session(
         self,
         payload: Mapping[str, object],
@@ -464,8 +524,11 @@ class OwnershipLedger:
                 key, allow_create=False, allow_legacy=True
             )
             needs_legacy_migration = current.schema == LEGACY_LEDGER_SCHEMA
+            completed_legacy_journal: LedgerSnapshot | None = None
             if needs_legacy_migration and self.rotation_path.exists():
                 self._assert_legacy_rotation_journal_matches_locked(current, key)
+            elif not needs_legacy_migration:
+                completed_legacy_journal = self._load_legacy_rotation_journal_locked(key)
             if current.transfer is not None:
                 raise LedgerError(
                     "registry/ledger consistency cannot commit an in-progress transfer"
@@ -486,6 +549,17 @@ class OwnershipLedger:
                     current,
                     key,
                     require_complete_legacy_chain=False,
+                )
+            elif completed_legacy_journal is not None:
+                self._authenticate_legacy_authority(
+                    current=completed_legacy_journal,
+                    key=key,
+                    channel_id=channel_id,
+                    registrations=registrations,
+                    tombstones=tombstones,
+                    transfer_lineage=transfer_lineage,
+                    global_live_owners=global_live_owners,
+                    require_materialized_roots=require_materialized_roots,
                 )
 
             pending_lease_updates: dict[str, OwnershipLease] = {}
@@ -823,12 +897,75 @@ class OwnershipLedger:
                     raise LedgerError(
                         "registry/ledger consistency found an incompatible lineage fingerprint"
                     )
+            if completed_legacy_journal is not None and not self._legacy_migration_matches_current(
+                completed_legacy_journal,
+                key,
+                current,
+                global_live_owners=global_live_owners,
+                pending_legacy_owners=pending_legacy_owners,
+            ):
+                raise LedgerError(
+                    "legacy ownership rotation journal does not match the committed ledger"
+                )
+
+            if needs_legacy_migration and self.rotation_path.exists():
+                # The active v1 key and ledger were already proven to match the
+                # journal above. Remove this redundant journal durably first:
+                # interruption then leaves the retryable v1 state, never a v2
+                # ledger paired with a journal that rejects ordinary reads.
+                self.rotation_path.unlink(missing_ok=True)
+                _fsync_directory(self.root)
+            elif completed_legacy_journal is not None:
+                # The committed v2 snapshot has already been authenticated and
+                # matched to this exact v1 source plus the proved receipt updates.
+                self.rotation_path.unlink(missing_ok=True)
+                _fsync_directory(self.root)
             if needs_legacy_migration or pending_lease_updates or receipt_lease_updates:
                 self._write_ledger_locked(current, key)
-                if needs_legacy_migration:
-                    self.rotation_path.unlink(missing_ok=True)
-                    _fsync_directory(self.root)
             return current
+
+    def _legacy_migration_matches_current(
+        self,
+        legacy: LedgerSnapshot,
+        key: _KeyMaterial,
+        current: LedgerSnapshot,
+        *,
+        global_live_owners: Sequence[LegacyOwner],
+        pending_legacy_owners: Sequence[LegacyOwner],
+    ) -> bool:
+        """Check whether a v1 journal is the exact source of the committed v2 ledger."""
+
+        expected = self._migrate_legacy_ledger(
+            legacy,
+            key,
+            require_complete_legacy_chain=False,
+        )
+        leases = dict(expected.leases)
+        for owner in global_live_owners:
+            if owner.receipt_digest is None:
+                continue
+            lease = leases.get(owner.vault_binding_id)
+            if lease is not None:
+                leases[owner.vault_binding_id] = replace(
+                    lease,
+                    owner_receipt_digest=owner.receipt_digest,
+                )
+        for owner in pending_legacy_owners:
+            lease = leases.get(owner.vault_binding_id)
+            if lease is None or lease.state != "pending":
+                continue
+            leases[owner.vault_binding_id] = OwnershipLease(
+                **(
+                    asdict(lease)
+                    | {
+                        "state": "active",
+                        "owner_receipt_digest": owner.receipt_digest
+                        or lease.owner_receipt_digest,
+                    }
+                )
+            )
+        expected = self._replace(expected, leases=leases)
+        return expected == current
 
     def recover_or_require_active(
         self,

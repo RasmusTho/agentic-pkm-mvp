@@ -3235,6 +3235,35 @@ def _prepare_legacy_registry_for_mvr05_floor(
 
     snapshot = registry.load()
     if snapshot.revision != 0:
+        if (
+            ledger.path.is_file()
+            and ledger.key_path.is_file()
+            and ledger.needs_fenced_registry_consistency()
+        ):
+            if quiescence_proof is None:
+                raise InstanceStatePreflightError(
+                    "durable quiescence proof is required"
+                )
+            populated_registry_proof = _bind_legacy_owner_inventory_to_proof(
+                inventory_path=inventory_path,
+                quiescence_proof=quiescence_proof,
+                channel=channel,
+                host_global_root=ledger.root,
+                expected_sha256=inventory_sha256,
+            )
+            populated_registry_owners = _load_legacy_owner_inventory(
+                inventory_path,
+                registry=snapshot,
+                channel=channel,
+                quiescence_proof=populated_registry_proof,
+                require_explicit_binding=True,
+            )
+            _converge_authenticated_legacy_ledger(
+                channel=channel,
+                registry=snapshot,
+                ledger=ledger,
+                owners=tuple(populated_registry_owners),
+            )
         return snapshot
 
     bound_proof = quiescence_proof
@@ -4959,6 +4988,7 @@ def main(argv: list[str] | None = None) -> int:
         from app.instance.mvr05_cutover import (
             load_mvr05_fence_plan,
             record_mvr05_runtime_floor,
+            validate_mvr05_runtime_floor,
         )
 
         layout = InstanceStateLayout(
@@ -4980,14 +5010,26 @@ def main(argv: list[str] | None = None) -> int:
                 registry = VaultRegistryStore(args.registry_path)
                 ledger = OwnershipLedger(args.host_global_root)
                 # Complete any dormant legacy import while the deployment and
-                # restart fences are still held.  This keeps a floor write from
-                # advancing an empty registry past the import-only revision.
+                # restart fences are still held.  A populated registry may
+                # also need this authenticated seam when an established v1
+                # ledger must be checked against the exact registered owners.
                 registry_snapshot = registry.load()
+                fence_plan = load_mvr05_fence_plan(args.fence_plan)
+                validate_mvr05_runtime_floor(registry_snapshot, fence_plan)
                 quiescence_proof = None
-                if registry_snapshot.revision == 0 and (
+                needs_fenced_registry_consistency = registry_snapshot.revision == 0 and (
                     args.legacy_path.is_file()
                     or (ledger.path.is_file() and ledger.key_path.is_file())
+                )
+                if (
+                    registry_snapshot.revision != 0
+                    and ledger.path.is_file()
+                    and ledger.key_path.is_file()
                 ):
+                    needs_fenced_registry_consistency = (
+                        ledger.needs_fenced_registry_consistency()
+                    )
+                if needs_fenced_registry_consistency:
                     quiescence_proof = _load_deployment_quiescence_proof(
                         args.quiescence_proof_path
                     )
@@ -5004,7 +5046,7 @@ def main(argv: list[str] | None = None) -> int:
                 ledger.require_existing()
                 result = record_mvr05_runtime_floor(
                     registry,
-                    fence=load_mvr05_fence_plan(args.fence_plan),
+                    fence=fence_plan,
                     channel_id=args.channel,
                     _capability=local_operator_storage_capability(),
                 )
