@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -8,8 +9,19 @@ from typing import Any, Callable
 
 import pytest
 
+import app.eval.failure_capture as failure_capture_module
 import app.orchestrator.executor as executor_module
 from app.governance.governed_write import GovernedWriteAdapter
+from app.eval.failure_capture import (
+    DRAFT_STATUS_PENDING,
+    DRAFT_STATUS_PROMOTED,
+    DRAFT_STATUS_REJECTED,
+    draft_dead_letter_case,
+    promote_draft,
+    read_draft,
+    reject_draft,
+    PromotionDecisionError,
+)
 from app.mcp.vault_tools import append_note as production_append_note
 from app.orchestrator.executor import MockPlanExecutor, StepContext, StepExecutionError
 from app.orchestrator.runtime import Orchestrator
@@ -1271,3 +1283,116 @@ def test_same_process_same_effect_calls_are_serialized_without_duplicate_writer_
 
     assert all(result["status"] == "ok" for result in results)
     assert len(list((tmp_path / "_mcp").glob("*.md"))) == 1
+
+
+def test_eval_capture_disposition_uses_production_governed_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Human eval disposition uses GOV token + state-owner receipt + GOV receipt.
+
+    Candidate creation is exercised separately from the disposition. Both
+    production promote/reject entrypoints bind the reviewer, action, write
+    class, and exact draft resource before changing the candidate status; a
+    mismatched token is refused before any note mutation.
+    """
+    outbox_path = tmp_path / "eval-disposition-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    golden_path = Path("docs/eval/classification_golden.yaml")
+    golden_before = golden_path.read_bytes()
+
+    for index, (decide, expected_status, actor) in enumerate(
+        (
+            (promote_draft, DRAFT_STATUS_PROMOTED, "human:promoter"),
+            (reject_draft, DRAFT_STATUS_REJECTED, "human:reviewer"),
+        )
+    ):
+        vault = tmp_path / f"vault-{index}"
+        vault.mkdir()
+        draft = draft_dead_letter_case(
+            vault_root=vault,
+            topic="ingest.vault.changed",
+            reason="schema_violation:missing_required_field",
+            event_id=f"evt-{index}",
+            payload={"event_id": f"evt-{index}"},
+            trace_id=f"trace-{index}",
+            write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+        )
+        assert draft is not None and draft.draft_path is not None
+        assert draft.status == DRAFT_STATUS_PENDING
+
+        decision = decide(vault, draft.draft_id, decided_by=actor)
+        assert decision.decision == ("promote" if expected_status == DRAFT_STATUS_PROMOTED else "reject")
+        assert decision.authority_receipt is not None
+        assert decision.authority_receipt.actor == actor
+        assert decision.authority_receipt.resource == draft.draft_path
+        assert decision.authority_receipt.write_class == "eval_draft_disposition"
+        assert decision.authority_receipt.action.endswith(decision.decision)
+
+        persisted = read_draft(vault, draft.draft_id)
+        assert persisted is not None
+        assert persisted.status == expected_status
+        assert persisted.decided_by == actor
+
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    disposition_events = [
+        record
+        for record in records
+        if record["event"] == "governance.authority_receipt.recorded"
+        and record["source"] == "eval.failure_capture"
+    ]
+    assert len(disposition_events) == 2
+    for event in disposition_events:
+        payload = event["payload"]
+        token = payload["decision_token"]
+        policy = payload["policy_decision"]
+        state_owner_receipt = payload["state_owner_receipt"]
+        authority = payload["authority_receipt"]
+        assert policy["source"] == "human_review"
+        assert token["actor"] in {"human:promoter", "human:reviewer"}
+        assert token["action"].endswith(payload["decision"])
+        assert token["write_class"] == "eval_draft_disposition"
+        assert token["resource"] == authority["resource"]
+        assert authority["decision_token_id"] == token["token_id"]
+        assert authority["actor"] == token["actor"]
+        assert authority["outcome"] == "applied"
+        assert authority["source_receipt_ref"]
+        assert state_owner_receipt["operation"] == "write_note"
+        assert state_owner_receipt["locator"]["path"] == authority["resource"]
+
+    # A candidate disposition never edits golden-set membership.
+    assert golden_path.read_bytes() == golden_before
+
+    mismatch_vault = tmp_path / "vault-mismatch"
+    mismatch_vault.mkdir()
+    mismatch = draft_dead_letter_case(
+        vault_root=mismatch_vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-mismatch",
+        payload={"event_id": "evt-mismatch"},
+        trace_id="trace-mismatch",
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    )
+    assert mismatch is not None and mismatch.draft_path is not None
+    mismatch_path = mismatch_vault / mismatch.draft_path
+    before = mismatch_path.read_bytes()
+    adapter = failure_capture_module._GOVERNED_WRITE_ADAPTER
+    real_issue = adapter.issue_human_decision_token
+
+    def issue_mismatched_token(**kwargs: Any) -> Any:
+        grant = real_issue(**kwargs)
+        bad_token = replace(grant.decision_token, resource="other-draft.md")
+        return replace(grant, decision_token=bad_token)
+
+    monkeypatch.setattr(adapter, "issue_human_decision_token", issue_mismatched_token)
+    with pytest.raises(PromotionDecisionError, match="GOV refused"):
+        promote_draft(mismatch_vault, mismatch.draft_id, decided_by="human:bad-token")
+    assert mismatch_path.read_bytes() == before
+    unchanged = read_draft(mismatch_vault, mismatch.draft_id)
+    assert unchanged is not None and unchanged.status == DRAFT_STATUS_PENDING

@@ -78,7 +78,22 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 from uuid import uuid4
 
+from app.events.schema import make_outbox_event
+from app.governance.governed_write import (
+    AuthorityReceipt,
+    GovernedWriteAdapter,
+    GovernedWriteGrant,
+)
 from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.contracts import WriteReceipt
+from app.outbox.events import INDEX_OUTBOX_PATH
+from app.services.outbox import (
+    EVENT_ID_FINGERPRINT,
+    append_jsonl_outbox_event,
+    coerce_outbox_event,
+    derive_idempotency_key,
+    write_outbox_event,
+)
 
 import yaml
 
@@ -114,6 +129,16 @@ SCHEMA_VIOLATION_REASON = "schema_violation"
 DRAFT_STATUS_PENDING = "pending"
 DRAFT_STATUS_PROMOTED = "promoted"
 DRAFT_STATUS_REJECTED = "rejected"
+
+# Human disposition is a governed effect. Candidate intake keeps its existing
+# WriteGuard gate, while only promote/reject obtain a human-authorized GOV
+# DecisionToken and emit a distinct durable AuthorityReceipt.
+EVAL_DRAFT_DISPOSITION_EVENT = "governance.authority_receipt.recorded"
+EVAL_DRAFT_DISPOSITION_ACTION_PREFIX = "eval.failure_capture"
+EVAL_DRAFT_DISPOSITION_WRITE_CLASS = "eval_draft_disposition"
+EVAL_DRAFT_STATE_OWNER = "knowledge"
+EVAL_DRAFT_EVENT_SOURCE = "eval.failure_capture"
+_GOVERNED_WRITE_ADAPTER = GovernedWriteAdapter()
 
 
 class FailureCaptureError(RuntimeError):
@@ -505,6 +530,10 @@ class PromotionDecisionError(FailureCaptureError):
     """Raised when a promote/reject call cannot be recorded truthfully."""
 
 
+class AuthorityReceiptPersistenceError(FailureCaptureError):
+    """Raised when a completed disposition lacks a durable GOV receipt."""
+
+
 @dataclass(frozen=True)
 class PromotionDecision:
     """An explicit, recorded human decision on a draft. The ground-truth step.
@@ -521,9 +550,104 @@ class PromotionDecision:
     decided_by: str
     decided_at: str
     notes: str | None = None
+    authority_receipt: AuthorityReceipt | None = None
 
 
 _VALID_DECISIONS = {DRAFT_STATUS_PROMOTED: "promote", DRAFT_STATUS_REJECTED: "reject"}
+
+
+def _resolve_outbox_path() -> Path:
+    env_path = os.getenv("INDEX_OUTBOX_PATH")
+    if env_path:
+        return Path(env_path)
+    return Path(INDEX_OUTBOX_PATH)
+
+
+def _governed_disposition_payload(
+    *,
+    draft_id: str,
+    decision: str,
+    grant: GovernedWriteGrant,
+    mutation_receipt: WriteReceipt,
+    authority_receipt: AuthorityReceipt,
+) -> dict[str, Any]:
+    """Build the durable, cross-layer disposition receipt payload."""
+    from dataclasses import asdict
+
+    return {
+        "draft_id": draft_id,
+        "decision": decision,
+        "policy_decision": asdict(grant.policy_decision),
+        "decision_token": asdict(grant.decision_token),
+        "state_owner_receipt": asdict(mutation_receipt),
+        "authority_receipt": asdict(authority_receipt),
+    }
+
+
+def _persist_disposition_authority_receipt(
+    *,
+    draft_id: str,
+    decision: str,
+    grant: GovernedWriteGrant,
+    mutation_receipt: WriteReceipt,
+    authority_receipt: AuthorityReceipt,
+    trace_id: str | None,
+) -> None:
+    """Persist GOV accountability through the shared outbox sinks.
+
+    The draft note remains the state owner's source of truth. This event is a
+    separate durable accountability fact and is required before callers may
+    acknowledge the disposition. It deliberately uses the existing outbox
+    machinery rather than introducing an eval-specific authority store.
+    """
+    payload = _governed_disposition_payload(
+        draft_id=draft_id,
+        decision=decision,
+        grant=grant,
+        mutation_receipt=mutation_receipt,
+        authority_receipt=authority_receipt,
+    )
+    event = make_outbox_event(
+        event=EVAL_DRAFT_DISPOSITION_EVENT,
+        source=EVAL_DRAFT_EVENT_SOURCE,
+        payload=payload,
+        trace_id=trace_id,
+    )
+    emitted = False
+    try:
+        emitted = append_jsonl_outbox_event(
+            _resolve_outbox_path(), event, default_source=EVAL_DRAFT_EVENT_SOURCE
+        )
+    except Exception:
+        # A DB outbox may still be available; try it below before refusing the
+        # acknowledgement.
+        emitted = False
+
+    backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
+    db_url = os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
+    if backend == "pg" or db_url:
+        outbox_event = coerce_outbox_event(
+            event, default_source=EVAL_DRAFT_EVENT_SOURCE
+        )
+        if outbox_event is not None:
+            try:
+                stored_id = write_outbox_event(
+                    outbox_event,
+                    idempotency_key=derive_idempotency_key(
+                        outbox_event.event,
+                        outbox_event.event_id,
+                        EVENT_ID_FINGERPRINT,
+                    ),
+                )
+                emitted = emitted or bool(stored_id)
+            except Exception:
+                pass
+
+    if not emitted:
+        raise AuthorityReceiptPersistenceError(
+            "eval draft disposition was applied but its AuthorityReceipt "
+            "could not be persisted; success acknowledgement withheld"
+        )
 
 
 def promote_draft(
@@ -594,6 +718,30 @@ def _decide(
     if draft.status != DRAFT_STATUS_PENDING:
         raise PromotionDecisionError(f"draft already decided: {draft_id} (status={draft.status})")
 
+    rel_path = draft.draft_path or _safe_rel_path(str(_draft_path(vault_root, draft_id)))
+    decision = _VALID_DECISIONS[target_status]
+    action = f"{EVAL_DRAFT_DISPOSITION_ACTION_PREFIX}.{decision}"
+    try:
+        grant = _GOVERNED_WRITE_ADAPTER.issue_human_decision_token(
+            action=action,
+            write_class=EVAL_DRAFT_DISPOSITION_WRITE_CLASS,
+            actor=decided_by,
+            resource=rel_path,
+        )
+        token = _GOVERNED_WRITE_ADAPTER.validate_decision_token(
+            decision_token=grant.decision_token,
+            action=action,
+            write_class=EVAL_DRAFT_DISPOSITION_WRITE_CLASS,
+            actor=decided_by,
+            resource=rel_path,
+        )
+    except Exception as exc:
+        raise PromotionDecisionError(
+            f"GOV refused eval draft disposition: {exc}"
+        ) from exc
+
+    # WriteGuard remains the state-owner write precondition. It is deliberately
+    # separate from GOV's reviewer authorization and receipt accountability.
     write_guard.assert_writes_allowed(FAILURE_CAPTURE_DRAFT_ACTION)
     decided_at = _now_iso()
     updated = DraftEvalCase(
@@ -611,8 +759,7 @@ def _decide(
     )
     title = f"{_VALID_DECISIONS[target_status].capitalize()}d draft: {draft.kind}"
     content = _render_draft_note(updated, title=title)
-    rel_path = draft.draft_path or _safe_rel_path(str(_draft_path(vault_root, draft_id)))
-    write_note_relative(
+    mutation_receipt = write_note_relative(
         rel_path,
         content,
         vault_root=vault_root,
@@ -621,6 +768,21 @@ def _decide(
         expected_version=expected_version,
         writer_identity="eval.failure_capture.decision",
     )
+    authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
+        decision_token=token,
+        mutation_receipt=mutation_receipt,
+        state_owner=EVAL_DRAFT_STATE_OWNER,
+        resource=rel_path,
+        trace_id=draft.trace_id,
+    )
+    _persist_disposition_authority_receipt(
+        draft_id=draft_id,
+        decision=decision,
+        grant=grant,
+        mutation_receipt=mutation_receipt,
+        authority_receipt=authority_receipt,
+        trace_id=draft.trace_id,
+    )
 
     return PromotionDecision(
         draft_id=draft_id,
@@ -628,6 +790,7 @@ def _decide(
         decided_by=decided_by,
         decided_at=decided_at,
         notes=notes,
+        authority_receipt=authority_receipt,
     )
 
 
@@ -639,6 +802,10 @@ __all__ = [
     "DRAFT_STATUS_PROMOTED",
     "DRAFT_STATUS_REJECTED",
     "FAILURE_CAPTURE_DRAFT_ACTION",
+    "EVAL_DRAFT_DISPOSITION_ACTION_PREFIX",
+    "EVAL_DRAFT_DISPOSITION_EVENT",
+    "EVAL_DRAFT_DISPOSITION_WRITE_CLASS",
+    "AuthorityReceiptPersistenceError",
     "DraftEvalCase",
     "FailureCaptureError",
     "PromotionDecision",

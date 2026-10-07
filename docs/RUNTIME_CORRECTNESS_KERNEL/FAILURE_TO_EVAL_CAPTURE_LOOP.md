@@ -33,9 +33,13 @@ separately reviewed integration into regression coverage.
   and a payload snapshot. Enough for a reviewer to reconstruct the failure without log archaeology.
 - Drafts land in a **file-based human review surface** that *mirrors the shape* of the existing
   pattern (`app/agent_memory/review_queue.py` + `materialize_promoted_memory` in
-  `app/agent_memory/materialization.py`): a WriteGuard-gated file, an explicit human-decision
-  promotion step that records the decision on the draft, and no golden-set write as part of that
-  decision. Golden-set or fixture integration is a separate reviewed code change.
+  `app/agent_memory/materialization.py`): a WriteGuard-gated, candidate-only file and an explicit
+  human disposition step. Intake never grants authority. Promotion or rejection uses the shared
+  GOV adapter to issue and validate a DecisionToken bound to the reviewer, decision, write class,
+  and exact draft resource before the state-owner status write. The state-owner write receipt and
+  distinct GOV AuthorityReceipt are persisted through the existing receipt/outbox path before the
+  disposition is acknowledged. Golden-set or fixture integration is a separate reviewed code
+  change.
   It does **not reuse `MemoryCandidateReviewQueue`** — see "Reviewer surfacing" below for why that
   queue is memory-candidate-specific and an eval-dataset case is a distinct artifact class.
 - Drafting is **WriteGuard-gated** like all vault writes: call
@@ -88,9 +92,12 @@ review **UI** itself stays out of scope (W7/W8, see below).
 
 Promotion and rejection persist `decided_by`, `decided_at`, and reviewer `notes`
 in the existing draft frontmatter, using the same WriteGuard and observed-byte
-version check as the status change. The decision API returns the same values
-that were written. This keeps decision provenance with the draft and prevents
-a stale concurrent edit from being overwritten.
+version check as the status change. The decision path separately records the
+human-bound DecisionToken, state-owner status receipt, and AuthorityReceipt
+through the shared outbox sink; WriteGuard health and OEF findings remain
+neither authorization nor accountability. The decision API returns the same
+values that were written. This keeps decision provenance with the draft and
+prevents a stale concurrent edit from being overwritten.
 
 To track a promoted draft's intended integration, include exactly one
 standalone line in its decision notes, using the form that matches the draft:
@@ -122,14 +129,22 @@ note-write and concurrency contract follows
 - [ ] Draft writes go through WriteGuard; a blocked write-state prevents the draft, asserted through
       the production write path.
       Verify: `tests/eval/test_failure_capture_loop.py::test_draft_is_write_guard_gated` — asserts `WriteGuard.assert_writes_allowed` is invoked from the draft-write entrypoint.
-- [ ] No auto-promotion: promoting a draft records the human decision but does not itself change
-      the golden dataset or fixture. Integration is a separate reviewed change.
+- [ ] Explicit promote and reject transitions use the production GOV chain: a DecisionToken is
+      bound to the human reviewer, decision action, `eval_draft_disposition` write class, and
+      exact draft resource before the state-owner status mutation; the distinct state-owner write
+      receipt and AuthorityReceipt are durable before acknowledgement. Missing or mismatched
+      tokens leave the draft unchanged. OEF findings, traces, and WriteGuard health do not supply
+      authorization or accountability.
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
+- [ ] Candidate intake remains non-authoritative: promoting a draft records the human decision but
+      does not itself change the golden dataset or fixture. Integration is a separate reviewed code
+      change.
       Verify: `tests/eval/test_eval_draft_reconciliation.py::test_promoted_unintegrated_draft_is_reported`
       Verify: `tests/eval/test_failure_capture_loop.py::test_no_auto_promotion`
 
 ## How to Verify (Pre-Merge)
 
-1. `pytest -q tests/eval/test_failure_capture_loop.py`.
+1. `pytest -q tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain tests/eval/test_failure_capture_loop.py`.
 2. Full `pytest -q -m "not pg"` + `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q -m uat_integrated_runtime`
    (vault-write path).
 3. `ruff check app tests`.
