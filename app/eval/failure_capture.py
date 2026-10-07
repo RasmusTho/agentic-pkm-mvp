@@ -96,7 +96,6 @@ from app.governance.governed_write import (
 )
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.contracts import WriteReceipt
-from app.knowledge.locators import make_note_locator
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
@@ -108,7 +107,11 @@ from app.services.outbox import (
 
 import yaml
 
-from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
+from app.knowledge.write_ops import (
+    make_note_locator,
+    read_note_text_with_version,
+    write_note_relative,
+)
 from app.receipts.outbox_sources import read_receipt_source_records
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
