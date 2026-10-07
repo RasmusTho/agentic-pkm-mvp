@@ -189,7 +189,6 @@ if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "pr
   deploy_channel_model_access_preflight \
     "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" \
     "/etc/yggdrasil/model-access/runtime.env" || exit $?
-  preflight_capture_watch_config "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" || exit $?
 fi
 
 # Resolve the effective instance-state-init legacy setting before creating the
@@ -1545,6 +1544,9 @@ else
   DEPLOY_TTS_ENABLED=false
   unset DEPLOY_TTS_HOST_ROOT
   export DEPLOY_TTS_CONFIG_GOVERNED DEPLOY_TTS_ENABLED
+fi
+if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
+  preflight_capture_watch_config "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" || exit $?
 fi
 migration_from_sha="${current_sha:-}"
 if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then

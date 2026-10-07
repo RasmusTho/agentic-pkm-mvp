@@ -136,38 +136,19 @@ def test_real_prod_and_test_compose_still_pass_preflight() -> None:
     assert test_result.ok, test_result.summary()
 
 
-def test_deploy_script_recreates_the_new_service() -> None:
-    """`scripts/deploy_channel.sh` must pull/recreate this service like its siblings.
-
-    Otherwise a prod image update ships new code to api/worker/watcher but
-    heimdal-capture-watch keeps running its old image indefinitely --
-    unversioned drift the standard promotion path would silently miss.
-    """
+def test_deploy_script_recreates_the_new_service_when_configured() -> None:
+    """The deploy script includes capture-watch only when its inbox is configured."""
     text = (_REPO_ROOT / "scripts" / "deploy_channel.sh").read_text(encoding="utf-8")
-    lines = [line.strip() for line in text.splitlines()]
-    pull_lines = [line for line in lines if line.startswith("compose pull")]
-    runtime_recreate_lines = [
-        line
-        for line in lines
-        if line.startswith("compose up -d --force-recreate")
-        and " api " in f" {line} "
-    ]
+    recreate_body = text.split("recreate_channel_services()", 1)[1].split("\n}", 1)[0]
+    pull_body = text.split("pull_channel_images()", 1)[1].split("\n}", 1)[0]
 
-    assert pull_lines, "deploy script must pull channel service images"
-    assert runtime_recreate_lines, "deploy script must recreate runtime services"
-    ordinary_lines = [
-        line
-        for line in [*pull_lines, *runtime_recreate_lines]
-        if "scalar-rollback-guard" not in line
-    ]
-    for line in ordinary_lines:
-        assert _SERVICE in line, line
-    scalar_lines = [
-        line for line in [*pull_lines, *runtime_recreate_lines]
-        if "scalar-rollback-guard" in line
-    ]
-    assert scalar_lines
-    assert all(_SERVICE not in line for line in scalar_lines)
+    assert 'runtime_services=(api worker watcher)' in recreate_body
+    assert 'runtime_services+=(heimdal-capture-watch)' in recreate_body
+    assert 'if [ "${CAPTURE_WATCH_CONFIGURED}" = "1" ]' in recreate_body
+    assert 'compose up -d --force-recreate "${runtime_services[@]}" companion-ui' in recreate_body
+    assert 'services+=(heimdal-capture-watch)' in pull_body
+    assert 'compose pull "${services[@]}"' in pull_body
+    assert 'if [ "${CAPTURE_WATCH_CONFIGURED}" = "1" ]' in pull_body
 
 
 def test_deploy_script_health_gates_the_new_service() -> None:
