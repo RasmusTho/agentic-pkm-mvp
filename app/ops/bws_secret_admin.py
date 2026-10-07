@@ -15,7 +15,7 @@ from uuid import UUID
 from app.ops.bws_secret_reader import _sdk_client
 from app.ops.host_secret_bootstrap import _security_framework_keychain_lookup
 from app.ops.host_secret_contract import (
-    BWS_IDENTITIES, BWS_ISOLATED_IDENTITIES, CHANNEL_PROJECTS,
+    BWS_IDENTITIES, CHANNEL_PROJECTS,
 )
 
 
@@ -47,14 +47,12 @@ class BwsAdminConfig:
     organization_id: str
     non_prod_project_id: str
     prod_project_id: str
-    marr_dev_project_id: str | None = None
 
     @classmethod
     def from_environment(cls, environment: Mapping[str, str]) -> BwsAdminConfig:
         try:
             cfg = cls(environment['BWS_ORGANIZATION_ID'],
-                      environment['BWS_NON_PROD_PROJECT_ID'], environment['BWS_PROD_PROJECT_ID'],
-                      environment.get('BWS_MARR_DEV_PROJECT_ID'))
+                      environment['BWS_NON_PROD_PROJECT_ID'], environment['BWS_PROD_PROJECT_ID'])
             cfg.validate()
             return cfg
         except Exception:
@@ -62,8 +60,6 @@ class BwsAdminConfig:
 
     def validate(self) -> None:
         ids = [self.organization_id, self.non_prod_project_id, self.prod_project_id]
-        if self.marr_dev_project_id is not None:
-            ids.append(self.marr_dev_project_id)
         if len(set(ids)) != len(ids) or any(str(UUID(item)) != item for item in ids):
             raise SecretAdminError()
 
@@ -73,8 +69,6 @@ class BwsAdminConfig:
             'non-prod': self.non_prod_project_id,
             'prod': self.prod_project_id,
         }
-        if self.marr_dev_project_id is not None:
-            projects['marr-dev'] = self.marr_dev_project_id
         return projects
 
 
@@ -119,11 +113,8 @@ class BwsSecretAdmin:
     def _scope(self, project: str, identity: str) -> str:
         prefix, _, logical = identity.partition('/')
         scope = BWS_IDENTITIES.get(logical)
-        isolated = BWS_ISOLATED_IDENTITIES.get(logical)
         configured_projects = self.config.projects()
-        if scope == 'isolated':
-            allowed = isolated == (project, identity)
-        elif scope == 'shared':
+        if scope == 'shared':
             allowed = prefix == 'shared' and project in {'non-prod', 'prod'}
         elif scope == 'channel':
             allowed = CHANNEL_PROJECTS.get(prefix) == project

@@ -27,7 +27,7 @@ Extend evidence coverage to artifacts no mechanical rule can place (a doc that d
 - The production path submits provider-free `fallback_forbidden` intent through
   `app/builderops/ckm/judgment.py`, its separate dev-only authenticated Builder client, and MARR's
   `POST /v1/ckm-judgment`. The server validates its Builder-owned pinned model profile and resolves
-  `dev/typesafe.api-key` from the isolated `marr-dev` BWS project through the dedicated read-only
+  `dev/typesafe.api-key` from the existing `non-prod` BWS project through the existing read-only
   MARR account. The BWS reader token remains in the MARR host Keychain. CKM receives neither
   credential. TSO-07/#5801 repository support was delivered by PR #5803; live BWS permission
   qualification remains pending under #5667. Product policy/client/profile,

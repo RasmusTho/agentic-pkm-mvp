@@ -20,7 +20,7 @@ from app.model_access.typesafe_judgment_executor import PRODUCT_TYPESAFE_PROFILE
 from app.ops.host_secret_contract import UndeclaredSecretConsumerError, load_host_secret_contract
 
 
-MARR_BWS_IDENTITY = ("marr-dev", "dev/typesafe.api-key")
+MARR_BWS_IDENTITY = ("non-prod", "dev/typesafe.api-key")
 
 
 class _FakeCheckOperation:

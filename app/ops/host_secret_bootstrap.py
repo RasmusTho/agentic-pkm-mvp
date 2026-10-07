@@ -28,7 +28,7 @@ from app.ops.bws_secret_reader import (
 )
 from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
 from app.ops.host_secret_contract import (
-    BWS_ISOLATED_IDENTITIES,
+    BWS_ONLY_SECRETS,
     HostSecretContract,
     load_host_secret_contract,
 )
@@ -39,7 +39,7 @@ HOST_SECRET_BOOTSTRAP_FAILURE_REF = "HOST_SECRET_BOOTSTRAP_FAILURE_REF"
 HOST_SECRET_BOOTSTRAP_CHANNEL = "HOST_SECRET_BOOTSTRAP_CHANNEL"
 HOST_SECRET_BOOTSTRAP_CONSUMER = "HOST_SECRET_BOOTSTRAP_CONSUMER"
 MARR_BWS_TOKEN_KEYCHAIN_SERVICE = "yggdrasil.bws-reader"
-MARR_BWS_TOKEN_KEYCHAIN_ACCOUNT = "marr-server-dev-reader.token"
+MARR_BWS_TOKEN_KEYCHAIN_ACCOUNT = "non-prod-reader.token"
 _RAW_STORE_KEY_PATTERN = re.compile(r"^[0-9a-fA-F]{64}$")
 _DISCORD_WEBHOOK_URL_PATTERN = re.compile(
     r"^https://(?:discord\.com|discordapp\.com)/api/webhooks/[0-9]+/[A-Za-z0-9._-]+$"
@@ -228,7 +228,7 @@ def create_marr_typesafe_bws_reader(
     keychain_lookup: KeychainLookup = _security_keychain_lookup,
     client_factory: Callable[[], object] | None = None,
 ) -> BwsSecretReader:
-    """Create the isolated MARR reader with a Keychain-held read-only token."""
+    """Create the MARR reader with the existing non-prod read-only token."""
     if sys.platform != "darwin":
         raise HostSecretBootstrapError("host secret provider unavailable")
     try:
@@ -486,7 +486,7 @@ def _resolve_consumer_environment(
         ):
             if secret in contract.keychain_only_secrets and sys.platform != "darwin":
                 raise HostSecretBootstrapError("host secret provider unavailable")
-            if secret in BWS_ISOLATED_IDENTITIES:
+            if secret in BWS_ONLY_SECRETS:
                 raise HostSecretBootstrapError("host secret provider unavailable")
             env_name = contract.binding_for(secret)
             kind = contract.kind_for(secret)
@@ -552,7 +552,7 @@ def resolve_host_secret_values(
         selected = contract or load_host_secret_contract()
         if provider == "keychain":
             if any(
-                secret in BWS_ISOLATED_IDENTITIES
+                secret in BWS_ONLY_SECRETS
                 for declared_channel, declared_consumer, secret in selected.allowed
                 if declared_channel == channel and declared_consumer == consumer
             ):
@@ -571,7 +571,7 @@ def resolve_host_secret_values(
         ):
             raise HostSecretBootstrapError("host secret provider unavailable")
         if any(
-            secret in BWS_ISOLATED_IDENTITIES
+            secret in BWS_ONLY_SECRETS
             for declared_channel, declared_consumer, secret in selected.allowed
             if declared_channel == channel and declared_consumer == consumer
         ) and (
@@ -971,7 +971,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "verify the declared Keychain item and non-interactive access"
             if args.provider == "keychain"
             else (
-                "verify the isolated MARR BWS project and Keychain reader token"
+                "verify the non-prod BWS project and Keychain reader token"
                 if (sys.platform, args.channel, args.consumer)
                 == ("darwin", "dev", "marr-server-dev")
                 else "verify the declared provider and file credential"

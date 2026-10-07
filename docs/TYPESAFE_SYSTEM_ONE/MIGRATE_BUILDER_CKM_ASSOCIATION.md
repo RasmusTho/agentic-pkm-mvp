@@ -24,7 +24,7 @@ the separate Builder dev acceptance below is approved.
 - Use the Builder-owned resolver/adapter path and `fallback_forbidden`; the production Builder call site does not name a provider or import Product MARR policy.
 - Use a Choice with an explicit no-match option. Reject answers outside the submitted candidate set.
 - Preserve inferred/candidate provenance, the existing confidence floor, stable edge identity, snapshot revalidation, watermark transaction, explicit `confirm-edge` receipt, and visible zero-edge skip on unavailable/degraded results.
-- Authenticate to the bounded MARR operation with a separate Builder caller credential and policy. TSO-05 grants `typesafe.api-key` only to the Mac `marr-server-dev` consumer; CKM and Linux never resolve or receive it. Keep the Builder route unavailable pending its own dev acceptance; do not widen any BWS reader or grant test/prod access.
+- Authenticate to the bounded MARR operation with a separate Builder caller credential and policy. TSO-05 grants `typesafe.api-key` only to the Mac `marr-server-dev` consumer; CKM and Linux application paths never resolve or receive it. Linux reader identities may retain accepted store-level access under #5808, but that does not create an application binding. Keep the Builder route unavailable pending its own dev acceptance; do not widen the code-level consumer allowlist or grant test/prod access.
 
 ## Concretely
 

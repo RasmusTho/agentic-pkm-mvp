@@ -31,7 +31,7 @@ from app.ops.host_secret_bootstrap import create_marr_typesafe_bws_reader
 CAPABILITY = "model-access.example/cap/complete"
 FAKE_KEY = "synthetic-typesafe-test-credential-5766"
 INTENT = "Consider two possible plans without changing anything."
-MARR_BWS_IDENTITY = ("marr-dev", "dev/typesafe.api-key")
+MARR_BWS_IDENTITY = ("non-prod", "dev/typesafe.api-key")
 
 
 class _FakeCheckOperation:
@@ -261,7 +261,7 @@ def test_exact_marr_reader_malformed_keychain_token_stops_product_adapter(
 
     reader = create_marr_typesafe_bws_reader(
         environment={
-            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_READER_PROJECT": "non-prod",
             "BWS_PROJECT_ID": "00000000-0000-4000-8000-000000000001",
             "BWS_ORGANIZATION_ID": "00000000-0000-4000-8000-000000000002",
         },

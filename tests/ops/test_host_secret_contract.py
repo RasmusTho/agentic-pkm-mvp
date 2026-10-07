@@ -569,10 +569,10 @@ def test_bws_identity_scope_is_closed_and_consumer_grants_are_preserved(
 _TYPESAFE_CANARY = "fixture-typesafe-never-in-diagnostics"
 
 
-def test_typesafe_bws_binding_is_marr_only(
+def test_typesafe_key_uses_non_prod_project_and_marr_only_consumer(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """The active provider key maps only to the isolated MARR project identity."""
+    """The active provider key uses non-prod storage with an MARR-only grant."""
     contract = load_host_secret_contract()
     monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
 
@@ -593,8 +593,8 @@ def test_typesafe_bws_binding_is_marr_only(
     ) == {"typesafe.api-key": _TYPESAFE_CANARY}
     assert contract.bws_identity(
         channel="dev", consumer="marr-server-dev", secret="typesafe.api-key"
-    ) == ("marr-dev", "dev/typesafe.api-key")
-    assert reader.calls == [("marr-dev", "dev/typesafe.api-key")]
+    ) == ("non-prod", "dev/typesafe.api-key")
+    assert reader.calls == [("non-prod", "dev/typesafe.api-key")]
     keychain_lookup = Mock(return_value=_TYPESAFE_CANARY)
     with pytest.raises(host_secret_bootstrap.HostSecretBootstrapError):
         host_secret_bootstrap.resolve_host_secret_values(
@@ -611,7 +611,7 @@ def test_typesafe_bws_binding_is_marr_only(
     assert contract.consumers_declared_for(channel="prod", secret="typesafe.api-key") == frozenset()
 
 
-def test_typesafe_key_consumer_bindings_are_separate(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_bws_reader_project_assignments_are_not_channel_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
     contract = load_host_secret_contract()
     payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text())
     assert contract.keychain_only_secrets == frozenset()
@@ -622,18 +622,17 @@ def test_typesafe_key_consumer_bindings_are_separate(monkeypatch: pytest.MonkeyP
         "dev": "non-prod", "test": "non-prod", "prod": "prod"
     }
     assert payload["bws"]["machine_accounts"] == {
-        "admin": ["non-prod", "prod", "marr-dev"],
-        "non-prod-reader": ["non-prod"],
-        "prod-reader": ["prod"],
-        "marr-server-dev-reader": ["marr-dev"],
+        "admin": ["non-prod", "prod"],
+        "non-prod-reader": ["non-prod", "prod"],
+        "prod-reader": ["non-prod", "prod"],
     }
     assert payload["keychain_only_secrets"] == []
     assert {item["logical_id"]: item["scope"] for item in payload["bws"]["identities"]}[
         "typesafe.api-key"
-    ] == "isolated"
+    ] == "channel"
     assert contract.bws_identity(
         channel="dev", consumer="marr-server-dev", secret="typesafe.api-key"
-    ) == ("marr-dev", "dev/typesafe.api-key")
+    ) == ("non-prod", "dev/typesafe.api-key")
 
 
 @pytest.mark.parametrize(
@@ -677,7 +676,7 @@ def test_typesafe_key_is_dev_only_and_agent_processes_cannot_resolve_it(
             bws_reader=reader,
             controller=HostSecretController(tmp_path / "controller"),
         ) == {"typesafe.api-key": _TYPESAFE_CANARY}
-        reader.lookup.assert_called_once_with("marr-dev", "dev/typesafe.api-key")
+        reader.lookup.assert_called_once_with("non-prod", "dev/typesafe.api-key")
         with pytest.raises(host_secret_bootstrap.HostSecretBootstrapError):
             host_secret_bootstrap.resolve_host_secret_values(
                 channel=channel, consumer=consumer, provider="keychain", keychain_lookup=lookup

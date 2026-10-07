@@ -50,10 +50,10 @@ class BwsReaderConfig:
     def from_marr_server_environment(
         cls, environment: Mapping[str, str]
     ) -> BwsReaderConfig:
-        """Build the MARR-only configuration; its token is fetched from Keychain."""
+        """Build the MARR configuration; its non-prod reader token is fetched from Keychain."""
         try:
             if (
-                environment["BWS_READER_PROJECT"] != "marr-dev"
+                environment["BWS_READER_PROJECT"] != "non-prod"
                 or any(
                     name in environment
                     for name in (
@@ -65,7 +65,7 @@ class BwsReaderConfig:
             ):
                 raise BwsLookupError()
             return cls(
-                "marr-dev",
+                "non-prod",
                 environment["BWS_PROJECT_ID"],
                 environment["BWS_ORGANIZATION_ID"],
                 None,
@@ -84,7 +84,7 @@ class BwsReaderConfig:
         except (ValueError, TypeError, AttributeError):
             valid_ids = False
         valid_marr = (
-            project == self.project == "marr-dev"
+            project == self.project == "non-prod"
             and self.token_source == "keychain"
             and self.credentials_directory is None
             and self.token_file is None
@@ -190,26 +190,16 @@ class BwsSecretReader:
             self.config.validate(project)
             # Even a direct caller cannot name an identity from a different channel/project.
             prefix, separator, logical_id = identity.partition("/")
-            from app.ops.host_secret_contract import (
-                BWS_IDENTITIES,
-                BWS_ISOLATED_IDENTITIES,
-                CHANNEL_PROJECTS,
-            )
+            from app.ops.host_secret_contract import BWS_IDENTITIES, CHANNEL_PROJECTS
 
             scope = BWS_IDENTITIES.get(logical_id)
-            valid_isolated_identity = (
-                scope == "isolated"
-                and BWS_ISOLATED_IDENTITIES.get(logical_id) == (project, identity)
-            )
             valid_channel_identity = (
                 scope == "channel" and CHANNEL_PROJECTS.get(prefix) == project
             )
             valid_shared_identity = scope == "shared" and prefix == "shared"
             if (
                 not separator
-                or not (valid_isolated_identity or valid_channel_identity or valid_shared_identity)
-                or (project == "marr-dev" and not valid_isolated_identity)
-                or (project != "marr-dev" and valid_isolated_identity)
+                or not (valid_channel_identity or valid_shared_identity)
             ):
                 raise BwsLookupError()
             if self.config.token_source == "keychain":

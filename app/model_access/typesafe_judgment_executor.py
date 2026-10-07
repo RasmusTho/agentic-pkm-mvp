@@ -105,7 +105,7 @@ class ProductTypeSafeExecutor:
         self._profile_path = profile_path
         self._adapter = adapter or TypeSafeAdapter()
         # This Keychain seam supplies the MARR BWS reader token only. The
-        # TypeSafe provider key comes from the isolated BWS project.
+        # TypeSafe provider key comes from the selected non-prod BWS project.
         self._keychain_lookup = keychain_lookup
         self._bws_reader = bws_reader
         self._secret_controller = secret_controller
