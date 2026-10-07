@@ -810,6 +810,8 @@ def test_unconfigured_capture_watch_does_not_block_or_start_with_deploy(
     (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
     env["FAKE_SHA"] = sha
     env["FAKE_DOCKER_FAIL_MATCH"] = " ps -q "
+    fitness_args = tmp_path / "fleet-model-fitness-args.txt"
+    env["FAKE_FLEET_MODEL_FITNESS_ARGS_FILE"] = str(fitness_args)
 
     result = _run_deploy(root, env, sha)
 
@@ -837,6 +839,23 @@ def test_unconfigured_capture_watch_does_not_block_or_start_with_deploy(
     )
     assert not any("ps -q heimdal-capture-watch" in event for event in events)
     assert (root / "ops/deployments/dev-latest.json").exists()
+    assert "--capture-watch-disabled" in fitness_args.read_text(encoding="utf-8")
+    assert "--capture-watch-configured" not in fitness_args.read_text(encoding="utf-8")
+
+
+def test_fleet_model_fitness_gate_passes_capture_configuration(tmp_path: Path) -> None:
+    root, env, _ = _deploy_harness(tmp_path)
+    sha = _commit_prefloor_successor(root, "capture watcher configured target")
+    env["FAKE_SHA"] = sha
+    fitness_args = tmp_path / "fleet-model-fitness-args.txt"
+    env["FAKE_FLEET_MODEL_FITNESS_ARGS_FILE"] = str(fitness_args)
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    args = fitness_args.read_text(encoding="utf-8")
+    assert "--capture-watch-configured" in args
+    assert "--capture-watch-disabled" not in args
 
 
 def test_unconfigured_capture_watch_stays_disabled_during_automatic_recovery(
