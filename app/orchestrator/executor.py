@@ -689,14 +689,22 @@ def _persisted_notification(
         ) from exc
     expected_event_id = _event_id(effect_id, "notification")
     expected_note_path = effect_result.get("note_path")
-    if (
-        not isinstance(expected_note_path, str)
-        or not expected_note_path
-        or not isinstance(authority_receipt, dict)
+    if not isinstance(expected_note_path, str) or not expected_note_path or not isinstance(
+        authority_receipt, dict
     ):
         raise _EffectReconciliationConflict(
             f"durable notification linkage is unavailable while recovering {effect_id}"
         )
+    receipt_trace_id = authority_receipt.get("trace_id")
+    if receipt_trace_id is not None and not isinstance(receipt_trace_id, str):
+        raise _EffectReconciliationConflict(
+            f"durable notification provenance is unavailable while recovering {effect_id}"
+        )
+    expected_trace_id = (
+        receipt_trace_id
+        if receipt_trace_id
+        else effect_id
+    )
     matched = False
     for record in records:
         if not isinstance(record, dict):
@@ -712,6 +720,13 @@ def _persisted_notification(
         if record.get("event") != _MCP_APPEND_EVENT or event_id != expected_event_id:
             raise _EffectReconciliationConflict(
                 f"known notification event for {effect_id} has inconsistent identity"
+            )
+        if (
+            record.get("source") != "orchestrator.runtime"
+            or record.get("trace_id") != expected_trace_id
+        ):
+            raise _EffectReconciliationConflict(
+                f"known notification event for {effect_id} has inconsistent provenance"
             )
         if (
             not isinstance(payload, dict)

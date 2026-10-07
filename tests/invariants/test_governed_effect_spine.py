@@ -996,6 +996,22 @@ def test_persisted_receipt_mutated_accountability_linkage_is_indeterminate(
                 receipt_id="forged-receipt"
             ),
         ),
+        (
+            "mismatched_source",
+            lambda event: event.update(source="forged.source"),
+        ),
+        (
+            "missing_source",
+            lambda event: event.pop("source"),
+        ),
+        (
+            "mismatched_trace_id",
+            lambda event: event.update(trace_id="forged-trace"),
+        ),
+        (
+            "missing_trace_id",
+            lambda event: event.pop("trace_id"),
+        ),
     ],
     ids=lambda value: value if isinstance(value, str) else None,
 )
