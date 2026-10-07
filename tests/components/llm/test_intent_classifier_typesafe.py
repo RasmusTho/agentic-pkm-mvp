@@ -34,7 +34,7 @@ from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
 @pytest.fixture
 def judgment_path(monkeypatch, tmp_path):
-    calls, sent, lookups = [], [], []
+    calls, sent, lookups, bws_lookups = [], [], [], []
     state = {"intent_class": "exploratory", "action_type": "unknown", "failure": None,
              "intent_confidence": 0.9, "action_confidence": 0.9, "probability": 0.9}
 
@@ -88,12 +88,19 @@ def judgment_path(monkeypatch, tmp_path):
         lookups.append((service, account))
         return "synthetic-test-credential"
 
+    class SyntheticBwsReader:
+        def lookup(self, project, identity):
+            bws_lookups.append((project, identity))
+            if (project, identity) != ("non-prod", "dev/typesafe.api-key"):
+                raise AssertionError("unexpected synthetic BWS identity")
+            return "synthetic-test-api-key"
+
     profile = tmp_path / "profile.json"
     profile.write_bytes(Path("config/model_access/product_typesafe_profile.json").read_bytes())
     executor = ProductTypeSafeExecutor(
         mode="accepted_dev", runtime_channel="dev", profile_path=profile,
         adapter=TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(provider)),
-        keychain_lookup=lookup,
+        keychain_lookup=lookup, bws_reader=SyntheticBwsReader(),
     )
     factory = ModelAccessAdapterFactory.from_declared_sources(
         adapters_path=Path("docs/settings/models/adapters.yaml"),
@@ -132,7 +139,14 @@ def judgment_path(monkeypatch, tmp_path):
         monkeypatch.setattr(classifier, "CodexRemoteTransport", lambda **kwargs: CodexRemoteTransport(
             **kwargs, transport=httpx.MockTransport(bridge),
         ))
-        yield SimpleNamespace(state=state, calls=calls, sent=sent, lookups=lookups, profile=profile)
+        yield SimpleNamespace(
+            state=state,
+            calls=calls,
+            sent=sent,
+            lookups=lookups,
+            bws_lookups=bws_lookups,
+            profile=profile,
+        )
 
 
 @pytest.fixture
@@ -171,7 +185,9 @@ def test_production_classifier_uses_marr_and_minimal_state(
     monkeypatch.setattr("app.components.llm.fabric.get_chat_client", lambda *a, **k: pytest.fail("generic chat"))
     response = canvas_path.client.post(canvas_path.url, json={"intent": "Compare two plans."})
     assert response.status_code == 200 and response.json()["status"] == "exploratory_no_edit"
-    assert len(judgment_path.sent) == len(judgment_path.calls) == len(judgment_path.lookups) == 1
+    assert len(judgment_path.sent) == len(judgment_path.calls) == 1
+    assert judgment_path.bws_lookups == [("non-prod", "dev/typesafe.api-key")]
+    assert judgment_path.lookups == []
     assert judgment_path.sent[0].url.path == "/v1/judgment"
     neutral = json.loads(judgment_path.sent[0].content)
     wire = json.loads(judgment_path.calls[0].content)
@@ -183,6 +199,15 @@ def test_production_classifier_uses_marr_and_minimal_state(
     assert canvas_path.note.read_text() == canvas_path.original
     assert "Private body" not in judgment_path.sent[0].content.decode()
     assert "authorization" not in judgment_path.sent[0].headers
+
+
+def test_intent_fixture_uses_synthetic_bws_reader(judgment_path, canvas_path):
+    response = canvas_path.client.post(canvas_path.url, json={"intent": "Compare two plans."})
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "exploratory_no_edit"
+    assert judgment_path.bws_lookups == [("non-prod", "dev/typesafe.api-key")]
+    assert judgment_path.lookups == []
 
 
 def test_typesafe_input_allowlist_and_size_limit(judgment_path, canvas_path):
