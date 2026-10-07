@@ -184,12 +184,27 @@ class OrchestratorV2:
         execution_order: List[str] = []  # Track completion order for reverse compensation
         results: List[Dict[str, Any]] = []
         failed_step_id: str | None = None
+        governed_write_grants: dict[str, GovernedWriteGrant] = {}
 
         # Attempt to load checkpoint for resume
         checkpoint = self._load_checkpoint(plan)
         if checkpoint:
             completed_steps = set(checkpoint.get("completed_steps", []))
             plan_results = checkpoint.get("step_results", {})
+            # Checkpoints persist completed step results, but the in-memory GOV
+            # grant map is intentionally rebuilt for every process. Reissue a
+            # completed authority step whenever its effect is still pending so
+            # the effect can never run with an empty or unvalidated grant map.
+            for step in plan.steps:
+                effect_step_id = step.metadata.get("append_effect_step_id")
+                if (
+                    step.step_class == "authority_check"
+                    and isinstance(effect_step_id, str)
+                    and step.id in completed_steps
+                    and effect_step_id not in completed_steps
+                ):
+                    completed_steps.remove(step.id)
+                    plan_results.pop(step.id, None)
             # Add checkpoint results to the results list with "ok" status (not "resumed")
             # to ensure consistent status handling for rollback and compensation
             for step_id in completed_steps:
@@ -205,7 +220,6 @@ class OrchestratorV2:
         # tool_timeout_seconds (in-flight cancellation is a known, separately
         # tracked gap).
         budget_state: MutableMapping[str, int] = {"steps": 0, "tool_calls": 0}
-        governed_write_grants: dict[str, GovernedWriteGrant] = {}
         max_steps = _coerce_int(context_tool_settings.get("max_steps")) if context_tool_settings else None
         deadline = time.monotonic() + plan_timeout
 

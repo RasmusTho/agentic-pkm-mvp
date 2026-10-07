@@ -13,6 +13,7 @@ from app.governance.governed_write import GovernedWriteAdapter
 from app.mcp.vault_tools import append_note as production_append_note
 from app.orchestrator.executor import MockPlanExecutor, StepContext, StepExecutionError
 from app.orchestrator.runtime import Orchestrator
+from app.orchestrator.v2_runtime import OrchestratorV2
 from app.planner.provider import build_vault_append_steps
 from app.planner.schema import Plan, PlanMetadata
 from app.services.outbox import append_jsonl_record
@@ -249,6 +250,68 @@ def test_partial_failure_reconciles_without_duplicate_mutation(
     assert len(append_calls) == 1
     assert results[1]["result"]["result"]["authority_receipt"]["outcome"] == "applied"
     assert write_attempts == (3 if failure_stage == "notification" else 3)
+
+
+def test_v2_checkpoint_resume_restores_authority_for_partial_append_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A saved V2 authority step must not leave its resumed append ungated."""
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    append_calls: list[Path] = []
+    write_attempts = 0
+
+    def append_note(**kwargs: Any) -> Path:
+        note_path = production_append_note(**kwargs)
+        append_calls.append(note_path)
+        return note_path
+
+    def write_events(path: Path, records: list[Any]) -> None:
+        nonlocal write_attempts
+        write_attempts += 1
+        if write_attempts == 1:
+            raise OSError("injected authority receipt persistence failure")
+        for record in records:
+            append_jsonl_record(path, record.model_dump(mode="json"), require_event_id=True)
+
+    class CheckpointMemory:
+        data: dict[str, Any] | None = None
+
+        def save_checkpoint(self, _key: str, checkpoint: dict[str, Any]) -> None:
+            self.data = checkpoint
+
+        def load_checkpoint(self, _key: str) -> dict[str, Any] | None:
+            return self.data
+
+    monkeypatch.setattr(executor_module, "is_policy_enforced", lambda: False)
+    monkeypatch.setattr(executor_module, "assert_tool_allowed", lambda *_: None)
+    monkeypatch.setattr(executor_module.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda *_: None)
+    monkeypatch.setattr(executor_module, "append_note", append_note)
+    monkeypatch.setattr(executor_module, "_write_outbox_events", write_events)
+
+    checkpoint_store = CheckpointMemory()
+    orchestrator = OrchestratorV2(
+        checkpoint_store=checkpoint_store,
+        checkpoint_interval=1,
+        max_workers=1,
+        tool_settings={"mcp_vault_enable": True, "vault_root": str(tmp_path)},
+    )
+
+    initial = orchestrator.run_plan(_plan())
+    assert next(entry for entry in initial if entry["step_id"] == "append")["status"] == "error"
+    assert checkpoint_store.data is not None
+    saved_authority = checkpoint_store.data["step_results"]["append-authority"]
+    original_token_id = saved_authority["governed_write"]["decision_token"]["token_id"]
+
+    resumed = orchestrator.run_plan(_plan())
+    append_result = next(entry for entry in resumed if entry["step_id"] == "append")
+    assert append_result["status"] == "ok"
+    assert append_result["result"]["result"]["decision_token"]["token_id"] == original_token_id
+    assert len(append_calls) == 1
+    assert len(list((tmp_path / "_mcp").glob("*.md"))) == 1
+    assert write_attempts == 3
 
 
 def test_restart_reconciliation_uses_environment_vault_root_after_hints_clear(
