@@ -696,7 +696,11 @@ class OwnershipLedger:
                 if (
                     binding_id != lease.vault_binding_id
                     or lease.state != "active"
-                    or not self._has_authenticated_stored_identity(lease, key)
+                    or not self._has_authenticated_stored_identity(
+                        lease,
+                        key,
+                        require_path_ancestors=not require_materialized_roots,
+                    )
                     or (
                         require_materialized_roots
                         and not self._has_complete_self_identity(lease, key)
@@ -768,7 +772,11 @@ class OwnershipLedger:
                 if (
                     binding_id != retired.vault_binding_id
                     or retired.state != "retired"
-                    or not self._has_authenticated_stored_identity(retired, key)
+                    or not self._has_authenticated_stored_identity(
+                        retired,
+                        key,
+                        require_path_ancestors=not require_materialized_roots,
+                    )
                     or (
                         require_materialized_roots
                         and not self._has_complete_self_identity(retired, key)
@@ -818,7 +826,9 @@ class OwnershipLedger:
                     or source.ancestor_fingerprints != item.ancestor_fingerprints
                     or destination.ancestor_fingerprints != item.ancestor_fingerprints
                     or not self._has_authenticated_stored_identity(
-                        lineage_lease, key
+                        lineage_lease,
+                        key,
+                        require_path_ancestors=not require_materialized_roots,
                     )
                     or (
                         require_materialized_roots
@@ -840,11 +850,28 @@ class OwnershipLedger:
                 raise LedgerError(
                     "registry/ledger consistency requires one live lease per registration"
                 )
+            channel_live_owner_roots = {
+                owner.vault_binding_id: owner.root
+                for owner in global_live_owners
+                if owner.channel_id == channel_id
+            }
             for binding_id, root in registrations.items():
                 lease = channel_leases[binding_id]
+                owner_root = channel_live_owner_roots.get(binding_id, root)
                 if (
                     lease.state != "active"
                     or lease.vault_binding_id != binding_id
+                    or (
+                        not require_materialized_roots
+                        and (
+                            owner_root is None
+                            or not self._sealed_root_matches_path(
+                                lease,
+                                owner_root,
+                                key,
+                            )
+                        )
+                    )
                     or (
                         require_materialized_roots
                         and (
@@ -873,6 +900,17 @@ class OwnershipLedger:
                 if (
                     retired.state != "retired"
                     or retired.vault_binding_id != binding_id
+                    or (
+                        not require_materialized_roots
+                        and (
+                            root is None
+                            or not self._sealed_root_matches_path(
+                                retired,
+                                root,
+                                key,
+                            )
+                        )
+                    )
                     or (
                         require_materialized_roots
                         and (
@@ -925,11 +963,11 @@ class OwnershipLedger:
                 raise LedgerError(
                     "registry/ledger consistency requires matching transfer lineage"
                 )
-            roots = dict(registrations) | dict(tombstones)
+            roots = dict(registrations) | channel_live_owner_roots | dict(tombstones)
             for identity, item in ledger_lineage.items():
                 destination_binding_id = identity[-1]
                 destination_root = roots.get(destination_binding_id)
-                if require_materialized_roots and destination_root is None:
+                if destination_root is None:
                     raise LedgerError(
                         "registry/ledger consistency lineage has no destination root"
                     )
@@ -952,6 +990,24 @@ class OwnershipLedger:
                     raise LedgerError(
                         "registry/ledger consistency found an incompatible lineage fingerprint"
                     )
+                if not require_materialized_roots:
+                    source = current.tombstones.get(identity[2])
+                    if (
+                        source is None
+                        or not self._sealed_root_matches_path(
+                            lineage_lease,
+                            destination_root,
+                            key,
+                        )
+                        or not self._sealed_root_matches_path(
+                            source,
+                            destination_root,
+                            key,
+                        )
+                    ):
+                        raise LedgerError(
+                            "registry/ledger consistency found an incompatible lineage path"
+                        )
             if completed_legacy_journal is not None and not self._legacy_migration_matches_current(
                 completed_legacy_journal,
                 key,
@@ -1828,12 +1884,16 @@ class OwnershipLedger:
         self,
         lease: OwnershipLease,
         key: _KeyMaterial,
+        *,
+        require_path_ancestors: bool = False,
     ) -> bool:
         """Authenticate stored identity fields without opening the content root."""
 
         try:
             root = Path(self._open_root(lease.sealed_root, key))
-        except (LedgerError, UnicodeError, ValueError):
+            if require_path_ancestors:
+                root = root.expanduser().resolve(strict=False)
+        except (LedgerError, UnicodeError, ValueError, OSError, RuntimeError):
             return False
         fingerprints = (lease.root_fingerprint, *lease.ancestor_fingerprints)
         return (
@@ -1844,7 +1904,35 @@ class OwnershipLedger:
                 and all(character in "0123456789abcdef" for character in value)
                 for value in fingerprints
             )
+            and (
+                not require_path_ancestors
+                or (
+                    len(lease.ancestor_fingerprints) == len(root.parents)
+                    and sorted(lease.ancestor_fingerprints)
+                    == sorted(
+                        _fingerprint(f"path:{ancestor}", key.secret)
+                        for ancestor in root.parents
+                    )
+                )
+            )
         )
+
+    def _sealed_root_matches_path(
+        self,
+        lease: OwnershipLease,
+        expected_root: Path,
+        key: _KeyMaterial,
+    ) -> bool:
+        """Compare an authenticated locator to a registry path without statting it."""
+
+        try:
+            stored_root = Path(self._open_root(lease.sealed_root, key)).expanduser().resolve(
+                strict=False
+            )
+            registry_root = Path(expected_root).expanduser().resolve(strict=False)
+        except (LedgerError, UnicodeError, ValueError, OSError, RuntimeError):
+            return False
+        return stored_root.is_absolute() and stored_root == registry_root
 
     def _lease_for_root(
         self,

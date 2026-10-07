@@ -3313,6 +3313,7 @@ def _prepare_legacy_registry_for_mvr05_floor(
     inventory_path: Path,
     quiescence_proof: DeploymentQuiescenceProof | None,
     inventory_sha256: str | None = None,
+    require_populated_registry_consistency: bool = False,
 ) -> RegistrySnapshot:
     """Finish dormant legacy import while the MVR-05 fence is still held."""
 
@@ -3320,10 +3321,18 @@ def _prepare_legacy_registry_for_mvr05_floor(
 
     snapshot = registry.load()
     if snapshot.revision != 0:
-        if (
+        requires_legacy_retired_evidence = (
             ledger.path.is_file()
             and ledger.key_path.is_file()
             and ledger.needs_fenced_registry_consistency()
+        )
+        if (
+            ledger.path.is_file()
+            and ledger.key_path.is_file()
+            and (
+                requires_legacy_retired_evidence
+                or require_populated_registry_consistency
+            )
         ):
             if quiescence_proof is None:
                 raise InstanceStatePreflightError(
@@ -3345,27 +3354,28 @@ def _prepare_legacy_registry_for_mvr05_floor(
                 require_explicit_binding=True,
                 retired_owners_out=populated_registry_retired_owners,
             )
-            expected_retired = {
-                (
-                    channel,
-                    binding_id,
-                    str(Path(item.path).expanduser().resolve(strict=False)),
-                )
-                for binding_id, item in snapshot.removal_tombstones.items()
-            }
-            actual_retired = {
-                (
-                    owner.channel_id,
-                    owner.vault_binding_id,
-                    str(owner.root.expanduser().resolve(strict=False)),
-                )
-                for owner in populated_registry_retired_owners
-                if owner.channel_id == channel
-            }
-            if actual_retired != expected_retired:
-                raise InstanceStatePreflightError(
-                    "legacy-owner inventory tombstones do not match the registered channel"
-                )
+            if requires_legacy_retired_evidence:
+                expected_retired = {
+                    (
+                        channel,
+                        binding_id,
+                        str(Path(item.path).expanduser().resolve(strict=False)),
+                    )
+                    for binding_id, item in snapshot.removal_tombstones.items()
+                }
+                actual_retired = {
+                    (
+                        owner.channel_id,
+                        owner.vault_binding_id,
+                        str(owner.root.expanduser().resolve(strict=False)),
+                    )
+                    for owner in populated_registry_retired_owners
+                    if owner.channel_id == channel
+                }
+                if actual_retired != expected_retired:
+                    raise InstanceStatePreflightError(
+                        "legacy-owner inventory tombstones do not match the registered channel"
+                    )
             _converge_authenticated_legacy_ledger(
                 channel=channel,
                 registry=snapshot,
@@ -5124,7 +5134,10 @@ def main(argv: list[str] | None = None) -> int:
                 # ledger must be checked against the exact registered owners.
                 registry_snapshot = registry.load()
                 fence_plan = load_mvr05_fence_plan(args.fence_plan)
-                validate_mvr05_runtime_floor(registry_snapshot, fence_plan)
+                floor_already_recorded = validate_mvr05_runtime_floor(
+                    registry_snapshot,
+                    fence_plan,
+                )
                 quiescence_proof = None
                 needs_fenced_registry_consistency = registry_snapshot.revision == 0 and (
                     args.legacy_path.is_file()
@@ -5137,6 +5150,7 @@ def main(argv: list[str] | None = None) -> int:
                 ):
                     needs_fenced_registry_consistency = (
                         ledger.needs_fenced_registry_consistency()
+                        or not floor_already_recorded
                     )
                 if needs_fenced_registry_consistency:
                     quiescence_proof = _load_deployment_quiescence_proof(
@@ -5151,6 +5165,10 @@ def main(argv: list[str] | None = None) -> int:
                     inventory_path=args.inventory_path,
                     quiescence_proof=quiescence_proof,
                     inventory_sha256=args.inventory_sha256,
+                    require_populated_registry_consistency=(
+                        registry_snapshot.revision != 0
+                        and not floor_already_recorded
+                    ),
                 )
                 ledger.require_existing()
                 result = record_mvr05_runtime_floor(
