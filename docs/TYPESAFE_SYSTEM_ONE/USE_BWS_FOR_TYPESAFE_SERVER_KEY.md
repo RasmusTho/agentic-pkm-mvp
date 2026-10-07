@@ -37,7 +37,7 @@ Keep the rotated TypeSafe provider key in Bitwarden and let only the existing MA
 
 - [ ] The host-secret contract permits `typesafe.api-key` only for `dev/marr-server-dev`, maps it to `non-prod/dev/typesafe.api-key`, and preserves the MARR-only runtime grant; reader project scope does not alter the code-level consumer allowlist.
   - Verify: `tests/ops/test_host_secret_contract.py::test_typesafe_key_uses_non_prod_project_and_marr_only_consumer`
-- [ ] The production MARR startup path reads the BWS token only from the declared Keychain entry, resolves exactly the isolated TypeSafe key, and never places either credential in Product or Builder caller environments or receipts.
+- [ ] The production MARR startup path reads the BWS token only from the declared Keychain entry, resolves exactly the channel-selected TypeSafe key, and never places either credential in Product or Builder caller environments or receipts.
   - Verify: `tests/ops/test_host_secret_bootstrap.py::test_typesafe_bws_lookup_uses_non_prod_project_and_reader_token`
   - Verify: `tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy`
 - [ ] Missing, malformed, ambiguous, or out-of-scope BWS credentials/items fail before Jev dispatch, without Keychain fallback, credential disclosure, or a second inference attempt.
@@ -57,7 +57,7 @@ Keep the rotated TypeSafe provider key in Bitwarden and let only the existing MA
 
 ## Out of Scope
 
-- Creating or purchasing a Bitwarden subscription, upgrading a plan, or using a shared Linux reader for the TypeSafe key.
+- Creating or purchasing a Bitwarden subscription, upgrading a plan, or changing the accepted shared Linux reader scope for the TypeSafe key.
 - Live BWS project/account creation, secret import/provisioning, MARR token installation, TypeSafe API calls, key rotation, or Product/Builder route activation.
 - Product or Builder caller credentials, policy, or profile ownership changes; generic chat/completion; direct-agent Jev calls; and changing Yggdrasil's default model.
 
