@@ -305,7 +305,14 @@ def test_v2_checkpoint_resume_restores_authority_for_partial_append_recovery(
     saved_authority = checkpoint_store.data["step_results"]["append-authority"]
     original_token_id = saved_authority["governed_write"]["decision_token"]["token_id"]
 
-    resumed = orchestrator.run_plan(_plan())
+    executor_module._EFFECT_PATH_HINTS.clear()
+    executor_module._EFFECT_ROOT_HINTS.clear()
+    resumed = OrchestratorV2(
+        checkpoint_store=checkpoint_store,
+        checkpoint_interval=1,
+        max_workers=1,
+        tool_settings={"mcp_vault_enable": True, "vault_root": str(tmp_path)},
+    ).run_plan(_plan())
     append_result = next(entry for entry in resumed if entry["step_id"] == "append")
     assert append_result["status"] == "ok"
     assert append_result["result"]["result"]["decision_token"]["token_id"] == original_token_id
