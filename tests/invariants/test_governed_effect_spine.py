@@ -1477,6 +1477,7 @@ def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
 
     # The configured DB source is healthy but empty on recovery, so first-time
     # reconciliation remains allowed to emit the missing receipt.
+    outbox_path.touch()
     monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: [])
     recovered = reconcile_pending_disposition_receipt(vault, draft.draft_id)
     assert recovered.decision == "promote"
@@ -1566,12 +1567,13 @@ def test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavail
         AuthorityReceiptPersistenceError,
         match="configured DB receipt source is unavailable",
     ):
+        outbox_path.touch()
         reconcile_pending_disposition_receipt(vault, draft.draft_id)
 
     terminal = read_draft(vault, draft.draft_id)
     assert terminal is not None and terminal.status == DRAFT_STATUS_PROMOTED
     assert len(writes) == 1
-    assert not outbox_path.exists()
+    assert outbox_path.read_text(encoding="utf-8") == ""
 
 
 @pytest.mark.parametrize(

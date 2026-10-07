@@ -147,8 +147,8 @@ note-write and concurrency contract follows
       resource bindings all match the terminal draft, after the shared GOV adapter validates the
       persisted original authorization. It rejects a nested state-owner receipt whose outcome or
       writer identity is wrong and discovers a durable DB-only receipt before reconstructing one.
-      If a configured DB receipt source is unreadable while JSONL is absent, reconciliation fails
-      closed instead of treating the source as empty; a healthy empty source still permits valid
+      If a configured DB receipt source is unreadable, reconciliation fails closed even when an
+      existing JSONL source is empty; a complete readable empty source still permits valid
       first-time recovery.
       OEF findings, traces, and WriteGuard health do not supply authorization or accountability.
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`

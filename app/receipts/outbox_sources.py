@@ -15,13 +15,18 @@ def read_receipt_source_records(*, outbox_path: Path | None = None) -> list[dict
     """Read receipt-supporting source records from configured durable/audit sources.
 
     ``None`` means no source is available. An empty list means a source is
-    connected and contains no readable records.
+    connected and contains no readable records. When the configured database
+    source cannot be read, return ``None`` even if JSONL is readable: a
+    partial view must not be treated as an empty authoritative source.
     """
 
     source_available = False
     records: list[dict[str, Any]] = []
 
+    db_configured = _db_outbox_configured()
     db_records = _read_db_outbox_records()
+    if db_configured and db_records is None:
+        return None
     if db_records is not None:
         source_available = True
         records.extend(db_records)
