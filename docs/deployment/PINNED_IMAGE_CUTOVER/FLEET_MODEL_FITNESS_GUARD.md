@@ -19,10 +19,11 @@ The epic's identity claims ("test and prod no longer share a code source", "the 
 
 - Adds a read-only guard `app/release_channels/fleet_model_fitness.py` (sibling of `prod_ref_fitness.py`) that, for a named channel, inspects the live containers and reports:
   - **Model detection** — whether the channel's app services run with a repo `/app` bind-mount (checkout model) or from an image only (pinned-image model). Pre-cutover channels report `model=checkout` as information, not failure — the guard is honest, not aspirational.
-  - **Pin match (pinned-image mode)** — every app-code service (`api`, `worker`, `watcher`, `heimdal-capture-watch`) runs the image tag recorded in `config/deploy/<channel>.env`, and the channel API's `/version` `git_sha` equals that pin.
+  - **Pin match (pinned-image mode)** — every selected app-code service runs the image tag recorded in `config/deploy/<channel>.env`, and the channel API's `/version` `git_sha` equals that pin. `api`, `worker`, and `watcher` are always selected; `heimdal-capture-watch` is selected only when `HEIMDAL_CAPTURE_WATCH_DIR` is non-empty.
   - **No half-deployed state** — API and gateway report the same SHA (the §Gateways-as-managed-units lockstep rule); a version-diverged gateway is a FAIL.
   - **Gateway unit liveness** — the channel's managed gateway unit is up and its `/healthz` responds.
 - Embeds the guard verdict in the deploy receipt written by `scripts/deploy_channel.sh` (the `ops/deployments/<channel>-latest.json` receipt gains a `fleet_model_fitness` block) — this recorded PASS is the **cutover receipt** that README INV-2 and the promotion-workflow model switch (CUTOVER-01) key on.
+- The deploy path passes its validated capture-watch state into the guard. A direct guard call without an explicit state reads only whether `HEIMDAL_CAPTURE_WATCH_DIR` is non-empty in the API container's resolved environment; it never emits the value.
 - Wires the guard into the `verify-promotion` skill's check list so every post-promotion verification asserts the fleet model, catching regressions on every subsequent deploy, not only at cutover.
 
 ## Concretely
@@ -31,9 +32,10 @@ The epic's identity claims ("test and prod no longer share a code source", "the 
 # On the runtime host (read-only):
 python -m app.release_channels.fleet_model_fitness prod
 # → model=pinned-image | checkout
-#   pinned-image mode: PASS only if no /app repo bind-mount on app services,
+#   pinned-image mode: PASS only if no /app repo bind-mount on selected app services,
 #   image tag == config/deploy/prod.env APP_IMAGE_TAG == /version git_sha,
 #   gateway up + same SHA. Any mismatch → non-zero exit naming the divergent service.
+# The direct call derives optional capture-watch enablement from the API container.
 ```
 
 ## Why This Matters
@@ -42,8 +44,13 @@ Without a live-fleet predicate, "cut over" is a claim in a receipt, not a proper
 
 ## Acceptance Criteria
 
-- [ ] In pinned-image mode the guard fails, naming the service, when any app-code service carries a repo `/app` bind-mount.
+- [ ] In pinned-image mode the guard fails, naming the service, when any selected app-code service carries a repo `/app` bind-mount.
   - Verify: `tests/deploy/test_fleet_model_fitness.py::test_bind_mount_in_pinned_mode_fails_naming_service`
+- [ ] When capture is disabled, a missing capture watcher does not block fitness; when configured, it remains required and must match the pin.
+  - Verify: `tests/deploy/test_fleet_model_fitness.py::test_unconfigured_capture_watch_is_optional`
+  - Verify: `tests/deploy/test_fleet_model_fitness.py::test_configured_capture_watch_remains_required`
+- [ ] A direct guard call derives capture-watch enablement from the API container environment.
+  - Verify: `tests/deploy/test_fleet_model_fitness.py::test_direct_guard_infers_capture_from_api_env`
 - [ ] In pinned-image mode the guard fails when the running image tag, the channel pin file, and `/version` `git_sha` are not all equal, and when API and gateway SHAs diverge.
   - Verify: `tests/deploy/test_fleet_model_fitness.py::test_pin_version_and_gateway_sha_must_agree`
 - [ ] A checkout-model channel reports `model=checkout` informatively without failing, so the guard is adoptable fleet-wide before the cutover.

@@ -1415,7 +1415,13 @@ version_gate() {
 
 fleet_model_fitness_gate() {
   local receipt_json rc=0
-  receipt_json="$("${PYTHON}" -m app.release_channels.fleet_model_fitness "${channel}" --root "${ROOT}" --json --require-pinned)" || rc=$?
+  local -a fitness_args=("${channel}" --root "${ROOT}" --json --require-pinned)
+  if [ "${CAPTURE_WATCH_CONFIGURED}" = "1" ]; then
+    fitness_args+=(--capture-watch-configured)
+  else
+    fitness_args+=(--capture-watch-disabled)
+  fi
+  receipt_json="$("${PYTHON}" -m app.release_channels.fleet_model_fitness "${fitness_args[@]}")" || rc=$?
   if [ "${rc}" -ne 0 ]; then
     echo "fleet-model fitness gate failed" >&2
     if [ -n "${receipt_json}" ]; then

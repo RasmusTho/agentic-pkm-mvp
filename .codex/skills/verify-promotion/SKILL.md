@@ -57,6 +57,12 @@ Every post-promotion verification must run the live fleet-model guard:
 python -m app.release_channels.fleet_model_fitness prod --json
 ```
 
+The guard always checks `api`, `worker`, `watcher`, and the gateway. Capture-watch is required only
+when `HEIMDAL_CAPTURE_WATCH_DIR` is non-empty in the running API container's resolved environment;
+the direct guard reads only that configured/unconfigured state and never prints the value. The
+deployment path passes its preflighted state explicitly. A configured capture watcher that is
+missing or unhealthy remains a verification failure.
+
 `model=checkout` is an allowed informational result before prod has a pinned-image cutover receipt.
 In pinned-image mode, the guard is a required FAIL/PASS check: it must fail on any repo `/app`
 bind-mount, channel pin vs running tag vs `/version` or `/api/health.version` divergence, API/gateway
