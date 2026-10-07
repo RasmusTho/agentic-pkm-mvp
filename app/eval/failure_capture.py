@@ -814,6 +814,47 @@ def reject_draft(
     )
 
 
+def _validated_reconciliation_grant(
+    draft: DraftEvalCase,
+    *,
+    action: str,
+    resource: str,
+) -> GovernedWriteGrant:
+    """Validate the original persisted GOV authorization before recovery."""
+    if draft.policy_decision is None or draft.decision_token is None:
+        raise AuthorityReceiptPersistenceError(
+            "receipt reconciliation requires the original GOV authorization"
+        )
+    if (
+        draft.policy_decision.status != "approved"
+        or draft.policy_decision.source != "human_review"
+        or draft.policy_decision.decision_id != draft.decision_token.decision_id
+        or draft.policy_decision.actor != draft.decided_by
+        or draft.policy_decision.action != action
+        or draft.policy_decision.write_class != EVAL_DRAFT_DISPOSITION_WRITE_CLASS
+        or draft.policy_decision.resource != resource
+    ):
+        raise AuthorityReceiptPersistenceError(
+            "persisted eval draft GOV authorization does not match the terminal draft"
+        )
+    try:
+        token = _GOVERNED_WRITE_ADAPTER.validate_decision_token(
+            decision_token=draft.decision_token,
+            action=action,
+            write_class=EVAL_DRAFT_DISPOSITION_WRITE_CLASS,
+            actor=draft.decided_by or "",
+            resource=resource,
+        )
+    except Exception as exc:
+        raise PromotionDecisionError(
+            f"GOV refused eval draft receipt reconciliation: {exc}"
+        ) from exc
+    return GovernedWriteGrant(
+        policy_decision=draft.policy_decision,
+        decision_token=token,
+    )
+
+
 def reconcile_pending_disposition_receipt(
     vault_root: Path,
     draft_id: str,
@@ -835,6 +876,12 @@ def reconcile_pending_disposition_receipt(
             "receipt reconciliation requires a terminal draft with reviewer provenance"
         )
     rel_path = draft.draft_path or _safe_rel_path(str(_draft_path(vault_root, draft_id)))
+    action = f"{EVAL_DRAFT_DISPOSITION_ACTION_PREFIX}.{decision}"
+    grant = _validated_reconciliation_grant(
+        draft,
+        action=action,
+        resource=rel_path,
+    )
     disposition_id = _disposition_id(
         draft_id=draft_id,
         decision=decision,
@@ -846,7 +893,6 @@ def reconcile_pending_disposition_receipt(
     )
     if persisted is not None:
         existing, payload = persisted
-        expected_action = f"{EVAL_DRAFT_DISPOSITION_ACTION_PREFIX}.{decision}"
         persisted_policy = _parse_persisted_policy_decision(
             payload.get("policy_decision")
         )
@@ -861,13 +907,13 @@ def reconcile_pending_disposition_receipt(
             or payload.get("disposition_id") != disposition_id
             or payload.get("draft_id") != draft_id
             or payload.get("decision") != decision
-            or persisted_policy != draft.policy_decision
-            or persisted_token != draft.decision_token
+            or persisted_policy != grant.policy_decision
+            or persisted_token != grant.decision_token
             or existing.outcome != "applied"
-            or existing.decision_id != draft.policy_decision.decision_id
-            or existing.decision_token_id != draft.decision_token.token_id
+            or existing.decision_id != grant.policy_decision.decision_id
+            or existing.decision_token_id != grant.decision_token.token_id
             or existing.actor != draft.decided_by
-            or existing.action != expected_action
+            or existing.action != action
             or existing.write_class != EVAL_DRAFT_DISPOSITION_WRITE_CLASS
             or existing.resource != rel_path
             or existing.operation != "write_note"
@@ -892,40 +938,6 @@ def reconcile_pending_disposition_receipt(
             authority_receipt=existing,
         )
 
-    action = f"{EVAL_DRAFT_DISPOSITION_ACTION_PREFIX}.{decision}"
-    if draft.policy_decision is None or draft.decision_token is None:
-        raise AuthorityReceiptPersistenceError(
-            "receipt reconciliation requires the original GOV authorization"
-        )
-    if (
-        draft.policy_decision.status != "approved"
-        or draft.policy_decision.source != "human_review"
-        or draft.policy_decision.decision_id != draft.decision_token.decision_id
-        or draft.policy_decision.actor != draft.decided_by
-        or draft.policy_decision.action != action
-        or draft.policy_decision.write_class != EVAL_DRAFT_DISPOSITION_WRITE_CLASS
-        or draft.policy_decision.resource != rel_path
-    ):
-        raise AuthorityReceiptPersistenceError(
-            "persisted eval draft GOV authorization does not match the terminal draft"
-        )
-    try:
-        token = _GOVERNED_WRITE_ADAPTER.validate_decision_token(
-            decision_token=draft.decision_token,
-            action=action,
-            write_class=EVAL_DRAFT_DISPOSITION_WRITE_CLASS,
-            actor=draft.decided_by,
-            resource=rel_path,
-        )
-    except Exception as exc:
-        raise PromotionDecisionError(
-            f"GOV refused eval draft receipt reconciliation: {exc}"
-        ) from exc
-    grant = GovernedWriteGrant(
-        policy_decision=draft.policy_decision,
-        decision_token=token,
-    )
-
     # The terminal note is the durable state-owner result. Reconciliation
     # maps it to the existing receipt shape without repeating the mutation.
     mutation_receipt = WriteReceipt(
@@ -938,7 +950,7 @@ def reconcile_pending_disposition_receipt(
         outcome="written",
     )
     authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
-        decision_token=token,
+        decision_token=grant.decision_token,
         mutation_receipt=mutation_receipt,
         state_owner=EVAL_DRAFT_STATE_OWNER,
         resource=rel_path,
