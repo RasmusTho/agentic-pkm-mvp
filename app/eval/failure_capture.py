@@ -30,6 +30,12 @@ case to a golden dataset or fixture. Integration into
 `docs/eval/classification_golden.yaml` or a topic-schema fixture is a separate,
 reviewed code change. Until a decision is recorded the draft remains pending.
 
+If a status mutation succeeds while both configured receipt sinks reject the
+AuthorityReceipt, :func:`reconcile_pending_disposition_receipt` explicitly
+reconciles the durable terminal draft through the same GOV and outbox seams;
+it never mutates the draft status a second time and withholds success until a
+receipt event is durable.
+
 Deliberate divergence from "reuse the existing queue surface"
 -------------------------------------------------------------
 
@@ -69,6 +75,7 @@ Spec: docs/RUNTIME_CORRECTNESS_KERNEL/FAILURE_TO_EVAL_CAPTURE_LOOP.md
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -86,12 +93,14 @@ from app.governance.governed_write import (
 )
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.locators import make_note_locator
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
     append_jsonl_outbox_event,
     coerce_outbox_event,
     derive_idempotency_key,
+    read_jsonl_outbox_records,
     write_outbox_event,
 )
 
@@ -563,8 +572,47 @@ def _resolve_outbox_path() -> Path:
     return Path(INDEX_OUTBOX_PATH)
 
 
+def _disposition_id(*, draft_id: str, decision: str, decided_at: str) -> str:
+    """Return the stable identity for one terminal draft disposition."""
+    if not decided_at:
+        raise AuthorityReceiptPersistenceError(
+            "cannot reconcile eval draft disposition without decided_at"
+        )
+    seed = f"{draft_id}\x00{decision}\x00{decided_at}".encode("utf-8")
+    return f"eval-disposition-{hashlib.sha256(seed).hexdigest()}"
+
+
+def _read_persisted_disposition_receipt(
+    *,
+    disposition_id: str,
+    outbox_path: Path,
+) -> AuthorityReceipt | None:
+    """Read an existing receipt event without mutating the JSONL sink."""
+    records = read_jsonl_outbox_records(outbox_path, read_only=True)
+    for record in records:
+        if (
+            record.get("event") != EVAL_DRAFT_DISPOSITION_EVENT
+            or record.get("event_id") != disposition_id
+        ):
+            continue
+        payload = record.get("payload")
+        raw_receipt = payload.get("authority_receipt") if isinstance(payload, dict) else None
+        if not isinstance(raw_receipt, dict):
+            raise AuthorityReceiptPersistenceError(
+                "eval draft disposition receipt event is malformed"
+            )
+        try:
+            return AuthorityReceipt(**raw_receipt)
+        except (TypeError, ValueError) as exc:
+            raise AuthorityReceiptPersistenceError(
+                "eval draft disposition receipt event is invalid"
+            ) from exc
+    return None
+
+
 def _governed_disposition_payload(
     *,
+    disposition_id: str,
     draft_id: str,
     decision: str,
     grant: GovernedWriteGrant,
@@ -575,6 +623,7 @@ def _governed_disposition_payload(
     from dataclasses import asdict
 
     return {
+        "disposition_id": disposition_id,
         "draft_id": draft_id,
         "decision": decision,
         "policy_decision": asdict(grant.policy_decision),
@@ -586,6 +635,7 @@ def _governed_disposition_payload(
 
 def _persist_disposition_authority_receipt(
     *,
+    disposition_id: str,
     draft_id: str,
     decision: str,
     grant: GovernedWriteGrant,
@@ -601,6 +651,7 @@ def _persist_disposition_authority_receipt(
     machinery rather than introducing an eval-specific authority store.
     """
     payload = _governed_disposition_payload(
+        disposition_id=disposition_id,
         draft_id=draft_id,
         decision=decision,
         grant=grant,
@@ -611,8 +662,9 @@ def _persist_disposition_authority_receipt(
         event=EVAL_DRAFT_DISPOSITION_EVENT,
         source=EVAL_DRAFT_EVENT_SOURCE,
         payload=payload,
-        trace_id=trace_id,
+        trace_id=trace_id or disposition_id,
     )
+    event = event.model_copy(update={"event_id": disposition_id})
     emitted = False
     try:
         emitted = append_jsonl_outbox_event(
@@ -695,6 +747,113 @@ def reject_draft(
     )
 
 
+def reconcile_pending_disposition_receipt(
+    vault_root: Path,
+    draft_id: str,
+) -> PromotionDecision:
+    """Reconcile a terminal draft whose GOV receipt was not acknowledged.
+
+    This is an explicit recovery operation for ``applied_receipt_pending``.
+    It reads the durable terminal draft, reconstructs the state-owner receipt
+    identity, and emits the existing governed receipt event without calling the
+    note mutation seam a second time. A receipt already present in the JSONL
+    sink is returned idempotently.
+    """
+    draft = read_draft(vault_root, draft_id)
+    if draft is None:
+        raise PromotionDecisionError(f"no draft found: {draft_id}")
+    decision = _VALID_DECISIONS.get(draft.status)
+    if decision is None or not draft.decided_by or not draft.decided_at:
+        raise AuthorityReceiptPersistenceError(
+            "receipt reconciliation requires a terminal draft with reviewer provenance"
+        )
+    rel_path = draft.draft_path or _safe_rel_path(str(_draft_path(vault_root, draft_id)))
+    disposition_id = _disposition_id(
+        draft_id=draft_id,
+        decision=decision,
+        decided_at=draft.decided_at,
+    )
+    existing = _read_persisted_disposition_receipt(
+        disposition_id=disposition_id,
+        outbox_path=_resolve_outbox_path(),
+    )
+    if existing is not None:
+        expected_action = f"{EVAL_DRAFT_DISPOSITION_ACTION_PREFIX}.{decision}"
+        if (
+            existing.actor != draft.decided_by
+            or existing.action != expected_action
+            or existing.write_class != EVAL_DRAFT_DISPOSITION_WRITE_CLASS
+            or existing.resource != rel_path
+        ):
+            raise AuthorityReceiptPersistenceError(
+                "persisted eval draft receipt does not match the terminal draft"
+            )
+        return PromotionDecision(
+            draft_id=draft_id,
+            decision=decision,
+            decided_by=draft.decided_by,
+            decided_at=draft.decided_at,
+            notes=draft.notes,
+            authority_receipt=existing,
+        )
+
+    action = f"{EVAL_DRAFT_DISPOSITION_ACTION_PREFIX}.{decision}"
+    try:
+        grant = _GOVERNED_WRITE_ADAPTER.issue_human_decision_token(
+            action=action,
+            write_class=EVAL_DRAFT_DISPOSITION_WRITE_CLASS,
+            actor=draft.decided_by,
+            resource=rel_path,
+        )
+        token = _GOVERNED_WRITE_ADAPTER.validate_decision_token(
+            decision_token=grant.decision_token,
+            action=action,
+            write_class=EVAL_DRAFT_DISPOSITION_WRITE_CLASS,
+            actor=draft.decided_by,
+            resource=rel_path,
+        )
+    except Exception as exc:
+        raise PromotionDecisionError(
+            f"GOV refused eval draft receipt reconciliation: {exc}"
+        ) from exc
+
+    # The terminal note is the durable state-owner result. Reconciliation
+    # maps it to the existing receipt shape without repeating the mutation.
+    mutation_receipt = WriteReceipt(
+        operation="write_note",
+        locator=make_note_locator(rel_path),
+        adapter="fs_vault",
+        trace_id=draft.trace_id,
+        writer_identity="eval.failure_capture.decision",
+        written_at=draft.decided_at,
+        outcome="written",
+    )
+    authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
+        decision_token=token,
+        mutation_receipt=mutation_receipt,
+        state_owner=EVAL_DRAFT_STATE_OWNER,
+        resource=rel_path,
+        trace_id=draft.trace_id,
+    )
+    _persist_disposition_authority_receipt(
+        disposition_id=disposition_id,
+        draft_id=draft_id,
+        decision=decision,
+        grant=grant,
+        mutation_receipt=mutation_receipt,
+        authority_receipt=authority_receipt,
+        trace_id=draft.trace_id,
+    )
+    return PromotionDecision(
+        draft_id=draft_id,
+        decision=decision,
+        decided_by=draft.decided_by,
+        decided_at=draft.decided_at,
+        notes=draft.notes,
+        authority_receipt=authority_receipt,
+    )
+
+
 def _decide(
     vault_root: Path,
     draft_id: str,
@@ -745,6 +904,11 @@ def _decide(
     # separate from GOV's reviewer authorization and receipt accountability.
     write_guard.assert_writes_allowed(FAILURE_CAPTURE_DRAFT_ACTION)
     decided_at = _now_iso()
+    disposition_id = _disposition_id(
+        draft_id=draft_id,
+        decision=decision,
+        decided_at=decided_at,
+    )
     updated = DraftEvalCase(
         draft_id=draft.draft_id,
         kind=draft.kind,
@@ -777,6 +941,7 @@ def _decide(
         trace_id=draft.trace_id,
     )
     _persist_disposition_authority_receipt(
+        disposition_id=disposition_id,
         draft_id=draft_id,
         decision=decision,
         grant=grant,
@@ -811,6 +976,7 @@ __all__ = [
     "FailureCaptureError",
     "PromotionDecision",
     "PromotionDecisionError",
+    "reconcile_pending_disposition_receipt",
     "SourceEvent",
     "draft_dead_letter_case",
     "draft_unknown_classification_case",

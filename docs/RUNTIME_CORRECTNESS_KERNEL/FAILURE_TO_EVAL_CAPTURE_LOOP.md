@@ -38,8 +38,11 @@ separately reviewed integration into regression coverage.
   GOV adapter to issue and validate a DecisionToken bound to the reviewer, decision, write class,
   and exact draft resource before the state-owner status write. The state-owner write receipt and
   distinct GOV AuthorityReceipt are persisted through the existing receipt/outbox path before the
-  disposition is acknowledged. Golden-set or fixture integration is a separate reviewed code
-  change.
+  disposition is acknowledged. If both configured receipt sinks fail after the status mutation,
+  `reconcile_pending_disposition_receipt` explicitly reconstructs the state-owner receipt from
+  the durable terminal draft and emits the same stable receipt event without a second status
+  mutation; acknowledgement remains withheld until the receipt is durable. Golden-set or fixture
+  integration is a separate reviewed code change.
   It does **not reuse `MemoryCandidateReviewQueue`** — see "Reviewer surfacing" below for why that
   queue is memory-candidate-specific and an eval-dataset case is a distinct artifact class.
 - Drafting is **WriteGuard-gated** like all vault writes: call
@@ -133,9 +136,12 @@ note-write and concurrency contract follows
       bound to the human reviewer, decision action, `eval_draft_disposition` write class, and
       exact draft resource before the state-owner status mutation; the distinct state-owner write
       receipt and AuthorityReceipt are durable before acknowledgement. Missing or mismatched
-      tokens leave the draft unchanged. OEF findings, traces, and WriteGuard health do not supply
-      authorization or accountability.
+      tokens leave the draft unchanged. If receipt persistence fails after the status mutation,
+      explicit reconciliation emits the durable AuthorityReceipt without repeating the status
+      mutation. OEF findings, traces, and WriteGuard health do not supply authorization or
+      accountability.
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_receipt_pending_reconciles_without_second_status_mutation`
 - [ ] Candidate intake remains non-authoritative: promoting a draft records the human decision but
       does not itself change the golden dataset or fixture. Integration is a separate reviewed code
       change.

@@ -13,11 +13,13 @@ import app.eval.failure_capture as failure_capture_module
 import app.orchestrator.executor as executor_module
 from app.governance.governed_write import GovernedWriteAdapter
 from app.eval.failure_capture import (
+    AuthorityReceiptPersistenceError,
     DRAFT_STATUS_PENDING,
     DRAFT_STATUS_PROMOTED,
     DRAFT_STATUS_REJECTED,
     draft_dead_letter_case,
     promote_draft,
+    reconcile_pending_disposition_receipt,
     read_draft,
     reject_draft,
     PromotionDecisionError,
@@ -1396,3 +1398,105 @@ def test_eval_capture_disposition_uses_production_governed_chain(
     assert mismatch_path.read_bytes() == before
     unchanged = read_draft(mismatch_vault, mismatch.draft_id)
     assert unchanged is not None and unchanged.status == DRAFT_STATUS_PENDING
+
+
+def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A sink fault after mutation is recoverable through one durable receipt."""
+    outbox_path = tmp_path / "eval-disposition-reconcile-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-reconcile"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-reconcile",
+        payload={"event_id": "evt-reconcile"},
+        trace_id="trace-reconcile",
+        write_guard=write_guard,
+    )
+    assert draft is not None and draft.draft_path is not None
+
+    real_write = failure_capture_module.write_note_relative
+    writes: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def count_write(*args: Any, **kwargs: Any) -> Any:
+        writes.append((args, kwargs))
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_write)
+    real_append = failure_capture_module.append_jsonl_outbox_event
+    append_attempts = 0
+
+    def fail_receipt_sink_once(*args: Any, **kwargs: Any) -> bool:
+        nonlocal append_attempts
+        append_attempts += 1
+        if append_attempts == 1:
+            raise OSError("fault injection after status mutation")
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "append_jsonl_outbox_event",
+        fail_receipt_sink_once,
+    )
+    db_attempts = 0
+
+    def fail_db_sink_once(*args: Any, **kwargs: Any) -> str:
+        nonlocal db_attempts
+        db_attempts += 1
+        if db_attempts == 1:
+            raise OSError("fault injection for the configured DB sink")
+        return "db-receipt-event"
+
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", fail_db_sink_once)
+
+    with pytest.raises(AuthorityReceiptPersistenceError, match="could not be persisted"):
+        promote_draft(
+            vault,
+            draft.draft_id,
+            decided_by="human:reconcile",
+            write_guard=write_guard,
+        )
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None
+    assert terminal.status == DRAFT_STATUS_PROMOTED
+    assert terminal.decided_by == "human:reconcile"
+    assert len(writes) == 1
+    assert append_attempts == 1
+    assert db_attempts == 1
+
+    recovered = reconcile_pending_disposition_receipt(vault, draft.draft_id)
+    assert recovered.decision == "promote"
+    assert recovered.authority_receipt is not None
+    assert recovered.authority_receipt.actor == "human:reconcile"
+    assert len(writes) == 1
+    assert append_attempts == 2
+    assert db_attempts == 2
+
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record["event"] == "governance.authority_receipt.recorded"
+        and record["payload"]["draft_id"] == draft.draft_id
+    ]
+    assert len(matching) == 1
+    assert matching[0]["event_id"] == matching[0]["payload"]["disposition_id"]
+    assert matching[0]["payload"]["authority_receipt"]["actor"] == "human:reconcile"
+
+    replay = reconcile_pending_disposition_receipt(vault, draft.draft_id)
+    assert replay.authority_receipt is not None
+    assert replay.authority_receipt.receipt_id == recovered.authority_receipt.receipt_id
+    assert len(writes) == 1
+    assert append_attempts == 2
