@@ -1508,3 +1508,61 @@ def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
     assert replay.authority_receipt.receipt_id == recovered.authority_receipt.receipt_id
     assert len(writes) == 1
     assert append_attempts == 2
+
+
+@pytest.mark.parametrize("tamper", ["outcome", "decision_token_id"])
+def test_eval_capture_reconciliation_rejects_tampered_persisted_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    """A matching event is usable only when its durable receipt is applied and bound."""
+    outbox_path = tmp_path / f"tampered-{tamper}.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    vault = tmp_path / f"vault-tampered-{tamper}"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id=f"evt-tampered-{tamper}",
+        payload={"event_id": f"evt-tampered-{tamper}"},
+        trace_id=f"trace-tampered-{tamper}",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+    promote_draft(
+        vault,
+        draft.draft_id,
+        decided_by="human:tamper-check",
+        write_guard=write_guard,
+    )
+
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    receipt = matching[0]["payload"]["authority_receipt"]
+    if tamper == "outcome":
+        receipt["outcome"] = "failed"
+    else:
+        receipt["decision_token_id"] = "tampered-token"
+    outbox_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="does not match the terminal draft",
+    ):
+        reconcile_pending_disposition_receipt(vault, draft.draft_id)

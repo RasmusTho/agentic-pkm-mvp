@@ -655,7 +655,7 @@ def _read_persisted_disposition_receipt(
     *,
     disposition_id: str,
     outbox_path: Path,
-) -> AuthorityReceipt | None:
+) -> tuple[AuthorityReceipt, dict[str, Any]] | None:
     """Read an existing receipt event without mutating the JSONL sink."""
     records = read_jsonl_outbox_records(outbox_path, read_only=True)
     for record in records:
@@ -671,7 +671,7 @@ def _read_persisted_disposition_receipt(
                 "eval draft disposition receipt event is malformed"
             )
         try:
-            return AuthorityReceipt(**raw_receipt)
+            return AuthorityReceipt(**raw_receipt), payload
         except (TypeError, ValueError) as exc:
             raise AuthorityReceiptPersistenceError(
                 "eval draft disposition receipt event is invalid"
@@ -840,21 +840,45 @@ def reconcile_pending_disposition_receipt(
         decision=decision,
         decided_at=draft.decided_at,
     )
-    existing = _read_persisted_disposition_receipt(
+    persisted = _read_persisted_disposition_receipt(
         disposition_id=disposition_id,
         outbox_path=_resolve_outbox_path(),
     )
-    if existing is not None:
+    if persisted is not None:
+        existing, payload = persisted
         expected_action = f"{EVAL_DRAFT_DISPOSITION_ACTION_PREFIX}.{decision}"
+        persisted_policy = _parse_persisted_policy_decision(
+            payload.get("policy_decision")
+        )
+        persisted_token = _parse_persisted_decision_token(
+            payload.get("decision_token")
+        )
+        state_owner_receipt = payload.get("state_owner_receipt")
+        expected_source_receipt_ref = f"fs_vault:write_note:{rel_path}"
         if (
-            existing.actor != draft.decided_by
+            draft.policy_decision is None
+            or draft.decision_token is None
+            or payload.get("disposition_id") != disposition_id
+            or payload.get("draft_id") != draft_id
+            or payload.get("decision") != decision
+            or persisted_policy != draft.policy_decision
+            or persisted_token != draft.decision_token
+            or existing.outcome != "applied"
+            or existing.decision_id != draft.policy_decision.decision_id
+            or existing.decision_token_id != draft.decision_token.token_id
+            or existing.actor != draft.decided_by
             or existing.action != expected_action
             or existing.write_class != EVAL_DRAFT_DISPOSITION_WRITE_CLASS
             or existing.resource != rel_path
-            or (
-                draft.decision_token is not None
-                and existing.decision_token_id != draft.decision_token.token_id
-            )
+            or existing.operation != "write_note"
+            or existing.adapter != "fs_vault"
+            or existing.state_owner != EVAL_DRAFT_STATE_OWNER
+            or existing.source_receipt_ref != expected_source_receipt_ref
+            or not isinstance(state_owner_receipt, dict)
+            or state_owner_receipt.get("operation") != "write_note"
+            or state_owner_receipt.get("adapter") != "fs_vault"
+            or not isinstance(state_owner_receipt.get("locator"), dict)
+            or state_owner_receipt["locator"].get("path") != rel_path
         ):
             raise AuthorityReceiptPersistenceError(
                 "persisted eval draft receipt does not match the terminal draft"

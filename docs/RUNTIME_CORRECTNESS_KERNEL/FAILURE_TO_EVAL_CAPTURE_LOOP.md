@@ -140,9 +140,13 @@ note-write and concurrency contract follows
       tokens leave the draft unchanged. If receipt persistence fails after the status mutation,
       explicit reconciliation reuses the original persisted DecisionToken and emits the durable
       AuthorityReceipt without minting replacement authority or repeating the status mutation.
+      Reconciliation accepts an existing event only when its outcome is `applied` and its
+      PolicyDecision, DecisionToken, AuthorityReceipt, state-owner receipt, draft, action, and
+      resource bindings all match the terminal draft.
       OEF findings, traces, and WriteGuard health do not supply authorization or accountability.
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_receipt_pending_reconciles_without_second_status_mutation`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_rejects_tampered_persisted_receipt`
 - [ ] Candidate intake remains non-authoritative: promoting a draft records the human decision but
       does not itself change the golden dataset or fixture. Integration is a separate reviewed code
       change.
