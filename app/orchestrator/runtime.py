@@ -4,6 +4,7 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Mapping, MutableMapping, Set
 
+from app.governance.governed_write import GovernedWriteGrant
 from app.planner.schema import Plan, PlanStep
 
 from .admission import (
@@ -97,6 +98,7 @@ class Orchestrator:
         admit_plan(plan, plan_timeout_seconds=plan_timeout)
 
         budget_state: MutableMapping[str, int] = {"steps": 0, "tool_calls": 0}
+        governed_write_grants: dict[str, GovernedWriteGrant] = {}
         max_steps = _coerce_int(context_tool_settings.get("max_steps")) if context_tool_settings else None
         deadline = time.monotonic() + plan_timeout
 
@@ -138,6 +140,7 @@ class Orchestrator:
                 trace_id=trace_id,
                 metadata=plan.meta,
                 results=plan_results,
+                governed_write_grants=governed_write_grants,
                 flow_id=plan_flow_id,
                 event_type=plan.trigger.event_type if plan.trigger else None,
                 tool_settings=context_tool_settings,

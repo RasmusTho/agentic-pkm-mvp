@@ -3,8 +3,8 @@
 This module introduces the EXE side-effect request seam in a frozen, additive
 shape. It does not decide policy and it does not perform side effects: it wraps
 an already-authorized real-tool call so that GOV/OEF can see what was requested,
-which DecisionToken (if any) authorized it, and how the result links back to a
-trace/receipt.
+which DecisionToken authorized it, and how the result links back to a stable
+effect identity and trace/receipt.
 
 The `DecisionToken` type is reused from `app.governance.governed_write` rather
 than redefined, so EXE and GOV share one authorization vocabulary.
@@ -27,9 +27,9 @@ class ExecutionRequest:
     """Authorized request to perform one side effect via EXE.
 
     Mirrors the Inputs section of `docs/contracts/EXECUTION_REQUEST.md`. EXE knows
-    how to execute; GOV decides whether execution is admissible. The DecisionToken
-    reference is OPTIONAL while the orchestrator does not yet thread one through
-    (see the contract's Transitional Implementation Notes).
+    how to execute; GOV decides whether execution is admissible. Generic
+    execution requests may omit a token for read-only or mock paths, but the
+    production real-tool path rejects an omitted token before the writer runs.
     """
 
     side_effect: str
@@ -38,6 +38,7 @@ class ExecutionRequest:
     adapter: str
     active_context_set: str | None = None
     decision_token: DecisionToken | None = None
+    effect_id: str | None = None
     dry_run: bool = False
     preview: bool = False
     trace_id: str | None = None

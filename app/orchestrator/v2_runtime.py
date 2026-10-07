@@ -18,6 +18,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 import time
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Set
 
+from app.governance.governed_write import GovernedWriteGrant
 from app.planner.schema import Plan, PlanMetadata, PlanStep
 
 from .admission import (
@@ -183,12 +184,27 @@ class OrchestratorV2:
         execution_order: List[str] = []  # Track completion order for reverse compensation
         results: List[Dict[str, Any]] = []
         failed_step_id: str | None = None
+        governed_write_grants: dict[str, GovernedWriteGrant] = {}
 
         # Attempt to load checkpoint for resume
         checkpoint = self._load_checkpoint(plan)
         if checkpoint:
             completed_steps = set(checkpoint.get("completed_steps", []))
             plan_results = checkpoint.get("step_results", {})
+            # Checkpoints persist completed step results, but the in-memory GOV
+            # grant map is intentionally rebuilt for every process. Reissue a
+            # completed authority step whenever its effect is still pending so
+            # the effect can never run with an empty or unvalidated grant map.
+            for step in plan.steps:
+                effect_step_id = step.metadata.get("append_effect_step_id")
+                if (
+                    step.step_class == "authority_check"
+                    and isinstance(effect_step_id, str)
+                    and step.id in completed_steps
+                    and effect_step_id not in completed_steps
+                ):
+                    completed_steps.remove(step.id)
+                    plan_results.pop(step.id, None)
             # Add checkpoint results to the results list with "ok" status (not "resumed")
             # to ensure consistent status handling for rollback and compensation
             for step_id in completed_steps:
@@ -274,6 +290,7 @@ class OrchestratorV2:
                         trace_id=trace_id,
                         metadata=plan.meta,
                         results=plan_results,
+                        governed_write_grants=governed_write_grants,
                         flow_id=plan_flow_id,
                         event_type=plan.trigger.event_type if plan.trigger else None,
                         tool_settings=context_tool_settings,
