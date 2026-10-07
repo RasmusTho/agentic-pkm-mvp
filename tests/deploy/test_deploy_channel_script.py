@@ -132,8 +132,8 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert run_block.index("heimdal_raw_migration_secret_preflight") < run_block.index(
         "write_pin"
     )
-    assert run_block.index("write_pin") < run_block.index("compose pull")
-    assert run_block.index("compose pull") < run_block.index(
+    assert run_block.index("write_pin") < run_block.index("pull_channel_images")
+    assert run_block.index("pull_channel_images") < run_block.index(
         "prepare_instance_state_deployment"
     )
     assert run_block.index("prepare_instance_state_deployment") < run_block.index(
@@ -800,6 +800,97 @@ def test_every_postmutation_gate_has_fail_closed_terminal_handling(
     assert not (root / "ops/deployments/dev-latest.json").exists()
 
 
+def test_unconfigured_capture_watch_does_not_block_or_start_with_deploy(
+    tmp_path: Path,
+) -> None:
+    root, env, base_sha = _deploy_harness(tmp_path)
+    sha = _commit_prefloor_successor(root, "capture watch disabled target")
+    previous_sha = base_sha
+    pin_path = _seed_previous_pin(root, previous_sha)
+    (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
+    env["FAKE_SHA"] = sha
+    env["FAKE_DOCKER_FAIL_MATCH"] = " ps -q "
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "capture-watch gate: skipped (HEIMDAL_CAPTURE_WATCH_DIR not configured)"
+        in result.stdout
+    )
+    assert f"APP_IMAGE_TAG={sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert any(event.endswith("pull api worker watcher companion-ui") for event in events)
+    assert any(event.endswith("stop heimdal-capture-watch") for event in events)
+    assert any(
+        event.endswith("up -d --force-recreate api worker watcher companion-ui")
+        for event in events
+    )
+    assert not any(
+        "pull api worker watcher heimdal-capture-watch" in event for event in events
+    )
+    assert not any(
+        event.endswith(
+            "up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"
+        )
+        for event in events
+    )
+    assert not any("ps -q heimdal-capture-watch" in event for event in events)
+    assert (root / "ops/deployments/dev-latest.json").exists()
+
+
+def test_unconfigured_capture_watch_stays_disabled_during_automatic_recovery(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    sha = _commit_prefloor_successor(root, "capture disabled recovery target")
+    env["FAKE_SHA"] = sha
+    pin_path = _seed_previous_pin(root, previous_sha)
+    (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
+    env["FAKE_API_LIVENESS"] = "fail"
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 1
+    assert "health gate failed" in result.stderr
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert sum(event.endswith("stop heimdal-capture-watch") for event in events) == 2
+    assert sum(
+        event.endswith("up -d --force-recreate api worker watcher companion-ui")
+        for event in events
+    ) == 2
+    assert not any("heimdal-capture-watch companion-ui" in event for event in events)
+
+
+def test_duplicate_capture_watch_config_fails_before_deploy_mutation(
+    tmp_path: Path,
+) -> None:
+    root, env, base_sha = _deploy_harness(tmp_path)
+    sha = _commit_prefloor_successor(root, "capture duplicate target")
+    env["FAKE_SHA"] = sha
+    (root / "tmp/runtime.env").write_text(
+        "TTS_ENABLED=false\n"
+        "HEIMDAL_CAPTURE_WATCH_DIR=/fixture/first\n"
+        "HEIMDAL_CAPTURE_WATCH_DIR=/fixture/second\n",
+        encoding="utf-8",
+    )
+    pin_path = _seed_previous_pin(root, base_sha)
+    original_pin = pin_path.read_text(encoding="utf-8")
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 78
+    assert (
+        "capture-watch config preflight: blocked reason=invalid_runtime_env"
+        in result.stderr
+    )
+    assert pin_path.read_text(encoding="utf-8") == original_pin
+    assert _deploy_events(env) == ["archive-preflight dev"]
+    assert not Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"]).exists()
+    assert not (root / "config/deploy/dev.env.lock").exists()
+
+
 def test_instance_state_preflight_failure_before_migrations_restores_prior_pin_and_clears_pending_marker(
     tmp_path: Path,
 ) -> None:
@@ -929,6 +1020,30 @@ def test_manual_rollback_never_runs_target_forward_migration_authority(tmp_path:
     assert not any("deployment-prove" in event for event in events)
     assert not any("deployment-finish" in event for event in events)
     assert not any("docker ps --no-trunc" in event for event in events)
+
+
+def test_manual_rollback_keeps_unconfigured_capture_watch_stopped(
+    tmp_path: Path,
+) -> None:
+    root, env, rollback_sha = _deploy_harness(tmp_path)
+    current_sha = _commit_prefloor_successor(root, "capture disabled manual rollback pin")
+    pin_path = _seed_previous_pin(root, current_sha)
+    (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
+
+    result = _run_rollback(root, env, rollback_sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "capture-watch gate: skipped (HEIMDAL_CAPTURE_WATCH_DIR not configured)" in result.stdout
+    assert f"APP_IMAGE_TAG={rollback_sha}" in pin_path.read_text(encoding="utf-8")
+    events = _deploy_events(env)
+    assert any(event.endswith("pull api worker watcher companion-ui") for event in events)
+    assert any(event.endswith("stop heimdal-capture-watch") for event in events)
+    assert any(
+        event.endswith("up -d --force-recreate api worker watcher companion-ui")
+        for event in events
+    )
+    assert not any("heimdal-capture-watch" in event for event in events if " pull " in event)
+    assert not any("heimdal-capture-watch companion-ui" in event for event in events)
 
 
 def test_prod_rollback_ensures_external_volume_without_instance_state_authority(

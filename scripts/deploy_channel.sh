@@ -126,6 +126,59 @@ receipt_dir="${ROOT}/ops/deployments"
 promotion_dir="${ROOT}/ops/promotions"
 image_repository="${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}"
 health_timeout="${DEPLOY_HEALTH_TIMEOUT_SECONDS:-90}"
+CAPTURE_WATCH_CONFIGURED=0
+
+preflight_capture_watch_config() {
+  local runtime_env_file="${1:?runtime env file required}"
+  local capture_status
+  capture_status="$(
+    RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON}" - 2>/dev/null <<'PY'
+from pathlib import Path
+import os
+import sys
+
+path = Path(os.environ["RUNTIME_ENV_FILE"])
+try:
+    path.lstat()
+except FileNotFoundError:
+    print("disabled")
+    raise SystemExit(0)
+except OSError:
+    print("blocked")
+    raise SystemExit(0)
+
+if not path.is_file() or not os.access(path, os.R_OK):
+    print("blocked")
+    raise SystemExit(0)
+
+try:
+    lines = path.read_text(encoding="utf-8").splitlines()
+except (OSError, UnicodeError):
+    print("blocked")
+    raise SystemExit(0)
+
+values = [line[len("HEIMDAL_CAPTURE_WATCH_DIR="):] for line in lines
+          if line.startswith("HEIMDAL_CAPTURE_WATCH_DIR=")]
+if len(values) > 1:
+    print("blocked")
+elif values and values[0] != "":
+    print("configured")
+else:
+    print("disabled")
+PY
+  )" || {
+    echo "capture-watch config preflight: blocked reason=validation_failed" >&2
+    return 78
+  }
+  case "${capture_status}" in
+    configured) CAPTURE_WATCH_CONFIGURED=1 ;;
+    disabled) CAPTURE_WATCH_CONFIGURED=0 ;;
+    *)
+      echo "capture-watch config preflight: blocked reason=invalid_runtime_env" >&2
+      return 78
+      ;;
+  esac
+}
 
 # Gate Product-channel MARR bindings before creating the channel lock, materializing
 # migration files, or preparing host deployment state. Rollback keeps recovery
@@ -136,6 +189,7 @@ if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "pr
   deploy_channel_model_access_preflight \
     "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" \
     "/etc/yggdrasil/model-access/runtime.env" || exit $?
+  preflight_capture_watch_config "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" || exit $?
 fi
 
 # Resolve the effective instance-state-init legacy setting before creating the
@@ -925,6 +979,7 @@ retire_scalar_rollback_services() {
 
 recreate_channel_services() {
   local rc=0
+  local -a runtime_services=(api worker watcher)
   if [ "${scalar_rollback}" = "1" ]; then
     compose stop api worker watcher heimdal-capture-watch companion-ui \
       scalar-rollback-gateway || return $?
@@ -935,6 +990,11 @@ recreate_channel_services() {
   if [ "${action}" != "deploy" ]; then
     retire_scalar_rollback_services || return $?
   fi
+  if [ "${CAPTURE_WATCH_CONFIGURED}" = "1" ]; then
+    runtime_services+=(heimdal-capture-watch)
+  else
+    compose stop heimdal-capture-watch || return $?
+  fi
   if [ "${action}" = "deploy" ] && [ "${ack_embedding_rebuild_required}" = "1" ]; then
     # During an acknowledged embedding-dimension cutover, /readyz must stay red
     # until the governed full rebuild completes. Start the runtime first, prove
@@ -942,7 +1002,7 @@ recreate_channel_services() {
     # dependency. The later live smoke still admits only the sole exact
     # embedding_index=rebuild_required transition; the API container healthcheck
     # remains strict on /readyz throughout.
-    compose up -d --force-recreate api worker watcher heimdal-capture-watch || rc=$?
+    compose up -d --force-recreate "${runtime_services[@]}" || rc=$?
     [ "${rc}" -eq 0 ] || return "${rc}"
     wait_json_ok "http://127.0.0.1:${api_port}/healthz" || return 1
     rc=0
@@ -951,7 +1011,16 @@ recreate_channel_services() {
     return 0
   fi
 
-  compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
+  compose up -d --force-recreate "${runtime_services[@]}" companion-ui
+}
+
+pull_channel_images() {
+  local -a services=(api worker watcher)
+  if [ "${CAPTURE_WATCH_CONFIGURED}" = "1" ]; then
+    services+=(heimdal-capture-watch)
+  fi
+  services+=(companion-ui)
+  compose pull "${services[@]}"
 }
 
 scalar_rollback_gateway_auth_gate() {
@@ -1136,7 +1205,7 @@ rollback_failed_startup() {
     if ! (
       action=rollback
       MVR01C_SCALAR_ROLLBACK=0 INSTANCE_STATE_LEGACY_ROLLBACK=1 \
-        compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui
+        recreate_channel_services
     ); then
       echo "rollback recreate failed for previous pin ${current_sha}" >&2
     fi
@@ -1163,6 +1232,10 @@ run_postmutation_gate() {
 }
 
 capture_watch_gate() {
+  if [ "${CAPTURE_WATCH_CONFIGURED}" != "1" ]; then
+    echo "capture-watch gate: skipped (HEIMDAL_CAPTURE_WATCH_DIR not configured)"
+    return 0
+  fi
   # Surface a broken heimdal-capture-watch (e.g. missing/invalid HEIMDAL_RAW_STORE_KEY, which
   # its own healthcheck fails loud on) at deploy time instead of letting it sit unhealthy and
   # silent. This is a required post-mutation gate: a failure routes through the shared rollback
@@ -1591,7 +1664,7 @@ if [ "${scalar_rollback}" = "1" ]; then
     compose pull scalar-rollback-guard api scalar-rollback-gateway || exit $?
 else
   run_postmutation_gate "image pull failed" \
-    compose pull api worker watcher heimdal-capture-watch companion-ui || exit $?
+    pull_channel_images || exit $?
 fi
 if [ "${scalar_rollback}" != "1" ] && [ "${action}" = "deploy" ]; then
   run_postmutation_gate "scalar rollback service retirement failed" \

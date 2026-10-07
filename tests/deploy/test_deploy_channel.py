@@ -138,7 +138,10 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "config/tts-disabled/.gitkeep").touch()
     (root / "ops/deployments").mkdir(parents=True)
     (root / "tmp").mkdir(parents=True)
-    (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
+    (root / "tmp/runtime.env").write_text(
+        "TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=/fixture/capture-inbox\n",
+        encoding="utf-8",
+    )
     (root / "app/__init__.py").write_text(
         '"""Isolated deploy-harness application package."""\n'
         "from pkgutil import extend_path\n"
