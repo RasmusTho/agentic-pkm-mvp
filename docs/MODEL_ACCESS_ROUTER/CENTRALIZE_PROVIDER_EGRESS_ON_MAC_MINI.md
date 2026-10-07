@@ -21,9 +21,13 @@ onto the Mac.
 
 ## What This Task Does
 
-Extend the Mac-hosted Model Access API to accept a bounded, exact Product provider/model request and
-dispatch it through the host's configured adapter. The API owns provider transport and
-credential resolution; callers do not select a harness, supply an endpoint, or send credentials.
+Extend the Mac-hosted Model Access API with a bounded Product request containing only provider,
+model, capability intent, and prompt/schema data. The Product surface is `POST /v1/product/catalog`,
+`POST /v1/product/preflight`, and `POST /v1/product/complete`; it contains neither `transport_id`
+nor catalog provenance. The API resolves the provider's configured host adapter and credentials,
+then returns the exact transport and host-loaded catalog hash. Callers do not select a harness,
+supply an endpoint, or send credentials. The legacy exact-route `/v1` operations remain only for
+Codex CLI/Ollama compatibility; provider API inference must use the Product surface.
 Discovery covers the current provider census using provider-supplied metadata, including OpenAI and
 Anthropic updates. Unsupported, unconfigured, or stale routes fail before inference. The request and
 receipt bind the exact provider, model, transport, capabilities, and catalog snapshot without
@@ -49,10 +53,11 @@ resources. Caller-controlled schema URLs must never create a second egress path 
 
 ## Concretely
 
-Product policy resolves `openai/gpt-6-luna` from its selected profile. The caller sends the exact
-provider/model plus bounded prompt and capability intent to the Mac API. The API resolves the
-configured host adapter and credentials, executes once, and returns route provenance. The request
-does not contain `CODEX_HOME`, an API key, an arbitrary URL, or shell arguments.
+Product settings resolve `openai/gpt-6-luna` from the selected profile. The caller sends provider,
+model, bounded prompt, and capability intent to the Mac API. The API resolves the configured host
+adapter and credentials, binds a fresh host-discovered catalog snapshot, executes once, and returns
+route provenance. The request does not contain a transport, catalog hash, `CODEX_HOME`, an API key,
+an arbitrary URL, or shell arguments.
 
 ## Why This Matters
 
@@ -63,8 +68,12 @@ dispatch, the result is no longer bound to the model selected in settings.
 ## Acceptance Criteria
 
 - [ ] The Mac API dispatches every currently declared, configured Product provider/model route via
-  its host-local adapter and does not accept arbitrary transport commands, endpoints, or credentials.
+  its host-local adapter; Product requests cannot choose transport or catalog provenance and cannot
+  accept arbitrary commands, endpoints, or credentials.
   - Verify: `tests/model_access/test_product_provider_gateway.py::test_dispatches_exact_declared_route_without_caller_credentials`
+- [ ] Exact-route compatibility requests bind the host's actual fresh catalog and reject fabricated
+  snapshot references or hashes before preflight or inference.
+  - Verify: `tests/model_access/test_codex_executor_service.py::test_exact_route_rejects_fabricated_catalog_provenance_before_dispatch`
 - [ ] OpenAI and Anthropic discovery updates a snapshot only from verifiable provider metadata; stale,
   unsupported, or capability-incompatible descriptors are not promoted, and requested reasoning
   effort is checked against the selected model's declared capability before inference. Unknown and

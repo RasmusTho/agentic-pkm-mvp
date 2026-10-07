@@ -69,6 +69,59 @@ class CompletionCapabilityIntent(_StrictModel):
     max_output_tokens_required: bool = False
 
 
+class ProductModelTarget(_StrictModel):
+    """Logical Product target; the Mac host resolves its adapter and transport."""
+
+    provider: Literal["openai", "anthropic", "deepseek", "ollama"]
+    model: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+    )
+
+
+class ProductCompletionRequest(ProductModelTarget):
+    """Bounded Product completion with no caller-selected harness or catalog proof."""
+
+    reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+    ] | None = None
+    capability_intent: CompletionCapabilityIntent = Field(
+        default_factory=CompletionCapabilityIntent
+    )
+    trusted_instructions: str = Field(max_length=32_768)
+    user_input: str = Field(min_length=1, max_length=96_000)
+    output_schema: dict[str, Any] | None = None
+    max_output_tokens: int | None = Field(default=None, ge=1, le=1_000_000)
+
+    @model_validator(mode="after")
+    def _request_matches_declared_capabilities(self) -> "ProductCompletionRequest":
+        if self.capability_intent.structured_output != (self.output_schema is not None):
+            raise ValueError("structured output intent must match the supplied schema")
+        if self.capability_intent.max_output_tokens_required != (
+            self.max_output_tokens is not None
+        ):
+            raise ValueError("output token limit intent must match the supplied limit")
+        return self
+
+
+class ProductPreflightRequest(ProductModelTarget):
+    """No-inference Product preflight; the host resolves transport and catalog."""
+
+    reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+    ] | None = None
+    capability_intent: CompletionCapabilityIntent = Field(
+        default_factory=CompletionCapabilityIntent
+    )
+
+
+class ProductCatalogRequest(_StrictModel):
+    """Ask the host for the configured catalog of one Product provider."""
+
+    provider: Literal["openai", "anthropic", "deepseek", "ollama"]
+
+
 class CompletionRequest(_StrictModel):
     """A bounded completion request with no execution or credential controls."""
 

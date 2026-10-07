@@ -10,7 +10,7 @@ import re
 import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal, cast
 
 from fastapi import FastAPI, Request
 from jsonschema.exceptions import SchemaError
@@ -19,7 +19,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.responses import JSONResponse
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
-from app.model_access.catalog import CatalogError
+from app.model_access.catalog import CatalogCache, CatalogError, CatalogSnapshot
 from app.model_access.catalog_discovery import OllamaCatalogDiscovery, codex_catalog_snapshot
 from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpError
@@ -42,6 +42,9 @@ from app.model_access.remote_contract import (
     CatalogResponse,
     PreflightRequest,
     PreflightResponse,
+    ProductCatalogRequest,
+    ProductCompletionRequest,
+    ProductPreflightRequest,
     validate_inline_schema,
 )
 
@@ -288,6 +291,109 @@ def create_codex_executor_app(
         lifespan=lifespan,
     )
     slots = threading.BoundedSemaphore(max_concurrency)
+    local_catalog_cache = CatalogCache()
+
+    def catalog_snapshot_for(transport_id: str) -> CatalogSnapshot:
+        if transport_id == "codex_cli":
+            return local_catalog_cache.get(
+                provider="openai",
+                transport_id=transport_id,
+                loader=lambda fetched_at: codex_catalog_snapshot(
+                    codex_executor.list_catalog_models(), fetched_at=fetched_at
+                ),
+            )
+        if transport_id == "ollama_http":
+            if ollama_adapter is None:
+                raise _RequestFailure(503, "ollama_unavailable")
+            return local_catalog_cache.get(
+                provider="ollama",
+                transport_id=transport_id,
+                loader=lambda fetched_at: OllamaCatalogDiscovery(
+                    ollama_adapter
+                ).discover(fetched_at=fetched_at),
+            )
+        if provider_api_adapter is None:
+            raise _RequestFailure(503, "provider_adapter_unavailable")
+        return provider_api_adapter.discover_catalog(transport_id)
+
+    def bind_host_catalog(route: CompletionRouteIdentity) -> CompletionRouteIdentity:
+        """Bind an exact route to the fresh catalog actually loaded on this host."""
+        try:
+            snapshot = catalog_snapshot_for(route.transport_id)
+        except _RequestFailure:
+            raise
+        except Exception as exc:
+            raise _adapter_failure(exc) from exc
+        if snapshot.freshness != "fresh":
+            raise _RequestFailure(503, "catalog_stale")
+        if (
+            route.catalog_snapshot_ref is not None
+            and (
+                route.catalog_snapshot_ref != snapshot.snapshot_ref
+                or route.catalog_snapshot_hash != snapshot.snapshot_hash
+            )
+        ):
+            raise _RequestFailure(409, "catalog_snapshot_mismatch")
+        descriptor = next(
+            (item for item in snapshot.models if item.model == route.model), None
+        )
+        now = datetime.now(timezone.utc)
+        if (
+            descriptor is None
+            or descriptor.deprecated
+            or (descriptor.sunset_at is not None and descriptor.sunset_at <= now)
+        ):
+            raise _RequestFailure(422, "provider_model_unavailable")
+        return route.model_copy(
+            update={
+                "catalog_snapshot_ref": snapshot.snapshot_ref,
+                "catalog_snapshot_hash": snapshot.snapshot_hash,
+            }
+        )
+
+    def resolve_product_route(
+        provider: Literal["openai", "anthropic", "deepseek", "ollama"],
+        model: str,
+    ) -> CompletionRouteIdentity:
+        """Resolve provider/model to the adapter configured on the Mac host."""
+        try:
+            adapter_id = adapter_factory.default_adapter_id(provider)
+            descriptor = adapter_factory.describe(
+                adapter_id, provider=provider, model=model
+            )
+        except (KeyError, ValueError) as exc:
+            raise _RequestFailure(422, "route_not_declared") from exc
+        if descriptor.transport_id not in {
+            "codex_cli",
+            "ollama_http",
+            "openai_api",
+            "anthropic_api",
+            "deepseek_api",
+        }:
+            raise _RequestFailure(422, "route_not_declared")
+        route = CompletionRouteIdentity(
+            provider=provider,
+            model=model,
+            transport_id=cast(
+                Literal[
+                    "codex_cli",
+                    "ollama_http",
+                    "openai_api",
+                    "anthropic_api",
+                    "deepseek_api",
+                ],
+                descriptor.transport_id,
+            ),
+        )
+        return bind_host_catalog(route)
+
+    def validate_legacy_route(route: CompletionRouteIdentity) -> CompletionRouteIdentity:
+        # The old exact-route wire shape remains only for Codex CLI/Ollama
+        # compatibility. Provider API requests must use the Product contract,
+        # which contains no harness or catalog selectors.
+        if route.transport_id not in {"codex_cli", "ollama_http"}:
+            raise _RequestFailure(422, "product_route_required")
+        return bind_host_catalog(route)
 
     @app.post("/v1/ckm-judgment", response_model=BuilderJudgmentResult)
     async def ckm_judgment(request: Request) -> JSONResponse:
@@ -351,6 +457,12 @@ def create_codex_executor_app(
                 adapter_factory=adapter_factory,
                 require_output_schema=False,
             )
+            resolved_route = await run_in_threadpool(
+                validate_legacy_route, preflight_request.route
+            )
+            preflight_request = preflight_request.model_copy(
+                update={"route": resolved_route}
+            )
             if not slots.acquire(blocking=False):
                 raise _RequestFailure(429, "executor_busy")
             try:
@@ -403,24 +515,9 @@ def create_codex_executor_app(
             if not slots.acquire(blocking=False):
                 raise _RequestFailure(429, "executor_busy")
             try:
-                if catalog_request.transport_id == "codex_cli":
-                    raw_models = await run_in_threadpool(codex_executor.list_catalog_models)
-                    snapshot = codex_catalog_snapshot(
-                        raw_models,
-                        fetched_at=datetime.now(timezone.utc),
-                    )
-                elif catalog_request.transport_id == "ollama_http":
-                    if ollama_adapter is None:
-                        raise _RequestFailure(503, "ollama_unavailable")
-                    snapshot = await run_in_threadpool(
-                        OllamaCatalogDiscovery(ollama_adapter).discover
-                    )
-                else:
-                    if provider_api_adapter is None:
-                        raise _RequestFailure(503, "provider_adapter_unavailable")
-                    snapshot = await run_in_threadpool(
-                        provider_api_adapter.discover_catalog, catalog_request.transport_id
-                    )
+                snapshot = await run_in_threadpool(
+                    catalog_snapshot_for, catalog_request.transport_id
+                )
             except _RequestFailure:
                 raise
             except Exception as exc:
@@ -439,6 +536,110 @@ def create_codex_executor_app(
             if len(encoded) > MAX_CATALOG_RESPONSE_BYTES:
                 raise _RequestFailure(502, "catalog_response_too_large")
             return JSONResponse(content=response_json)
+        except _RequestFailure as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": {"code": exc.code}},
+            )
+
+    @app.post("/v1/product/catalog", response_model=CatalogResponse)
+    async def product_catalog(request: Request) -> JSONResponse:
+        try:
+            _require_loopback_peer(request)
+            body = await _read_bounded_body(request, max_bytes=max_request_bytes)
+            try:
+                catalog_request = ProductCatalogRequest.model_validate(
+                    _decode_json_object(body)
+                )
+            except ValidationError as exc:
+                raise _RequestFailure(422, "invalid_request") from exc
+            try:
+                adapter_id = adapter_factory.default_adapter_id(catalog_request.provider)
+                snapshot = await run_in_threadpool(
+                    catalog_snapshot_for,
+                    adapter_id,
+                )
+            except _RequestFailure:
+                raise
+            except Exception as exc:
+                raise _adapter_failure(exc) from exc
+            if snapshot.freshness != "fresh":
+                raise _RequestFailure(503, "catalog_stale")
+            response = CatalogResponse(snapshot=snapshot)
+            response_json = response.model_dump(mode="json")
+            encoded = json.dumps(
+                response_json,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+            if len(encoded) > MAX_CATALOG_RESPONSE_BYTES:
+                raise _RequestFailure(502, "catalog_response_too_large")
+            return JSONResponse(content=response_json)
+        except _RequestFailure as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": {"code": exc.code}},
+            )
+
+    @app.post("/v1/product/preflight", response_model=PreflightResponse)
+    async def product_preflight(request: Request) -> JSONResponse:
+        try:
+            _require_loopback_peer(request)
+            body = await _read_bounded_body(request, max_bytes=max_request_bytes)
+            try:
+                product_request = ProductPreflightRequest.model_validate(
+                    _decode_json_object(body)
+                )
+            except ValidationError as exc:
+                raise _RequestFailure(422, "invalid_request") from exc
+
+            if not slots.acquire(blocking=False):
+                raise _RequestFailure(429, "executor_busy")
+            try:
+                route = await run_in_threadpool(
+                    resolve_product_route,
+                    product_request.provider,
+                    product_request.model,
+                )
+                preflight_request = PreflightRequest(
+                    route=route,
+                    reasoning_effort=product_request.reasoning_effort,
+                    capability_intent=product_request.capability_intent,
+                )
+                _validate_capability_intent(
+                    route=route,
+                    intent=preflight_request.capability_intent,
+                    adapter_factory=adapter_factory,
+                    require_output_schema=False,
+                )
+                if route.transport_id == "codex_cli":
+                    await run_in_threadpool(
+                        _codex_preflight, codex_executor, preflight_request
+                    )
+                elif route.transport_id == "ollama_http":
+                    if ollama_adapter is None:
+                        raise _RequestFailure(503, "ollama_unavailable")
+                    await run_in_threadpool(
+                        _ollama_preflight, ollama_adapter, preflight_request
+                    )
+                else:
+                    if provider_api_adapter is None:
+                        raise _RequestFailure(503, "provider_adapter_unavailable")
+                    await run_in_threadpool(
+                        provider_api_adapter.preflight, preflight_request
+                    )
+            except _RequestFailure:
+                raise
+            except Exception as exc:
+                raise _adapter_failure(exc) from exc
+            finally:
+                slots.release()
+
+            response = PreflightResponse(route=route, preflight_status="passed")
+            return JSONResponse(
+                content=response.model_dump(mode="json", exclude_none=True)
+            )
         except _RequestFailure as exc:
             return JSONResponse(
                 status_code=exc.status_code,
@@ -466,6 +667,12 @@ def create_codex_executor_app(
                 adapter_factory=adapter_factory,
                 output_schema=completion_request.output_schema,
                 require_output_schema=True,
+            )
+            resolved_route = await run_in_threadpool(
+                validate_legacy_route, completion_request.route
+            )
+            completion_request = completion_request.model_copy(
+                update={"route": resolved_route}
             )
 
             if not slots.acquire(blocking=False):
@@ -499,6 +706,89 @@ def create_codex_executor_app(
             if len(content.encode("utf-8")) > max_output_bytes:
                 raise _RequestFailure(502, "completion_too_large")
             response = CompletionResponse(route=completion_request.route, content=content)
+            return JSONResponse(
+                content=response.model_dump(mode="json", exclude_none=True)
+            )
+        except _RequestFailure as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": {"code": exc.code}},
+            )
+
+    @app.post("/v1/product/complete", response_model=CompletionResponse)
+    async def product_complete(request: Request) -> JSONResponse:
+        try:
+            _require_loopback_peer(request)
+            body = await _read_bounded_body(request, max_bytes=max_request_bytes)
+            try:
+                product_request = ProductCompletionRequest.model_validate(
+                    _decode_json_object(body)
+                )
+            except ValidationError as exc:
+                raise _RequestFailure(422, "invalid_request") from exc
+            if product_request.capability_intent.native_tools:
+                raise _RequestFailure(422, "native_tools_unavailable")
+            if product_request.output_schema is not None:
+                try:
+                    validate_inline_schema(product_request.output_schema)
+                except ValueError as exc:
+                    raise _RequestFailure(422, "output_schema_invalid") from exc
+
+            if not slots.acquire(blocking=False):
+                raise _RequestFailure(429, "executor_busy")
+            try:
+                route = await run_in_threadpool(
+                    resolve_product_route,
+                    product_request.provider,
+                    product_request.model,
+                )
+                try:
+                    completion_request = CompletionRequest(
+                        route=route,
+                        reasoning_effort=product_request.reasoning_effort,
+                        capability_intent=product_request.capability_intent,
+                        trusted_instructions=product_request.trusted_instructions,
+                        user_input=product_request.user_input,
+                        output_schema=product_request.output_schema,
+                        max_output_tokens=product_request.max_output_tokens,
+                    )
+                except ValidationError as exc:
+                    raise _RequestFailure(422, "invalid_request") from exc
+                _validate_capability_intent(
+                    route=route,
+                    intent=completion_request.capability_intent,
+                    adapter_factory=adapter_factory,
+                    output_schema=completion_request.output_schema,
+                    require_output_schema=True,
+                )
+                if route.transport_id == "codex_cli":
+                    content = await run_in_threadpool(
+                        _codex_complete, codex_executor, completion_request
+                    )
+                elif route.transport_id == "ollama_http":
+                    if ollama_adapter is None:
+                        raise _RequestFailure(503, "ollama_unavailable")
+                    content = await run_in_threadpool(
+                        _ollama_complete, ollama_adapter, completion_request
+                    )
+                else:
+                    if provider_api_adapter is None:
+                        raise _RequestFailure(503, "provider_adapter_unavailable")
+                    content = await run_in_threadpool(
+                        provider_api_adapter.complete, completion_request
+                    )
+            except _RequestFailure:
+                raise
+            except Exception as exc:
+                raise _adapter_failure(exc) from exc
+            finally:
+                slots.release()
+
+            if not isinstance(content, str) or not content:
+                raise _RequestFailure(502, "empty_completion")
+            if len(content.encode("utf-8")) > max_output_bytes:
+                raise _RequestFailure(502, "completion_too_large")
+            response = CompletionResponse(route=route, content=content)
             return JSONResponse(
                 content=response.model_dump(mode="json", exclude_none=True)
             )

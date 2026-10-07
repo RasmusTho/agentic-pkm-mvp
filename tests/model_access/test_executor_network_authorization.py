@@ -22,7 +22,15 @@ class _CodexExecutor:
         return SimpleNamespace(response_text="complete")
 
     def list_catalog_models(self) -> list[dict[str, Any]]:
-        return []
+        return [
+            {
+                "model": "gpt-5.6-luna",
+                "hidden": False,
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                ],
+            }
+        ]
 
 
 class _OllamaAdapter:

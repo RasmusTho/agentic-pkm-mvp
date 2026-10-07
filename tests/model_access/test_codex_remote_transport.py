@@ -23,6 +23,9 @@ from app.model_access.remote_contract import (
     CompletionRouteIdentity,
     PreflightRequest,
     PreflightResponse,
+    ProductCatalogRequest,
+    ProductCompletionRequest,
+    ProductPreflightRequest,
 )
 
 
@@ -223,6 +226,12 @@ def test_remote_catalog_unexpected_transport_exception_is_invalid() -> None:
 
 def test_remote_preflight_is_route_bound_and_single_request() -> None:
     request = _preflight_request()
+    host_route = request.route.model_copy(
+        update={
+            "catalog_snapshot_ref": "catalog.openai_codex_cli",
+            "catalog_snapshot_hash": "sha256:" + "b" * 64,
+        }
+    )
     calls: list[httpx.Request] = []
 
     def respond(http_request: httpx.Request) -> httpx.Response:
@@ -235,7 +244,7 @@ def test_remote_preflight_is_route_bound_and_single_request() -> None:
         assert "trusted_instructions" not in sent
         assert "user_input" not in sent
         response = PreflightResponse(
-            route=request.route,
+            route=host_route,
             preflight_status="passed",
         )
         return httpx.Response(200, json=response.model_dump(mode="json"))
@@ -249,7 +258,7 @@ def test_remote_preflight_is_route_bound_and_single_request() -> None:
     finally:
         transport.close()
 
-    assert result.route == request.route
+    assert result.route == host_route
     assert result.preflight_status == "passed"
     assert len(calls) == 1
 
@@ -461,6 +470,12 @@ def test_remote_preflight_classifies_tls_alert_wrapped_in_read_error() -> None:
 
 def test_remote_complete_is_route_bound_and_never_retries() -> None:
     request = _request()
+    host_route = request.route.model_copy(
+        update={
+            "catalog_snapshot_ref": "catalog.openai_codex_cli",
+            "catalog_snapshot_hash": "sha256:" + "b" * 64,
+        }
+    )
     calls: list[httpx.Request] = []
 
     def respond(http_request: httpx.Request) -> httpx.Response:
@@ -470,7 +485,7 @@ def test_remote_complete_is_route_bound_and_never_retries() -> None:
         assert "authorization" not in http_request.headers
         sent = json.loads(http_request.content)
         assert sent["route"] == request.route.model_dump(mode="json")
-        response = CompletionResponse(route=request.route, content="hello")
+        response = CompletionResponse(route=host_route, content="hello")
         return httpx.Response(200, json=response.model_dump(mode="json"))
 
     transport = CodexRemoteTransport(
@@ -482,9 +497,88 @@ def test_remote_complete_is_route_bound_and_never_retries() -> None:
     finally:
         transport.close()
 
-    assert result.route == request.route
+    assert result.route == host_route
     assert result.content == "hello"
     assert len(calls) == 1
+
+
+def test_product_transport_sends_only_logical_provider_and_model() -> None:
+    request = ProductCompletionRequest(
+        provider="openai",
+        model="gpt-6-luna",
+        reasoning_effort="high",
+        trusted_instructions="Be concise.",
+        user_input="Say hello.",
+    )
+    preflight_request = ProductPreflightRequest(
+        provider="openai", model="gpt-6-luna", reasoning_effort="high"
+    )
+    host_route = CompletionRouteIdentity(
+        provider="openai",
+        model="gpt-6-luna",
+        transport_id="openai_api",
+        catalog_snapshot_ref="catalog.openai_openai_api",
+        catalog_snapshot_hash="sha256:" + "c" * 64,
+    )
+    calls: list[httpx.Request] = []
+
+    def respond(http_request: httpx.Request) -> httpx.Response:
+        calls.append(http_request)
+        sent = json.loads(http_request.content)
+        assert "transport_id" not in sent
+        assert "catalog_snapshot_ref" not in sent
+        if http_request.url.path.endswith("/preflight"):
+            assert str(http_request.url) == ENDPOINT + "/v1/product/preflight"
+            return httpx.Response(
+                200,
+                json=PreflightResponse(
+                    route=host_route, preflight_status="passed"
+                ).model_dump(mode="json"),
+            )
+        assert str(http_request.url) == ENDPOINT + "/v1/product/complete"
+        return httpx.Response(
+            200,
+            json=CompletionResponse(route=host_route, content="hello").model_dump(
+                mode="json"
+            ),
+        )
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        preflight = transport.preflight(preflight_request)
+        completion = transport.complete(request)
+    finally:
+        transport.close()
+
+    assert preflight.route == host_route
+    assert completion.route == host_route
+    assert completion.content == "hello"
+    assert len(calls) == 2
+
+
+def test_product_catalog_selects_provider_without_a_transport_field() -> None:
+    request = ProductCatalogRequest(provider="openai")
+    response_payload = _catalog_response("codex_cli")
+
+    def respond(http_request: httpx.Request) -> httpx.Response:
+        assert str(http_request.url) == ENDPOINT + "/v1/product/catalog"
+        assert json.loads(http_request.content) == {"provider": "openai"}
+        return httpx.Response(200, json=response_payload)
+
+    transport = CodexRemoteTransport(
+        endpoint=ENDPOINT,
+        transport=httpx.MockTransport(respond),
+    )
+    try:
+        catalog = transport.catalog(request)
+    finally:
+        transport.close()
+
+    assert catalog.snapshot.provider == "openai"
+    assert catalog.snapshot.transport_id == "codex_cli"
 
 
 def test_remote_complete_timeout_is_indeterminate_and_never_retries() -> None:

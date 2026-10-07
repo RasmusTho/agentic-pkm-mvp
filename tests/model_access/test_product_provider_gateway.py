@@ -121,13 +121,8 @@ def _api_response(provider: str) -> dict[str, Any]:
 def _payload(transport_id: str) -> dict[str, Any]:
     provider, model = _ROUTES[transport_id]
     return {
-        "route": {
-            "provider": provider,
-            "model": model,
-            "transport_id": transport_id,
-            "catalog_snapshot_ref": f"catalog.{provider}_{transport_id}",
-            "catalog_snapshot_hash": SNAPSHOT_HASH,
-        },
+        "provider": provider,
+        "model": model,
         "reasoning_effort": None,
         "capability_intent": {
             "structured_output": False,
@@ -164,18 +159,16 @@ def _gateway(
 
 
 def _bind_catalog_snapshot(client: TestClient, payload: dict[str, Any]) -> None:
-    response = client.post(
-        "/v1/catalog", json={"transport_id": payload["route"]["transport_id"]}
-    )
+    # Prime the host cache; provenance is generated and bound on the Mac and
+    # is deliberately absent from Product requests.
+    response = client.post("/v1/product/catalog", json={"provider": payload["provider"]})
     assert response.status_code == 200
-    snapshot = response.json()["snapshot"]
-    payload["route"]["catalog_snapshot_ref"] = snapshot["snapshot_ref"]
-    payload["route"]["catalog_snapshot_hash"] = snapshot["snapshot_hash"]
 
 
 def _preflight_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return {
-        "route": payload["route"],
+        "provider": payload["provider"],
+        "model": payload["model"],
         "reasoning_effort": payload["reasoning_effort"],
         "capability_intent": payload["capability_intent"],
     }
@@ -207,15 +200,19 @@ def test_dispatches_exact_declared_route_without_caller_credentials() -> None:
         for transport_id, (provider, _) in _ROUTES.items():
             payload = _payload(transport_id)
             _bind_catalog_snapshot(client, payload)
-            preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+            preflight = client.post("/v1/product/preflight", json=_preflight_payload(payload))
             assert preflight.status_code == 200
-            assert preflight.json()["route"] == payload["route"]
-            response = client.post("/v1/complete", json=payload)
+            resolved_route = preflight.json()["route"]
+            assert resolved_route["provider"] == provider
+            assert resolved_route["model"] == payload["model"]
+            assert resolved_route["transport_id"] == transport_id
+            assert resolved_route["catalog_snapshot_hash"].startswith("sha256:")
+            response = client.post("/v1/product/complete", json=payload)
             with_secret_field = client.post(
-                "/v1/complete", json={**payload, "api_key": KEY}
+                "/v1/product/complete", json={**payload, "api_key": KEY}
             )
             assert response.status_code == 200
-            assert response.json()["route"] == payload["route"]
+            assert response.json()["route"] == resolved_route
             expected_content = (
                 "exact Anthropic route" if provider == "anthropic" else f"exact {provider} route"
             )
@@ -265,9 +262,9 @@ def test_provider_native_json_schema_is_sent_and_validated() -> None:
         payload["output_schema"] = schema
         with _local_test_client(app) as client:
             _bind_catalog_snapshot(client, payload)
-            preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+            preflight = client.post("/v1/product/preflight", json=_preflight_payload(payload))
             assert preflight.status_code == 200
-            response = client.post("/v1/complete", json=payload)
+            response = client.post("/v1/product/complete", json=payload)
         assert response.status_code == 200
         assert response.json()["content"] == '{"ok":true}'
         assert len([request for request in sent if request.method == "POST"]) == 1
@@ -292,7 +289,7 @@ def test_invalid_provider_schema_output_is_terminal_after_one_dispatch() -> None
     payload["output_schema"] = schema
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        response = client.post("/v1/complete", json=payload)
+        response = client.post("/v1/product/complete", json=payload)
 
     assert response.status_code == 502
     assert response.json() == {"error": {"code": "provider_schema_violation"}}
@@ -330,7 +327,7 @@ def test_reference_schema_is_rejected_before_provider_or_schema_egress(
     }
 
     with _local_test_client(app) as client:
-        response = client.post("/v1/complete", json=payload)
+        response = client.post("/v1/product/complete", json=payload)
 
     assert response.status_code == 422
     assert response.json() == {"error": {"code": "output_schema_invalid"}}
@@ -356,7 +353,7 @@ def test_catalog_refresh_uses_verifiable_provider_metadata() -> None:
     snapshots = {}
     with _local_test_client(app) as client:
         for transport_id, (provider, _) in _ROUTES.items():
-            response = client.post("/v1/catalog", json={"transport_id": transport_id})
+            response = client.post("/v1/product/catalog", json={"provider": provider})
             assert response.status_code == 200
             snapshot = response.json()["snapshot"]
             assert snapshot["provider"] == provider
@@ -411,8 +408,8 @@ def test_catalog_capability_contradiction_blocks_preflight_and_completion() -> N
     }
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
-        completion = client.post("/v1/complete", json=payload)
+        preflight = client.post("/v1/product/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/product/complete", json=payload)
 
     assert preflight.status_code == 422
     assert preflight.json() == {"error": {"code": "structured_output_unavailable"}}
@@ -437,8 +434,8 @@ def test_provider_explicitly_disabling_reasoning_blocks_inference() -> None:
     payload["reasoning_effort"] = "high"
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
-        completion = client.post("/v1/complete", json=payload)
+        preflight = client.post("/v1/product/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/product/complete", json=payload)
 
     expected = {"error": {"code": "reasoning_effort_unavailable"}}
     assert preflight.status_code == 422
@@ -473,12 +470,12 @@ def test_reasoning_requires_static_model_declared_efforts(
 
     app = _gateway(respond)
     payload = _payload(transport_id)
-    payload["route"]["model"] = model_id
+    payload["model"] = model_id
     payload["reasoning_effort"] = "high"
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
-        completion = client.post("/v1/complete", json=payload)
+        preflight = client.post("/v1/product/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/product/complete", json=payload)
 
     expected = {"error": {"code": "reasoning_effort_unavailable"}}
     assert preflight.status_code == 422
@@ -502,12 +499,12 @@ def test_declared_openai_luna_reasoning_effort_passes_preflight_and_dispatch(
 
     app = _gateway(respond)
     payload = _payload("openai_api")
-    payload["route"]["model"] = "gpt-6-luna"
+    payload["model"] = "gpt-6-luna"
     payload["reasoning_effort"] = effort
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
-        completion = client.post("/v1/complete", json=payload)
+        preflight = client.post("/v1/product/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/product/complete", json=payload)
 
     assert preflight.status_code == 200
     assert completion.status_code == 200
@@ -531,7 +528,7 @@ def test_default_output_limit_is_checked_against_provider_catalog() -> None:
     payload = _payload("anthropic_api")
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        response = client.post("/v1/complete", json=payload)
+        response = client.post("/v1/product/complete", json=payload)
 
     assert response.status_code == 422
     assert response.json() == {"error": {"code": "max_output_tokens_unavailable"}}
@@ -553,19 +550,20 @@ def test_model_missing_from_provider_catalog_is_rejected_before_inference() -> N
     payload = _payload("anthropic_api")
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        response = client.post("/v1/preflight", json=_preflight_payload(payload))
+        response = client.post("/v1/product/preflight", json=_preflight_payload(payload))
 
     assert response.status_code == 422
     assert response.json() == {"error": {"code": "provider_model_unavailable"}}
     assert all(request.method == "GET" for request in sent)
 
 
-class _RefreshOnThirdCatalogRead(CatalogCache):
+class _RefreshOnFourthCatalogRead(CatalogCache):
     """Advance only the completion read past TTL to exercise gateway drift handling."""
 
     def __init__(self) -> None:
         super().__init__()
         self._reads = 0
+        self._base_time = datetime.now(timezone.utc)
 
     def get(
         self,
@@ -576,8 +574,9 @@ class _RefreshOnThirdCatalogRead(CatalogCache):
         now: datetime | None = None,
     ) -> CatalogSnapshot:
         self._reads += 1
-        if self._reads == 3:
-            now = datetime.now(timezone.utc) + timedelta(minutes=6)
+        now = self._base_time + (
+            timedelta(minutes=6) if self._reads >= 4 else timedelta(0)
+        )
         return super().get(
             provider=provider,
             transport_id=transport_id,
@@ -629,8 +628,8 @@ def test_stale_catalog_cannot_authorize_preflight_or_inference() -> None:
     payload = _payload("openai_api")
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
-        completion = client.post("/v1/complete", json=payload)
+        preflight = client.post("/v1/product/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/product/complete", json=payload)
 
     expected = {"error": {"code": "catalog_stale"}}
     assert preflight.status_code == 503
@@ -640,7 +639,7 @@ def test_stale_catalog_cannot_authorize_preflight_or_inference() -> None:
     assert all(request.method == "GET" for request in sent)
 
 
-def test_completion_rejects_route_when_catalog_changes_after_preflight() -> None:
+def test_completion_receipt_binds_the_catalog_snapshot_used_for_that_request() -> None:
     sent: list[httpx.Request] = []
     catalog_reads = 0
 
@@ -653,20 +652,23 @@ def test_completion_rejects_route_when_catalog_changes_after_preflight() -> None
             if catalog_reads > 1:
                 payload["data"][0]["created"] += 1
             return httpx.Response(200, json=payload)
-        raise AssertionError("catalog drift must reject before inference")
+        if request.method == "POST":
+            return httpx.Response(200, json=_api_response("openai"))
+        raise AssertionError("unexpected request")
 
-    app = _gateway(respond, catalog_cache=_RefreshOnThirdCatalogRead())
+    app = _gateway(respond, catalog_cache=_RefreshOnFourthCatalogRead())
     payload = _payload("openai_api")
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
-        completion = client.post("/v1/complete", json=payload)
+        preflight = client.post("/v1/product/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/product/complete", json=payload)
 
     assert preflight.status_code == 200
-    assert completion.status_code == 409
-    assert completion.json() == {"error": {"code": "catalog_snapshot_mismatch"}}
+    assert completion.status_code == 200
+    assert completion.json()["route"]["catalog_snapshot_hash"] != preflight.json()["route"]["catalog_snapshot_hash"]
+    assert completion.json()["content"] == "exact openai route"
     assert catalog_reads == 2
-    assert all(request.method == "GET" for request in sent)
+    assert len([request for request in sent if request.method == "POST"]) == 1
 
 
 def test_dispatch_failure_is_terminal_and_receipt_is_secret_free() -> None:
@@ -682,9 +684,9 @@ def test_dispatch_failure_is_terminal_and_receipt_is_secret_free() -> None:
     payload = _payload("openai_api")
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+        preflight = client.post("/v1/product/preflight", json=_preflight_payload(payload))
         assert preflight.status_code == 200
-        response = client.post("/v1/complete", json=payload)
+        response = client.post("/v1/product/complete", json=payload)
 
     assert response.status_code == 503
     assert response.json() == {"error": {"code": "provider_unavailable"}}
@@ -703,19 +705,20 @@ def test_preflight_requires_host_credential_and_exact_provider_model() -> None:
     app = _gateway(respond, credential_resolver=lambda _name: None)
     payload = _payload("openai_api")
     preflight = {
-        "route": payload["route"],
+        "provider": payload["provider"],
+        "model": payload["model"],
         "reasoning_effort": None,
         "capability_intent": payload["capability_intent"],
     }
     with _local_test_client(app) as client:
-        response = client.post("/v1/preflight", json=preflight)
+        response = client.post("/v1/product/preflight", json=preflight)
 
     assert response.status_code == 503
     assert response.json() == {"error": {"code": "credential_unavailable"}}
     assert sent == []
 
 
-def test_preflight_rejects_unverified_snapshot_before_inference() -> None:
+def test_preflight_rejects_caller_selected_transport_and_catalog_provenance() -> None:
     sent: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -726,18 +729,23 @@ def test_preflight_rejects_unverified_snapshot_before_inference() -> None:
     payload = _payload("openai_api")
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
-        payload["route"]["catalog_snapshot_hash"] = "sha256:" + "f" * 64
-        response = client.post("/v1/preflight", json=_preflight_payload(payload))
+        response = client.post(
+            "/v1/product/preflight",
+            json={**_preflight_payload(payload), "transport_id": "codex_cli", "catalog_snapshot_hash": "sha256:" + "f" * 64},
+        )
 
-    assert response.status_code == 409
-    assert response.json() == {"error": {"code": "catalog_snapshot_mismatch"}}
-    assert all(request.method == "GET" for request in sent)
+    assert response.status_code == 422
+    assert response.json() == {"error": {"code": "invalid_request"}}
+    assert len([request for request in sent if request.method == "POST"]) == 0
 
 
-def test_snapshot_provenance_pair_is_validated() -> None:
+def test_completion_rejects_caller_supplied_catalog_provenance() -> None:
     payload = _payload("openai_api")
-    payload["route"]["catalog_snapshot_hash"] = None
     app = _gateway(lambda _request: httpx.Response(500))
     with _local_test_client(app) as client:
-        response = client.post("/v1/complete", json=payload)
+        response = client.post(
+            "/v1/product/complete",
+            json={**payload, "catalog_snapshot_ref": "catalog.unrelated", "catalog_snapshot_hash": SNAPSHOT_HASH},
+        )
     assert response.status_code == 422
+    assert response.json() == {"error": {"code": "invalid_request"}}
