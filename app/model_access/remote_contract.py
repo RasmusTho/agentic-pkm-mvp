@@ -74,7 +74,7 @@ class CompletionRequest(_StrictModel):
 
     route: CompletionRouteIdentity
     reasoning_effort: Literal[
-        "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent
@@ -104,7 +104,7 @@ class PreflightRequest(_StrictModel):
 
     route: CompletionRouteIdentity
     reasoning_effort: Literal[
-        "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent

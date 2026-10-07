@@ -36,6 +36,8 @@ automatic promotion. OpenAI's list endpoint supplies model IDs and creation time
 capability metadata, so the pinned Product census carries its per-model reasoning-effort allowlist.
 A missing allowlist means unknown and denies a requested effort; an empty list explicitly declares a
 non-reasoning model. Provider attestations, when present, can only narrow the declared allowlist.
+The gateway also refuses inference against a stale catalog snapshot, even while the cache retains
+that snapshot as a bounded availability aid for read-only callers.
 
 The current census in `docs/settings/models/providers.yaml` is the scope boundary; adding a new
 provider is not part of this task. Local Ollama remains optional and is not a readiness prerequisite
@@ -68,7 +70,9 @@ dispatch, the result is no longer bound to the model selected in settings.
   effort is checked against the selected model's declared capability before inference. Unknown and
   explicitly unsupported effort sets fail closed.
   - Verify: `tests/model_access/test_product_provider_gateway.py::test_catalog_refresh_uses_verifiable_provider_metadata`
-  - Verify: `tests/model_access/test_product_provider_gateway.py::test_openai_reasoning_requires_model_declared_efforts`
+  - Verify: `tests/model_access/test_product_provider_gateway.py::test_reasoning_requires_static_model_declared_efforts`
+  - Verify: `tests/model_access/test_product_provider_gateway.py::test_stale_catalog_cannot_authorize_preflight_or_inference`
+  - Verify: `tests/model_access/test_product_provider_gateway.py::test_declared_openai_luna_reasoning_effort_passes_preflight_and_dispatch`
 - [ ] One inference request causes at most one provider dispatch; preflight failure is typed and a
   post-dispatch failure is terminal, with secret-free route provenance.
   - Verify: `tests/model_access/test_product_provider_gateway.py::test_dispatch_failure_is_terminal_and_receipt_is_secret_free`

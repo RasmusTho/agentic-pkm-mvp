@@ -210,6 +210,8 @@ class ProductProviderApiAdapter:
 
     @staticmethod
     def _require_snapshot_match(route: Any, snapshot: CatalogSnapshot) -> None:
+        if snapshot.freshness != "fresh":
+            raise ProviderApiError("catalog_stale")
         if (
             route.catalog_snapshot_ref != snapshot.snapshot_ref
             or route.catalog_snapshot_hash != snapshot.snapshot_hash
@@ -240,10 +242,12 @@ class ProductProviderApiAdapter:
             and reasoning_effort not in model.reasoning_efforts
         ):
             raise ProviderApiError("reasoning_effort_unavailable")
-        if declared_reasoning_efforts is not None:
-            if reasoning_effort not in declared_reasoning_efforts:
-                raise ProviderApiError("reasoning_effort_unavailable")
-        elif not model.reasoning_effort_attested:
+        # The checked-in per-model census is the authority. Provider metadata may
+        # veto a declared effort, but it cannot fill an unknown allowlist or widen it.
+        if (
+            declared_reasoning_efforts is None
+            or reasoning_effort not in declared_reasoning_efforts
+        ):
             raise ProviderApiError("reasoning_effort_unavailable")
         return model
 

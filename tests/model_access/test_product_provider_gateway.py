@@ -448,18 +448,31 @@ def test_provider_explicitly_disabling_reasoning_blocks_inference() -> None:
     assert all(request.method == "GET" for request in sent)
 
 
-@pytest.mark.parametrize("model_id", ["gpt-4.1", "gpt-5.3-codex-spark"])
-def test_openai_reasoning_requires_model_declared_efforts(model_id: str) -> None:
+@pytest.mark.parametrize(
+    ("transport_id", "model_id"),
+    [
+        ("openai_api", "gpt-4.1"),
+        ("openai_api", "gpt-5.3-codex-spark"),
+        # Live provider catalogs attest these efforts, but the static census is
+        # intentionally unknown; provider data cannot grant the missing authority.
+        ("anthropic_api", "claude-fable-5"),
+        ("deepseek_api", "deepseek-chat"),
+    ],
+)
+def test_reasoning_requires_static_model_declared_efforts(
+    transport_id: str, model_id: str
+) -> None:
     sent: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         sent.append(request)
         if request.method == "GET":
-            return httpx.Response(200, json=_catalog_payload("openai"))
-        return httpx.Response(200, json=_api_response("openai"))
+            provider = _ROUTES[transport_id][0]
+            return httpx.Response(200, json=_catalog_payload(provider))
+        return httpx.Response(200, json=_api_response(_ROUTES[transport_id][0]))
 
     app = _gateway(respond)
-    payload = _payload("openai_api")
+    payload = _payload(transport_id)
     payload["route"]["model"] = model_id
     payload["reasoning_effort"] = "high"
     with _local_test_client(app) as client:
@@ -475,7 +488,10 @@ def test_openai_reasoning_requires_model_declared_efforts(model_id: str) -> None
     assert all(request.method == "GET" for request in sent)
 
 
-def test_declared_openai_luna_reasoning_effort_passes_preflight_and_dispatch() -> None:
+@pytest.mark.parametrize("effort", ["high", "none"])
+def test_declared_openai_luna_reasoning_effort_passes_preflight_and_dispatch(
+    effort: str,
+) -> None:
     sent: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
@@ -487,7 +503,7 @@ def test_declared_openai_luna_reasoning_effort_passes_preflight_and_dispatch() -
     app = _gateway(respond)
     payload = _payload("openai_api")
     payload["route"]["model"] = "gpt-6-luna"
-    payload["reasoning_effort"] = "high"
+    payload["reasoning_effort"] = effort
     with _local_test_client(app) as client:
         _bind_catalog_snapshot(client, payload)
         preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
@@ -495,7 +511,9 @@ def test_declared_openai_luna_reasoning_effort_passes_preflight_and_dispatch() -
 
     assert preflight.status_code == 200
     assert completion.status_code == 200
-    assert sum(request.method == "POST" for request in sent) == 1
+    dispatched = [request for request in sent if request.method == "POST"]
+    assert len(dispatched) == 1
+    assert json.loads(dispatched[0].content)["reasoning_effort"] == effort
 
 
 def test_default_output_limit_is_checked_against_provider_catalog() -> None:
@@ -566,6 +584,60 @@ class _RefreshOnThirdCatalogRead(CatalogCache):
             loader=loader,
             now=now,
         )
+
+
+class _StaleOnSecondCatalogRead(CatalogCache):
+    """Serve a cached snapshot as stale after a simulated six-minute outage."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._reads = 0
+        self._base_time = datetime.now(timezone.utc)
+
+    def get(
+        self,
+        *,
+        provider: str,
+        transport_id: str,
+        loader: Callable[[datetime], CatalogSnapshot],
+        now: datetime | None = None,
+    ) -> CatalogSnapshot:
+        self._reads += 1
+        fixed_time = self._base_time
+        if self._reads >= 2:
+            fixed_time += timedelta(minutes=6)
+        return super().get(
+            provider=provider,
+            transport_id=transport_id,
+            loader=loader,
+            now=fixed_time,
+        )
+
+
+def test_stale_catalog_cannot_authorize_preflight_or_inference() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET" and len([item for item in sent if item.method == "GET"]) == 1:
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        if request.method == "GET":
+            return httpx.Response(503)
+        raise AssertionError("stale catalog must reject before inference")
+
+    app = _gateway(respond, catalog_cache=_StaleOnSecondCatalogRead())
+    payload = _payload("openai_api")
+    with _local_test_client(app) as client:
+        _bind_catalog_snapshot(client, payload)
+        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/complete", json=payload)
+
+    expected = {"error": {"code": "catalog_stale"}}
+    assert preflight.status_code == 503
+    assert preflight.json() == expected
+    assert completion.status_code == 503
+    assert completion.json() == expected
+    assert all(request.method == "GET" for request in sent)
 
 
 def test_completion_rejects_route_when_catalog_changes_after_preflight() -> None:
