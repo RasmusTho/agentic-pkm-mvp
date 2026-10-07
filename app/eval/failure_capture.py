@@ -32,9 +32,10 @@ reviewed code change. Until a decision is recorded the draft remains pending.
 
 If a status mutation succeeds while both configured receipt sinks reject the
 AuthorityReceipt, :func:`reconcile_pending_disposition_receipt` explicitly
-reconciles the durable terminal draft through the same GOV and outbox seams;
-it never mutates the draft status a second time and withholds success until a
-receipt event is durable.
+reconciles the durable terminal draft through the same GOV and outbox seams,
+reusing the original DecisionToken persisted with that status mutation; it
+never mints a replacement authority or mutates the draft status a second time,
+and withholds success until a receipt event is durable.
 
 Deliberate divergence from "reuse the existing queue surface"
 -------------------------------------------------------------
@@ -79,7 +80,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
@@ -88,8 +89,10 @@ from uuid import uuid4
 from app.events.schema import make_outbox_event
 from app.governance.governed_write import (
     AuthorityReceipt,
+    DecisionToken,
     GovernedWriteAdapter,
     GovernedWriteGrant,
+    PolicyDecision,
 )
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.contracts import WriteReceipt
@@ -177,6 +180,8 @@ class DraftEvalCase:
     decided_by: str | None = None
     decided_at: str | None = None
     notes: str | None = None
+    policy_decision: PolicyDecision | None = None
+    decision_token: DecisionToken | None = None
 
 
 def is_schema_violation_reason(reason: str | None) -> bool:
@@ -428,6 +433,17 @@ def _render_draft_note(draft: DraftEvalCase, *, title: str) -> str:
                 "notes": draft.notes,
             }
         )
+    if draft.policy_decision is not None or draft.decision_token is not None:
+        if draft.policy_decision is None or draft.decision_token is None:
+            raise FailureCaptureError(
+                "terminal eval draft authorization must persist both policy decision and token"
+            )
+        frontmatter.update(
+            {
+                "policy_decision": asdict(draft.policy_decision),
+                "decision_token": asdict(draft.decision_token),
+            }
+        )
     yaml_block = yaml.safe_dump(frontmatter, sort_keys=True, allow_unicode=False).strip()
     payload_json = json.dumps(dict(draft.payload_snapshot), indent=2, sort_keys=True)
     return (
@@ -444,6 +460,57 @@ def _render_draft_note(draft: DraftEvalCase, *, title: str) -> str:
         "## Payload snapshot\n\n"
         f"```json\n{payload_json}\n```\n"
     )
+
+
+def _parse_persisted_policy_decision(raw: Any) -> PolicyDecision | None:
+    """Parse a strict GOV policy decision stored in terminal draft frontmatter."""
+    if not isinstance(raw, dict):
+        return None
+    string_fields = (
+        "decision_id",
+        "status",
+        "action",
+        "write_class",
+        "actor",
+        "resource",
+        "reason",
+        "issued_at",
+        "source",
+        "contract_version",
+    )
+    if any(not isinstance(raw.get(field), str) for field in string_fields):
+        return None
+    try:
+        return PolicyDecision(**{field: raw[field] for field in string_fields})
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_persisted_decision_token(raw: Any) -> DecisionToken | None:
+    """Parse a strict GOV decision token stored in terminal draft frontmatter."""
+    if not isinstance(raw, dict):
+        return None
+    string_fields = (
+        "token_id",
+        "decision_id",
+        "action",
+        "write_class",
+        "actor",
+        "resource",
+        "issued_at",
+        "contract_version",
+    )
+    if any(not isinstance(raw.get(field), str) for field in string_fields):
+        return None
+    if not isinstance(raw.get("valid"), bool):
+        return None
+    try:
+        return DecisionToken(
+            **{field: raw[field] for field in string_fields},
+            valid=raw["valid"],
+        )
+    except (TypeError, ValueError):
+        return None
 
 
 def list_pending_drafts(vault_root: Path) -> list[DraftEvalCase]:
@@ -532,6 +599,8 @@ def _parse_draft_text(
         decided_by=fm.get("decided_by") if isinstance(fm.get("decided_by"), str) else None,
         decided_at=fm.get("decided_at") if isinstance(fm.get("decided_at"), str) else None,
         notes=fm.get("notes") if isinstance(fm.get("notes"), str) else None,
+        policy_decision=_parse_persisted_policy_decision(fm.get("policy_decision")),
+        decision_token=_parse_persisted_decision_token(fm.get("decision_token")),
     )
 
 
@@ -620,8 +689,6 @@ def _governed_disposition_payload(
     authority_receipt: AuthorityReceipt,
 ) -> dict[str, Any]:
     """Build the durable, cross-layer disposition receipt payload."""
-    from dataclasses import asdict
-
     return {
         "disposition_id": disposition_id,
         "draft_id": draft_id,
@@ -784,6 +851,10 @@ def reconcile_pending_disposition_receipt(
             or existing.action != expected_action
             or existing.write_class != EVAL_DRAFT_DISPOSITION_WRITE_CLASS
             or existing.resource != rel_path
+            or (
+                draft.decision_token is not None
+                and existing.decision_token_id != draft.decision_token.token_id
+            )
         ):
             raise AuthorityReceiptPersistenceError(
                 "persisted eval draft receipt does not match the terminal draft"
@@ -798,15 +869,25 @@ def reconcile_pending_disposition_receipt(
         )
 
     action = f"{EVAL_DRAFT_DISPOSITION_ACTION_PREFIX}.{decision}"
-    try:
-        grant = _GOVERNED_WRITE_ADAPTER.issue_human_decision_token(
-            action=action,
-            write_class=EVAL_DRAFT_DISPOSITION_WRITE_CLASS,
-            actor=draft.decided_by,
-            resource=rel_path,
+    if draft.policy_decision is None or draft.decision_token is None:
+        raise AuthorityReceiptPersistenceError(
+            "receipt reconciliation requires the original GOV authorization"
         )
+    if (
+        draft.policy_decision.status != "approved"
+        or draft.policy_decision.source != "human_review"
+        or draft.policy_decision.decision_id != draft.decision_token.decision_id
+        or draft.policy_decision.actor != draft.decided_by
+        or draft.policy_decision.action != action
+        or draft.policy_decision.write_class != EVAL_DRAFT_DISPOSITION_WRITE_CLASS
+        or draft.policy_decision.resource != rel_path
+    ):
+        raise AuthorityReceiptPersistenceError(
+            "persisted eval draft GOV authorization does not match the terminal draft"
+        )
+    try:
         token = _GOVERNED_WRITE_ADAPTER.validate_decision_token(
-            decision_token=grant.decision_token,
+            decision_token=draft.decision_token,
             action=action,
             write_class=EVAL_DRAFT_DISPOSITION_WRITE_CLASS,
             actor=draft.decided_by,
@@ -816,6 +897,10 @@ def reconcile_pending_disposition_receipt(
         raise PromotionDecisionError(
             f"GOV refused eval draft receipt reconciliation: {exc}"
         ) from exc
+    grant = GovernedWriteGrant(
+        policy_decision=draft.policy_decision,
+        decision_token=token,
+    )
 
     # The terminal note is the durable state-owner result. Reconciliation
     # maps it to the existing receipt shape without repeating the mutation.
@@ -921,6 +1006,8 @@ def _decide(
         decided_by=decided_by,
         decided_at=decided_at,
         notes=notes,
+        policy_decision=grant.policy_decision,
+        decision_token=grant.decision_token,
     )
     title = f"{_VALID_DECISIONS[target_status].capitalize()}d draft: {draft.kind}"
     content = _render_draft_note(updated, title=title)

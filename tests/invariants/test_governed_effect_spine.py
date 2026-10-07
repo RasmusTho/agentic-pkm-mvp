@@ -1468,6 +1468,8 @@ def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
     assert terminal is not None
     assert terminal.status == DRAFT_STATUS_PROMOTED
     assert terminal.decided_by == "human:reconcile"
+    assert terminal.decision_token is not None
+    original_token_id = terminal.decision_token.token_id
     assert len(writes) == 1
     assert append_attempts == 1
     assert db_attempts == 1
@@ -1476,6 +1478,7 @@ def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
     assert recovered.decision == "promote"
     assert recovered.authority_receipt is not None
     assert recovered.authority_receipt.actor == "human:reconcile"
+    assert recovered.authority_receipt.decision_token_id == original_token_id
     assert len(writes) == 1
     assert append_attempts == 2
     assert db_attempts == 2
@@ -1493,6 +1496,11 @@ def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
     ]
     assert len(matching) == 1
     assert matching[0]["event_id"] == matching[0]["payload"]["disposition_id"]
+    assert matching[0]["payload"]["decision_token"]["token_id"] == original_token_id
+    assert (
+        matching[0]["payload"]["authority_receipt"]["decision_token_id"]
+        == original_token_id
+    )
     assert matching[0]["payload"]["authority_receipt"]["actor"] == "human:reconcile"
 
     replay = reconcile_pending_disposition_receipt(vault, draft.draft_id)
