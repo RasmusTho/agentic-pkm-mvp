@@ -1,6 +1,6 @@
 ---
 name: deliver-issue-set
-description: "Review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set in agentic-pkm-mvp; build a pickup order and verification ledger, repair readiness when needed, and execute issues through the repo delivery chain, including rational parallel sub-agent delivery."
+description: "Review, plan, make ready, and deliver an epic, parent feature issue, Kanban/Project lane, or larger ready-issue set in agentic-pkm-mvp; build a pickup order and verification ledger, repair readiness when needed, and execute issues through the repo delivery chain. When delivery scope is omitted, automatically choose one bounded executable scope by priority, bug urgency, dependency value, and executable epic size instead of asking the owner to choose."
 ---
 
 # Deliver Issue Set
@@ -10,7 +10,7 @@ Blocked and needs-human candidates must carry the compatible `action:*` subtype 
 
 Use this skill when asked to review, plan, make ready, or deliver an epic, parent feature issue, Kanban/Project lane, or larger set of issues that should move through agent pickup.
 
-The goal is to produce an executable implementation plan and, when requested, deliver the full epic or all in-scope Kanban/Project issues that can truthfully be delivered. When the ready pool is too small, repair or create bounded ready issues using the repo's existing backlog workflows.
+The goal is to produce an executable implementation plan and, when requested, deliver the full epic or all in-scope Kanban/Project issues that can truthfully be delivered. When a delivery request leaves scope implicit, automatically select one default scope from the current repository using the rule below; do not pause to ask which issue set the owner means. When the ready pool is too small, repair or create bounded ready issues using the repo's existing backlog workflows.
 
 This skill is a coordinator. It does not replace `issue-to-code`, `verification-and-closure`, `issue-maintenance-change-control`, `docs-to-issue`, or `feature-breakdown`.
 
@@ -360,6 +360,24 @@ human-authority stop. Do not use this gate to invent scope: if source authority 
 bounded remediation, record that fact and follow the normal maintenance or Human Exception route.
 
 ## Scope Resolution
+
+### Automatic default scope
+
+When a delivery request names no issue IDs, parent/epic, Project, or lane, resolve one default scope from this repository's live GitHub state. Do not stop to ask the owner which issue set to pick; state the selected scope and its basis, then continue. Never search or combine unrelated repositories. Inspect Project state only when the request names a Project or Kanban lane.
+
+Treat open epic/feature parents and bounded standalone issues as candidate scopes. A candidate qualifies only if an in-scope issue has an autonomous next action: it passes strict `agent:ready` validation, or an owning workflow can repair readiness from clear source authority without a human decision. A blocked parent does not disqualify independent ready children; exclude scopes whose only remaining work requires a human or external action.
+
+Rank qualifying scopes lexicographically:
+
+1. Best actionable issue priority: `prio:high`, then `prio:med`, then `prio:low`, following `issue-to-code`.
+2. Among equal-priority work, apply the confirmed bug route in `AGENTS.md :: Transition-period bug-delivery policy` and `bug-to-issue`: P0/P1/protected work stays in repair, valid P2 goes through the Known Defects route, and P3 is informational. Do not infer severity or let `type:bug` alone outrank other work.
+3. Apply the remaining `issue-to-code` tie-breakers in order: unblocked work with clear Source Anchors, bounded scope, dependency-unlocking value, smallest safe implementation surface, then reduced fragmentation or rollout drift.
+4. Executable scope size: count ready or source-authoritatively repairable children in a parent; a standalone issue counts as one. “Largest epic” means the largest executable child set, not the most raw or blocked children.
+5. Lowest parent/issue number as a stable final tie-break.
+
+Compare standalone issues and parent scopes in the same ranking, so a high-priority active bug can outrank a larger medium-priority epic. Select only the top-ranked scope; do not combine unrelated issues into a synthetic set. For a selected parent, deliver its complete in-scope child set in dependency and priority order, continuing independent children while another is blocked. For a standalone fallback, deliver that one bounded issue through its full chain.
+
+If no candidate qualifies, use the Ready Pool Rule and No-progress final gate to repair source-supported work or identify the genuine blocker. Request owner input only for the actual human decision or action through `owner-decision-brief`, never to choose a scope. An explicitly scoped request overrides this default and must not be broadened.
 
 For an epic or parent feature issue:
 
