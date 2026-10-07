@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -10,9 +9,6 @@ from fastapi.testclient import TestClient
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.codex_executor_service import create_codex_executor_app
-
-
-CAPABILITY_NAME = "model-access.example/cap/complete"
 
 
 class _CodexExecutor:
@@ -47,7 +43,6 @@ def _executor_app():
         codex_executor=_CodexExecutor(),  # type: ignore[arg-type]
         ollama_adapter=_OllamaAdapter(),  # type: ignore[arg-type]
         adapter_factory=factory,
-        serve_capability_name=CAPABILITY_NAME,
     )
 
 
@@ -68,19 +63,7 @@ def _preflight_payload() -> dict[str, Any]:
     }
 
 
-def _capability_header(*, channel: str = "product", actions: list[str] | None = None):
-    return {
-        "Tailscale-App-Capabilities": json.dumps(
-            {
-                CAPABILITY_NAME: [
-                    {"channel": channel, "actions": actions or ["preflight"]}
-                ]
-            }
-        )
-    }
-
-
-def test_paths_require_channel_and_action_authorization() -> None:
+def test_configured_mtls_vlan_path_is_the_only_executor_path() -> None:
     root = Path(__file__).resolve().parents[2]
     policy = yaml.safe_load(
         (root / "config/model_access/executor_network_paths.yaml").read_text(
@@ -92,34 +75,16 @@ def test_paths_require_channel_and_action_authorization() -> None:
     configured_order = policy["executor_path_policies"][
         "profile.codex_remote_host"
     ]["order"]
-    assert vlan_policy == "policy.product_channel_actions"
+    authentication = policy["authentication_profiles"]["ygg_vlan_mutual_tls"]
+    assert vlan_policy == "policy.vlan_mtls_authenticated_caller"
     assert configured_order == ["ygg_vlan_primary"]
     assert set(path_profiles) == {"ygg_vlan_primary"}
+    assert authentication["mode"] == "mutual_tls"
 
     payload = _preflight_payload()
     with TestClient(_executor_app(), client=("127.0.0.1", 12345)) as client:
-        # A local/proxied socket or source-network membership alone is not authorization.
-        missing_claim = client.post("/v1/preflight", json=payload)
-        wrong_channel = client.post(
-            "/v1/preflight",
-            json=payload,
-            headers=_capability_header(channel="builder"),
-        )
-        wrong_action = client.post(
-            "/v1/preflight",
-            json=payload,
-            headers=_capability_header(actions=["complete"]),
-        )
-        valid = client.post(
-            "/v1/preflight",
-            json=payload,
-            headers=_capability_header(actions=["preflight"]),
-        )
+        # The external VLAN ingress authenticates the client certificate; the
+        # loopback-only backend does not depend on Tailscale-injected claims.
+        local_backend = client.post("/v1/preflight", json=payload)
 
-    assert missing_claim.status_code == 403
-    assert missing_claim.json()["error"]["code"] == "serve_capability_required"
-    assert wrong_channel.status_code == 403
-    assert wrong_channel.json()["error"]["code"] == "serve_capability_invalid"
-    assert wrong_action.status_code == 403
-    assert wrong_action.json()["error"]["code"] == "serve_capability_invalid"
-    assert valid.status_code == 200
+    assert local_backend.status_code == 200

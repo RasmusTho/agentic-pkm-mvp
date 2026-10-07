@@ -135,15 +135,14 @@ choose an endpoint or network adapter.
 
 Before completion, the path router runs no-inference catalog and route-preflight requests. It may
 advance to the next configured path only for `PATH_UNAVAILABLE`, `CONNECT_TIMEOUT`,
-`PREFLIGHT_TIMEOUT`, or `PATH_AUTHENTICATION_FAILED`. Common Product authorization denial, malformed
-requests, route/capability mismatch, and missing path configuration fail closed. Once a non-200 HTTP
+`PREFLIGHT_TIMEOUT`, or `PATH_AUTHENTICATION_FAILED`. Malformed requests, route/capability mismatch,
+and missing path configuration fail closed. Once a non-200 HTTP
 status is received, a stalled, disconnected, or oversized error body preserves that status; only a
 fully decoded explicit path-local error code can authorize another configured path. The active Ygg
 profile has no second path, so VLAN failure is terminal. The VLAN ingress uses mutually
 authenticated HTTPS to a host-local RFC1918 IPv4 or IPv6 unique-local address literal; DNS names
-are rejected so a public endpoint cannot receive completion content. Its gateway maps the
-authenticated caller to the Product channel/action capability contract, strips caller-supplied
-capability headers, and injects the trusted claim. The executor backend remains loopback-bound.
+are rejected so a public endpoint cannot receive completion content. The executor backend remains
+loopback-bound and does not rely on Tailscale-Serve headers or per-action capability claims.
 After preflight, exactly one completion uses the selected path. An ambiguous completion cannot retry
 over another path or switch providers. Provider/model fallback remains a separate explicit policy
 decision.

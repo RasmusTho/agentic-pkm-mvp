@@ -79,7 +79,7 @@ Implementation task specifications:
 
 The accepted target request flow is:
 
-Product reads or refreshes a bounded catalog snapshot → Product policy selects the exact logical model route and required capabilities → Product client resolves the current Ygg VLAN-only profile (`ygg_vlan_primary`) → the VLAN ingress authenticates the caller and authorizes the Product channel/action → a no-inference `POST /v1/preflight` verifies that same route → each distinct completion request is preceded by a fresh preflight and sends exactly one `POST /v1/complete` → one selected model adapter executes the completion → the result and internal receipt retain route and path provenance.
+Product reads or refreshes a bounded catalog snapshot → Product policy selects the exact logical model route and required capabilities → Product client resolves the current Ygg VLAN-only profile (`ygg_vlan_primary`) → the VLAN ingress authenticates the caller with mutual TLS → a no-inference `POST /v1/preflight` verifies that same route → each distinct completion request is preceded by a fresh preflight and sends exactly one `POST /v1/complete` → one selected model adapter executes the completion → the result and internal receipt retain route and path provenance.
 
 Builder continues through its own resolver/profile and adapters. The shared facade does not make
 Product and Builder share policy or credentials.
@@ -88,13 +88,14 @@ The shared facade remains policy-agnostic: Product resolves the route, and the e
 
 The completion/catalog service exposes `POST /v1/complete`, `POST /v1/preflight`, and
 `POST /v1/catalog`. Its additional bounded System One operations are Product `POST /v1/judgment`
-and Builder `POST /v1/ckm-judgment`, each with a separate fixed payload, caller authorization and
-server-owned profile. They add no completion fallback or model-selection authority to callers.
+and Builder `POST /v1/ckm-judgment`, each with a separate fixed payload and server-owned profile.
+VLAN ingress authentication applies to the API; no Tailscale claim or per-action capability header
+is required. They add no completion fallback or model-selection authority to callers.
 Completion supplies one declared provider/model/transport, optional reasoning
 effort, output schema, and output-token limit, a capability intent, trusted instructions, and user
 content as distinct fields. Preflight supplies only one declared provider/model/transport and
-capability intent. Catalog
-supplies only a declared `codex_cli` or `ollama_http` transport and returns a sanitized snapshot.
+capability intent. Catalog supplies only a declared transport (`codex_cli`, `ollama_http`,
+`openai_api`, `anthropic_api`, or `deepseek_api`) and returns a sanitized snapshot.
 None accepts commands, argv, paths, arbitrary environment, tools, MCP servers, provider endpoints,
 or credentials. Completion returns the exact route and result; preflight returns the exact route and
 sanitized readiness; catalog returns the snapshot's provider, descriptors, source/fetch metadata,
@@ -133,7 +134,7 @@ transport before the pure latest-compatible selector can use it.
 
 1. Policy ownership: the facade accepts Product or Builder policy explicitly. If the neutral contract lands before either profile mapper, existing route behavior stays unchanged; no default policy is guessed.
 2. Model Inquiry isolation: the Codex alias continues to resolve exactly one target with fallback_forbidden. Product's Ollama fallback cannot enter Model Inquiry, including when shared adapter code is reused.
-3. Cross-host identity: every configured path authenticates a caller and authorizes the same Product channel/action contract. The current Ygg profile contains only VLAN. VLAN membership, source IP, user identity headers, or request-body claims alone are not authorization. An optional Tailscale adapter, if explicitly configured later, must forward only its scoped app-capability grant. The executor backend remains loopback-only; no public listener or unscoped shared bearer token is allowed.
+3. Cross-host identity: the current Ygg profile is VLAN mTLS only. The executor backend remains loopback-only; it does not trust request-body identity or Tailscale-injected claims. Tailscale is not required. Public listeners and unencrypted fallback are not allowed.
 4. Codex host isolation: Product Codex execution uses a dedicated empty cwd, read-only sandbox, ignored ambient user/project config, and an exact version-reviewed no-tools profile. It disables shell/execution and every other model-callable file, browser/computer, app, MCP, plugin, and agent capability. A new or unknown CLI tool/profile fails closed. Host authentication uses the existing interactive login session, never fresh non-interactive SSH.
 5. Prompt-channel preservation: trusted Product system-instruction content and untrusted user content remain separate end-to-end; the CLI maps them only to its distinct developer-instructions and user-prompt channels. No flattening or concatenation. The route does not assert literal system-role equivalence.
 6. Retry boundary: each completion sends one HTTP request. Any ambiguous completion result is terminal and does not retry the path or trigger a second provider call. Preflight is a distinct no-inference operation and may precede the single completion. Path failover preserves the exact logical executor, model, and capability intent.

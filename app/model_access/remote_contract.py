@@ -28,22 +28,35 @@ class JudgmentUsage(_StrictModel):
 class CompletionRouteIdentity(_StrictModel):
     """The exact provider/model/transport already selected by Product policy."""
 
-    provider: Literal["openai", "ollama"]
+    provider: Literal["openai", "anthropic", "deepseek", "ollama"]
     model: str = Field(
         min_length=1,
         max_length=128,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
     )
-    transport_id: Literal["codex_cli", "ollama_http"]
+    transport_id: Literal[
+        "codex_cli", "ollama_http", "openai_api", "anthropic_api", "deepseek_api"
+    ]
+    catalog_snapshot_ref: str | None = Field(
+        default=None, pattern=r"^catalog\.[a-z][a-z0-9_]*$"
+    )
+    catalog_snapshot_hash: str | None = Field(
+        default=None, pattern=r"^sha256:[0-9a-f]{64}$"
+    )
 
     @model_validator(mode="after")
     def _provider_matches_transport(self) -> "CompletionRouteIdentity":
         expected_provider = {
             "codex_cli": "openai",
             "ollama_http": "ollama",
+            "openai_api": "openai",
+            "anthropic_api": "anthropic",
+            "deepseek_api": "deepseek",
         }[self.transport_id]
         if self.provider != expected_provider:
             raise ValueError("provider and transport do not form an allowed route")
+        if (self.catalog_snapshot_ref is None) != (self.catalog_snapshot_hash is None):
+            raise ValueError("catalog snapshot reference and hash must be supplied together")
         return self
 
 
@@ -123,7 +136,9 @@ class PreflightResponse(_StrictModel):
 class CatalogRequest(_StrictModel):
     """Select a catalog source on the executor; never accepts an endpoint or model call."""
 
-    transport_id: Literal["codex_cli", "ollama_http"]
+    transport_id: Literal[
+        "codex_cli", "ollama_http", "openai_api", "anthropic_api", "deepseek_api"
+    ]
 
 
 class CatalogResponse(_StrictModel):

@@ -157,7 +157,7 @@ def _router(
         "adapter": "tailscale_serve_https",
         "endpoint_ref": "host_config.ygg_codex_tailnet",
         "authentication_profile_ref": "host_config.ygg_tailscale_serve",
-        "caller_policy_ref": "policy.product_channel_actions",
+        "caller_policy_ref": "policy.vlan_mtls_authenticated_caller",
     }
     policy["executor_path_policies"]["profile.codex_remote_host"]["order"] = [
         "ygg_vlan_primary",

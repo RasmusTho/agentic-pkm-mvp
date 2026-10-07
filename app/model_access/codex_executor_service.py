@@ -23,6 +23,7 @@ from app.model_access.catalog import CatalogError
 from app.model_access.catalog_discovery import OllamaCatalogDiscovery, codex_catalog_snapshot
 from app.model_access.codex_cli import CodexCliError, CodexCliExecutor
 from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpError
+from app.model_access.provider_api import ProductProviderApiAdapter, ProviderApiError
 from app.model_access.product_judgment_contract import (
     PRODUCT_JUDGMENT_REQUEST_BYTES, ProductJudgmentResult, validate_product_request,
 )
@@ -46,11 +47,9 @@ from app.model_access.remote_contract import (
 
 
 MAX_REQUEST_BYTES = 256_000
-MAX_CAPABILITY_HEADER_BYTES = 8_192
 MAX_OUTPUT_BYTES = 512_000
 MAX_CATALOG_RESPONSE_BYTES = 2_000_000
 DEFAULT_CONCURRENCY = 2
-_CAPABILITY_NAME = re.compile(r"^[a-z0-9.-]+/[a-z0-9._/-]{1,160}$")
 _CONTENT_LENGTH = re.compile(r"^[0-9]{1,12}$")
 
 
@@ -98,48 +97,6 @@ def _require_loopback_peer(request: Request) -> None:
         raise _RequestFailure(403, "loopback_only") from exc
 
 
-def _require_serve_capability(
-    request: Request,
-    capability_name: str,
-    *,
-    action: str,
-    channel: str = "product",
-) -> None:
-    value = request.headers.get("tailscale-app-capabilities")
-    if value is None or len(value.encode("utf-8")) > MAX_CAPABILITY_HEADER_BYTES:
-        raise _RequestFailure(403, "serve_capability_required")
-    try:
-        claims = json.loads(
-            value,
-            object_pairs_hook=_unique_json_object,
-            parse_constant=_reject_json_constant,
-        )
-    except (ValueError, json.JSONDecodeError, RecursionError) as exc:
-        raise _RequestFailure(403, "serve_capability_invalid") from exc
-    if not isinstance(claims, dict) or set(claims) != {capability_name}:
-        raise _RequestFailure(403, "serve_capability_invalid")
-    grants = claims.get(capability_name)
-    if not isinstance(grants, list):
-        raise _RequestFailure(403, "serve_capability_invalid")
-    for grant in grants:
-        if not isinstance(grant, dict) or set(grant) != {"channel", "actions"}:
-            continue
-        actions = grant.get("actions")
-        if not isinstance(actions, list) or any(
-            not isinstance(value, str) or value not in {"complete", "preflight", "catalog", "judgment", "ckm_judgment"}
-            for value in actions
-        ):
-            continue
-        if (
-            grant.get("channel") == channel
-            and bool(actions)
-            and len(actions) == len(set(actions))
-            and action in actions
-        ):
-            return
-    raise _RequestFailure(403, "serve_capability_invalid")
-
-
 async def _read_bounded_body(request: Request, *, max_bytes: int) -> bytes:
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     if content_type != "application/json":
@@ -170,10 +127,9 @@ def _validate_capability_intent(
     output_schema: dict[str, Any] | None = None,
     require_output_schema: bool,
 ) -> None:
-    if (
-        intent.max_output_tokens_required
-        and route.transport_id != "ollama_http"
-    ):
+    if intent.max_output_tokens_required and route.transport_id not in {
+        "ollama_http", "openai_api", "anthropic_api", "deepseek_api"
+    }:
         raise _RequestFailure(422, "output_token_limit_unavailable")
     try:
         descriptor = adapter_factory.describe(
@@ -185,7 +141,9 @@ def _validate_capability_intent(
         raise _RequestFailure(422, "route_not_declared") from exc
 
     capabilities = descriptor.supported_capabilities
-    if intent.native_tools and not capabilities.native_tools:
+    if intent.native_tools:
+        # The bounded completion contract intentionally carries no tool schema or
+        # execution grant, even when a provider's API offers tools natively.
         raise _RequestFailure(422, "native_tools_unavailable")
     if intent.structured_output:
         if not capabilities.structured_output or (
@@ -271,6 +229,23 @@ def _adapter_failure(exc: Exception) -> _RequestFailure:
         if exc.failure_code == "ollama_output_too_large":
             return _RequestFailure(502, exc.failure_code)
         return _RequestFailure(503, exc.failure_code)
+    if isinstance(exc, ProviderApiError):
+        if exc.code in {"provider_response_invalid", "provider_schema_violation", "provider_response_too_large"}:
+            return _RequestFailure(502, exc.code)
+        if exc.code == "catalog_snapshot_mismatch":
+            return _RequestFailure(409, exc.code)
+        if exc.code in {
+            "provider_model_unavailable",
+            "provider_tools_unavailable",
+            "reasoning_effort_unavailable",
+            "route_not_declared",
+            "structured_output_unavailable",
+            "max_output_tokens_unavailable",
+        }:
+            return _RequestFailure(422, exc.code)
+        if exc.code == "provider_request_rejected":
+            return _RequestFailure(422, exc.code)
+        return _RequestFailure(503, exc.code)
     if isinstance(exc, CatalogError):
         return _RequestFailure(503, exc.code)
     if isinstance(exc, (SchemaError, ValidationError)):
@@ -281,9 +256,9 @@ def _adapter_failure(exc: Exception) -> _RequestFailure:
 def create_codex_executor_app(
     *,
     codex_executor: CodexCliExecutor,
-    ollama_adapter: OllamaHttpAdapter,
+    ollama_adapter: OllamaHttpAdapter | None = None,
+    provider_api_adapter: ProductProviderApiAdapter | None = None,
     adapter_factory: ModelAccessAdapterFactory,
-    serve_capability_name: str,
     max_request_bytes: int = MAX_REQUEST_BYTES,
     max_output_bytes: int = MAX_OUTPUT_BYTES,
     max_concurrency: int = DEFAULT_CONCURRENCY,
@@ -292,21 +267,16 @@ def create_codex_executor_app(
 ) -> FastAPI:
     """Build bounded preflight/completion operations; route policy stays with callers."""
 
-    normalized_capability = serve_capability_name.lower()
-    if (
-        not _CAPABILITY_NAME.fullmatch(serve_capability_name)
-        or normalized_capability.startswith(("tailscale.com/", "tailscale.io/"))
-    ):
-        raise ValueError("Serve capability name is invalid")
     if min(max_request_bytes, max_output_bytes, max_concurrency) <= 0:
         raise ValueError("executor service bounds must be positive")
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         yield
-        close = getattr(ollama_adapter, "close", None)
-        if callable(close):
-            close()
+        for adapter in (ollama_adapter, provider_api_adapter):
+            close = getattr(adapter, "close", None)
+            if callable(close):
+                close()
 
     app = FastAPI(
         title="Private Model Executor",
@@ -321,7 +291,6 @@ def create_codex_executor_app(
     async def ckm_judgment(request: Request) -> JSONResponse:
         try:
             _require_loopback_peer(request)
-            _require_serve_capability(request, serve_capability_name, action="ckm_judgment", channel="builder")
             body = await _read_bounded_body(request, max_bytes=CKM_JUDGMENT_REQUEST_BYTES)
             try:
                 typed_request = validate_ckm_request(SystemOneJudgmentRequest.model_validate(_decode_json_object(body)))
@@ -344,7 +313,6 @@ def create_codex_executor_app(
     async def judgment(request: Request) -> JSONResponse:
         try:
             _require_loopback_peer(request)
-            _require_serve_capability(request, serve_capability_name, action="judgment")
             body = await _read_bounded_body(request, max_bytes=PRODUCT_JUDGMENT_REQUEST_BYTES)
             try:
                 typed_request = validate_product_request(SystemOneJudgmentRequest.model_validate(_decode_json_object(body)))
@@ -367,9 +335,6 @@ def create_codex_executor_app(
     async def preflight(request: Request) -> JSONResponse:
         try:
             _require_loopback_peer(request)
-            _require_serve_capability(
-                request, serve_capability_name, action="preflight"
-            )
             body = await _read_bounded_body(request, max_bytes=max_request_bytes)
             try:
                 preflight_request = PreflightRequest.model_validate(
@@ -391,10 +356,20 @@ def create_codex_executor_app(
                     await run_in_threadpool(
                         _codex_preflight, codex_executor, preflight_request
                     )
-                else:
+                elif preflight_request.route.transport_id == "ollama_http":
+                    if ollama_adapter is None:
+                        raise _RequestFailure(503, "ollama_unavailable")
                     await run_in_threadpool(
                         _ollama_preflight, ollama_adapter, preflight_request
                     )
+                else:
+                    if provider_api_adapter is None:
+                        raise _RequestFailure(503, "provider_adapter_unavailable")
+                    await run_in_threadpool(
+                        provider_api_adapter.preflight, preflight_request
+                    )
+            except _RequestFailure:
+                raise
             except Exception as exc:
                 raise _adapter_failure(exc) from exc
             finally:
@@ -404,7 +379,9 @@ def create_codex_executor_app(
                 route=preflight_request.route,
                 preflight_status="passed",
             )
-            return JSONResponse(content=response.model_dump(mode="json"))
+            return JSONResponse(
+                content=response.model_dump(mode="json", exclude_none=True)
+            )
         except _RequestFailure as exc:
             return JSONResponse(
                 status_code=exc.status_code,
@@ -415,7 +392,6 @@ def create_codex_executor_app(
     async def catalog(request: Request) -> JSONResponse:
         try:
             _require_loopback_peer(request)
-            _require_serve_capability(request, serve_capability_name, action="catalog")
             body = await _read_bounded_body(request, max_bytes=max_request_bytes)
             try:
                 catalog_request = CatalogRequest.model_validate(_decode_json_object(body))
@@ -431,10 +407,20 @@ def create_codex_executor_app(
                         raw_models,
                         fetched_at=datetime.now(timezone.utc),
                     )
-                else:
+                elif catalog_request.transport_id == "ollama_http":
+                    if ollama_adapter is None:
+                        raise _RequestFailure(503, "ollama_unavailable")
                     snapshot = await run_in_threadpool(
                         OllamaCatalogDiscovery(ollama_adapter).discover
                     )
+                else:
+                    if provider_api_adapter is None:
+                        raise _RequestFailure(503, "provider_adapter_unavailable")
+                    snapshot = await run_in_threadpool(
+                        provider_api_adapter.discover_catalog, catalog_request.transport_id
+                    )
+            except _RequestFailure:
+                raise
             except Exception as exc:
                 raise _adapter_failure(exc) from exc
             finally:
@@ -461,9 +447,6 @@ def create_codex_executor_app(
     async def complete(request: Request) -> JSONResponse:
         try:
             _require_loopback_peer(request)
-            _require_serve_capability(
-                request, serve_capability_name, action="complete"
-            )
             body = await _read_bounded_body(request, max_bytes=max_request_bytes)
             try:
                 completion_request = CompletionRequest.model_validate(
@@ -490,10 +473,20 @@ def create_codex_executor_app(
                     content = await run_in_threadpool(
                         _codex_complete, codex_executor, completion_request
                     )
-                else:
+                elif completion_request.route.transport_id == "ollama_http":
+                    if ollama_adapter is None:
+                        raise _RequestFailure(503, "ollama_unavailable")
                     content = await run_in_threadpool(
                         _ollama_complete, ollama_adapter, completion_request
                     )
+                else:
+                    if provider_api_adapter is None:
+                        raise _RequestFailure(503, "provider_adapter_unavailable")
+                    content = await run_in_threadpool(
+                        provider_api_adapter.complete, completion_request
+                    )
+            except _RequestFailure:
+                raise
             except Exception as exc:
                 raise _adapter_failure(exc) from exc
             finally:
@@ -504,7 +497,9 @@ def create_codex_executor_app(
             if len(content.encode("utf-8")) > max_output_bytes:
                 raise _RequestFailure(502, "completion_too_large")
             response = CompletionResponse(route=completion_request.route, content=content)
-            return JSONResponse(content=response.model_dump(mode="json"))
+            return JSONResponse(
+                content=response.model_dump(mode="json", exclude_none=True)
+            )
         except _RequestFailure as exc:
             return JSONResponse(
                 status_code=exc.status_code,
@@ -562,15 +557,9 @@ def main() -> None:
         provider_census_path=root / "docs/settings/models/providers.yaml",
     )
     profile_path = os.environ.get("CODEX_CLI_SAFE_PROFILE_PATH", "")
-    capability_name = os.environ.get("MODEL_ACCESS_SERVE_CAPABILITY_NAME", "")
     if not profile_path or not Path(profile_path).is_absolute():
         raise SystemExit("CODEX_CLI_SAFE_PROFILE_PATH must name a host-local absolute profile")
-    if not capability_name:
-        raise SystemExit("MODEL_ACCESS_SERVE_CAPABILITY_NAME is required")
-
     ollama_base_url = os.environ.get("MODEL_ACCESS_OLLAMA_BASE_URL", "")
-    if not ollama_base_url:
-        raise SystemExit("MODEL_ACCESS_OLLAMA_BASE_URL is required")
     try:
         port = int(os.environ.get("MODEL_ACCESS_EXECUTOR_PORT", "8787"))
     except ValueError as exc:
@@ -582,16 +571,25 @@ def main() -> None:
         max_input_bytes=MAX_REQUEST_BYTES,
         max_output_bytes=MAX_OUTPUT_BYTES,
     )
-    ollama_adapter = OllamaHttpAdapter(
-        base_url=ollama_base_url,
+    ollama_adapter = (
+        OllamaHttpAdapter(
+            base_url=ollama_base_url,
+            timeout_seconds=120,
+            max_output_bytes=MAX_OUTPUT_BYTES,
+        )
+        if ollama_base_url
+        else None
+    )
+    provider_api_adapter = ProductProviderApiAdapter(
+        adapter_factory=factory,
+        credential_resolver=os.environ.get,
         timeout_seconds=120,
-        max_output_bytes=MAX_OUTPUT_BYTES,
     )
     app = create_codex_executor_app(
         codex_executor=codex_executor,
         ollama_adapter=ollama_adapter,
+        provider_api_adapter=provider_api_adapter,
         adapter_factory=factory,
-        serve_capability_name=capability_name,
         product_judgment_executor=ProductTypeSafeExecutor.from_host_environment(),
         builder_judgment_executor=BuilderTypeSafeExecutor.from_host_environment(),
     )
@@ -603,7 +601,6 @@ if __name__ == "__main__":
 
 
 __all__ = [
-    "MAX_CAPABILITY_HEADER_BYTES",
     "MAX_OUTPUT_BYTES",
     "MAX_REQUEST_BYTES",
     "create_codex_executor_app",

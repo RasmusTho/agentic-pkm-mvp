@@ -31,19 +31,16 @@ only configured or required path; Tailscale is not part of current acceptance or
   path-local outcomes: `PATH_UNAVAILABLE`, `CONNECT_TIMEOUT`, `PREFLIGHT_TIMEOUT`, and
   `PATH_AUTHENTICATION_FAILED` (the candidate ingress could not establish its own caller identity).
 - Application-level preflight failures are terminal unless they are one of those typed path-local
-  outcomes. Common Product channel/action denial, malformed request, missing required model
-  capability, route mismatch, missing or invalid path configuration, and common-policy
-  authorization failure cannot be hidden by trying another path. The decision and reason code
-  distinguish path authentication from common Product authorization.
-- Every configured path authenticates the caller and authorizes the same Product channel and
-  operation-specific action. VLAN membership, source IP, or request-body claims alone do not
-  authorize the request. An optional Tailscale adapter, when explicitly configured, validates its
-  Serve-forwarded application capability. The executor backend remains loopback-bound; public
-  ingress is forbidden.
+  outcomes. Malformed requests, missing model capabilities, route mismatch, and missing or invalid
+  path configuration cannot be hidden by trying another path.
+- The current configured path requires mutual TLS at the private VLAN ingress. The executor backend
+  remains loopback-bound and accepts no Tailscale-injected capability claim; no per-action claim or
+  shared bearer token is required for this single-operator deployment. Model capability checks still
+  validate each route before inference. Public ingress is forbidden.
 - The VLAN private-HTTPS adapter accepts only an HTTPS origin using a literal IPv4 address in
   RFC1918 space or a literal IPv6 unique-local address. DNS names are rejected so a host-local
-  endpoint typo cannot send completion content to a public host. Tailscale Serve uses its separate
-  verified `.ts.net` adapter.
+  endpoint typo cannot send completion content to a public host. Tailscale is not configured or
+  required for the Mac mini portal.
 - Once a completion may have reached the executor, a timeout or lost response is terminal. The
   client does not retry over another path, change provider, or send a second completion.
 - Network-path fallback does not imply provider/model fallback. Those decisions remain separately
@@ -64,7 +61,7 @@ path_profiles:
     adapter: private_https_ingress
     endpoint_ref: host_config.ygg_codex_vlan
     authentication_profile_ref: host_config.ygg_vlan_mutual_tls
-    caller_policy_ref: policy.product_channel_actions
+    caller_policy_ref: policy.vlan_mtls_authenticated_caller
 ```
 
 The references above are logical placeholders, not checked-in endpoint or credential values.
@@ -80,12 +77,12 @@ explicitly before use; they are not implicit Ygg dependencies.
   explicitly configured and a typed path-local failure occurs before completion; the current Ygg
   profile contains no second path.
   - Verify: `tests/model_access/test_executor_network_policy.py::test_only_typed_path_local_failures_use_next_path`
-- [ ] Common authorization denial, malformed request, route mismatch, missing path configuration,
-  and capability mismatch fail closed without trying another path.
+- [ ] Malformed request, route mismatch, missing path configuration, and capability mismatch fail
+  closed without trying another path.
   - Verify: `tests/model_access/test_executor_network_authorization.py::test_terminal_preflight_failures_do_not_use_another_path`
-- [ ] Every configured path enforces the same Product channel/action authorization contract; the
-  current VLAN-only profile rejects source-IP or VLAN-membership-only authorization.
-  - Verify: `tests/model_access/test_executor_network_authorization.py::test_paths_require_channel_and_action_authorization`
+- [ ] The configured Ygg path is VLAN-only, uses mutual TLS, and the loopback backend does not need
+  a Tailscale Serve header.
+  - Verify: `tests/model_access/test_executor_network_authorization.py::test_configured_mtls_vlan_path_is_the_only_executor_path`
 - [ ] An ambiguous completion result does not retry over another path or dispatch a second model
   completion.
   - Verify: `tests/model_access/test_executor_network_policy.py::test_ambiguous_completion_does_not_fail_over`

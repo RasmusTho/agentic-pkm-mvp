@@ -13,7 +13,11 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from app.components.settings.providers_loader import ProviderCensus, load_provider_census
+from app.components.settings.providers_loader import (
+    ProviderCensus,
+    ProviderEntry,
+    load_provider_census,
+)
 from app.model_access.codex_cli import CodexCliExecutor
 from llm_contract import (
     ModelAccessAdapterDescriptor,
@@ -284,3 +288,14 @@ class ModelAccessAdapterFactory:
         if len(matches) != 1:
             raise AdapterRegistryError("provider has no unique default transport")
         return matches[0].id
+
+    def provider_entry(self, provider: str) -> ProviderEntry:
+        """Return declared provider metadata without exposing credentials."""
+        try:
+            return self._provider_census.provider(provider)
+        except KeyError as exc:
+            raise AdapterRegistryError("provider is not in the provider census") from exc
+
+    def provider_api_endpoint(self, provider: str) -> str | None:
+        """Return a provider-owned endpoint from the checked-in census."""
+        return self.provider_entry(provider).api_endpoint

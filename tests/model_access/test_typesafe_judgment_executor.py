@@ -28,7 +28,6 @@ from app.model_access.typesafe_judgment_executor import (
 from app.ops.host_secret_bootstrap import create_marr_typesafe_bws_reader
 
 
-CAPABILITY = "model-access.example/cap/complete"
 FAKE_KEY = "synthetic-typesafe-test-credential-5766"
 INTENT = "Consider two possible plans without changing anything."
 MARR_BWS_IDENTITY = ("non-prod", "dev/typesafe.api-key")
@@ -47,12 +46,23 @@ class _FakeSecretController:
         yield _FakeCheckOperation()
 
 
-def _headers(channel: str = "product", action: str = "judgment") -> dict[str, str]:
-    return {
-        "Tailscale-App-Capabilities": json.dumps(
-            {CAPABILITY: [{"channel": channel, "actions": [action]}]}
-        )
-    }
+def _headers(_channel: str = "product", _action: str = "judgment") -> dict[str, str]:
+    """The VLAN mTLS ingress authenticates callers; no Tailscale claim is sent."""
+    return {}
+
+
+def _vlan_remote_transport(monkeypatch, transport: httpx.BaseTransport) -> CodexRemoteTransport:
+    monkeypatch.setattr(
+        "app.model_access.codex_remote_transport._private_ingress_ssl_context",
+        lambda **_kwargs: object(),
+    )
+    return CodexRemoteTransport(
+        endpoint="https://10.42.42.10:8443",
+        path_adapter="private_https_ingress",
+        tls_verify="/host-only/ca.pem",
+        client_certificate=("/host-only/client.pem", "/host-only/client.key"),
+        transport=transport,
+    )
 
 
 def _provider_body(request: httpx2.Request) -> dict[str, Any]:
@@ -158,7 +168,6 @@ def _app(
         codex_executor=object(),
         ollama_adapter=object(),  # type: ignore[arg-type]
         adapter_factory=factory,
-        serve_capability_name=CAPABILITY,
         product_judgment_executor=executor,
     )
     return app, lookups, executor
@@ -198,9 +207,7 @@ def test_executor_dispatches_one_bounded_system_one_request(
             )
             return httpx.Response(response.status_code, content=response.content)
 
-        client = CodexRemoteTransport(
-            endpoint="https://executor.example.ts.net", transport=httpx.MockTransport(bridge)
-        )
+        client = _vlan_remote_transport(monkeypatch, httpx.MockTransport(bridge))
         result = client.judge_product_intent(INTENT)
         client.close()
     assert result.outcome == "success"
@@ -420,30 +427,19 @@ def test_request_allowlist_and_size_limit_fail_before_dispatch(monkeypatch, fiel
     assert provider.calls == lookups == []
 
 
-@pytest.mark.parametrize(
-    ("channel", "action"),
-    [
-        ("builder", "judgment"),
-        ("product", "complete"),
-        ("product", "catalog"),
-        ("product", "preflight"),
-    ],
-)
-def test_product_judgment_requires_own_channel_and_action(monkeypatch, channel, action) -> None:
+def test_product_judgment_needs_no_tailscale_claim_over_vlan_ingress(monkeypatch) -> None:
     provider = Provider()
     app, lookups, _ = _app(provider, monkeypatch)
-    assert _call(app, headers=_headers(channel, action)).status_code == 403
-    assert _call(app, headers={}).status_code == 403
+    assert _call(app, headers={}).status_code == 200
     with TestClient(app, client=("192.168.50.5", 12345)) as client:
         assert (
             client.post(
                 "/v1/judgment",
                 json=product_intent_request(INTENT).model_dump(mode="json"),
-                headers=_headers(),
             ).status_code
             == 403
         )
-    assert provider.calls == lookups == []
+    assert len(provider.calls) == len(lookups) == 1
 
 
 def test_supported_model_profile_swap_keeps_request_contract(monkeypatch, tmp_path) -> None:
@@ -592,16 +588,14 @@ def test_sdk_environment_cannot_override_owned_profile_or_log_bodies(monkeypatch
 @pytest.mark.parametrize(
     "error", [httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError]
 )
-def test_product_client_never_retries_ambiguous_remote_outcome(error) -> None:
+def test_product_client_never_retries_ambiguous_remote_outcome(error, monkeypatch) -> None:
     calls = []
 
     def fail(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         raise error(FAKE_KEY + INTENT)
 
-    client = CodexRemoteTransport(
-        endpoint="https://executor.example.ts.net", transport=httpx.MockTransport(fail)
-    )
+    client = _vlan_remote_transport(monkeypatch, httpx.MockTransport(fail))
     assert client.judge_product_intent(INTENT).outcome == "outcome_unknown_after_dispatch"
     assert len(calls) == 1
     client.close()

@@ -29,6 +29,12 @@ Anthropic updates. Unsupported, unconfigured, or stale routes fail before infere
 receipt bind the exact provider, model, transport, capabilities, and catalog snapshot without
 secrets.
 
+Provider-reported structured-output and reasoning-effort metadata can confirm or veto the checked-in
+Product allowlist. If a provider catalog omits a field, that value remains unknown rather than an
+explicit negative; unknown metadata does not authorize newly discovered models or effort values for
+automatic promotion. OpenAI's list endpoint supplies model IDs and creation times but no per-model
+capability metadata, so its existing pinned Product allowlist remains the capability authority.
+
 The current census in `docs/settings/models/providers.yaml` is the scope boundary; adding a new
 provider is not part of this task. Local Ollama remains optional and is not a readiness prerequisite
 for Codex CLI or API-provider routes.

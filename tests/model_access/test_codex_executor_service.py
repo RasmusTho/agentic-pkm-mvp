@@ -106,7 +106,6 @@ def _app(
         codex_executor=codex,  # type: ignore[arg-type]
         ollama_adapter=ollama,  # type: ignore[arg-type]
         adapter_factory=_factory(),
-        serve_capability_name=CAPABILITY_NAME,
         max_request_bytes=max_request_bytes,
         max_output_bytes=max_output_bytes,
     )
@@ -135,13 +134,44 @@ def _payload(transport_id: str = "codex_cli") -> dict[str, Any]:
     }
 
 
-def test_main_requires_configured_ollama_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CODEX_CLI_SAFE_PROFILE_PATH", "/tmp/codex-safe-profile.json")
-    monkeypatch.setenv("MODEL_ACCESS_SERVE_CAPABILITY_NAME", CAPABILITY_NAME)
-    monkeypatch.delenv("MODEL_ACCESS_OLLAMA_BASE_URL", raising=False)
+def test_main_starts_without_ollama_or_tailscale_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
 
-    with pytest.raises(SystemExit, match="MODEL_ACCESS_OLLAMA_BASE_URL is required"):
-        main()
+    module = importlib.import_module("app.model_access.codex_executor_service")
+    factory = _factory()
+    captured: dict[str, Any] = {}
+    monkeypatch.setenv("CODEX_CLI_SAFE_PROFILE_PATH", "/tmp/codex-safe-profile.json")
+    monkeypatch.delenv("MODEL_ACCESS_OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("MODEL_ACCESS_SERVE_CAPABILITY_NAME", raising=False)
+    monkeypatch.setattr(
+        module.ModelAccessAdapterFactory,
+        "from_declared_sources",
+        lambda **_kwargs: factory,
+    )
+    monkeypatch.setattr(
+        factory,
+        "create_codex_cli_executor",
+        lambda **_kwargs: FakeCodexExecutor(),
+    )
+
+    def create_app(**kwargs: Any) -> object:
+        captured["ollama_adapter"] = kwargs["ollama_adapter"]
+        captured["provider_api_adapter"] = kwargs["provider_api_adapter"]
+        return object()
+
+    monkeypatch.setattr(module, "create_codex_executor_app", create_app)
+    monkeypatch.setattr(
+        module, "serve_executor", lambda app, *, host, port: captured.update(
+            app=app, host=host, port=port
+        )
+    )
+    main()
+
+    assert captured["ollama_adapter"] is None
+    assert captured["host"] == "127.0.0.1"
+    captured["provider_api_adapter"].close()
 
 
 def _preflight_payload(transport_id: str = "codex_cli") -> dict[str, Any]:
@@ -199,27 +229,14 @@ def test_preflight_probes_exact_declared_route_without_completion(
     assert ollama.calls == []
 
 
-def test_executor_accepts_one_serve_grant_for_both_bounded_actions() -> None:
+def test_bounded_actions_do_not_require_tailscale_headers() -> None:
     app, codex, ollama = _app()
-    combined_header = {
-        "Tailscale-App-Capabilities": json.dumps(
-            {
-                CAPABILITY_NAME: [
-                    {"channel": "product", "actions": ["complete", "preflight"]}
-                ]
-            }
-        )
-    }
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         preflight = client.post(
-            "/v1/preflight",
-            json=_preflight_payload(),
-            headers=combined_header,
+            "/v1/preflight", json=_preflight_payload()
         )
         completion = client.post(
-            "/v1/complete",
-            json=_payload(),
-            headers=combined_header,
+            "/v1/complete", json=_payload()
         )
 
     assert preflight.status_code == 200
@@ -230,21 +247,20 @@ def test_executor_accepts_one_serve_grant_for_both_bounded_actions() -> None:
     assert ollama.calls == []
 
 
-def test_preflight_requires_its_own_capability_and_rejects_completion_fields() -> None:
+def test_preflight_rejects_completion_fields_without_serve_grants() -> None:
     app, codex, ollama = _app()
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         wrong_action = client.post(
-            "/v1/preflight", json=_preflight_payload(), headers=CAPABILITY_HEADER
+            "/v1/preflight", json=_preflight_payload()
         )
         with_extra_field = client.post(
             "/v1/preflight",
             json={**_preflight_payload(), "user_input": "must not be accepted"},
-            headers=PREFLIGHT_CAPABILITY_HEADER,
         )
 
-    assert wrong_action.status_code == 403
+    assert wrong_action.status_code == 200
     assert with_extra_field.status_code == 422
-    assert codex.preflight_calls == []
+    assert codex.preflight_calls == [{"model": "gpt-5.6-luna", "reasoning_effort": "low"}]
     assert ollama.preflight_calls == []
     assert codex.calls == []
     assert ollama.calls == []
@@ -269,20 +285,17 @@ def test_preflight_rejects_native_tools_before_ollama_probe() -> None:
     assert codex.calls == []
 
 
-def test_catalog_operation_is_authorized_and_never_calls_a_model() -> None:
+def test_catalog_operation_needs_no_tailscale_header_and_never_calls_a_model() -> None:
     app, codex, ollama = _app()
     payload = {"transport_id": "codex_cli"}
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
-        allowed = client.post(
-            "/v1/catalog", json=payload, headers=CATALOG_CAPABILITY_HEADER
-        )
-        wrong_action = client.post(
+        allowed = client.post("/v1/catalog", json=payload)
+        compatibility_header = client.post(
             "/v1/catalog", json=payload, headers=CAPABILITY_HEADER
         )
         extra_field = client.post(
             "/v1/catalog",
             json={**payload, "endpoint": "https://must-not-be-caller-selected"},
-            headers=CATALOG_CAPABILITY_HEADER,
         )
 
     assert allowed.status_code == 200
@@ -290,36 +303,26 @@ def test_catalog_operation_is_authorized_and_never_calls_a_model() -> None:
     assert snapshot["transport_id"] == "codex_cli"
     assert snapshot["models"][0]["model"] == "gpt-5.6-luna"
     assert snapshot["snapshot_hash"].startswith("sha256:")
-    assert wrong_action.status_code == 403
+    assert compatibility_header.status_code == 200
     assert extra_field.status_code == 422
-    assert codex.catalog_calls == 1
+    assert codex.catalog_calls == 2
     assert codex.calls == []
     assert ollama.calls == []
 
 
-def test_complete_requires_loopback_and_served_app_capability() -> None:
+def test_complete_requires_loopback_but_not_tailscale_capability() -> None:
     app, codex, _ollama = _app()
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         absent = client.post("/v1/complete", json=_payload())
-        wrong_channel = client.post(
-            "/v1/complete",
-            json=_payload(),
-            headers={
-                "Tailscale-App-Capabilities": json.dumps(
-                    {CAPABILITY_NAME: [{"channel": "builder", "actions": ["complete"]}]}
-                )
-            },
-        )
-    assert absent.status_code == 403
-    assert wrong_channel.status_code == 403
-    assert len(codex.calls) == 0
+    assert absent.status_code == 200
+    assert len(codex.calls) == 1
 
     with TestClient(app, client=("192.0.2.12", 12345)) as non_loopback:
         remote_peer = non_loopback.post(
             "/v1/complete", json=_payload(), headers=CAPABILITY_HEADER
         )
     assert remote_peer.status_code == 403
-    assert len(codex.calls) == 0
+    assert len(codex.calls) == 1
     assert require_loopback_bind_host("127.0.0.1") == "127.0.0.1"
     with pytest.raises(ValueError, match="loopback"):
         require_loopback_bind_host("0.0.0.0")
@@ -450,7 +453,6 @@ def test_complete_rejects_missing_instruction_mapping_before_dispatch(
         codex_executor=codex,  # type: ignore[arg-type]
         ollama_adapter=ollama,  # type: ignore[arg-type]
         adapter_factory=factory,
-        serve_capability_name=CAPABILITY_NAME,
     )
     payload = _payload()
 
@@ -533,14 +535,13 @@ def test_executor_exposes_only_bounded_model_operations() -> None:
     }
 
 
-def test_executor_rejects_reserved_tailscale_capability_names() -> None:
-    with pytest.raises(ValueError, match="Serve capability name"):
-        create_codex_executor_app(
-            codex_executor=FakeCodexExecutor(),  # type: ignore[arg-type]
-            ollama_adapter=FakeOllamaAdapter(),  # type: ignore[arg-type]
-            adapter_factory=_factory(),
-            serve_capability_name="tailscale.com/cap/complete",
-        )
+def test_executor_uses_loopback_backend_without_tailscale_configuration() -> None:
+    app = create_codex_executor_app(
+        codex_executor=FakeCodexExecutor(),  # type: ignore[arg-type]
+        ollama_adapter=None,
+        adapter_factory=_factory(),
+    )
+    assert app is not None
 
 
 def test_executor_enforces_the_configured_concurrency_bound() -> None:
@@ -560,7 +561,6 @@ def test_executor_enforces_the_configured_concurrency_bound() -> None:
         codex_executor=BlockingCodexExecutor(),  # type: ignore[arg-type]
         ollama_adapter=FakeOllamaAdapter(),  # type: ignore[arg-type]
         adapter_factory=_factory(),
-        serve_capability_name=CAPABILITY_NAME,
         max_concurrency=1,
     )
 
@@ -607,7 +607,6 @@ def test_ollama_adapter_preserves_instruction_channels_with_one_http_call() -> N
         codex_executor=FakeCodexExecutor(),  # type: ignore[arg-type]
         ollama_adapter=adapter,  # type: ignore[arg-type]
         adapter_factory=_factory(),
-        serve_capability_name=CAPABILITY_NAME,
     )
     payload = _payload("ollama_http")
     payload["capability_intent"]["max_output_tokens_required"] = True

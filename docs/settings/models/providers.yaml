@@ -16,6 +16,7 @@ providers:
     kinds: [chat]
     tier: paid
     capabilities: {}
+    api_endpoint: https://api.deepseek.com/chat/completions
     paid_eligible_task_kinds: []
     credential_identifiers: [deepseek.api-key]
     excluded_model_families: []

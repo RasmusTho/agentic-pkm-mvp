@@ -1,0 +1,571 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
+import json
+from pathlib import Path
+from typing import Any
+
+import httpx
+from fastapi.testclient import TestClient
+
+from app.model_access.adapter_factory import ModelAccessAdapterFactory
+from app.model_access.catalog import CatalogCache, CatalogSnapshot
+from app.model_access.codex_executor_service import create_codex_executor_app
+from app.model_access.provider_api import ProductProviderApiAdapter
+
+
+KEY = "synthetic-provider-key-never-return"
+SNAPSHOT_HASH = "sha256:" + "a" * 64
+_ROUTES = {
+    "openai_api": ("openai", "gpt-4.1"),
+    "anthropic_api": ("anthropic", "claude-fable-5"),
+    "deepseek_api": ("deepseek", "deepseek-chat"),
+}
+
+
+class _Codex:
+    def execute(self, **_kwargs: Any) -> Any:
+        raise AssertionError("Codex CLI must not receive API-provider routes")
+
+    def preflight(self, **_kwargs: Any) -> Any:
+        raise AssertionError("Codex CLI must not receive API-provider routes")
+
+    def list_catalog_models(self) -> list[dict[str, Any]]:
+        raise AssertionError("Codex CLI must not receive API-provider routes")
+
+
+class _Ollama:
+    def complete(self, **_kwargs: Any) -> str:
+        raise AssertionError("Ollama must not receive API-provider routes")
+
+    def preflight(self, **_kwargs: Any) -> Any:
+        raise AssertionError("Ollama must not receive API-provider routes")
+
+
+def _factory() -> ModelAccessAdapterFactory:
+    root = Path(__file__).resolve().parents[2]
+    return ModelAccessAdapterFactory.from_declared_sources(
+        adapters_path=root / "docs/settings/models/adapters.yaml",
+        provider_census_path=root / "docs/settings/models/providers.yaml",
+    )
+
+
+def _catalog_payload(provider: str) -> dict[str, Any]:
+    if provider == "openai":
+        return {
+            "data": [
+                {"id": "gpt-4.1", "created": 1_760_000_000},
+                {"id": "gpt-4.1-mini", "created": 1_760_000_001},
+            ]
+        }
+    if provider == "anthropic":
+        return {
+            "data": [
+                {
+                    "type": "model",
+                    "id": "claude-fable-5",
+                    "created_at": "2026-09-01T00:00:00Z",
+                    "max_input_tokens": 200_000,
+                    "max_tokens": 64_000,
+                    "capabilities": {
+                        "structured_outputs": {"supported": True},
+                        "effort": {
+                            "supported": True,
+                            "low": {"supported": True},
+                            "high": {"supported": True},
+                        },
+                    },
+                }
+            ],
+            "has_more": False,
+        }
+    return {
+        "object": "list",
+        "data": [
+            {
+                "object": "model",
+                "id": "deepseek-chat",
+                "context_window": 128_000,
+                "max_output_tokens": 8_000,
+                "effort": {"supported_levels": ["low", "high"]},
+            }
+        ],
+    }
+
+
+def _api_response(provider: str) -> dict[str, Any]:
+    if provider == "anthropic":
+        return {
+            "type": "message",
+            "content": [{"type": "text", "text": "exact Anthropic route"}],
+        }
+    return {
+        "choices": [
+            {"message": {"role": "assistant", "content": f"exact {provider} route"}}
+        ]
+    }
+
+
+def _payload(transport_id: str) -> dict[str, Any]:
+    provider, model = _ROUTES[transport_id]
+    return {
+        "route": {
+            "provider": provider,
+            "model": model,
+            "transport_id": transport_id,
+            "catalog_snapshot_ref": f"catalog.{provider}_{transport_id}",
+            "catalog_snapshot_hash": SNAPSHOT_HASH,
+        },
+        "reasoning_effort": None,
+        "capability_intent": {
+            "structured_output": False,
+            "native_tools": False,
+            "literal_system_role_required": False,
+            "max_output_tokens_required": False,
+        },
+        "trusted_instructions": "Trusted system instructions.",
+        "user_input": "Untrusted user request.",
+        "output_schema": None,
+        "max_output_tokens": None,
+    }
+
+
+def _gateway(
+    responder,
+    *,
+    credential_resolver=None,
+    catalog_cache=None,
+):
+    factory = _factory()
+    provider_adapter = ProductProviderApiAdapter(
+        adapter_factory=factory,
+        credential_resolver=credential_resolver or (lambda _name: KEY),
+        transport=httpx.MockTransport(responder),
+        catalog_cache=catalog_cache,
+    )
+    return create_codex_executor_app(
+        codex_executor=_Codex(),  # type: ignore[arg-type]
+        ollama_adapter=_Ollama(),  # type: ignore[arg-type]
+        provider_api_adapter=provider_adapter,
+        adapter_factory=factory,
+    )
+
+
+def _bind_catalog_snapshot(client: TestClient, payload: dict[str, Any]) -> None:
+    response = client.post(
+        "/v1/catalog", json={"transport_id": payload["route"]["transport_id"]}
+    )
+    assert response.status_code == 200
+    snapshot = response.json()["snapshot"]
+    payload["route"]["catalog_snapshot_ref"] = snapshot["snapshot_ref"]
+    payload["route"]["catalog_snapshot_hash"] = snapshot["snapshot_hash"]
+
+
+def _preflight_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "route": payload["route"],
+        "reasoning_effort": payload["reasoning_effort"],
+        "capability_intent": payload["capability_intent"],
+    }
+
+
+def test_dispatches_exact_declared_route_without_caller_credentials() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        provider = next(name for name, host in {
+            "openai": "api.openai.com",
+            "anthropic": "api.anthropic.com",
+            "deepseek": "api.deepseek.com",
+        }.items() if request.url.host == host)
+        transport_id = {
+            "api.openai.com": "openai_api",
+            "api.anthropic.com": "anthropic_api",
+            "api.deepseek.com": "deepseek_api",
+        }[request.url.host]
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload(provider))
+        assert request.method == "POST"
+        assert json.loads(request.content)["model"] == _ROUTES[transport_id][1]
+        return httpx.Response(200, json=_api_response(provider))
+
+    app = _gateway(respond)
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        for transport_id, (provider, _) in _ROUTES.items():
+            payload = _payload(transport_id)
+            _bind_catalog_snapshot(client, payload)
+            preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+            assert preflight.status_code == 200
+            assert preflight.json()["route"] == payload["route"]
+            response = client.post("/v1/complete", json=payload)
+            with_secret_field = client.post(
+                "/v1/complete", json={**payload, "api_key": KEY}
+            )
+            assert response.status_code == 200
+            assert response.json()["route"] == payload["route"]
+            expected_content = (
+                "exact Anthropic route" if provider == "anthropic" else f"exact {provider} route"
+            )
+            assert response.json()["content"] == expected_content
+            assert KEY not in response.text
+            assert with_secret_field.status_code == 422
+    dispatched = [request for request in sent if request.method == "POST"]
+    assert len(dispatched) == len(_ROUTES)
+    assert all(
+        request.headers.get("authorization") or request.headers.get("x-api-key")
+        for request in dispatched
+    )
+
+
+def test_provider_native_json_schema_is_sent_and_validated() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+        "additionalProperties": False,
+    }
+    for transport_id, (provider, _) in _ROUTES.items():
+        if provider == "deepseek":
+            continue
+        sent: list[httpx.Request] = []
+
+        def respond(request: httpx.Request) -> httpx.Response:
+            sent.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json=_catalog_payload(provider))
+            body = json.loads(request.content)
+            if provider == "openai":
+                assert body["response_format"]["json_schema"]["schema"] == schema
+                return httpx.Response(
+                    200,
+                    json={"choices": [{"message": {"content": '{"ok":true}'}}]},
+                )
+            assert body["output_config"]["format"]["schema"] == schema
+            return httpx.Response(
+                200,
+                json={"content": [{"type": "text", "text": '{"ok":true}'}]},
+            )
+
+        app = _gateway(respond)
+        payload = _payload(transport_id)
+        payload["capability_intent"]["structured_output"] = True
+        payload["output_schema"] = schema
+        with TestClient(app, client=("127.0.0.1", 12345)) as client:
+            _bind_catalog_snapshot(client, payload)
+            preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+            assert preflight.status_code == 200
+            response = client.post("/v1/complete", json=payload)
+        assert response.status_code == 200
+        assert response.json()["content"] == '{"ok":true}'
+        assert len([request for request in sent if request.method == "POST"]) == 1
+
+
+def test_invalid_provider_schema_output_is_terminal_after_one_dispatch() -> None:
+    sent: list[httpx.Request] = []
+    schema = {"type": "object", "properties": {"ok": {"type": "boolean"}}}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"ok":"not-a-bool"}'}}]},
+        )
+
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    payload["capability_intent"]["structured_output"] = True
+    payload["output_schema"] = schema
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        _bind_catalog_snapshot(client, payload)
+        response = client.post("/v1/complete", json=payload)
+
+    assert response.status_code == 502
+    assert response.json() == {"error": {"code": "provider_schema_violation"}}
+    assert len([request for request in sent if request.method == "POST"]) == 1
+
+
+def test_catalog_refresh_uses_verifiable_provider_metadata() -> None:
+    requested: list[str] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requested.append(f"{request.url.host}{request.url.path}")
+        provider_by_host = {
+            "api.openai.com": "openai",
+            "api.anthropic.com": "anthropic",
+            "api.deepseek.com": "deepseek",
+        }
+        provider = provider_by_host[request.url.host]
+        assert request.method == "GET"
+        return httpx.Response(200, json=_catalog_payload(provider))
+
+    app = _gateway(respond)
+    snapshots = {}
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        for transport_id, (provider, _) in _ROUTES.items():
+            response = client.post("/v1/catalog", json={"transport_id": transport_id})
+            assert response.status_code == 200
+            snapshot = response.json()["snapshot"]
+            assert snapshot["provider"] == provider
+            assert snapshot["transport_id"] == transport_id
+            assert snapshot["snapshot_hash"].startswith("sha256:")
+            snapshots[provider] = snapshot
+
+    openai_models = {item["model"]: item for item in snapshots["openai"]["models"]}
+    assert openai_models["gpt-4.1"]["release_at"] is not None
+    assert openai_models["gpt-4.1"]["capabilities"] == {
+        "structured_output": False,
+        "native_tools": False,
+        "system_prompt_channel": False,
+        "deterministic_execution": False,
+        "embedding_dimension": None,
+    }
+    assert openai_models["gpt-4.1"]["structured_output_attested"] is False
+    anthropic_model = snapshots["anthropic"]["models"][0]
+    assert anthropic_model["capabilities"]["structured_output"] is True
+    assert anthropic_model["structured_output_attested"] is True
+    assert anthropic_model["reasoning_effort_attested"] is True
+    assert anthropic_model["reasoning_efforts"] == ["high", "low"]
+    deepseek_model = snapshots["deepseek"]["models"][0]
+    assert deepseek_model["release_at"] is None
+    assert deepseek_model["reasoning_efforts"] == ["high", "low"]
+    assert requested == [
+        "api.openai.com/v1/models",
+        "api.anthropic.com/v1/models",
+        "api.deepseek.com/models",
+    ]
+
+
+def test_catalog_capability_contradiction_blocks_preflight_and_completion() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            catalog = _catalog_payload("anthropic")
+            catalog["data"][0]["capabilities"]["structured_outputs"]["supported"] = False
+            return httpx.Response(200, json=catalog)
+        raise AssertionError("capability mismatch must be rejected before inference")
+
+    app = _gateway(respond)
+    payload = _payload("anthropic_api")
+    payload["capability_intent"]["structured_output"] = True
+    payload["output_schema"] = {
+        "type": "object",
+        "properties": {"ok": {"type": "boolean"}},
+        "required": ["ok"],
+        "additionalProperties": False,
+    }
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        _bind_catalog_snapshot(client, payload)
+        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/complete", json=payload)
+
+    assert preflight.status_code == 422
+    assert preflight.json() == {"error": {"code": "structured_output_unavailable"}}
+    assert completion.status_code == 422
+    assert completion.json() == {"error": {"code": "structured_output_unavailable"}}
+    assert all(request.method == "GET" for request in sent)
+
+
+def test_provider_explicitly_disabling_reasoning_blocks_inference() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            catalog = _catalog_payload("anthropic")
+            catalog["data"][0]["capabilities"]["effort"] = {"supported": False}
+            return httpx.Response(200, json=catalog)
+        raise AssertionError("unsupported reasoning must be rejected before inference")
+
+    app = _gateway(respond)
+    payload = _payload("anthropic_api")
+    payload["reasoning_effort"] = "high"
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        _bind_catalog_snapshot(client, payload)
+        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/complete", json=payload)
+
+    expected = {"error": {"code": "reasoning_effort_unavailable"}}
+    assert preflight.status_code == 422
+    assert preflight.json() == expected
+    assert completion.status_code == 422
+    assert completion.json() == expected
+    assert all(request.method == "GET" for request in sent)
+
+
+def test_default_output_limit_is_checked_against_provider_catalog() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            catalog = _catalog_payload("anthropic")
+            catalog["data"][0]["max_tokens"] = 2048
+            return httpx.Response(200, json=catalog)
+        raise AssertionError("an over-limit default must be rejected before inference")
+
+    app = _gateway(respond)
+    payload = _payload("anthropic_api")
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        _bind_catalog_snapshot(client, payload)
+        response = client.post("/v1/complete", json=payload)
+
+    assert response.status_code == 422
+    assert response.json() == {"error": {"code": "max_output_tokens_unavailable"}}
+    assert all(request.method == "GET" for request in sent)
+
+
+def test_model_missing_from_provider_catalog_is_rejected_before_inference() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            catalog = _catalog_payload("anthropic")
+            catalog["data"][0]["id"] = "claude-unlisted-model"
+            return httpx.Response(200, json=catalog)
+        raise AssertionError("an unlisted model must be rejected before inference")
+
+    app = _gateway(respond)
+    payload = _payload("anthropic_api")
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        _bind_catalog_snapshot(client, payload)
+        response = client.post("/v1/preflight", json=_preflight_payload(payload))
+
+    assert response.status_code == 422
+    assert response.json() == {"error": {"code": "provider_model_unavailable"}}
+    assert all(request.method == "GET" for request in sent)
+
+
+class _RefreshOnThirdCatalogRead(CatalogCache):
+    """Advance only the completion read past TTL to exercise gateway drift handling."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._reads = 0
+
+    def get(
+        self,
+        *,
+        provider: str,
+        transport_id: str,
+        loader: Callable[[datetime], CatalogSnapshot],
+        now: datetime | None = None,
+    ) -> CatalogSnapshot:
+        self._reads += 1
+        if self._reads == 3:
+            now = datetime.now(timezone.utc) + timedelta(minutes=6)
+        return super().get(
+            provider=provider,
+            transport_id=transport_id,
+            loader=loader,
+            now=now,
+        )
+
+
+def test_completion_rejects_route_when_catalog_changes_after_preflight() -> None:
+    sent: list[httpx.Request] = []
+    catalog_reads = 0
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal catalog_reads
+        sent.append(request)
+        if request.method == "GET":
+            catalog_reads += 1
+            payload = _catalog_payload("openai")
+            if catalog_reads > 1:
+                payload["data"][0]["created"] += 1
+            return httpx.Response(200, json=payload)
+        raise AssertionError("catalog drift must reject before inference")
+
+    app = _gateway(respond, catalog_cache=_RefreshOnThirdCatalogRead())
+    payload = _payload("openai_api")
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        _bind_catalog_snapshot(client, payload)
+        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+        completion = client.post("/v1/complete", json=payload)
+
+    assert preflight.status_code == 200
+    assert completion.status_code == 409
+    assert completion.json() == {"error": {"code": "catalog_snapshot_mismatch"}}
+    assert catalog_reads == 2
+    assert all(request.method == "GET" for request in sent)
+
+
+def test_dispatch_failure_is_terminal_and_receipt_is_secret_free() -> None:
+    sent: list[httpx.Request] = []
+
+    def fail(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        return httpx.Response(503, json={"error": {"message": KEY}})
+
+    app = _gateway(fail)
+    payload = _payload("openai_api")
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        _bind_catalog_snapshot(client, payload)
+        preflight = client.post("/v1/preflight", json=_preflight_payload(payload))
+        assert preflight.status_code == 200
+        response = client.post("/v1/complete", json=payload)
+
+    assert response.status_code == 503
+    assert response.json() == {"error": {"code": "provider_unavailable"}}
+    assert len([request for request in sent if request.method == "POST"]) == 1
+    assert KEY not in response.text
+    assert response.json().get("route") is None
+
+
+def test_preflight_requires_host_credential_and_exact_provider_model() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=_catalog_payload("openai"))
+
+    app = _gateway(respond, credential_resolver=lambda _name: None)
+    payload = _payload("openai_api")
+    preflight = {
+        "route": payload["route"],
+        "reasoning_effort": None,
+        "capability_intent": payload["capability_intent"],
+    }
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        response = client.post("/v1/preflight", json=preflight)
+
+    assert response.status_code == 503
+    assert response.json() == {"error": {"code": "credential_unavailable"}}
+    assert sent == []
+
+
+def test_preflight_rejects_unverified_snapshot_before_inference() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json=_catalog_payload("openai"))
+
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        _bind_catalog_snapshot(client, payload)
+        payload["route"]["catalog_snapshot_hash"] = "sha256:" + "f" * 64
+        response = client.post("/v1/preflight", json=_preflight_payload(payload))
+
+    assert response.status_code == 409
+    assert response.json() == {"error": {"code": "catalog_snapshot_mismatch"}}
+    assert all(request.method == "GET" for request in sent)
+
+
+def test_snapshot_provenance_pair_is_validated() -> None:
+    payload = _payload("openai_api")
+    payload["route"]["catalog_snapshot_hash"] = None
+    app = _gateway(lambda _request: httpx.Response(500))
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        response = client.post("/v1/complete", json=payload)
+    assert response.status_code == 422
