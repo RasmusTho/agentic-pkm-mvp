@@ -18,7 +18,7 @@ from app.planner.provider import build_vault_append_steps
 from app.planner.schema import Plan, PlanMetadata
 from app.services.outbox import append_jsonl_record
 from app.write_guard import WriteGuard
-from scripts.yaml_roundtrip import load_frontmatter
+from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 pytestmark = pytest.mark.not_pg
 
@@ -425,6 +425,78 @@ def test_restart_reconciliation_preserves_original_token_with_distinct_retry_tok
         authority_event["payload"]["retry_decision_token"]["token_id"]
         != original_token_id
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "mutated_value"),
+    (
+        ("valid", "yes"),
+        ("contract_version", "governed_write_protocol.v999"),
+        ("token_id", "decision_token_invalid"),
+        ("decision_id", "policy_decision_invalid"),
+        ("issued_at", "not-a-utc-timestamp"),
+    ),
+)
+def test_reconciliation_rejects_malformed_recovered_decision_token(
+    field: str,
+    mutated_value: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Malformed recovered authorization cannot authorize a second append."""
+    outbox_path = tmp_path / "outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    write_attempts = 0
+    append_calls: list[Path] = []
+
+    def write_events(path: Path, records: list[Any]) -> None:
+        nonlocal write_attempts
+        write_attempts += 1
+        if write_attempts == 1:
+            raise OSError("injected authority receipt persistence failure")
+        for record in records:
+            append_jsonl_record(path, record.model_dump(mode="json"), require_event_id=True)
+
+    def append_note(**kwargs: Any) -> Path:
+        note_path = production_append_note(**kwargs)
+        append_calls.append(note_path)
+        return note_path
+
+    monkeypatch.setattr(executor_module.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda *_: None)
+    monkeypatch.setattr(executor_module, "_write_outbox_events", write_events)
+    monkeypatch.setattr(executor_module, "append_note", append_note)
+    args = {"title": "Malformed authorization", "body": "body"}
+    adapter = GovernedWriteAdapter()
+    grant = adapter.issue_decision_token(
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "ok"}),
+        action="mcp.vault.append_note",
+        write_class="vault_mcp_append",
+        actor="ask.v1",
+        resource=args["title"],
+    )
+    executor = MockPlanExecutor()
+    with pytest.raises(OSError, match="authority receipt persistence failure"):
+        executor._run_vault_append(args, _context(tmp_path, grant=grant), step_id="append")
+
+    note = append_calls[0]
+    frontmatter, body = load_frontmatter(note.read_text(encoding="utf-8"))
+    metadata = dict(frontmatter["metadata"])
+    authorization = dict(metadata["governed_authorization"])
+    authorization[field] = mutated_value
+    metadata["governed_authorization"] = authorization
+    frontmatter["metadata"] = metadata
+    note.write_text(dump_frontmatter(frontmatter, body), encoding="utf-8")
+    executor_module._EFFECT_PATH_HINTS.clear()
+    executor_module._EFFECT_ROOT_HINTS.clear()
+
+    with pytest.raises(StepExecutionError) as exc_info:
+        executor._run_vault_append(args, _context(tmp_path, grant=grant), step_id="append")
+
+    assert exc_info.value.error_type == "effect_reconciliation_conflict"
+    assert len(append_calls) == 1
+    assert len(list((tmp_path / "_mcp").glob("*.md"))) == 1
+    assert write_attempts == 1
 
 
 def test_reconciliation_conflicting_note_is_indeterminate_and_never_appends(

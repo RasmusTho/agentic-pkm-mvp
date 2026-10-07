@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import stat
 import time
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any, Callable, Dict, Iterable, Mapping, MutableMapping, Protocol, cast
@@ -69,6 +71,8 @@ _DECISION_TOKEN_FIELDS = frozenset(
         "contract_version",
     }
 )
+_DECISION_TOKEN_ID_PATTERN = re.compile(r"^decision_token_[0-9a-f]{32}$")
+_POLICY_DECISION_ID_PATTERN = re.compile(r"^policy_decision_[0-9a-f]{32}$")
 _EXECUTION_REQUEST_FIELDS = frozenset(
     {
         "side_effect",
@@ -279,21 +283,10 @@ def _decision_token_from_metadata(
     raw = metadata.get("governed_authorization")
     if not isinstance(raw, Mapping):
         return None
-    expected_keys = {
-        "token_id",
-        "decision_id",
-        "action",
-        "write_class",
-        "actor",
-        "resource",
-        "issued_at",
-        "valid",
-        "contract_version",
-    }
-    if set(raw) != expected_keys:
+    token = _validated_decision_token(raw)
+    if token is None:
         return None
     try:
-        token = DecisionToken(**dict(raw))
         _GOVERNED_WRITE_ADAPTER.validate_decision_token(
             decision_token=token,
             action=action,
@@ -304,6 +297,38 @@ def _decision_token_from_metadata(
     except (TypeError, ValueError, InvalidDecisionTokenError, MissingDecisionTokenError):
         return None
     return token
+
+
+def _validated_decision_token(raw: Mapping[str, Any]) -> DecisionToken | None:
+    """Reconstruct only a token that has the complete generated GOV schema."""
+    if set(raw) != _DECISION_TOKEN_FIELDS:
+        return None
+    if raw.get("valid") is not True:
+        return None
+    string_fields = _DECISION_TOKEN_FIELDS - {"valid"}
+    if any(type(raw.get(field)) is not str or not raw[field] for field in string_fields):
+        return None
+    token_id = cast(str, raw["token_id"])
+    decision_id = cast(str, raw["decision_id"])
+    if not _DECISION_TOKEN_ID_PATTERN.fullmatch(token_id):
+        return None
+    if not _POLICY_DECISION_ID_PATTERN.fullmatch(decision_id):
+        return None
+    if raw["contract_version"] != "governed_write_protocol.v0":
+        return None
+    issued_at = cast(str, raw["issued_at"])
+    try:
+        parsed_issued_at = datetime.fromisoformat(
+            issued_at[:-1] + "+00:00" if issued_at.endswith("Z") else issued_at
+        )
+    except ValueError:
+        return None
+    if parsed_issued_at.tzinfo is None or parsed_issued_at.utcoffset() != timedelta(0):
+        return None
+    try:
+        return DecisionToken(**dict(raw))
+    except (TypeError, ValueError):
+        return None
 
 
 def _effect_note_evidence(
@@ -498,7 +523,11 @@ def _validate_persisted_authority_payload(
     decision_token = payload.get("decision_token")
     expected_request_args: dict[str, Any]
     try:
-        original_token = DecisionToken(**dict(decision_token)) if isinstance(decision_token, dict) else None
+        original_token = (
+            _validated_decision_token(decision_token)
+            if isinstance(decision_token, dict)
+            else None
+        )
         if original_token is None:
             raise ValueError("missing DecisionToken")
         expected_request_args = dict(args)
