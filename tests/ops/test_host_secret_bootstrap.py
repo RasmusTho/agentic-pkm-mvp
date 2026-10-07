@@ -1477,6 +1477,7 @@ _BWS_ORG = "00000000-0000-4000-8000-000000000002"
 _BWS_ITEM = "00000000-0000-4000-8000-000000000003"
 _BWS_PROD_PROJECT = "00000000-0000-4000-8000-000000000004"
 _BWS_PEER_ITEM = "00000000-0000-4000-8000-000000000005"
+_BWS_NONCANONICAL_PROJECT_ID = "ABCDEFAB-CDEF-4ABC-8ABC-ABCDEFABCDEF"
 _BWS_PROJECT_IDS = {
     "non-prod": _BWS_NON_PROD_PROJECT,
     "prod": _BWS_PROD_PROJECT,
@@ -1503,6 +1504,7 @@ class _BwsClient:
         self.unexpected_project = False
         self.duplicate_project_name = False
         self.duplicate_project_id = False
+        self.peer_project_id_fault: str | None = None
         self.include_peer_project_item = False
         self.duplicate_item = False
         self.wrong_item_organization = False
@@ -1540,6 +1542,10 @@ class _BwsClient:
             if self.wrong_peer_project_organization else _BWS_ORG
         )
         peer_project_id = _BWS_PROJECT_IDS[peer_project]
+        if self.peer_project_id_fault == "malformed":
+            peer_project_id = "not-a-uuid"
+        elif self.peer_project_id_fault == "noncanonical":
+            peer_project_id = _BWS_NONCANONICAL_PROJECT_ID
         peer_name = self.project if self.duplicate_project_name else peer_project
         if self.duplicate_project_id:
             peer_project_id = selected_project_id
@@ -1718,6 +1724,8 @@ def test_bws_lookup_accepts_both_projects_and_fetches_only_selected_item(
         "wrong-selected-project-organization",
         "wrong-peer-project-organization",
         "wrong-selected-project-id",
+        "malformed-peer-project-id",
+        "noncanonical-peer-project-id",
         "unexpected-project",
         "duplicate-project-name",
         "duplicate-project-id",
@@ -1736,6 +1744,10 @@ def test_bws_lookup_rejects_invalid_multi_project_scope(
         fault == "wrong-peer-project-organization"
     )
     client.wrong_project_id = fault == "wrong-selected-project-id"
+    if fault == "malformed-peer-project-id":
+        client.peer_project_id_fault = "malformed"
+    elif fault == "noncanonical-peer-project-id":
+        client.peer_project_id_fault = "noncanonical"
     client.unexpected_project = fault == "unexpected-project"
     client.duplicate_project_name = fault == "duplicate-project-name"
     client.duplicate_project_id = fault == "duplicate-project-id"
