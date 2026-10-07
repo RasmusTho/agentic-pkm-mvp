@@ -82,4 +82,4 @@ Keep the rotated TypeSafe provider key in Bitwarden and let only the existing MA
 
 ## Applies learning (optional)
 
-The task incorporates the user-directed BWS source correction after #5770 established a Keychain-only binding. The shared Linux `non-prod-reader` is not a safe reader for this provider key because it is installed on ygg-dev and ygg-test.
+The task incorporates the user-directed BWS source correction after #5770 established a Keychain-only binding. The shared Linux `non-prod-reader` is intentionally reused under the accepted one-operator store-level policy; its broader project scope does not create a code-level MARR consumer grant, and channel lookup remains explicitly selected in code.

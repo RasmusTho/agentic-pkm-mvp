@@ -42,8 +42,9 @@ ingress transport only; it is never a secret store or raw-audio archive.
 ## Linux Bitwarden Secrets Manager
 
 Linux explicitly selects `HOST_SECRET_PROVIDER=bws`; failed or missing BWS access never falls back
-to Keychain. The project-scoped reader resolves only code-declared consumer bindings. Dev/test
-use non-prod and prod uses prod. BWS administration stays on the designated agent host with its
+to Keychain. The reader uses the explicitly selected project for channel lookup and resolves only
+code-declared consumer bindings. The existing reader identities may access both projects under the
+accepted store-level policy; dev/test still select non-prod and prod selects prod. BWS administration stays on the designated agent host with its
 Keychain-backed admin identity; a VM receives only its reader's encrypted systemd credential.
 BWS-03 / #5679 owns installation of that encrypted source and remains a separate delivery gate.
 

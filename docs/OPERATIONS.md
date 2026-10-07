@@ -437,8 +437,10 @@ Companion docs:
   `dev/typesafe.api-key` identity in the existing `non-prod` BWS project through the existing
   read-only `non-prod-reader` account (#5801 / #5808). Its BWS reader token remains a
   separate Mac Keychain bootstrap credential. The existing admin writer may access this project only
-  through the designated controller after #5667 qualification; Product, Builder, Linux channel
-  readers, Codex, and Claude receive no provider key. Fake-backed repository proofs do not establish
+  through the designated controller after #5667 qualification. Product and Builder callers receive no
+  provider key; Linux reader identities retain accepted store-level access to the existing projects,
+  while the application code-level MARR grant remains the sole runtime binding. Codex and Claude
+  receive no code-level provider-key grant. Fake-backed repository proofs do not establish
   live entitlement or permissions. Verify the BWS entitlement and sole-writer boundary under #5667,
   then the existing MARR host and separate caller bindings under #5764. The already-authorized
   synthetic Product and Builder attempts remain single-shot and require separate redacted acceptance
