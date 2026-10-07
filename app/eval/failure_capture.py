@@ -657,7 +657,18 @@ def _read_persisted_disposition_receipt(
     outbox_path: Path,
 ) -> tuple[AuthorityReceipt, dict[str, Any]] | None:
     """Read an existing receipt event without mutating either outbox sink."""
-    records = read_receipt_source_records(outbox_path=outbox_path) or []
+    records = read_receipt_source_records(outbox_path=outbox_path)
+    if records is None:
+        backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
+        db_configured = backend == "pg" or bool(
+            os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
+        )
+        if db_configured:
+            raise AuthorityReceiptPersistenceError(
+                "configured DB receipt source is unavailable and no JSONL "
+                "receipt source can be read"
+            )
+        records = []
     for record in records:
         if (
             record.get("event") != EVAL_DRAFT_DISPOSITION_EVENT

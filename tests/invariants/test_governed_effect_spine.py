@@ -1475,6 +1475,9 @@ def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
     assert append_attempts == 1
     assert db_attempts == 1
 
+    # The configured DB source is healthy but empty on recovery, so first-time
+    # reconciliation remains allowed to emit the missing receipt.
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: [])
     recovered = reconcile_pending_disposition_receipt(vault, draft.draft_id)
     assert recovered.decision == "promote"
     assert recovered.authority_receipt is not None
@@ -1509,6 +1512,66 @@ def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
     assert replay.authority_receipt.receipt_id == recovered.authority_receipt.receipt_id
     assert len(writes) == 1
     assert append_attempts == 2
+
+
+def test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An unreadable configured DB cannot be mistaken for an empty receipt source."""
+    outbox_path = tmp_path / "unavailable-db-receipt.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-unavailable-db"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-unavailable-db",
+        payload={"event_id": "evt-unavailable-db"},
+        trace_id="trace-unavailable-db",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+
+    writes: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_write = failure_capture_module.write_note_relative
+
+    def count_write(*args: Any, **kwargs: Any) -> Any:
+        writes.append((args, kwargs))
+        return real_write(*args, **kwargs)
+
+    def fail_jsonl(*_args: Any, **_kwargs: Any) -> bool:
+        raise OSError("JSONL unavailable")
+
+    def fail_db(*_args: Any, **_kwargs: Any) -> str:
+        raise OSError("DB unavailable")
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_write)
+    monkeypatch.setattr(failure_capture_module, "append_jsonl_outbox_event", fail_jsonl)
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", fail_db)
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: None)
+
+    with pytest.raises(AuthorityReceiptPersistenceError, match="could not be persisted"):
+        promote_draft(
+            vault,
+            draft.draft_id,
+            decided_by="human:unavailable-db",
+            write_guard=write_guard,
+        )
+
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="configured DB receipt source is unavailable",
+    ):
+        reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None and terminal.status == DRAFT_STATUS_PROMOTED
+    assert len(writes) == 1
+    assert not outbox_path.exists()
 
 
 @pytest.mark.parametrize(

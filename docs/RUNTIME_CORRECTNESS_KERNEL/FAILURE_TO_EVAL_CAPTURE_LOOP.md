@@ -147,11 +147,15 @@ note-write and concurrency contract follows
       resource bindings all match the terminal draft, after the shared GOV adapter validates the
       persisted original authorization. It rejects a nested state-owner receipt whose outcome or
       writer identity is wrong and discovers a durable DB-only receipt before reconstructing one.
+      If a configured DB receipt source is unreadable while JSONL is absent, reconciliation fails
+      closed instead of treating the source as empty; a healthy empty source still permits valid
+      first-time recovery.
       OEF findings, traces, and WriteGuard health do not supply authorization or accountability.
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_receipt_pending_reconciles_without_second_status_mutation`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_rejects_tampered_persisted_receipt`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_discovers_db_only_receipt`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable`
       Verify: `tests/api/test_eval_drafts.py::test_decision_route_rejects_request_identity_not_bound_to_auth`
 - [ ] Candidate intake remains non-authoritative: promoting a draft records the human decision but
       does not itself change the golden dataset or fixture. Integration is a separate reviewed code
