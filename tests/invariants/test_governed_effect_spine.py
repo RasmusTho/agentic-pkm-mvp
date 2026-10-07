@@ -11,6 +11,7 @@ import pytest
 
 import app.eval.failure_capture as failure_capture_module
 import app.orchestrator.executor as executor_module
+import app.receipts.outbox_sources as receipt_sources
 from app.governance.governed_write import GovernedWriteAdapter
 from app.eval.failure_capture import (
     AuthorityReceiptPersistenceError,
@@ -1510,7 +1511,10 @@ def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
     assert append_attempts == 2
 
 
-@pytest.mark.parametrize("tamper", ["outcome", "decision_token_id"])
+@pytest.mark.parametrize(
+    "tamper",
+    ["outcome", "decision_token_id", "state_owner_outcome", "state_owner_writer"],
+)
 def test_eval_capture_reconciliation_rejects_tampered_persisted_receipt(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1551,11 +1555,16 @@ def test_eval_capture_reconciliation_rejects_tampered_persisted_receipt(
         if record.get("payload", {}).get("draft_id") == draft.draft_id
     ]
     assert len(matching) == 1
-    receipt = matching[0]["payload"]["authority_receipt"]
+    payload = matching[0]["payload"]
+    receipt = payload["authority_receipt"]
     if tamper == "outcome":
         receipt["outcome"] = "failed"
-    else:
+    elif tamper == "decision_token_id":
         receipt["decision_token_id"] = "tampered-token"
+    elif tamper == "state_owner_outcome":
+        payload["state_owner_receipt"]["outcome"] = "failed"
+    else:
+        payload["state_owner_receipt"]["writer_identity"] = "attacker"
     outbox_path.write_text(
         "".join(json.dumps(record) + "\n" for record in records),
         encoding="utf-8",
@@ -1566,3 +1575,65 @@ def test_eval_capture_reconciliation_rejects_tampered_persisted_receipt(
         match="does not match the terminal draft",
     ):
         reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+
+def test_eval_capture_reconciliation_discovers_db_only_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A durable DB receipt is replayed instead of reconstructing a second receipt."""
+    outbox_path = tmp_path / "db-only-receipt.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    vault = tmp_path / "vault-db-only-receipt"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-db-only-receipt",
+        payload={"event_id": "evt-db-only-receipt"},
+        trace_id="trace-db-only-receipt",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+    promoted = promote_draft(
+        vault,
+        draft.draft_id,
+        decided_by="human:db-replay",
+        write_guard=write_guard,
+    )
+    assert promoted.authority_receipt is not None
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    db_record = matching[0]
+    outbox_path.unlink()
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: [db_record])
+
+    writes: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_write = failure_capture_module.write_note_relative
+
+    def count_write(*args: Any, **kwargs: Any) -> Any:
+        writes.append((args, kwargs))
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_write)
+    recovered = reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+    assert recovered.authority_receipt is not None
+    assert recovered.authority_receipt.receipt_id == promoted.authority_receipt.receipt_id
+    assert recovered.authority_receipt.decision_token_id == (
+        promoted.authority_receipt.decision_token_id
+    )
+    assert writes == []
+    assert not outbox_path.exists()

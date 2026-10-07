@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import app.api.routes.eval_drafts as eval_drafts_module
 from app.api.app import app
 from app.knowledge.contracts import NoteLocator, WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
@@ -50,6 +51,11 @@ def _draft_schema_violation(vault_root: Path, *, trace_id: str, event_id: str):
 @pytest.fixture()
 def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     bind_initialized_vault(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        eval_drafts_module,
+        "_authenticated_principal_id",
+        lambda request, api_key: "principal:test",
+    )
     return tmp_path
 
 
@@ -137,13 +143,13 @@ def test_decide_removes_from_pending(vault: Path) -> None:
 
     resp = client.post(
         f"/api/eval-drafts/{draft.draft_id}/decision",
-        json={"action": "promote", "decided_by": "rasmus:reviewer", "notes": "confirmed"},
+        json={"action": "promote", "decided_by": "principal:test", "notes": "confirmed"},
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["draft_id"] == draft.draft_id
     assert body["decision"] == "promote"
-    assert body["decided_by"] == "rasmus:reviewer"
+    assert body["decided_by"] == "principal:test"
 
     # After decision: draft is no longer pending.
     resp = client.get("/api/eval-drafts")
@@ -157,7 +163,7 @@ def test_decide_removes_from_pending(vault: Path) -> None:
     # A second decision on an already-decided draft is refused.
     resp = client.post(
         f"/api/eval-drafts/{draft.draft_id}/decision",
-        json={"action": "reject", "decided_by": "rasmus:reviewer"},
+        json={"action": "reject", "decided_by": "principal:test"},
     )
     assert resp.status_code == 409
 
@@ -171,7 +177,7 @@ def test_reject_removes_from_pending(vault: Path) -> None:
     client = TestClient(app)
     resp = client.post(
         f"/api/eval-drafts/{draft.draft_id}/decision",
-        json={"action": "reject", "decided_by": "rasmus:reviewer"},
+        json={"action": "reject", "decided_by": "principal:test"},
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["decision"] == "reject"
@@ -184,7 +190,7 @@ def test_decision_on_unknown_draft_is_404(vault: Path) -> None:
     client = TestClient(app)
     resp = client.post(
         "/api/eval-drafts/does-not-exist/decision",
-        json={"action": "promote", "decided_by": "rasmus:reviewer"},
+        json={"action": "promote", "decided_by": "principal:test"},
     )
     assert resp.status_code == 409
 
@@ -309,7 +315,7 @@ def test_api_translates_eval_draft_write_conflict(
     client = TestClient(app, raise_server_exceptions=False)
     resp = client.post(
         "/api/eval-drafts/schema-violation-missing/decision",
-        json={"action": "reject", "decided_by": "rasmus:reviewer"},
+        json={"action": "reject", "decided_by": "principal:test"},
     )
 
     assert resp.status_code == 409, resp.text
@@ -336,7 +342,7 @@ def test_api_preserves_receiptless_eval_draft_write_conflict(
     with pytest.raises(KnowledgeWriteConflict, match="canonical outcome is indeterminate"):
         client.post(
             "/api/eval-drafts/schema-violation-missing/decision",
-            json={"action": "reject", "decided_by": "rasmus:reviewer"},
+            json={"action": "reject", "decided_by": "principal:test"},
         )
 
 
@@ -455,7 +461,7 @@ def test_traversal_draft_id_is_refused_via_api(vault: Path) -> None:
     client = TestClient(app)
     resp = client.post(
         "/api/eval-drafts/..%2F..%2FInbox%2Fvictim/decision",
-        json={"action": "promote", "decided_by": "rasmus:reviewer"},
+        json={"action": "promote", "decided_by": "principal:test"},
     )
     # Route-level outcome may be 404 (no route match for the encoded
     # separator) or 409 (refused at the domain seam) -- either way the

@@ -20,19 +20,24 @@ under ``eval_drafts/`` via ``list_pending_drafts``/``read_draft``, neither of
 which touches a durable-write primitive. The decision route is a POST and
 therefore out of P-3's GET-only scope; its write goes through
 ``promote_draft``/``reject_draft``, which are already WriteGuard-gated at the
-``app.eval.failure_capture`` write seam.
+``app.eval.failure_capture`` write seam. Its reviewer actor is derived from the
+authenticated auth/GOV principal boundary; a client ``decided_by`` value is
+only an optional assertion of that server-derived identity.
 
 Review UI (W7/W8) and auto-promotion are out of scope.
 """
 
 from __future__ import annotations
 
+import os
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from app.api.routes.active_context_selection import build_selection_service, get_selection_store
+from app.auth import api_key_header, resolve_auth_subject
 from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.eval.failure_capture import (
     DraftEvalCase,
@@ -43,6 +48,7 @@ from app.eval.failure_capture import (
     reject_draft,
 )
 from app.knowledge.errors import KnowledgeWriteConflict
+from app.instance.local_operator_principal import PrincipalPreflightError
 
 router = APIRouter(prefix="/eval-drafts", tags=["eval-drafts"])
 
@@ -77,7 +83,9 @@ class PendingEvalDraftsResponse(BaseModel):
 
 class EvalDraftDecisionRequest(BaseModel):
     action: Literal["promote", "reject"]
-    decided_by: str
+    # Optional assertion for clients that already know the server-derived principal. The
+    # route never treats this client field as authority; it derives the actor below.
+    decided_by: str | None = Field(default=None, min_length=1)
     notes: str | None = None
 
 
@@ -103,6 +111,27 @@ def _projection(draft: DraftEvalCase) -> EvalDraftProjection:
     )
 
 
+def _authenticated_principal_id(
+    request: Request,
+    api_key: str | None,
+) -> str:
+    """Resolve the actor through the existing auth/GOV principal boundary."""
+    if not os.getenv("INSTANCE_VAULT_REGISTRY_PATH", "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail="instance registry is not bound on this process",
+        )
+    try:
+        subject = resolve_auth_subject(request, api_key)
+        derived = build_selection_service(get_selection_store()).derive(
+            subject,
+            presented_credential=api_key,
+        )
+    except PrincipalPreflightError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    return derived.principal.principal_id
+
+
 @router.get("", response_model=PendingEvalDraftsResponse)
 def get_pending_eval_drafts() -> PendingEvalDraftsResponse | JSONResponse:
     """Bounded read over pending eval-draft candidates awaiting review.
@@ -125,7 +154,10 @@ def get_pending_eval_drafts() -> PendingEvalDraftsResponse | JSONResponse:
     response_model=EvalDraftDecisionResponse,
 )
 def post_eval_draft_decision(
-    draft_id: str, req: EvalDraftDecisionRequest
+    draft_id: str,
+    req: EvalDraftDecisionRequest,
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
 ) -> EvalDraftDecisionResponse | JSONResponse:
     """Record an explicit promote/reject decision on a pending eval draft.
 
@@ -136,6 +168,15 @@ def post_eval_draft_decision(
     doc change (unchanged from KERNEL-15); this endpoint only records the
     review decision on the draft file itself.
     """
+    authenticated_actor = _authenticated_principal_id(request, api_key)
+    if req.decided_by is not None and req.decided_by != authenticated_actor:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "reviewer_identity_mismatch",
+                "message": "decided_by must match the authenticated principal",
+            },
+        )
     vault_root = active_vault_root_or_selection_required()
     if isinstance(vault_root, JSONResponse):
         return vault_root
@@ -145,7 +186,7 @@ def post_eval_draft_decision(
         decision = decide(
             vault_root,
             draft_id,
-            decided_by=req.decided_by,
+            decided_by=authenticated_actor,
             notes=req.notes,
         )
     except KnowledgeWriteConflict as exc:

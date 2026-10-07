@@ -103,13 +103,13 @@ from app.services.outbox import (
     append_jsonl_outbox_event,
     coerce_outbox_event,
     derive_idempotency_key,
-    read_jsonl_outbox_records,
     write_outbox_event,
 )
 
 import yaml
 
 from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
+from app.receipts.outbox_sources import read_receipt_source_records
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -656,8 +656,8 @@ def _read_persisted_disposition_receipt(
     disposition_id: str,
     outbox_path: Path,
 ) -> tuple[AuthorityReceipt, dict[str, Any]] | None:
-    """Read an existing receipt event without mutating the JSONL sink."""
-    records = read_jsonl_outbox_records(outbox_path, read_only=True)
+    """Read an existing receipt event without mutating either outbox sink."""
+    records = read_receipt_source_records(outbox_path=outbox_path) or []
     for record in records:
         if (
             record.get("event") != EVAL_DRAFT_DISPOSITION_EVENT
@@ -923,6 +923,9 @@ def reconcile_pending_disposition_receipt(
             or not isinstance(state_owner_receipt, dict)
             or state_owner_receipt.get("operation") != "write_note"
             or state_owner_receipt.get("adapter") != "fs_vault"
+            or state_owner_receipt.get("outcome") not in {"written", "applied"}
+            or state_owner_receipt.get("writer_identity")
+            != "eval.failure_capture.decision"
             or not isinstance(state_owner_receipt.get("locator"), dict)
             or state_owner_receipt["locator"].get("path") != rel_path
         ):
