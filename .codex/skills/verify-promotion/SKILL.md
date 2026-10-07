@@ -60,8 +60,9 @@ python -m app.release_channels.fleet_model_fitness prod --json
 The guard always checks `api`, `worker`, `watcher`, and the gateway. Capture-watch is required only
 when `HEIMDAL_CAPTURE_WATCH_DIR` is non-empty in the running API container's resolved environment;
 the direct guard reads only that configured/unconfigured state and never prints the value. The
-deployment path passes its preflighted state explicitly. A configured capture watcher that is
-missing or unhealthy remains a verification failure.
+deployment path passes its preflighted state explicitly. In the guard, a configured capture watcher
+must be present and match the image/pin checks; the guard does not inspect its health. During deploy,
+`scripts/deploy_channel.sh` enforces capture health separately through `capture_watch_gate`.
 
 `model=checkout` is an allowed informational result before prod has a pinned-image cutover receipt.
 In pinned-image mode, the guard is a required FAIL/PASS check: it must fail on any repo `/app`
