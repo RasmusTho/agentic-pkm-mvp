@@ -215,12 +215,34 @@ class BwsSecretReader:
             if not login.success or login.data is None or not login.data.authenticated:
                 raise BwsLookupError()
             projects = client.projects().list(self.config.organization_id)
+            if not projects.success:
+                raise BwsLookupError()
+            project_records = projects.data.data
+            if not isinstance(project_records, list) or len(project_records) != 2:
+                raise BwsLookupError()
+            projects_by_name: dict[str, str] = {}
+            project_ids: set[str] = set()
+            for record in project_records:
+                name = record.name
+                project_id = str(record.id)
+                organization_id = str(record.organization_id)
+                try:
+                    valid_project_id = str(UUID(project_id)) == project_id
+                except (ValueError, TypeError, AttributeError):
+                    valid_project_id = False
+                if (
+                    name not in {"non-prod", "prod"}
+                    or name in projects_by_name
+                    or not valid_project_id
+                    or project_id in project_ids
+                    or organization_id != self.config.organization_id
+                ):
+                    raise BwsLookupError()
+                projects_by_name[name] = project_id
+                project_ids.add(project_id)
             if (
-                not projects.success
-                or len(projects.data.data) != 1
-                or str(projects.data.data[0].id) != self.config.project_id
-                or projects.data.data[0].name != project
-                or str(projects.data.data[0].organization_id) != self.config.organization_id
+                set(projects_by_name) != {"non-prod", "prod"}
+                or projects_by_name.get(project) != self.config.project_id
             ):
                 raise BwsLookupError()
             identifiers = client.secrets().list(self.config.organization_id)
