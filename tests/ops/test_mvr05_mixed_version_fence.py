@@ -36,6 +36,7 @@ from app.instance.ownership_ledger import (
 from app.instance.vault_registry import (
     AppLocalSettingsStore,
     KnownVaultRef,
+    RemovalTombstone,
     VaultRegistration,
     VaultRegistryStore,
 )
@@ -167,7 +168,11 @@ def _floor_command(tmp_path, monkeypatch) -> tuple[list[str], Path, Path]:
     )
 
 
-def _legacy_owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
+def _legacy_owner_inventory(
+    owners: list[dict[str, str]],
+    *,
+    retired_owner_identities: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
     identities = []
     for owner in owners:
         resolved_root = Path(owner["root"]).resolve(strict=False)
@@ -198,6 +203,7 @@ def _legacy_owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
         "config": [],
         "owners": owners,
         "owner_identities": identities,
+        "retired_owner_identities": retired_owner_identities or [],
     }
     return {
         "schema": "agentic-pkm.legacy-owner-inventory.v1",
@@ -211,6 +217,897 @@ def _legacy_owner_inventory(owners: list[dict[str, str]]) -> dict[str, object]:
         "source_evidence": source_evidence,
         "owners": owners,
     }
+
+
+def _rewrite_inventory_file_for_test(command: list[str], payload: dict[str, object]) -> None:
+    inventory_path = Path(command[command.index("--inventory-path") + 1])
+    source_evidence = payload["source_evidence"]
+    assert isinstance(source_evidence, dict)
+    payload["source_digest"] = hashlib.sha256(
+        json.dumps(source_evidence, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    encoded = json.dumps(payload).encode()
+    inventory_path.write_bytes(encoded)
+    inventory_path.chmod(0o600)
+    command[command.index("--inventory-sha256") + 1] = hashlib.sha256(
+        encoded
+    ).hexdigest()
+
+
+def _populated_legacy_floor_case(
+    tmp_path: Path,
+    *,
+    inventory_binding_id: str = "binding-existing",
+    include_tombstone: bool = False,
+) -> tuple[list[str], Path, OwnershipLedger, Path, str]:
+    state_root = tmp_path / "instance-state"
+    state_root.mkdir(mode=0o700)
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    test_root = tmp_path / "existing-test-vault"
+    prod_root = tmp_path / "existing-prod-vault"
+    test_root.mkdir()
+    prod_root.mkdir()
+    retired_root = tmp_path / "retired-test-vault"
+    if include_tombstone:
+        retired_root.mkdir()
+
+    ledger = OwnershipLedger(ownership_root)
+    for channel, binding_id, root in (
+        ("test", "binding-existing", test_root),
+        ("prod", "binding-foreign", prod_root),
+    ):
+        ledger.reserve(
+            channel_id=channel,
+            vault_binding_id=binding_id,
+            root=root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        ledger.activate(binding_id, _capability=STORAGE_MUTATION_CAPABILITY)
+    if include_tombstone:
+        ledger.reserve(
+            channel_id="test",
+            vault_binding_id="binding-retired",
+            root=retired_root,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        ledger.activate("binding-retired", _capability=STORAGE_MUTATION_CAPABILITY)
+        ledger.release_to_tombstone(
+            "binding-retired", _capability=STORAGE_MUTATION_CAPABILITY
+        )
+    legacy_roots = (test_root, prod_root, *((retired_root,) if include_tombstone else ()))
+    _rewrite_ledger_as_authenticated_v1(ledger, *legacy_roots)
+
+    registry_path = state_root / "agentic-pkm" / "vault-registry.md"
+    registry = VaultRegistryStore(registry_path)
+    initial = registry.load()
+    registered = registry.register(
+        VaultRegistration(
+            "binding-existing",
+            f"path:{test_root}",
+            str(test_root),
+        ),
+        expected_revision=initial.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    if include_tombstone:
+        registered = registry.register(
+            VaultRegistration(
+                "binding-retired",
+                f"path:{retired_root}",
+                str(retired_root),
+            ),
+            expected_revision=registered.revision,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+        registry.commit_state(
+            registrations={
+                binding_id: registration
+                for binding_id, registration in registered.registrations.items()
+                if binding_id != "binding-retired"
+            },
+            removal_tombstones={
+                "binding-retired": RemovalTombstone(
+                    vault_binding_id="binding-retired",
+                    ref=f"path:{retired_root}",
+                    path=str(retired_root),
+                    vault_id=None,
+                    local_instance_id=None,
+                    content_epoch=1,
+                )
+            },
+            expected_revision=registered.revision,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+
+    retired_owner_identities: list[dict[str, object]] = []
+    if include_tombstone:
+        for channel_id, binding_id, root in ledger.retired_owner_roots(
+            allow_legacy=True
+        ):
+            root_identity = resolve_filesystem_root_identity(root)
+            retired_owner_identities.append(
+                {
+                    "channel_id": channel_id,
+                    "vault_binding_id": binding_id,
+                    "root": str(root),
+                    "identity": f"inode:{root_identity.device}:{root_identity.inode}",
+                    "ancestor_identities": sorted(
+                        f"path:{ancestor}"
+                        for ancestor in root.parents
+                    ),
+                    "legacy_ancestor_identities": [
+                        f"inode:{identity.device}:{identity.inode}"
+                        for ancestor in root.parents
+                        for identity in (resolve_filesystem_root_identity(ancestor),)
+                    ],
+                }
+            )
+
+    legacy_path = tmp_path / "absent-app-local.md"
+    controller_start_token = "linux:" + "0" * 64
+    runtime_module._begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    quiescence_inventory = ownership_root / "deployment-quiescence-inventory.json"
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    empty_digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": controller_start_token,
+                },
+                "domains": domains,
+                "snapshot_digests": [empty_digest, empty_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quiescence_inventory.chmod(0o600)
+    runtime_module._prove_instance_state_quiescence(
+        channel="test",
+        host_global_root=ownership_root,
+        inventory_path=quiescence_inventory,
+    )
+
+    owner_inventory = ownership_root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory(
+                [
+                    {
+                        "channel_id": "test",
+                        "vault_binding_id": inventory_binding_id,
+                        "root": str(test_root),
+                    },
+                    {
+                        "channel_id": "prod",
+                        "vault_binding_id": "binding-foreign",
+                        "root": str(prod_root),
+                    },
+                ],
+                retired_owner_identities=retired_owner_identities,
+            )
+        ),
+        encoding="utf-8",
+    )
+    owner_inventory.chmod(0o600)
+    # The deployment container is mount-blind; host identity evidence stays in
+    # the digest-bound owner inventory while the roots are absent.
+    test_root.rmdir()
+    prod_root.rmdir()
+    if include_tombstone:
+        retired_root.rmdir()
+
+    fence_plan = tmp_path / "mvr05-fence-plan.json"
+    fence_plan.write_text(
+        json.dumps(
+            discover_db_producer_fence(REPO_ROOT / "docker-compose.yaml").as_payload()
+        ),
+        encoding="utf-8",
+    )
+    proof_path = ownership_root / "deployment-quiescence-proof.json"
+    command = [
+        "mvr05-record-floor",
+        "--channel",
+        "test",
+        "--registry-path",
+        str(registry_path),
+        "--host-global-root",
+        str(ownership_root),
+        "--legacy-path",
+        str(legacy_path),
+        "--inventory-path",
+        str(owner_inventory),
+        "--inventory-sha256",
+        hashlib.sha256(owner_inventory.read_bytes()).hexdigest(),
+        "--quiescence-proof-path",
+        str(proof_path),
+        "--fence-plan",
+        str(fence_plan),
+    ]
+    return (
+        command,
+        registry_path,
+        ledger,
+        legacy_path,
+        controller_start_token,
+    )
+
+
+def _interrupt_populated_floor_after_v2_write(
+    command: list[str],
+    ledger: OwnershipLedger,
+    monkeypatch,
+) -> None:
+    def stop_before_floor(*_args, **_kwargs):
+        raise RuntimeError("injected stop before floor recording")
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(
+            mvr05_cutover_module,
+            "record_mvr05_runtime_floor",
+            stop_before_floor,
+        )
+        with pytest.raises(RuntimeError, match="stop before floor recording"):
+            runtime_module.main(command)
+
+    assert ledger.require_existing().schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert not ledger.rotation_path.exists()
+
+
+def _prepare_fresh_v2_retry_without_retired_rows(
+    command: list[str],
+    *,
+    registry_path: Path,
+    ledger: OwnershipLedger,
+    legacy_path: Path,
+    controller_start_token: str,
+) -> Path:
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+    runtime_module._begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=registry_path.parent.parent,
+        host_global_root=ledger.root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    proof_path = Path(command[command.index("--quiescence-proof-path") + 1])
+    assert runtime_module._prove_instance_state_quiescence(
+        channel="test",
+        host_global_root=ledger.root,
+        inventory_path=ledger.root / "deployment-quiescence-inventory.json",
+    )
+
+    inventory_path = Path(command[command.index("--inventory-path") + 1])
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    source_evidence = inventory["source_evidence"]
+    assert isinstance(source_evidence, dict)
+    source_evidence["retired_owner_identities"] = []
+    # Model the current v2 host producer: it emits live-owner evidence but no
+    # retired-owner roots. The runtime binds this fresh receipt to the new proof.
+    for field in (
+        "deployment_nonce",
+        "controller",
+        "quiescence_inventory_digest",
+        "receipt_digest",
+    ):
+        inventory.pop(field, None)
+    _rewrite_inventory_file_for_test(command, inventory)
+    command[command.index("--inventory-sha256") + 1] = hashlib.sha256(
+        inventory_path.read_bytes()
+    ).hexdigest()
+    assert proof_path.exists()
+    return inventory_path
+
+
+def test_populated_mvr05_registry_converges_matching_legacy_ledger_before_floor(
+    tmp_path,
+) -> None:
+    (
+        command,
+        registry_path,
+        ledger,
+        legacy_path,
+        controller_start_token,
+    ) = _populated_legacy_floor_case(tmp_path)
+
+    assert runtime_module.main(command) == 0
+
+    migrated = ledger.require_existing()
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert migrated.legacy_bootstrap_complete
+    assert set(migrated.leases) == {"binding-existing", "binding-foreign"}
+    registry = VaultRegistryStore(registry_path).load()
+    assert registry.authority == "dormant"
+    assert registry.revision == 2
+    assert registry.extensions["runtimeFloors"]["minimumRuntimeSchema"] == "mvr-05"
+    assert set(registry.registrations) == {"binding-existing"}
+    assert not legacy_path.exists()
+
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+def test_populated_mvr05_registry_converges_authenticated_legacy_tombstone(
+    tmp_path,
+) -> None:
+    command, registry_path, ledger, _legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path, include_tombstone=True)
+    )
+
+    assert runtime_module.main(command) == 0
+
+    migrated = ledger.require_existing()
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert set(migrated.tombstones) == {"binding-retired"}
+    assert migrated.tombstones["binding-retired"].channel_id == "test"
+    registry = VaultRegistryStore(registry_path).load()
+    assert registry.authority == "dormant"
+    assert registry.extensions["runtimeFloors"]["minimumRuntimeSchema"] == "mvr-05"
+    assert set(registry.removal_tombstones) == {"binding-retired"}
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+def test_populated_mvr05_registry_rejects_mismatched_legacy_tombstone_path(
+    tmp_path,
+) -> None:
+    command, registry_path, ledger, _legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path, include_tombstone=True)
+    )
+    registry_store = VaultRegistryStore(registry_path)
+    registry = registry_store.load()
+    tombstone = registry.removal_tombstones["binding-retired"]
+    registry_store.commit_state(
+        registrations=dict(registry.registrations),
+        removal_tombstones={
+            "binding-retired": replace(
+                tombstone,
+                ref="path:/different-retired-root",
+                path="/different-retired-root",
+            )
+        },
+        expected_revision=registry.revision,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger_before = ledger.path.read_bytes()
+    key_before = ledger.key_path.read_bytes()
+    registry_before = registry_path.read_bytes()
+
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="tombstones do not match the registered channel",
+    ):
+        runtime_module.main(command)
+
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    assert "minimumRuntimeSchema" not in VaultRegistryStore(registry_path).load().extensions.get(
+        "runtimeFloors", {}
+    )
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+@pytest.mark.parametrize(
+    ("evidence_change", "expected_error"),
+    [
+        ("missing", "tombstones do not match the registered channel"),
+        ("tampered", "tombstone fields are not registry-authenticated"),
+    ],
+)
+def test_populated_mvr05_registry_rejects_missing_or_tampered_retired_evidence(
+    tmp_path,
+    evidence_change: str,
+    expected_error: str,
+) -> None:
+    command, registry_path, ledger, _legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path, include_tombstone=True)
+    )
+    inventory_path = Path(command[command.index("--inventory-path") + 1])
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    source_evidence = inventory["source_evidence"]
+    assert isinstance(source_evidence, dict)
+    retired_rows = source_evidence["retired_owner_identities"]
+    assert isinstance(retired_rows, list) and len(retired_rows) == 1
+    if evidence_change == "missing":
+        source_evidence["retired_owner_identities"] = []
+    else:
+        row = retired_rows[0]
+        assert isinstance(row, dict)
+        row["identity"] = "inode:0:0"
+    _rewrite_inventory_file_for_test(command, inventory)
+    ledger_before = ledger.path.read_bytes()
+    key_before = ledger.key_path.read_bytes()
+    registry_before = registry_path.read_bytes()
+
+    with pytest.raises(runtime_module.InstanceStatePreflightError, match=expected_error):
+        runtime_module.main(command)
+
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    assert "minimumRuntimeSchema" not in VaultRegistryStore(registry_path).load().extensions.get(
+        "runtimeFloors", {}
+    )
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+def test_populated_mvr05_registry_rejects_legacy_binding_mismatch_before_floor(
+    tmp_path,
+) -> None:
+    (
+        command,
+        registry_path,
+        ledger,
+        _legacy_path,
+        controller_start_token,
+    ) = _populated_legacy_floor_case(
+        tmp_path,
+        inventory_binding_id="binding-mismatch",
+    )
+    ledger_before = ledger.path.read_bytes()
+    key_before = ledger.key_path.read_bytes()
+    registry_before = registry_path.read_bytes()
+
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="does not match the registered root",
+    ):
+        runtime_module.main(command)
+
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    floors = VaultRegistryStore(registry_path).load().extensions.get("runtimeFloors", {})
+    assert "minimumRuntimeSchema" not in floors
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+def test_populated_mvr05_registry_rejects_invalid_fence_before_legacy_migration(
+    tmp_path,
+) -> None:
+    command, registry_path, ledger, _legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path)
+    )
+    fence_path = Path(command[command.index("--fence-plan") + 1])
+    invalid_fence = json.loads(fence_path.read_text(encoding="utf-8"))
+    invalid_fence["stopped_services"].append(invalid_fence["migration_runner"])
+    fence_path.write_text(json.dumps(invalid_fence), encoding="utf-8")
+    ledger_before = ledger.path.read_bytes()
+    key_before = ledger.key_path.read_bytes()
+    registry_before = registry_path.read_bytes()
+
+    with pytest.raises(
+        mvr05_cutover_module.Mvr05CutoverError,
+        match="fence plan receipt is invalid",
+    ):
+        runtime_module.main(command)
+
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+def test_populated_mvr05_retry_recovers_v1_after_rotation_journal_cleanup(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    command, registry_path, ledger, _legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path)
+    )
+    legacy_bytes = ledger.path.read_bytes()
+    ledger.rotation_path.write_text(
+        json.dumps(
+            {
+                "schema": ownership_ledger_module.ROTATION_SCHEMA,
+                "key": json.loads(ledger.key_path.read_text(encoding="utf-8")),
+                "ledger": json.loads(legacy_bytes),
+            }
+        ),
+        encoding="utf-8",
+    )
+    ledger.rotation_path.chmod(0o600)
+    original_write = OwnershipLedger._write_ledger_locked
+
+    def interrupt_v2_write(self, candidate, key):
+        if candidate.schema == ownership_ledger_module.LEDGER_SCHEMA:
+            raise OSError("injected interruption after legacy journal cleanup")
+        original_write(self, candidate, key)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(OwnershipLedger, "_write_ledger_locked", interrupt_v2_write)
+        with pytest.raises(OSError, match="after legacy journal cleanup"):
+            runtime_module.main(command)
+
+    assert ledger.path.read_bytes() == legacy_bytes
+    assert not ledger.rotation_path.exists()
+    registry = VaultRegistryStore(registry_path).load()
+    assert "minimumRuntimeSchema" not in registry.extensions.get("runtimeFloors", {})
+
+    inventory_path = Path(command[command.index("--inventory-path") + 1])
+    command[command.index("--inventory-sha256") + 1] = hashlib.sha256(
+        inventory_path.read_bytes()
+    ).hexdigest()
+    assert runtime_module.main(command) == 0
+
+    migrated = ledger.require_existing()
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    registry = VaultRegistryStore(registry_path).load()
+    assert registry.extensions["runtimeFloors"]["minimumRuntimeSchema"] == "mvr-05"
+    assert registry.authority == "dormant"
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+def test_populated_mvr05_retry_recovers_committed_v2_with_legacy_rotation_journal(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    command, registry_path, ledger, legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path, include_tombstone=True)
+    )
+    inventory_path = Path(command[command.index("--inventory-path") + 1])
+    unbound_inventory_bytes = inventory_path.read_bytes()
+    proof_path = Path(command[command.index("--quiescence-proof-path") + 1])
+    first_proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    interrupted_journal = {
+        "schema": ownership_ledger_module.ROTATION_SCHEMA,
+        "key": json.loads(ledger.key_path.read_text(encoding="utf-8")),
+        "ledger": json.loads(ledger.path.read_text(encoding="utf-8")),
+    }
+
+    def stop_after_ledger_convergence(*_args, **_kwargs):
+        raise RuntimeError("injected stop before floor recording")
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(
+            mvr05_cutover_module,
+            "record_mvr05_runtime_floor",
+            stop_after_ledger_convergence,
+        )
+        with pytest.raises(RuntimeError, match="stop before floor recording"):
+            runtime_module.main(command)
+
+    migrated = ledger.require_existing()
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    registry = VaultRegistryStore(registry_path).load()
+    assert "minimumRuntimeSchema" not in registry.extensions.get("runtimeFloors", {})
+
+    # Recreate the v2 + matching-v1-journal state left by the previous release's
+    # write-then-unlink ordering, then verify the production retry repairs it.
+    ledger.rotation_path.write_text(json.dumps(interrupted_journal), encoding="utf-8")
+    ledger.rotation_path.chmod(0o600)
+    ledger_before = ledger.path.read_bytes()
+    key_before = ledger.key_path.read_bytes()
+    registry_before = registry_path.read_bytes()
+    journal_before = ledger.rotation_path.read_bytes()
+    with pytest.raises(
+        LedgerError,
+        match="legacy ownership ledger requires fenced registry authority",
+    ):
+        ledger.require_existing()
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    assert ledger.rotation_path.read_bytes() == journal_before
+
+    command[command.index("--inventory-sha256") + 1] = hashlib.sha256(
+        inventory_path.read_bytes()
+    ).hexdigest()
+
+    mismatched_journal = json.loads(json.dumps(interrupted_journal))
+    mismatched_journal["ledger"]["leases"]["binding-existing"]["channel_id"] = "prod"
+    ledger.rotation_path.write_text(json.dumps(mismatched_journal), encoding="utf-8")
+    mismatched_journal_bytes = ledger.rotation_path.read_bytes()
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="owner fields are not registry-authenticated",
+    ):
+        runtime_module.main(command)
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    assert ledger.rotation_path.read_bytes() == mismatched_journal_bytes
+
+    tampered_ancestors = json.loads(json.dumps(interrupted_journal))
+    original_ancestors = tampered_ancestors["ledger"]["leases"][
+        "binding-existing"
+    ]["ancestor_fingerprints"]
+    tampered_ancestors["ledger"]["leases"]["binding-existing"][
+        "ancestor_fingerprints"
+    ] = ["a" * 64 for _ in original_ancestors]
+    ledger.rotation_path.write_text(json.dumps(tampered_ancestors), encoding="utf-8")
+    tampered_ancestor_bytes = ledger.rotation_path.read_bytes()
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="owner fields are not registry-authenticated",
+    ):
+        runtime_module.main(command)
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    assert ledger.rotation_path.read_bytes() == tampered_ancestor_bytes
+
+    ledger.rotation_path.write_bytes(journal_before)
+    ledger.rotation_path.chmod(0o600)
+
+    # A deployment producer releases an interrupted attempt and issues a fresh
+    # proof and owner receipt. Recovery must compare the migrated snapshot after
+    # applying this retry's receipt digest, not against the previous attempt's
+    # stored digest.
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+    runtime_module._begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=registry_path.parent.parent,
+        host_global_root=ledger.root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert runtime_module._prove_instance_state_quiescence(
+        channel="test",
+        host_global_root=ledger.root,
+        inventory_path=ledger.root / "deployment-quiescence-inventory.json",
+    )
+    second_proof = json.loads(proof_path.read_text(encoding="utf-8"))
+    assert second_proof["nonce"] != first_proof["nonce"]
+    inventory_path.write_bytes(unbound_inventory_bytes)
+    inventory_path.chmod(0o600)
+    command[command.index("--inventory-sha256") + 1] = hashlib.sha256(
+        unbound_inventory_bytes
+    ).hexdigest()
+    assert runtime_module.main(command) == 0
+
+    assert not ledger.rotation_path.exists()
+    migrated = ledger.require_existing()
+    refreshed_inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    assert migrated.leases["binding-existing"].owner_receipt_digest == refreshed_inventory[
+        "receipt_digest"
+    ]
+    assert migrated.tombstones["binding-retired"].channel_id == "test"
+    registry = VaultRegistryStore(registry_path).load()
+    assert registry.extensions["runtimeFloors"]["minimumRuntimeSchema"] == "mvr-05"
+    assert registry.authority == "dormant"
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+def test_populated_mvr05_retry_recovers_committed_v2_without_journal_or_retired_rows(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    command, registry_path, ledger, legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path, include_tombstone=True)
+    )
+    _interrupt_populated_floor_after_v2_write(command, ledger, monkeypatch)
+    registry = VaultRegistryStore(registry_path).load()
+    assert "minimumRuntimeSchema" not in registry.extensions.get("runtimeFloors", {})
+
+    inventory_path = _prepare_fresh_v2_retry_without_retired_rows(
+        command,
+        registry_path=registry_path,
+        ledger=ledger,
+        legacy_path=legacy_path,
+        controller_start_token=controller_start_token,
+    )
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    assert inventory["source_evidence"]["retired_owner_identities"] == []
+
+    assert runtime_module.main(command) == 0
+
+    migrated = ledger.require_existing()
+    refreshed_inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert migrated.leases["binding-existing"].owner_receipt_digest == refreshed_inventory[
+        "receipt_digest"
+    ]
+    assert migrated.tombstones["binding-retired"].channel_id == "test"
+    assert not ledger.rotation_path.exists()
+    registry = VaultRegistryStore(registry_path).load()
+    assert registry.extensions["runtimeFloors"]["minimumRuntimeSchema"] == "mvr-05"
+    assert registry.authority == "dormant"
+    ledger_after_floor = ledger.path.read_bytes()
+    registry_after_floor = registry_path.read_bytes()
+    assert runtime_module.main(command) == 0
+    assert ledger.path.read_bytes() == ledger_after_floor
+    assert registry_path.read_bytes() == registry_after_floor
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+@pytest.mark.parametrize("inventory_failure", ["missing", "invalid"])
+def test_populated_mvr05_v2_retry_requires_fresh_owner_inventory(
+    tmp_path,
+    monkeypatch,
+    inventory_failure: str,
+) -> None:
+    command, registry_path, ledger, legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path, include_tombstone=True)
+    )
+    _interrupt_populated_floor_after_v2_write(command, ledger, monkeypatch)
+    inventory_path = _prepare_fresh_v2_retry_without_retired_rows(
+        command,
+        registry_path=registry_path,
+        ledger=ledger,
+        legacy_path=legacy_path,
+        controller_start_token=controller_start_token,
+    )
+    if inventory_failure == "missing":
+        inventory_path.unlink()
+    else:
+        inventory_path.write_text("{}", encoding="utf-8")
+        inventory_path.chmod(0o600)
+        command[command.index("--inventory-sha256") + 1] = hashlib.sha256(
+            inventory_path.read_bytes()
+        ).hexdigest()
+    ledger_before = ledger.path.read_bytes()
+    key_before = ledger.key_path.read_bytes()
+    registry_before = registry_path.read_bytes()
+
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="complete drained legacy-owner inventory is required",
+    ):
+        runtime_module.main(command)
+
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    assert "minimumRuntimeSchema" not in VaultRegistryStore(registry_path).load().extensions.get(
+        "runtimeFloors", {}
+    )
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+@pytest.mark.parametrize("tamper", ["stored_ancestors", "registry_tombstone_path"])
+def test_populated_mvr05_v2_retry_rejects_tampered_retired_identity(
+    tmp_path,
+    monkeypatch,
+    tamper: str,
+) -> None:
+    command, registry_path, ledger, legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path, include_tombstone=True)
+    )
+    _interrupt_populated_floor_after_v2_write(command, ledger, monkeypatch)
+    _prepare_fresh_v2_retry_without_retired_rows(
+        command,
+        registry_path=registry_path,
+        ledger=ledger,
+        legacy_path=legacy_path,
+        controller_start_token=controller_start_token,
+    )
+    if tamper == "stored_ancestors":
+        payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+        ancestors = payload["tombstones"]["binding-retired"][
+            "ancestor_fingerprints"
+        ]
+        ancestors[0] = "a" * 64
+        ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+        ledger.path.chmod(0o600)
+    else:
+        registry_store = VaultRegistryStore(registry_path)
+        registry = registry_store.load()
+        tombstone = registry.removal_tombstones["binding-retired"]
+        registry_store.commit_state(
+            registrations=dict(registry.registrations),
+            removal_tombstones={
+                "binding-retired": replace(
+                    tombstone,
+                    ref="path:/different-retired-root",
+                    path="/different-retired-root",
+                )
+            },
+            expected_revision=registry.revision,
+            _capability=STORAGE_MUTATION_CAPABILITY,
+        )
+    ledger_before = ledger.path.read_bytes()
+    key_before = ledger.key_path.read_bytes()
+    registry_before = registry_path.read_bytes()
+
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="registry/ledger consistency verification failed",
+    ):
+        runtime_module.main(command)
+
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    assert "minimumRuntimeSchema" not in VaultRegistryStore(registry_path).load().extensions.get(
+        "runtimeFloors", {}
+    )
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
 
 
 def test_mvr05_floor_waits_for_digest_matched_owner_inventory(
@@ -1509,6 +2406,75 @@ def test_v1_coherent_owner_rename_is_not_migrated(tmp_path) -> None:
         )
 
     assert ledger.path.read_bytes() == before
+
+
+def test_v1_transfer_tombstone_uses_authenticated_destination_lineage(tmp_path) -> None:
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    root = tmp_path / "transferred-vault"
+    root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    ledger.reserve(
+        channel_id="test",
+        vault_binding_id="binding-source",
+        root=root,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate("binding-source", _capability=STORAGE_MUTATION_CAPABILITY)
+    ledger.begin_transfer(
+        source_binding_id="binding-source",
+        destination_channel_id="dev",
+        destination_binding_id="binding-destination",
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    ledger.activate_transfer(_capability=STORAGE_MUTATION_CAPABILITY)
+    current = ledger.require_existing()
+    lineage = current.transfer_lineage[0]
+    _rewrite_ledger_as_authenticated_v1(ledger, root)
+
+    from scripts import instance_state_writer_inventory as writer_inventory
+
+    identity, ancestors, legacy_ancestors = writer_inventory._owner_identity_material(
+        root, domain="dev", source="test"
+    )
+    destination_owner = LegacyOwner(
+        "dev",
+        "binding-destination",
+        root,
+        identity,
+        tuple(sorted(ancestors)),
+        legacy_ancestors,
+    )
+    retired_source = LegacyOwner(
+        "test",
+        "binding-source",
+        root,
+        identity,
+        tuple(sorted(ancestors)),
+        legacy_ancestors,
+    )
+
+    migrated = ledger.require_registry_consistency(
+        channel_id="dev",
+        registrations={"binding-destination": root},
+        tombstones={},
+        transfer_lineage=(
+            {
+                "ownership_transfer_id": lineage.transfer_id,
+                "source_channel_id": lineage.source_channel_id,
+                "source_binding_id": lineage.source_binding_id,
+                "destination_channel_id": lineage.destination_channel_id,
+                "destination_binding_id": lineage.destination_binding_id,
+            },
+        ),
+        global_live_owners=(destination_owner,),
+        global_retired_owners=(retired_source,),
+        require_materialized_roots=False,
+    )
+
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert migrated.leases["binding-destination"].channel_id == "dev"
+    assert migrated.tombstones["binding-source"].channel_id == "test"
 
 
 def test_valid_v1_rotation_journal_recovers_all_authority_surfaces(tmp_path) -> None:

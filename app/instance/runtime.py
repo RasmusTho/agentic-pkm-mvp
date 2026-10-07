@@ -2745,6 +2745,10 @@ def _load_legacy_owner_inventory_payload(
             or not isinstance(source_evidence.get("docker"), list)
             or not isinstance(source_evidence.get("config"), list)
             or not isinstance(source_evidence.get("owner_identities"), list)
+            or (
+                "retired_owner_identities" in source_evidence
+                and not isinstance(source_evidence.get("retired_owner_identities"), list)
+            )
             or any(
                 not isinstance(item, str)
                 or (
@@ -2824,6 +2828,78 @@ def _legacy_owner_identity_evidence(
         if key in evidence:
             raise InstanceStatePreflightError("legacy-owner inventory entries are invalid")
         evidence[key] = (identity, tuple(ancestors), tuple(legacy_ancestors))
+    return evidence
+
+
+def _legacy_retired_owner_identity_evidence(
+    payload: Mapping[str, object],
+) -> list[LegacyOwner]:
+    """Validate host-captured identity rows for historical ownership tombstones."""
+
+    source_evidence = payload.get("source_evidence")
+    if not isinstance(source_evidence, dict):
+        raise InstanceStatePreflightError("legacy retired-owner inventory entries are invalid")
+    rows = source_evidence.get("retired_owner_identities", [])
+    if not isinstance(rows, list):
+        raise InstanceStatePreflightError("legacy retired-owner inventory entries are invalid")
+    receipt_digest = str(payload.get("receipt_digest") or "") or None
+    evidence: list[LegacyOwner] = []
+    seen: set[tuple[str, str]] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            raise InstanceStatePreflightError(
+                "legacy retired-owner inventory entries are invalid"
+            )
+        channel = str(row.get("channel_id") or "").strip()
+        binding_id = str(row.get("vault_binding_id") or "").strip()
+        root_text = str(row.get("root") or "").strip()
+        identity = str(row.get("identity") or "").strip()
+        ancestors = row.get("ancestor_identities")
+        legacy_ancestors = row.get("legacy_ancestor_identities")
+        root = Path(root_text)
+        key = (channel, binding_id)
+        if (
+            not channel
+            or not binding_id
+            or not root_text
+            or not root.is_absolute()
+            or str(root.expanduser().resolve(strict=False)) != root_text
+            or _LEGACY_OWNER_IDENTITY_RE.fullmatch(identity) is None
+            or not identity.startswith("inode:")
+            or not isinstance(ancestors, list)
+            or not ancestors
+            or any(
+                not isinstance(value, str)
+                or _LEGACY_OWNER_IDENTITY_RE.fullmatch(value) is None
+                for value in ancestors
+            )
+            or len(set(ancestors)) != len(ancestors)
+            or identity in ancestors
+            or not isinstance(legacy_ancestors, list)
+            or any(
+                not isinstance(value, str)
+                or not value.startswith("inode:")
+                or _LEGACY_OWNER_IDENTITY_RE.fullmatch(value) is None
+                for value in legacy_ancestors
+            )
+            or len(set(legacy_ancestors)) != len(legacy_ancestors)
+            or key in seen
+        ):
+            raise InstanceStatePreflightError(
+                "legacy retired-owner inventory entries are invalid"
+            )
+        seen.add(key)
+        evidence.append(
+            LegacyOwner(
+                channel,
+                binding_id,
+                root,
+                identity,
+                tuple(ancestors),
+                tuple(legacy_ancestors),
+                receipt_digest,
+            )
+        )
     return evidence
 
 
@@ -2968,12 +3044,14 @@ def _load_legacy_owner_inventory(
     expected_sha256: str | None = None,
     require_receipt_integrity: bool = False,
     require_explicit_binding: bool = False,
+    retired_owners_out: list[LegacyOwner] | None = None,
 ) -> list[LegacyOwner]:
     payload = _load_legacy_owner_inventory_payload(
         inventory_path,
         expected_sha256=expected_sha256,
     )
     identity_evidence = _legacy_owner_identity_evidence(payload)
+    retired_owners = _legacy_retired_owner_identity_evidence(payload)
     if require_receipt_integrity:
         receipt_digest = str(payload.get("receipt_digest") or "")
         if (
@@ -3001,6 +3079,8 @@ def _load_legacy_owner_inventory(
             raise InstanceStatePreflightError(
                 "drained legacy-owner receipt is not bound to this deployment proof"
             )
+    if retired_owners_out is not None:
+        retired_owners_out.extend(retired_owners)
 
     owner_payload = payload.get("owners")
     if not isinstance(owner_payload, list):
@@ -3073,6 +3153,7 @@ def _converge_authenticated_legacy_ledger(
     registry: RegistrySnapshot,
     ledger: OwnershipLedger,
     owners: tuple[LegacyOwner, ...],
+    retired_owners: tuple[LegacyOwner, ...] = (),
 ) -> LedgerSnapshot:
     """Converge a schema-v1 ledger only through its authenticated inventory seam."""
 
@@ -3101,7 +3182,10 @@ def _converge_authenticated_legacy_ledger(
         return ledger.require_registry_consistency(
             channel_id=channel,
             registrations=registrations,
-            tombstones={binding_id: None for binding_id in registry.removal_tombstones},
+            tombstones={
+                binding_id: Path(item.path)
+                for binding_id, item in registry.removal_tombstones.items()
+            },
             transfer_lineage=tuple(
                 {
                     "ownership_transfer_id": item.ownership_transfer_id,
@@ -3113,6 +3197,7 @@ def _converge_authenticated_legacy_ledger(
                 for item in registry.transfer_lineage
             ),
             global_live_owners=resolved_owners,
+            global_retired_owners=retired_owners,
             require_materialized_roots=False,
         )
     except LedgerError as exc:
@@ -3228,6 +3313,7 @@ def _prepare_legacy_registry_for_mvr05_floor(
     inventory_path: Path,
     quiescence_proof: DeploymentQuiescenceProof | None,
     inventory_sha256: str | None = None,
+    require_populated_registry_consistency: bool = False,
 ) -> RegistrySnapshot:
     """Finish dormant legacy import while the MVR-05 fence is still held."""
 
@@ -3235,6 +3321,68 @@ def _prepare_legacy_registry_for_mvr05_floor(
 
     snapshot = registry.load()
     if snapshot.revision != 0:
+        requires_legacy_retired_evidence = (
+            ledger.path.is_file()
+            and ledger.key_path.is_file()
+            and ledger.needs_fenced_registry_consistency()
+        )
+        if (
+            ledger.path.is_file()
+            and ledger.key_path.is_file()
+            and (
+                requires_legacy_retired_evidence
+                or require_populated_registry_consistency
+            )
+        ):
+            if quiescence_proof is None:
+                raise InstanceStatePreflightError(
+                    "durable quiescence proof is required"
+                )
+            populated_registry_proof = _bind_legacy_owner_inventory_to_proof(
+                inventory_path=inventory_path,
+                quiescence_proof=quiescence_proof,
+                channel=channel,
+                host_global_root=ledger.root,
+                expected_sha256=inventory_sha256,
+            )
+            populated_registry_retired_owners: list[LegacyOwner] = []
+            populated_registry_owners = _load_legacy_owner_inventory(
+                inventory_path,
+                registry=snapshot,
+                channel=channel,
+                quiescence_proof=populated_registry_proof,
+                require_explicit_binding=True,
+                retired_owners_out=populated_registry_retired_owners,
+            )
+            if requires_legacy_retired_evidence:
+                expected_retired = {
+                    (
+                        channel,
+                        binding_id,
+                        str(Path(item.path).expanduser().resolve(strict=False)),
+                    )
+                    for binding_id, item in snapshot.removal_tombstones.items()
+                }
+                actual_retired = {
+                    (
+                        owner.channel_id,
+                        owner.vault_binding_id,
+                        str(owner.root.expanduser().resolve(strict=False)),
+                    )
+                    for owner in populated_registry_retired_owners
+                    if owner.channel_id == channel
+                }
+                if actual_retired != expected_retired:
+                    raise InstanceStatePreflightError(
+                        "legacy-owner inventory tombstones do not match the registered channel"
+                    )
+            _converge_authenticated_legacy_ledger(
+                channel=channel,
+                registry=snapshot,
+                ledger=ledger,
+                owners=tuple(populated_registry_owners),
+                retired_owners=tuple(populated_registry_retired_owners),
+            )
         return snapshot
 
     bound_proof = quiescence_proof
@@ -4959,6 +5107,7 @@ def main(argv: list[str] | None = None) -> int:
         from app.instance.mvr05_cutover import (
             load_mvr05_fence_plan,
             record_mvr05_runtime_floor,
+            validate_mvr05_runtime_floor,
         )
 
         layout = InstanceStateLayout(
@@ -4980,14 +5129,30 @@ def main(argv: list[str] | None = None) -> int:
                 registry = VaultRegistryStore(args.registry_path)
                 ledger = OwnershipLedger(args.host_global_root)
                 # Complete any dormant legacy import while the deployment and
-                # restart fences are still held.  This keeps a floor write from
-                # advancing an empty registry past the import-only revision.
+                # restart fences are still held.  A populated registry may
+                # also need this authenticated seam when an established v1
+                # ledger must be checked against the exact registered owners.
                 registry_snapshot = registry.load()
+                fence_plan = load_mvr05_fence_plan(args.fence_plan)
+                floor_already_recorded = validate_mvr05_runtime_floor(
+                    registry_snapshot,
+                    fence_plan,
+                )
                 quiescence_proof = None
-                if registry_snapshot.revision == 0 and (
+                needs_fenced_registry_consistency = registry_snapshot.revision == 0 and (
                     args.legacy_path.is_file()
                     or (ledger.path.is_file() and ledger.key_path.is_file())
+                )
+                if (
+                    registry_snapshot.revision != 0
+                    and ledger.path.is_file()
+                    and ledger.key_path.is_file()
                 ):
+                    needs_fenced_registry_consistency = (
+                        ledger.needs_fenced_registry_consistency()
+                        or not floor_already_recorded
+                    )
+                if needs_fenced_registry_consistency:
                     quiescence_proof = _load_deployment_quiescence_proof(
                         args.quiescence_proof_path
                     )
@@ -5000,11 +5165,15 @@ def main(argv: list[str] | None = None) -> int:
                     inventory_path=args.inventory_path,
                     quiescence_proof=quiescence_proof,
                     inventory_sha256=args.inventory_sha256,
+                    require_populated_registry_consistency=(
+                        registry_snapshot.revision != 0
+                        and not floor_already_recorded
+                    ),
                 )
                 ledger.require_existing()
                 result = record_mvr05_runtime_floor(
                     registry,
-                    fence=load_mvr05_fence_plan(args.fence_plan),
+                    fence=fence_plan,
                     channel_id=args.channel,
                     _capability=local_operator_storage_capability(),
                 )
