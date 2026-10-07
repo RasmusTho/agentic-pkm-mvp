@@ -449,6 +449,8 @@ def test_deploy_and_rollback_share_vault_overlay_selection() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     assert script.count("deploy_channel_compose") == 2  # source path + one wrapper call
-    assert "compose pull api worker watcher heimdal-capture-watch companion-ui" in script
-    assert script.count("compose up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui") == 2
+    assert "pull_channel_images()" in script
+    assert 'compose pull "${services[@]}"' in script
+    assert 'runtime_services+=(heimdal-capture-watch)' in script
+    assert 'compose up -d --force-recreate "${runtime_services[@]}" companion-ui' in script
     assert 'if [ "${action}" = "rollback" ]' in script
