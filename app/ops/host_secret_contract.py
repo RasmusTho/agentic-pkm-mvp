@@ -50,17 +50,14 @@ BWS_IDENTITIES = {
     "anthropic.api-key": "shared",
     "github.token": "shared",
     "discord.webhook": "shared",
-    "typesafe.api-key": "isolated",
-}
-BWS_ISOLATED_IDENTITIES = {
-    "typesafe.api-key": ("marr-dev", "dev/typesafe.api-key"),
+    "typesafe.api-key": "channel",
 }
 BWS_MACHINE_ACCOUNTS = {
-    "admin": ["non-prod", "prod", "marr-dev"],
-    "non-prod-reader": ["non-prod"],
-    "prod-reader": ["prod"],
-    "marr-server-dev-reader": ["marr-dev"],
+    "admin": ["non-prod", "prod"],
+    "non-prod-reader": ["non-prod", "prod"],
+    "prod-reader": ["non-prod", "prod"],
 }
+BWS_ONLY_SECRETS = frozenset({"typesafe.api-key"})
 DATABASE_CONSUMERS = {
     "postgres-db": "db",
     "postgres-migrate": "migrate",
@@ -121,10 +118,6 @@ class HostSecretContract:
         if channel not in CHANNEL_PROJECTS or secret not in BWS_IDENTITIES:
             raise UndeclaredSecretConsumerError("undeclared host secret request")
         scope = BWS_IDENTITIES[secret]
-        if scope == "isolated":
-            if (channel, consumer, secret) != ("dev", "marr-server-dev", "typesafe.api-key"):
-                raise UndeclaredSecretConsumerError("undeclared host secret request")
-            return BWS_ISOLATED_IDENTITIES[secret]
         prefix = "shared" if scope == "shared" else channel
         return CHANNEL_PROJECTS[channel], f"{prefix}/{secret}"
 

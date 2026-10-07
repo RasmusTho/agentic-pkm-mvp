@@ -8,7 +8,7 @@ Source of truth: mixed
 Last reviewed: 2026-10-06 (TypeSafe MARR BWS binding for #5801/#5803; TypeSafe Builder CKM dormant support for #5768; YouTube discovery scheduling its 2026-09-24 review, BuilderOps Issue-delivery its 2026-09-17 review, and other sections their 2026-09-13 review)
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
 Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, Issue #5442 / PR #5450, Issue #5511 / PR #5513, merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-13
-TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json; tests/ops/test_host_secret_contract.py::test_typesafe_bws_binding_is_marr_only, tests/ops/test_secret_admin.py::test_typesafe_import_is_restricted_to_isolated_marr_project, and tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy; Issue #5801 / PR #5803 on 2026-10-06. Repository-only fake/injected-source evidence; no live BWS permission or host/provider verification.
+TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json; tests/ops/test_host_secret_contract.py::test_typesafe_key_uses_non_prod_project_and_marr_only_consumer, tests/ops/test_secret_admin.py::test_typesafe_import_targets_non_prod_and_rejects_other_channels, and tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy; Issue #5808 follows Issue #5801 / PR #5803 on 2026-10-07. Repository-only fake/injected-source evidence; no live BWS permission or host/provider verification.
 TypeSafe Builder CKM repository evidence: app/builderops/ckm/judgment.py, app/model_access/ckm_judgment_executor.py, tests/builderops/ckm/test_semantic_typesafe.py, and Issue #5768 on 2026-10-05; fake-provider proofs only, with runtime disabled and no live host or provider verification.
 # Operations Playbook
 
@@ -434,11 +434,13 @@ Companion docs:
   routed through Codex CLI, and no host login, CLI profile, service, or tailnet grant is implied by
   a merged code change.
 - The repository resolves the MARR-only `typesafe.api-key` binding from the exact
-  `dev/typesafe.api-key` identity in isolated BWS project `marr-dev` through the dedicated
-  read-only `marr-server-dev-reader` account (#5801 / PR #5803). Its BWS reader token remains a
+  `dev/typesafe.api-key` identity in the existing `non-prod` BWS project through the existing
+  read-only `non-prod-reader` account (#5801 / #5808). Its BWS reader token remains a
   separate Mac Keychain bootstrap credential. The existing admin writer may access this project only
-  through the designated controller after #5667 qualification; Product, Builder, Linux channel
-  readers, Codex, and Claude receive no provider key. Fake-backed repository proofs do not establish
+  through the designated controller after #5667 qualification. Product and Builder callers receive no
+  provider key; Linux reader identities retain accepted store-level access to the existing projects,
+  while the application code-level MARR grant remains the sole runtime binding. Codex and Claude
+  receive no code-level provider-key grant. Fake-backed repository proofs do not establish
   live entitlement or permissions. Verify the BWS entitlement and sole-writer boundary under #5667,
   then the existing MARR host and separate caller bindings under #5764. The already-authorized
   synthetic Product and Builder attempts remain single-shot and require separate redacted acceptance

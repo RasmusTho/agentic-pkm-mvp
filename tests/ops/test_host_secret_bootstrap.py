@@ -1608,12 +1608,12 @@ def test_bws_lookup_uses_scoped_active_identity(
     assert "fixture-machine-token" not in (controller.directory / "operations.jsonl").read_text()
 
 
-def test_typesafe_bws_lookup_uses_isolated_project_and_keychain_reader_token(
+def test_typesafe_bws_lookup_uses_non_prod_project_and_reader_token(
     tmp_path, monkeypatch, capsys, caplog
 ):
     monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
     provider_key = "fixture-typesafe-provider-key"
-    client = _BwsClient("marr-dev", "dev/typesafe.api-key", provider_key)
+    client = _BwsClient("non-prod", "dev/typesafe.api-key", provider_key)
     token_calls = []
 
     def keychain_lookup(service, account):
@@ -1622,7 +1622,7 @@ def test_typesafe_bws_lookup_uses_isolated_project_and_keychain_reader_token(
 
     reader = host_secret_bootstrap.create_marr_typesafe_bws_reader(
         environment={
-            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_READER_PROJECT": "non-prod",
             "BWS_PROJECT_ID": _BWS_PROJECT,
             "BWS_ORGANIZATION_ID": _BWS_ORG,
         },
@@ -1639,7 +1639,7 @@ def test_typesafe_bws_lookup_uses_isolated_project_and_keychain_reader_token(
     ) == {"typesafe.api-key": provider_key}
 
     assert token_calls == [
-        ("yggdrasil.bws-reader", "marr-server-dev-reader.token")
+        ("yggdrasil.bws-reader", "non-prod-reader.token")
     ]
     assert client.calls == [
         ("login", None),
@@ -1674,7 +1674,7 @@ def test_marr_typesafe_reader_rejects_exact_binding_adverse_cases_without_disclo
 ):
     monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
     provider_key = "fixture-typesafe-provider-key"
-    client = _BwsClient("marr-dev", "dev/typesafe.api-key", provider_key)
+    client = _BwsClient("non-prod", "dev/typesafe.api-key", provider_key)
     if fault == "wrong-project-organization":
         client.wrong_project_organization = True
     elif fault == "wrong-project-id":
@@ -1709,7 +1709,7 @@ def test_marr_typesafe_reader_rejects_exact_binding_adverse_cases_without_disclo
     with pytest.raises(host_secret_bootstrap.HostSecretBootstrapError):
         reader = host_secret_bootstrap.create_marr_typesafe_bws_reader(
             environment={
-                "BWS_READER_PROJECT": "marr-dev",
+                "BWS_READER_PROJECT": "non-prod",
                 "BWS_PROJECT_ID": _BWS_PROJECT,
                 "BWS_ORGANIZATION_ID": _BWS_ORG,
             },
@@ -1723,7 +1723,7 @@ def test_marr_typesafe_reader_rejects_exact_binding_adverse_cases_without_disclo
             bws_reader=reader,
             controller=HostSecretController(tmp_path / "controller"),
         )
-    assert token_calls == [("yggdrasil.bws-reader", "marr-server-dev-reader.token")]
+    assert token_calls == [("yggdrasil.bws-reader", "non-prod-reader.token")]
     assert bool(client_factory_calls) is (fault != "malformed-token")
     diagnostics = capsys.readouterr().out + caplog.text
     assert provider_key not in diagnostics and "malformed token" not in diagnostics
@@ -1733,18 +1733,16 @@ def test_marr_typesafe_reader_rejects_exact_binding_adverse_cases_without_disclo
     "environment",
     [
         {},
-        {"BWS_READER_PROJECT": "non-prod", "BWS_PROJECT_ID": _BWS_PROJECT, "BWS_ORGANIZATION_ID": _BWS_ORG},
         {
-            "BWS_READER_PROJECT": "marr-dev",
-            "BWS_PROJECT_ID": _BWS_PROJECT,
-            "BWS_ORGANIZATION_ID": _BWS_ORG,
-            "BWS_ACCESS_TOKEN": "forbidden-token-source",
-        },
-        {
-            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_READER_PROJECT": "non-prod",
             "BWS_PROJECT_ID": _BWS_PROJECT,
             "BWS_ORGANIZATION_ID": _BWS_ORG,
             "BWS_ACCESS_TOKEN_FILE": "/forbidden/token-file",
+        },
+        {
+            "BWS_READER_PROJECT": "prod",
+            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_ORGANIZATION_ID": _BWS_ORG,
         },
     ],
 )
@@ -1761,7 +1759,7 @@ def test_typesafe_bws_lookup_fails_closed_before_provider_dispatch(
 
     def client_factory():
         client_factory_calls.append(True)
-        return _BwsClient("marr-dev", "dev/typesafe.api-key", "fixture-provider-key")
+        return _BwsClient("non-prod", "dev/typesafe.api-key", "fixture-provider-key")
 
     with pytest.raises(host_secret_bootstrap.HostSecretBootstrapError):
         reader = host_secret_bootstrap.create_marr_typesafe_bws_reader(
@@ -2087,7 +2085,7 @@ def test_typesafe_server_bootstrap_attests_identity_without_materializing_provid
     monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "darwin")
     monkeypatch.setenv("TYPESAFE_API_KEY", "fixture-ambient-key-must-not-be-inherited")
     environment = {
-        "BWS_READER_PROJECT": "marr-dev",
+        "BWS_READER_PROJECT": "non-prod",
         "BWS_PROJECT_ID": _BWS_PROJECT,
         "BWS_ORGANIZATION_ID": _BWS_ORG,
     }
@@ -2140,9 +2138,13 @@ def test_typesafe_server_bootstrap_refuses_before_lookup_or_launch(
     "environment",
     [
         {},
-        {"BWS_READER_PROJECT": "non-prod", "BWS_PROJECT_ID": _BWS_PROJECT, "BWS_ORGANIZATION_ID": _BWS_ORG},
         {
-            "BWS_READER_PROJECT": "marr-dev",
+            "BWS_READER_PROJECT": "prod",
+            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_ORGANIZATION_ID": _BWS_ORG,
+        },
+        {
+            "BWS_READER_PROJECT": "non-prod",
             "BWS_PROJECT_ID": _BWS_PROJECT,
             "BWS_ORGANIZATION_ID": _BWS_ORG,
             "BWS_ACCESS_TOKEN": "forbidden-token-source",

@@ -19,8 +19,8 @@ Product and Builder requests need to reach Jev through separate caller authoriza
 ## Credential-source supersession
 
 TSO-02 was delivered against the then-current Keychain-only provider-key binding from TSO-05.
-TSO-07 replaces that provider-key source with the isolated `marr-dev` BWS project and a dedicated
-read-only MARR account. The BWS reader token remains in the MARR host Keychain. Product keeps the
+TSO-07 and follow-up #5808 replace that provider-key source with the existing `non-prod` BWS project
+and reader identity, while retaining an MARR-only consumer binding. The BWS reader token remains in the MARR host Keychain. Product keeps the
 same caller authorization and does not gain BWS access.
 
 ## What This Task Does
@@ -28,7 +28,7 @@ same caller authorization and does not gain BWS access.
 - Add a bounded System One judgment operation to the MARR service and Product client, reusing existing authenticated admission and channel/action authorization.
 - Accept only the typed contract and the closed Product allowlist: `intent_text` up to 2,000 UTF-8 bytes; serialized request ≤4 KiB. Reject `current_body`, note titles, vault paths, prior turns, and unknown fields before dispatch.
 - Execute one request with SDK retries disabled. Classify `unavailable_before_send`, `outcome_unknown_after_dispatch`, `provider_rejected`, `response_invalid`, and `success`; every state is terminal. A timeout after dispatch may have begun is `outcome_unknown_after_dispatch`, and the same request is never replayed.
-- Resolve `typesafe.api-key` only for `marr-server-dev` on `dev` through the host-secret contract. TSO-02 originally used its Mac Keychain-only binding; TSO-07 supersedes that source with the isolated BWS identity. Product and Builder keep separate caller credentials and policies; neither receives the provider key. Missing or unauthorized server bindings fail closed.
+- Resolve `typesafe.api-key` only for `marr-server-dev` on `dev` through the host-secret contract. TSO-02 originally used its Mac Keychain-only binding; TSO-07/#5808 supersede that source with the non-prod BWS identity. Product and Builder keep separate caller credentials and policies; neither receives the provider key. Missing or unauthorized server bindings fail closed.
 - Do not retry a request after a send may have reached TypeSafe; do not fall back to Codex or Ollama after inference may have started.
 
 ## Concretely
