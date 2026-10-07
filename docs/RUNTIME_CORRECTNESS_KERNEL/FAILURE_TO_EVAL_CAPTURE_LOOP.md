@@ -142,7 +142,8 @@ note-write and concurrency contract follows
       AuthorityReceipt without minting replacement authority or repeating the status mutation.
       Reconciliation accepts an existing event only when its outcome is `applied` and its
       PolicyDecision, DecisionToken, AuthorityReceipt, state-owner receipt, draft, action, and
-      resource bindings all match the terminal draft.
+      resource bindings all match the terminal draft, after the shared GOV adapter validates the
+      persisted original authorization.
       OEF findings, traces, and WriteGuard health do not supply authorization or accountability.
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_receipt_pending_reconciles_without_second_status_mutation`
