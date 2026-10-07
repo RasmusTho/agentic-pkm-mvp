@@ -93,6 +93,7 @@ class AuthorityReceipt:
     fallback_used: bool
     recorded_at: str
     trace_id: str | None = None
+    effect_id: str | None = None
     contract_version: str = CONTRACT_VERSION
 
 
@@ -114,7 +115,7 @@ class GovernedWriteAdapter:
     ) -> GovernedWriteGrant:
         write_guard.assert_writes_allowed(action)
         issued_at = _utc_now()
-        resource_ref = _normalize_resource_ref(resource)
+        resource_ref = normalize_resource_ref(resource)
         decision = PolicyDecision(
             decision_id=_id("policy_decision"),
             status="approved",
@@ -136,6 +137,48 @@ class GovernedWriteAdapter:
         )
         return GovernedWriteGrant(policy_decision=decision, decision_token=token)
 
+    def validate_decision_token(
+        self,
+        *,
+        decision_token: DecisionToken | None,
+        action: str,
+        write_class: str,
+        actor: str,
+        resource: str,
+    ) -> DecisionToken:
+        """Validate a token against the effect request before it is executed.
+
+        The adapter is the GOV boundary for this check.  Callers must not treat
+        the presence of a token object as authorization: every binding field is
+        compared to the concrete effect request before the state owner or EXE
+        performs its effect.
+        """
+        if decision_token is None:
+            raise MissingDecisionTokenError(
+                "authority-bearing effect requires a prevalidated DecisionToken"
+            )
+        if not decision_token.valid:
+            raise InvalidDecisionTokenError("DecisionToken is not valid")
+        expected = {
+            "action": action,
+            "write_class": write_class,
+            "actor": actor,
+            "resource": normalize_resource_ref(resource),
+        }
+        actual = {
+            "action": decision_token.action,
+            "write_class": decision_token.write_class,
+            "actor": decision_token.actor,
+            "resource": normalize_resource_ref(decision_token.resource),
+        }
+        mismatched = [key for key, value in expected.items() if actual[key] != value]
+        if mismatched:
+            raise InvalidDecisionTokenError(
+                "DecisionToken does not match effect request: "
+                + ", ".join(mismatched)
+            )
+        return decision_token
+
     def record_authority_receipt(
         self,
         *,
@@ -144,6 +187,8 @@ class GovernedWriteAdapter:
         state_owner: str,
         outcome: AuthorityReceiptOutcome = "applied",
         trace_id: str | None = None,
+        resource: str | None = None,
+        effect_id: str | None = None,
     ) -> AuthorityReceipt:
         if decision_token is None:
             raise MissingDecisionTokenError(
@@ -156,10 +201,11 @@ class GovernedWriteAdapter:
                 "authority receipt recording requires the state owner's mutation receipt"
             )
 
-        resource = _normalize_resource_ref(mutation_receipt.locator.path)
-        if resource != _normalize_resource_ref(decision_token.resource):
+        mutation_resource = normalize_resource_ref(mutation_receipt.locator.path)
+        bound_resource = normalize_resource_ref(resource or mutation_resource)
+        if bound_resource != normalize_resource_ref(decision_token.resource):
             raise InvalidDecisionTokenError(
-                "DecisionToken resource does not match state owner mutation receipt"
+                "DecisionToken resource does not match governed effect target"
             )
 
         return AuthorityReceipt(
@@ -169,17 +215,18 @@ class GovernedWriteAdapter:
             action=decision_token.action,
             write_class=decision_token.write_class,
             actor=decision_token.actor,
-            resource=resource,
+            resource=bound_resource,
             outcome=outcome,
             operation=mutation_receipt.operation,
             adapter=mutation_receipt.adapter,
             state_owner=state_owner,
             source_receipt_ref=(
-                f"{mutation_receipt.adapter}:{mutation_receipt.operation}:{resource}"
+                f"{mutation_receipt.adapter}:{mutation_receipt.operation}:{mutation_resource}"
             ),
             fallback_used=mutation_receipt.fallback_used,
             recorded_at=_utc_now(),
             trace_id=trace_id or mutation_receipt.trace_id,
+            effect_id=effect_id,
         )
 
 
@@ -191,7 +238,7 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
 
 
-def _normalize_resource_ref(resource: str) -> str:
+def normalize_resource_ref(resource: str) -> str:
     return resource.strip().replace("\\", "/")
 
 
@@ -205,4 +252,5 @@ __all__ = [
     "MissingAuthorityReceiptError",
     "MissingDecisionTokenError",
     "PolicyDecision",
+    "normalize_resource_ref",
 ]

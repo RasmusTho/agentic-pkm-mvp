@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import stat
 import time
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Mapping, MutableMapping, Protocol
+from threading import Lock
+from typing import Any, Callable, Dict, Iterable, Mapping, MutableMapping, Protocol, cast
+from uuid import NAMESPACE_URL, uuid5
+
+import yaml
 
 from app.a2a.events import emit_agent_error_event, emit_agent_response_event, send_agent_request
 from app.a2a.schema import AgentRequest, AgentResponse, new_error, new_response
@@ -14,8 +20,16 @@ from app.builderops.boundary import execute_builderops_mcp_tool, is_builderops_m
 from app.builderops.models import BuilderOpsValidationError
 from app.domain.state_axes import normalize_promotion_payload
 from app.execution.execution_request import ExecutionRequest, ExecutionResult
-from app.knowledge.write_ops import KNOWLEDGE_WRITE_ACTION
-from app.mcp.vault_tools import VaultToolError, append_note
+from app.governance.governed_write import (
+    AuthorityReceipt,
+    DecisionToken,
+    GovernedWriteAdapter,
+    GovernedWriteGrant,
+    InvalidDecisionTokenError,
+    MissingDecisionTokenError,
+    normalize_resource_ref,
+)
+from app.mcp.vault_tools import VaultToolError, append_note, get_vault_root
 from app.orchestrator.agents import AgentPermissionError, _normalize_agent_target, resolve_agent_config, validate_agent_permissions
 from app.planner.schema import PlanMetadata, PlanStep, ToolDescriptor
 from app.planner.tools import get_tool_descriptor
@@ -24,12 +38,641 @@ AgentHandler = Callable[[AgentRequest], AgentResponse]
 from app.policy.enforce import assert_tool_allowed, is_policy_enforced
 from app.quality import timeout_wrapper
 from app.outbox.events import INDEX_OUTBOX_PATH
-from app.services.outbox import append_jsonl_record
+from app.services.outbox import (
+    JsonlOutboxCorruptionError,
+    append_jsonl_record,
+    read_jsonl_outbox_records,
+)
 from app.objects import ObjectStore
 from app.events.schema import OutboxEvent
 from app.write_guard import DEFAULT_WRITE_GUARD
 
 from .events import emit_mcp_tool_call_finished, emit_mcp_tool_call_started
+
+
+_GOVERNED_WRITE_ADAPTER = GovernedWriteAdapter()
+_MCP_APPEND_ACTION = "mcp.vault.append_note"
+_MCP_APPEND_WRITE_CLASS = "vault_mcp_append"
+_MCP_APPEND_STATE_OWNER = "exe"
+_AUTHORITY_RECEIPT_EVENT = "governance.authority_receipt.recorded"
+_MCP_APPEND_EVENT = "mcp.vault.append_note"
+_DECISION_TOKEN_FIELDS = frozenset(
+    {
+        "token_id",
+        "decision_id",
+        "action",
+        "write_class",
+        "actor",
+        "resource",
+        "issued_at",
+        "valid",
+        "contract_version",
+    }
+)
+_EXECUTION_REQUEST_FIELDS = frozenset(
+    {
+        "side_effect",
+        "actor",
+        "resource",
+        "adapter",
+        "active_context_set",
+        "decision_token",
+        "effect_id",
+        "dry_run",
+        "preview",
+        "trace_id",
+        "args",
+        "contract_version",
+    }
+)
+_EXECUTION_RESULT_FIELDS = frozenset(
+    {
+        "request",
+        "status",
+        "preview_result",
+        "dry_run_result",
+        "effect_result",
+        "rollback_available",
+        "rollback_result",
+        "receipt_ref",
+        "trace_id",
+        "contract_version",
+    }
+)
+_AUTHORITY_RECEIPT_FIELDS = frozenset(
+    {
+        "receipt_id",
+        "decision_token_id",
+        "decision_id",
+        "action",
+        "write_class",
+        "actor",
+        "resource",
+        "outcome",
+        "operation",
+        "adapter",
+        "state_owner",
+        "source_receipt_ref",
+        "fallback_used",
+        "recorded_at",
+        "trace_id",
+        "effect_id",
+        "contract_version",
+    }
+)
+
+# A process-local recovery hint covers the crash window in which the writer
+# returned a path but the first durable receipt write failed. The canonical
+# effect itself also carries this identity in frontmatter, so recovery after a
+# process restart uses the vault scan below rather than this cache.
+_EFFECT_PATH_HINTS: dict[str, Path] = {}
+_EFFECT_ROOT_HINTS: dict[str, str | None] = {}
+_EFFECT_LOCKS: dict[str, Lock] = {}
+_EFFECT_LOCKS_GUARD = Lock()
+
+
+@dataclass
+class _EffectLocator:
+    path: str
+
+
+@dataclass
+class _EffectReceipt:
+    operation: str
+    locator: _EffectLocator
+    adapter: str
+    trace_id: str | None = None
+    fallback_used: bool = False
+
+
+@dataclass(frozen=True)
+class _EffectRecovery:
+    path: Path
+    decision_token: DecisionToken
+
+
+class _EffectReconciliationConflict(RuntimeError):
+    """A persisted effect identity exists with content that no longer matches."""
+
+
+def _effect_identity(
+    plan_id: str,
+    step_id: str,
+    args: Mapping[str, Any],
+    *,
+    vault_root: Path | str | None = None,
+) -> str:
+    encoded = json.dumps(dict(args), sort_keys=True, separators=(",", ":"), default=str)
+    scope = str(Path(vault_root).expanduser()) if vault_root is not None else "default-vault"
+    digest = hashlib.sha256(f"{scope}\0{encoded}".encode("utf-8")).hexdigest()[:24]
+    return f"orchestrator:{plan_id}:{step_id}:{digest}"
+
+
+def _effect_resource(args: Mapping[str, Any]) -> str:
+    return normalize_resource_ref(str(args.get("title") or ""))
+
+
+def _effect_note_reference(path: Path | str) -> str:
+    """Return the canonical serialized note reference without changing access paths."""
+    return normalize_resource_ref(str(path))
+
+
+def _effect_metadata(args: Mapping[str, Any], effect_id: str) -> dict[str, Any]:
+    metadata = dict(args.get("metadata") or {})
+    existing = metadata.get("governed_effect_id")
+    if existing is not None and str(existing) != effect_id:
+        raise InvalidDecisionTokenError(
+            "effect metadata is bound to a different governed effect identity"
+        )
+    metadata["governed_effect_id"] = effect_id
+    return metadata
+
+
+def _effect_metadata_with_authorization(
+    args: Mapping[str, Any],
+    effect_id: str,
+    decision_token: DecisionToken,
+) -> dict[str, Any]:
+    metadata = _effect_metadata(args, effect_id)
+    existing = metadata.get("governed_authorization")
+    serialized = asdict(decision_token)
+    if existing is not None and existing != serialized:
+        raise InvalidDecisionTokenError(
+            "effect metadata is bound to a different authorization provenance"
+        )
+    metadata["governed_authorization"] = serialized
+    return metadata
+
+
+def _has_configured_vault_root(settings: Mapping[str, Any] | None) -> bool:
+    if settings:
+        if any(settings.get(key) for key in ("vault_root", "root", "path")):
+            return True
+        nested = settings.get("vault")
+        if isinstance(nested, Mapping) and any(nested.get(key) for key in ("root", "path")):
+            return True
+    return any(os.getenv(name) for name in ("MCP_VAULT_ROOT", "VAULT_DIR", "VAULT_ROOT"))
+
+
+def _resolve_effect_vault_root(settings: Mapping[str, Any] | None) -> Path | None:
+    """Resolve the exact root that the production writer will use.
+
+    Some legacy tests replace the writer and intentionally omit a vault root;
+    preserving ``None`` for that seam keeps their mock path additive. Whenever
+    a real configuration exists, resolve it once and pass the canonical root
+    into the writer and recovery scan so a restart cannot scan a different
+    default root than the append used.
+    """
+    if not _has_configured_vault_root(settings):
+        return None
+    return get_vault_root(settings).expanduser().resolve()
+
+
+def _effect_lock(effect_id: str, vault_root: Path | str | None) -> Lock:
+    root = str(Path(vault_root).expanduser().resolve()) if vault_root is not None else "unresolved"
+    key = f"{root}\0{effect_id}"
+    with _EFFECT_LOCKS_GUARD:
+        return _EFFECT_LOCKS.setdefault(key, Lock())
+
+
+def _expected_effect_tags(args: Mapping[str, Any]) -> list[str]:
+    return [tag for tag in (args.get("tags") or []) if isinstance(tag, str) and tag.strip()]
+
+
+def _parse_writer_note(text: str) -> tuple[dict[str, Any], str] | None:
+    """Parse the exact line-delimited format emitted by ``append_note``.
+
+    Splitting on the delimiter substring loses titles containing ``---`` and
+    stripping the body loses intentional leading blank lines. Delimiter lines
+    are structural; all bytes after the closing line remain part of the body.
+    """
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0] not in {"---\n", "---\r\n"}:
+        return None
+    closing_index = next(
+        (
+            index
+            for index, line in enumerate(lines[1:], start=1)
+            if line.rstrip("\r\n") == "---" and line.strip() == "---"
+        ),
+        None,
+    )
+    if closing_index is None:
+        return None
+    try:
+        frontmatter = yaml.safe_load("".join(lines[1:closing_index])) or {}
+    except yaml.YAMLError:
+        return None
+    if not isinstance(frontmatter, dict):
+        return None
+    return frontmatter, "".join(lines[closing_index + 1 :])
+
+
+def _decision_token_from_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    action: str,
+    write_class: str,
+    actor: str,
+    resource: str,
+) -> DecisionToken | None:
+    raw = metadata.get("governed_authorization")
+    if not isinstance(raw, Mapping):
+        return None
+    expected_keys = {
+        "token_id",
+        "decision_id",
+        "action",
+        "write_class",
+        "actor",
+        "resource",
+        "issued_at",
+        "valid",
+        "contract_version",
+    }
+    if set(raw) != expected_keys:
+        return None
+    try:
+        token = DecisionToken(**dict(raw))
+        _GOVERNED_WRITE_ADAPTER.validate_decision_token(
+            decision_token=token,
+            action=action,
+            write_class=write_class,
+            actor=actor,
+            resource=resource,
+        )
+    except (TypeError, ValueError, InvalidDecisionTokenError, MissingDecisionTokenError):
+        return None
+    return token
+
+
+def _effect_note_evidence(
+    path: Path,
+    *,
+    effect_id: str,
+    args: Mapping[str, Any],
+    actor: str,
+    vault_root: Path,
+    known_path: bool = False,
+) -> tuple[str, DecisionToken | None]:
+    """Accept only a writer-shaped note with exact causal content.
+
+    A marker in body text is not evidence: the frontmatter metadata, title,
+    tags, body, and vault-relative destination must all match the request that
+    produced this stable effect identity.
+    """
+    try:
+        candidate = path.expanduser().resolve(strict=True)
+        root = vault_root.expanduser().resolve()
+        candidate_stat = candidate.stat()
+        if candidate.parent != root / "_mcp" or not stat.S_ISREG(candidate_stat.st_mode):
+            return "unverifiable", None
+        parsed = _parse_writer_note(candidate.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return "unverifiable", None
+    if parsed is None:
+        return "unverifiable", None
+    frontmatter, body = parsed
+    raw_metadata = frontmatter.get("metadata")
+    if not isinstance(raw_metadata, Mapping):
+        return ("identity_conflict", None) if known_path else ("none", None)
+    candidate_effect_id = raw_metadata.get("governed_effect_id")
+    if candidate_effect_id is None:
+        return ("identity_conflict", None) if known_path else ("none", None)
+    if candidate_effect_id != effect_id:
+        return "identity_conflict", None
+    original_token = _decision_token_from_metadata(
+        raw_metadata,
+        action=_MCP_APPEND_ACTION,
+        write_class=_MCP_APPEND_WRITE_CLASS,
+        actor=actor,
+        resource=_effect_resource(args),
+    )
+    if original_token is None:
+        return "conflict", None
+    expected_metadata = _effect_metadata(args, effect_id)
+    actual_metadata = dict(raw_metadata)
+    actual_metadata.pop("governed_authorization", None)
+    if actual_metadata != expected_metadata:
+        return "conflict", original_token
+    if frontmatter.get("title") != str(args.get("title") or "").strip():
+        return "conflict", original_token
+    expected_tags = _expected_effect_tags(args)
+    actual_tags = frontmatter.get("tags")
+    if expected_tags:
+        if actual_tags != expected_tags:
+            return "conflict", original_token
+    elif actual_tags not in (None, []):
+        return "conflict", original_token
+    expected_body = f"\n{str(args.get('body') or '').rstrip()}\n"
+    if body != expected_body:
+        return "conflict", original_token
+    return "match", original_token
+
+
+def _effect_path_from_vault(
+    effect_id: str,
+    vault_root: Path | str | None,
+    args: Mapping[str, Any],
+    actor: str,
+) -> _EffectRecovery | None:
+    hint = _EFFECT_PATH_HINTS.get(effect_id)
+    if hint is not None:
+        current_root = str(Path(vault_root).expanduser().resolve()) if vault_root is not None else None
+        if (
+            _EFFECT_ROOT_HINTS.get(effect_id) == current_root
+            and vault_root is not None
+        ):
+            evidence, decision_token = _effect_note_evidence(
+                hint,
+                effect_id=effect_id,
+                args=args,
+                actor=actor,
+                vault_root=Path(vault_root),
+                known_path=True,
+            )
+            if evidence == "conflict":
+                raise _EffectReconciliationConflict(
+                    f"persisted effect {effect_id} conflicts with its original content"
+                )
+            if evidence == "unverifiable":
+                raise _EffectReconciliationConflict(
+                    f"persisted effect {effect_id} cannot be read or parsed for recovery"
+                )
+            if evidence == "identity_conflict":
+                raise _EffectReconciliationConflict(
+                    f"persisted effect {effect_id} has conflicting identity in its hinted path"
+                )
+            if evidence == "match" and decision_token is not None:
+                return _EffectRecovery(path=hint, decision_token=decision_token)
+    if vault_root is None:
+        return None
+    root = Path(vault_root).expanduser().resolve()
+    mcp_dir = root / "_mcp"
+    try:
+        with os.scandir(mcp_dir) as entries:
+            candidates = sorted(
+                (mcp_dir / entry.name for entry in entries if entry.name.endswith(".md")),
+                key=lambda candidate: candidate.name,
+            )
+    except FileNotFoundError:
+        candidates = []
+    except OSError as exc:
+        raise _EffectReconciliationConflict(
+            f"vault inventory cannot be enumerated while recovering {effect_id}"
+        ) from exc
+    match: _EffectRecovery | None = None
+    for candidate in candidates:
+        evidence, decision_token = _effect_note_evidence(
+            candidate,
+            effect_id=effect_id,
+            args=args,
+            actor=actor,
+            vault_root=root,
+        )
+        if evidence == "conflict":
+            raise _EffectReconciliationConflict(
+                f"persisted effect {effect_id} conflicts with its original content"
+            )
+        if evidence == "unverifiable":
+            raise _EffectReconciliationConflict(
+                f"vault evidence cannot be read or parsed while recovering {effect_id}"
+            )
+        if evidence == "identity_conflict":
+            continue
+        if evidence == "match" and decision_token is not None:
+            match = _EffectRecovery(path=candidate, decision_token=decision_token)
+    return match
+
+
+def _validate_persisted_authority_payload(
+    effect_id: str,
+    event_id: str,
+    payload: Any,
+    *,
+    args: Mapping[str, Any],
+    actor: str,
+    resource: str,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise _EffectReconciliationConflict(
+            f"durable authority receipt for {effect_id} has no valid payload"
+        )
+    if set(payload) != {
+        "effect_id",
+        "execution_result",
+        "decision_token",
+        "retry_decision_token",
+        "authority_receipt",
+    }:
+        raise _EffectReconciliationConflict(
+            f"durable authority receipt for {effect_id} has incomplete payload linkage"
+        )
+    if payload.get("effect_id") != effect_id or event_id != _event_id(effect_id, "authority_receipt"):
+        raise _EffectReconciliationConflict(
+            f"durable authority receipt for {effect_id} has inconsistent identity"
+        )
+    execution_result = payload.get("execution_result")
+    if (
+        not isinstance(execution_result, dict)
+        or set(execution_result) != _EXECUTION_RESULT_FIELDS
+        or execution_result.get("status") != "succeeded"
+        or execution_result.get("contract_version") != "execution_request.v0"
+    ):
+        raise _EffectReconciliationConflict(
+            f"durable authority receipt for {effect_id} has no succeeded EXE result"
+        )
+    effect_result = execution_result.get("effect_result")
+    if (
+        not isinstance(effect_result, dict)
+        or set(effect_result) != {"status", "note_path"}
+        or effect_result.get("status") != "ok"
+        or not isinstance(effect_result.get("note_path"), str)
+        or not effect_result["note_path"]
+        or _effect_note_reference(effect_result["note_path"]) != effect_result["note_path"]
+    ):
+        raise _EffectReconciliationConflict(
+            f"durable authority receipt for {effect_id} has no valid effect result"
+        )
+    execution_request = execution_result.get("request")
+    decision_token = payload.get("decision_token")
+    expected_request_args: dict[str, Any]
+    try:
+        original_token = DecisionToken(**dict(decision_token)) if isinstance(decision_token, dict) else None
+        if original_token is None:
+            raise ValueError("missing DecisionToken")
+        expected_request_args = dict(args)
+        expected_request_args["metadata"] = _effect_metadata_with_authorization(
+            args,
+            effect_id,
+            original_token,
+        )
+    except (TypeError, ValueError, InvalidDecisionTokenError):
+        expected_request_args = {}
+    if (
+        not isinstance(execution_request, dict)
+        or set(execution_request) != _EXECUTION_REQUEST_FIELDS
+        or execution_request.get("contract_version") != "execution_request.v0"
+        or execution_request.get("effect_id") != effect_id
+        or execution_request.get("side_effect") != _MCP_APPEND_ACTION
+        or execution_request.get("adapter") != _MCP_APPEND_ACTION
+        or execution_request.get("actor") != actor
+        or execution_request.get("resource") != resource
+        or not isinstance(decision_token, dict)
+        or set(decision_token) != _DECISION_TOKEN_FIELDS
+        or decision_token.get("valid") is not True
+        or decision_token.get("action") != _MCP_APPEND_ACTION
+        or decision_token.get("write_class") != _MCP_APPEND_WRITE_CLASS
+        or decision_token.get("actor") != actor
+        or decision_token.get("resource") != resource
+        or decision_token.get("contract_version") != "governed_write_protocol.v0"
+        or execution_request.get("decision_token") != decision_token
+        or not expected_request_args
+        or execution_request.get("args") != expected_request_args
+    ):
+        raise _EffectReconciliationConflict(
+            f"durable authority receipt for {effect_id} has invalid authorization provenance"
+        )
+    receipt_ref = execution_result.get("receipt_ref")
+    expected_receipt_ref = f"{_MCP_APPEND_ACTION}:{effect_result['note_path']}"
+    if (
+        receipt_ref != expected_receipt_ref
+        or execution_result.get("trace_id") != execution_request.get("trace_id")
+        or execution_result.get("preview_result") is not None
+        or execution_result.get("dry_run_result") is not None
+        or execution_result.get("rollback_available") is not False
+        or execution_result.get("rollback_result") is not None
+    ):
+        raise _EffectReconciliationConflict(
+            f"durable authority receipt for {effect_id} has inconsistent EXE linkage"
+        )
+    authority_receipt = payload.get("authority_receipt")
+    if (
+        not isinstance(authority_receipt, dict)
+        or set(authority_receipt) != _AUTHORITY_RECEIPT_FIELDS
+        or not isinstance(authority_receipt.get("receipt_id"), str)
+        or not authority_receipt.get("receipt_id")
+        or authority_receipt.get("effect_id") != effect_id
+        or authority_receipt.get("outcome") != "applied"
+        or authority_receipt.get("decision_token_id") != decision_token.get("token_id")
+        or authority_receipt.get("decision_id") != decision_token.get("decision_id")
+        or authority_receipt.get("action") != decision_token.get("action")
+        or authority_receipt.get("write_class") != decision_token.get("write_class")
+        or authority_receipt.get("actor") != actor
+        or authority_receipt.get("resource") != resource
+        or authority_receipt.get("operation") != "append_note"
+        or authority_receipt.get("adapter") != _MCP_APPEND_ACTION
+        or authority_receipt.get("state_owner") != _MCP_APPEND_STATE_OWNER
+        or authority_receipt.get("source_receipt_ref")
+        != f"{_MCP_APPEND_ACTION}:append_note:{effect_result['note_path']}"
+        or not isinstance(authority_receipt.get("fallback_used"), bool)
+        or not isinstance(authority_receipt.get("recorded_at"), str)
+        or not authority_receipt.get("recorded_at")
+        or authority_receipt.get("trace_id") != execution_result.get("trace_id")
+        or authority_receipt.get("contract_version") != "governed_write_protocol.v0"
+    ):
+        raise _EffectReconciliationConflict(
+            f"durable authority receipt for {effect_id} is missing or inconsistent"
+        )
+    retry_token = payload.get("retry_decision_token")
+    if retry_token is not None and (
+        not isinstance(retry_token, dict)
+        or set(retry_token) != _DECISION_TOKEN_FIELDS
+        or retry_token.get("valid") is not True
+        or retry_token.get("token_id") == decision_token.get("token_id")
+        or retry_token.get("action") != _MCP_APPEND_ACTION
+        or retry_token.get("write_class") != _MCP_APPEND_WRITE_CLASS
+        or retry_token.get("actor") != actor
+        or retry_token.get("resource") != resource
+    ):
+        raise _EffectReconciliationConflict(
+            f"durable authority receipt for {effect_id} has invalid retry authorization"
+        )
+    return payload
+
+
+def _persisted_authority_receipt(
+    effect_id: str,
+    outbox_path: Path,
+    *,
+    args: Mapping[str, Any],
+    actor: str,
+    resource: str,
+) -> dict[str, Any] | None:
+    try:
+        records = read_jsonl_outbox_records(outbox_path, read_only=True)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, JsonlOutboxCorruptionError) as exc:
+        raise _EffectReconciliationConflict(
+            f"durable outbox receipt cannot be read while recovering {effect_id}"
+        ) from exc
+    expected_event_id = _event_id(effect_id, "authority_receipt")
+    matched: dict[str, Any] | None = None
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        event_id = record.get("event_id")
+        payload = record.get("payload")
+        payload_effect_id = payload.get("effect_id") if isinstance(payload, dict) else None
+        known_receipt = event_id == expected_event_id or (
+            record.get("event") == _AUTHORITY_RECEIPT_EVENT
+            and payload_effect_id == effect_id
+        )
+        if not known_receipt:
+            continue
+        if record.get("event") != _AUTHORITY_RECEIPT_EVENT:
+            raise _EffectReconciliationConflict(
+                f"known authority receipt event for {effect_id} has an unexpected event type"
+            )
+        validated = _validate_persisted_authority_payload(
+            effect_id,
+            str(event_id),
+            payload,
+            args=args,
+            actor=actor,
+            resource=resource,
+        )
+        if matched is not None and validated != matched:
+            raise _EffectReconciliationConflict(
+                f"known authority receipt events for {effect_id} disagree"
+            )
+        matched = validated
+    return matched
+
+
+def _persisted_notification(effect_id: str, outbox_path: Path) -> bool:
+    try:
+        records = read_jsonl_outbox_records(outbox_path, read_only=True)
+    except FileNotFoundError as exc:
+        raise _EffectReconciliationConflict(
+            f"durable outbox notification cannot be read while recovering {effect_id}"
+        ) from exc
+    except (OSError, ValueError, JsonlOutboxCorruptionError) as exc:
+        raise _EffectReconciliationConflict(
+            f"durable outbox notification cannot be read while recovering {effect_id}"
+        ) from exc
+    return any(
+        record.get("event") == _MCP_APPEND_EVENT
+        and isinstance(record.get("payload"), dict)
+        and record["payload"].get("effect_id") == effect_id
+        for record in records
+    )
+
+
+def _event_id(effect_id: str, stage: str) -> str:
+    return uuid5(NAMESPACE_URL, f"{effect_id}:{stage}").hex
+
+
+def _governed_write_payload(
+    grant: GovernedWriteGrant,
+    authority_receipt: AuthorityReceipt,
+) -> dict[str, Any]:
+    return {
+        "policy_decision": asdict(grant.policy_decision),
+        "decision_token": asdict(grant.decision_token),
+        "authority_receipt": asdict(authority_receipt),
+    }
 
 
 def _flag_enabled(value: Any) -> bool:
@@ -75,6 +718,7 @@ class StepContext:
     trace_id: str | None
     metadata: PlanMetadata
     results: MutableMapping[str, Dict[str, Any]] = field(default_factory=dict)
+    governed_write_grants: MutableMapping[str, GovernedWriteGrant] = field(default_factory=dict)
     flow_id: str | None = None
     event_type: str | None = None
     tool_settings: Mapping[str, Any] | None = None
@@ -227,7 +871,9 @@ class MockPlanExecutor(PlanExecutor):
             except Exception:
                 timeout_value = None
         try:
-            result_payload = self._invoke_tool(descriptor, args, context, timeout_value)
+            result_payload = self._invoke_tool(
+                descriptor, args, context, timeout_value, step_id=step.id
+            )
         except (FutureTimeoutError, TimeoutError) as exc:
             raise StepExecutionError("tool call timed out", error_type="tool_timeout") from exc
         emit_mcp_tool_call_finished(
@@ -241,7 +887,13 @@ class MockPlanExecutor(PlanExecutor):
         return {"tool": descriptor.name, "result": result_payload}
 
     def _invoke_tool(
-        self, descriptor: ToolDescriptor, args: Mapping[str, Any], context: StepContext, timeout_secs: float | None
+        self,
+        descriptor: ToolDescriptor,
+        args: Mapping[str, Any],
+        context: StepContext,
+        timeout_secs: float | None,
+        *,
+        step_id: str | None = None,
     ) -> Dict[str, Any]:
         def call() -> Dict[str, Any]:
             if descriptor.kind == "internal":
@@ -249,7 +901,7 @@ class MockPlanExecutor(PlanExecutor):
             if self._should_use_real_tool(descriptor.name, context):
                 if is_builderops_mcp_tool(descriptor.name):
                     return self._run_builderops_tool(descriptor.name, args, context)
-                return self._run_vault_append(args, context)
+                return self._run_vault_append(args, context, step_id=step_id)
             return dict(descriptor.mock_result or {"status": "ok"})
 
         if timeout_secs is not None:
@@ -328,49 +980,216 @@ class MockPlanExecutor(PlanExecutor):
                 error_type="mcp_tool_error",
             ) from exc
 
-    def _run_vault_append(self, args: Mapping[str, Any], context: StepContext) -> Dict[str, Any]:
-        # EXE side-effect seam (docs/contracts/EXECUTION_REQUEST.md): this path is
-        # only reached behind the real-tool gate (_should_use_real_tool), so the
-        # ExecutionRequest/ExecutionResult wrapper is additive and does not change
-        # mock/CI behavior or tool policy. EXE does not decide policy here; the
-        # DecisionToken reference is None until the orchestrator threads one
-        # through (see the contract's Transitional Implementation Notes).
-        vault_root = context.tool_settings.get("vault_root") if context.tool_settings else None
-        execution_request = ExecutionRequest(
-            side_effect="mcp.vault.append_note",
-            actor=context.agent_id or "orchestrator.runtime",
-            resource=str(args.get("title") or ""),
-            adapter="mcp.vault.append_note",
-            decision_token=None,
-            trace_id=context.trace_id,
-            args=dict(args),
-        )
+    def _run_vault_append(
+        self,
+        args: Mapping[str, Any],
+        context: StepContext,
+        *,
+        step_id: str | None = None,
+    ) -> Dict[str, Any]:
+        """Run the one governed real-tool append path.
+
+        The authority step issues the GOV grant and places it in the shared
+        execution context. This method validates that grant again immediately
+        before the writer, then records the EXE result and GOV AuthorityReceipt
+        as separate durable outbox stages. A stable effect identity and the
+        identity marker in the note's metadata make the append retryable without
+        repeating a completed writer call.
+        """
+        actor = context.agent_id or "orchestrator.runtime"
+        resource = _effect_resource(args)
+        grant = context.governed_write_grants.get(step_id or "")
         try:
-            note_path = append_note(
-                title=str(args.get("title") or ""),
-                body=str(args.get("body") or ""),
-                tags=args.get("tags") or [],
-                metadata=args.get("metadata") or {},
+            token = _GOVERNED_WRITE_ADAPTER.validate_decision_token(
+                decision_token=grant.decision_token if grant else None,
+                action=_MCP_APPEND_ACTION,
+                write_class=_MCP_APPEND_WRITE_CLASS,
+                actor=actor,
+                resource=resource,
+            )
+        except (InvalidDecisionTokenError, MissingDecisionTokenError) as exc:
+            raise StepExecutionError(
+                f"GOV refused mcp.vault.append_note: {exc}",
+                error_type="policy_denied",
+            ) from exc
+
+        try:
+            vault_root = _resolve_effect_vault_root(context.tool_settings)
+        except VaultToolError as exc:
+            raise StepExecutionError(
+                f"vault root could not be resolved: {exc}",
+                error_type="mcp_tool_error",
+            )
+        effect_id = _effect_identity(
+            context.plan_id,
+            step_id or "mcp.vault.append_note",
+            args,
+            vault_root=vault_root,
+        )
+        with _effect_lock(effect_id, vault_root):
+            return self._run_vault_append_locked(
+                args=args,
+                context=context,
+                actor=actor,
+                resource=resource,
+                token=token,
+                grant=grant,
+                effect_id=effect_id,
                 vault_root=vault_root,
             )
-            event_kwargs = {
-                "event": "mcp.vault.append_note",
-                "source": "orchestrator.runtime",
-                "payload": {"note_path": str(note_path)},
+
+    def _run_vault_append_locked(
+        self,
+        *,
+        args: Mapping[str, Any],
+        context: StepContext,
+        actor: str,
+        resource: str,
+        token: DecisionToken,
+        grant: GovernedWriteGrant | None,
+        effect_id: str,
+        vault_root: Path | None,
+    ) -> Dict[str, Any]:
+        outbox_path = _resolve_outbox_path()
+        try:
+            persisted = _persisted_authority_receipt(
+                effect_id,
+                outbox_path,
+                args=args,
+                actor=actor,
+                resource=resource,
+            )
+        except _EffectReconciliationConflict as exc:
+            raise StepExecutionError(
+                f"effect reconciliation is indeterminate: {exc}",
+                error_type="effect_reconciliation_conflict",
+            ) from exc
+        if persisted is not None:
+            execution_payload = persisted.get("execution_result")
+            if not isinstance(execution_payload, dict):
+                raise StepExecutionError(
+                    "durable AuthorityReceipt has no factual EXE receipt",
+                    error_type="receipt_missing",
+                )
+            effect_result = execution_payload.get("effect_result")
+            if not isinstance(effect_result, dict):
+                raise StepExecutionError(
+                    "durable AuthorityReceipt has no factual effect result",
+                    error_type="receipt_missing",
+                )
+            try:
+                notification_persisted = _persisted_notification(effect_id, outbox_path)
+            except _EffectReconciliationConflict as exc:
+                raise StepExecutionError(
+                    f"effect reconciliation is indeterminate: {exc}",
+                    error_type="effect_reconciliation_conflict",
+                ) from exc
+            if not notification_persisted:
+                self._persist_append_notification(
+                    effect_id=effect_id,
+                    effect_result=effect_result,
+                    authority_receipt=persisted.get("authority_receipt"),
+                    trace_id=context.trace_id,
+                )
+            return {
+                **effect_result,
+                "receipt_ref": execution_payload.get("receipt_ref"),
+                "effect_id": effect_id,
+                "authority_receipt": persisted.get("authority_receipt"),
+                "decision_token": persisted.get("decision_token"),
+                "retry_decision_token": persisted.get("retry_decision_token"),
             }
-            if context.trace_id:
-                event_kwargs["trace_id"] = context.trace_id
-            mcp_event = OutboxEvent(**event_kwargs)
-            _write_outbox_events(_resolve_outbox_path(), [mcp_event])
-            effect_result = {"status": "ok", "note_path": str(note_path)}
+
+        try:
+            recovery = _effect_path_from_vault(effect_id, vault_root, args, actor)
+        except _EffectReconciliationConflict as exc:
+            raise StepExecutionError(
+                f"effect reconciliation is indeterminate: {exc}",
+                error_type="effect_reconciliation_conflict",
+            ) from exc
+        authorization_token = recovery.decision_token if recovery else token
+        retry_token = token if recovery and token.token_id != authorization_token.token_id else None
+        request_args = dict(args)
+        request_args["metadata"] = _effect_metadata_with_authorization(
+            args,
+            effect_id,
+            authorization_token,
+        )
+        execution_request = ExecutionRequest(
+            side_effect=_MCP_APPEND_ACTION,
+            actor=actor,
+            resource=resource,
+            adapter=_MCP_APPEND_ACTION,
+            decision_token=authorization_token,
+            effect_id=effect_id,
+            trace_id=context.trace_id,
+            args=request_args,
+        )
+
+        note_path = recovery.path if recovery else None
+        try:
+            if note_path is None:
+                note_path = append_note(
+                    title=str(args.get("title") or "").strip(),
+                    body=str(args.get("body") or ""),
+                    tags=args.get("tags") or [],
+                    metadata=request_args["metadata"],
+                    vault_root=vault_root,
+                )
+                _EFFECT_PATH_HINTS[effect_id] = Path(note_path)
+                _EFFECT_ROOT_HINTS[effect_id] = (
+                    str(Path(vault_root).expanduser().resolve()) if vault_root is not None else None
+                )
+            note_reference = _effect_note_reference(note_path)
+            effect_result = {"status": "ok", "note_path": note_reference}
+            effect_receipt = _EffectReceipt(
+                operation="append_note",
+                locator=_EffectLocator(path=note_reference),
+                adapter=_MCP_APPEND_ACTION,
+                trace_id=context.trace_id,
+            )
+            authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
+                decision_token=authorization_token,
+                mutation_receipt=cast(Any, effect_receipt),
+                state_owner=_MCP_APPEND_STATE_OWNER,
+                trace_id=context.trace_id,
+                resource=resource,
+                effect_id=effect_id,
+            )
             execution_result = ExecutionResult(
                 request=execution_request,
                 status="succeeded",
                 effect_result=effect_result,
-                receipt_ref=f"mcp.vault.append_note:{note_path}",
+                receipt_ref=f"{_MCP_APPEND_ACTION}:{note_reference}",
                 trace_id=context.trace_id,
             )
-            return {**effect_result, "receipt_ref": execution_result.receipt_ref}
+            self._persist_authority_receipt(
+                effect_id=effect_id,
+                execution_result=execution_result,
+                grant=grant,
+                authority_receipt=authority_receipt,
+                trace_id=context.trace_id,
+            )
+            self._persist_append_notification(
+                effect_id=effect_id,
+                effect_result=effect_result,
+                authority_receipt=authority_receipt,
+                trace_id=context.trace_id,
+            )
+            _EFFECT_PATH_HINTS.pop(effect_id, None)
+            _EFFECT_ROOT_HINTS.pop(effect_id, None)
+            return {
+                **effect_result,
+                "receipt_ref": execution_result.receipt_ref,
+                "effect_id": effect_id,
+                "authority_receipt": asdict(authority_receipt),
+                "decision_token": asdict(authorization_token),
+                **(
+                    {"retry_decision_token": asdict(retry_token)}
+                    if retry_token is not None
+                    else {}
+                ),
+            }
         except VaultToolError as exc:
             ExecutionResult(
                 request=execution_request,
@@ -379,6 +1198,67 @@ class MockPlanExecutor(PlanExecutor):
                 trace_id=context.trace_id,
             )
             raise StepExecutionError(f"vault append failed: {exc}", error_type="mcp_tool_error") from exc
+
+    def _persist_authority_receipt(
+        self,
+        *,
+        effect_id: str,
+        execution_result: ExecutionResult,
+        grant: GovernedWriteGrant | None,
+        authority_receipt: AuthorityReceipt,
+        trace_id: str | None,
+    ) -> None:
+        payload = {
+            "effect_id": effect_id,
+            "execution_result": asdict(execution_result),
+            "decision_token": (
+                asdict(execution_result.request.decision_token)
+                if execution_result.request.decision_token
+                else None
+            ),
+            "retry_decision_token": (
+                asdict(grant.decision_token)
+                if grant
+                and execution_result.request.decision_token
+                and grant.decision_token.token_id
+                != execution_result.request.decision_token.token_id
+                else None
+            ),
+            "authority_receipt": asdict(authority_receipt),
+        }
+        event = OutboxEvent(
+            event=_AUTHORITY_RECEIPT_EVENT,
+            event_id=_event_id(effect_id, "authority_receipt"),
+            trace_id=trace_id or effect_id,
+            source="orchestrator.runtime",
+            payload=payload,
+        )
+        _write_outbox_events(_resolve_outbox_path(), [event])
+
+    def _persist_append_notification(
+        self,
+        *,
+        effect_id: str,
+        effect_result: Mapping[str, Any],
+        authority_receipt: Mapping[str, Any] | AuthorityReceipt | None,
+        trace_id: str | None,
+    ) -> None:
+        if isinstance(authority_receipt, AuthorityReceipt):
+            authority_payload: Mapping[str, Any] | None = asdict(authority_receipt)
+        else:
+            authority_payload = authority_receipt
+        event = OutboxEvent(
+            event=_MCP_APPEND_EVENT,
+            event_id=_event_id(effect_id, "notification"),
+            trace_id=trace_id or effect_id,
+            source="orchestrator.runtime",
+            payload={
+                "effect_id": effect_id,
+                "note_path": effect_result.get("note_path"),
+                "authority_receipt": authority_payload,
+            },
+        )
+        _write_outbox_events(_resolve_outbox_path(), [event])
 
 
 def execute_plan_step(
@@ -409,14 +1289,35 @@ def execute_plan_step(
             assert_tool_allowed(context.agent_id, "mcp.vault.append_note")
         except PermissionError as exc:
             raise StepExecutionError(str(exc), error_type="policy_denied") from exc
+        resource = _effect_resource(step.tool_args or {})
+        if not resource:
+            raise StepExecutionError(
+                "mcp.vault.append_note authority check requires a target title",
+                error_type="invalid_tool_args",
+            )
         try:
-            DEFAULT_WRITE_GUARD.assert_writes_allowed(KNOWLEDGE_WRITE_ACTION)
+            grant = _GOVERNED_WRITE_ADAPTER.issue_decision_token(
+                write_guard=DEFAULT_WRITE_GUARD,
+                action=_MCP_APPEND_ACTION,
+                write_class=_MCP_APPEND_WRITE_CLASS,
+                actor=context.agent_id or "orchestrator.runtime",
+                resource=resource,
+            )
         except Exception as exc:
             raise StepExecutionError(
                 f"WriteGuard blocked mcp.vault.append_note: {exc}",
                 error_type="write_guard_denied",
             ) from exc
-        return {"status": "allowed", "tool": "mcp.vault.append_note"}
+        effect_step_id = str(step.metadata["append_effect_step_id"])
+        context.governed_write_grants[effect_step_id] = grant
+        return {
+            "status": "allowed",
+            "tool": "mcp.vault.append_note",
+            "governed_write": {
+                "policy_decision": asdict(grant.policy_decision),
+                "decision_token": asdict(grant.decision_token),
+            },
+        }
 
     receipt_from_step = step.metadata.get("receipt_from_step")
     if (
