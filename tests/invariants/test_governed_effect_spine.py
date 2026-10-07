@@ -42,12 +42,17 @@ def _plan() -> Plan:
     )
 
 
-def _context(tmp_path: Path, *, grant: Any | None = None) -> StepContext:
+def _context(
+    tmp_path: Path,
+    *,
+    grant: Any | None = None,
+    trace_id: str = "trace-direct-governed-effect",
+) -> StepContext:
     grants = {"append": grant} if grant is not None else {}
     return StepContext(
         plan_id="direct-governed-effect-plan",
         object_id="direct-governed-effect-object",
-        trace_id="trace-direct-governed-effect",
+        trace_id=trace_id,
         metadata=PlanMetadata(
             goal="direct governed effect",
             source_object_uuid="direct-governed-effect-object",
@@ -65,6 +70,7 @@ def _prepare_notification_replay_case(
     title: str,
     *,
     vault_root: Path | None = None,
+    trace_id: str = "trace-direct-governed-effect",
 ) -> tuple[MockPlanExecutor, dict[str, str], Any, list[Path], Path, Path, list[int]]:
     outbox_path = tmp_path / "outbox.jsonl"
     effective_vault_root = vault_root or tmp_path
@@ -100,7 +106,7 @@ def _prepare_notification_replay_case(
     with pytest.raises(OSError, match="notification persistence failure"):
         executor._run_vault_append(
             args,
-            _context(effective_vault_root, grant=grant),
+            _context(effective_vault_root, grant=grant, trace_id=trace_id),
             step_id="append",
         )
     original_note = append_calls[0]
@@ -1057,6 +1063,64 @@ def test_notification_only_replay_normalizes_backslash_resource(
     assert result["authority_receipt"]["resource"] == "C:/Notes"
     frontmatter, _body = load_frontmatter(moved_note.read_text(encoding="utf-8"))
     assert frontmatter["title"] == title
+
+
+def test_notification_only_replay_preserves_durable_trace_across_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    original_trace_id = "trace-original-append"
+    executor, args, grant, append_calls, outbox_path, moved_note, write_attempts = (
+        _prepare_notification_replay_case(
+            monkeypatch,
+            tmp_path,
+            "Durable trace replay",
+            trace_id=original_trace_id,
+        )
+    )
+
+    result = executor._run_vault_append(
+        args,
+        _context(tmp_path, grant=grant, trace_id="trace-notification-retry"),
+        step_id="append",
+    )
+
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    notification = next(
+        record for record in records if record["event"] == "mcp.vault.append_note"
+    )
+    assert notification["event_id"] == executor_module._event_id(result["effect_id"], "notification")
+    assert notification["source"] == "orchestrator.runtime"
+    assert notification["trace_id"] == original_trace_id
+    assert notification["payload"] == {
+        "effect_id": result["effect_id"],
+        "note_path": result["note_path"],
+        "authority_receipt": result["authority_receipt"],
+    }
+
+    restarted_executor = MockPlanExecutor()
+    replay_result = restarted_executor._run_vault_append(
+        args,
+        _context(tmp_path, grant=grant, trace_id="trace-follow-on-retry"),
+        step_id="append",
+    )
+
+    assert replay_result["authority_receipt"] == result["authority_receipt"]
+    assert len(append_calls) == 1
+    assert moved_note.is_file()
+    assert write_attempts[0] == 3
+    final_records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert len(
+        [record for record in final_records if record["event"] == "mcp.vault.append_note"]
+    ) == 1
 
 
 def test_notification_only_replay_canonicalizes_literal_backslash_vault_path(

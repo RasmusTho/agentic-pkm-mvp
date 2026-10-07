@@ -1172,11 +1172,16 @@ class MockPlanExecutor(PlanExecutor):
                     error_type="effect_reconciliation_conflict",
                 ) from exc
             if not notification_persisted:
+                authority_receipt = persisted.get("authority_receipt")
                 self._persist_append_notification(
                     effect_id=effect_id,
                     effect_result=effect_result,
-                    authority_receipt=persisted.get("authority_receipt"),
-                    trace_id=context.trace_id,
+                    authority_receipt=authority_receipt,
+                    trace_id=(
+                        authority_receipt.get("trace_id")
+                        if isinstance(authority_receipt, dict)
+                        else None
+                    ),
                 )
             return {
                 **effect_result,
