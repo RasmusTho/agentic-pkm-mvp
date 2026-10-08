@@ -132,10 +132,13 @@ preflight_capture_watch_config() {
   local runtime_env_file="${1:?runtime env file required}"
   local capture_status
   capture_status="$(
-    RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON}" - 2>/dev/null <<'PY'
+    DEPLOY_REPO_ROOT="${ROOT}" RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON}" - 2>/dev/null <<'PY'
 from pathlib import Path
 import os
 import sys
+
+sys.path.insert(0, os.environ["DEPLOY_REPO_ROOT"])
+from scripts.compose_env import compose_env_value
 
 path = Path(os.environ["RUNTIME_ENV_FILE"])
 try:
@@ -157,11 +160,11 @@ except (OSError, UnicodeError):
     print("blocked")
     raise SystemExit(0)
 
-values = [line[len("HEIMDAL_CAPTURE_WATCH_DIR="):] for line in lines
+values = [compose_env_value(line[len("HEIMDAL_CAPTURE_WATCH_DIR="):]) for line in lines
           if line.startswith("HEIMDAL_CAPTURE_WATCH_DIR=")]
 if len(values) > 1:
     print("blocked")
-elif values and values[0] != "":
+elif values and values[0]:
     print("configured")
 else:
     print("disabled")

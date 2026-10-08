@@ -800,14 +800,23 @@ def test_every_postmutation_gate_has_fail_closed_terminal_handling(
     assert not (root / "ops/deployments/dev-latest.json").exists()
 
 
+@pytest.mark.parametrize(
+    "runtime_env_text",
+    [
+        "TTS_ENABLED=false\n",
+        'TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=""\n',
+        "TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=''\n",
+        'TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR="" # disabled\n',
+    ],
+)
 def test_unconfigured_capture_watch_does_not_block_or_start_with_deploy(
-    tmp_path: Path,
+    tmp_path: Path, runtime_env_text: str
 ) -> None:
     root, env, base_sha = _deploy_harness(tmp_path)
     sha = _commit_prefloor_successor(root, "capture watch disabled target")
     previous_sha = base_sha
     pin_path = _seed_previous_pin(root, previous_sha)
-    (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
+    (root / "tmp/runtime.env").write_text(runtime_env_text, encoding="utf-8")
     env["FAKE_SHA"] = sha
     env["FAKE_DOCKER_FAIL_MATCH"] = " ps -q "
     fitness_args = tmp_path / "fleet-model-fitness-args.txt"
@@ -2574,6 +2583,12 @@ def test_vm_capture_watch_selection_uses_runtime_input_and_fails_on_ambiguity(tm
     cfg = linux.LinuxConfig('test', tmp_path, tmp_path / 'data', 1000, 1000, '', '')
     assert linux._capture_watch_configured(cfg) is False
     runtime = tmp_path / 'runtime.env'
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=""\n', encoding='utf-8')
+    assert linux._capture_watch_configured(cfg) is False
+    runtime.write_text("HEIMDAL_CAPTURE_WATCH_DIR=''\n", encoding='utf-8')
+    assert linux._capture_watch_configured(cfg) is False
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR="" # disabled\n', encoding='utf-8')
+    assert linux._capture_watch_configured(cfg) is False
     runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/capture\n', encoding='utf-8')
     assert linux._capture_watch_configured(cfg) is True
     alternate = tmp_path / 'alternate.env'

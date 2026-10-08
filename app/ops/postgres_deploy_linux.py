@@ -290,6 +290,8 @@ def _git_bytes(root: Path, *args: str) -> bytes:
 
 def _capture_watch_configured(config: LinuxConfig) -> bool:
     """Mirror deploy_channel.sh's fail-closed runtime-file selection."""
+    from scripts.compose_env import compose_env_value
+
     runtime_path = database_input_files(config)[1]
     try:
         runtime_path.lstat()
@@ -307,7 +309,7 @@ def _capture_watch_configured(config: LinuxConfig) -> bool:
               for line in lines if line.startswith('HEIMDAL_CAPTURE_WATCH_DIR=')]
     if len(values) > 1:
         raise PostgresDeployError()
-    return bool(values and values[0] != '')
+    return bool(values and compose_env_value(values[0]))
 
 
 def _pin_value(config: LinuxConfig, key: str) -> str:
