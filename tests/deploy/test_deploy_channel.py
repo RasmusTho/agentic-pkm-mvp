@@ -1752,6 +1752,22 @@ def test_acknowledged_embedding_cutover_allows_transitional_health(tmp_path: Pat
     assert any("/api/health" in event for event in events)
 
 
+def test_acknowledged_embedding_cutover_keeps_required_health_strict_when_readyz_is_green(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    env["FAKE_READINESS"] = "pass"
+    env["FAKE_REQUIRED_HEALTH"] = "fail"
+
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
+
+    assert result.returncode == 1
+    assert "health gate failed" in result.stderr
+    events = _deploy_events(env)
+    assert any("/readyz" in event for event in events)
+    assert any("/api/health" in event for event in events)
+
+
 def test_acknowledged_embedding_cutover_keeps_independent_readiness_failure_blocking(
     tmp_path: Path,
 ) -> None:
