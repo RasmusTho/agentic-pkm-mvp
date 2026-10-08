@@ -24,7 +24,26 @@ _deploy_channel_resolve_runtime_env_file() {
   local channel_env_file="${3:?channel env file required}"
   local runtime_env_ref
 
-  runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
+  runtime_env_ref="$(
+    ROOT="${root}" CHANNEL_ENV_FILE="${channel_env_file}" "${PYTHON:-python3}" - 2>/dev/null <<'PY'
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.environ["ROOT"])
+from scripts.compose_env import compose_env_value
+
+channel_env_file = Path(os.environ["CHANNEL_ENV_FILE"])
+try:
+    channel_lines = channel_env_file.read_text(encoding="utf-8").splitlines()
+except FileNotFoundError:
+    channel_lines = []
+for line in channel_lines:
+    if line.startswith("WATCHER_RUNTIME_ENV_FILE="):
+        print(compose_env_value(line.split("=", 1)[1]))
+        break
+PY
+  )"
   if [ -z "${runtime_env_ref}" ]; then
     case "${channel}" in
       test) runtime_env_ref="./tmp-test/runtime.env" ;;

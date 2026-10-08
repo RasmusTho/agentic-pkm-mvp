@@ -86,6 +86,19 @@ def test_malformed_optional_provider_credential_blocks_check(setup):
     assert admin.check('dev', ['heimdal-api-ingress'])[0]['status'] == 'invalid'
 
 
+def test_absent_api_raw_key_skips_only_when_no_required_consumer_is_selected(setup):
+    admin, provider, _ = setup
+    api_status = admin.check('dev', ['heimdal-api-ingress'])
+    assert api_status == [
+        {'secret': 'github.token', 'status': 'skipped'},
+        {'secret': 'heimdal.raw-store-key', 'status': 'skipped'},
+    ]
+    capture_status = admin.check('dev', ['heimdal-api-ingress', 'heimdal-capture-watch'])
+    raw_status = next(row for row in capture_status if row['secret'] == 'heimdal.raw-store-key')
+    assert raw_status == {'secret': 'heimdal.raw-store-key', 'status': 'missing'}
+    assert not any(action == 'put' for action, *_ in provider.calls)
+
+
 def test_external_identity_imports_from_stdin_without_value_disclosure(setup, capsys):
     admin, provider, _ = setup
     assert main(['import', 'dev', 'openai.api-key', '--stdin'], admin=admin, stdin=StringIO(CANARY)) == 0

@@ -1068,12 +1068,32 @@ def test_optional_secret_failure_never_unlocks_the_run_anyway_handoff(
     )
 
 
-def test_absent_required_secret_still_fails_closed(tmp_path: Path) -> None:
-    """#4489 must not weaken the guarantee protecting the ingress lanes."""
+def test_absent_api_raw_key_degrades_only_the_ingress_layer(tmp_path: Path) -> None:
+    """The API may start with its media/screen ingress lanes unavailable."""
+    contract = host_secret_bootstrap.load_host_secret_contract()
+    assert contract.is_optional("heimdal.raw-store-key") is False
+    assert contract.is_optional_for_consumer(
+        channel="dev", consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
+    ) is True
+    assert contract.is_optional_for_consumer(
+        channel="dev", consumer="heimdal-capture-watch", secret="heimdal.raw-store-key"
+    ) is False
+
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="heimdal-api-ingress",
+        keychain_lookup=_absent(":heimdal.raw-store-key"),
+        directory=tmp_path,
+    ) as env_file:
+        assert env_file.read_text(encoding="utf-8") == f"GITHUB_TOKEN={_GITHUB_TOKEN}\n"
+
+
+def test_absent_capture_watch_raw_key_still_fails_closed(tmp_path: Path) -> None:
+    """A configured encryption consumer remains blocked without its key."""
     with pytest.raises(HostSecretBootstrapError):
         with materialize_consumer_environment(
             channel="dev",
-            consumer="heimdal-api-ingress",
+            consumer="heimdal-capture-watch",
             keychain_lookup=_absent(":heimdal.raw-store-key"),
             directory=tmp_path,
         ):
@@ -1093,6 +1113,12 @@ def test_every_committed_secret_declares_its_optionality_explicitly() -> None:
     for logical_id in ("heimdal.raw-store-key", "openai.api-key", "anthropic.api-key"):
         assert contract.is_optional(logical_id) is False
     assert contract.is_optional("github.token") is True
+    assert contract.is_optional_for_consumer(
+        channel="prod", consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
+    ) is True
+    assert contract.is_optional_for_consumer(
+        channel="prod", consumer="heimdal-raw-migrate", secret="heimdal.raw-store-key"
+    ) is False
 
 
 @pytest.mark.parametrize(

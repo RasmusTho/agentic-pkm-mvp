@@ -35,6 +35,7 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_ownership_host_state.sh",
         "scripts/lib/signboard_root.sh",
+        "scripts/compose_env.py",
         "scripts/instance_state_writer_inventory.py",
     ):
         source = REPO_ROOT / relative
@@ -239,6 +240,7 @@ def test_disappearing_tts_root_fails_with_compose_output_redacted(
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_ownership_host_state.sh",
         "scripts/lib/signboard_root.sh",
+        "scripts/compose_env.py",
     ):
         destination = synthetic_root / relative
         destination.write_text((REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8")
@@ -428,6 +430,7 @@ def test_atomic_export_never_exposes_partial_tts_snapshot(tmp_path: Path) -> Non
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_ownership_host_state.sh",
         "scripts/lib/signboard_root.sh",
+        "scripts/compose_env.py",
     ):
         destination = synthetic_root / relative
         destination.write_text((REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8")
