@@ -18,13 +18,15 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 
 **Classification:** docs-only changes; skill/governance text under `.codex/skills/**`, `AGENTS.md`, and `.github` governance surfaces; comment-level fixes. No product/runtime behavior, contracts, or shipped reality change.
 
-**Deterministic CI classifier:** the PR body carries `- [x] Docs authoring lane` or `- [x] Governance lane`. The existing lane checkboxes double as the tier declaration — no new labels, tokens, or attestation mechanisms.
+**Deterministic CI classifier:** the PR body carries `- [x] Docs authoring lane` or `- [x] Governance lane` and the diff satisfies that lane. Existing lane checkboxes declare the tier; issue-backed code cannot self-declare Tier 1 to bypass traceability.
 
 **Required machinery:**
 
 - lane classifier in the PR body (the checkbox above)
 - truthful authoritative lifecycle state (labels, Issue/PR state, CI) — mandatory at every tier
-- `## BuilderOps Routing` may be omitted entirely when nothing was routed: **absence means "none"**. A present-but-unfilled section (template placeholders) still fails CI — claiming the section means filling it.
+- An **issue-free** Tier 1 PR may omit `## BuilderOps Routing` when nothing was routed: absence
+  means `none`. Issue authority requires concrete routing even with a Tier 1 checkbox. A present
+  but unfilled section still fails CI.
 - output format: a short human summary (2–4 sentences) plus a receipt line; no multi-section report
 - validation: lightweight docs/governance checks appropriate to the touched surfaces; no full code/test smoke by default
 - delivery depth: light path — declare `Final-Review-Rounds: 0` and merge plainly on green required checks; no independent review round, no verified-merge ceremony; approved bounded multi-Issue work uses the same native merge
@@ -177,7 +179,12 @@ Product-side scale posture is owned by `docs/DESIGN_PRINCIPLES.md`.
 
 ## CI enforcement
 
-`.github/workflows/issue-pr-governance.yml` (`pr-contract` job) implements the Tier 1 relaxation deterministically: when the PR body carries a docs-authoring or governance lane checkbox, a missing `## BuilderOps Routing` section is treated as "none"; for all other PRs the section remains required with concrete values. The same job accepts `Final-Review-Rounds: 0` (light path), `1` (one independent review), or `2` (backward-compatible authenticated declaration for already-started deliveries); the value's delivery-depth meaning is defined by this contract, not by CI. New deliveries never select `2` from risk or convergence classification.
+`.github/workflows/issue-pr-governance.yml` (`pr-contract` job) treats absent `## BuilderOps Routing`
+as `none` only for a docs-authoring/governance lane with no Issue authority. Issue-backed PRs require
+concrete routing and traceability; their checkbox cannot bypass those guards. The same job accepts
+`Final-Review-Rounds: 0` (light path), `1` (one independent review), or `2` (backward-compatible
+authenticated declaration for already-started deliveries). This contract owns delivery-depth
+meaning; new deliveries never select `2` from risk or convergence classification.
 
 ## Output formats
 
