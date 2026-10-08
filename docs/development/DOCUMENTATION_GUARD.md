@@ -38,6 +38,12 @@ their governance-only changes do not imply Product/Runtime temporal state change
 does not cover other modules under `app/builderops/` or `scripts/`, and mixing runtime/config
 changes still requires the runtime temporal owner document as well as PR Hot Path.
 
+Source-anchor enforcement in `scripts/validate_source_anchors.py` is paired with
+`docs/development/DEV_WORKFLOW.md :: Source-anchor rule for backlog creation`.
+Changes to that validator require this exact owner document; an Issue-contract
+summary or unrelated governance document alone cannot satisfy the pairing.
+Mixed runtime/config changes still require the normal temporal owner writeback.
+
 This document is the paired owner contract for both `scripts/docs_guard.py`
 and `scripts/docs_guard_logic.py`. When either script's policy, base/diff
 handling, documentation scope, language heuristic, or temporal-owner routing

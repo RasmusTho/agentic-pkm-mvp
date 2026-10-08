@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-06 (owner decision, TypeSafe System One repository support merged by PR #5803, and GitHub contract readback; no host credentials, route settings, database, or deployment changed)
+Last reviewed: 2026-10-07 (owner portal decision and #5819–#5821 target/implementation state reconciled; repository and GitHub evidence only, no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -73,6 +73,10 @@ Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md
 ### Production Model Access decision and readiness (2026-10-05)
 
 The owner decision recorded in [Issue #5618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5989039472) puts production in scope: Product chat/planning (`decide` and `plan`) should use the VLAN-only Model Access Router path to the Luna Codex CLI executor, with Ollama reserved for embeddings. This supersedes the 2026-10-04 note that production was excluded. It is the product outcome, not a finding that Luna is technically unsuitable. It does not qualify a production caller identity or replace the existing credential and release gates; live Product `llm_routing` settings remain the route authority.
+
+The additional owner decision in [Issue #5819](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5819) (2026-10-07) sets a broader target: the Mac mini is the portal for all registry-declared Product inference, including embeddings, while each clone or satellite selects its own model/profile through settings. This is not yet shipped or live. MARR-12 (#5821) extends provider egress/catalog support; MARR-13 (#5820) migrates Product callers and embeddings. Until both slices and integrated host acceptance pass, the only proven live route remains the designated Luna/Codex CLI acceptance, and embeddings remain on their existing path.
+
+The current single-operator VLAN boundary uses mTLS at ingress and a loopback-only executor. No Tailscale path, per-release-channel credentials, or separate per-channel/action capability header is required. Ollama remains optional and is not a readiness prerequisite for routes that do not select it. Product and Builder policy resolvers and credential profiles remain separate. The accepted single-operator ingress risk and its multi-operator revisit condition are recorded in ADR-0067; no universal portal, Product caller migration, or production activation is inferred here.
 
 The same 2026-10-05 readback found that `ygg-prod` still reports `required_ok=false` and `mock` for `decide`, `plan`, and `embed`; its embedding index has 10 objects without vectors, and the production Ollama container has no model installed. No production MARR caller identity or binding was present. PR #5798 adds repository support for production caller binding, but does not activate a live route. `ygg-test` has only API and DB containers, with no worker or watcher, so candidate-bound test verification is not available. The latest dev readback reported container health only, not functional application health, and no MARR caller bindings.
 

@@ -98,7 +98,7 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
 - Verify roadmap or plan wording was cleaned up if the item is now delivered
 - Verify no duplicate `planned` and `shipped` statements remain active at once
 - Verify the BuilderOps routing outcome per tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`):
-  Tier 2+ PR bodies must carry the routing outcome; on Tier 1 (docs/governance lane) PRs a missing
+  Issue-backed and Tier 2+ PR bodies must carry routing; on issue-free Tier 1 (docs/governance lane) a missing
   `## BuilderOps Routing` section means `none` and does not block merge. At every tier, unresolved
   learning, docs freshness, roadmap execution, promotion, projection, or receipt material must be
   represented by a BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason
@@ -681,9 +681,9 @@ receipt states none) for any divergence, docs-freshness finding, operational roa
 proposed authority crossing, or processed/promoted/superseded/discarded material noticed during
 delivery.
 
-If none apply, the delivery receipt may state `BuilderOps routing: none` with the reason. On Tier 1
+If none apply, the delivery receipt may state `BuilderOps routing: none` with the reason. On issue-free Tier 1
 PRs (`docs/development/GOVERNANCE_PROPORTIONALITY.md`), an absent `## BuilderOps Routing` section is
-read as `none` — do not block closure on its absence. Do not use `docs/learning-log.md` as the
+read as `none`; Issue authority still requires concrete routing. Do not use `docs/learning-log.md` as the
 primary closure surface.
 
 ## Parent Issue Closure

@@ -438,6 +438,7 @@ Use this lane only when:
   - `tests/ops/test_review_before_ci_workflow_risk.py`
   - `tests/ops/test_host_global_lease.py`
   - `tests/scripts/test_validate_issue_readiness.py`
+  - `tests/scripts/test_validate_source_anchors.py`
   - `tests/scripts/test_docs_guard.py`
   - `tests/scripts/test_pr_body_generator.py`
   - `tests/fixtures/issue_readiness/**`
@@ -627,6 +628,16 @@ When converting a doc item into a GitHub Issue:
 2. Reference the most local actionable doc item, not only a broad document path.
 3. Prefer stable item IDs such as `PA2-FREEFORM` or `ORCHV2-TDD-PILOT` over prose fragments.
 4. Keep the anchor stable even if the surrounding paragraph is reworded.
+
+For an existing defect or implementation fact, an existing repository file with a descriptive
+locator is also a valid source anchor: code, tests, Makefile targets, and workflow paths can locate
+the evidence directly. `Source Docs` still names the normative owner authority; a factual file
+reference neither becomes policy authority nor requires inventing a documentation item.
+
+`scripts/validate_source_anchors.py` enforces existing file paths, rejects absolute paths,
+traversal, directories, and symlinks escaping the repository, and resolves explicit stable IDs in
+Markdown. Other locators are descriptive; path validation does not prove symbol semantics.
+Changes to that validator require this owner document in the same diff.
 
 Recommended anchor format:
 

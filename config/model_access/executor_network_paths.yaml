@@ -16,7 +16,7 @@ path_profiles:
     adapter: private_https_ingress
     endpoint_ref: host_config.ygg_codex_vlan
     authentication_profile_ref: host_config.ygg_vlan_mutual_tls
-    caller_policy_ref: policy.product_channel_actions
+    caller_policy_ref: policy.vlan_mtls_authenticated_caller
 executor_path_policies:
   profile.codex_remote_host:
     order: [ygg_vlan_primary]

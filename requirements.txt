@@ -29,6 +29,7 @@ rapidfuzz==3.9.6
 iniconfig==2.1.0
 jsonpatch==1.33
 jsonschema==4.23.0
+referencing==0.37.0
 jsonpointer==3.0.0
 lingua-language-detector==2.1.1
 rfc3339-validator==0.1.4

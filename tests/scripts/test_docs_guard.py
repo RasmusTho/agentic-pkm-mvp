@@ -435,6 +435,47 @@ def test_select_pr_tests_requires_its_specific_paired_doc(tmp_path: Path) -> Non
     assert "temporal code/config changed" in result.stdout
 
 
+@pytest.mark.parametrize(
+    "owner_doc, runtime_path, temporal_writeback, expected_status",
+    [
+        ("DEV_WORKFLOW.md", None, False, 0),
+        (None, None, False, 1),
+        ("UNRELATED.md", None, False, 1),
+        ("DEV_WORKFLOW.md", "app/runtime.py", False, 1),
+        ("DEV_WORKFLOW.md", "config/runtime.toml", False, 1),
+        ("DEV_WORKFLOW.md", "app/runtime.py", True, 0),
+        (None, "app/runtime.py", True, 1),
+    ],
+)
+def test_source_anchor_enforcement_requires_its_exact_owner_and_mixed_writeback(
+    tmp_path: Path,
+    owner_doc: str | None,
+    runtime_path: str | None,
+    temporal_writeback: bool,
+    expected_status: int,
+) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "scripts/validate_source_anchors.py").write_text("# source-anchor enforcement\n", encoding="utf-8")
+    if owner_doc:
+        (repo / "docs/development" / owner_doc).write_text("source-anchor contract\n", encoding="utf-8")
+    if runtime_path:
+        runtime = repo / runtime_path
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        runtime.write_text("changed = true\n", encoding="utf-8")
+    if temporal_writeback:
+        (repo / "docs/STATUS.md").write_text("temporal writeback\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "source-anchor-owner-pairing"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == expected_status, result.stdout + result.stderr
+    if expected_status:
+        assert "temporal code/config changed" in result.stdout
+    else:
+        assert "Docs guard: OK" in result.stdout
+
+
 def _assert_governance_script_rejects_unrelated_doc(tmp_path: Path, script: str) -> None:
     repo = _guard_repo(tmp_path)
     script_path = repo / script if "/" in script else repo / "scripts" / script

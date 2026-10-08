@@ -181,6 +181,7 @@ GOVERNANCE_TEMPORAL_ENFORCEMENT = MappingProxyType(
         "app/builderops/publication.py": "docs/development/PR_HOT_PATH.md",
         "scripts/build_verification_dispatch_request.py": "docs/development/PR_HOT_PATH.md",
         "scripts/pr_body_generator.py": "docs/development/PR_HOT_PATH.md",
+        "scripts/validate_source_anchors.py": "docs/development/DEV_WORKFLOW.md",
     }
 )
 

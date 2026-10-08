@@ -30,11 +30,27 @@ Issue bodies must contain exactly these sections:
 Parent feature issues additionally carry `## Implementation Tasks`, `## Verification Path`, and
 `## Validation / Acceptance Path` (see `feature-breakdown`).
 
+## Source Anchors
+
+The owner rule is `docs/development/DEV_WORKFLOW.md :: Source-anchor rule for backlog creation`.
+Use the most local verifiable source: a governing doc section/stable ID, prior Issue/PR, or existing
+repository file with a descriptive locator. Code, tests, Makefile targets, and workflow paths are
+valid factual anchors; `Source Docs` still names the normative owner authority. A factual anchor
+does not become policy authority or require inventing a documentation item for an existing defect.
+
+`scripts/validate_source_anchors.py` requires repo-local paths to exist as files and refuses absolute
+paths, traversal, and symlinks escaping the repository. It also resolves explicit stable IDs in
+Markdown. Locators in other files are descriptive; path validation does not prove symbol semantics.
+
 ## Outcome and implementation discretion
 
 Make the required outcome precise without freezing the agent's engineering plan. Apply
 `AGENTS.md :: Agency default` and `decision-quality :: Current mandate and delegated choices`:
 
+- Carry the delivery mandate through retries and skill transitions while its scope, effect authority,
+  and constraints hold. A later explicit owner direction may revise an earlier owner restriction;
+  record the revision once in the governing Issue through its owning workflow before relying on
+  it. Do not repeat an already answered ask or infer new authority from silence, retries, or labels.
 - Preserve the requested outcome, meaningful acceptance, explicit user decisions/exclusions, and
   applicable security, privacy, authority, persistence, compatibility, budget, and operator gates.
   State the source and purpose of a restrictive constraint in the existing Issue sections.
@@ -213,7 +229,7 @@ parent-validation authority, not to this closing slice.
 <Bounded outcome and expected files/artifacts; distinguish implementation defaults from explicit boundaries.>
 
 ## Source Anchors
-- `<path> :: <section or stable anchor ID>`
+- `<path> :: <section, stable anchor ID, or factual locator>`
 
 ## SBS Impact
 - Primary subsystem: <Product SBS subsystem, or Builder System / CES boundary>
