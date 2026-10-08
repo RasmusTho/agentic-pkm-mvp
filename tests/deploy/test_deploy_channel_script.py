@@ -2555,9 +2555,11 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
     root = tmp_path / 'repo'
     (root / 'config/deploy').mkdir(parents=True)
     journal = DeployJournal(tmp_path / 'journal', 'test')
+    lookups = []
 
     class Reader:
         def lookup(self, _project, identity):
+            lookups.append(identity)
             if identity.endswith('heimdal.raw-store-key'):
                 raise BwsItemAbsent()
             if identity.endswith('postgres.password'):
@@ -2619,6 +2621,10 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
         with pytest.raises(PostgresDeployError):
             supervisor.request(retry)
 
+    assert active_consumer in effects.active_consumers
+    assert effects.password is None
+    assert effects.consumer_values == {}
+    assert sum(identity.endswith('heimdal.raw-store-key') for identity in lookups) == 2
     assert activation_events == []
 
 
