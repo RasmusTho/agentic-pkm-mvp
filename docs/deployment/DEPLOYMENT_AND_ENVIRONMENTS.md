@@ -554,7 +554,19 @@ No CLI flag creates this approval. The admin token remains on the agent host.
 
 The root-owned `config/systemd/yggdrasil-bws-deploy@.service` and installed
 `scripts/postgres_deploy_service.py` launcher supervise VM work independently of SSH. Operator setup
-places the launcher at `/usr/local/libexec/yggdrasil-bws-deploy` and an owner-only (`root:root`, `0600`)
+runs `sudo scripts/install_bws_deploy_runtime.sh` from the checkout. That idempotent command
+requires Python 3.12 or newer, creates or updates `/opt/yggdrasil/bws-deploy-runtime` from the
+pinned `requirements-bws-deploy.txt` manifest, imports the BWS SDK, PostgreSQL driver, and Linux
+supervisor module through that runtime, then installs the root-owned launcher at
+`/usr/local/libexec/yggdrasil-bws-deploy` with the matching interpreter path. The service and RPC
+launcher use that interpreter; it is one shared runtime for the host's dev, test, and prod channels.
+Re-run it after changing the manifest, with no deployment operation in flight, then restart every
+active supervisor instance before starting another operation. If dependency installation or its
+import check fails, keep supervisor work idle and rerun setup after correcting the runtime issue;
+the launcher is installed only after the checks pass. The setup does not install packages into
+system Python.
+
+Operator setup then creates an owner-only (`root:root`, `0600`)
 `/etc/yggdrasil/bws-deploy/<channel>.json` containing the root-owned, non-writable checkout `root`,
 actual existing named-volume `data_directory`, non-root service `uid`/`gid`, `organization_id`,
 channel-project `project_id`, and an absolute `runtime_env_file` path to that channel's generated
