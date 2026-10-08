@@ -72,11 +72,13 @@ those subsequent callers and their operation-specific terminal verifiers.
   --channel dev --consumer <declared-consumer>` reads non-secret `BWS_READER_PROJECT`,
   `BWS_PROJECT_ID`, and `BWS_ORGANIZATION_ID` settings. The project name must be `non-prod` or
   `prod` as fixed by the requested channel. The pinned Bitwarden Python SDK authenticates in
-  memory with no state file; it lists value-free identifiers and fetches only the selected item.
-  PostgreSQL password validation accepts the existing nonempty one-line printable UTF-8
-  value, including ordinary spaces; it imposes no API-key length limits.
-  Both identifier and response membership must match the selected project. An overprivileged
-  multi-project reader is refused before fetching any value.
+  memory with no state file. Its organization inventory must contain exactly the `non-prod` and
+  `prod` projects, both in the configured organization, and the configured project ID must match
+  the requested channel's project name. It lists value-free identifiers, requires the selected
+  identity to belong only to that project, and fetches only that item; access to the peer project
+  does not widen the runtime lookup. PostgreSQL password validation accepts the existing nonempty
+  one-line printable UTF-8 value, including ordinary spaces; it imposes no API-key length limits.
+  Both identifier and response membership must match the selected project.
 - `BWS_ACCESS_TOKEN_FILE` must equal `$CREDENTIALS_DIRECTORY/bws-machine-account-token`.
   The file must be an owner-readable regular file, private to root/the service owner, with no
   symlink or hardlink. Token-valued environment variables are never consumed. Linux CLI calls
