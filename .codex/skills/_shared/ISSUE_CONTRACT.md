@@ -32,6 +32,7 @@ Parent feature issues additionally carry `## Implementation Tasks`, `## Verifica
 
 ## Source Anchors
 
+The owner rule is `docs/development/DEV_WORKFLOW.md :: Source-anchor rule for backlog creation`.
 Use the most local verifiable source: a governing doc section/stable ID, prior Issue/PR, or existing
 repository file with a descriptive locator. Code, tests, Makefile targets, and workflow paths are
 valid factual anchors; `Source Docs` still names the normative owner authority. A factual anchor

@@ -147,7 +147,7 @@ Issue-free bounded instruction, skill, governance test/script/template, and owne
 
 ## Dispatcher policy
 
-The dispatcher is an optional collision guard; GitHub is lifecycle truth and Project optional projection.
+The dispatcher is an optional collision guard; GitHub Issue state, blocked-state and review-handoff labels are durable truth; Project is optional projection.
 Use `scripts/issue_pickup_claim.sh` through `issue-to-code`; never reconstruct the claim handshake.
 Heartbeat about every 30 minutes renews the holder's unexpired lease from its persisted TTL;
 the default 90-minute TTL and holder/expiry validation remain binding.
