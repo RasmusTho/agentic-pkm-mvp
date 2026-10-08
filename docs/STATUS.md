@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-08 (owner portal decision and #5819–#5821 target/implementation state reconciled; Issue #5828/PR #5835 repository candidate reviewed and validated; no host credentials, route settings, database, or deployment changed)
+Last reviewed: 2026-10-08 (PR #5835 merge and deploy-selection evidence checked; the Issue #5828 candidate SHA and validation count corrected below; no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -102,13 +102,20 @@ Neither the implementation nor its fake-adapter/static-render proof changes the 
 posture. The detailed contract remains in `docs/CLOUD_SECRET_PROVISIONING/README.md` and
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Linux channel secret provisioning`.
 
-The Issue #5828 candidate in PR #5835 (`2f2660edcacc84e082c7ec7daf3c3ecd25c1d912`) adds
-consumer-specific deploy selection: a missing raw-store key may degrade API ingress visibly,
-capture-watch is selected only when configured, and raw migration only when the target migration is
-pending. Missing keys for active capture or migration still block; malformed present values fail
-closed. The current candidate passed 462 issue/deployment/docs tests and Ruff and received an
-independent review with no P0/P1/P2 findings. This is repository evidence only; no BWS value write,
-token rotation, live channel qualification, or runtime-state change is claimed.
+Last verified against (Issue #5828 deploy-consumer selection): PR #5835, candidate
+`27cae8f3735e50f98784e0495fed5f6ac67e8aed`, merged as
+`24900014c491327617b83e26a93732fc20e5833c`; exact-candidate validation reported 889 passed,
+7 skipped, Ruff, `mypy` (1,049 files), docs and language guards, shell syntax, and diff checks.
+GitHub CI Smoke run #37742806960 passed on the exact candidate; later PR-description-only run
+#37744619163 skipped code-surface jobs. No live BWS value write, token rotation, channel
+qualification, or runtime change occurred.
+
+PR #5835 merged the Issue #5828 deploy-selection fix at the candidate and merge SHAs recorded
+above. A missing raw-store key may degrade API ingress visibly; capture-watch is selected only
+when configured, and raw migration only when its target migration is pending. Missing keys for
+active capture or migration still block, and malformed present values fail closed. The independent
+mechanism-convergence review found no remaining findings. This is repository evidence only; no
+live BWS value write, token rotation, channel qualification, or runtime-state change is claimed.
 
 At the 2026-09-23 MARR-08 repository checkpoint, Issue #5635 had added a bounded Product client and
 one host-side completion operation that dispatches an exact Product-selected route to Codex CLI or
