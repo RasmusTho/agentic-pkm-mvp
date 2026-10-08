@@ -3163,6 +3163,132 @@ def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(tmp_pat
     assert 'fake-postgres-canary' not in (journal.directory / 'test.request.json').read_text()
 
 
+def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.postgres_deploy import DeployReceipt
+
+    controller = SimpleNamespace(directory=tmp_path)
+    captured = []
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'configured_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'SshDeployRemote', lambda _host: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+
+    def deploy(_admin, _remote, plan, *, qualified):
+        captured.append(plan)
+        qualified()
+        return DeployReceipt(str(uuid4()), 'test', 'deploy', 'committed', 'committed')
+
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+
+    assert host.main(['test', 'a' * 40]) == 0
+    assert captured[-1].ack_forward_only is False
+    assert host.main(['test', 'b' * 40, '--ack-forward-only']) == 0
+    assert captured[-1].ack_forward_only is True
+
+
+def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_path, monkeypatch):
+    from dataclasses import asdict, replace
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+    from app.ops.postgres_deploy_linux import DeploymentSupervisor, SshDeployRemote
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), False)
+    journal.bind_request(operation_id, plan, False, create=True)
+    journal.write(operation_id, 'prepared')
+    journal.write(operation_id, 'preflighted')
+    journal.write(operation_id, 'materialized')
+    journal.write(operation_id, 'activating')
+    receipt = journal.write(operation_id, 'committed')
+    supervisor = DeploymentSupervisor(SimpleNamespace(channel='test', journal=journal))
+    transmitted = []
+
+    def ssh(_argv, **kwargs):
+        transmitted.append(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0, stdout='{"pending": true}')
+
+    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    remote = SshDeployRemote('ygg-test')
+    remote._request('join', operation_id, plan)
+    request = transmitted[-1]
+
+    assert type(request['plan']['ack_forward_only']) is bool
+    assert request['plan']['ack_forward_only'] is False
+    assert json.loads((journal.directory / 'test.request.json').read_text())['plan']['ack_forward_only'] is False
+    assert supervisor.request(request)['receipt'] == asdict(receipt)
+    remote._request('join', operation_id, replace(plan, ack_forward_only=True))
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(transmitted[-1])
+
+    malformed = asdict(plan)
+    malformed['ack_forward_only'] = 1
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({**request, 'plan': malformed})
+    unknown = {**asdict(plan), 'unbound_authority': True}
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({**request, 'plan': unknown})
+
+
+@pytest.mark.parametrize('ack_forward_only', [False, True])
+def test_bws_activation_uses_only_request_bound_forward_only_ack(tmp_path, monkeypatch, ack_forward_only):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    journal.write(operation_id, 'prepared')
+    journal.write(operation_id, 'preflighted')
+    journal.write(operation_id, 'materialized')
+    journal.write(operation_id, 'activating')
+    source = tmp_path / 'tmpfs'
+    source.mkdir()
+    cfg = SimpleNamespace(channel='test', journal=journal, source_directory=source, root=tmp_path)
+    effects = linux.LinuxEffects(cfg)
+    effects.lock_fd = 123
+    effects.source = SimpleNamespace(verify=lambda: None)
+    effects.environment = lambda: {
+        'HOST_SECRET_PROVIDER': 'bws', 'DEPLOY_ACK_FORWARD_ONLY': '1',
+    }
+    effects.consumer_values = {
+        'heimdal-api-ingress': {}, 'heimdal-capture-watch': {}, 'heimdal-raw-migrate': {},
+    }
+    effects.active_consumers = (*DATABASE_CONSUMERS, 'heimdal-api-ingress')
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), ack_forward_only,
+    )
+    calls = []
+
+    def command(argv, **kwargs):
+        calls.append((argv, kwargs))
+        assert kwargs['pass_fds'] == (123,)
+        assert all(path.stat().st_mode & 0o777 == 0o600 for path in source.iterdir())
+        return ''
+
+    monkeypatch.setattr(linux, '_command', command)
+    effects.activate(plan)
+
+    assert len(calls) == 1
+    argv, kwargs = calls[0]
+    assert ('--ack-forward-only' in argv) is ack_forward_only
+    assert 'DEPLOY_ACK_FORWARD_ONLY' not in kwargs['env']
+    assert list(source.iterdir()) == []
+
+
 def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
     from dataclasses import asdict
     from types import SimpleNamespace

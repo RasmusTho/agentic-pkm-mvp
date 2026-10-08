@@ -35,10 +35,12 @@ class DeployPlan:
     revision: str
     services: tuple[str, ...]
     consumers: tuple[str, ...]
+    ack_forward_only: bool = False
 
     def validate(self) -> None:
         contract = load_host_secret_contract()
-        if (self.channel not in CHANNEL_PROJECTS or len(self.revision) != 40
+        if (type(self.ack_forward_only) is not bool
+            or self.channel not in CHANNEL_PROJECTS or len(self.revision) != 40
             or any(c not in '0123456789abcdef' for c in self.revision)
             or not self.services or len(set(self.services)) != len(self.services)
             or not self.consumers or len(set(self.consumers)) != len(self.consumers)):
