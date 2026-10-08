@@ -15,7 +15,7 @@ from app.eval.benchmark import (
     MetricValue,
 )
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 
 # ── helpers ─────────────────────────────────────────────────────────────

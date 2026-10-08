@@ -41,7 +41,7 @@ from app.eval.classification import (
     load_replay_completions,
 )
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 
 def _report_valid_eval_usage(observer, model: str) -> None:

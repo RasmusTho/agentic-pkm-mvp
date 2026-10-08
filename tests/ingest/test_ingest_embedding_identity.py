@@ -30,6 +30,8 @@ from app.components.llm.router import LLMTaskIntent
 from app.index.artifact_metadata import embedding_identity_provenance
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 def _capture_requested_events(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     """Capture envelopes at the outbox boundary.
 

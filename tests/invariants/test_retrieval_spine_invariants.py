@@ -27,7 +27,10 @@ from app.retrieval import hybrid
 from app.stores import get_vector_index, reset_store_backends
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 @pytest.fixture(autouse=True)
+
 def _isolate_stores(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
     # ADR-0059 D1 (#3405): the serving path scores with each row's STORED

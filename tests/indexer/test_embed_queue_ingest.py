@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
 from app.llm.embed_queue import EmbedDeadLetterError
 
 
@@ -16,6 +18,8 @@ from app.llm.embed_queue import EmbedDeadLetterError
 #   Drives the PRODUCTION call site; asserts (a) no exception propagates and
 #   (b) emit_index_embedding_failed is called.
 # ---------------------------------------------------------------------------
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 def test_exhausted_embed_dead_letters_and_continues(monkeypatch):
     """EmbedDeadLetterError in handle_ingest_object_created emits failed + continues.
