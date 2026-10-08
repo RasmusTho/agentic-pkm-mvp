@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/yggdrasil/bws-deploy-runtime/bin/python3
 """Operator-installed as /usr/local/libexec/yggdrasil-bws-deploy (root-owned)."""
 import json
 import os
