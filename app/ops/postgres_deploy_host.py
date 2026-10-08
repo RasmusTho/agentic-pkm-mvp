@@ -43,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
         '--ack-forward-only', action='store_true',
         help='acknowledge forward-only migrations in this exact deployment request',
     )
+    parser.add_argument(
+        '--existing-secrets-only', action='store_true',
+        help='refuse a missing PostgreSQL password before remote mutation; never bootstrap a BWS value',
+    )
     args = parser.parse_args(argv)
     try:
         controller = HostSecretController()
@@ -52,7 +56,8 @@ def main(argv: list[str] | None = None) -> int:
                           (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only)
         admin = SecretAdmin(configured_admin(), controller=controller)
         receipt = deploy_from_host(admin, SshDeployRemote('ygg-' + args.channel), plan,
-                                   qualified=lambda: require_qualification(controller))
+                                   qualified=lambda: require_qualification(controller),
+                                   allow_bootstrap=not args.existing_secrets_only)
         print(json.dumps(receipt.__dict__, sort_keys=True))
         return 0 if receipt.terminal_result == 'committed' else 78
     except Exception:
