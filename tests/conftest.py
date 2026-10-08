@@ -148,6 +148,108 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
     yield monkeypatch
 
 
+@pytest.fixture
+def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
+    """Deterministic Mac-portal fake for Product tests that are not API tests."""
+    from types import SimpleNamespace
+
+    from app.components.llm import fabric
+    from app.model_access.remote_contract import (
+        CompletionResponse,
+        CompletionRouteIdentity,
+        EmbeddingRouteIdentity,
+        PreflightResponse,
+        ProductEmbeddingResponse,
+    )
+
+    class _Gateway:
+        def __init__(self) -> None:
+            self.preflight_requests: list[object] = []
+            self.completion_requests: list[object] = []
+            self.embedding_requests: list[object] = []
+            self.completion_content = "fixture Product answer"
+            self.completion_usage = None
+            self.embedding_error: Exception | None = None
+            self._routes: dict[str, CompletionRouteIdentity] = {}
+
+        @staticmethod
+        def _completion_route(provider: str, model: str) -> CompletionRouteIdentity:
+            if provider == "openai":
+                transport_id = "codex_cli" if model.endswith("-luna") else "openai_api"
+            elif provider == "ollama":
+                transport_id = "ollama_http"
+            elif provider == "anthropic":
+                transport_id = "anthropic_api"
+            else:
+                transport_id = "deepseek_api"
+            return CompletionRouteIdentity(
+                provider=provider,
+                model=model,
+                transport_id=transport_id,
+                catalog_snapshot_ref=f"catalog.{provider}_{transport_id}",
+                catalog_snapshot_hash="sha256:" + "a" * 64,
+            )
+
+        def preflight_product(self, request):
+            self.preflight_requests.append(request)
+            route = self._completion_route(request.provider, request.model)
+            receipt = SimpleNamespace(
+                receipt_id=f"fixture-{len(self.preflight_requests)}",
+                failure_before_selection=None,
+            )
+            self._routes[receipt.receipt_id] = route
+            return SimpleNamespace(
+                response=PreflightResponse(route=route, preflight_status="passed"),
+                receipt=receipt,
+            )
+
+        def discard_product_path_receipt(self, receipt) -> None:
+            if receipt is not None:
+                self._routes.pop(receipt.receipt_id, None)
+
+        def complete_product_selected_path(self, request, *, receipt):
+            self.completion_requests.append(request)
+            route = self._routes.pop(receipt.receipt_id)
+            return CompletionResponse(
+                route=route,
+                content=self.completion_content,
+                usage=self.completion_usage,
+            )
+
+        def embed_product(self, request):
+            self.embedding_requests.append(request)
+            if self.embedding_error is not None:
+                raise self.embedding_error
+            if request.provider == "gemini":
+                transport_id = "gemini_api"
+            elif request.provider == "ollama":
+                transport_id = "ollama_http"
+            else:
+                transport_id = "mock"
+            route = EmbeddingRouteIdentity(
+                provider=request.provider,
+                model=request.model,
+                transport_id=transport_id,
+                catalog_snapshot_ref=f"catalog.{request.provider}_{transport_id}",
+                catalog_snapshot_hash="sha256:" + "a" * 64,
+            )
+            return SimpleNamespace(
+                response=ProductEmbeddingResponse(
+                    route=route,
+                    dimensions=request.dimensions,
+                    vector=tuple([0.125] * request.dimensions),
+                ),
+                selected_path_profile="ygg_vlan_primary",
+            )
+
+        def close(self) -> None:
+            return None
+
+    gateway = _Gateway()
+    monkeypatch.setattr(fabric, "_new_executor_path_router", lambda **_kwargs: gateway)
+    return gateway
+
+
 @pytest.fixture(autouse=True)
 def force_memory_store_for_non_pg(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
     """Keep non-pg tests independent of DATABASE_URL/DB_DSN."""

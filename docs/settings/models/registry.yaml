@@ -27,6 +27,9 @@ models:
   - id: ollama.embed.nomic_embed_text
     path: docs/settings/models/ollama.embed.nomic_embed_text.yaml
     status: active
+  - id: ollama.embed.bge_m3
+    path: docs/settings/models/ollama.embed.bge_m3.yaml
+    status: active
   - id: gemini.embed.gemini_embedding_001
     path: docs/settings/models/gemini.embed.gemini_embedding_001.yaml
     status: active

@@ -155,6 +155,11 @@ def test_identity_converges(tmp_path, monkeypatch) -> None:
             base = float(len(text) % 7 + 1)
             return [base] * new_identity.dim
 
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(doctor_mod, "get_embeddings_client", lambda _intent: _StubClient())
+
     def _seed_row(dsn: str, identity: EmbeddingIdentity, *, text: str) -> str:
         # Writes store_vector_index directly, bypassing VectorIndex.upsert()'s
         # single-identity-per-write guardrail, so a mixed-identity index can be
@@ -229,7 +234,9 @@ def test_identity_converges(tmp_path, monkeypatch) -> None:
             "during migration was not surfaced as a loud doctor issue"
         )
 
-        monkeypatch.setattr(reconcile_mod, "get_embedding_client", lambda *a, **k: _StubClient())
+        monkeypatch.setattr(
+            reconcile_mod, "get_product_embedding_client", lambda **_kwargs: _StubClient()
+        )
         runner = CliRunner()
         result = runner.invoke(index_cli, ["reconcile", "--json"])
         assert result.exit_code == 0, result.output

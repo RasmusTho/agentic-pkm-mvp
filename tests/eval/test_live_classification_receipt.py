@@ -124,53 +124,57 @@ def test_receipt_and_failures_are_secret_free(monkeypatch, capsys, caplog) -> No
 
 @pytest.mark.parametrize("cache_write_tokens", [0, 50])
 def test_real_api_seam_captures_usage_without_content_logging(
-    monkeypatch, cache_write_tokens
+    monkeypatch, cache_write_tokens, product_model_access_gateway
 ) -> None:
     from app.components.llm import fabric
     from app.components.llm.router import LLMTaskIntent
+    from app.model_access.remote_contract import (
+        CompletionPromptTokenDetails,
+        CompletionTokenUsage,
+        CompletionUsageMetadata,
+    )
     from app.services import llm
 
-    calls = []
-    client = Client()
-    client.metadata["usage"]["prompt_tokens_details"]["cache_write_tokens"] = cache_write_tokens
-
-    class Response:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {
-                **client.metadata,
-                "choices": [
-                    {"message": {"content": '{"intent_class":"exploratory","action_type":null}'}}
-                ],
-            }
-
-    def post(url, **kwargs):
-        calls.append(json.loads(kwargs["data"]))
-        return Response()
-
-    monkeypatch.setattr(llm.requests, "post", post)
+    product_model_access_gateway.completion_content = (
+        '{"intent_class":"exploratory","action_type":null}'
+    )
+    product_model_access_gateway.completion_usage = CompletionUsageMetadata(
+        model="gpt-5.6-terra",
+        service_tier="default",
+        usage=CompletionTokenUsage(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            prompt_tokens_details=CompletionPromptTokenDetails(
+                cached_tokens=10,
+                cache_write_tokens=cache_write_tokens,
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        llm.requests,
+        "post",
+        lambda *_args, **_kwargs: pytest.fail("Product called a local provider endpoint"),
+    )
     monkeypatch.setattr(llm, "log_llm_call", lambda **kw: pytest.fail("content persisted"))
     real = fabric.get_chat_client(
         LLMTaskIntent(task_kind="eval"),
-        model_id="gpt-5.6-luna",
+        model_id="gpt-5.6-terra",
         transport_id="openai_api",
-        adapter_runtime_config=fabric.AdapterRuntimeConfig(
-            api_key="test-key", base_url="https://api.openai.com/v1"
-        ),
     )
     receipt = live.run_live_classification(
-        EvalLLMConfig(model="gpt-5.6-luna", mode="run", chat_client=real)
+        EvalLLMConfig(model="gpt-5.6-terra", mode="run", chat_client=real)
     )
     assert receipt["complete"] is (cache_write_tokens == 0)
     if cache_write_tokens:
         assert receipt["cost"] is None
-    assert len(calls) == len(load_classification_cases())
-    assert all(c["model"] == "gpt-5.6-luna" and c["service_tier"] == "default" for c in calls)
-    assert all(c["reasoning_effort"] == "none" and "temperature" not in c for c in calls)
+    assert len(product_model_access_gateway.completion_requests) == len(
+        load_classification_cases()
+    )
+    assert all(
+        request.model == "gpt-5.6-terra"
+        for request in product_model_access_gateway.completion_requests
+    )
 
 
 @pytest.mark.parametrize(

@@ -194,6 +194,12 @@ def test_doctor_honors_bge_profile_over_shipped_model_default(monkeypatch) -> No
     monkeypatch.setenv("EMBED_MODEL", "nomic-embed-text:latest")
     monkeypatch.setenv("EMBED_DIM", "768")
     monkeypatch.setattr(doctor_mod, "get_vector_index", _BgeIndex)
+    class _ProfiledClient:
+        identity = resolve_embedding_identity(profile="bge-m3")
+
+    monkeypatch.setattr(
+        doctor_mod, "get_embeddings_client", lambda _intent: _ProfiledClient()
+    )
     monkeypatch.setattr(
         doctor_mod,
         "inspect_retrieval_index_divergence",
@@ -301,6 +307,13 @@ def test_doctor_flags_old_identity_rows(tmp_path, monkeypatch) -> None:
 
     old_identity = EmbeddingIdentity(provider="ollama", model="nomic-embed-text:latest", dim=768, normalize=True)
     new_identity = EmbeddingIdentity(provider="ollama", model="bge-m3:latest", dim=1024, normalize=True)
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        doctor_mod,
+        "get_embeddings_client",
+        lambda _intent: SimpleNamespace(identity=new_identity),
+    )
 
     try:
         # Seed the pre-migration identity as the recorded steady-state, then
@@ -374,6 +387,9 @@ def test_reconcile_converges(tmp_path, monkeypatch) -> None:
             base = float(len(text) % 7 + 1)
             return [base] * new_identity.dim
 
+        def close(self) -> None:
+            return None
+
     try:
         import psycopg
 
@@ -394,7 +410,10 @@ def test_reconcile_converges(tmp_path, monkeypatch) -> None:
 
         _seed_row(_dsn(), old_identity, text="pre-migration row to reconcile")
 
-        monkeypatch.setattr(reconcile_mod, "get_embedding_client", lambda *a, **k: _StubClient())
+        monkeypatch.setattr(
+            reconcile_mod, "get_product_embedding_client", lambda **_kwargs: _StubClient()
+        )
+        monkeypatch.setattr(doctor_mod, "get_embeddings_client", lambda _intent: _StubClient())
 
         runner = CliRunner()
         result = runner.invoke(index_cli, ["reconcile", "--json"])

@@ -294,6 +294,70 @@ def test_embedding_route_uses_gateway_and_preserves_identity(
     assert _GEMINI_KEY not in repr(route_provenance)
 
 
+def test_bge_m3_profile_creates_mac_portal_embedding_client(
+    monkeypatch: pytest.MonkeyPatch, clean_llm_env: pytest.MonkeyPatch
+) -> None:
+    clean_llm_env.delenv("EMBED_MODEL", raising=False)
+    clean_llm_env.delenv("EMBED_PROVIDER", raising=False)
+    clean_llm_env.delenv("EMBED_PRIMARY_PROVIDER", raising=False)
+    clean_llm_env.delenv("EMBED_PROFILE", raising=False)
+    bundle = SettingsBundle()
+    monkeypatch.setattr(fabric, "get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(
+        "app.components.embeddings.legacy.get_settings_bundle", lambda: bundle
+    )
+
+    requests: list[Any] = []
+    closed: list[bool] = []
+
+    class _Portal:
+        def embed_product(self, request: Any) -> Any:
+            requests.append(request)
+            response = ProductEmbeddingResponse(
+                route=EmbeddingRouteIdentity(
+                    provider="ollama",
+                    model="bge-m3:latest",
+                    transport_id="ollama_http",
+                    catalog_snapshot_ref="catalog.ollama_ollama_http",
+                    catalog_snapshot_hash=_SNAPSHOT_HASH,
+                ),
+                dimensions=request.dimensions,
+                vector=tuple([0.125] * request.dimensions),
+            )
+            return SimpleNamespace(
+                response=response,
+                selected_path_profile="ygg_vlan_primary",
+            )
+
+        def close(self) -> None:
+            closed.append(True)
+
+    monkeypatch.setattr(fabric, "_new_executor_path_router", lambda **_kwargs: _Portal())
+    monkeypatch.setattr(
+        fabric,
+        "get_embedding_client",
+        lambda **_kwargs: pytest.fail("BGE Product profile invoked a local embedding client"),
+    )
+
+    client = fabric.get_product_embedding_client(profile="bge-m3")
+    try:
+        vector = client.embed_text("profile-bound Mac portal embedding")
+        provenance = client.route_provenance
+    finally:
+        client.close()
+
+    assert client.identity.provider == "ollama"
+    assert client.identity.model == "bge-m3:latest"
+    assert client.identity.dim == 1024
+    assert len(vector) == 1024
+    assert len(requests) == 1
+    assert requests[0].model == "bge-m3:latest"
+    assert provenance is not None
+    assert provenance["transport_id"] == "ollama_http"
+    assert provenance["execution_host"] == EXECUTOR_NETWORK_PROFILE
+    assert closed == [True]
+
+
 def test_retrieval_and_indexer_embedding_entrypoints_use_product_portal(
     monkeypatch: pytest.MonkeyPatch, clean_llm_env: pytest.MonkeyPatch
 ) -> None:

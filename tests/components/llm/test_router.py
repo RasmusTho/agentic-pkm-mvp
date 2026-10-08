@@ -41,6 +41,18 @@ def _assert_unregistered_embedding_fails_closed(intent: LLMTaskIntent) -> None:
         get_embeddings_client(intent)
 
 
+def _assert_bge_embedding_resolves_through_product_portal(
+    intent: LLMTaskIntent,
+) -> None:
+    client = get_embeddings_client(intent)
+    try:
+        assert client.identity.provider == "ollama"
+        assert client.identity.model == "bge-m3:latest"
+        assert client.identity.dim == 1024
+    finally:
+        client.close()
+
+
 @pytest.mark.parametrize(
     ("provider", "expected"),
     [
@@ -175,7 +187,7 @@ def test_router_honors_activated_embedding_profile_over_generic_env_model_defaul
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    _assert_unregistered_embedding_fails_closed(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"
@@ -214,7 +226,7 @@ def test_activated_profile_beats_generic_settings_model_default(
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    _assert_unregistered_embedding_fails_closed(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"
@@ -274,7 +286,7 @@ def test_router_honors_activated_profile_over_shipped_default_target(
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    _assert_unregistered_embedding_fails_closed(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"
@@ -343,7 +355,7 @@ def test_router_honors_settings_default_profile_over_shipped_default_target(
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    _assert_unregistered_embedding_fails_closed(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"
@@ -467,7 +479,7 @@ def test_explicit_embedding_task_profile_remains_active(
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    _assert_unregistered_embedding_fails_closed(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"

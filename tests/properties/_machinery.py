@@ -1638,34 +1638,40 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "derived-artifact payload; ingest_object -> store_vector_index."
     ),
     # -- carries_via_indexed_unit_builder: payload = build_indexed_unit_payload(...) (the choke) --
-    ("app/cli/index_rebuild.py", 320): (
+    ("app/cli/index_rebuild.py", 321): (
         "carries_via_indexed_unit_builder: cold rebuild re-embeds store_objects rows through "
-        "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index."
+        "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index. "
+        "Line shifted 320 -> 321 when #5820 routed Product embedding through the portal client."
     ),
-    ("app/cli/index_rebuild.py", 726): (
+    ("app/cli/index_rebuild.py", 727): (
         "carries_via_indexed_unit_builder: fallback rebuild upsert via build_indexed_unit_payload "
-        "-> store_vector_index."
+        "-> store_vector_index. Line shifted 726 -> 727 when #5820 routed Product embedding "
+        "through the portal client."
     ),
-    ("app/indexer/consumer.py", 88): (
+    ("app/indexer/consumer.py", 92): (
         "carries_via_indexed_unit_builder: legacy embedding-in-event path; payload = "
-        "build_indexed_unit_payload(...) -> idx.upsert -> store_vector_index."
+        "build_indexed_unit_payload(...) -> idx.upsert -> store_vector_index. Line shifted "
+        "88 -> 92 when #5820 routed Product embedding through the portal client."
     ),
-    ("app/indexer/consumer.py", 180): (
+    ("app/indexer/consumer.py", 199): (
         "carries_via_indexed_unit_builder: INDEX_EMBEDDING_REQUESTED path; upsert_kwargs['payload'] "
-        "= build_indexed_unit_payload(payload=dict(obj.payload)) -> store_vector_index."
+        "= build_indexed_unit_payload(payload=dict(obj.payload)) -> store_vector_index. Line shifted "
+        "180 -> 199 when #5820 routed Product embedding through the portal client."
     ),
     ("app/search/service.py", 280): (
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 176): (
+    ("app/services/indexer.py", 175): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
-        "into the input on the vault-changed path and preserves an existing binding via the merge."
+        "into the input on the vault-changed path and preserves an existing binding via the merge. "
+        "Line shifted 176 -> 175 when #5820 routed Product embedding through the portal client."
     ),
-    ("app/services/indexer.py", 256): (
+    ("app/services/indexer.py", 257): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
-        "'payload'] = build_indexed_unit_payload(...) -> store_vector_index."
+        "'payload'] = build_indexed_unit_payload(...) -> store_vector_index. Line shifted 256 -> 257 "
+        "when #5820 routed Product embedding through the portal client."
     ),
     # -- preserves_existing_payload: update starting from dict(existing.payload) ------------------
     ("app/agents/panel/writeback.py", 213): (

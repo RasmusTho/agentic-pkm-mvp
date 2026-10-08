@@ -1,0 +1,8 @@
+id: ollama.embed.bge_m3
+status: active
+kind: embedding
+provider: ollama
+model: bge-m3:latest
+dims: 1024
+allowed_transports: [ollama_http]
+notes: Mac-hosted Ollama embedding option; requires the model on the host and an index rebuilt for this identity.

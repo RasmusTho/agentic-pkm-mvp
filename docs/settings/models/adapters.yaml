@@ -96,3 +96,8 @@ model_routes:
     model_prefix: gpt-
     model_suffix: -luna
     adapter_id: codex_cli
+  - provider: ollama
+    model_kind: embedding
+    model_prefix: bge-
+    model_suffix: :latest
+    adapter_id: ollama_http

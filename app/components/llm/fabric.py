@@ -1010,6 +1010,11 @@ def get_chat_client_for_route(
     """Bind one already-resolved Product policy route to the shared access facade."""
     if allow_explicit_eval_transport and (intent.task_kind != "eval" or selected_route is None):
         raise LLMRouteError("evaluation-only admission requires an explicit eval route")
+    explicit_eval_transport = (
+        selected_route.transport_id if allow_explicit_eval_transport else None
+    )
+    if allow_explicit_eval_transport and not explicit_eval_transport:
+        raise LLMRouteError("explicit evaluation route has no transport binding")
     router = LLMRouter()
     route_candidates = getattr(router, "candidate_routes", None)
     candidates = route_candidates(intent) if route_candidates is not None else []
@@ -1082,6 +1087,13 @@ def get_chat_client_for_route(
                 ),
                 max_output_tokens=max_output_tokens,
             )
+            if (
+                explicit_eval_transport is not None
+                and model_access_route.transport_id != explicit_eval_transport
+            ):
+                raise LLMRouteError(
+                    "Mac portal preflight selected a different transport than the explicit evaluation request"
+                )
             transport_observation = _preflight_transport_observation(
                 selection.executor_path_receipt
             )
@@ -1231,6 +1243,11 @@ def _product_embedding_client_for_identity(
         raise LLMRouteError(
             "Product embedding route is not declared by the Mac portal adapter registry"
         ) from exc
+
+    if descriptor.allowed_transports and expected_transport not in descriptor.allowed_transports:
+        raise LLMRouteError(
+            "Product embedding adapter is not allowed by the model registry"
+        )
 
     remote_transport = _new_executor_path_router(
         executor_profile=EXECUTOR_NETWORK_PROFILE,

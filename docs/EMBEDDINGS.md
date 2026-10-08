@@ -5,10 +5,12 @@ and `app/settings/models.py::EmbeddingProfile.dim` all now read **768**, matchin
 document's operative default (`nomic-embed-text`, unchanged shipped default). A new,
 SELECTABLE `bge-m3` embedding profile (model `bge-m3`, dim **1024**, no-prefix mode) is
 now registered (`app/settings/models.py::EmbeddingProfiles.profiles["bge-m3"]`) per
-ADR-0052, but it is **not** the shipped default — activating it is an explicit operator
-action (`EMBED_PROFILE=bge-m3` or `default_profile: bge-m3`), gated on pulling `bge-m3`
-into Ollama and running the full re-index. See `docs/runbooks/RUNBOOK_BGE_M3_CUTOVER.md` for
-the operator procedure.
+ADR-0052 and has a Product registry entry (`docs/settings/models/ollama.embed.bge_m3.yaml`).
+It is **not** the shipped default — activating it is an explicit operator action
+(`EMBED_PROFILE=bge-m3` or `default_profile: bge-m3`). Product calls use the Mac portal;
+the Mac host's Ollama must have `bge-m3` available, and changing to this identity requires
+the full governed re-index. See `docs/runbooks/RUNBOOK_BGE_M3_CUTOVER.md` for the operator
+procedure.
 # Embeddings
 
 This document is the **normative specification** for how embeddings are produced, validated, recorded, and stored in the system.

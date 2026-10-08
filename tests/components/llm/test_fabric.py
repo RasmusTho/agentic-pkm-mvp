@@ -1230,17 +1230,28 @@ def test_product_output_limit_uses_preflight_approved_ollama_route(monkeypatch) 
     assert ("preflight", "ollama_http", True) in remote.events
 
 
-def test_gpt56_eval_api_admission_preserves_implicit_luna_transport(monkeypatch) -> None:
+def test_gpt56_eval_api_admission_rejects_host_transport_substitution(monkeypatch) -> None:
     intent = LLMTaskIntent(task_kind="eval")
     factory = fabric._adapter_factory()
     implicit = fabric._exact_product_model_route(intent, "gpt-5.6-luna", factory=factory)
     assert implicit.transport_id == "codex_cli_tailscale"
-    for tier in ("luna", "terra", "sol"):
+    for tier in ("terra", "sol"):
         client = get_chat_client(intent, model_id=f"gpt-5.6-{tier}", transport_id="openai_api")
         assert client.route.model == f"gpt-5.6-{tier}"
-        expected_host_transport = "codex_cli" if tier == "luna" else "openai_api"
-        assert client.route.transport_id == expected_host_transport
+        assert client.route.transport_id == "openai_api"
         assert client.model_access_route.request.intent.fallback_requirement == "fallback_forbidden"
+
+    completion_calls: list[Any] = []
+    original_complete = _FixtureProductRemoteTransport.complete
+
+    def record_complete(self: _FixtureProductRemoteTransport, request: Any) -> Any:
+        completion_calls.append(request)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(_FixtureProductRemoteTransport, "complete", record_complete)
+    with pytest.raises(LLMRouteError, match="different transport"):
+        get_chat_client(intent, model_id="gpt-5.6-luna", transport_id="openai_api")
+    assert completion_calls == []
 
 
 @pytest.mark.parametrize("task_kind", ["decide", "eval"])

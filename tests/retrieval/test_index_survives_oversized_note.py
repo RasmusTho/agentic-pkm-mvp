@@ -5,56 +5,34 @@ import numpy as np
 import pytest
 
 import app.components.retrieval as retrieval_module
-import app.llm.embeddings as emb
-from app.components.embeddings import EmbeddingIdentity
-from app.index import embeddings as index_emb
 from app.ingest.chunk_policy import build_structural_chunks
+import app.llm.embeddings as emb
 from app.llm.embeddings import embed_texts
 from app.retrieval.hybrid import MemoryHybridStore
 
 
-def test_oversized_note_does_not_abort_index(monkeypatch) -> None:
+def test_oversized_note_does_not_abort_index(
+    monkeypatch, clean_llm_env, product_model_access_gateway
+) -> None:
     """An index build over a corpus containing one oversized note completes:
     the oversized note is chunked, the rest embed, and the whole build does not
     abort with the provider 500 (#2110).
     """
-    dim = 8
+    dim = 768
     max_chars = 100
+    from app.components.llm.fabric import get_product_embedding_client
+
     monkeypatch.setenv("EMBED_MAX_INPUT_CHARS", str(max_chars))
     monkeypatch.setenv("LLM_TIMEOUT", "5")
-
-    def fake_embed_api(text, model, d, timeout):
-        # Mirror the real failure: a whole oversized note 500s; in-window
-        # chunks succeed.
-        if len(text) > max_chars:
-            raise RuntimeError(
-                "Ollama /api/embeddings returned HTTP 500: the input length exceeds the context length"
-            )
-        return tuple(0.1 for _ in range(d))
-
-    monkeypatch.setattr(emb, "_ollama_embed_api", fake_embed_api)
-    emb._embed_single.cache_clear()
-
-    # Force the retrieval index build down the ollama embedding path without
-    # depending on settings/profile resolution.
-    identity = EmbeddingIdentity(provider="ollama", model="nomic-embed-text:latest", dim=dim, normalize=True)
-
-    class _OllamaStubClient:
-        def __init__(self) -> None:
-            self.identity = identity
-
-        def embed_text(self, text: str) -> list[float]:
-            return index_emb.embed_text(
-                text, provider="ollama", model=identity.model, dim=dim, normalize=True
-            )
-
-        def embed_texts(self, texts):
-            return [self.embed_text(t) for t in texts]
-
-        def embed_batches(self, texts, batch_size: int = 32):
-            yield self.embed_texts(list(texts))
-
-    monkeypatch.setattr(retrieval_module, "get_embedding_client", lambda *a, **k: _OllamaStubClient())
+    monkeypatch.setattr(
+        retrieval_module,
+        "_embedding_client_for_profile",
+        lambda _profile: get_product_embedding_client(
+            profile="default",
+            override_provider="ollama",
+            override_model="nomic-embed-text:latest",
+        ),
+    )
 
     store = MemoryHybridStore()
     store.set_documents(
@@ -71,7 +49,8 @@ def test_oversized_note_does_not_abort_index(monkeypatch) -> None:
     assert store._embeddings is not None
     assert store._embeddings.shape[0] == 3, "all three docs (incl. the oversized one) embedded"
     assert scores.shape[0] == 3
-    emb._embed_single.cache_clear()
+    assert any(len(request.input_text) > 0 for request in product_model_access_gateway.embedding_requests)
+    assert all(len(request.input_text) <= max_chars for request in product_model_access_gateway.embedding_requests)
 
 
 def test_failing_note_degraded_to_zero_vector(monkeypatch) -> None:

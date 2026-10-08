@@ -31,6 +31,8 @@ Related docs:
   disables catalog promotion and fallback. A model descriptor's
   `explicit_eval_transports` adds admission only for that explicit eval request;
   ordinary `allowed_transports` and their existing refusal/selection stay unchanged.
+  The Mac portal's no-inference preflight must bind that exact transport; a different
+  host transport is rejected before completion rather than silently substituted.
   Measured classification invocation and usage/cost evidence are defined in `docs/eval.md`.
 - **Routes/Providers**: A route selects a provider + model. Providers are identified by string values
   (`mock`, `ollama`, `openai`, `deepseek`, etc.).

@@ -70,6 +70,9 @@ providers:
       - id: nomic-embed-text:latest
         effective_identity: ollama/nomic-embed-text:latest
         capabilities: {embedding_dimensions: 768}
+      - id: bge-m3:latest
+        effective_identity: ollama/bge-m3:latest
+        capabilities: {embedding_dimensions: 1024}
   - id: openai
     kinds: [chat]
     tier: paid

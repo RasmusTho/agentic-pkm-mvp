@@ -71,7 +71,7 @@ def test_no_compatible_route_fails_loud(clean_llm_env, cloud_primary_routing) ->
 
 
 def test_legacy_route_projection_and_enforcement_compatibility(
-    clean_llm_env, cloud_primary_routing
+    clean_llm_env, cloud_primary_routing, product_model_access_gateway
 ) -> None:
     clean_llm_env.setenv("LLM_PROVIDER", "ollama")
     clean_llm_env.setenv("LLM_PROVIDER_ENFORCE", "1")
@@ -88,17 +88,18 @@ def test_legacy_route_projection_and_enforcement_compatibility(
 
 
 def test_deepseek_legacy_route_projects_to_declared_adapter(
-    monkeypatch: pytest.MonkeyPatch, clean_llm_env
+    monkeypatch: pytest.MonkeyPatch,
+    clean_llm_env,
+    product_model_access_gateway,
 ) -> None:
     from app.components.llm.fabric import get_chat_client_for_route
     from app.components.llm.router import LLMRoute
     from app.components.llm import fabric
 
-    captured = {}
     monkeypatch.setattr(
         fabric,
         "call_llm",
-        lambda name, pack, **kwargs: captured.update(kwargs) or "deepseek response",
+        lambda *_args, **_kwargs: pytest.fail("Product called a local provider adapter"),
     )
     selected = LLMRoute(
         provider="deepseek",
@@ -113,6 +114,6 @@ def test_deepseek_legacy_route_projects_to_declared_adapter(
 
     assert client.model_access_route is not None
     assert client.model_access_route.transport_id == "deepseek_api"
-    assert client.chat("qa", {"system": "", "user": "hello"}) == "deepseek response"
-    assert captured["provider_override"] == "deepseek"
-    assert captured["model_override"] == "deepseek-chat"
+    assert client.chat("qa", {"system": "", "user": "hello"}) == "fixture Product answer"
+    assert product_model_access_gateway.preflight_requests[-1].provider == "deepseek"
+    assert product_model_access_gateway.completion_requests[-1].model == "deepseek-chat"

@@ -24,7 +24,7 @@ from uuid import uuid4
 import pytest
 
 from app.agents.panel.filters import strip_ai_panels
-from app.components.embeddings import EmbeddingIdentity
+from app.components.embeddings import EmbeddingIdentity, resolve_embedding_identity
 from app.index.artifact_metadata import canonicalize_indexable_text, compute_content_hash
 from app.ingest.chunk_policy import CHUNK_POLICY_VERSION
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
@@ -439,20 +439,27 @@ Transient panel text.
         import importlib
 
         rebuild_module = importlib.import_module("app.cli.index_rebuild")
-        resolved_client = rebuild_module.get_embedding_client(profile="default")
         embedded_texts: list[str] = []
 
         class CapturingClient:
-            identity = resolved_client.identity
+            identity = resolve_embedding_identity(profile="default")
 
             def embed_text(self, text: str) -> list[float]:
                 embedded_texts.append(text)
-                return resolved_client.embed_text(text)
+                return [0.125] * self.identity.dim
+
+            def close(self) -> None:
+                return None
 
         monkeypatch.setattr(
             rebuild_module,
-            "get_embedding_client",
-            lambda *, profile="default": CapturingClient(),
+            "get_product_embedding_client",
+            lambda **_kwargs: CapturingClient(),
+        )
+        from app.index import doctor as doctor_mod
+
+        monkeypatch.setattr(
+            doctor_mod, "get_embeddings_client", lambda _intent: CapturingClient()
         )
 
         runner = CliRunner()
@@ -740,16 +747,18 @@ def test_reconcile_reclassifies_source_update_before_conditional_purge(
 
         rebuild_module = importlib.import_module("app.cli.index_rebuild")
         original_resolve = rebuild_module._reconcile_object_payload
-        resolved_client = rebuild_module.get_embedding_client(profile="default")
         embedded_texts: list[str] = []
         raced = False
 
         class CapturingClient:
-            identity = resolved_client.identity
+            identity = resolve_embedding_identity(profile="default")
 
             def embed_text(self, text: str) -> list[float]:
                 embedded_texts.append(text)
-                return resolved_client.embed_text(text)
+                return [0.125] * self.identity.dim
+
+            def close(self) -> None:
+                return None
 
         def update_after_stale_read(object_id, vector_payload):
             nonlocal raced
@@ -772,8 +781,13 @@ def test_reconcile_reclassifies_source_update_before_conditional_purge(
         monkeypatch.setattr(rebuild_module, "_reconcile_object_payload", update_after_stale_read)
         monkeypatch.setattr(
             rebuild_module,
-            "get_embedding_client",
-            lambda *, profile="default": CapturingClient(),
+            "get_product_embedding_client",
+            lambda **_kwargs: CapturingClient(),
+        )
+        from app.index import doctor as doctor_mod
+
+        monkeypatch.setattr(
+            doctor_mod, "get_embeddings_client", lambda _intent: CapturingClient()
         )
 
         result = CliRunner().invoke(

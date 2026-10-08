@@ -206,7 +206,7 @@ registered API model, provide an authorized key through the environment (never
 put the key in command arguments or receipts), then run:
 
 ```bash
-EVAL_LLM_MODE=run EVAL_LLM_MODEL=gpt-5.6-luna \
+EVAL_LLM_MODE=run EVAL_LLM_MODEL=gpt-5.6-terra \
 EVAL_LLM_TRANSPORT=openai_api EVAL_LLM_BASE_URL=https://api.openai.com/v1 \
 python -m app.eval.live_classification
 ```
@@ -217,9 +217,11 @@ OpenAI API endpoint so a compatible proxy cannot inherit OpenAI billing claims.
 It binds one registry model and the explicit transport through the Product facade
 for every golden case; active conflicting force/enforcement settings, unknown
 models, and unadmitted transports fail before inference. Catalog promotion and
-model/transport fallback are disabled. Normal Product routes retain their existing
-behavior: implicit GPT-5.6 Luna selection still uses `codex_cli_tailscale`, while
-explicit evaluation may use `openai_api`. Terra and Sol are registered API targets.
+model/transport fallback are disabled. The Mac portal's no-inference preflight
+must confirm the requested transport exactly; a different host-selected
+transport fails before inference. Normal Product routes retain their existing
+behavior: implicit GPT-5.6 Luna selection still uses `codex_cli_tailscale`.
+Terra and Sol are registered API targets for measured OpenAI API evaluation.
 
 The command emits `classification_live_run.v1` JSON containing the requested route,
 observed model identities (the same alias or its dated snapshot), UTC timestamp,
