@@ -307,6 +307,7 @@ def apply_publication_plan(
         normalized["repository"],
         normalized["git"]["branch"],
     )
+    _require_bound_existing_remote(normalized, remote_head, commit_sha)
     reconciled = local_state == "committed"
     existing = _resolve_pr_history(normalized, prs, commit_sha)
     if existing is not None:
@@ -329,7 +330,8 @@ def apply_publication_plan(
         state_before_stage, _ = _observe_local_state(runner, worktree, normalized)
         if state_before_stage not in {"uncommitted", "staged"}:
             raise PublicationRefusal("drift", "local state changed before staging")
-        stage = runner.run(["git", "add", "--", *normalized["git"]["intended_paths"]], cwd=worktree)
+        dirty_paths = normalized["git"].get("dirty_paths", normalized["git"]["intended_paths"])
+        stage = runner.run(["git", "add", "--", *dirty_paths], cwd=worktree)
         if stage.returncode != 0:
             raise PublicationCommandError(stage)
         _assert_staged_plan(runner, worktree, normalized)
@@ -1380,7 +1382,17 @@ def _transition_readback(
         plan["repository"],
         plan["git"]["branch"],
     )
+    _require_bound_existing_remote(plan, remote_head, commit_sha)
     return authority, remote_head, prs
+
+
+def _require_bound_existing_remote(
+    plan: Mapping[str, Any], remote_head: str | None, commit_sha: str | None
+) -> None:
+    if plan["pr"].get("existing") and (
+        remote_head is None or remote_head not in {plan["git"]["remote_head"], commit_sha}
+    ):
+        raise PublicationRefusal("unknown", "existing PR remote head is missing or outside its bound update states")
 
 
 def _resolve_pr_history(

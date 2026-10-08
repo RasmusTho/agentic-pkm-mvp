@@ -1438,7 +1438,7 @@ def test_resumed_history_scope_uses_real_git_including_reverted_paths(tmp_path: 
         build_publication_plan(_request(repo), executor=GitHubFakeExecutor())
 
 
-@pytest.mark.parametrize("failure", ["missing", "body-drift", "remote-drift", "closed"])
+@pytest.mark.parametrize("failure", ["missing", "body-drift", "remote-drift", "remote-missing", "closed"])
 def test_existing_update_revalidates_before_any_effect(tmp_path: Path, failure: str) -> None:
     (tmp_path / "feature.txt").write_text("new content\n")
     runner = FakeExecutor(tmp_path)
@@ -1456,6 +1456,8 @@ def test_existing_update_revalidates_before_any_effect(tmp_path: Path, failure: 
         runner.prs[0]["body"] += "\nUnplanned metadata."
     elif failure == "closed":
         runner.prs[0]["state"] = "closed"
+    elif failure == "remote-missing":
+        runner.remote_head = None
     else:
         runner.remote_head = CONFLICT_SHA
     before = len(runner.calls)
@@ -1463,7 +1465,7 @@ def test_existing_update_revalidates_before_any_effect(tmp_path: Path, failure: 
         apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=runner)
     assert not any(
         call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")}
-        or _is_gh_api_call(call, "PATCH")
+        or _is_gh_api_call(call, "PATCH") or _is_gh_api_call(call, "POST")
         for call in runner.calls[before:]
     )
 
@@ -1496,3 +1498,91 @@ def test_existing_update_reconciles_only_exact_metadata_after_error(
             apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=runner)
     assert sum(_is_gh_api_call(call, "PATCH") for call in runner.calls) == 1
     assert not any(call[:3] == ("gh", "pr", "create") for call in runner.calls)
+
+
+class LocalGitPublicationExecutor(GitHubFakeExecutor):
+    """Run real local Git effects; double only GitHub and separately tested gates."""
+
+    def __init__(self, remote: Path) -> None:
+        super().__init__()
+        self.remote = remote
+        self.prs: list[dict[str, object]] = []
+
+    def run(self, argv: Sequence[str], *, cwd: Path, input_text: str | None = None) -> CommandResult:
+        args = tuple(argv)
+        if any(part.endswith(("scripts/agent_workspace_preflight.sh", "scripts/review_before_ci_gate.py")) for part in args):
+            self.calls.append(args)
+            return CommandResult(args, 0, '{"ok":true}\n', "")
+        if _is_gh_api_call(args, "GET") and args[6].endswith("/pulls"):
+            self.calls.append(args)
+            return CommandResult(args, 0, json.dumps(self.prs), "")
+        if _is_gh_api_call(args, "POST") and args[6].endswith("/git/refs"):
+            self.calls.append(args)
+            ref = next(part.removeprefix("ref=") for part in args if part.startswith("ref="))
+            sha = next(part.removeprefix("sha=") for part in args if part.startswith("sha="))
+            _run("git", "--git-dir", str(self.remote), "update-ref", ref, sha, "0" * 40, cwd=cwd)
+            return CommandResult(args, 0, "{}", "")
+        if args[:3] == ("gh", "pr", "create"):
+            self.calls.append(args)
+            self.prs = [{
+                "number": 6000, "state": "open", "merged_at": None,
+                "title": args[args.index("--title") + 1], "body": args[args.index("--body") + 1],
+                "base": {"ref": "main", "sha": _run("git", "rev-parse", "origin/main", cwd=cwd).strip(), "repo": {"full_name": REPOSITORY}},
+                "head": {"ref": BRANCH, "sha": _run("git", "rev-parse", "HEAD", cwd=cwd).strip(), "repo": {"full_name": REPOSITORY}},
+            }]
+            return CommandResult(args, 0, "https://github.com/RasmusTho/agentic-pkm-mvp/pull/6000\n", "")
+        return super().run(argv, cwd=cwd, input_text=input_text)
+
+
+def _local_publication_repo(tmp_path: Path) -> tuple[Path, Path]:
+    remote = tmp_path / "remote.git"
+    repo = tmp_path / "repo"
+    _run("git", "init", "--bare", "--initial-branch=main", str(remote), cwd=tmp_path)
+    _run("git", "init", "--initial-branch=main", str(repo), cwd=tmp_path)
+    _run("git", "config", "user.email", "test@example.com", cwd=repo)
+    _run("git", "config", "user.name", "Test User", cwd=repo)
+    (repo / "feature.txt").write_text("base\n")
+    _run("git", "add", "feature.txt", cwd=repo)
+    _run("git", "commit", "-m", "base", cwd=repo)
+    _run("git", "remote", "add", "origin", str(remote), cwd=repo)
+    _run("git", "push", "origin", "main", cwd=repo)
+    _run("git", "checkout", "-b", BRANCH, cwd=repo)
+    return repo, remote
+
+
+def test_resumed_publication_stages_only_dirty_paths_with_retired_history(tmp_path: Path) -> None:
+    repo, remote = _local_publication_repo(tmp_path)
+    (repo / "retired.txt").write_text("temporary in-scope history\n")
+    _run("git", "add", "retired.txt", cwd=repo)
+    _run("git", "commit", "-m", "add bounded historical file", cwd=repo)
+    _run("git", "rm", "retired.txt", cwd=repo)
+    _run("git", "commit", "-m", "retire bounded historical file", cwd=repo)
+    prior_head = _run("git", "rev-parse", "HEAD", cwd=repo).strip()
+    (repo / "feature.txt").write_text("additive update\n")
+    executor = LocalGitPublicationExecutor(remote)
+    request = replace(_request(repo), intended_paths=("feature.txt", "retired.txt"))
+    plan = build_publication_plan(request, executor=executor)
+    assert plan["git"]["dirty_paths"] == ["feature.txt"]
+    assert plan["git"]["intended_paths"] == ["feature.txt", "retired.txt"]
+    receipt = apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=executor)
+    assert _run("git", "rev-parse", "HEAD^", cwd=repo).strip() == prior_head
+    assert receipt["commit_sha"] == _run("git", "rev-parse", "HEAD", cwd=repo).strip()
+    assert [call for call in executor.calls if call[:2] == ("git", "add")] == [("git", "add", "--", "feature.txt")]
+    assert not (repo / "retired.txt").exists()
+    assert _run("git", "status", "--short", cwd=repo) == ""
+
+
+def test_clean_resumed_publication_uses_exact_existing_commit(tmp_path: Path) -> None:
+    repo, remote = _local_publication_repo(tmp_path)
+    (repo / "feature.txt").write_text("bounded candidate\n")
+    _run("git", "add", "feature.txt", cwd=repo)
+    _run("git", "commit", "-m", "bounded existing commit", cwd=repo)
+    prior_head = _run("git", "rev-parse", "HEAD", cwd=repo).strip()
+    executor = LocalGitPublicationExecutor(remote)
+    plan = build_publication_plan(_request(repo), executor=executor)
+    assert plan["git"]["dirty_paths"] == []
+    receipt = apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=executor)
+    assert receipt["commit_sha"] == prior_head
+    assert _run("git", "rev-parse", "HEAD", cwd=repo).strip() == prior_head
+    assert not any(call[:2] in {("git", "add"), ("git", "commit")} for call in executor.calls)
+    assert _run("git", "ls-remote", "--heads", "origin", f"refs/heads/{BRANCH}", cwd=repo).split()[0] == prior_head
