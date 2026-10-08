@@ -460,12 +460,14 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "census's own directly-related-repair convention when #3451 bound "
         "write_frontmatter to the exact NoteRead version."
     ),
-    ("app/vault/manager.py", 949): (
+    ("app/vault/manager.py", 959): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
         "reaching this line. Line drifted 716 -> 841 -> 843 -> 924 -> 928 -> 934 -> 940 -> 944 (site unchanged) when "
-        "#3452 added conflict-quarantine receipt policy above the manager."
+        "#3452 added conflict-quarantine receipt policy above the manager. "
+        "Current main has the same site at line 949; #5846 adds ten lines above "
+        "the method, moving it to 959."
     ),
     ("app/vault/settings_service.py", 629): (
         "guarded: SettingsService.update_setting asserts "
@@ -498,12 +500,13 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 # closed so moving a write from ``write_frontmatter`` cannot make it disappear
 # from the WriteGuard inventory.
 WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/vault/manager.py", 729): (
+    ("app/vault/manager.py", 739): (
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
         "pre-selection initialization transition; O_EXCL preserves existing owner files. "
         "Line drifted 496 -> 621 -> 623 -> 704 -> 714 -> 720 (site unchanged) when #3164 added the "
         "nested canonical prompt seed, #3452 added conflict-quarantine receipt policy, and "
-        "SETTINGS-05C added the activation seam above the manager."
+        "SETTINGS-05C added the activation seam above the manager. Current main has the same "
+        "site at line 729; #5846 adds ten lines above it, moving it to 739."
     ),
     ("app/vault/settings_service.py", 708): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
