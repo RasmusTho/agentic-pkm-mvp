@@ -2603,12 +2603,17 @@ class OwnershipLedger:
                     f"path:{ancestor}" for ancestor in resolved.parents
                 }
                 owner_ancestors = set(owner.ancestor_identities)
-                # The host inventory is authoritative for the current
-                # path-bound ancestry is consistency evidence only. A
-                # schema-v1 lease must authenticate its stored chain as the
-                # host-captured v1 inode chain or a locally recomputable
-                # complete/portable v1 segment; path-only evidence is not a
-                # migration authority.
+                # The host inventory is authoritative for current path-bound
+                # ancestry. Accept this representation only when the v1 lease
+                # contains the complete HMAC set for every canonical ancestor
+                # in that proof-bound inventory; a subset or altered chain is
+                # not migration authority.
+                path_chain_match = (
+                    owner_ancestors == expected_ancestors
+                    and len(owner.ancestor_identities) == len(expected_ancestors)
+                    and len(lease.ancestor_fingerprints) == len(expected_ancestors)
+                    and self._matches_host_validated_identity(lease, owner, key)
+                )
                 legacy_chain_match = self._matches_host_validated_legacy_ancestors(
                     lease, owner, key
                 )
@@ -2624,7 +2629,7 @@ class OwnershipLedger:
                     local_chain_match = False
                 if owner_ancestors != expected_ancestors and not local_chain_match:
                     return False
-                if not (legacy_chain_match or local_chain_match):
+                if not (path_chain_match or legacy_chain_match or local_chain_match):
                     return False
                 return (
                     sealed_root_text == str(resolved)
