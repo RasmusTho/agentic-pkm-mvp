@@ -21,6 +21,8 @@ from app.model_access.remote_contract import (
     CompletionRequest,
     CompletionResponse,
     CompletionRouteIdentity,
+    CompletionTokenUsage,
+    CompletionUsageMetadata,
     PreflightRequest,
     PreflightResponse,
     ProductCatalogRequest,
@@ -240,7 +242,9 @@ def test_remote_preflight_is_route_bound_and_single_request() -> None:
         assert "tailscale-app-capabilities" not in http_request.headers
         assert "authorization" not in http_request.headers
         sent = json.loads(http_request.content)
-        assert sent == request.model_dump(mode="json")
+        expected = request.model_dump(mode="json")
+        expected.pop("service_tier", None)
+        assert sent == expected
         assert "trusted_instructions" not in sent
         assert "user_input" not in sent
         response = PreflightResponse(
@@ -527,6 +531,7 @@ def test_product_transport_sends_only_logical_provider_and_model() -> None:
         sent = json.loads(http_request.content)
         assert "transport_id" not in sent
         assert "catalog_snapshot_ref" not in sent
+        assert "service_tier" not in sent
         if http_request.url.path.endswith("/preflight"):
             assert str(http_request.url) == ENDPOINT + "/v1/product/preflight"
             return httpx.Response(
@@ -538,9 +543,20 @@ def test_product_transport_sends_only_logical_provider_and_model() -> None:
         assert str(http_request.url) == ENDPOINT + "/v1/product/complete"
         return httpx.Response(
             200,
-            json=CompletionResponse(route=host_route, content="hello").model_dump(
-                mode="json"
-            ),
+            json=CompletionResponse(
+                route=host_route,
+                content="hello",
+                usage=CompletionUsageMetadata(
+                    model="gpt-6-luna-2026-10-08",
+                    service_tier="default",
+                    usage=CompletionTokenUsage(
+                        prompt_tokens=100,
+                        completion_tokens=20,
+                        total_tokens=120,
+                        prompt_tokens_details={"cached_tokens": 10},
+                    ),
+                ),
+            ).model_dump(mode="json"),
         )
 
     transport = CodexRemoteTransport(
@@ -556,6 +572,10 @@ def test_product_transport_sends_only_logical_provider_and_model() -> None:
     assert preflight.route == host_route
     assert completion.route == host_route
     assert completion.content == "hello"
+    assert completion.usage is not None
+    assert completion.usage.model == "gpt-6-luna-2026-10-08"
+    assert completion.usage.usage is not None
+    assert completion.usage.usage.prompt_tokens_details.cached_tokens == 10
     assert len(calls) == 2
 
 

@@ -6,12 +6,14 @@ import uuid as _uuid
 from datetime import datetime, timezone
 from typing import Dict
 
-from app.components.embeddings import get_embedding_client, get_embedding_identity
+from app.components.embeddings import EmbeddingClientProtocol
+from app.components.llm.fabric import get_product_embedding_client
 from app.index.artifact_metadata import (
     build_indexed_unit_payload,
     canonicalize_indexable_text,
     canonicalize_indexed_text,
 )
+from app.index.embedding_identity import ensure_index_primary_identity
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.llm.fallback_orchestrator import embed_with_fallback
@@ -23,13 +25,10 @@ from app.stores import get_vector_index
 logger = logging.getLogger(__name__)
 
 
-def llm_embed_text(*, text: str, provider: str, model: str, dim: int, normalize: bool) -> list[float]:
-    client = get_embedding_client(override_provider=provider, override_model=model)
+def llm_embed_text(*, text: str, client: EmbeddingClientProtocol) -> list[float]:
     vector = client.embed_text(text)
-    if len(vector) != dim:
-        raise ValueError(f"expected {dim} got {len(vector)}")
-    if normalize:
-        return list(vector)
+    if len(vector) != client.identity.dim:
+        raise ValueError(f"expected {client.identity.dim} got {len(vector)}")
     return list(vector)
 
 
@@ -182,23 +181,23 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         )
         return
 
-    identity = get_embedding_identity()
+    embedding_client = get_product_embedding_client()
+    identity = embedding_client.identity
+    vector_index = get_vector_index()
     actual_identity = identity
     embedding: list[float] | None = None
     actual_dim: int | None = None
     is_fallback = False
 
     try:
+        ensure_index_primary_identity(vector_index, identity)
         embedding, actual_identity, is_fallback = embed_with_fallback(
             canonical_content,
             primary_identity=identity,
             object_id=object_uuid,
             primary_embed_callable=lambda: llm_embed_text(
                 text=canonical_content,
-                provider=identity.provider,
-                model=identity.model,
-                dim=identity.dim,
-                normalize=identity.normalize,
+                client=embedding_client,
             ),
         )
         actual_dim = len(embedding)
@@ -228,14 +227,16 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
             error=str(exc),
         )
         return
+    finally:
+        close = getattr(embedding_client, "close", None)
+        if callable(close):
+            close()
 
-    vector_index = get_vector_index()
     model_name = actual_identity.model
 
     object_uuid_val = _uuid.UUID(object_uuid)
     with start_span("indexer.upsert", trace_id, {"kind": obj.get("kind") or "note"}):
         try:
-            vector_index.purge_vectors(object_uuid_val, view=DEFAULT_EMBEDDING_VIEW)
             upsert_kwargs = {
                 "kind": domain.kind,
                 "source_ref": domain.source_ref or "",

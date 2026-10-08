@@ -156,8 +156,18 @@ def _run_materialize(monkeypatch: pytest.MonkeyPatch, note_uuid: str, content: s
     """Drive the real T-materialize transition (`handle_ingest_object_created`)
     with only the embedding client/vector-index stubbed."""
     identity = SimpleNamespace(provider="ollama", model="nomic-embed-text:latest", dim=8, normalize=True)
+
+    class _EmbeddingClient:
+        def __init__(self) -> None:
+            self.identity = identity
+
+        def close(self) -> None:
+            return None
+
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: _NullVectorIndex())
-    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+    monkeypatch.setattr(
+        "app.services.indexer.get_product_embedding_client", _EmbeddingClient
+    )
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: None)
     monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: None)
 

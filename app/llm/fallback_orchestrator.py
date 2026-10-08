@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import os
 from enum import Enum
 from typing import Callable
 
-from app.components.embeddings import EmbeddingIdentity, get_embedding_client, get_embedding_identity
+from app.components.embeddings import EmbeddingIdentity, resolve_embedding_identity
+from app.components.llm.fabric import get_product_embedding_client_for_identity
 from app.llm.embed_queue import EmbedDeadLetterError, embed_with_retry
 from app.llm.embeddings import get_fallback_provider
 
@@ -14,18 +14,12 @@ logger = logging.getLogger(__name__)
 
 class FallbackGateResult(str, Enum):
     AVAILABLE = "AVAILABLE"
-    NO_KEY = "NO_KEY"
     NO_FALLBACK_CONFIGURED = "NO_FALLBACK_CONFIGURED"
     DIM_MISMATCH = "DIM_MISMATCH"
 
 
-def _has_gemini_api_key() -> bool:
-    return bool(os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip())
-
-
 def _resolve_fallback_identity(provider: str) -> EmbeddingIdentity:
-    client = get_embedding_client(override_provider=provider)
-    return get_embedding_identity(client=client)
+    return resolve_embedding_identity(override_provider=provider)
 
 
 def _checked_embed(embed_callable: Callable[[], list[float]], *, identity: EmbeddingIdentity) -> list[float]:
@@ -39,8 +33,6 @@ def evaluate_fallback_gate(primary_dim: int) -> FallbackGateResult:
     provider = get_fallback_provider()
     if provider != "gemini":
         return FallbackGateResult.NO_FALLBACK_CONFIGURED
-    if not _has_gemini_api_key():
-        return FallbackGateResult.NO_KEY
     fallback_identity = _resolve_fallback_identity(provider)
     if fallback_identity.dim != primary_dim:
         return FallbackGateResult.DIM_MISMATCH
@@ -66,6 +58,8 @@ def embed_with_fallback(
         )
         return vector, primary_identity, False
     except EmbedDeadLetterError as primary_exc:
+        if primary_exc.indeterminate:
+            raise
         provider = get_fallback_provider()
         gate = evaluate_fallback_gate(primary_identity.dim)
         if gate is not FallbackGateResult.AVAILABLE or provider != "gemini":
@@ -86,13 +80,14 @@ def embed_with_fallback(
                 )
             raise EmbedDeadLetterError(f"{primary_exc}; fallback gate={gate.value}") from primary_exc
 
-        fallback_client = get_embedding_client(override_provider=provider)
-        fallback_identity = get_embedding_identity(client=fallback_client)
+        fallback_identity = _resolve_fallback_identity(provider)
+        fallback_client = get_product_embedding_client_for_identity(fallback_identity)
         logger.warning(
             "embed_with_fallback: primary exhausted, trying fallback provider=%s object_id=%s",
             fallback_identity.provider,
             object_id or "-",
         )
+        fallback_error: tuple[str, bool] | None = None
         try:
             vector = embed_with_retry(
                 text,
@@ -104,9 +99,20 @@ def embed_with_fallback(
                 ),
             )
         except Exception as fallback_exc:
+            fallback_error = (
+                str(fallback_exc),
+                bool(getattr(fallback_exc, "indeterminate", False)),
+            )
+        finally:
+            close = getattr(fallback_client, "close", None)
+            if callable(close):
+                close()
+        if fallback_error is not None:
+            detail, indeterminate = fallback_error
             raise EmbedDeadLetterError(
-                f"{primary_exc}; fallback provider={fallback_identity.provider} failed: {fallback_exc}"
-            ) from fallback_exc
+                f"{primary_exc}; fallback provider={fallback_identity.provider} failed: {detail}",
+                indeterminate=indeterminate,
+            )
         return vector, fallback_identity, True
 
 

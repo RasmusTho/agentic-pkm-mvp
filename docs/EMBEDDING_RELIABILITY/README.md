@@ -29,6 +29,14 @@ See [OPERATOR_EGRESS_DECISION.md](OPERATOR_EGRESS_DECISION.md). The operator cho
 - A fallback-written index is **mixed-identity** and must be reconciled by a re-index under the primary identity once Ollama recovers. Auto-fallback is a *bridge for ingest progress*, not a permanent split.
 - The Colima 4→8 GB local fix was evaluated and **not chosen** (it restarts the shared dev+prod VM); it is recorded as the rejected alternative, not executed.
 
+**Product portal qualification (ADR-0067).** The Ollama/Gemini decision above preserves the
+dimension, mixed-identity, and reconcile rules; it does not authorize a Product clone to call
+either provider directly. Product non-mock embeddings now go through the Mac Product API, which
+owns provider credentials. After a Product embedding request may have reached the host, the client
+must not retry or switch providers. A future Product fallback must be selected and capability-
+preflighted at the Mac before its one inference dispatch; local presence or absence of a Gemini key
+is not a Product route signal.
+
 ## Implementation tasks (execution order)
 
 Ordered, independently mergeable slices. `→` denotes a hard dependency.
@@ -52,7 +60,7 @@ These hold *across* tasks and name the partial-failure seams.
 - **CTI-1 — One steady-state identity per index.** At rest, every vector in an index shares one `EmbeddingIdentity (provider, model, dim, normalize)`. The dim guardrail (`EMBED_DIM=768`) is enforced for *every* provider (Ollama and Gemini) — a provider returning a non-768 vector fails that object (existing `assert_embed_dim` behavior), never silently resizes or mixes dims.
 - **CTI-2 — Fallback is non-terminal.** A Gemini-fallback write produces a vector tagged with the **Gemini identity**, which differs from the Ollama primary identity even at equal dim (nomic and gemini-embedding-001 occupy different vector spaces; cosine scores across them are meaningless). The index is therefore **mixed** after any fallback. A fallback write is recorded as **reconcilable**, not done. The seam: *task 5 may write a fallback vector that task 6 must later re-embed under the primary identity.* If task 6 never runs, retrieval over fallback-written notes is degraded — task 6 owns convergence and `index doctor` surfaces the drift loudly.
 - **CTI-3 — Query uses the primary identity.** The ASK/retrieval path always embeds the query with the **primary** identity, never the fallback. Fallback-written document vectors are knowingly-degraded matches until reconciled; this is acceptable as a temporary availability bridge and must be visible (doctor/preflight), never silent.
-- **CTI-4 — Secret-gated egress.** Gemini is available only when its key (`GEMINI_API_KEY` / `GOOGLE_API_KEY`) is present. Absent key ⇒ Gemini provider is unavailable ⇒ fallback is a no-op that surfaces `index.embedding.failed` for that object (never crashes the worker, never logs the key or note content beyond existing provenance fields). This keeps a local-only deployment fully viable.
+- **CTI-4 — Secret-gated egress.** Gemini credentials are available only to the authorized provider-execution boundary. Product clones do not read or carry `GEMINI_API_KEY` / `GOOGLE_API_KEY`; a missing Mac-side credential fails at the portal without caller-side provider egress. The worker surfaces `index.embedding.failed` for the affected object and continues without logging a key or note content beyond existing provenance fields.
 - **CTI-5 — Backpressure precedes fallback.** The queue exhausts bounded retry-with-backoff against the **primary** provider before declaring a primary failure and consulting fallback. Backoff (not just concurrency=1) is what lets a crashed Ollama runner reload between attempts. Fallback is the last resort, not the first retry.
 - **CTI-6 — No abort on single-object failure.** When neither primary (after retries) nor fallback can embed an object, the object is skipped/dead-lettered with `index.embedding.failed` and the ingest **continues**. The existing all-zero-batch fail-loud guard (`embed_texts`, #2190) is preserved: a *provider-wide* outage still fails loud rather than producing a semantically dead index.
 

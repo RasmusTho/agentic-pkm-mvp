@@ -48,11 +48,33 @@ def _is_transient_embed_error(exc: BaseException) -> bool:
     import is deferred to avoid the circular dependency
     embed_queue → outbox_worker → consumer → embed_queue; the logic is never duplicated.
     """
+    if _has_indeterminate_embed_error(exc):
+        return False
     for current in (exc, getattr(exc, "__cause__", None), getattr(exc, "__context__", None)):
         if current is not None and getattr(current, "is_transient", None) is True:
             return True
     from app.workers.outbox_worker import _is_transient_dispatch_error  # noqa: PLC0415
     return _is_transient_dispatch_error(exc)
+
+
+def _has_indeterminate_embed_error(exc: BaseException) -> bool:
+    """Find a sent-request uncertainty before transient causes can authorize replay."""
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if getattr(current, "indeterminate", False) is True:
+            return True
+        cause = getattr(current, "__cause__", None)
+        context = getattr(current, "__context__", None)
+        if cause is not None:
+            pending.append(cause)
+        if context is not None:
+            pending.append(context)
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +87,10 @@ class EmbedDeadLetterError(RuntimeError):
     Callers can catch this specifically to dead-letter the object and continue
     the ingest batch without inspecting exception strings.
     """
+
+    def __init__(self, message: str, *, indeterminate: bool = False) -> None:
+        self.indeterminate = indeterminate
+        super().__init__(message)
 
 
 # ---------------------------------------------------------------------------
@@ -179,11 +205,18 @@ def embed_with_retry(
     max_backoff = _get_max_backoff()
 
     last_exc: Exception | None = None
+    terminal_indeterminate = False
 
     for attempt in range(1, retry_max + 1):
         try:
             return _embed_once()
         except Exception as exc:
+            if _has_indeterminate_embed_error(exc):
+                # The request may already have reached a provider. Leave the except
+                # block before raising so its transient HTTP cause is not inherited
+                # by the terminal wrapper and rediscovered by the outbox classifier.
+                terminal_indeterminate = True
+                break
             if not _is_transient_embed_error(exc):
                 # Non-transient: re-raise immediately, no retry, no sleep.
                 raise
@@ -209,6 +242,12 @@ def embed_with_retry(
                     exc,
                     object_id or "-",
                 )
+
+    if terminal_indeterminate:
+        raise EmbedDeadLetterError(
+            "embedding execution outcome is indeterminate; request was not retried",
+            indeterminate=True,
+        )
 
     if dead_letter_on_exhaustion:
         raise EmbedDeadLetterError(

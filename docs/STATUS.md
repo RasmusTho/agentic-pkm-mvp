@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-08 (PR #5835 merge and deploy-selection evidence checked; the Issue #5828 candidate SHA and validation count corrected below; no host credentials, route settings, database, or deployment changed)
+Last reviewed: 2026-10-08 (PR #5835 merge/deploy-selection evidence and PR #5822 Model Access merge checked; PR #5838 repository evidence checked; no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -47,6 +47,12 @@ Codex CLI completion through the sole configured `ygg_vlan_primary` path, authen
 and pre-inference refusal of unsupported native tools. This is designated-host acceptance only;
 persistent Product routing and dev/test/prod rollout remain separate. Tailscale and Ollama were not
 used or required.
+Last verified against (MARR-13 Product client repository candidate): Issue #5820 and PR #5838
+candidate `e74d9d7ee4b9323df96a478d6207d23291a61b4e`; the Product gateway/fabric/provider/eval and
+Builder Model Inquiry boundary suite passed 234 tests on 2026-10-08. This is repository evidence
+only: no live provider call, Mac host setting/service change, embedding-index mutation, or deployment
+was performed. The designated Luna/Codex CLI receipt above remains the only live route acceptance;
+integrated Product chat/embedding host acceptance is still separate.
 
 ### TypeSafe System One repository support (2026-10-06)
 
@@ -74,7 +80,7 @@ Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md
 
 The owner decision recorded in [Issue #5618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5989039472) puts production in scope: Product chat/planning (`decide` and `plan`) should use the VLAN-only Model Access Router path to the Luna Codex CLI executor, with Ollama reserved for embeddings. This supersedes the 2026-10-04 note that production was excluded. It is the product outcome, not a finding that Luna is technically unsuitable. It does not qualify a production caller identity or replace the existing credential and release gates; live Product `llm_routing` settings remain the route authority.
 
-The additional owner decision in [Issue #5819](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5819) (2026-10-07) sets a broader target: the Mac mini is the portal for all registry-declared Product inference, including embeddings, while each clone or satellite selects its own model/profile through settings. This is not yet shipped or live. MARR-12 (#5821) extends provider egress/catalog support; MARR-13 (#5820) migrates Product callers and embeddings. Until both slices and integrated host acceptance pass, the only proven live route remains the designated Luna/Codex CLI acceptance, and embeddings remain on their existing path.
+The additional owner decision in [Issue #5819](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5819) (2026-10-07) sets a broader target: the Mac mini is the portal for all registry-declared Product inference, including embeddings, while each clone or satellite selects its own model/profile through settings. MARR-12 (#5821) delivered provider egress/catalog support in PR #5822 (merge commit `3330ca0d01d7fffdddc931569de3ac67eb387067`). MARR-13 (#5820; PR #5838) owns the Product caller and embedding migration. Repository implementation and merge are not live acceptance: the designated Luna/Codex CLI receipt above remains the only proven live route, and Product embedding use of the portal still requires integrated host verification.
 
 The current single-operator VLAN boundary uses mTLS at ingress and a loopback-only executor. No Tailscale path, per-release-channel credentials, or separate per-channel/action capability header is required. Ollama remains optional and is not a readiness prerequisite for routes that do not select it. Product and Builder policy resolvers and credential profiles remain separate. The accepted single-operator ingress risk and its multi-operator revisit condition are recorded in ADR-0067; no universal portal, Product caller migration, or production activation is inferred here.
 

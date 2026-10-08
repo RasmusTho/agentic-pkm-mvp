@@ -23,7 +23,9 @@ def _compiled_openai_bundle() -> SettingsBundle:
     )
 
 
-def test_registered_explain_and_execution_share_compiled_reasoning_route(monkeypatch) -> None:
+def test_registered_explain_and_execution_share_compiled_reasoning_route(
+    monkeypatch, product_model_access_gateway
+) -> None:
     bundle = _compiled_openai_bundle()
     monkeypatch.setattr(runtime, "get_settings_bundle", lambda: bundle)
     monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
@@ -45,7 +47,9 @@ def test_registered_explain_and_execution_share_compiled_reasoning_route(monkeyp
     assert (execution["provider"], execution["model"]) == (route.provider, route.model)
 
 
-def test_yggdrasil_reasoning_can_select_gpt_6_astra_through_model_registry(monkeypatch) -> None:
+def test_yggdrasil_reasoning_can_select_gpt_6_astra_through_model_registry(
+    monkeypatch, product_model_access_gateway
+) -> None:
     bundle = SettingsBundle(
         llm_routing=LLMRoutingSettings(
             default_reasoning=LLMRoutingSettings.TaskPolicy(
@@ -117,7 +121,9 @@ def test_force_override_explain_reports_its_real_origin(monkeypatch) -> None:
     assert (payload["provider"], payload["model"]) == ("openai", "gpt-4.1-mini")
 
 
-def test_reasoning_execution_failure_carries_the_selected_route(monkeypatch) -> None:
+def test_reasoning_execution_failure_carries_the_selected_route(
+    monkeypatch, product_model_access_gateway
+) -> None:
     bundle = _compiled_openai_bundle()
     monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
     monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)

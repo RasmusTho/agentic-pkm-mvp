@@ -139,9 +139,16 @@ class LLMRoutingSettings(BaseModel):
             default=None,
             description="Optional primary-target override for evaluation work.",
         )
+        default_embedding: "LLMRoutingSettings.RouteTarget | None" = Field(
+            default=None,
+            description="Optional primary-target override for embedding and retrieval work.",
+        )
         tasks: Dict[str, "LLMRoutingSettings.RouteTarget"] = Field(
             default_factory=dict,
-            description="Per-task primary-target overrides; each target must use a registry model_id.",
+            description=(
+                "Per-task primary-target overrides; chat tasks use chat model IDs and "
+                "the embed task uses an embedding model ID."
+            ),
         )
 
     default_provider: str | None = Field(

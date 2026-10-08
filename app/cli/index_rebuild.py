@@ -10,7 +10,8 @@ from uuid import UUID
 
 import click
 
-from app.components.embeddings import EmbeddingIdentity, get_embedding_client
+from app.components.embeddings import EmbeddingIdentity
+from app.components.llm.fabric import get_product_embedding_client
 from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.index.artifact_metadata import (
     build_indexed_unit_payload,
@@ -241,7 +242,7 @@ def rebuild(
         "backend": resolve_store_backend(),
     }
 
-    client = get_embedding_client(profile=profile, override_model=override_model)
+    client = get_product_embedding_client(profile=profile, override_model=override_model)
     identity = client.identity
     identity_info = _identity_summary(identity)
     summary["identity"] = identity_info
@@ -578,7 +579,7 @@ def reconcile(
     _prepare_failures_path(path)
     retry_limit = _resolve_max_retries(max_retries)
 
-    client = get_embedding_client(profile=profile)
+    client = get_product_embedding_client(profile=profile)
     primary = client.identity
     identity_info = _identity_summary(primary)
     summary["identity"] = identity_info

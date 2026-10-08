@@ -52,13 +52,16 @@ surfacing` and the write/version contract in
   ```bash
   PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q -m "eval"
   ```
-- Eval tests rely on a configured OpenAI-compatible endpoint (typically Ollama):
+- Eval tests use the shared Product model-access client and the Mac portal for non-mock
+  inference. The portal owns provider credentials, endpoints, and harness selection; Ollama
+  is optional, and Tailscale is not required:
   - `EVAL_LLM_MODE=run|skip` (default: `skip`)
-  - `EVAL_LLM_BASE_URL` (default: `http://127.0.0.1:11434/v1`)
-  - `EVAL_LLM_API_KEY` (default: `sk-local`)
-  - `EVAL_LLM_MODEL` (default: `llama3.1:8b`)
+  - `EVAL_LLM_MODEL` (required for `run`; a registry-backed Product chat model ID)
+  - `EVAL_LLM_TRANSPORT` (optional for general evals; an explicitly admitted Product transport)
 
-Implementation note: the eval harness configures `OPENAI_BASE_URL` / `OPENAI_API_KEY` for DeepEval/Ragas compatibility (see `app/eval/llm_client.py`).
+`EVAL_LLM_API_KEY`, `EVAL_LLM_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_BASE_URL` do not
+configure this client. DeepEval and Ragas use wrappers around the same Product client, not
+provider SDKs or local endpoints.
 
 ## Golden cases for ASK
 - Seed cases live in `docs/eval/ask_cases.yaml` plus `docs/eval/ask_cases_bilingual.yaml` (English + Swedish probes).
@@ -202,39 +205,38 @@ real without a live LLM. The gate runs in the `not pg` PR suite (named CI
 step "Intent-classification golden gate" in `.github/workflows/ci.yml`) via
 `tests/eval/test_classification_golden.py`. Live evaluation is opt-in and never part
 of the PR gate. To run the checked-in classification golden set against one exact
-registered API model, provide an authorized key through the environment (never
-put the key in command arguments or receipts), then run:
+registered API model through the Mac portal, select the exact transport, then run:
 
 ```bash
-EVAL_LLM_MODE=run EVAL_LLM_MODEL=gpt-5.6-luna \
-EVAL_LLM_TRANSPORT=openai_api EVAL_LLM_BASE_URL=https://api.openai.com/v1 \
+EVAL_LLM_MODE=run EVAL_LLM_MODEL=gpt-5.6-terra \
+EVAL_LLM_TRANSPORT=openai_api \
 python -m app.eval.live_classification
 ```
 
-`EVAL_LLM_API_KEY` takes precedence over `OPENAI_API_KEY`, including an explicitly
-empty value, which refuses the run. The measured command requires the official
-OpenAI API endpoint so a compatible proxy cannot inherit OpenAI billing claims.
-It binds one registry model and the explicit transport through the Product facade
-for every golden case; active conflicting force/enforcement settings, unknown
-models, and unadmitted transports fail before inference. Catalog promotion and
-model/transport fallback are disabled. Normal Product routes retain their existing
-behavior: implicit GPT-5.6 Luna selection still uses `codex_cli_tailscale`, while
-explicit evaluation may use `openai_api`. Terra and Sol are registered API targets.
+The measured command requires one registry model and explicit `openai_api` transport.
+Provider credentials and endpoint remain on the Mac portal; local API-key and endpoint
+variables are ignored. Active conflicting force/enforcement settings, unknown models, and
+unadmitted transports fail before inference. Catalog promotion and model/transport fallback
+are disabled. The Mac portal's no-inference preflight must confirm the requested transport
+exactly; a different host-selected transport fails before inference. Normal Product model
+selection remains settings-owned, and the portal resolves the current VLAN-backed harness.
+Terra and Sol are registered API targets for measured OpenAI API evaluation.
 
 The command emits `classification_live_run.v1` JSON containing the requested route,
 observed model identities (the same alias or its dated snapshot), UTC timestamp,
 golden-set path and SHA-256, expected/completed case counts, metrics, mutation-side
-hard-gate result, captured input/cached-input/output usage, and a Standard text-token
-cost estimate with dated registry price sources. It requests Standard service and
-`reasoning_effort=none`; cost is an estimate from reported token use, not an invoice.
+hard-gate result, captured input/cached-input/output usage, the host-attested dispatched
+reasoning effort, provider-reported service tier, and a Standard text-token cost
+estimate with dated registry price sources. It requests `reasoning_effort=none` and
+`service_tier=default`; cost is an estimate from reported token use, not an invoice.
 Prices must be reviewed before comparisons when their date or promotion window is
 no longer applicable. The GPT-5.6 prices were retrieved from each official model
 page on 2026-09-28; Sol's published promotional window runs at least through
 2026-11-21.
 
-A provider failure stops further requests. Missing/malformed usage, mismatched
-model identity, non-Standard service, unsupported cache-write/audio billing,
-requests above 272,000 input tokens, or missing registered prices produce
+A provider failure stops further requests. Missing/malformed usage or execution-setting
+evidence, mismatched model identity, non-Standard service, unsupported cache-write/audio
+billing, requests above 272,000 input tokens, or missing registered prices produce
 `complete: false` and `cost: null`; missing usage never becomes zero cost. A complete
 run can still fail the mutation-side hard gate. Exit status is 0 only for complete
 runs passing that gate, 1 for incomplete or hard-gate-failing runs, and 2 for setup

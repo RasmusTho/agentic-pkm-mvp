@@ -14,6 +14,10 @@ from app.index.artifact_metadata import (
     canonicalize_indexed_text,
     extract_indexable_text,
 )
+from app.index.embedding_identity import (
+    IndexEmbeddingIdentityMismatch,
+    ensure_index_primary_identity,
+)
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.llm.fallback_orchestrator import embed_with_fallback
 from app.llm.embeddings import EMBED_MODEL
@@ -141,6 +145,7 @@ def process_event(evt: Dict[str, Any]) -> None:
     actual_identity = identity
     is_fallback = False
     try:
+        ensure_index_primary_identity(idx, identity)
         embedding, actual_identity, is_fallback = embed_with_fallback(
             text,
             primary_identity=identity,
@@ -158,8 +163,22 @@ def process_event(evt: Dict[str, Any]) -> None:
             error=str(exc),
         )
         return
+    except IndexEmbeddingIdentityMismatch as exc:
+        outbox_events.emit_index_embedding_failed(
+            object_id=obj_uuid,
+            trace_id=trace_id,
+            source_ref=str(obj.source_ref or ""),
+            provider=identity.provider,
+            model=identity.model,
+            expected_dim=identity.dim,
+            error=str(exc),
+        )
+        return
+    finally:
+        close = getattr(embedder, "close", None)
+        if callable(close):
+            close()
 
-    _purge_vectors(idx, obj_uuid)
     upsert_kwargs = {
         "kind": str(obj.kind or "note"),
         "source_ref": str(obj.source_ref or ""),

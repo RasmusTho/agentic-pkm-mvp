@@ -59,6 +59,19 @@ class CompletionRouteIdentity(_StrictModel):
             raise ValueError("catalog snapshot reference and hash must be supplied together")
         return self
 
+    def same_execution_target(self, other: "CompletionRouteIdentity") -> bool:
+        """Whether two receipts name the same provider/model/transport.
+
+        Catalog snapshots are execution provenance, not caller-selected Product
+        targets. The Mac may refresh a snapshot between its no-inference preflight
+        and completion; the completion response then carries the actual snapshot.
+        """
+        return (self.provider, self.model, self.transport_id) == (
+            other.provider,
+            other.model,
+            other.transport_id,
+        )
+
 
 class CompletionCapabilityIntent(_StrictModel):
     """Capabilities required by this single completion request."""
@@ -86,6 +99,7 @@ class ProductCompletionRequest(ProductModelTarget):
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
+    service_tier: Literal["default"] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent
     )
@@ -111,6 +125,7 @@ class ProductPreflightRequest(ProductModelTarget):
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
+    service_tier: Literal["default"] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent
     )
@@ -195,6 +210,7 @@ class CompletionRequest(_StrictModel):
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
+    service_tier: Literal["default"] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent
     )
@@ -209,6 +225,8 @@ class CompletionRequest(_StrictModel):
             raise ValueError("Codex CLI routes require an explicit reasoning effort")
         if self.route.transport_id == "ollama_http" and self.reasoning_effort is not None:
             raise ValueError("Ollama routes do not accept Codex reasoning effort")
+        if self.service_tier is not None and self.route.transport_id != "openai_api":
+            raise ValueError("service tier is supported only by OpenAI API routes")
         if self.capability_intent.structured_output != (self.output_schema is not None):
             raise ValueError("structured output intent must match the supplied schema")
         if self.capability_intent.max_output_tokens_required != (
@@ -225,6 +243,7 @@ class PreflightRequest(_StrictModel):
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
+    service_tier: Literal["default"] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent
     )
@@ -235,7 +254,43 @@ class PreflightRequest(_StrictModel):
             raise ValueError("Codex CLI preflight requires an explicit reasoning effort")
         if self.route.transport_id == "ollama_http" and self.reasoning_effort is not None:
             raise ValueError("Ollama preflight does not accept Codex reasoning effort")
+        if self.service_tier is not None and self.route.transport_id != "openai_api":
+            raise ValueError("service tier is supported only by OpenAI API routes")
         return self
+
+
+class CompletionPromptTokenDetails(_StrictModel):
+    """Whitelisted prompt-token details needed for usage evidence."""
+
+    cached_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    audio_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    cache_write_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    cache_creation_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+
+
+class CompletionTokenUsage(_StrictModel):
+    """Bounded token counts; excludes provider request/response content."""
+
+    prompt_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    completion_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    total_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    prompt_tokens_details: CompletionPromptTokenDetails | None = None
+
+
+class CompletionUsageMetadata(_StrictModel):
+    """Minimal provider billing evidence safe to cross the private portal."""
+
+    model: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+    )
+    service_tier: str | None = Field(
+        default=None,
+        max_length=32,
+        pattern=r"^[A-Za-z0-9_-]{1,32}$",
+    )
+    usage: CompletionTokenUsage | None = None
 
 
 class CompletionResponse(_StrictModel):
@@ -243,6 +298,10 @@ class CompletionResponse(_StrictModel):
 
     route: CompletionRouteIdentity
     content: str = Field(min_length=1, max_length=512_000)
+    dispatched_reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+    ] | None = None
+    usage: CompletionUsageMetadata | None = None
 
 
 class PreflightResponse(_StrictModel):

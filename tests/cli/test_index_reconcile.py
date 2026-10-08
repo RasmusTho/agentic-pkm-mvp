@@ -166,7 +166,10 @@ def _count_rows() -> int:
 
 
 def _install_client(monkeypatch, client) -> None:
-    monkeypatch.setattr(reconcile_mod, "get_embedding_client", lambda *a, **k: client)
+    monkeypatch.setattr(
+        reconcile_mod, "get_product_embedding_client", lambda **_kwargs: client
+    )
+    monkeypatch.setattr(doctor_mod, "get_embeddings_client", lambda _intent: client)
 
 
 PRIMARY_TUPLE = (PRIMARY.provider, PRIMARY.model, PRIMARY.dim, PRIMARY.normalize)

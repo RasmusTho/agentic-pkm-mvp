@@ -70,6 +70,9 @@ providers:
       - id: nomic-embed-text:latest
         effective_identity: ollama/nomic-embed-text:latest
         capabilities: {embedding_dimensions: 768}
+      - id: bge-m3:latest
+        effective_identity: ollama/bge-m3:latest
+        capabilities: {embedding_dimensions: 1024}
   - id: openai
     kinds: [chat]
     tier: paid
@@ -134,7 +137,7 @@ projections:
   - site: app/cli/health.py::_check_llm_providers
     providers: [mock, ollama, openai, deepseek]
   - site: docs/settings/models/registry.yaml::provider
-    providers: [mock, ollama, openai]
+    providers: [gemini, mock, ollama, openai]
   - site: docs/LLM.md::Providers (Current)
     providers: [mock, ollama, openai, deepseek]
 known_divergences: []

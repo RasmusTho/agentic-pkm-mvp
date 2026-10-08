@@ -248,12 +248,21 @@ def _stub_indexer_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:
     ``purge_vectors``+``upsert``, so a double-insert on redelivery would be
     caught by the vector-index snapshot leg. Only the network-bound embedding
     provider (``llm_embed_text``) and identity resolution are stubbed to a
-    fixed dim-8 vector so the harness needs no live embeddings client.
+    fixed dim-8 identity/vector so the harness needs no live model portal.
     """
     from app.services import indexer as indexer_module
 
     monkeypatch.setattr(indexer_module, "llm_embed_text", lambda **_: list(_STUB_VECTOR))
-    monkeypatch.setattr(indexer_module, "get_embedding_identity", lambda: _STUB_IDENTITY)
+
+    class _FakeProductEmbedder:
+        identity = _STUB_IDENTITY
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        indexer_module, "get_product_embedding_client", lambda: _FakeProductEmbedder()
+    )
 
 
 def _stub_consumer_embeddings(monkeypatch: pytest.MonkeyPatch) -> None:

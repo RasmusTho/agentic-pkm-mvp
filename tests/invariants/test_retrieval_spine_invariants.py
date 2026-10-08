@@ -30,11 +30,9 @@ from app.stores import get_vector_index, reset_store_backends
 @pytest.fixture(autouse=True)
 def _isolate_stores(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
-    # ADR-0059 D1 (#3405): the serving path now scores with each row's
-    # STORED vector instead of silently re-embedding every document with the
-    # live runtime identity, so this file's 8-dim seed vectors must match the
-    # dim the live query embedder resolves to (previously masked by the
-    # read-path re-embed this ADR removes).
+    # ADR-0059 D1 (#3405): the serving path scores with each row's STORED
+    # vector. Seed rows with the exact deterministic query identity so the
+    # read-path identity guard exercises freshness rather than a mismatch.
     monkeypatch.setenv("EMBED_DIM", "8")
     reset_store_backends()
     hybrid.get_store().set_documents([])
@@ -46,7 +44,9 @@ def _isolate_stores(monkeypatch: pytest.MonkeyPatch):
 
 
 def _upsert_doc(oid: UUID, title: str, text: str) -> None:
-    identity = EmbeddingIdentity(provider="mock", model="embed-test", dim=8, normalize=False)
+    identity = EmbeddingIdentity(
+        provider="mock", model="mock-embedding", dim=8, normalize=True
+    )
     get_vector_index().upsert(
         object_id=oid,
         kind="note",
@@ -155,6 +155,11 @@ def test_identity_converges(tmp_path, monkeypatch) -> None:
             base = float(len(text) % 7 + 1)
             return [base] * new_identity.dim
 
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(doctor_mod, "get_embeddings_client", lambda _intent: _StubClient())
+
     def _seed_row(dsn: str, identity: EmbeddingIdentity, *, text: str) -> str:
         # Writes store_vector_index directly, bypassing VectorIndex.upsert()'s
         # single-identity-per-write guardrail, so a mixed-identity index can be
@@ -229,7 +234,9 @@ def test_identity_converges(tmp_path, monkeypatch) -> None:
             "during migration was not surfaced as a loud doctor issue"
         )
 
-        monkeypatch.setattr(reconcile_mod, "get_embedding_client", lambda *a, **k: _StubClient())
+        monkeypatch.setattr(
+            reconcile_mod, "get_product_embedding_client", lambda **_kwargs: _StubClient()
+        )
         runner = CliRunner()
         result = runner.invoke(index_cli, ["reconcile", "--json"])
         assert result.exit_code == 0, result.output

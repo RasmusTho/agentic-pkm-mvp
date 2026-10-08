@@ -23,6 +23,20 @@ def _make_event(source_ref: str = "vault/path", trace_id: str | None = None) -> 
     }
 
 
+def _patch_embedding_client(monkeypatch, identity, vector=None):
+    class _Client:
+        def __init__(self) -> None:
+            self.identity = identity
+            self.vector = vector if vector is not None else [0.0] * identity.dim
+
+        def embed_text(self, _text: str) -> list[float]:
+            return list(self.vector)
+
+    client = _Client()
+    monkeypatch.setattr("app.services.indexer.get_product_embedding_client", lambda: client)
+    return client
+
+
 def test_uuid_only_legacy_event_resolves_retained_canonical_id(monkeypatch):
     vault_uuid = str(UUID(int=1))
     canonical_id = str(UUID(int=2))
@@ -85,7 +99,7 @@ def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: events.append(kwargs))
     monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: failures.append(kwargs))
-    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+    client = _patch_embedding_client(monkeypatch, identity)
 
     event = _make_event()
     with patch("app.services.indexer.llm_embed_text") as m_embed:
@@ -93,10 +107,7 @@ def test_handle_ingest_object_created_uses_shared_vector_index(monkeypatch):
         handle_ingest_object_created(event)
         m_embed.assert_called_once_with(
             text=event["content"],
-            provider=identity.provider,
-            model=identity.model,
-            dim=identity.dim,
-            normalize=identity.normalize,
+            client=client,
         )
 
     assert calls
@@ -121,6 +132,7 @@ def test_handle_ingest_object_created_emits_failure_event(monkeypatch):
     failures: list[dict] = []
 
     vector_index = MagicMock()
+    vector_index.get_identity.return_value = None
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: vector_index)
     vector_index.purge_vectors.return_value = 0
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: emitted.append(kwargs))
@@ -132,7 +144,7 @@ def test_handle_ingest_object_created_emits_failure_event(monkeypatch):
         dim=768,
         normalize=True,
     )
-    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+    _patch_embedding_client(monkeypatch, identity)
 
     with patch("app.services.indexer.llm_embed_text", side_effect=ValueError("expected 768 got 1536")):
         handle_ingest_object_created(_make_event())
@@ -157,7 +169,7 @@ def test_handle_ingest_object_created_replaces_vectors_on_update(monkeypatch):
     monkeypatch.setenv("EMBED_DIM", "4")
     reset_store_backends()
     identity = SimpleNamespace(provider="test", model="test-model", dim=4, normalize=True)
-    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+    _patch_embedding_client(monkeypatch, identity)
 
     embed_vectors = [[1, 0, 0, 0], [0, 1, 0, 0]]
 
@@ -188,11 +200,12 @@ def test_handle_ingest_object_created_replaces_vectors_on_update(monkeypatch):
     updated_event["content"] = "updated content"
     handle_ingest_object_created(updated_event)
 
-    assert len(purge_calls) == 2
-    assert purge_calls[0][2] == 0
-    assert purge_calls[1][2] == 1
+    assert purge_calls == []
     store = get_vector_index()
     assert len(store._entries) == 1
+    entry = store._entries[UUID(note_uuid)]
+    assert entry.payload["content"] == "updated content"
+    assert entry.embedding == [0.0, 1.0, 0.0, 0.0]
 
 
 def test_handle_ingest_object_created_preserves_source_and_indexes_canonical_bytes(monkeypatch):
@@ -209,7 +222,7 @@ def test_handle_ingest_object_created_preserves_source_and_indexes_canonical_byt
 
     identity = SimpleNamespace(provider="mock", model="mock-embedding", dim=3, normalize=True)
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
-    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+    _patch_embedding_client(monkeypatch, identity)
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: None)
     monkeypatch.setattr("app.services.indexer.emit_index_embedding_failed", lambda **kwargs: None)
 
@@ -262,7 +275,7 @@ def test_handle_ingest_object_created_does_not_recreate_panel_only_vector(monkey
 
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
     monkeypatch.setattr(
-        "app.services.indexer.get_embedding_identity",
+        "app.services.indexer.get_product_embedding_client",
         lambda: (_ for _ in ()).throw(
             AssertionError("panel-only source must not resolve an embedding identity")
         ),
@@ -295,7 +308,7 @@ def test_vault_event_preserves_explicitly_empty_canonical_body(monkeypatch):
 
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
     monkeypatch.setattr(
-        "app.services.indexer.get_embedding_identity",
+        "app.services.indexer.get_product_embedding_client",
         lambda: (_ for _ in ()).throw(
             AssertionError("empty canonical vault body must not be embedded")
         ),
@@ -334,7 +347,7 @@ def test_handle_ingest_object_created_uses_raw_text_fallback_bytes(monkeypatch):
 
     identity = SimpleNamespace(provider="mock", model="mock-embedding", dim=3, normalize=True)
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: DummyIndex())
-    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: identity)
+    _patch_embedding_client(monkeypatch, identity)
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: None)
 
     def fake_embed(**kwargs):

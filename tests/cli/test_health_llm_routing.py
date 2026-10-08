@@ -80,6 +80,28 @@ def test_health_route_inventory_uses_caller_capability_contracts(monkeypatch) ->
     assert policies["custom_text"]["intent"]["json_schema_required"] is False
 
 
+def test_health_policy_projects_product_model_to_declared_portal_transport(monkeypatch) -> None:
+    bundle = SettingsBundle(
+        llm_routing=LLMRoutingSettings(
+            tasks={
+                "qa": LLMRoutingSettings.TaskPolicy(
+                    primary=LLMRoutingSettings.RouteTarget(
+                        provider="openai", model="gpt-6-luna"
+                    )
+                )
+            }
+        )
+    )
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    monkeypatch.setattr(llm_config, "_ACTIVE_PROVIDER", None)
+
+    route = health_module._check_llm_router()["route_policies"]["qa"]["effective"]
+
+    assert route["provider"] == "openai"
+    assert route["model"] == "gpt-6-luna"
+    assert route["transport_id"] == "codex_cli_tailscale"
+
+
 def test_schema_backed_caller_cannot_report_text_only_health_as_green(monkeypatch) -> None:
     bundle = SettingsBundle(
         llm_routing=LLMRoutingSettings(
@@ -155,25 +177,35 @@ def test_health_route_projection_preserves_reasoning_effort(monkeypatch) -> None
     assert seen == {"provider": "openai", "reasoning_effort": "high"}
 
 
-def test_provider_env_check_accepts_openai_base_url(monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://api.example.invalid/v1")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.delenv("OPENAI_BASE", raising=False)
+def test_provider_env_check_uses_portal_without_local_credentials(monkeypatch) -> None:
+    class _Client:
+        model_access_route = SimpleNamespace(
+            provider="openai",
+            model="gpt-6-luna",
+            transport_id="codex_cli_tailscale",
+            preflight_status="passed",
+        )
 
-    result = health_module._provider_env_check("openai", "gpt-5.4-mini")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv(
+        "OPENAI_BASE_URL",
+        "https://operator:password@api.example.invalid/private?token=secret",
+    )
+    monkeypatch.setattr(
+        health_module,
+        "get_chat_client_for_route",
+        lambda *_args, **_kwargs: _Client(),
+    )
+
+    result = health_module._provider_env_check("openai", "gpt-6-luna")
 
     assert result["ok"] is True
-    assert result["status"] == "ok"
-
-
-def test_provider_env_check_openai_base_still_accepted(monkeypatch) -> None:
-    monkeypatch.setenv("OPENAI_BASE", "https://api.example.invalid/v1/chat/completions")
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
-
-    result = health_module._provider_env_check("openai", "gpt-5.4-mini")
-
-    assert result["ok"] is True
+    assert result["preflight_status"] == "passed"
+    assert "base_url" not in result
+    assert all(
+        secret not in repr(result)
+        for secret in ("operator", "password", "private", "token", "secret")
+    )
 
 
 def test_health_task_routes_fail_when_effective_model_missing(monkeypatch) -> None:
@@ -274,13 +306,9 @@ def test_llm_access_fails_closed_on_selected_route_preflight(monkeypatch) -> Non
         assert allow_catalog_promotion is False
         return _Client()
 
-    def _unexpected_ollama_probe(**_kwargs):
-        raise AssertionError("an unselected embedding Ollama route must not be probed")
-
     monkeypatch.setattr(
         health_module, "get_chat_client_for_route", _get_chat_client_for_route
     )
-    monkeypatch.setattr(health_module, "_check_ollama", _unexpected_ollama_probe)
 
     result = health_module._check_llm_access(
         {
@@ -446,46 +474,43 @@ def test_product_health_rejects_local_codex_cli_transport(monkeypatch) -> None:
     assert provider_env_checks == []
 
 
-def test_provider_env_check_only_exposes_endpoint_origin(monkeypatch) -> None:
-    endpoint = "https://operator:password@api.example.invalid/private/path?token=secret#fragment"
-    monkeypatch.setenv("OPENAI_BASE_URL", endpoint)
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+def test_selected_ollama_product_route_uses_portal_not_local_health(monkeypatch) -> None:
+    seen: list[object] = []
 
-    result = health_module._provider_env_check("openai", "gpt-5.4-mini")
+    class _Client:
+        model_access_route = SimpleNamespace(
+            provider="ollama",
+            model="llama3.1:8b",
+            transport_id="ollama_http",
+            preflight_status="passed",
+            capabilities=SimpleNamespace(),
+            degraded=False,
+        )
+        preflight_transport_observation = {
+            "status": "available",
+            "reason_code": "transport_reachable",
+        }
 
-    assert result["base_url"] == "https://api.example.invalid"
-    assert all(secret not in repr(result) for secret in ("operator", "password", "private", "token", "secret", "fragment"))
+        def chat(self, *_args, **_kwargs):
+            raise AssertionError("health must never dispatch inference")
 
+    def _get_chat_client_for_route(
+        intent, *, selected_route, allow_fallback, allow_catalog_promotion
+    ):
+        assert intent.task_kind == "health"
+        assert selected_route.provider == "ollama"
+        assert selected_route.model == "llama3.1:8b"
+        assert allow_fallback is False
+        assert allow_catalog_promotion is False
+        seen.append(selected_route)
+        return _Client()
 
-def test_deepseek_health_only_exposes_endpoint_origin(monkeypatch) -> None:
-    endpoint = "https://operator:password@api.example.invalid/private/path?token=secret#fragment"
-    monkeypatch.setenv("DEEPSEEK_BASE", endpoint)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
-
-    result = health_module._provider_env_check("deepseek", "deepseek-chat")
-
-    assert result["base_url"] == "https://api.example.invalid"
-    assert all(secret not in repr(result) for secret in ("operator", "password", "private", "token", "secret", "fragment"))
-
-
-def test_selected_ollama_route_is_probed_independent_of_legacy_provider(monkeypatch) -> None:
-    calls: list[str] = []
-
-    class _Response:
-        def raise_for_status(self) -> None:
-            pass
-
-        def json(self) -> dict[str, list[dict[str, str]]]:
-            return {"models": [{"name": "llama3.1:8b"}]}
-
-    def _get(url: str, *, timeout: float) -> _Response:
-        calls.append(url)
-        assert timeout == health_module._health_probe_timeout()
-        return _Response()
-
-    monkeypatch.setenv("LLM_PROVIDER", "mock")
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.local:11434")
-    monkeypatch.setattr(health_module.httpx, "get", _get)
+    monkeypatch.setattr(health_module, "get_chat_client_for_route", _get_chat_client_for_route)
+    monkeypatch.setattr(
+        health_module,
+        "_provider_env_check",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("local provider env must not be checked")),
+    )
 
     result = health_module._check_llm_access(
         {
@@ -512,24 +537,33 @@ def test_selected_ollama_route_is_probed_independent_of_legacy_provider(monkeypa
 
     assert result["ok"] is True
     assert set(result["capabilities"]) == {"text_generation"}
-    assert calls == ["http://ollama.local:11434/api/tags"]
+    assert len(seen) == 1
+    assert result["transport_observation"]["status"] == "available"
 
 
-def test_selected_ollama_route_fails_when_its_model_is_not_installed(monkeypatch) -> None:
-    class _Response:
-        def raise_for_status(self) -> None:
-            pass
+def test_selected_ollama_product_route_fails_when_portal_preflight_fails(monkeypatch) -> None:
+    class _Client:
+        model_access_route = SimpleNamespace(
+            provider="ollama",
+            model="llama3.1:8b",
+            transport_id="ollama_http",
+            preflight_status="failed",
+            capabilities=SimpleNamespace(),
+            degraded=False,
+        )
+        preflight_transport_observation = {
+            "status": "available",
+            "reason_code": "transport_reachable",
+        }
 
-        def json(self) -> dict[str, list[dict[str, str]]]:
-            return {"models": [{"name": "other-model:latest"}]}
+        def chat(self, *_args, **_kwargs):
+            raise AssertionError("health must never dispatch inference")
 
-    monkeypatch.setenv("OLLAMA_BASE_URL", "http://ollama.local:11434")
     monkeypatch.setattr(
-        health_module.httpx,
-        "get",
-        lambda *_args, **_kwargs: _Response(),
+        health_module,
+        "get_chat_client_for_route",
+        lambda *_args, **_kwargs: _Client(),
     )
-
     result = health_module._check_llm_access(
         {
             "route_policies": {

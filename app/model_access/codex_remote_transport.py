@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import math
 import ssl
 from typing import Any
 from urllib.parse import urlsplit
@@ -19,6 +20,8 @@ from app.model_access.remote_contract import (
     PreflightResponse,
     ProductCatalogRequest,
     ProductCompletionRequest,
+    ProductEmbeddingRequest,
+    ProductEmbeddingResponse,
     ProductPreflightRequest,
 )
 from app.model_access.product_judgment_contract import (
@@ -116,6 +119,15 @@ class RemoteCatalogError(RuntimeError):
 
     def __init__(self, code: str) -> None:
         self.code = code
+        super().__init__(code)
+
+
+class RemoteEmbeddingError(RuntimeError):
+    """Sanitized one-attempt embedding failure; sent requests are never retried."""
+
+    def __init__(self, code: str, *, indeterminate: bool = False) -> None:
+        self.code = code
+        self.indeterminate = indeterminate
         super().__init__(code)
 
 
@@ -289,6 +301,7 @@ class CodexRemoteTransport:
         self._product_preflight_url = api_root + "/v1/product/preflight"
         self._product_catalog_url = api_root + "/v1/product/catalog"
         self._product_complete_url = api_root + "/v1/product/complete"
+        self._product_embed_url = api_root + "/v1/product/embed"
         self._max_request_bytes = max_request_bytes
         self._max_response_bytes = max_response_bytes
         # HTTPX verifies TLS certificates by default; spell this out for the production
@@ -437,13 +450,20 @@ class CodexRemoteTransport:
             raise RemoteCatalogError("catalog_transport_mismatch")
         return result
 
+    def product_catalog(self, request: ProductCatalogRequest) -> CatalogResponse:
+        """Fetch a logical Product provider catalog through the Mac host."""
+        return self.catalog(request)
+
     def preflight(
         self, request: PreflightRequest | ProductPreflightRequest
     ) -> PreflightResponse:
         """Check one exact remote route through the no-inference operation."""
         try:
+            payload = request.model_dump(mode="json")
+            if payload.get("service_tier") is None:
+                payload.pop("service_tier", None)
             request_body = json.dumps(
-                request.model_dump(mode="json"),
+                payload,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 allow_nan=False,
@@ -568,12 +588,21 @@ class CodexRemoteTransport:
                 raise RemotePreflightError("preflight_route_mismatch")
         return result
 
+    def preflight_product(
+        self, request: ProductPreflightRequest
+    ) -> PreflightResponse:
+        """Run Product preflight without exposing host transport selection."""
+        return self.preflight(request)
+
     def complete(
         self, request: CompletionRequest | ProductCompletionRequest
     ) -> CompletionResponse:
         try:
+            payload = request.model_dump(mode="json")
+            if payload.get("service_tier") is None:
+                payload.pop("service_tier", None)
             request_body = json.dumps(
-                request.model_dump(mode="json"),
+                payload,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 allow_nan=False,
@@ -652,6 +681,13 @@ class CodexRemoteTransport:
                 )
             ):
                 raise RemoteCompletionError("executor_route_mismatch", indeterminate=True)
+        if (
+            request.service_tier is not None
+            and result.dispatched_reasoning_effort != request.reasoning_effort
+        ):
+            raise RemoteCompletionError(
+                "executor_reasoning_effort_mismatch", indeterminate=True
+            )
         try:
             content_bytes = result.content.encode("utf-8", errors="strict")
         except UnicodeEncodeError:
@@ -660,6 +696,78 @@ class CodexRemoteTransport:
             ) from None
         if not content_bytes or len(content_bytes) > self._max_response_bytes:
             raise RemoteCompletionError("executor_response_invalid", indeterminate=True)
+        return result
+
+    def embed_product(
+        self, request: ProductEmbeddingRequest
+    ) -> ProductEmbeddingResponse:
+        """Send one logical Product embedding request without retries or provider details."""
+        try:
+            request_body = json.dumps(
+                request.model_dump(mode="json"),
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError, UnicodeError):
+            raise RemoteEmbeddingError("embedding_request_invalid") from None
+        if len(request_body) > self._max_request_bytes:
+            raise RemoteEmbeddingError("embedding_request_too_large")
+
+        body = bytearray()
+        try:
+            with self._client.stream(
+                "POST",
+                self._product_embed_url,
+                content=request_body,
+                headers={"Content-Type": "application/json"},
+            ) as response:
+                if response.status_code != 200:
+                    # The host may have reached inference before returning an error.
+                    raise RemoteEmbeddingError(
+                        f"embedding_http_{response.status_code}", indeterminate=True
+                    )
+                for chunk in response.iter_bytes():
+                    if len(body) + len(chunk) > self._max_response_bytes:
+                        raise RemoteEmbeddingError(
+                            "embedding_response_too_large", indeterminate=True
+                        )
+                    body.extend(chunk)
+        except RemoteEmbeddingError:
+            raise
+        except Exception:
+            # Once the HTTP transport is entered, a lost response cannot authorize
+            # another path or provider attempt.
+            raise RemoteEmbeddingError(
+                "embedding_execution_indeterminate", indeterminate=True
+            ) from None
+
+        try:
+            value = json.loads(
+                bytes(body).decode("utf-8", errors="strict"),
+                object_pairs_hook=_strict_object_pairs,
+                parse_constant=_reject_json_constant,
+            )
+            if isinstance(value, dict) and isinstance(value.get("vector"), list):
+                # The wire format is a JSON array while the immutable contract
+                # stores vectors as tuples; convert only this declared field.
+                value = {**value, "vector": tuple(value["vector"])}
+            result = ProductEmbeddingResponse.model_validate(value)
+        except Exception:
+            raise RemoteEmbeddingError(
+                "embedding_response_invalid", indeterminate=True
+            ) from None
+
+        if (
+            result.route.provider != request.provider
+            or result.route.model != request.model
+            or result.dimensions != request.dimensions
+            or len(result.vector) != request.dimensions
+            or any(not math.isfinite(value) for value in result.vector)
+        ):
+            raise RemoteEmbeddingError(
+                "embedding_route_or_dimension_mismatch", indeterminate=True
+            )
         return result
 
     def close(self) -> None:
@@ -706,4 +814,5 @@ __all__ = [
     "RemoteCompletionError",
     "RemoteCatalogError",
     "RemotePreflightError",
+    "RemoteEmbeddingError",
 ]

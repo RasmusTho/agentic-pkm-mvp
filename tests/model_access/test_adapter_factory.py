@@ -104,6 +104,22 @@ def test_host_adapter_binding_selects_codex_cli_for_luna_model_family(
     assert factory.adapter_id_for("openai", "gpt-5.6-sol") == "openai_api"
 
 
+def test_bge_embedding_profile_has_registry_census_and_host_adapter_binding(
+    factory: ModelAccessAdapterFactory,
+) -> None:
+    assert (
+        factory.adapter_id_for("ollama", "bge-m3:latest", model_kind="embedding")
+        == "ollama_http"
+    )
+    descriptor = factory.describe(
+        "ollama_http",
+        provider="ollama",
+        model="bge-m3:latest",
+        model_kind="embedding",
+    )
+    assert descriptor.supported_capabilities.embedding_dimension == 1024
+
+
 def test_invalid_model_family_adapter_binding_fails_closed(tmp_path: Path) -> None:
     declarations_path = tmp_path / "adapters.yaml"
     declarations = yaml.safe_load(

@@ -8,6 +8,7 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import BaseModel, ConfigDict
 from fastapi.testclient import TestClient
 
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
@@ -24,6 +25,15 @@ _ROUTES = {
     "anthropic_api": ("anthropic", "claude-fable-5"),
     "deepseek_api": ("deepseek", "deepseek-chat"),
 }
+
+
+class _LegacyProductCompletionResponse(BaseModel):
+    """The strict route/content-only Product response contract on origin/main."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    route: remote_contract.CompletionRouteIdentity
+    content: str
 
 
 class _Codex:
@@ -125,6 +135,7 @@ def _payload(transport_id: str) -> dict[str, Any]:
         "provider": provider,
         "model": model,
         "reasoning_effort": None,
+        "service_tier": None,
         "capability_intent": {
             "structured_output": False,
             "native_tools": False,
@@ -171,6 +182,7 @@ def _preflight_payload(payload: dict[str, Any]) -> dict[str, Any]:
         "provider": payload["provider"],
         "model": payload["model"],
         "reasoning_effort": payload["reasoning_effort"],
+        "service_tier": payload["service_tier"],
         "capability_intent": payload["capability_intent"],
     }
 
@@ -214,6 +226,7 @@ def test_dispatches_exact_declared_route_without_caller_credentials() -> None:
             )
             assert response.status_code == 200
             assert response.json()["route"] == resolved_route
+            assert "dispatched_reasoning_effort" not in response.json()
             expected_content = (
                 "exact Anthropic route" if provider == "anthropic" else f"exact {provider} route"
             )
@@ -226,6 +239,169 @@ def test_dispatches_exact_declared_route_without_caller_credentials() -> None:
         request.headers.get("authorization") or request.headers.get("x-api-key")
         for request in dispatched
     )
+
+
+def test_product_openai_completion_exposes_only_bounded_usage_metadata() -> None:
+    private_marker = "provider-private-response-field"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-4.1-2026-10-08",
+                "service_tier": "default",
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 10,
+                        "audio_tokens": 0,
+                        "private": private_marker,
+                    },
+                    "provider_private": private_marker,
+                },
+                "provider_private": private_marker,
+                "choices": [
+                    {"message": {"role": "assistant", "content": "safe result"}}
+                ],
+            },
+        )
+
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    payload["service_tier"] = "default"
+    with _local_test_client(app) as client:
+        _bind_catalog_snapshot(client, payload)
+        completion = client.post("/v1/product/complete", json=payload)
+
+    assert completion.status_code == 200, completion.text
+    result = completion.json()
+    assert result["content"] == "safe result"
+    assert result["usage"] == {
+        "model": "gpt-4.1-2026-10-08",
+        "service_tier": "default",
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "prompt_tokens_details": {"cached_tokens": 10, "audio_tokens": 0},
+        },
+    }
+    assert private_marker not in completion.text
+
+
+def test_product_completion_without_usage_opt_in_is_baseline_wire_compatible() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        return httpx.Response(200, json=_api_response("openai"))
+
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    with _local_test_client(app) as client:
+        _bind_catalog_snapshot(client, payload)
+        completion = client.post("/v1/product/complete", json=payload)
+
+    assert completion.status_code == 200, completion.text
+    result = completion.json()
+    _LegacyProductCompletionResponse.model_validate(result)
+    assert set(result) == {"route", "content"}
+
+
+def test_nonreasoning_openai_route_omits_effort_and_sends_requested_tier() -> None:
+    sent: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        return httpx.Response(200, json=_api_response("openai"))
+
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    payload["service_tier"] = "default"
+    with _local_test_client(app) as client:
+        _bind_catalog_snapshot(client, payload)
+        preflight = client.post(
+            "/v1/product/preflight", json=_preflight_payload(payload)
+        )
+        completion = client.post("/v1/product/complete", json=payload)
+
+    assert preflight.status_code == 200, preflight.text
+    assert completion.status_code == 200, completion.text
+    provider_call = next(request for request in sent if request.method == "POST")
+    body = json.loads(provider_call.content)
+    assert body["model"] == "gpt-4.1"
+    assert body["service_tier"] == "default"
+    assert "reasoning_effort" not in body
+    assert completion.json().get("dispatched_reasoning_effort") is None
+
+
+def test_semantically_invalid_classification_keeps_portal_usage_for_unknown_safe_fail() -> None:
+    from app.eval.live_classification import _CLASSIFICATION_PROVIDER_OUTPUT_SCHEMA
+
+    sent: list[httpx.Request] = []
+    invalid_classification = (
+        '{"intent_class":"not-a-registered-class","action_type":null,"rationale":null}'
+    )
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        body = json.loads(request.content)
+        assert (
+            body["response_format"]["json_schema"]["schema"]
+            == _CLASSIFICATION_PROVIDER_OUTPUT_SCHEMA
+        )
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-5.6-sol-2026-10-08",
+                "service_tier": "default",
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                    "prompt_tokens_details": {"cached_tokens": 10},
+                },
+                "choices": [
+                    {"message": {"role": "assistant", "content": invalid_classification}}
+                ],
+            },
+        )
+
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    payload.update(
+        {
+            "model": "gpt-5.6-sol",
+            "reasoning_effort": "none",
+            "service_tier": "default",
+            "capability_intent": {
+                **payload["capability_intent"],
+                "structured_output": True,
+            },
+            "output_schema": _CLASSIFICATION_PROVIDER_OUTPUT_SCHEMA,
+        }
+    )
+    with _local_test_client(app) as client:
+        _bind_catalog_snapshot(client, payload)
+        preflight = client.post(
+            "/v1/product/preflight", json=_preflight_payload(payload)
+        )
+        completion = client.post("/v1/product/complete", json=payload)
+
+    assert preflight.status_code == 200, preflight.text
+    assert completion.status_code == 200, completion.text
+    result = completion.json()
+    assert result["content"] == invalid_classification
+    assert result["dispatched_reasoning_effort"] == "none"
+    assert result["usage"]["service_tier"] == "default"
+    assert len([request for request in sent if request.method == "POST"]) == 1
 
 
 def test_provider_native_json_schema_is_sent_and_validated() -> None:
