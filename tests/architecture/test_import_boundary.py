@@ -276,12 +276,16 @@ def test_builder_does_not_import_product_llm_without_exemption() -> None:
     assert _module_list(contract["source_modules"]) == {"app.builderops"}
     assert _module_list(contract["forbidden_modules"]) == {"app.components.llm"}
 
-    # Both PR workflows invoke this same config, so this proves the production
-    # CI gate rather than a test-local reimplementation of the contract.
-    for workflow in (".github/workflows/import-linter.yaml", ".github/workflows/ci-smoke.yaml"):
-        assert "lint-imports --config importlinter.ini" in (REPO_ROOT / workflow).read_text(
-            encoding="utf-8"
-        )
+    # The dedicated PR workflow owns this blocking gate; CI Smoke owns its
+    # other contract checks and must not repeat the import-boundary command.
+    import_workflow = (REPO_ROOT / ".github/workflows/import-linter.yaml").read_text(
+        encoding="utf-8"
+    )
+    smoke_workflow = (REPO_ROOT / ".github/workflows/ci-smoke.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert "lint-imports --config importlinter.ini" in import_workflow
+    assert "lint-imports --config importlinter.ini" not in smoke_workflow
 
     assert _builder_to_product_llm_imports() == set()
 
@@ -299,11 +303,11 @@ def test_interim_exemption_is_removed_with_last_import() -> None:
 
 
 def test_importlinter_header_states_blocking_gate_posture() -> None:
-    """The config header describes the two workflows that block on this gate."""
+    """The config header describes the workflow that owns this blocking gate."""
     header = IMPORTLINTER_INI.read_text(encoding="utf-8").split("[importlinter]", maxsplit=1)[0]
     assert "Run BLOCKING" in header
     assert ".github/workflows/import-linter.yaml" in header
-    assert ".github/workflows/ci-smoke.yaml" in header
+    assert ".github/workflows/ci-smoke.yaml" not in header
     assert "non-blocking" not in header.lower()
 
 

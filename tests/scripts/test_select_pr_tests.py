@@ -252,6 +252,33 @@ def test_ci_smoke_workflow_change_selects_full_shared_suite() -> None:
     assert selection.unowned_paths == ()
 
 
+def test_contract_selection_remains_conservative_after_deduplication() -> None:
+    selection = select_tests([".github/workflows/import-linter.yaml"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("governance",)
+    assert selection.unowned_paths == ()
+    # The hot-path module runs once as part of the selected architecture
+    # target; it is no longer a second explicit CI Smoke invocation.
+    assert "tests/architecture" in selection.targets
+    assert selection.targets.count("tests/architecture") == 1
+
+    unknown = select_tests(
+        [".github/workflows/import-linter.yaml", "tests/new_area/test_contract.py"]
+    )
+    assert unknown.subsystems == ("unowned",)
+    assert unknown.unowned_paths == (
+        ".github/workflows/import-linter.yaml",
+        "tests/new_area/test_contract.py",
+    )
+
+    mixed_runtime = select_tests(
+        [".github/workflows/import-linter.yaml", "app/new_unowned_surface.py"]
+    )
+    assert mixed_runtime.subsystems == ("unowned",)
+    assert mixed_runtime.unowned_paths == ("app/new_unowned_surface.py",)
+
+
 def test_shared_note_path_normalization_has_exact_vault_ownership() -> None:
     selection = select_tests(
         [
