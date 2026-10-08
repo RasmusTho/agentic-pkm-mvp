@@ -1254,6 +1254,51 @@ def test_gpt56_eval_api_admission_rejects_host_transport_substitution(monkeypatc
     assert completion_calls == []
 
 
+@pytest.mark.parametrize("max_tokens", [None, 128])
+def test_explicit_eval_transport_is_rechecked_at_each_inference_preflight(
+    monkeypatch, max_tokens
+) -> None:
+    intent = LLMTaskIntent(task_kind="eval")
+    original_preflight = _FixtureProductRemoteTransport.preflight
+    completion_calls: list[Any] = []
+    preflight_count = 0
+
+    def drift_transport_after_binding(self, request):
+        nonlocal preflight_count
+        if isinstance(request, ProductPreflightRequest) and request.model == "gpt-5.6-terra":
+            preflight_count += 1
+            transport_id = "openai_api" if preflight_count == 1 else "codex_cli"
+            route = CompletionRouteIdentity(
+                provider="openai",
+                model=request.model,
+                transport_id=transport_id,
+                catalog_snapshot_ref=f"catalog.openai_{transport_id}",
+                catalog_snapshot_hash="sha256:" + "a" * 64,
+            )
+            self._routes[(route.provider, route.model)] = route
+            return PreflightResponse(route=route, preflight_status="passed")
+        return original_preflight(self, request)
+
+    original_complete = _FixtureProductRemoteTransport.complete
+
+    def record_completion(self, request):
+        completion_calls.append(request)
+        return original_complete(self, request)
+
+    monkeypatch.setattr(
+        _FixtureProductRemoteTransport, "preflight", drift_transport_after_binding
+    )
+    monkeypatch.setattr(_FixtureProductRemoteTransport, "complete", record_completion)
+
+    client = get_chat_client(intent, model_id="gpt-5.6-terra", transport_id="openai_api")
+    call_options = {} if max_tokens is None else {"max_tokens": max_tokens}
+    with pytest.raises(LLMRouteError, match="different transport"):
+        client.chat("eval", {"system": "trusted", "user": "question"}, **call_options)
+
+    assert preflight_count == 2
+    assert completion_calls == []
+
+
 @pytest.mark.parametrize("task_kind", ["decide", "eval"])
 def test_settings_resolved_luna_uses_host_selected_product_transport(monkeypatch, task_kind) -> None:
     from app.settings.models import LLMRoutingSettings, SettingsBundle

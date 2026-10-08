@@ -745,6 +745,23 @@ def _select_and_bind_product_preflight(
     return _bind_product_host_route(selected, selection.response.route), selection
 
 
+def _require_explicit_eval_transport(
+    route: ModelAccessRoute,
+    *,
+    expected_transport_id: str | None,
+    selection: Any,
+    transport: Any,
+) -> None:
+    if expected_transport_id is None or route.transport_id == expected_transport_id:
+        return
+    discard_receipt = getattr(transport, "discard_product_path_receipt", None)
+    if callable(discard_receipt):
+        discard_receipt(getattr(selection, "executor_path_receipt", None))
+    raise LLMRouteError(
+        "Mac portal preflight selected a different transport than the explicit evaluation request"
+    )
+
+
 @dataclass
 class ChatClient:
     route: LLMRoute
@@ -763,6 +780,9 @@ class ChatClient:
         default=None, repr=False, compare=False
     )
     _fallback_route: LLMRoute | None = field(default=None, repr=False, compare=False)
+    _explicit_eval_transport_id: str | None = field(
+        default=None, repr=False, compare=False
+    )
 
     @property
     def preflight_transport_observation(self) -> dict[str, str] | None:
@@ -796,6 +816,12 @@ class ChatClient:
                     {"type": "object"} if self._intent.json_schema_required else None
                 ),
                 max_output_tokens=max_tokens,
+            )
+            _require_explicit_eval_transport(
+                bound_route,
+                expected_transport_id=self._explicit_eval_transport_id,
+                selection=selection,
+                transport=transport,
             )
             discard_receipt = getattr(transport, "discard_product_path_receipt", None)
             if callable(discard_receipt):
@@ -880,6 +906,12 @@ class ChatClient:
                     remote_transport=transport,
                     response_format=response_format,
                     max_output_tokens=max_tokens,
+                )
+                _require_explicit_eval_transport(
+                    bound_route,
+                    expected_transport_id=self._explicit_eval_transport_id,
+                    selection=selection,
+                    transport=transport,
                 )
                 if selection.fallback_provenance.used:
                     assert self._fallback_route is not None
@@ -1087,13 +1119,12 @@ def get_chat_client_for_route(
                 ),
                 max_output_tokens=max_output_tokens,
             )
-            if (
-                explicit_eval_transport is not None
-                and model_access_route.transport_id != explicit_eval_transport
-            ):
-                raise LLMRouteError(
-                    "Mac portal preflight selected a different transport than the explicit evaluation request"
-                )
+            _require_explicit_eval_transport(
+                model_access_route,
+                expected_transport_id=explicit_eval_transport,
+                selection=selection,
+                transport=remote_transport,
+            )
             transport_observation = _preflight_transport_observation(
                 selection.executor_path_receipt
             )
@@ -1137,6 +1168,7 @@ def get_chat_client_for_route(
             _adapter_runtime_config=adapter_runtime_config,
             _fallback_access_route=fallback_access_route,
             _fallback_route=fallback,
+            _explicit_eval_transport_id=explicit_eval_transport,
         )
     finally:
         if (
