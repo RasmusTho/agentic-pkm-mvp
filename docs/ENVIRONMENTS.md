@@ -341,6 +341,10 @@ Environment separation MUST be explicit across the following surfaces.
   - `prod`: `app` (override: `PKM_DB_NAME_PROD`)
   - `dev`: `app_dev` (override: `PKM_DB_NAME_DEV`)
   - `test`: `app_test` (override: `PKM_DB_NAME_TEST`)
+- PostgreSQL data uses separate channel-scoped Docker volumes:
+  - `prod`: external volume `pkm-prod_pgdata`
+  - `dev`: project-scoped volume `pkm-dev_pgdata-dev`
+  - `test`: project-scoped volume `pkm-test_pgdata`
 - Explicit `DATABASE_URL` / `DB_DSN` still overrides environment-derived conventions.
 - File-based audit logs respect environment separation.
 
