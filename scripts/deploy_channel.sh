@@ -970,8 +970,9 @@ health_gate() {
       || ! acknowledged_embedding_readiness_failure; then
       return 1
     fi
-  fi
-  if [ "${action}" != "deploy" ] || [ "${ack_embedding_rebuild_required}" != "1" ]; then
+  else
+    # The acknowledgement is limited to the exact red /readyz embedding
+    # transition above. A green /readyz never waives required health.
     wait_json_required_ok "http://127.0.0.1:${api_port}/api/health" || return 1
   fi
   wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
