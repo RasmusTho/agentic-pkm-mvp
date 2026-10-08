@@ -1,0 +1,8 @@
+id: gemini.embed.gemini_embedding_001
+status: active
+kind: embedding
+provider: gemini
+model: gemini-embedding-001
+dims: 768
+allowed_transports: [gemini_api]
+notes: Mac-hosted Gemini embedding option; changing to it requires a matching embedding identity/index.

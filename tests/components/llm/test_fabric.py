@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import os
 from threading import Barrier
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -31,8 +32,94 @@ from app.model_access.codex_remote_transport import (
     RemoteCatalogError,
     RemotePreflightError,
 )
-from app.model_access.remote_contract import CompletionResponse, PreflightResponse
+from app.model_access.remote_contract import (
+    CompletionResponse,
+    CompletionRouteIdentity,
+    CompletionTokenUsage,
+    CompletionUsageMetadata,
+    PreflightResponse,
+    ProductCatalogRequest,
+    ProductCompletionRequest,
+    ProductPreflightRequest,
+)
 from llm_contract import ModelCapabilities
+
+
+class _FixtureProductRemoteTransport:
+    """Offline Mac-portal fake for fabric tests that do not provide a focused fake."""
+
+    def __init__(self, **_kwargs) -> None:
+        self._routes: dict[tuple[str, str], CompletionRouteIdentity] = {}
+
+    @staticmethod
+    def _route(provider: str, model: str) -> CompletionRouteIdentity:
+        if provider == "openai":
+            transport_id = "codex_cli" if model.endswith("-luna") else "openai_api"
+        elif provider == "ollama":
+            transport_id = "ollama_http"
+        elif provider == "anthropic":
+            transport_id = "anthropic_api"
+        else:
+            transport_id = "deepseek_api"
+        return CompletionRouteIdentity(
+            provider=provider,
+            model=model,
+            transport_id=transport_id,
+            catalog_snapshot_ref=f"catalog.{provider}_{transport_id}",
+            catalog_snapshot_hash="sha256:" + "a" * 64,
+        )
+
+    def preflight(self, request):
+        if isinstance(request, ProductPreflightRequest):
+            route = self._route(request.provider, request.model)
+        else:
+            route = request.route
+        self._routes[(route.provider, route.model)] = route
+        return PreflightResponse(route=route, preflight_status="passed")
+
+    def catalog(self, request):
+        if not isinstance(request, ProductCatalogRequest) or request.provider != "openai":
+            raise RemoteCatalogError("catalog_unavailable")
+        now = datetime.now(timezone.utc)
+        snapshot = CatalogSnapshot.create(
+            provider="openai",
+            transport_id="codex_cli",
+            source_id="fixture_model_catalog",
+            fetched_at=now,
+            models=(
+                CatalogModelDescriptor(
+                    provider="openai",
+                    model="gpt-5.6-luna",
+                    transports=("codex_cli",),
+                    capabilities=ModelCapabilities(
+                        structured_output=True, system_prompt_channel=True
+                    ),
+                    reasoning_efforts=("low", "xhigh"),
+                    release_at=now - timedelta(seconds=1),
+                ),
+                CatalogModelDescriptor(
+                    provider="openai",
+                    model="gpt-6-luna",
+                    transports=("codex_cli",),
+                    capabilities=ModelCapabilities(
+                        structured_output=True, system_prompt_channel=True
+                    ),
+                    reasoning_efforts=("low", "xhigh"),
+                    release_at=now,
+                ),
+            ),
+        )
+        return SimpleNamespace(snapshot=snapshot)
+
+    def complete(self, request):
+        if isinstance(request, ProductCompletionRequest):
+            route = self._routes[(request.provider, request.model)]
+        else:
+            route = request.route
+        return CompletionResponse(route=route, content="fixture Product answer")
+
+    def close(self) -> None:
+        return None
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +135,38 @@ def _configured_executor_network_paths(monkeypatch, tmp_path):
         path = tmp_path / filename
         path.write_text("test-only placeholder", encoding="utf-8")
         monkeypatch.setenv(variable, str(path))
+    monkeypatch.setattr(fabric, "CodexRemoteTransport", _FixtureProductRemoteTransport)
+
+
+def _product_route(
+    request: ProductPreflightRequest | ProductCompletionRequest,
+    *,
+    snapshot: CatalogSnapshot | None = None,
+) -> CompletionRouteIdentity:
+    provider, model = request.provider, request.model
+    if provider == "openai":
+        transport_id = "codex_cli" if model.endswith("-luna") else "openai_api"
+    elif provider == "ollama":
+        transport_id = "ollama_http"
+    elif provider == "anthropic":
+        transport_id = "anthropic_api"
+    else:
+        transport_id = "deepseek_api"
+    return CompletionRouteIdentity(
+        provider=provider,
+        model=model,
+        transport_id=transport_id,
+        catalog_snapshot_ref=(
+            snapshot.snapshot_ref
+            if snapshot is not None and snapshot.transport_id == transport_id
+            else f"catalog.{provider}_{transport_id}"
+        ),
+        catalog_snapshot_hash=(
+            snapshot.snapshot_hash
+            if snapshot is not None and snapshot.transport_id == transport_id
+            else "sha256:" + "a" * 64
+        ),
+    )
 
 
 def test_get_embeddings_client_uses_router_route_even_when_llm_provider_is_set(monkeypatch) -> None:
@@ -58,24 +177,23 @@ def test_get_embeddings_client_uses_router_route_even_when_llm_provider_is_set(m
                 model="nomic-embed-text:latest",
                 mode="embeddings",
                 reason="settings",
+                embedding_identity=EmbeddingIdentity(
+                    provider="ollama", model="nomic-embed-text:latest", dim=768
+                ),
             )
-
-    captured: dict[str, str | None] = {}
-
-    def _fake_get_embedding_client(*, override_provider=None, override_model=None):
-        captured["provider"] = override_provider
-        captured["model"] = override_model
-        return object()
 
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.delenv("EMBED_PROVIDER", raising=False)
     monkeypatch.delenv("EMBED_MODEL", raising=False)
     monkeypatch.setattr("app.components.llm.fabric.LLMRouter", _Router)
-    monkeypatch.setattr("app.components.llm.fabric.get_embedding_client", _fake_get_embedding_client)
 
-    get_embeddings_client(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
-
-    assert captured == {"provider": "ollama", "model": "nomic-embed-text:latest"}
+    client = get_embeddings_client(
+        LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    )
+    assert client.identity == EmbeddingIdentity(
+        provider="ollama", model="nomic-embed-text:latest", dim=768
+    )
+    client.close()
 
 
 def test_product_call_sites_use_shared_model_access_router(monkeypatch) -> None:
@@ -98,25 +216,28 @@ def test_product_call_sites_use_shared_model_access_router(monkeypatch) -> None:
             resolved.append(args[0])
             return self.inner.resolve(*args, **kwargs)
 
-    called = {}
-
-    def _fake_call_llm(name, pack, **kwargs):
-        called.update(kwargs)
-        return "ok"
+    direct_calls = []
 
     monkeypatch.setattr(fabric, "LLMRouter", _Router)
     monkeypatch.setattr(fabric, "ModelAccessRouter", _SpyRouter)
-    monkeypatch.setattr(fabric, "call_llm", _fake_call_llm)
+    monkeypatch.setattr(
+        fabric,
+        "call_llm",
+        lambda *args, **kwargs: direct_calls.append((args, kwargs))
+        or "unexpected local provider call",
+    )
 
     client = get_chat_client(LLMTaskIntent(task_kind="qa"))
-    assert client.chat("qa", {"system": "trusted", "user": "question"}) == "ok"
+    assert client.chat("qa", {"system": "trusted", "user": "question"}) == (
+        "fixture Product answer"
+    )
 
     assert len(resolved) == 1
     assert client.model_access_route is not None
     assert client.model_access_route.transport_id == "openai_api"
+    assert client.model_access_route.execution_host_profile == "profile.codex_remote_host"
     assert (client.route.provider, client.route.model) == ("openai", "gpt-5.4")
-    assert called["provider_override"] == "openai"
-    assert called["model_override"] == "gpt-5.4"
+    assert direct_calls == []
 
 
 def test_product_rejects_local_codex_transport_before_openai_http_dispatch(monkeypatch) -> None:
@@ -183,7 +304,10 @@ def test_luna_route_provenance_and_embedding_identity_are_separate(monkeypatch) 
             return SimpleNamespace(snapshot=snapshot)
 
         def preflight(self, request):
-            return PreflightResponse(route=request.route, preflight_status="passed")
+            return PreflightResponse(
+                route=_product_route(request, snapshot=snapshot),
+                preflight_status="passed",
+            )
 
         def close(self):
             pass
@@ -210,7 +334,7 @@ def test_luna_route_provenance_and_embedding_identity_are_separate(monkeypatch) 
     assert route is not None
 
     assert route.model == "gpt-6-luna"
-    assert route.transport_id == "codex_cli_tailscale"
+    assert route.transport_id == "codex_cli"
     assert route.catalog_snapshot_ref == snapshot.snapshot_ref
     assert route.catalog_snapshot_hash == snapshot.snapshot_hash
     assert route.capability_provenance.source == "catalog_snapshot"
@@ -227,20 +351,19 @@ def test_luna_route_provenance_and_embedding_identity_are_separate(monkeypatch) 
                 ),
             )
 
-    captured: dict[str, str | None] = {}
-
-    def _fake_get_embedding_client(*, resolved_identity=None):
-        captured["identity"] = resolved_identity
-        return object()
+    class _RemotePath:
+        def close(self):
+            return None
 
     monkeypatch.setattr(fabric, "LLMRouter", _Router)
-    monkeypatch.setattr(fabric, "get_embedding_client", _fake_get_embedding_client)
-    get_embeddings_client(LLMTaskIntent(task_kind="embed"))
-    assert captured == {
-        "identity": EmbeddingIdentity(
-            provider="ollama", model="nomic-embed-text:latest", dim=768
-        )
-    }
+    monkeypatch.setattr(
+        fabric, "_new_executor_path_router", lambda **_kwargs: _RemotePath()
+    )
+    client = get_embeddings_client(LLMTaskIntent(task_kind="embed"))
+    assert client.identity == EmbeddingIdentity(
+        provider="ollama", model="nomic-embed-text:latest", dim=768
+    )
+    client.close()
 
 
 @pytest.mark.parametrize(
@@ -299,7 +422,10 @@ def test_product_catalog_auth_or_invalid_refresh_never_routes_stale_snapshot(
             return SimpleNamespace(snapshot=snapshot)
 
         def preflight(self, request):
-            return PreflightResponse(route=request.route, preflight_status="passed")
+            return PreflightResponse(
+                route=_product_route(request, snapshot=snapshot),
+                preflight_status="passed",
+            )
 
         def close(self) -> None:
             pass
@@ -387,11 +513,23 @@ def test_bound_client_keeps_catalog_route_after_cache_refresh(monkeypatch) -> No
 
         def preflight(self, request):
             state["preflight"].append(request)
-            return PreflightResponse(route=request.route, preflight_status="passed")
+            bound_snapshot = (
+                snapshot_a if request.model == "gpt-5.6-luna" else snapshot_b
+            )
+            return PreflightResponse(
+                route=_product_route(request, snapshot=bound_snapshot),
+                preflight_status="passed",
+            )
 
         def complete(self, request):
             state["completion"].append(request)
-            return CompletionResponse(route=request.route, content="bound answer")
+            bound_snapshot = (
+                snapshot_a if request.model == "gpt-5.6-luna" else snapshot_b
+            )
+            return CompletionResponse(
+                route=_product_route(request, snapshot=bound_snapshot),
+                content="bound answer",
+            )
 
         def close(self):
             pass
@@ -419,7 +557,7 @@ def test_bound_client_keeps_catalog_route_after_cache_refresh(monkeypatch) -> No
     assert state["completion"] == []
 
     assert first.chat("qa", {"system": "", "user": "question"}, max_tokens=32) == "bound answer"
-    assert state["completion"][0].route.model == "gpt-5.6-luna"
+    assert state["completion"][0].model == "gpt-5.6-luna"
     assert first.model_access_route.catalog_snapshot_hash == snapshot_a.snapshot_hash
     assert state["catalog_calls"] == 2
 
@@ -483,19 +621,34 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
             state["catalog"] += 1
             raise AssertionError("exact eval model must not discover/promote")
 
-        def preflight(self, request):
+        def preflight_product(self, request):
             self.preflight_requests.append(request)
             state["preflight"].append((self, request))
+            route = _product_route(request)
             return SimpleNamespace(
-                response=PreflightResponse(
-                    route=request.route, preflight_status="passed"
-                ),
+                response=PreflightResponse(route=route, preflight_status="passed"),
                 receipt=SimpleNamespace(failure_before_selection="PATH_UNAVAILABLE"),
             )
 
-        def complete_selected_path(self, request, *, receipt):
+        def complete_product_selected_path(self, request, *, receipt):
             state["completion"].append((self, request, receipt))
-            return SimpleNamespace(content="remote eval")
+            refreshed_route = _product_route(request).model_copy(
+                update={"catalog_snapshot_hash": "sha256:" + "b" * 64}
+            )
+            return CompletionResponse(
+                route=refreshed_route,
+                content="remote eval",
+                usage=CompletionUsageMetadata(
+                    model="gpt-5.6-luna-2026-10-08",
+                    service_tier="default",
+                    usage=CompletionTokenUsage(
+                        prompt_tokens=100,
+                        completion_tokens=20,
+                        total_tokens=120,
+                        prompt_tokens_details={"cached_tokens": 10},
+                    ),
+                ),
+            )
 
         def close(self):
             state["closed"] += 1
@@ -530,8 +683,8 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
 
     assert client.route.model == "gpt-5.6-luna"
     assert client.model_access_route is not None
-    assert client.model_access_route.transport_id == "codex_cli_tailscale"
-    assert client.model_access_route.catalog_snapshot_hash is None
+    assert client.model_access_route.transport_id == "codex_cli"
+    assert client.model_access_route.catalog_snapshot_hash is not None
     assert client.remote_transport is None
     assert client.preflight_transport_observation == {
         "status": "degraded",
@@ -542,16 +695,35 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
     assert "private-eval-key" not in repr(client)
     assert "private-eval-provider.example" not in repr(client)
 
+    observed_usage: list[dict[str, Any]] = []
     assert client.chat(
         "eval",
         {"system": "trusted", "user": "evaluate this"},
         response_format={"type": "object"},
+        usage_observer=observed_usage.append,
     ) == "remote eval"
+    assert observed_usage == [
+        {
+            "model": "gpt-5.6-luna-2026-10-08",
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "prompt_tokens_details": {"cached_tokens": 10},
+            },
+            "service_tier": "default",
+        }
+    ]
+    assert client.last_execution_route is not None
+    assert client.last_execution_route.catalog_snapshot_hash == "sha256:" + "b" * 64
 
     preflight_remote, preflight_request = state["preflight"][-1]
     completion_remote, request, receipt = state["completion"][0]
     assert preflight_remote is completion_remote
-    assert preflight_request.route == request.route
+    assert (preflight_request.provider, preflight_request.model) == (
+        request.provider,
+        request.model,
+    )
     assert preflight_request.reasoning_effort == request.reasoning_effort
     assert preflight_request.capability_intent == request.capability_intent
     assert preflight_request.capability_intent.structured_output is True
@@ -576,13 +748,16 @@ def test_product_trusted_and_user_messages_remain_separate_on_remote_route() -> 
     class _Remote:
         preflight_request = None
         completion_request = None
+        route = None
 
-        def preflight(self, request):
+        def preflight_product(self, request):
             self.preflight_request = request
+            self.route = _product_route(request)
+            return PreflightResponse(route=self.route, preflight_status="passed")
 
         def complete(self, request):
             self.completion_request = request
-            return SimpleNamespace(content="remote answer")
+            return CompletionResponse(route=self.route, content="remote answer")
 
     remote = _Remote()
     client = ChatClient(
@@ -599,8 +774,11 @@ def test_product_trusted_and_user_messages_remain_separate_on_remote_route() -> 
     request = remote.completion_request
     assert request.trusted_instructions == "trusted system"
     assert request.user_input == "untrusted question"
-    assert request.route.transport_id == "codex_cli"
-    assert remote.preflight_request.route == request.route
+    assert (remote.preflight_request.provider, remote.preflight_request.model) == (
+        request.provider,
+        request.model,
+    )
+    assert remote.route.transport_id == "openai_api"
 
 
 def test_concurrent_remote_chats_have_exclusive_router_lifetimes(monkeypatch) -> None:
@@ -625,15 +803,22 @@ def test_concurrent_remote_chats_have_exclusive_router_lifetimes(monkeypatch) ->
             self.completion_count = 0
             self.closed = False
 
-        def preflight(self, _request):
+        def preflight_product(self, request):
             self.preflight_count += 1
             barrier.wait(timeout=5)
-            return SimpleNamespace(receipt=self)
+            return SimpleNamespace(
+                response=PreflightResponse(
+                    route=_product_route(request), preflight_status="passed"
+                ),
+                receipt=self,
+            )
 
-        def complete_selected_path(self, _request, *, receipt):
+        def complete_product_selected_path(self, request, *, receipt):
             assert receipt is self
             self.completion_count += 1
-            return SimpleNamespace(content="remote answer")
+            return CompletionResponse(
+                route=_product_route(request), content="remote answer"
+            )
 
         def close(self):
             self.closed = True
@@ -729,23 +914,25 @@ def test_product_remote_fallback_is_selected_before_one_completion(monkeypatch) 
             self.completion_requests = []
 
         def catalog(self, request):
-            self.events.append(("catalog", request.transport_id))
+            self.events.append(("catalog", "codex_cli"))
             return SimpleNamespace(snapshot=snapshot)
 
         def preflight(self, request):
-            transport_id = request.route.transport_id
+            route = _product_route(request)
+            transport_id = route.transport_id
             self.events.append(("preflight", transport_id))
             if transport_id == "codex_cli":
                 raise RemotePreflightError("session_expired")
             return PreflightResponse(
-                route=request.route, preflight_status="passed"
+                route=route, preflight_status="passed"
             )
 
         def complete(self, request):
-            self.events.append(("complete", request.route.transport_id))
+            route = _product_route(request, snapshot=snapshot)
+            self.events.append(("complete", route.transport_id))
             self.completion_requests.append(request)
             return CompletionResponse(
-                route=request.route, content="remote fallback answer"
+                route=route, content="remote fallback answer"
             )
 
         def close(self) -> None:
@@ -768,7 +955,7 @@ def test_product_remote_fallback_is_selected_before_one_completion(monkeypatch) 
     assert client.model_access_route is not None
     assert client.model_access_route.provider == "ollama"
     assert client.model_access_route.model == "llama3.1:8b"
-    assert client.model_access_route.transport_id == "ollama_http_tailscale"
+    assert client.model_access_route.transport_id == "ollama_http"
     assert client.model_access_route.preflight_status == "passed"
     assert client.model_access_route.fallback_provenance.used is True
     assert client.model_access_route.fallback_provenance.reason_code == "session_expired"
@@ -820,7 +1007,7 @@ def test_product_remote_preflight_can_forbid_fallback(monkeypatch) -> None:
             self.completion_requests = []
 
         def preflight(self, request):
-            self.preflight_routes.append(request.route.transport_id)
+            self.preflight_routes.append(_product_route(request).transport_id)
             raise RemotePreflightError("session_expired")
 
         def complete(self, request):
@@ -900,7 +1087,7 @@ def test_product_remote_fallback_does_not_downgrade_strong_reasoning(monkeypatch
             return SimpleNamespace(snapshot=snapshot)
 
         def preflight(self, request):
-            self.preflight_routes.append(request.route.transport_id)
+            self.preflight_routes.append(_product_route(request).transport_id)
             raise RemotePreflightError("session_expired")
 
         def close(self) -> None:
@@ -975,32 +1162,34 @@ def test_product_output_limit_uses_preflight_approved_ollama_route(monkeypatch) 
             self.completion_requests = []
 
         def catalog(self, request):
-            self.events.append(("catalog", request.transport_id, None))
+            self.events.append(("catalog", "codex_cli", None))
             return SimpleNamespace(snapshot=snapshot)
 
         def preflight(self, request):
+            route = _product_route(request, snapshot=snapshot)
             self.events.append(
                 (
                     "preflight",
-                    request.route.transport_id,
+                    route.transport_id,
                     request.capability_intent.max_output_tokens_required,
                 )
             )
             if (
-                request.route.transport_id == "codex_cli"
+                route.transport_id == "codex_cli"
                 and request.capability_intent.max_output_tokens_required
             ):
                 raise RemotePreflightError("output_token_limit_unavailable")
             return PreflightResponse(
-                route=request.route, preflight_status="passed"
+                route=route, preflight_status="passed"
             )
 
         def complete(self, request):
+            route = _product_route(request, snapshot=snapshot)
             self.events.append(
-                ("complete", request.route.transport_id, request.max_output_tokens)
+                ("complete", route.transport_id, request.max_output_tokens)
             )
             self.completion_requests.append(request)
-            return CompletionResponse(route=request.route, content="bounded answer")
+            return CompletionResponse(route=route, content="bounded answer")
 
         def close(self) -> None:
             self.events.append(("close", "", None))
@@ -1025,7 +1214,10 @@ def test_product_output_limit_uses_preflight_approved_ollama_route(monkeypatch) 
     assert client.model_access_route.fallback_provenance.reason_code == (
         "adapter_unavailable"
     )
-    assert remote.completion_requests[0].route.transport_id == "ollama_http"
+    assert (remote.completion_requests[0].provider, remote.completion_requests[0].model) == (
+        "ollama",
+        "llama3.1:8b",
+    )
     assert remote.completion_requests[0].max_output_tokens == 160
     assert [event for event in remote.events if event[0] == "complete"] == [
         ("complete", "ollama_http", 160)
@@ -1046,12 +1238,13 @@ def test_gpt56_eval_api_admission_preserves_implicit_luna_transport(monkeypatch)
     for tier in ("luna", "terra", "sol"):
         client = get_chat_client(intent, model_id=f"gpt-5.6-{tier}", transport_id="openai_api")
         assert client.route.model == f"gpt-5.6-{tier}"
-        assert client.route.transport_id == "openai_api"
+        expected_host_transport = "codex_cli" if tier == "luna" else "openai_api"
+        assert client.route.transport_id == expected_host_transport
         assert client.model_access_route.request.intent.fallback_requirement == "fallback_forbidden"
 
 
 @pytest.mark.parametrize("task_kind", ["decide", "eval"])
-def test_settings_resolved_luna_without_explicit_eval_transport_retains_refusal(monkeypatch, task_kind) -> None:
+def test_settings_resolved_luna_uses_host_selected_product_transport(monkeypatch, task_kind) -> None:
     from app.settings.models import LLMRoutingSettings, SettingsBundle
     from app.components.llm import router
     for name in ("LLM_FORCE_PROVIDER", "LLM_FORCE_MODEL", "LLM_PROVIDER_ENFORCE", "LLM_PROVIDER", "LLM_MODEL"):
@@ -1062,9 +1255,11 @@ def test_settings_resolved_luna_without_explicit_eval_transport_retains_refusal(
         )
     }))
     monkeypatch.setattr(router, "get_settings_bundle", lambda: bundle)
-    monkeypatch.setattr(fabric, "call_llm", lambda *a, **kw: pytest.fail("inference started"))
+    monkeypatch.setattr(fabric, "call_llm", lambda *a, **kw: pytest.fail("bypassed Product portal"))
     selected = router.LLMRouter().route(LLMTaskIntent(task_kind=task_kind))
     assert selected.model == "gpt-5.6-luna"
     assert selected.transport_id is None
-    with pytest.raises(LLMRouteError, match="selected transport is not allowed"):
-        get_chat_client(LLMTaskIntent(task_kind=task_kind))
+    client = get_chat_client(LLMTaskIntent(task_kind=task_kind))
+    assert client.model_access_route is not None
+    assert client.model_access_route.execution_host_profile == "profile.codex_remote_host"
+    assert client.route.transport_id == "codex_cli"

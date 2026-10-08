@@ -4,8 +4,8 @@ Authority: Canonical routing and fabric contract for LLM chat and embedding acce
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: routing code, compiled Product settings, channel Compose, and acceptance receipts
-Last reviewed: 2026-10-05
-Last verified against: Issue #5794 clone-local profile tests, Issue #5772 Compose integration tests, and the MARR-06 acceptance receipt in Issue #5624.
+Last reviewed: 2026-10-08
+Last verified against: Issue #5820 Product gateway/profile tests (local ASGI and mocked provider); Issue #5624's bounded Luna/Codex CLI dev-chat acceptance. No live embedding-route or satellite-profile acceptance is claimed.
 
 # LLM Routing Contract (Router + Fabric)
 
@@ -39,13 +39,17 @@ Related docs:
   `runtime/settings/llm_routing.yaml`.
 - **Model-first settings**: The settings note selects `model_id` values from the model registry. The compiler derives
   `provider` and `model` from that registry so users do not need to keep both in sync by hand.
-- **Clone-local model profiles**: `llm_routing.md` may declare named profiles containing registry-backed
-  chat targets. Each clone selects one with `llmRoutingProfile` in its gitignored `settings/local.md`;
-  omit it or use `default` to retain the shared task policy. A work satellite can select `work` while
-  another clone remains on `default`. Profile targets replace only the primary chat/reasoning/eval
-  model; shared task fallbacks and capability checks remain in force. Embedding identity and Builder
-  Model Inquiry are not affected. Unknown profile names and invalid profile model IDs fail closed.
-  For example, declare `profiles.work.default_chat.model_id` using a chat ID from
+- **Clone-local model profiles**: `llm_routing.md` may declare named profiles with registry-backed
+  chat targets and embedding targets (`default_embedding` or `tasks.embed`). The compiler enforces
+  the model kind. Each clone selects one profile with `llmRoutingProfile` in its gitignored
+  `settings/local.md`; omit it or use `default` to retain the shared task policy. A work satellite
+  can select `work` while another clone uses a different profile. Profile targets replace the
+  primary chat/reasoning/eval or embedding model; shared fallback policy and capability/identity
+  checks remain in force. Selecting another embedding model changes the requested embedding
+  identity, so the existing index compatibility and governed rebuild/reconcile rules still apply.
+  Builder Model Inquiry is not affected. Unknown profile names, unregistered model IDs, and
+  chat/embedding kind mismatches fail closed. For example, declare
+  `profiles.work.default_embedding.model_id` using an embedding ID from
   `docs/settings/models/registry.yaml`, then put `llmRoutingProfile: work` in that clone's local.md.
 - **Embedding identity protection**: embed tasks may auto-repair transport/endpoints, but must not silently switch
   to an incompatible embedding identity when `require_compatible_identity=true`.
@@ -63,9 +67,10 @@ Routing is intentionally deterministic and single-source:
 3. **Environment defaults** — env vars fill in provider/model defaults when the task policy leaves them blank.
 4. **Built-in defaults** — used when no settings or env override is present.
 
-For Product chat, reasoning, and eval tasks, a non-default clone-local `llmRoutingProfile` overrides
-the primary target after the shared task policy is loaded. Profile definitions remain shared
-configuration; the selected profile name remains local to each clone and is not committed.
+For Product chat, reasoning, eval, and embedding tasks, a non-default clone-local
+`llmRoutingProfile` overrides the corresponding primary target after the shared task policy is
+loaded. Profile definitions remain shared configuration; the selected profile name remains local to
+each clone and is not committed.
 
 For the dev, test, and prod channels, Compose forwards the governed `LLM_PROVIDER` value to only the
 Product `api`, `worker`, and `watcher` callers, defaulting to `mock` when the channel has no
@@ -91,8 +96,13 @@ requires successful no-inference preflight. Product model selection remains in t
 `vault/settings/llm_routing.md` and its compiled settings. Production code support does not prove
 its host identity, live route policy, provider availability, or release is active.
 
-The owner-approved Product target is Luna through the Codex CLI for chat/planning and Ollama for
-embeddings. These capabilities have separate route policies and health requirements.
+The current shared Product defaults select Luna through Codex CLI for text tasks and
+`nomic-embed-text` through Ollama for embeddings. Those are model/provider choices, not local
+Product-side execution paths: every non-mock Product inference is sent through the Mac Product API
+over the configured VLAN path, and the Mac host resolves the actual transport/harness. A clone may
+select a different compatible registry-backed model through its local profile. Ollama is not a
+required local service or health dependency when it is unselected; provider-neutral health reports
+the selected logical `llm_access` capabilities.
 
 For embeddings, a blank compiled task target also permits the operator activation seam
 `EMBED_PROFILE` to select one complete named identity (provider, model, dimension, and
@@ -114,10 +124,12 @@ model gains `:latest`, while an invalid forced provider degrades coherently to
 
 Current state:
 - The neutral route/provenance contract and policy-agnostic `ModelAccessRouter` seam are available. Product chat/completion callers continue to enter through the Product router and fabric, with the selected target resolved through the shared facade before adapter execution. The facade carries owner-resolver fallback lineage, preserves the `fallback_forbidden`, `human_decision_required`, and `fallback_same_identity` requirements, distinguishes source fallback cause from selected-target preflight status, and rejects resolved capability claims outside the selected adapter descriptor's declared support. Product route policy remains settings-owned; the facade does not create a separate model-selection authority.
-- `app.model_access.adapter_factory.ModelAccessAdapterFactory` loads the strict transport declarations in `docs/settings/models/adapters.yaml` and binds an already-resolved provider/model to the provider census. It describes `codex_cli`, `ollama_http`, `openai_api`, `anthropic_api`, `deepseek_api`, and `mock`; this descriptor registration does not claim that Product's API/Ollama transports have migrated or that these adapters now select routes.
-- The bounded local Codex CLI executor is available for the Model Inquiry compatibility bridge. It uses an isolated empty working directory, read-only sandbox, ephemeral execution, separate developer/user channels, output bounds, and a version-pinned no-tools profile. No designated-host profile or Product caller is activated by this change; missing or unrecognized host profile fails before inference. Model Inquiry still owns its separate single-target, fallback-forbidden policy.
-- Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices.
-- Embedding fallback is blocked unless the fallback is **dimension-matched** and its mixed-identity write is bound to reconcile discipline. The sanctioned fallback is Ollama-primary with a Gemini `gemini-embedding-001` @ `output_dimensionality=768` (L2-renormalized) auto-fallback on primary failure; the write is **MIXED-IDENTITY / reconcilable** (carries the Gemini identity, reconciled via `index reconcile` once Ollama recovers), and the query path always uses the primary identity — per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`, `docs/EMBEDDINGS.md :: Fallback rule`, and `docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3. Generic fallback that changes dimension/normalization, or switches identity without that discipline, remains blocked.
+- Every non-mock Product chat/completion and embedding inference uses the logical Mac Product API over the configured executor/VLAN path. Product requests bind the selected provider/model and capability intent but do not choose the host transport, endpoint, or credentials. The host response binds the actual transport and catalog snapshot to the route. `mock` remains local for deterministic use.
+- `app.model_access.adapter_factory.ModelAccessAdapterFactory` validates declared model/provider/adapter compatibility; its descriptors do not make Product callers select or invoke provider SDKs directly. The Mac host owns the provider transport and subscription/credential boundary.
+- Clone-local Product profiles can select separate registry-backed chat and embedding models. Embedding inference uses `POST /v1/product/embed`; the Product client preserves its selected `EmbeddingIdentity`, checks the returned model/transport/dimension and catalog provenance, and does not retry after sending an embedding request. Switching embedding identity remains subject to the index compatibility/rebuild/reconcile gates.
+- The bounded local Codex CLI executor remains the Model Inquiry compatibility bridge. Product code rejects local `codex_cli` execution; the Mac portal returns the actual host transport. Model Inquiry retains its separate single-target, fallback-forbidden policy.
+- Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices. A preflight-approved text fallback, if policy allows one, occurs before inference; a failure after inference starts is terminal and cannot cause another provider call.
+- Product embeddings preserve the dimension and identity/reconcile rules in `docs/EMBEDDINGS.md`, but the Mac portal owns provider egress and credentials. The Product caller does not inspect a local Gemini key or invoke a provider SDK. Once `/v1/product/embed` has entered the HTTP transport, the outcome is terminal: no queue retry and no client-side provider fallback. Any future Product fallback must be selected and capability-preflighted by the Mac before its single inference dispatch; its returned provider/model/transport/snapshot provenance remains authoritative. A mixed-identity write, if the host later supports that posture, still requires the existing `index doctor` / `index reconcile` discipline.
 - Endpoint repair is operational and separate from provider substitution.
 - The router never emits a route whose `model` belongs to a different provider than the one that will execute the call. `LLM_PROVIDER` binds the executing provider on the enforced path **and** on the no-explicit-policy default path: the env provider is bound only when `LLM_PROVIDER_ENFORCE=1` (enforce) or when the task has no explicit policy (`router.py`: `if enforce or not has_explicit_task_policy`). For a task that *does* carry an explicit policy (e.g. `tasks.qa` with a cloud primary) and `LLM_PROVIDER` set **without** enforce, the router falls through to the policy primary — so `LLM_PROVIDER` does not necessarily run that call. To force an explicit-policy task onto the env provider, set `LLM_PROVIDER_ENFORCE=1`; then the resolved route uses a candidate (primary or fallback) that provider actually serves — e.g. an `ollama`-enforced chat task with a cloud-primary policy resolves to the local `ollama` fallback model, not the cloud model. When `LLM_PROVIDER_ENFORCE=1` and no candidate is served by the enforced provider, the router fails loud (`LLMRouteError`) rather than guessing a cross-provider route. The model swap is surfaced via `LLMRoute.reason` (`enforced-provider:<provider>`).
 
@@ -147,12 +159,12 @@ After preflight, exactly one completion uses the selected path. An ambiguous com
 over another path or switch providers. Provider/model fallback remains a separate explicit policy
 decision.
 
-This is code and configuration support, not persistent Product-route or release-channel activation.
-The designated Ygg development-host VLAN settings, gateway authorization, Luna/Codex CLI route, and
-sanitized acceptance receipt are verified by Issue #5624. That receipt proves the bounded dev-host
-path only; release-channel rollout remains a separate operational gate. Optional generic multi-path
-adapters do not make Tailscale a current Ygg dependency. Product policy can select Luna through the
-Codex CLI, but a PR merge or host acceptance alone does not change the deployed Product default.
+This is repository code/configuration support, not persistent Product-route or release-channel
+activation. Issue #5624's acceptance receipt verifies the bounded Ygg dev-host VLAN and Luna/Codex
+CLI chat path only; it does not verify this change's embedding request path or a clone-selected
+satellite model. Those live selections require their own host-level acceptance evidence. A PR merge
+does not change a deployed Product default. Optional generic multi-path adapters do not make
+Tailscale a current Ygg dependency.
 
 System health reports whether the configured workload's logical capabilities are available, not
 whether an unselected provider is installed or reachable. Adapter readiness and declared
@@ -268,4 +280,4 @@ Tests: `tests/e2e/test_llm_routing_e2e.py::test_force_override_affects_ask_api`
 - Generic chat/reasoning fallback can remain local or mock when the task policy allows it.
 - Embeddings are stricter: if the configured provider/model implies a different identity, startup must fail or require rebuild instead of silently degrading. The one sanctioned exception is the **dimension-matched (768/L2)** Gemini fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; its write is mixed-identity (carries the Gemini identity) and reconcilable, the query path uses the primary identity, and a mixed-identity index triggers `index reconcile`, not silent degradation (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3).
 - Multi-provider load balancing and rate limit handling are out of scope for the current fabric. The Gemini embedding fallback above is a single dimension-matched reliability fallback, not load balancing.
-- **Accepted future direction (ADR-0067, Issue #5819):** the Mac mini will mediate all registry-declared Product model routes, including embeddings, while shared settings declare model profiles and each clone/satellite selects locally. Today the delivered Mac API acceptance covers Luna/Codex CLI chat only; clone-local profiles affect chat/reasoning/eval, and embeddings still use their separate provider path. MARR-12/MARR-13 track the remaining gateway and Product integration. Do not treat the target as live until their integrated acceptance and deployment receipts exist.
+- **ADR-0067 Product portal implementation:** Issue #5821 supplies the real Product embedding API and Issue #5820 routes non-mock Product chat and embedding calls through the Mac portal, with clone-local registry-backed profile selection across both model kinds. These repository tests use a real in-process ASGI boundary with mocked provider I/O; they do not attest live host configuration, provider access, deployment, or a changed channel default. Keep the existing bounded live chat receipt and any future embedding/satellite acceptance evidence distinct.

@@ -75,7 +75,7 @@ comes from the compiled task policy; env vars supply defaults only when the poli
   - The primary embedding provider used for normal dispatch. Precedence: `EMBED_PRIMARY_PROVIDER` (env) > embedding-profile `primary_provider` > profile `provider` > `LLM_PROVIDER`. When unset, behavior is unchanged (falls back to `LLM_PROVIDER`).
   - Setting this changes the embedding **identity** (provider) and therefore requires a vector-index rebuild — see *Change policy* and the re-index path.
 - `EMBED_FALLBACK_PROVIDER`
-  - Optional secondary provider consulted only after the primary embed path exhausts its retry budget. A **dimension-matched, L2-renormalized** fallback is required; its write is **MIXED-IDENTITY** (carries the fallback provider's identity) and **reconcilable**, with the query path always using the primary identity (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). The sanctioned posture is Ollama-primary with a Gemini `gemini-embedding-001` fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`, pinned at `output_dimensionality=768` to match the shipped `nomic-embed-text` primary; `docs/adr/ADR-0052-embedding-fallback-repin-1024-bge-m3.md` (owner-ratified 2026-07-06) re-pins this to `output_dimensionality=1024` once an operator activates the `bge-m3` profile — see `docs/runbooks/RUNBOOK_BGE_M3_CUTOVER.md`. When no Gemini key is present (`GEMINI_API_KEY` or `GOOGLE_API_KEY`), the object is dead-lettered locally and no Google egress occurs. See the disciplined-fallback / reconcile path tracked by the Embedding Reliability capability (issue #2292) and the *Fallback rule* section below.
+  - Optional fallback-policy input, subject to the execution boundary below. A **dimension-matched, L2-renormalized** fallback is required; any fallback-produced write is **MIXED-IDENTITY** and **reconcilable**, with the query path using the primary identity (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3). Product callers do not use this setting to call a provider directly or to inspect local provider credentials. See *Product portal boundary* below.
 - `OLLAMA_HOST`
   - Example: `http://host.docker.internal:11434`
 - `EMBED_MODEL`
@@ -217,6 +217,18 @@ literal is indistinguishable from a real identity downstream, and a model name n
 adapter serves is a false provenance claim (#4178).
 
 ### Fallback rule
+
+#### Product portal boundary (ADR-0067)
+
+The identity and reconcile rules below continue to govern every fallback vector, but they do not
+authorize a Product-side second inference. Product non-mock embeddings use the Mac
+`POST /v1/product/embed` operation. If its HTTP request may have reached the host, a timeout,
+response error, or invalid response is terminal: the caller does not replay it or switch to Gemini.
+Provider credentials are resolved only on the Mac. A future Product fallback must be chosen and
+capability-preflighted at the Mac before its single provider dispatch, and the returned route must
+identify the model that actually produced the vector. This qualification is delivered by the
+Product portal client slice (#5820); it does not change the separate vector identity and
+`index reconcile` contract below.
 
 **Disciplined, dim-matched fallback is permitted** as an availability bridge. The constraints are:
 

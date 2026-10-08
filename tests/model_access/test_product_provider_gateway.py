@@ -228,6 +228,57 @@ def test_dispatches_exact_declared_route_without_caller_credentials() -> None:
     )
 
 
+def test_product_openai_completion_exposes_only_bounded_usage_metadata() -> None:
+    private_marker = "provider-private-response-field"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json=_catalog_payload("openai"))
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-4.1-2026-10-08",
+                "service_tier": "default",
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                    "prompt_tokens_details": {
+                        "cached_tokens": 10,
+                        "audio_tokens": 0,
+                        "private": private_marker,
+                    },
+                    "provider_private": private_marker,
+                },
+                "provider_private": private_marker,
+                "choices": [
+                    {"message": {"role": "assistant", "content": "safe result"}}
+                ],
+            },
+        )
+
+    app = _gateway(respond)
+    payload = _payload("openai_api")
+    with _local_test_client(app) as client:
+        _bind_catalog_snapshot(client, payload)
+        completion = client.post("/v1/product/complete", json=payload)
+
+    assert completion.status_code == 200, completion.text
+    result = completion.json()
+    assert result["content"] == "safe result"
+    assert result["usage"] == {
+        "model": "gpt-4.1-2026-10-08",
+        "service_tier": "default",
+        "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 20,
+            "total_tokens": 120,
+            "prompt_tokens_details": {"cached_tokens": 10, "audio_tokens": 0},
+        },
+    }
+    assert private_marker not in completion.text
+
+
 def test_provider_native_json_schema_is_sent_and_validated() -> None:
     schema = {
         "type": "object",

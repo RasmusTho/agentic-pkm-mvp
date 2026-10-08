@@ -14,15 +14,23 @@ from app.stores import reset_store_backends
 class _SpyVectorIndex:
     def __init__(self) -> None:
         self.upsert_calls: list[dict[str, object]] = []
+        self.purge_calls: list[UUID] = []
+        self.identity: EmbeddingIdentity | None = None
+        self.vectors: dict[UUID, dict[str, object]] = {}
+
+    def get_identity(self) -> EmbeddingIdentity | None:
+        return self.identity
 
     def purge_vectors(self, object_id: UUID, *, view: str) -> int:
-        del object_id, view
-        return 0
+        del view
+        self.purge_calls.append(object_id)
+        return int(self.vectors.pop(object_id, None) is not None)
 
     def upsert(self, object_id: UUID, **kwargs) -> None:
         call = dict(kwargs)
         call["object_id"] = object_id
         self.upsert_calls.append(call)
+        self.vectors[object_id] = call
 
 
 class _FakeEmbeddingClient:
@@ -60,7 +68,11 @@ def _patch_fallback(monkeypatch: pytest.MonkeyPatch, fallback_identity: Embeddin
 
     monkeypatch.setattr(fallback_orchestrator, "embed_with_retry", fake_embed_with_retry)
     monkeypatch.setattr(fallback_orchestrator, "_resolve_fallback_identity", lambda provider: fallback_identity)
-    monkeypatch.setattr(fallback_orchestrator, "get_embedding_client", lambda **kwargs: fallback_client)
+    monkeypatch.setattr(
+        fallback_orchestrator,
+        "get_product_embedding_client_for_identity",
+        lambda _identity: fallback_client,
+    )
     return fallback_client
 
 
@@ -75,7 +87,10 @@ def test_fallback_invoked_from_handle_ingest_object_created(monkeypatch: pytest.
     fallback_client = _patch_fallback(monkeypatch, fallback_identity, [0.25] * fallback_identity.dim)
     spy_index = _SpyVectorIndex()
 
-    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: primary_identity)
+    monkeypatch.setattr(
+        "app.services.indexer.get_product_embedding_client",
+        lambda: _FakeEmbeddingClient(primary_identity, [0.0] * primary_identity.dim),
+    )
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: spy_index)
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: None)
 
@@ -98,6 +113,56 @@ def test_fallback_invoked_from_handle_ingest_object_created(monkeypatch: pytest.
     assert spy_index.upsert_calls[0]["reconcilable_fallback"] is True
 
 
+def test_handle_ingest_rejects_index_identity_drift_before_inference_or_vector_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services.indexer import handle_ingest_object_created
+
+    stored_identity = EmbeddingIdentity(
+        provider="ollama", model="nomic-embed-text", dim=768
+    )
+    selected_identity = EmbeddingIdentity(
+        provider="gemini", model="gemini-embedding-001", dim=768
+    )
+    embedder = _FakeEmbeddingClient(selected_identity, [0.5] * selected_identity.dim)
+    vector_index = _SpyVectorIndex()
+    vector_index.identity = stored_identity
+    object_id = UUID("29292929-2929-2929-2929-292929292929")
+    previous_vector = {
+        "identity": stored_identity,
+        "embedding": [0.25] * stored_identity.dim,
+        "payload": {"content": "previously indexed content"},
+    }
+    vector_index.vectors[object_id] = previous_vector
+    failures: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "app.services.indexer.get_product_embedding_client", lambda: embedder
+    )
+    monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: vector_index)
+    monkeypatch.setattr(
+        "app.services.indexer.emit_index_embedding_failed",
+        lambda **kwargs: failures.append(kwargs),
+    )
+
+    handle_ingest_object_created(
+        {
+            "uuid": str(object_id),
+            "kind": "note",
+            "source_ref": "vault/identity-drift.md",
+            "content": "new content",
+            "payload": {},
+        }
+    )
+
+    assert embedder.calls == []
+    assert vector_index.purge_calls == []
+    assert vector_index.upsert_calls == []
+    assert vector_index.vectors[object_id] is previous_vector
+    assert len(failures) == 1
+    assert failures[0]["provider"] == selected_identity.provider
+    assert "index rebuild" in str(failures[0]["error"])
+
+
 def test_fallback_emits_egress_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.indexer import handle_ingest_object_created
 
@@ -110,7 +175,10 @@ def test_fallback_emits_egress_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     spy_index = _SpyVectorIndex()
     emitted: list[dict[str, object]] = []
 
-    monkeypatch.setattr("app.services.indexer.get_embedding_identity", lambda: primary_identity)
+    monkeypatch.setattr(
+        "app.services.indexer.get_product_embedding_client",
+        lambda: _FakeEmbeddingClient(primary_identity, [0.0] * primary_identity.dim),
+    )
     monkeypatch.setattr("app.services.indexer.get_vector_index", lambda: spy_index)
     monkeypatch.setattr("app.services.indexer.emit_index_object_embedded", lambda **kwargs: emitted.append(kwargs))
 

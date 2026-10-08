@@ -134,7 +134,7 @@ projections:
   - site: app/cli/health.py::_check_llm_providers
     providers: [mock, ollama, openai, deepseek]
   - site: docs/settings/models/registry.yaml::provider
-    providers: [mock, ollama, openai]
+    providers: [gemini, mock, ollama, openai]
   - site: docs/LLM.md::Providers (Current)
     providers: [mock, ollama, openai, deepseek]
 known_divergences: []

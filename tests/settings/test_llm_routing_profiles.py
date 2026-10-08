@@ -68,13 +68,43 @@ def test_profile_requires_registry_model_id() -> None:
         )
 
 
-def test_profile_rejects_embedding_override_field() -> None:
-    with pytest.raises(ValueError):
-        LLMRoutingSettings(
-            profiles={
+def test_profile_embedding_targets_resolve_from_registry() -> None:
+    resolved = _resolve_llm_routing_model_ids(
+        {
+            "profiles": {
                 "work": {
                     "default_embedding": {
-                        "model_id": "ollama.embed.nomic_embed_text",
+                        "model_id": "gemini.embed.gemini_embedding_001",
+                    },
+                    "tasks": {
+                        "embed": {"model_id": "ollama.embed.nomic_embed_text"},
+                    },
+                }
+            }
+        }
+    )
+
+    profile = LLMRoutingSettings(**resolved).profiles["work"]
+    assert profile.default_embedding is not None
+    assert (profile.default_embedding.provider, profile.default_embedding.model) == (
+        "gemini",
+        "gemini-embedding-001",
+    )
+    assert (profile.tasks["embed"].provider, profile.tasks["embed"].model) == (
+        "ollama",
+        "nomic-embed-text:latest",
+    )
+
+
+def test_profile_embedding_target_rejects_chat_model() -> None:
+    with pytest.raises(ValueError, match="expected kind=embedding"):
+        _resolve_llm_routing_model_ids(
+            {
+                "profiles": {
+                    "work": {
+                        "default_embedding": {
+                            "model_id": "openai.chat.gpt_6_luna",
+                        }
                     }
                 }
             }

@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import quote, urlsplit
 
 import httpx
+from pydantic import ValidationError
 
 from app.model_access.adapter_factory import AdapterRegistryError, ModelAccessAdapterFactory
 from app.model_access.catalog import (
@@ -26,6 +27,7 @@ from app.model_access.catalog_discovery import (
 from app.model_access.remote_contract import (
     CompletionCapabilityIntent,
     CompletionRequest,
+    CompletionUsageMetadata,
     PreflightRequest,
     ProductEmbeddingRequest,
     inline_schema_validator,
@@ -313,6 +315,13 @@ class ProductProviderApiAdapter:
         self._require_catalog_capabilities(model, request.capability_intent)
 
     def complete(self, request: CompletionRequest) -> str:
+        content, _usage = self.complete_with_usage(request)
+        return content
+
+    def complete_with_usage(
+        self, request: CompletionRequest
+    ) -> tuple[str, CompletionUsageMetadata | None]:
+        """Complete once and return only bounded OpenAI billing metadata."""
         schema_validator = None
         if request.output_schema is not None:
             try:
@@ -381,8 +390,8 @@ class ProductProviderApiAdapter:
                 schema_validator.validate(structured)
             except Exception:
                 raise ProviderApiError("provider_schema_violation") from None
-        return content
-
+        usage = _openai_usage_metadata(provider, payload)
+        return content, usage
     def preflight_embedding(self, request: ProductEmbeddingRequest) -> None:
         """Check census binding, endpoint, and host credential without inference."""
         if request.provider != "gemini":
@@ -539,6 +548,45 @@ class ProductProviderApiAdapter:
 
     def close(self) -> None:
         self._client.close()
+
+
+def _openai_usage_metadata(
+    provider: str, payload: dict[str, Any]
+) -> CompletionUsageMetadata | None:
+    """Project billing-only OpenAI fields; never forward the provider payload."""
+    if provider != "openai":
+        return None
+    raw_usage = payload.get("usage")
+    if not isinstance(raw_usage, dict):
+        return None
+    usage: dict[str, Any] = {
+        key: raw_usage[key]
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+        if key in raw_usage
+    }
+    raw_details = raw_usage.get("prompt_tokens_details")
+    if isinstance(raw_details, dict):
+        usage["prompt_tokens_details"] = {
+            key: raw_details[key]
+            for key in (
+                "cached_tokens",
+                "audio_tokens",
+                "cache_write_tokens",
+                "cache_creation_tokens",
+            )
+            if key in raw_details
+        }
+    candidate = {
+        "model": payload.get("model"),
+        "service_tier": payload.get("service_tier"),
+        "usage": usage,
+    }
+    try:
+        return CompletionUsageMetadata.model_validate(candidate)
+    except ValidationError:
+        # Usage is observational. A malformed optional field must not discard a
+        # valid completion; downstream evaluation will mark its receipt unpriced.
+        return None
 
 
 __all__ = ["ProductProviderApiAdapter", "ProviderApiError"]

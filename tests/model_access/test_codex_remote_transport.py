@@ -21,6 +21,8 @@ from app.model_access.remote_contract import (
     CompletionRequest,
     CompletionResponse,
     CompletionRouteIdentity,
+    CompletionTokenUsage,
+    CompletionUsageMetadata,
     PreflightRequest,
     PreflightResponse,
     ProductCatalogRequest,
@@ -538,9 +540,20 @@ def test_product_transport_sends_only_logical_provider_and_model() -> None:
         assert str(http_request.url) == ENDPOINT + "/v1/product/complete"
         return httpx.Response(
             200,
-            json=CompletionResponse(route=host_route, content="hello").model_dump(
-                mode="json"
-            ),
+            json=CompletionResponse(
+                route=host_route,
+                content="hello",
+                usage=CompletionUsageMetadata(
+                    model="gpt-6-luna-2026-10-08",
+                    service_tier="default",
+                    usage=CompletionTokenUsage(
+                        prompt_tokens=100,
+                        completion_tokens=20,
+                        total_tokens=120,
+                        prompt_tokens_details={"cached_tokens": 10},
+                    ),
+                ),
+            ).model_dump(mode="json"),
         )
 
     transport = CodexRemoteTransport(
@@ -556,6 +569,10 @@ def test_product_transport_sends_only_logical_provider_and_model() -> None:
     assert preflight.route == host_route
     assert completion.route == host_route
     assert completion.content == "hello"
+    assert completion.usage is not None
+    assert completion.usage.model == "gpt-6-luna-2026-10-08"
+    assert completion.usage.usage is not None
+    assert completion.usage.usage.prompt_tokens_details.cached_tokens == 10
     assert len(calls) == 2
 
 

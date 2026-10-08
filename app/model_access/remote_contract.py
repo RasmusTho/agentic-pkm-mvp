@@ -59,6 +59,19 @@ class CompletionRouteIdentity(_StrictModel):
             raise ValueError("catalog snapshot reference and hash must be supplied together")
         return self
 
+    def same_execution_target(self, other: "CompletionRouteIdentity") -> bool:
+        """Whether two receipts name the same provider/model/transport.
+
+        Catalog snapshots are execution provenance, not caller-selected Product
+        targets. The Mac may refresh a snapshot between its no-inference preflight
+        and completion; the completion response then carries the actual snapshot.
+        """
+        return (self.provider, self.model, self.transport_id) == (
+            other.provider,
+            other.model,
+            other.transport_id,
+        )
+
 
 class CompletionCapabilityIntent(_StrictModel):
     """Capabilities required by this single completion request."""
@@ -238,11 +251,46 @@ class PreflightRequest(_StrictModel):
         return self
 
 
+class CompletionPromptTokenDetails(_StrictModel):
+    """Whitelisted prompt-token details needed for usage evidence."""
+
+    cached_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    audio_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    cache_write_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    cache_creation_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+
+
+class CompletionTokenUsage(_StrictModel):
+    """Bounded token counts; excludes provider request/response content."""
+
+    prompt_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    completion_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    total_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    prompt_tokens_details: CompletionPromptTokenDetails | None = None
+
+
+class CompletionUsageMetadata(_StrictModel):
+    """Minimal provider billing evidence safe to cross the private portal."""
+
+    model: str | None = Field(
+        default=None,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$",
+    )
+    service_tier: str | None = Field(
+        default=None,
+        max_length=32,
+        pattern=r"^[A-Za-z0-9_-]{1,32}$",
+    )
+    usage: CompletionTokenUsage | None = None
+
+
 class CompletionResponse(_StrictModel):
     """The completion and the exact route that produced it."""
 
     route: CompletionRouteIdentity
     content: str = Field(min_length=1, max_length=512_000)
+    usage: CompletionUsageMetadata | None = None
 
 
 class PreflightResponse(_StrictModel):

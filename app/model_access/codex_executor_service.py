@@ -885,6 +885,7 @@ def create_codex_executor_app(
 
             if not slots.acquire(blocking=False):
                 raise _RequestFailure(429, "executor_busy")
+            usage = None
             try:
                 route = await run_in_threadpool(
                     resolve_product_route,
@@ -923,8 +924,8 @@ def create_codex_executor_app(
                 else:
                     if provider_api_adapter is None:
                         raise _RequestFailure(503, "provider_adapter_unavailable")
-                    content = await run_in_threadpool(
-                        provider_api_adapter.complete, completion_request
+                    content, usage = await run_in_threadpool(
+                        provider_api_adapter.complete_with_usage, completion_request
                     )
             except _RequestFailure:
                 raise
@@ -937,7 +938,7 @@ def create_codex_executor_app(
                 raise _RequestFailure(502, "empty_completion")
             if len(content.encode("utf-8")) > max_output_bytes:
                 raise _RequestFailure(502, "completion_too_large")
-            response = CompletionResponse(route=route, content=content)
+            response = CompletionResponse(route=route, content=content, usage=usage)
             return JSONResponse(
                 content=response.model_dump(mode="json", exclude_none=True)
             )
