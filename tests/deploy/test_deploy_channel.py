@@ -139,6 +139,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "ops/deployments").mkdir(parents=True)
     (root / "tmp").mkdir(parents=True)
     (root / "tmp/runtime.env").write_text(
+        f"LOCAL_UID={os.getuid()}\nLOCAL_GID={os.getgid()}\n"
         "TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=/fixture/capture-inbox\n",
         encoding="utf-8",
     )
@@ -300,6 +301,11 @@ esac
 set -eu
 touch {docker_marker!s}
 printf 'docker %s\\n' "$*" >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
+if [ "${{FAKE_CAPTURE_RUNTIME_IDENTITY:-0}}" = "1" ] && [[ "$*" == compose* ]]; then
+  printf 'compose identity uid=%s gid=%s cmd=%s\\n' \
+    "${{LOCAL_UID:-unset}}" "${{LOCAL_GID:-unset}}" "$*" \
+    >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
+fi
 if [ -n "${{FAKE_DOCKER_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_DOCKER_FAIL_MATCH}}"* ]]; then
   exit 24
 fi
@@ -2867,6 +2873,7 @@ def _configure_dev_test_environment_clobber_preflight(
     runtime_dir = root / ("tmp-test" if channel == "test" else "tmp")
     runtime_dir.mkdir(exist_ok=True)
     (runtime_dir / "runtime.env").write_text(
+        f"LOCAL_UID={os.getuid()}\nLOCAL_GID={os.getgid()}\n"
         "HEIMDAL_CAPTURE_WATCH_DIR=/real/capture/dir\n"
         "VAULT_LAYOUT_NOTE_REL=custom/vault.layout.md\n",
         encoding="utf-8",
@@ -3099,7 +3106,7 @@ def test_bws_effective_target_controls_generated_compose_dependency_graph(tmp_pa
                  'docker-compose.bws.yml', 'docker-compose.bws-external.yml'):
         shutil.copyfile(REPO_ROOT / name, root / name)
     runtime = tmp_path / 'runtime.env'
-    runtime.write_text('LLM_PROVIDER=mock\n')
+    runtime.write_text('LLM_PROVIDER=mock\nLOCAL_UID=1000\nLOCAL_GID=1000\n')
     pin = root / 'config/deploy' / (channel + '.env')
     pin.write_text('WATCHER_RUNTIME_ENV_FILE=' + str(runtime) + '\nAPP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\nAPP_IMAGE_TAG=' + 'a' * 40 + '\n')
     password = tmp_path / 'password'

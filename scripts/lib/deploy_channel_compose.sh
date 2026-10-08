@@ -59,6 +59,113 @@ PY
   esac
 }
 
+# Compose interpolation reads the caller environment and its CLI --env-file;
+# a service-level env_file does not supply values for fields such as `user:`.
+# Read only the two numeric process-identity fields from the governed runtime
+# env. Never source the file or use it as Compose's CLI --env-file, because it
+# also contains database and other runtime bindings.
+deploy_channel_runtime_identity_preflight() {
+  local runtime_env_file="${1:?runtime env file required}"
+  local identity_bindings runtime_uid runtime_gid
+
+  identity_bindings=""
+  if [ -e "${runtime_env_file}" ] || [ -L "${runtime_env_file}" ]; then
+    if [ ! -f "${runtime_env_file}" ]; then
+      echo "runtime identity preflight: blocked reason=invalid_runtime_env" >&2
+      return 78
+    fi
+    if ! identity_bindings="$(
+      RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON:-python3}" - 2>/dev/null <<'PY'
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import sys
+
+
+try:
+    raw = Path(os.environ["RUNTIME_ENV_FILE"]).read_bytes()
+except (KeyError, OSError):
+    raise SystemExit(2) from None
+if len(raw) > 1_048_576:
+    raise SystemExit(2)
+
+values: dict[str, list[bytes]] = {"LOCAL_UID": [], "LOCAL_GID": []}
+for line in raw.splitlines():
+    for key in values:
+        prefix = key.encode("ascii") + b"="
+        if line.startswith(prefix):
+            values[key].append(line[len(prefix):])
+
+if not values["LOCAL_UID"] and not values["LOCAL_GID"]:
+    raise SystemExit(0)
+if any(len(entries) != 1 for entries in values.values()):
+    raise SystemExit(2)
+uid, gid = values["LOCAL_UID"][0], values["LOCAL_GID"][0]
+if not re.fullmatch(rb"[0-9]+", uid) or not re.fullmatch(rb"[0-9]+", gid):
+    raise SystemExit(2)
+if not uid.lstrip(b"0") or not gid.lstrip(b"0"):
+    raise SystemExit(2)
+print(uid.decode("ascii") + "\t" + gid.decode("ascii"))
+PY
+    )"; then
+      echo "runtime identity preflight: blocked reason=invalid_runtime_env" >&2
+      return 78
+    fi
+  fi
+
+  if [ -n "${identity_bindings}" ]; then
+    IFS=$'\t' read -r runtime_uid runtime_gid <<<"${identity_bindings}"
+    if [[ ! "${runtime_uid}" =~ ^[0-9]+$ ]] || [[ ! "${runtime_gid}" =~ ^[0-9]+$ ]]; then
+      echo "runtime identity preflight: blocked reason=invalid_runtime_env" >&2
+      return 78
+    fi
+    LOCAL_UID="${runtime_uid}"
+    LOCAL_GID="${runtime_gid}"
+    export LOCAL_UID LOCAL_GID
+    return 0
+  fi
+
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+    echo "runtime identity preflight: blocked reason=missing_runtime_identity" >&2
+    return 78
+  fi
+
+  # Local development without a generated runtime env keeps the host identity
+  # behavior. A present but malformed/partial governed identity never falls
+  # through to this compatibility path.
+  LOCAL_UID="${LOCAL_UID:-$(id -u)}"
+  LOCAL_GID="${LOCAL_GID:-$(id -g)}"
+  export LOCAL_UID LOCAL_GID
+}
+
+deploy_channel_runtime_identity_matches_snapshot() {
+  local runtime_env_snapshot="${1:?runtime env snapshot required}"
+  local expected_uid="${LOCAL_UID:-$(id -u)}"
+  local expected_gid="${LOCAL_GID:-$(id -g)}"
+  local actual_uid actual_gid preflight_rc
+
+  if deploy_channel_runtime_identity_preflight "${runtime_env_snapshot}"; then
+    actual_uid="${LOCAL_UID}"
+    actual_gid="${LOCAL_GID}"
+  else
+    preflight_rc=$?
+    LOCAL_UID="${expected_uid}"
+    LOCAL_GID="${expected_gid}"
+    export LOCAL_UID LOCAL_GID
+    return "${preflight_rc}"
+  fi
+
+  LOCAL_UID="${expected_uid}"
+  LOCAL_GID="${expected_gid}"
+  export LOCAL_UID LOCAL_GID
+  if [ "${actual_uid}" != "${expected_uid}" ] || [ "${actual_gid}" != "${expected_gid}" ]; then
+    echo "runtime identity preflight: blocked reason=runtime_identity_changed" >&2
+    return 78
+  fi
+}
+
 _deploy_channel_model_access_config_blocked() {
   local reason="${1:?reason required}"
   echo "model-access runtime env preflight: blocked reason=${reason}" >&2
@@ -920,6 +1027,7 @@ deploy_channel_compose() {
     if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
       _deploy_channel_snapshot_runtime_env_file \
         "${runtime_env_file}" "${model_access_env_file}" "${runtime_env_snapshot_file}" || return $?
+      deploy_channel_runtime_identity_matches_snapshot "${runtime_env_snapshot_file}" || return $?
       runtime_env_ref="${runtime_env_snapshot_file}"
     fi
     export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
