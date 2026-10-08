@@ -106,6 +106,11 @@ select a different compatible registry-backed model through its local profile. O
 required local service or health dependency when it is unselected; provider-neutral health reports
 the selected logical `llm_access` capabilities.
 
+Vault initialization seeds these shared Luna and Nomic defaults in `settings/llm_routing.md` only
+when that file is absent. Reinitializing an existing vault preserves its owner-authored routing
+policy. No Ollama chat fallback is configured for Luna chat and planning; existing failure handling
+applies when the Mac route is unavailable.
+
 Product evaluation uses the same Mac portal and host-owned provider credentials/endpoints; local
 `EVAL_LLM_API_KEY`, `EVAL_LLM_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_BASE_URL` do not override
 that authority. Measured classification evaluation additionally pins one registry model and the

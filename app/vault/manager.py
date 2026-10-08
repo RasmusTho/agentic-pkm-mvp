@@ -1030,6 +1030,31 @@ def _static_shared_settings_seeds() -> tuple[tuple[str, dict[str, Any], str], ..
             "# YouTube Sync Settings\nSettings for the YouTube source-sync capability (YSS).\n"
             "See docs/YOUTUBE_SOURCE_SYNC/SOURCE_SYNC_CONTRACT.md for the full settings model.\n",
         ),
+        (
+            "llm_routing.md",
+            {"scope": "vault-shared"},
+            "# LLM Routing Settings\n"
+            "Shared Product model-routing defaults. Existing owner-authored routing policy is never replaced by initialization.\n\n"
+            "```yaml settings\n"
+            "default_chat:\n"
+            "  primary:\n"
+            "    model_id: openai.chat.gpt_6_luna\n"
+            "  fallback:\n"
+            "    mode: never\n\n"
+            "default_reasoning:\n"
+            "  primary:\n"
+            "    model_id: openai.chat.gpt_6_luna\n"
+            "  fallback:\n"
+            "    mode: never\n\n"
+            "default_embedding:\n"
+            "  primary:\n"
+            "    model_id: ollama.embed.nomic_embed_text\n"
+            "    profile: default\n"
+            "  fallback:\n"
+            "    mode: never\n"
+            "  require_compatible_identity: true\n"
+            "```\n",
+        ),
     )
 
 

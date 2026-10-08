@@ -8,6 +8,7 @@ import yaml
 from app.settings import compiler
 from app.settings.compiler import _resolve_llm_routing_model_ids
 from app.settings.models import LLMRoutingSettings
+from app.components.llm.router import LLMRouter, LLMTaskIntent
 from app.vault.manager import VaultManager
 
 pytestmark = pytest.mark.not_pg
@@ -109,6 +110,52 @@ def test_profile_embedding_target_rejects_chat_model() -> None:
                 }
             }
         )
+
+
+def test_initialized_vault_default_profile_routes_luna_and_nomic(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER_ENFORCE", raising=False)
+    monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_FORCE_MODEL", raising=False)
+    vault_root = tmp_path / "fresh-vault"
+    result = VaultManager().initialize_vault(vault_root, remember=False)
+    assert "settings/llm_routing.md" in result.created_files
+
+    runtime_dir = tmp_path / "runtime" / "settings"
+    monkeypatch.setattr(compiler, "RUNTIME", runtime_dir)
+    bundle = compiler.compile_all(vault_root=vault_root, auto_heal=False)
+
+    chat = bundle.llm_routing.default_chat
+    reasoning = bundle.llm_routing.default_reasoning
+    embedding = bundle.llm_routing.default_embedding
+    assert (chat.primary.model_id, chat.primary.provider, chat.primary.model) == (
+        "openai.chat.gpt_6_luna",
+        "openai",
+        "gpt-6-luna",
+    )
+    assert (reasoning.primary.model_id, reasoning.primary.provider, reasoning.primary.model) == (
+        "openai.chat.gpt_6_luna",
+        "openai",
+        "gpt-6-luna",
+    )
+    assert chat.fallback.mode == reasoning.fallback.mode == "never"
+    router = LLMRouter(settings=bundle)
+    for task_kind in ("ask", "plan"):
+        route = router.route(LLMTaskIntent(task_kind=task_kind))
+        assert (route.provider, route.model) == ("openai", "gpt-6-luna")
+    assert (
+        embedding.primary.model_id,
+        embedding.primary.provider,
+        embedding.primary.model,
+        embedding.primary.profile,
+    ) == (
+        "ollama.embed.nomic_embed_text",
+        "ollama",
+        "nomic-embed-text:latest",
+        "default",
+    )
+    assert embedding.fallback.mode == "never"
+    assert embedding.require_compatible_identity is True
 
 
 def test_clone_local_profile_is_compiled_into_instance_runtime(tmp_path, monkeypatch) -> None:
