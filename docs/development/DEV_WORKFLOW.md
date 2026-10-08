@@ -141,6 +141,39 @@ ambiguous. Review remains responsible for those cases.
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 
+### Validation-readiness diagnostic
+
+Before starting a costly validation lane, an operator may run the bounded, read-only diagnostic:
+
+```bash
+python3 scripts/validation_environment_readiness.py --target test
+python3 scripts/validation_environment_readiness.py --target lint
+```
+
+The command resolves the repository interpreter through `scripts/lib/resolve_repo_python.sh`,
+including an explicit `BUILDEROPS_PYTHON` override, and emits value-free JSON. `compatible` means
+the required modules imported in that interpreter; `unavailable` and `import_incompatible` require
+selecting an existing supported interpreter or fixing the invocation context. Helper status is
+`visible`, `missing`, `restricted`, or `unknown`; a failed or timed-out helper invocation remains
+`unknown` and does not imply a credential or ACL failure.
+
+The PG classification is `absent`, `forbidden`, `ambiguous`, or `disposable_candidate`. `absent`
+matches the existing no-DSN skip banner and is never a pass. A primary disposable DSN remains
+`ambiguous` when runtime or ambient writers are also configured, so one value cannot hide another
+target. Multiple primary DSNs are also unresolved unless they repeat the same value. URI or
+keyword conninfo without an explicit host is a forbidden local-socket target, and a host without an
+explicit port remains ambiguous. Only an explicit disposable candidate such as the documented
+`app_test` target may proceed to the existing PG guard and host-lease workflow; the diagnostic never
+connects, provisions, installs, or authorizes a lane. For
+`unavailable` or `import_incompatible`, select an existing supported interpreter or set a valid
+explicit override and rerun. For `missing` or `restricted`, use the existing helper path with the
+current checkout/sandbox visibility; for `unknown`, inspect the helper's bounded invocation result
+and rerun without changing credentials or ACLs. The terminal evidence for each recovery is the
+value-free JSON status plus the ordinary validation command's own receipt. A zero exit status means
+only that the diagnostic ran, so its statuses must be read before a validation command is started.
+This is an operator aid and does not add a mandatory gate or replace the existing Make/lease
+selection owned by #5805 or the temporary-isolation work tracked by #4009.
+
 ### Pointing the PG lane at a scratch database
 
 The `pg` lane has **no default database** (#4573). It runs destructive DDL, `TRUNCATE`, and
