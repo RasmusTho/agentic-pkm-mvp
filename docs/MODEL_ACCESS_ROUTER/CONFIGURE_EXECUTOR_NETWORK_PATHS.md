@@ -39,8 +39,8 @@ only configured or required path; Tailscale is not part of current acceptance or
   validate each route before inference. Public ingress is forbidden.
 - The VLAN private-HTTPS adapter accepts only an HTTPS origin using a literal IPv4 address in
   RFC1918 space or a literal IPv6 unique-local address. DNS names are rejected so a host-local
-  endpoint typo cannot send completion content to a public host. Tailscale is not configured or
-  required for the Mac mini portal.
+  endpoint typo cannot send completion content to a public host. Tailscale is not required for the
+  current VLAN-only Product portal.
 - Once a completion may have reached the executor, a timeout or lost response is terminal. The
   client does not retry over another path, change provider, or send a second completion.
 - Network-path fallback does not imply provider/model fallback. Those decisions remain separately
