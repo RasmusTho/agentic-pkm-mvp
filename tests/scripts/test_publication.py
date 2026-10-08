@@ -1586,3 +1586,23 @@ def test_clean_resumed_publication_uses_exact_existing_commit(tmp_path: Path) ->
     assert _run("git", "rev-parse", "HEAD", cwd=repo).strip() == prior_head
     assert not any(call[:2] in {("git", "add"), ("git", "commit")} for call in executor.calls)
     assert _run("git", "ls-remote", "--heads", "origin", f"refs/heads/{BRANCH}", cwd=repo).split()[0] == prior_head
+
+
+@pytest.mark.parametrize("message", ["Closes #9999", "Refs #9999"])
+def test_resumed_history_retains_commit_message_authority_guard(tmp_path: Path, message: str) -> None:
+    repo, remote = _local_publication_repo(tmp_path)
+    (repo / "feature.txt").write_text("in-scope historical change\n")
+    _run("git", "add", "feature.txt", cwd=repo)
+    _run("git", "commit", "-m", message, cwd=repo)
+    before_head = _run("git", "rev-parse", "HEAD", cwd=repo).strip()
+    (repo / "feature.txt").write_text("additive in-scope dirty change\n")
+    executor = LocalGitPublicationExecutor(remote)
+    if message.startswith("Closes"):
+        with pytest.raises(PublicationRefusal, match="candidate commit message contains a closing Issue reference"):
+            build_publication_plan(_request(repo), executor=executor)
+    else:
+        plan = build_publication_plan(_request(repo), executor=executor)
+        assert plan["git"]["head_sha"] == before_head
+    assert not any(call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")} or _is_gh_api_call(call, "POST") or _is_gh_api_call(call, "PATCH") or call[:3] == ("gh", "pr", "create") for call in executor.calls)
+    assert _run("git", "rev-parse", "HEAD", cwd=repo).strip() == before_head
+    assert _run("git", "status", "--short", cwd=repo).strip() == "M feature.txt"

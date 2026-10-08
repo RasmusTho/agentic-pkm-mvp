@@ -60,6 +60,10 @@ Native review rounds 0 and 1 do not automatically create executor requests or ar
 executor round-1 construction and legacy round-2 requests remain supported; authenticated in-flight
 executor ownership never changes routes merely because an artifact exists.
 
+Resumed history retains the commit-message authority guard: every candidate commit after the
+bound base may use `Refs` but must not contain closing-keyword Issue references. This keeps prior
+commit messages from adding undeclared closing authority.
+
 Non-`main`, unbounded/merge history, conflicting or terminal PR history, Direct Repair, declared
 high-risk, and ambiguous readback cases route to `.codex/skills/publish-pr/FULL_PATH.md :: Procedure`.
 Neither publication route owns merge, Issue closure, release, or deployment.

@@ -216,7 +216,7 @@ def build_publication_plan(
     ):
         issues[number] = _read_issue(runner, actual_worktree, request.repository, number)
         _require_publishable_issue(issues[number], number, claimed=number in closing_numbers)
-    issue = issues.get(request.governing_issue)
+    issue = issues.get(request.governing_issue) if request.governing_issue is not None else None
     remote_head = _read_remote_head(runner, actual_worktree, request.branch)
     if request.existing_pr_number is None and remote_head is not None:
         raise PublicationRefusal(
@@ -644,6 +644,9 @@ def _candidate_paths(executor: CommandExecutor, cwd: Path, base: str, head: str)
             raise PublicationRefusal(
                 "unsupported", "candidate merge or ambiguous history requires the full path"
             )
+        message = _checked(executor, ["git", "show", "-s", "--format=%B", parts[0]], cwd).stdout
+        if has_closing_issue_attempt(message):
+            raise PublicationRefusal("unsupported", "candidate commit message contains a closing Issue reference")
         paths |= _nul_paths(
             _checked(
                 executor,

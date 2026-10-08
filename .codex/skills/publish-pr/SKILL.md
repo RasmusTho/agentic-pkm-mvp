@@ -35,6 +35,10 @@ existing PR scope-revalidation gate. Updates make only additive commits and non-
 metadata is changed only after exact current-head readback. Unrelated dirty paths are preserved by
 refusing before staging.
 
+Every candidate commit since the bound base must also satisfy the existing commit-message rule:
+`Refs #<id>` is allowed; closing-keyword references are refused before publication. The adapter
+does not rewrite resumed history to remove them.
+
 `.codex/skills/publish-pr/FULL_PATH.md :: Procedure` is the canonical full-path publication owner.
 Route every unsupported case there without trying to coerce it into the normal command:
 
