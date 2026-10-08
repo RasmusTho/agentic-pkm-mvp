@@ -3106,7 +3106,7 @@ def test_bws_effective_target_controls_generated_compose_dependency_graph(tmp_pa
                  'docker-compose.bws.yml', 'docker-compose.bws-external.yml'):
         shutil.copyfile(REPO_ROOT / name, root / name)
     runtime = tmp_path / 'runtime.env'
-    runtime.write_text('LLM_PROVIDER=mock\n')
+    runtime.write_text('LLM_PROVIDER=mock\nLOCAL_UID=1000\nLOCAL_GID=1000\n')
     pin = root / 'config/deploy' / (channel + '.env')
     pin.write_text('WATCHER_RUNTIME_ENV_FILE=' + str(runtime) + '\nAPP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\nAPP_IMAGE_TAG=' + 'a' * 40 + '\n')
     password = tmp_path / 'password'
