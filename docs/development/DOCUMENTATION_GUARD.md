@@ -24,11 +24,19 @@ latter check; it does not bypass the language policy.
 
 `scripts/docs_guard_logic.py` owns the pure path and language-routing rules
 consumed by the runner. Its `GOVERNANCE_TEMPORAL_ENFORCEMENT` mapping is a
-deliberate exception for governance-only enforcement scripts: each listed
-script has to change with its named `docs/development/` contract. An unrelated
+deliberate exception for the listed governance-only enforcement scripts and
+the three Builder delivery modules below: each listed source has to change with its named
+`docs/development/` contract. An unrelated
 development document is not sufficient. Mixing a non-governance temporal path
-into the same change requires both every changed governance script's paired
+into the same change requires both every changed governance source's paired
 contract and the normal high-risk temporal owner document.
+
+Exactly `app/builderops/publication.py`, `scripts/build_verification_dispatch_request.py`,
+and `scripts/pr_body_generator.py` are paired with `docs/development/PR_HOT_PATH.md`.
+These sources construct or enforce Builder publication, verification requests, and PR bodies;
+their governance-only changes do not imply Product/Runtime temporal state changes. The pairing
+does not cover other modules under `app/builderops/` or `scripts/`, and mixing runtime/config
+changes still requires the runtime temporal owner document as well as PR Hot Path.
 
 This document is the paired owner contract for both `scripts/docs_guard.py`
 and `scripts/docs_guard_logic.py`. When either script's policy, base/diff

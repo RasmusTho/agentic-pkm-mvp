@@ -165,7 +165,7 @@ TEMPORAL_DOCS = frozenset(
     }
 )
 TEMPORAL_CODE_PREFIXES = ("app/", "scripts/", "config/", "docs/settings/")
-# Maps each governance-only enforcement script to its docs/development/ owner
+# Maps each listed governance enforcement/delivery module to its development owner
 # doc. Optional values retain the safe fallback for a future unassigned entry,
 # but every current enforcement script has an explicit paired contract.
 GOVERNANCE_TEMPORAL_ENFORCEMENT = MappingProxyType(
@@ -178,6 +178,9 @@ GOVERNANCE_TEMPORAL_ENFORCEMENT = MappingProxyType(
         "scripts/agent_worktree.py": "docs/development/GIT_HYGIENE.md",
         "scripts/review_before_ci_gate.py": "docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md",
         "scripts/select_pr_tests.py": "docs/development/TEST_STRATEGY_HOT_PATH.md",
+        "app/builderops/publication.py": "docs/development/PR_HOT_PATH.md",
+        "scripts/build_verification_dispatch_request.py": "docs/development/PR_HOT_PATH.md",
+        "scripts/pr_body_generator.py": "docs/development/PR_HOT_PATH.md",
     }
 )
 
@@ -341,12 +344,12 @@ def non_english_documentation(
 def requires_temporal_owner_doc(changed: list[str]) -> bool:
     """Return true unless a changed temporal surface has an owner-doc writeback.
 
-    A governance-only change to one of these enforcement scripts may use its
+    A governance-only change to one of these listed enforcement/delivery modules may use its
     `docs/development/` contract as the owner writeback. Presence of governance
     files is insufficient: every changed temporal surface must be one of those
-    scripts, so a mixed runtime/config PR cannot inherit the exception. A
-    script with an explicit paired doc in GOVERNANCE_TEMPORAL_ENFORCEMENT
-    requires that exact doc; a script mapped to None accepts any
+    modules, so a mixed runtime/config PR cannot inherit the exception. A
+    module with an explicit paired doc in GOVERNANCE_TEMPORAL_ENFORCEMENT
+    requires that exact doc; a module mapped to None accepts any
     docs/development/ touch until its own contract doc is assigned.
     """
 
