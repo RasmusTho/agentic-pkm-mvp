@@ -248,9 +248,16 @@ class BwsSecretReader:
             identifiers = client.secrets().list(self.config.organization_id)
             if not identifiers.success:
                 raise BwsLookupError()
-            selected = [item for item in identifiers.data.data if item.key == identity]
-            if not selected:
+            # Shared identities have one copy in each project; scope before uniqueness.
+            matching = [item for item in identifiers.data.data if item.key == identity]
+            if not matching:
                 raise BwsItemAbsent()
+            selected = [
+                item
+                for item in matching
+                if self.config.project_id
+                in [str(project_id) for project_id in item.project_ids]
+            ]
             if (
                 len(selected) != 1
                 or str(selected[0].organization_id) != self.config.organization_id

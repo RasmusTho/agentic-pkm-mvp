@@ -1506,6 +1506,7 @@ class _BwsClient:
         self.duplicate_project_id = False
         self.peer_project_id_fault: str | None = None
         self.include_peer_project_item = False
+        self.peer_project_item_identity: str | None = None
         self.duplicate_item = False
         self.wrong_item_organization = False
         self.wrong_item_project_ids = False
@@ -1599,10 +1600,12 @@ class _BwsClient:
         items = [] if self.missing else [item]
         if self.include_peer_project_item:
             peer_project = "prod" if self.project == "non-prod" else "non-prod"
-            peer_identity = (
-                "prod/heimdal.raw-store-key"
-                if peer_project == "prod" else "dev/postgres.password"
-            )
+            peer_identity = self.peer_project_item_identity
+            if peer_identity is None:
+                peer_identity = (
+                    "prod/heimdal.raw-store-key"
+                    if peer_project == "prod" else "dev/postgres.password"
+                )
             items.append(
                 SimpleNamespace(
                     id=_BWS_PEER_ITEM,
@@ -1688,20 +1691,21 @@ def test_bws_lookup_accepts_both_projects_and_fetches_only_selected_item(
     reader, client, controller = _bws_fixture(
         tmp_path,
         project="non-prod",
-        identity="dev/postgres.password",
+        identity="shared/openai.api-key",
         value=value,
     )
     client.include_peer_project_item = True
+    client.peer_project_item_identity = "shared/openai.api-key"
 
     resolved = resolve_host_secret_values(
         channel="dev",
-        consumer="postgres-api",
+        consumer="builderops-model-inquiry",
         provider="bws",
         bws_reader=reader,
         controller=controller,
     )
 
-    assert resolved == {"postgres.password": value}
+    assert resolved == {"openai.api-key": value}
     assert client.listed_project_count == 2
     assert client.calls == [
         ("login", None),
