@@ -1,4 +1,4 @@
-"""Hash-bound plan/apply adapter for the normal new-PR publication path."""
+"""Hash-bound plan/apply adapter for bounded native PR publication."""
 
 from __future__ import annotations
 
@@ -14,7 +14,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol, Sequence
 
-from app.dispatcher.verification_contract import has_closing_issue_attempt
+from app.dispatcher.verification_contract import (
+    MAX_CLOSING_ISSUES,
+    has_closing_issue_attempt,
+    resolve_issue_authority,
+)
 
 
 PLAN_SCHEMA = "builder.publication-plan.v1"
@@ -119,10 +123,12 @@ class PublicationRequest:
     risk_surfaces: tuple[str, ...]
     risk_assessment_complete: bool
     review_gate_complete: bool
-    governing_issue: int
+    governing_issue: int | None
     commit_message: str
     pr_title: str
     pr_body_inputs: Mapping[str, Any]
+    closing_issues: tuple[int, ...] | None = None
+    existing_pr_number: int | None = None
 
 
 @dataclass(frozen=True)
@@ -178,11 +184,6 @@ def build_publication_plan(
     base_remote_ref = f"origin/{request.base_ref}"
     base_sha = _git_text(runner, actual_worktree, "rev-parse", base_remote_ref)
     head_sha = _git_text(runner, actual_worktree, "rev-parse", "HEAD")
-    if head_sha != base_sha:
-        raise PublicationRefusal(
-            "unsupported",
-            "normal new-PR plan requires HEAD to equal the bound base",
-        )
     authority = _read_authority_snapshot(
         runner,
         actual_worktree,
@@ -197,27 +198,52 @@ def build_publication_plan(
     if staged:
         raise PublicationRefusal("drift", "publication plan requires an initially clean index")
     dirty_paths = unstaged | untracked
-    if dirty_paths != set(intended_paths):
+    candidate_paths = _candidate_paths(runner, actual_worktree, base_sha, head_sha)
+    if not candidate_paths.issubset(intended_paths):
+        raise PublicationRefusal("drift", "candidate history exceeds the intended scope")
+    if dirty_paths | candidate_paths != set(intended_paths) or not dirty_paths.issubset(
+        intended_paths
+    ):
         raise PublicationRefusal(
             "drift",
             "planned paths do not exactly match the dirty working-tree paths",
         )
     path_states = [_path_state(runner, actual_worktree, path, base_sha) for path in intended_paths]
-    issue = _read_issue(runner, actual_worktree, request.repository, request.governing_issue)
-    _require_publishable_issue(issue, request.governing_issue)
+    closing_numbers = _closing_numbers(request)
+    issues = {}
+    for number in sorted(
+        set(closing_numbers) | ({request.governing_issue} if request.governing_issue else set())
+    ):
+        issues[number] = _read_issue(runner, actual_worktree, request.repository, number)
+        _require_publishable_issue(issues[number], number, claimed=number in closing_numbers)
+    issue = issues.get(request.governing_issue)
     remote_head = _read_remote_head(runner, actual_worktree, request.branch)
-    if remote_head is not None:
+    if request.existing_pr_number is None and remote_head is not None:
         raise PublicationRefusal(
             "unsupported", "normal new-PR plan requires an absent remote publication branch"
         )
-    if _read_pr_history(runner, actual_worktree, request.repository, request.branch):
+    history = _read_pr_history(runner, actual_worktree, request.repository, request.branch)
+    if request.existing_pr_number is None and history:
         raise PublicationRefusal(
             "unsupported",
             "normal new-PR plan requires empty all-state PR history for the publication branch",
         )
+    existing_pr = None
+    if request.existing_pr_number is not None:
+        if remote_head != head_sha:
+            raise PublicationRefusal(
+                "drift", "existing PR remote head does not match local candidate"
+            )
+        if len(history) != 1 or history[0].get("number") != request.existing_pr_number:
+            raise PublicationRefusal("unknown", "existing PR history is not one exact requested PR")
+        existing_pr = _pr_binding(history[0])
+        _require_existing_pr(existing_pr, request, authority.base_sha, head_sha)
     pr_body_inputs = json.loads(canonical_json(request.pr_body_inputs))
     _validate_pr_body_inputs(request, pr_body_inputs)
+    if request.closing_issues is not None:
+        pr_body_inputs["closing_issues"] = list(closing_numbers)
     body = _generate_pr_body(runner, actual_worktree, pr_body_inputs)
+    _validate_generated_authority(body, request.governing_issue, closing_numbers)
 
     plan: dict[str, Any] = {
         "schema": PLAN_SCHEMA,
@@ -229,6 +255,7 @@ def build_publication_plan(
         "risk_assessment_complete": request.risk_assessment_complete,
         "review_gate_complete": request.review_gate_complete,
         "governing_issue": issue,
+        "closing_issues": [issues[number] for number in closing_numbers],
         "authority": authority.as_mapping(),
         "git": {
             "branch": request.branch,
@@ -238,7 +265,8 @@ def build_publication_plan(
             "head_sha": head_sha,
             "intended_paths": list(intended_paths),
             "path_states": path_states,
-            "remote_head": None,
+            "dirty_paths": sorted(dirty_paths),
+            "remote_head": remote_head,
         },
         "commit": {
             "message": request.commit_message.rstrip("\n"),
@@ -251,6 +279,7 @@ def build_publication_plan(
             "body_sha256": _sha256_text(body),
             "base_ref": request.base_ref,
             "head_ref": request.branch,
+            "existing": existing_pr,
         },
     }
     plan["plan_sha256"] = publication_plan_hash(plan)
@@ -284,11 +313,12 @@ def apply_publication_plan(
         if local_state != "committed" or commit_sha is None or remote_head != commit_sha:
             raise PublicationRefusal("unknown", "exact PR exists without exact local/remote commit")
         return _receipt(normalized, authority, commit_sha, existing, reconciled=True)
-    if local_state != "committed" and remote_head is not None:
+    previous_remote = normalized["git"].get("remote_head")
+    if local_state != "committed" and remote_head is not None and remote_head != previous_remote:
         raise PublicationRefusal(
             "unknown", "remote reservation exists without the exact local publication commit"
         )
-    if remote_head not in {None, normalized["authority"]["base_sha"], commit_sha}:
+    if remote_head not in {None, normalized["authority"]["base_sha"], previous_remote, commit_sha}:
         raise PublicationRefusal(
             "unknown", "remote branch is outside the publication state machine"
         )
@@ -341,7 +371,8 @@ def apply_publication_plan(
             raise PublicationRefusal("unknown", "exact PR exists without exact remote commit")
         return _receipt(normalized, authority, commit_sha, existing, reconciled=True)
     base_sha = normalized["authority"]["base_sha"]
-    if remote_head not in {None, base_sha, commit_sha}:
+    push_parent = previous_remote or base_sha
+    if remote_head not in {None, push_parent, commit_sha}:
         raise PublicationRefusal(
             "unknown", "remote branch is outside the publication state machine"
         )
@@ -389,12 +420,12 @@ def apply_publication_plan(
                 "unknown", "reservation command succeeded without exact remote readback"
             )
 
-    if remote_head == base_sha:
+    if remote_head == push_parent:
         authority, remote_head, prs = _transition_readback(runner, worktree, normalized, commit_sha)
         existing = _resolve_pr_history(normalized, prs, commit_sha)
         if existing is not None:
             raise PublicationRefusal("unknown", "PR appeared before the exact commit transition")
-        if remote_head != base_sha:
+        if remote_head != push_parent:
             if remote_head == commit_sha:
                 reconciled = True
             else:
@@ -402,7 +433,7 @@ def apply_publication_plan(
                     "unknown", "remote branch moved before the exact commit transition"
                 )
 
-    if remote_head == base_sha:
+    if remote_head == push_parent:
         push = runner.run(
             [
                 "git",
@@ -422,7 +453,7 @@ def apply_publication_plan(
             ) from None
         existing = _resolve_pr_history(normalized, prs, commit_sha)
         if push.returncode != 0:
-            if remote_head == base_sha:
+            if remote_head == push_parent:
                 raise PublicationCommandError(push)
             if remote_head != commit_sha:
                 raise PublicationRefusal("unknown", "push raced with a conflicting remote head")
@@ -440,8 +471,22 @@ def apply_publication_plan(
         raise PublicationRefusal("unknown", "remote branch moved before PR creation")
     existing = _resolve_pr_history(normalized, prs, commit_sha)
     if existing is None:
-        create = runner.run(
-            [
+        if normalized["pr"].get("existing"):
+            operation = [
+                "gh",
+                "api",
+                "--hostname",
+                GITHUB_HOST,
+                "--method",
+                "PATCH",
+                f"repos/{normalized['repository']}/pulls/{normalized['pr']['existing']['number']}",
+                "-f",
+                f"title={normalized['pr']['title']}",
+                "-f",
+                f"body={normalized['pr']['body']}",
+            ]
+        else:
+            operation = [
                 "gh",
                 "pr",
                 "create",
@@ -455,9 +500,8 @@ def apply_publication_plan(
                 normalized["pr"]["title"],
                 "--body",
                 normalized["pr"]["body"],
-            ],
-            cwd=worktree,
-        )
+            ]
+        create = runner.run(operation, cwd=worktree)
         if create.returncode != 0:
             try:
                 authority, remote_head, prs = _transition_readback(
@@ -466,14 +510,15 @@ def apply_publication_plan(
             except PublicationCommandError:
                 raise PublicationRefusal(
                     "unknown",
-                    "PR create failed and immediate readback was unavailable",
+                    "PR publication failed and immediate readback was unavailable",
                 ) from None
             if remote_head != commit_sha:
                 raise PublicationRefusal("unknown", "remote branch moved during PR creation")
             existing = _resolve_pr_history(normalized, prs, commit_sha)
             if existing is None:
                 raise PublicationRefusal(
-                    "unknown", "PR create failed and immediate readback did not prove the outcome"
+                    "unknown",
+                    "PR publication failed and immediate readback did not prove the outcome",
                 )
             reconciled = True
 
@@ -516,8 +561,17 @@ def _validate_request(request: PublicationRequest) -> None:
         request.review_gate_complete, bool
     ):
         raise PublicationRefusal("unsupported", "gate attestations must be explicit booleans")
-    if request.governing_issue <= 0:
+    if request.governing_issue is not None and (
+        type(request.governing_issue) is not int or request.governing_issue <= 0
+    ):
         raise PublicationRefusal("unsupported", "governing Issue must be positive")
+    if request.governing_issue is None and request.lane == "implementation":
+        raise PublicationRefusal("unsupported", "implementation requires a governing Issue")
+    _closing_numbers(request)
+    if request.existing_pr_number is not None and (
+        type(request.existing_pr_number) is not int or request.existing_pr_number <= 0
+    ):
+        raise PublicationRefusal("unsupported", "existing PR number must be positive")
     if not request.branch.strip() or not request.base_ref.strip():
         raise PublicationRefusal("unsupported", "branch and base ref are required")
     if request.base_ref != "main":
@@ -535,9 +589,140 @@ def _validate_pr_body_inputs(request: PublicationRequest, values: Mapping[str, A
         raise PublicationRefusal("drift", "PR body lane does not match publication lane")
     if values.get("issue_number") != request.governing_issue:
         raise PublicationRefusal("drift", "PR body Issue does not match governing Issue")
-    if values.get("final_review_rounds", 0) != 0:
+    if values.get("final_review_rounds", 0) not in {0, 1}:
         raise PublicationRefusal(
-            "unsupported", "normal Tier 1/2 plan requires Final-Review-Rounds 0"
+            "unsupported", "native publication supports Final-Review-Rounds 0 or 1"
+        )
+    supplied = values.get("closing_issues")
+    if supplied is not None and (
+        not isinstance(supplied, (list, tuple))
+        or not supplied
+        or len(supplied) > MAX_CLOSING_ISSUES
+        or any(type(number) is not int or number <= 0 for number in supplied)
+        or len(set(supplied)) != len(supplied)
+        or tuple(sorted(supplied)) != _closing_numbers(request)
+    ):
+        raise PublicationRefusal(
+            "drift", "PR body closing Issues do not match the explicit closing set"
+        )
+
+
+def _closing_numbers(request: PublicationRequest) -> tuple[int, ...]:
+    numbers = request.closing_issues
+    if numbers is None:
+        return (request.governing_issue,) if request.governing_issue is not None else ()
+    if (
+        request.governing_issue is None
+        or not numbers
+        or len(numbers) > MAX_CLOSING_ISSUES
+        or any(type(n) is not int or n <= 0 for n in numbers)
+        or len(set(numbers)) != len(numbers)
+    ):
+        raise PublicationRefusal(
+            "unsupported",
+            "closing Issues must be an explicit unique set of at most ten positive IDs with a governing Issue",
+        )
+    return tuple(sorted(numbers))
+
+
+def _candidate_paths(executor: CommandExecutor, cwd: Path, base: str, head: str) -> set[str]:
+    """Bind every touched path, including history whose changes were later reverted."""
+    if base == head:
+        return set()
+    ancestor = executor.run(["git", "merge-base", "--is-ancestor", base, head], cwd=cwd)
+    if ancestor.returncode != 0:
+        raise PublicationRefusal("drift", "candidate is not descended from the live base")
+    commits = _git_text(executor, cwd, "rev-list", "--parents", f"{base}..{head}").splitlines()
+    if not commits:
+        raise PublicationRefusal("unknown", "candidate history could not be resolved")
+    paths: set[str] = set()
+    for row in commits:
+        parts = row.split()
+        if len(parts) != 2 or any(not GIT_SHA_RE.fullmatch(sha) for sha in parts):
+            raise PublicationRefusal(
+                "unsupported", "candidate merge or ambiguous history requires the full path"
+            )
+        paths |= _nul_paths(
+            _checked(
+                executor,
+                [
+                    "git",
+                    "diff-tree",
+                    "--no-commit-id",
+                    "--name-only",
+                    "-r",
+                    "-z",
+                    "--no-renames",
+                    parts[0],
+                ],
+                cwd,
+            ).stdout
+        )
+    return paths
+
+
+def _pr_binding(pr: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "number": pr.get("number"),
+        "state": pr.get("state"),
+        "merged_at": pr.get("merged_at"),
+        "title": pr.get("title"),
+        "body": pr.get("body") or "",
+        "base": {
+            "ref": _nested(pr, "base", "ref"),
+            "sha": _nested(pr, "base", "sha"),
+            "repo": {"full_name": _nested(pr, "base", "repo", "full_name")},
+        },
+        "head": {
+            "ref": _nested(pr, "head", "ref"),
+            "sha": _nested(pr, "head", "sha"),
+            "repo": {"full_name": _nested(pr, "head", "repo", "full_name")},
+        },
+    }
+
+
+def _require_existing_pr(
+    pr: Mapping[str, Any], request: PublicationRequest, base: str, head: str
+) -> None:
+    if pr.get("state") != "open" or pr.get("merged_at") is not None:
+        raise PublicationRefusal("terminal", "existing PR is closed or merged")
+    if (
+        any(
+            _nested(pr, side, "repo", "full_name") != request.repository
+            for side in ("head", "base")
+        )
+        or _nested(pr, "base", "ref") != request.base_ref
+        or _nested(pr, "base", "sha") != base
+        or _nested(pr, "head", "ref") != request.branch
+        or _nested(pr, "head", "sha") != head
+    ):
+        raise PublicationRefusal(
+            "drift", "existing PR identity does not match the requested candidate"
+        )
+    body = str(pr.get("body") or "")
+    selected_lanes = {
+        name
+        for name, label in (
+            ("governance", "Governance lane"),
+            ("docs-authoring", "Docs authoring lane"),
+        )
+        if re.search(rf"(?m)^- \[[xX]\] {label}\s*$", body)
+    }
+    if selected_lanes != ({request.lane} if request.lane != "implementation" else set()):
+        raise PublicationRefusal("drift", "existing PR lane does not match publication lane")
+    authority = resolve_issue_authority(body)
+    if request.governing_issue is None:
+        if authority is not None or has_closing_issue_attempt(body) or "Governing-Issue:" in body:
+            raise PublicationRefusal(
+                "drift", "existing PR Issue authority does not match issue-free scope"
+            )
+    elif (
+        authority is None
+        or authority.governing_issue != request.governing_issue
+        or tuple(sorted(authority.closing_issues)) != _closing_numbers(request)
+    ):
+        raise PublicationRefusal(
+            "drift", "existing PR closing authority does not match the explicit scope"
         )
 
 
@@ -827,24 +1012,34 @@ def _read_issue(
     }
 
 
-def _require_publishable_issue(issue: Mapping[str, Any], expected_number: int) -> None:
+def _require_publishable_issue(
+    issue: Mapping[str, Any], expected_number: int, *, claimed: bool = True
+) -> None:
     if issue.get("number") != expected_number or issue.get("state") != "open":
         raise PublicationRefusal("drift", "governing Issue is not the expected open Issue")
     labels = set(issue.get("labels", []))
-    if "agent:in-progress" not in labels or "agent:ready" in labels:
+    if claimed and ("agent:in-progress" not in labels or "agent:ready" in labels):
         raise PublicationRefusal("drift", "governing Issue is not actively claimed")
 
 
 def _assert_issue_unchanged(executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]) -> None:
-    issue = _read_issue(
-        executor,
-        cwd,
-        str(plan["repository"]),
-        int(plan["governing_issue"]["number"]),
-    )
-    if issue != plan["governing_issue"]:
-        raise PublicationRefusal("drift", "governing Issue drift")
-    _require_publishable_issue(issue, int(plan["governing_issue"]["number"]))
+    governing = plan["governing_issue"]
+    closing = plan.get("closing_issues", [governing] if governing else [])
+    expected_issues = {item["number"]: item for item in closing}
+    if governing:
+        expected_issues[governing["number"]] = governing
+    for number, expected in expected_issues.items():
+        issue = _read_issue(executor, cwd, str(plan["repository"]), number)
+        if issue != expected:
+            raise PublicationRefusal(
+                "drift",
+                "governing Issue drift"
+                if governing and number == governing["number"]
+                else "closing Issue drift",
+            )
+        _require_publishable_issue(
+            issue, number, claimed=any(item["number"] == number for item in closing)
+        )
 
 
 def _read_remote_head(executor: CommandExecutor, cwd: Path, branch: str) -> str | None:
@@ -908,6 +1103,8 @@ def _generate_pr_body(executor: CommandExecutor, cwd: Path, values: Mapping[str,
     argv.extend(["--lane", str(values.get("lane", ""))])
     if values.get("issue_number") is not None:
         argv.extend(["--issue-number", str(values["issue_number"])])
+    for number in values.get("closing_issues", ()):
+        argv.extend(["--closing-issue", str(number)])
     summary = values.get("summary", [])
     if isinstance(summary, str):
         summary = [summary]
@@ -928,6 +1125,23 @@ def _generate_pr_body(executor: CommandExecutor, cwd: Path, values: Mapping[str,
     if values.get("notes") is not None:
         argv.extend(["--notes", str(values["notes"])])
     return _checked(executor, argv, cwd).stdout
+
+
+def _validate_generated_authority(
+    body: str, governing: int | None, closing: tuple[int, ...]
+) -> None:
+    authority = resolve_issue_authority(body)
+    if governing is None:
+        if authority is not None or has_closing_issue_attempt(body) or "Governing-Issue:" in body:
+            raise PublicationRefusal("drift", "generated body contains undeclared Issue authority")
+    elif (
+        authority is None
+        or authority.governing_issue != governing
+        or tuple(sorted(authority.closing_issues)) != closing
+    ):
+        raise PublicationRefusal(
+            "drift", "generated body does not match governing and closing Issue authority"
+        )
 
 
 def _validated_plan(plan: Mapping[str, Any], expected_hash: str) -> dict[str, Any]:
@@ -984,7 +1198,8 @@ def _validated_plan(plan: Mapping[str, Any], expected_hash: str) -> dict[str, An
         or git.get("base_ref") != "main"
         or git.get("base_remote_ref") != "origin/main"
         or git.get("base_sha") != authority.get("base_sha")
-        or git.get("head_sha") != authority.get("base_sha")
+        or not isinstance(git.get("head_sha"), str)
+        or not GIT_SHA_RE.fullmatch(git["head_sha"])
         or not isinstance(pr, Mapping)
         or pr.get("base_ref") != "main"
     ):
@@ -992,6 +1207,29 @@ def _validated_plan(plan: Mapping[str, Any], expected_hash: str) -> dict[str, An
     body = pr.get("body")
     if not isinstance(body, str) or _sha256_text(body) != pr.get("body_sha256"):
         raise PublicationRefusal("drift", "publication plan PR body digest mismatch")
+    governing = normalized.get("governing_issue")
+    closing = normalized.get("closing_issues", [governing] if governing else [])
+    request = PublicationRequest(
+        repository=repository,
+        worktree=Path(normalized["worktree"]),
+        branch=git["branch"],
+        base_ref="main",
+        intended_paths=tuple(git["intended_paths"]),
+        lane=normalized["lane"],
+        tier=normalized["tier"],
+        risk_surfaces=tuple(normalized["risk_surfaces"]),
+        risk_assessment_complete=True,
+        review_gate_complete=True,
+        governing_issue=governing["number"] if governing else None,
+        commit_message=normalized["commit"]["message"],
+        pr_title=pr["title"],
+        pr_body_inputs=pr["body_inputs"],
+        closing_issues=tuple(item["number"] for item in closing) if closing else None,
+        existing_pr_number=pr["existing"]["number"] if pr.get("existing") else None,
+    )
+    _validate_request(request)
+    _validate_pr_body_inputs(request, pr["body_inputs"])
+    _validate_generated_authority(body, request.governing_issue, _closing_numbers(request))
     return normalized
 
 
@@ -1013,20 +1251,21 @@ def _observe_local_state(
     planned_paths = set(plan["git"]["intended_paths"])
     dirty = unstaged | staged | untracked
     if current_head == plan["git"]["head_sha"]:
-        if dirty != planned_paths or not staged.issubset(planned_paths):
+        dirty_paths = set(plan["git"].get("dirty_paths", planned_paths))
+        if dirty != dirty_paths or not staged.issubset(dirty_paths):
             raise PublicationRefusal("drift", "planned local paths drifted before commit")
         for expected in plan["git"]["path_states"]:
             observed = _path_state(executor, cwd, expected["path"], plan["git"]["base_sha"])
             if _content_binding(observed) != _content_binding(expected):
                 raise PublicationRefusal("drift", f"planned content drift: {expected['path']}")
-        state = (
-            "staged" if staged == planned_paths and not (unstaged | untracked) else "uncommitted"
-        )
+        if not dirty_paths:
+            return "committed", current_head
+        state = "staged" if staged == dirty_paths and not (unstaged | untracked) else "uncommitted"
         return state, None
     if dirty:
         raise PublicationRefusal("drift", "working tree is dirty after publication commit")
     parents = _git_text(executor, cwd, "rev-list", "--parents", "-n", "1", "HEAD").split()
-    if parents != [current_head, plan["authority"]["base_sha"]]:
+    if parents != [current_head, plan["git"]["head_sha"]]:
         raise PublicationRefusal("drift", "publication commit parent does not match the plan")
     message = _checked(executor, ["git", "show", "-s", "--format=%B", "HEAD"], cwd).stdout.rstrip(
         "\n"
@@ -1049,7 +1288,7 @@ def _observe_local_state(
             cwd,
         ).stdout
     )
-    if committed_paths != planned_paths:
+    if committed_paths != set(plan["git"].get("dirty_paths", planned_paths)):
         raise PublicationRefusal("drift", "publication commit paths do not match the plan")
     for expected in plan["git"]["path_states"]:
         observed = _path_state(executor, cwd, expected["path"], plan["git"]["base_sha"])
@@ -1060,7 +1299,11 @@ def _observe_local_state(
 
 def _assert_staged_plan(executor: CommandExecutor, cwd: Path, plan: Mapping[str, Any]) -> None:
     unstaged, staged, untracked = _changed_path_sets(executor, cwd)
-    if staged != set(plan["git"]["intended_paths"]) or unstaged or untracked:
+    if (
+        staged != set(plan["git"].get("dirty_paths", plan["git"]["intended_paths"]))
+        or unstaged
+        or untracked
+    ):
         raise PublicationRefusal("drift", "staged paths do not exactly match the plan")
     for expected in plan["git"]["path_states"]:
         observed = _path_state(executor, cwd, expected["path"], plan["git"]["base_sha"])
@@ -1100,7 +1343,20 @@ def _run_review_gate(executor: CommandExecutor, cwd: Path, plan: Mapping[str, An
         argv.extend(["--changed-file", path])
     for risk in plan["risk_surfaces"]:
         argv.extend(["--risk-surface", risk])
-    argv.extend(["--publication-mode", "new", "--github-repository", plan["repository"]])
+    argv.extend(
+        [
+            "--publication-mode",
+            "existing" if plan["pr"].get("existing") else "new",
+            "--github-repository",
+            plan["repository"],
+        ]
+    )
+    if plan["pr"].get("existing"):
+        argv.extend(
+            ["--pr-scope-revalidation", "--pr-number", str(plan["pr"]["existing"]["number"])]
+        )
+        if plan["governing_issue"] is not None:
+            argv.extend(["--governing-issue", str(plan["governing_issue"]["number"])])
     _checked(executor, argv, cwd)
 
 
@@ -1131,10 +1387,37 @@ def _resolve_pr_history(
     plan: Mapping[str, Any], prs: Sequence[Mapping[str, Any]], commit_sha: str | None
 ) -> dict[str, Any] | None:
     if not prs:
+        if plan["pr"].get("existing"):
+            raise PublicationRefusal(
+                "unknown", "bound existing PR disappeared from all-state history"
+            )
         return None
     if len(prs) != 1 or commit_sha is None:
-        raise PublicationRefusal("unknown", "all-state PR history is not uniquely reconcilable")
+        # An explicitly bound PR may still be on its observed head before our
+        # additive commit. It is never evidence of completed publication.
+        if len(prs) != 1 or not plan["pr"].get("existing"):
+            raise PublicationRefusal("unknown", "all-state PR history is not uniquely reconcilable")
     pr = dict(prs[0])
+    bound = plan["pr"].get("existing")
+    if bound is not None:
+        observed_binding = _pr_binding(pr)
+        if observed_binding["number"] != bound["number"]:
+            raise PublicationRefusal("unknown", "existing PR number drift")
+        if observed_binding["state"] != "open" or observed_binding["merged_at"] is not None:
+            raise PublicationRefusal(
+                "terminal", "publication branch has closed or merged PR history"
+            )
+        allowed_head = observed_binding["head"]["sha"] in {plan["git"]["head_sha"], commit_sha}
+        initial = json.loads(canonical_json(observed_binding))
+        initial["head"]["sha"] = bound["head"]["sha"]
+        if allowed_head and initial == bound:
+            if (
+                observed_binding["head"]["sha"] == commit_sha
+                and pr.get("title") == plan["pr"]["title"]
+                and (pr.get("body") or "") == plan["pr"]["body"]
+            ):
+                return pr
+            return None
     expected = {
         "title": plan["pr"]["title"],
         "body": plan["pr"]["body"],
@@ -1230,7 +1513,9 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--risk-surface", action="append", default=[])
     plan.add_argument("--risk-assessment-complete", action="store_true")
     plan.add_argument("--review-gate-complete", action="store_true")
-    plan.add_argument("--governing-issue", type=int, required=True)
+    plan.add_argument("--governing-issue", type=int)
+    plan.add_argument("--closing-issue", type=int, action="append")
+    plan.add_argument("--existing-pr-number", type=int)
     plan.add_argument("--commit-message", required=True)
     plan.add_argument("--pr-title", required=True)
     plan.add_argument("--pr-body-input-json", type=Path, required=True)
@@ -1265,6 +1550,10 @@ def cli_main(
                     commit_message=args.commit_message,
                     pr_title=args.pr_title,
                     pr_body_inputs=body_inputs,
+                    closing_issues=tuple(args.closing_issue)
+                    if args.closing_issue is not None
+                    else None,
+                    existing_pr_number=args.existing_pr_number,
                 ),
                 executor=executor,
             )

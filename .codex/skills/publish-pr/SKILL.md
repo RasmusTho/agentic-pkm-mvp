@@ -20,22 +20,29 @@ workflows. Never publish unrelated changes or bypass a failed command.
 
 ## Supported path and exception routing
 
-The command path supports only a **new, single-Issue Tier 1/2 PR targeting `main`** in the `implementation`,
-`docs-authoring`, or `governance` lane, with `Final-Review-Rounds: 0`, no declared high-risk surface,
-no remote publication branch, and empty all-state PR history for the head branch. It binds one
-credential-free canonical fetch/push repository identity plus one live `main` SHA agreed by local
-`origin/main`, remote fetch readback, and GitHub REST. At plan time `HEAD` must equal that base
-exactly; a branch with any pre-existing commit routes to the full path so unrelated history cannot
-ride with the planned dirty paths.
+The command path supports **bounded native Tier 1/2 publication targeting `main`** in the
+`implementation`, `docs-authoring`, or `governance` lane, with `Final-Review-Rounds: 0` or `1` and
+no declared high-risk surface. This includes issue-free docs/governance work, resumed linear
+candidates, one explicitly named existing open PR, and explicit batches of at most ten unique
+closing Issues. Review depth does not request executor ownership.
+
+It binds canonical credential-free fetch/push repository identities and one live `main` SHA agreed
+by local `origin/main`, remote readback, and GitHub REST. Every committed path since that base,
+including reverted paths, and every dirty path must fit the explicit intended set. New PRs require
+an absent remote head and empty all-state history. Existing updates require `--existing-pr-number`,
+one exact open PR, matching repository/base/head/lane/Issue scope and local/remote heads, and the
+existing PR scope-revalidation gate. Updates make only additive commits and non-force pushes;
+metadata is changed only after exact current-head readback. Unrelated dirty paths are preserved by
+refusing before staging.
 
 `.codex/skills/publish-pr/FULL_PATH.md :: Procedure` is the canonical full-path publication owner.
 Route every unsupported case there without trying to coerce it into the normal command:
 
-- existing-PR update or review repair -> `pr-integration` and
+- existing-PR repair that cannot satisfy exact native binding -> `pr-integration` and
   `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`;
-- multi-Issue PR -> `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope` and
+- multi-Issue scope follows `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope` and
   `verification-and-closure :: Routing`;
-- issue-free docs/governance publication or Direct Repair -> the matching current lane contract in
+- Direct Repair or issue-free work outside the supported lanes -> the matching current lane contract in
   `docs/development/PR_HOT_PATH.md`;
 - Tier 3, full-path, or any auth/security/data/migration/concurrency/external-API/
   credential-durability/state-machine risk ->
@@ -52,8 +59,9 @@ Route every unsupported case there without trying to coerce it into the normal c
 
 ## Publication preflight — live open-PR overlap re-check
 
-The normal plan reads open, closed, and merged PR history for the exact head branch and refuses any
-history. Apply accepts only empty history or one uniquely reconcilable exact open PR; exact
+The native plan reads open, closed, and merged history for the exact head branch. New publication
+requires empty history; an update binds one explicitly requested exact open PR. Apply accepts only
+that bound history or one uniquely reconcilable exact new open PR; exact
 closed/merged history is terminal and mismatch/duplicates are `unknown`. Full-path publication must
 perform the equivalent live all-state read immediately before creation; an earlier snapshot is not
 collision evidence.
@@ -80,12 +88,20 @@ python3 scripts/publication.py plan \
   --pr-body-input-json <input.json>
 ```
 
+Omit `--governing-issue` only for issue-free docs/governance work. Supply repeated `--closing-issue`
+arguments for an explicit batch; they must agree with body input `closing_issues` when supplied.
+The body still carries exactly one `Governing-Issue`; a distinct parent is not closed automatically.
+Add `--existing-pr-number` only for a verified exact open PR update. A resumed candidate may already
+contain bounded commits or be clean; the plan binds the complete candidate and any additive dirty
+change. Merge commits and unrelated history use the protected full path.
+
 The two completion flags are explicit caller attestations, not defaults; supply them only after the
 named local prerequisites have actually completed. `plan` is read-only. It emits canonical
 `builder.publication-plan.v1` JSON whose
 `plan_sha256` binds strict fetch/push repository identities, canonical worktree, branch, live `main`
 SHA, exact paths and content, Issue authority, lane/risk inputs, commit intent, title, generated
-body, and body digest. Raw remote URLs are neither retained nor emitted. Inspect the plan and retain
+body, and body digest, including any existing PR's observed identity and metadata. Raw remote URLs
+are neither retained nor emitted. Inspect the plan and retain
 its exact hash; any unsupported state or drift routes through the exception list.
 
 Apply only that exact plan:
@@ -96,13 +112,15 @@ python3 scripts/publication.py apply \
   --expected-plan-sha256 <64-hex-plan-sha256>
 ```
 
-`apply` stages only planned paths, creates a sole-parent publication commit, and runs the existing
+`apply` stages only planned paths, creates an additive sole-parent commit when dirty changes exist,
+and runs the existing
 workspace/review/PR-body gates. Before every external transition it revalidates the strict authority,
-sole parent, Issue, remote state, and all-state PR history. External state advances monotonically as
+bound parent, exact governing/closing Issues, remote state, and all-state PR history. New-PR state advances as
 `absent -> base-reserved -> exact-commit -> exact-PR`: GitHub REST create-ref atomically reserves the
 branch at the bound base, then an ordinary non-force fast-forward push publishes the exact commit.
+An existing update advances its bound head by fast-forward and updates only that PR's title/body.
 Exact readback produces `builder.publication-receipt.v1`; interruption is reconciled only inside
-those states. Conflict, terminal history, or ambiguous readback stops before another effect. The
+the bound states. Conflict, terminal history, or ambiguous readback stops before another effect. The
 plan and receipt remain reconstructable evidence, never a ledger or lifecycle authority.
 
 Every command exit status is authoritative. Do not mask it, manually recreate a receipt, stage

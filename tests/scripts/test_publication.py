@@ -133,6 +133,8 @@ class FakeExecutor:
         self.drift_main_after_review_to: str | None = None
         self.mutable_branch_tip = COMMIT_SHA
         self.pr_body = generate_pr_body_from_mapping(BODY_INPUTS)
+        self.candidate_paths = {"feature.txt"}
+        self.commit_message = "Add deterministic publication adapter\n\nRefs #5230"
 
     def _result(
         self,
@@ -190,6 +192,8 @@ class FakeExecutor:
             url = self.push_url if "--push" in args else self.fetch_url
             return self._result(args, stdout=f"{url}\n")
         if args[:3] == ("git", "diff", "--name-only"):
+            if BASE_SHA in args:
+                return self._result(args, stdout="\0".join(sorted(self.candidate_paths)) + "\0")
             cached = "--cached" in args
             if cached:
                 paths = ("feature.txt",) if self.phase == "staged" else ()
@@ -239,13 +243,14 @@ class FakeExecutor:
             self.phase = "committed"
             return self._result(args, stdout=f"[{BRANCH} {COMMIT_SHA[:7]}] commit\n")
         if args[:2] == ("git", "rev-list"):
-            return self._result(args, stdout=f"{COMMIT_SHA} {HEAD_SHA}\n")
+            if "-n" not in args:
+                return self._result(args, stdout=f"{self.head_sha} {BASE_SHA}\n")
+            return self._result(args, stdout=f"{COMMIT_SHA} {self.head_sha}\n")
         if args[:2] == ("git", "show"):
-            return self._result(
-                args, stdout="Add deterministic publication adapter\n\nRefs #5230\n"
-            )
+            return self._result(args, stdout=self.commit_message + "\n")
         if args[:2] == ("git", "diff-tree"):
-            return self._result(args, stdout="feature.txt\0")
+            paths = {"feature.txt"} if args[-1] == "HEAD" else self.candidate_paths
+            return self._result(args, stdout="\0".join(sorted(paths)) + "\0")
         if args[:2] == ("git", "push"):
             if self.move_remote_before_push_to is not None:
                 self.remote_head = self.move_remote_before_push_to
@@ -259,21 +264,26 @@ class FakeExecutor:
                 if "push" in self.effect_then_fail:
                     self.remote_head = pushed_sha
                 return failed
-            if self.remote_head != BASE_SHA:
+            if self.remote_head not in {BASE_SHA, self.head_sha}:
                 return self._result(args, 1, stderr="non-fast-forward")
             self.remote_head = pushed_sha
+            for pr in self.prs:
+                pr["head"]["sha"] = pushed_sha
             self.last_successful_effect = "push"
             return self._result(args, stdout="pushed\n")
 
         if _is_gh_api_call(args, "GET"):
             endpoint = args[6]
-            if endpoint.endswith("/issues/5230"):
+            if "/issues/" in endpoint:
                 unavailable = self.post_success_readback_failures.get(
                     (self.last_successful_effect or "", "issue")
                 )
                 if unavailable is not None:
                     return self._result(args, unavailable, stderr="Issue readback failed")
-                return self._result(args, stdout=json.dumps(self.issue))
+                issue = dict(self.issue)
+                if not endpoint.endswith("/issues/5230"):
+                    issue["number"] = int(endpoint.rsplit("/", 1)[-1])
+                return self._result(args, stdout=json.dumps(issue))
             if endpoint.endswith("/git/ref/heads/main"):
                 return self._result(
                     args,
@@ -329,6 +339,16 @@ class FakeExecutor:
             return self._result(
                 args, stdout="https://github.com/RasmusTho/agentic-pkm-mvp/pull/6000\n"
             )
+        if _is_gh_api_call(args, "PATCH") and "/pulls/" in args[6]:
+            failed = self._failure("pr-update", args)
+            if not failed or "pr-update" in self.effect_then_fail:
+                self.prs[0]["title"] = next(
+                    p.split("=", 1)[1] for p in args if p.startswith("title=")
+                )
+                self.prs[0]["body"] = next(
+                    p.split("=", 1)[1] for p in args if p.startswith("body=")
+                )
+            return failed or self._result(args, stdout=json.dumps(self.prs[0]))
         raise AssertionError(f"unexpected command: {args}")
 
     def _exact_pr(self, *, state: str = "open", merged: bool = False) -> dict[str, object]:
@@ -487,9 +507,7 @@ def test_publication_plan_is_canonical_hash_bound_and_read_only(
         "head": _run("git", "rev-parse", "HEAD", cwd=repo),
     }
     assert after == before
-    assert all(
-        _is_gh_api_call(call, "GET") for call in executor.calls if call and call[0] == "gh"
-    )
+    assert all(_is_gh_api_call(call, "GET") for call in executor.calls if call and call[0] == "gh")
     pr_reads = [call for call in executor.calls if call and call[-1] == "per_page=2"]
     assert pr_reads
     assert all("state=all" in call for call in pr_reads)
@@ -667,18 +685,18 @@ def test_publication_plan_refuses_disagreeing_live_main_authorities(
     )
 
 
-def test_publication_plan_refuses_preexisting_commit_ahead_of_base_before_effects(
+def test_publication_plan_refuses_unrelated_history_before_effects(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
     executor = FakeExecutor(tmp_path)
     executor.head_sha = "b" * 40
+    executor.candidate_paths.add("unrelated.txt")
 
-    with pytest.raises(PublicationRefusal, match="HEAD to equal the bound base") as raised:
+    with pytest.raises(PublicationRefusal, match="candidate history exceeds") as raised:
         build_publication_plan(_request(tmp_path), executor=executor)
 
-    assert raised.value.outcome == "unsupported"
-    assert not any(call and call[0] == "gh" for call in executor.calls)
+    assert raised.value.outcome == "drift"
     assert not any(
         call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")} for call in executor.calls
     )
@@ -773,9 +791,7 @@ def test_publication_apply_revalidates_drift_and_orders_existing_gates(tmp_path:
         ),
         "workspace_prepush": workspace_positions[1],
         "reserve": next(
-            i
-            for i, call in enumerate(executor.calls)
-            if _is_gh_api_call(call, "POST")
+            i for i, call in enumerate(executor.calls) if _is_gh_api_call(call, "POST")
         ),
         "push": next(i for i, call in enumerate(executor.calls) if call[:2] == ("git", "push")),
         "pr_create": next(
@@ -1276,3 +1292,207 @@ def test_publication_cli_types_external_effect_failures_from_exact_readback(
     )
 
     assert result == expected_exit
+
+
+@pytest.mark.parametrize("lane", ["governance", "docs-authoring"])
+def test_issue_free_native_publication(tmp_path: Path, lane: str) -> None:
+    (tmp_path / "feature.txt").write_text("new content\n")
+    runner = FakeExecutor(tmp_path)
+    inputs = {**BODY_INPUTS, "lane": lane, "issue_number": None}
+    runner.pr_body = generate_pr_body_from_mapping(inputs)
+    request = replace(_request(tmp_path), lane=lane, governing_issue=None, pr_body_inputs=inputs)
+    plan = build_publication_plan(request, executor=runner)
+    assert plan["governing_issue"] is None
+    receipt = apply_publication_plan(
+        plan, expected_plan_sha256=plan["plan_sha256"], executor=runner
+    )
+    assert receipt["pr"]["number"] == 6000
+    assert "Governing-Issue:" not in plan["pr"]["body"]
+    assert not any("/issues/" in " ".join(call) for call in runner.calls)
+    assert sum(call[:3] == ("gh", "pr", "create") for call in runner.calls) == 1
+    apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=runner)
+    assert sum(call[:3] == ("gh", "pr", "create") for call in runner.calls) == 1
+
+
+def test_resumed_native_publication_preserves_scope(tmp_path: Path) -> None:
+    (tmp_path / "feature.txt").write_text("new content\n")
+    runner = FakeExecutor(tmp_path)
+    runner.head_sha = "b" * 40
+    plan = build_publication_plan(_request(tmp_path), executor=runner)
+    assert plan["git"]["head_sha"] == runner.head_sha
+    receipt = apply_publication_plan(
+        plan, expected_plan_sha256=plan["plan_sha256"], executor=runner
+    )
+    assert receipt["commit_sha"] == COMMIT_SHA
+    assert not any("--force" in arg for call in runner.calls for arg in call)
+
+    runner = FakeExecutor(tmp_path)
+    runner.head_sha = "b" * 40
+    runner.candidate_paths.add("unrelated.txt")
+    with pytest.raises(PublicationRefusal, match="candidate.*scope|history.*scope"):
+        build_publication_plan(_request(tmp_path), executor=runner)
+    assert not any(call[:2] == ("git", "add") for call in runner.calls)
+
+
+@pytest.mark.parametrize("history", ["open", "closed", "merged", "duplicate", "mismatch"])
+def test_existing_native_publication_requires_exact_open_pr(tmp_path: Path, history: str) -> None:
+    (tmp_path / "feature.txt").write_text("new content\n")
+    runner = FakeExecutor(tmp_path)
+    runner.head_sha = "b" * 40
+    runner.remote_head = runner.head_sha
+    pr = runner._exact_pr(
+        state="closed" if history in {"closed", "merged"} else "open", merged=history == "merged"
+    )
+    pr["head"]["sha"] = runner.head_sha
+    runner.prs = [pr]
+    if history == "duplicate":
+        runner.prs.append(dict(pr))
+    if history == "mismatch":
+        pr["head"]["repo"]["full_name"] = "other/repository"
+    inputs = {
+        **BODY_INPUTS,
+        "summary": ["Publish an additive reviewed change."],
+        "final_review_rounds": 1,
+    }
+    runner.pr_body = generate_pr_body_from_mapping(inputs)
+    request = replace(_request(tmp_path), existing_pr_number=6000, pr_body_inputs=inputs)
+    if history != "open":
+        with pytest.raises(PublicationRefusal):
+            build_publication_plan(request, executor=runner)
+        assert not any(call[:2] == ("git", "add") for call in runner.calls)
+        return
+    plan = build_publication_plan(request, executor=runner)
+    receipt = apply_publication_plan(
+        plan, expected_plan_sha256=plan["plan_sha256"], executor=runner
+    )
+    assert receipt["pr"]["number"] == 6000
+    assert "Final-Review-Rounds: 1" in runner.prs[0]["body"]
+    assert runner.prs[0]["head"]["sha"] == COMMIT_SHA
+    assert not any(call[:3] == ("gh", "pr", "create") for call in runner.calls)
+    assert sum(_is_gh_api_call(call, "PATCH") for call in runner.calls) == 1
+    apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=runner)
+    assert sum(_is_gh_api_call(call, "PATCH") for call in runner.calls) == 1
+
+
+@pytest.mark.parametrize("closing_order", [(5230, 5231), (5231, 5230)])
+def test_bounded_multi_issue_native_publication(tmp_path: Path, closing_order: tuple[int, ...]) -> None:
+    (tmp_path / "feature.txt").write_text("new content\n")
+    runner = FakeExecutor(tmp_path)
+    inputs = {**BODY_INPUTS, "closing_issues": list(closing_order)}
+    runner.pr_body = generate_pr_body_from_mapping(inputs)
+    request = replace(_request(tmp_path), closing_issues=tuple(reversed(closing_order)), pr_body_inputs=inputs)
+    plan = build_publication_plan(request, executor=runner)
+    body = plan["pr"]["body"]
+    assert body.count("Governing-Issue:") == 1
+    assert "Closes #5230\nCloses #5231" in body
+    runner.pr_body = body
+    assert (
+        apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=runner)[
+            "outcome"
+        ]
+        == "success"
+    )
+    for numbers in ((5230, 5230), tuple(range(1, 12)), (5230, -1), (5230, True)):
+        with pytest.raises(PublicationRefusal):
+            build_publication_plan(
+                replace(request, closing_issues=numbers), executor=FakeExecutor(tmp_path)
+            )
+    with pytest.raises(PublicationRefusal, match="closing"):
+        build_publication_plan(
+            replace(request, pr_body_inputs={**inputs, "closing_issues": [5230]}),
+            executor=FakeExecutor(tmp_path),
+        )
+    for supplied in ([5230, 5230], [5230, True], [5230, "5231"]):
+        with pytest.raises(PublicationRefusal, match="closing"):
+            build_publication_plan(replace(request, pr_body_inputs={**inputs, "closing_issues": supplied}), executor=FakeExecutor(tmp_path))
+
+
+def test_resumed_history_scope_uses_real_git_including_reverted_paths(tmp_path: Path) -> None:
+    remote = tmp_path / "remote.git"
+    repo = tmp_path / "repo"
+    _run("git", "init", "--bare", "--initial-branch=main", str(remote), cwd=tmp_path)
+    _run("git", "init", "--initial-branch=main", str(repo), cwd=tmp_path)
+    _run("git", "config", "user.email", "test@example.com", cwd=repo)
+    _run("git", "config", "user.name", "Test User", cwd=repo)
+    (repo / "feature.txt").write_text("base\n")
+    _run("git", "add", "feature.txt", cwd=repo)
+    _run("git", "commit", "-m", "base", cwd=repo)
+    _run("git", "remote", "add", "origin", str(remote), cwd=repo)
+    _run("git", "push", "origin", "main", cwd=repo)
+    _run("git", "checkout", "-b", BRANCH, cwd=repo)
+    (repo / "feature.txt").write_text("bounded prior commit\n")
+    _run("git", "add", "feature.txt", cwd=repo)
+    _run("git", "commit", "-m", "bounded candidate", cwd=repo)
+    (repo / "feature.txt").write_text("additional change\n")
+    plan = build_publication_plan(_request(repo), executor=GitHubFakeExecutor())
+    assert plan["git"]["head_sha"] != plan["git"]["base_sha"]
+    (repo / "unrelated.txt").write_text("unrelated history\n")
+    _run("git", "add", "unrelated.txt", cwd=repo)
+    _run("git", "commit", "-m", "unrelated", cwd=repo)
+    _run("git", "rm", "unrelated.txt", cwd=repo)
+    _run("git", "commit", "-m", "revert unrelated", cwd=repo)
+    assert "unrelated.txt" not in _run(
+        "git", "diff", "--name-only", "origin/main", "HEAD", cwd=repo
+    )
+    with pytest.raises(PublicationRefusal, match="candidate history exceeds"):
+        build_publication_plan(_request(repo), executor=GitHubFakeExecutor())
+
+
+@pytest.mark.parametrize("failure", ["missing", "body-drift", "remote-drift", "closed"])
+def test_existing_update_revalidates_before_any_effect(tmp_path: Path, failure: str) -> None:
+    (tmp_path / "feature.txt").write_text("new content\n")
+    runner = FakeExecutor(tmp_path)
+    runner.head_sha = "b" * 40
+    runner.remote_head = runner.head_sha
+    pr = runner._exact_pr()
+    pr["head"]["sha"] = runner.head_sha
+    runner.prs = [pr]
+    plan = build_publication_plan(
+        replace(_request(tmp_path), existing_pr_number=6000), executor=runner
+    )
+    if failure == "missing":
+        runner.prs = []
+    elif failure == "body-drift":
+        runner.prs[0]["body"] += "\nUnplanned metadata."
+    elif failure == "closed":
+        runner.prs[0]["state"] = "closed"
+    else:
+        runner.remote_head = CONFLICT_SHA
+    before = len(runner.calls)
+    with pytest.raises(PublicationRefusal):
+        apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=runner)
+    assert not any(
+        call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")}
+        or _is_gh_api_call(call, "PATCH")
+        for call in runner.calls[before:]
+    )
+
+
+@pytest.mark.parametrize("effect", [False, True])
+def test_existing_update_reconciles_only_exact_metadata_after_error(
+    tmp_path: Path, effect: bool
+) -> None:
+    (tmp_path / "feature.txt").write_text("new content\n")
+    runner = FakeExecutor(tmp_path)
+    runner.head_sha = "b" * 40
+    runner.remote_head = runner.head_sha
+    pr = runner._exact_pr()
+    pr["head"]["sha"] = runner.head_sha
+    runner.prs = [pr]
+    inputs = {**BODY_INPUTS, "summary": ["Additive metadata update."]}
+    runner.pr_body = generate_pr_body_from_mapping(inputs)
+    plan = build_publication_plan(
+        replace(_request(tmp_path), existing_pr_number=6000, pr_body_inputs=inputs), executor=runner
+    )
+    runner.failures["pr-update"] = 1
+    if effect:
+        runner.effect_then_fail.add("pr-update")
+        result = apply_publication_plan(
+            plan, expected_plan_sha256=plan["plan_sha256"], executor=runner
+        )
+        assert result["reconciled"] is True
+    else:
+        with pytest.raises(PublicationRefusal, match="immediate readback"):
+            apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=runner)
+    assert sum(_is_gh_api_call(call, "PATCH") for call in runner.calls) == 1
+    assert not any(call[:3] == ("gh", "pr", "create") for call in runner.calls)

@@ -156,3 +156,25 @@ def test_cli_generates_body_from_fixture() -> None:
     assert completed.returncode == 0, completed.stderr
     assert "- [x] Governance lane" in completed.stdout
     assert "Closes #3275" in completed.stdout
+
+
+def test_explicit_batch_preserves_open_governing_parent() -> None:
+    from app.dispatcher.verification_contract import resolve_issue_authority
+
+    data = {**_fixture("governance_issue.json"), "closing_issues": [3277, 3276]}
+    body = generate_pr_body_from_mapping(data)
+    authority = resolve_issue_authority(body)
+    assert authority is not None
+    assert authority.governing_issue == 3275
+    assert authority.closing_issues == (3276, 3277)
+    assert body.count("Governing-Issue:") == 1
+    assert "Closes #3275" not in body
+
+
+@pytest.mark.parametrize(
+    "closing", [[], [1, 1], list(range(1, 12)), [True], [0], [-1], ["12"], "12"]
+)
+def test_body_generator_rejects_malformed_explicit_closing_sets(closing: object) -> None:
+    data = {**_fixture("governance_issue.json"), "closing_issues": closing}
+    with pytest.raises(PRBodyGeneratorError, match="closing_issues"):
+        generate_pr_body_from_mapping(data)

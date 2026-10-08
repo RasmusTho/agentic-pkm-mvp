@@ -57,6 +57,7 @@ class PRBodyInputs:
     direct_repair_reason: str | None = None
     direct_repair_validation: str | None = None
     owner_doc_followup_issue: str | None = None
+    closing_issues: tuple[int, ...] | None = None
 
 
 def generate_pr_body(inputs: PRBodyInputs) -> str:
@@ -68,7 +69,7 @@ def generate_pr_body(inputs: PRBodyInputs) -> str:
         sections.append(_direct_repair_section(inputs))
     sections.extend([
         _change_lane_section(inputs.lane, inputs.final_review_rounds),
-        _linked_issue_section(inputs.issue_number),
+        _linked_issue_section(inputs.issue_number, inputs.closing_issues),
         _sbs_impact_section(inputs.sbs_impact),
         _owner_doc_section(inputs),
         _summary_section(inputs.summary),
@@ -89,9 +90,13 @@ def _inputs_from_mapping(data: Mapping[str, Any]) -> PRBodyInputs:
     issue_number = data.get("issue_number")
     if issue_number is not None:
         issue_number = int(issue_number)
+    closing_issues = data.get("closing_issues")
+    if closing_issues is not None and not isinstance(closing_issues, (list, tuple)):
+        raise PRBodyGeneratorError("closing_issues must be an explicit list")
     return PRBodyInputs(
         lane=str(data.get("lane", "")),
         issue_number=issue_number,
+        closing_issues=tuple(closing_issues) if closing_issues is not None else None,
         summary=tuple(str(item) for item in summary),
         sbs_impact=_string_mapping(data.get("sbs_impact", {}), "sbs_impact"),
         owner_doc_resolution=str(data.get("owner_doc_resolution", "")),
@@ -111,6 +116,13 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
         raise PRBodyGeneratorError(f"lane must be one of: {', '.join(sorted(LANES))}")
     if inputs.issue_number is not None and inputs.issue_number <= 0:
         raise PRBodyGeneratorError("issue_number must be positive")
+    if inputs.closing_issues is not None and (
+        inputs.issue_number is None or not inputs.closing_issues
+        or len(inputs.closing_issues) > 10
+        or any(type(n) is not int or n <= 0 for n in inputs.closing_issues)
+        or len(set(inputs.closing_issues)) != len(inputs.closing_issues)
+    ):
+        raise PRBodyGeneratorError("closing_issues requires a governing Issue and one to ten unique positive IDs")
     if inputs.final_review_rounds not in {0, 1, 2}:
         raise PRBodyGeneratorError("final_review_rounds must be 0, 1, or 2")
     if inputs.lane == "implementation" and inputs.issue_number is None:
@@ -151,12 +163,13 @@ def _change_lane_section(lane: str, final_review_rounds: int) -> str:
     ])
 
 
-def _linked_issue_section(issue_number: int | None) -> str:
+def _linked_issue_section(issue_number: int | None, closing_issues: tuple[int, ...] | None) -> str:
     if issue_number is None:
         return "## Linked Issue\n"
+    closing = closing_issues if closing_issues is not None else (issue_number,)
     return (
         f"Governing-Issue: #{issue_number}\n\n"
-        f"## Linked Issue\nCloses #{issue_number}"
+        "## Linked Issue\n" + "\n".join(f"Closes #{number}" for number in sorted(closing))
     )
 
 
@@ -248,6 +261,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-json", type=Path, help="JSON object with PR body inputs.")
     parser.add_argument("--lane", choices=sorted(LANES))
     parser.add_argument("--issue-number", type=int)
+    parser.add_argument("--closing-issue", type=int, action="append")
     parser.add_argument("--summary", action="append", default=[])
     parser.add_argument("--sbs", action="append", default=[], help="SBS field as key=value.")
     parser.add_argument("--owner-doc-resolution", choices=sorted(OWNER_DOC_RESOLUTIONS))
@@ -273,6 +287,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             body = generate_pr_body(PRBodyInputs(
                 lane=args.lane or "",
                 issue_number=args.issue_number,
+                closing_issues=tuple(args.closing_issue) if args.closing_issue is not None else None,
                 summary=tuple(args.summary),
                 sbs_impact=_parse_sbs(args.sbs),
                 owner_doc_resolution=args.owner_doc_resolution or "",
