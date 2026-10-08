@@ -3392,3 +3392,110 @@ def test_bws_prod_preflight_rejects_libpq_socket_and_default_targets_before_driv
     assert not (root / 'config/deploy/prod.env').exists()
     assert not any(event.startswith('docker ') for event in _deploy_events(env))
     assert 'fake-preflight-canary' not in result.stdout + result.stderr
+
+
+def _install_bws_identity_guard_fixture(root: Path) -> None:
+    (root / "app/ops/postgres_deploy_linux.py").write_text(
+        "import os, sys\n"
+        "assert sys.argv[1] == 'guard'\n"
+        "with open(os.environ['FAKE_DEPLOY_EVENT_LOG'], 'a') as stream:\n"
+        "    stream.write('bws-guard\\n')\n",
+        encoding="utf-8",
+    )
+
+
+def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    runtime_uid = os.getuid()
+    runtime_gid = os.getgid()
+    inherited_uid = "0" if runtime_uid != 0 else "1"
+    inherited_gid = "0" if runtime_gid != 0 else "1"
+    (root / "tmp/runtime.env").write_text(
+        f"LOCAL_UID={runtime_uid}\nLOCAL_GID={runtime_gid}\nTTS_ENABLED=false\n",
+        encoding="utf-8",
+    )
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(f"APP_IMAGE_TAG={sha}\n", encoding="utf-8")
+    _install_bws_identity_guard_fixture(root)
+    env.update(
+        FAKE_SHA=sha,
+        FAKE_CAPTURE_RUNTIME_IDENTITY="1",
+        HOST_SECRET_PROVIDER="bws",
+        BWS_DATABASE_TARGET="local",
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="0",
+        BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        LOCAL_UID=inherited_uid,
+        LOCAL_GID=inherited_gid,
+    )
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    identity_events = [event for event in events if event.startswith("compose identity ")]
+    assert identity_events
+    assert all(f"uid={runtime_uid} gid={runtime_gid}" in event for event in identity_events)
+    assert any("instance-state-init" in event for event in identity_events)
+    assert not any(
+        f"uid={inherited_uid} gid={inherited_gid}" in event for event in identity_events
+    )
+
+
+@pytest.mark.parametrize(
+    ("runtime_env", "provider", "expected_returncode"),
+    [
+        ("TTS_ENABLED=false\n", "bws", 78),
+        ("LOCAL_UID=1000\n", "bws", 78),
+        ("LOCAL_UID=1000\nLOCAL_GID=1001\nLOCAL_UID=1002\n", "bws", 78),
+        ("LOCAL_UID=bad\nLOCAL_GID=1001\n", "bws", 78),
+        ("TTS_ENABLED=false\n", "keychain", 0),
+    ],
+)
+def test_bws_runtime_identity_preflight_fails_before_mutation(
+    tmp_path: Path,
+    runtime_env: str,
+    provider: str,
+    expected_returncode: int,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    (root / "tmp/runtime.env").write_text(runtime_env, encoding="utf-8")
+    pin_path = root / "config/deploy/dev.env"
+    original_pin = f"APP_IMAGE_TAG={sha}\n"
+    pin_path.write_text(original_pin, encoding="utf-8")
+    env.update(
+        FAKE_SHA=sha,
+        FAKE_CAPTURE_RUNTIME_IDENTITY="1",
+        HOST_SECRET_PROVIDER=provider,
+        LOCAL_UID="0",
+        LOCAL_GID="0",
+    )
+    if provider == "bws":
+        _install_bws_identity_guard_fixture(root)
+        env.update(
+            BWS_DATABASE_TARGET="local",
+            BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="0",
+            BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        )
+    else:
+        env.pop("LOCAL_UID", None)
+        env.pop("LOCAL_GID", None)
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == expected_returncode, result.stdout + result.stderr
+    if provider == "bws":
+        assert "runtime identity preflight: blocked reason=" in result.stderr
+        assert pin_path.read_text(encoding="utf-8") == original_pin
+        assert not any(event.startswith("docker ") for event in _deploy_events(env))
+    else:
+        assert "runtime identity preflight: blocked" not in result.stderr
+        identity_events = [
+            event for event in _deploy_events(env) if event.startswith("compose identity ")
+        ]
+        assert identity_events
+        assert all(
+            f"uid={os.getuid()} gid={os.getgid()}" in event
+            for event in identity_events
+        )
