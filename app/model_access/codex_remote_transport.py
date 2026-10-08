@@ -17,6 +17,9 @@ from app.model_access.remote_contract import (
     CompletionResponse,
     PreflightRequest,
     PreflightResponse,
+    ProductCatalogRequest,
+    ProductCompletionRequest,
+    ProductPreflightRequest,
 )
 from app.model_access.product_judgment_contract import (
     PRODUCT_JUDGMENT_RESPONSE_BYTES, ProductJudgmentResult, encode_product_request,
@@ -37,8 +40,6 @@ _PRIVATE_INGRESS_NETWORKS = (
 )
 _PREFLIGHT_ERROR_CODES = frozenset(
     {
-        "serve_capability_required",
-        "serve_capability_invalid",
         "loopback_only",
         "invalid_json",
         "request_too_large",
@@ -63,6 +64,16 @@ _PREFLIGHT_ERROR_CODES = frozenset(
         "cli_version_unsupported",
         "tool_surface_unknown",
         "credential_unavailable",
+        "provider_adapter_unavailable",
+        "provider_auth_failed",
+        "provider_endpoint_not_declared",
+        "catalog_snapshot_mismatch",
+        "provider_model_unavailable",
+        "provider_request_rejected",
+        "provider_tools_unavailable",
+        "provider_unavailable",
+        "reasoning_effort_unavailable",
+        "max_output_tokens_unavailable",
         "ollama_unavailable",
         "ollama_timeout",
         "ollama_model_unavailable",
@@ -271,9 +282,13 @@ class CodexRemoteTransport:
             )
         else:
             raise ValueError("unsupported executor path adapter")
-        self._preflight_url = self._url.removesuffix("/v1/complete") + "/v1/preflight"
-        self._catalog_url = self._url.removesuffix("/v1/complete") + "/v1/catalog"
-        self._judgment_url = self._url.removesuffix("/v1/complete") + "/v1/judgment"
+        api_root = self._url.removesuffix("/v1/complete")
+        self._preflight_url = api_root + "/v1/preflight"
+        self._catalog_url = api_root + "/v1/catalog"
+        self._judgment_url = api_root + "/v1/judgment"
+        self._product_preflight_url = api_root + "/v1/product/preflight"
+        self._product_catalog_url = api_root + "/v1/product/catalog"
+        self._product_complete_url = api_root + "/v1/product/complete"
         self._max_request_bytes = max_request_bytes
         self._max_response_bytes = max_response_bytes
         # HTTPX verifies TLS certificates by default; spell this out for the production
@@ -318,11 +333,16 @@ class CodexRemoteTransport:
         except Exception:
             return ProductJudgmentResult(outcome="outcome_unknown_after_dispatch")
 
-    def catalog(self, request: CatalogRequest) -> CatalogResponse:
+    def catalog(
+        self, request: CatalogRequest | ProductCatalogRequest
+    ) -> CatalogResponse:
         """Fetch a transport catalog without invoking a model."""
         try:
             request_body = json.dumps(
-                request.model_dump(mode="json"),
+                request.model_dump(
+                    mode="json",
+                    exclude_none=isinstance(request, ProductCatalogRequest),
+                ),
                 ensure_ascii=False,
                 separators=(",", ":"),
                 allow_nan=False,
@@ -337,7 +357,11 @@ class CodexRemoteTransport:
         try:
             with self._client.stream(
                 "POST",
-                self._catalog_url,
+                (
+                    self._product_catalog_url
+                    if isinstance(request, ProductCatalogRequest)
+                    else self._catalog_url
+                ),
                 content=request_body,
                 headers={"Content-Type": "application/json"},
             ) as response:
@@ -406,11 +430,16 @@ class CodexRemoteTransport:
             result = CatalogResponse.model_validate_json(bytes(body))
         except Exception:
             raise RemoteCatalogError("catalog_response_invalid") from None
-        if result.snapshot.transport_id != request.transport_id:
+        if isinstance(request, ProductCatalogRequest):
+            if result.snapshot.provider != request.provider:
+                raise RemoteCatalogError("catalog_provider_mismatch")
+        elif result.snapshot.transport_id != request.transport_id:
             raise RemoteCatalogError("catalog_transport_mismatch")
         return result
 
-    def preflight(self, request: PreflightRequest) -> PreflightResponse:
+    def preflight(
+        self, request: PreflightRequest | ProductPreflightRequest
+    ) -> PreflightResponse:
         """Check one exact remote route through the no-inference operation."""
         try:
             request_body = json.dumps(
@@ -429,7 +458,11 @@ class CodexRemoteTransport:
         try:
             with self._client.stream(
                 "POST",
-                self._preflight_url,
+                (
+                    self._product_preflight_url
+                    if isinstance(request, ProductPreflightRequest)
+                    else self._preflight_url
+                ),
                 content=request_body,
                 headers={"Content-Type": "application/json"},
             ) as response:
@@ -505,11 +538,39 @@ class CodexRemoteTransport:
             result = PreflightResponse.model_validate(value)
         except Exception:
             raise RemotePreflightError("preflight_response_invalid") from None
-        if result.route != request.route:
-            raise RemotePreflightError("preflight_route_mismatch")
+        if isinstance(request, ProductPreflightRequest):
+            if (
+                result.route.provider != request.provider
+                or result.route.model != request.model
+                or result.route.catalog_snapshot_ref is None
+                or result.route.catalog_snapshot_hash is None
+            ):
+                raise RemotePreflightError("preflight_route_mismatch")
+        else:
+            requested_route = request.route
+            resolved_route = result.route
+            if (
+                resolved_route.provider != requested_route.provider
+                or resolved_route.model != requested_route.model
+                or resolved_route.transport_id != requested_route.transport_id
+                or (
+                    requested_route.catalog_snapshot_ref is not None
+                    and resolved_route != requested_route
+                )
+                or (
+                    requested_route.catalog_snapshot_ref is None
+                    and (
+                        resolved_route.catalog_snapshot_ref is None
+                        or resolved_route.catalog_snapshot_hash is None
+                    )
+                )
+            ):
+                raise RemotePreflightError("preflight_route_mismatch")
         return result
 
-    def complete(self, request: CompletionRequest) -> CompletionResponse:
+    def complete(
+        self, request: CompletionRequest | ProductCompletionRequest
+    ) -> CompletionResponse:
         try:
             request_body = json.dumps(
                 request.model_dump(mode="json"),
@@ -525,7 +586,11 @@ class CodexRemoteTransport:
         try:
             with self._client.stream(
                 "POST",
-                self._url,
+                (
+                    self._product_complete_url
+                    if isinstance(request, ProductCompletionRequest)
+                    else self._url
+                ),
                 content=request_body,
                 headers={"Content-Type": "application/json"},
             ) as response:
@@ -559,8 +624,34 @@ class CodexRemoteTransport:
         except Exception:
             raise RemoteCompletionError("executor_response_invalid", indeterminate=True) from None
 
-        if result.route != request.route:
-            raise RemoteCompletionError("executor_route_mismatch", indeterminate=True)
+        if isinstance(request, ProductCompletionRequest):
+            if (
+                result.route.provider != request.provider
+                or result.route.model != request.model
+                or result.route.catalog_snapshot_ref is None
+                or result.route.catalog_snapshot_hash is None
+            ):
+                raise RemoteCompletionError("executor_route_mismatch", indeterminate=True)
+        else:
+            requested_route = request.route
+            resolved_route = result.route
+            if (
+                resolved_route.provider != requested_route.provider
+                or resolved_route.model != requested_route.model
+                or resolved_route.transport_id != requested_route.transport_id
+                or (
+                    requested_route.catalog_snapshot_ref is not None
+                    and resolved_route != requested_route
+                )
+                or (
+                    requested_route.catalog_snapshot_ref is None
+                    and (
+                        resolved_route.catalog_snapshot_ref is None
+                        or resolved_route.catalog_snapshot_hash is None
+                    )
+                )
+            ):
+                raise RemoteCompletionError("executor_route_mismatch", indeterminate=True)
         try:
             content_bytes = result.content.encode("utf-8", errors="strict")
         except UnicodeEncodeError:

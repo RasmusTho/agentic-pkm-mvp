@@ -280,13 +280,23 @@ class AnthropicCatalogDiscovery:
             raise CatalogError("catalog_invalid")
         capabilities = capabilities if isinstance(capabilities, dict) else {}
         structured = capabilities.get("structured_outputs")
+        if structured is not None and not isinstance(structured, dict):
+            raise CatalogError("catalog_invalid")
+        structured_output_attested = (
+            isinstance(structured, dict) and "supported" in structured
+        )
         structured_output = (
-            structured.get("supported", False) if isinstance(structured, dict) else False
+            structured.get("supported", False)
+            if isinstance(structured, dict)
+            else False
         )
         if type(structured_output) is not bool:
             raise CatalogError("catalog_invalid")
         effort = capabilities.get("effort")
         efforts: list[str] = []
+        reasoning_effort_attested = (
+            isinstance(effort, dict) and "supported" in effort
+        )
         if isinstance(effort, dict):
             effort_supported = effort.get("supported", False)
             if type(effort_supported) is not bool:
@@ -314,10 +324,85 @@ class AnthropicCatalogDiscovery:
                 native_tools=False,
                 system_prompt_channel=False,
             ),
+            structured_output_attested=structured_output_attested,
+            reasoning_effort_attested=reasoning_effort_attested,
             reasoning_efforts=tuple(sorted(set(efforts))),
             release_at=created_at,
             context_window=input_tokens or None,
             max_output_tokens=output_tokens or None,
+        )
+
+    def close(self) -> None:
+        self._client.close()
+
+
+class DeepSeekCatalogDiscovery:
+    """Read DeepSeek's provider-owned model/capability listing without inference."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None,
+        transport: httpx.BaseTransport | None = None,
+    ) -> None:
+        self._api_key = api_key
+        self._client = _new_client(transport)
+
+    def discover(self, *, fetched_at: datetime | None = None) -> CatalogSnapshot:
+        if not self._api_key:
+            raise CatalogError("catalog_auth_failed")
+        now = _fetched_time(fetched_at)
+        page = _bounded_get(
+            self._client,
+            "https://api.deepseek.com/models",
+            headers={"Authorization": f"Bearer {self._api_key}"},
+        )
+        raw_models = page.get("data")
+        if not isinstance(raw_models, list) or not 1 <= len(raw_models) <= MAX_CATALOG_MODELS:
+            raise CatalogError("catalog_invalid")
+        models: list[CatalogModelDescriptor] = []
+        for raw in raw_models:
+            if not isinstance(raw, dict) or raw.get("object", "model") != "model":
+                raise CatalogError("catalog_invalid")
+            model_id = _valid_model_id(raw.get("id"))
+            effort = raw.get("effort")
+            efforts: list[str] = []
+            if effort is not None:
+                if not isinstance(effort, dict):
+                    raise CatalogError("catalog_invalid")
+                supported = effort.get("supported_levels", [])
+                if not isinstance(supported, list) or any(
+                    not isinstance(value, str) or not value for value in supported
+                ):
+                    raise CatalogError("catalog_invalid")
+                efforts = supported
+            context_window = raw.get("context_window")
+            max_output_tokens = raw.get("max_output_tokens")
+            for limit in (context_window, max_output_tokens):
+                if limit is not None and (type(limit) is not int or limit < 1):
+                    raise CatalogError("catalog_invalid")
+            # The listing has no verifiable release timestamp. Preserve the
+            # metadata, but never use its order for latest-model promotion.
+            models.append(
+                _descriptor(
+                    provider="deepseek",
+                    model=model_id,
+                    transports=("deepseek_api",),
+                    capabilities=ModelCapabilities(),
+                    reasoning_effort_attested=effort is not None,
+                    reasoning_efforts=tuple(sorted(set(efforts))),
+                    context_window=context_window,
+                    max_output_tokens=max_output_tokens,
+                )
+            )
+        if len({model.model for model in models}) != len(models):
+            raise CatalogError("catalog_invalid")
+        return _snapshot(
+            provider="deepseek",
+            transport_id="deepseek_api",
+            source_id="deepseek_models_v1",
+            fetched_at=now,
+            models=models,
         )
 
     def close(self) -> None:
@@ -445,6 +530,7 @@ def codex_catalog_snapshot(
 
 __all__ = [
     "AnthropicCatalogDiscovery",
+    "DeepSeekCatalogDiscovery",
     "MAX_CATALOG_MODELS",
     "MAX_CATALOG_RESPONSE_BYTES",
     "OllamaCatalogDiscovery",

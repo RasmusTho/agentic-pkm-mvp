@@ -4,6 +4,7 @@
 # and the standalone app.builderops.devui_runtime; receipt CLI is pure.
 fastapi==0.136.3
 jsonschema==4.23.0
+referencing==0.37.0
 psycopg[binary]==3.2.10
 pydantic==2.12.0
 starlette==1.2.1

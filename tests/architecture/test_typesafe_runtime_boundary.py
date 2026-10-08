@@ -101,28 +101,19 @@ def test_product_and_builder_keep_separate_typesafe_authorities(monkeypatch):
     assert wrong_builder.execute(_request()).outcome == "unavailable_before_send"
     assert wrong_product.execute(product_intent_request("Synthetic")).outcome == "unavailable_before_send"
     root = Path(__file__).resolve().parents[2]
-    capability = "model-access.example/cap/complete"
     app = create_codex_executor_app(
-        codex_executor=object(), ollama_adapter=object(), serve_capability_name=capability,
+        codex_executor=object(), ollama_adapter=object(),
         adapter_factory=ModelAccessAdapterFactory.from_declared_sources(
             adapters_path=root / "docs/settings/models/adapters.yaml",
             provider_census_path=root / "docs/settings/models/providers.yaml",
         ),
         builder_judgment_executor=builder, product_judgment_executor=product,
     )
-    cases = [("builder", "ckm_judgment", "/v1/ckm-judgment", _request()),
-             ("product", "judgment", "/v1/judgment", product_intent_request("Synthetic"))]
+    cases = [("builder", "/v1/ckm-judgment", _request()),
+             ("product", "/v1/judgment", product_intent_request("Synthetic"))]
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
-        for channel, action, route, request in cases:
-            for wrong_channel, wrong_action in (("product" if channel == "builder" else "builder", action),
-                                                 (channel, "judgment" if action == "ckm_judgment" else "ckm_judgment")):
-                headers = {"Tailscale-App-Capabilities": json.dumps({capability: [{"channel": wrong_channel, "actions": [wrong_action]}]})}
-                response = client.post(route, json=request.model_dump(mode="json"), headers=headers)
-                assert response.status_code == 403
-        assert lookups == sent == []
-        for channel, action, route, request in cases:
-            headers = {"Tailscale-App-Capabilities": json.dumps({capability: [{"channel": channel, "actions": [action]}]})}
-            result = client.post(route, json=request.model_dump(mode="json"), headers=headers).json()
+        for channel, route, request in cases:
+            result = client.post(route, json=request.model_dump(mode="json")).json()
             assert result["outcome"] == "success"
             assert result["selection"]["profile_id"].startswith(channel + ".")
     assert len(lookups) == len(sent) == 2

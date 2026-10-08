@@ -135,15 +135,14 @@ choose an endpoint or network adapter.
 
 Before completion, the path router runs no-inference catalog and route-preflight requests. It may
 advance to the next configured path only for `PATH_UNAVAILABLE`, `CONNECT_TIMEOUT`,
-`PREFLIGHT_TIMEOUT`, or `PATH_AUTHENTICATION_FAILED`. Common Product authorization denial, malformed
-requests, route/capability mismatch, and missing path configuration fail closed. Once a non-200 HTTP
+`PREFLIGHT_TIMEOUT`, or `PATH_AUTHENTICATION_FAILED`. Malformed requests, route/capability mismatch,
+and missing path configuration fail closed. Once a non-200 HTTP
 status is received, a stalled, disconnected, or oversized error body preserves that status; only a
 fully decoded explicit path-local error code can authorize another configured path. The active Ygg
 profile has no second path, so VLAN failure is terminal. The VLAN ingress uses mutually
 authenticated HTTPS to a host-local RFC1918 IPv4 or IPv6 unique-local address literal; DNS names
-are rejected so a public endpoint cannot receive completion content. Its gateway maps the
-authenticated caller to the Product channel/action capability contract, strips caller-supplied
-capability headers, and injects the trusted claim. The executor backend remains loopback-bound.
+are rejected so a public endpoint cannot receive completion content. The executor backend remains
+loopback-bound and does not rely on Tailscale-Serve headers or per-action capability claims.
 After preflight, exactly one completion uses the selected path. An ambiguous completion cannot retry
 over another path or switch providers. Provider/model fallback remains a separate explicit policy
 decision.
@@ -269,3 +268,4 @@ Tests: `tests/e2e/test_llm_routing_e2e.py::test_force_override_affects_ask_api`
 - Generic chat/reasoning fallback can remain local or mock when the task policy allows it.
 - Embeddings are stricter: if the configured provider/model implies a different identity, startup must fail or require rebuild instead of silently degrading. The one sanctioned exception is the **dimension-matched (768/L2)** Gemini fallback per `docs/adr/ADR-0023-embedding-egress-gemini-fallback.md`; its write is mixed-identity (carries the Gemini identity) and reconcilable, the query path uses the primary identity, and a mixed-identity index triggers `index reconcile`, not silent degradation (`docs/EMBEDDING_RELIABILITY/README.md` CTI-1/2/3).
 - Multi-provider load balancing and rate limit handling are out of scope for the current fabric. The Gemini embedding fallback above is a single dimension-matched reliability fallback, not load balancing.
+- **Accepted future direction (ADR-0067, Issue #5819):** the Mac mini will mediate all registry-declared Product model routes, including embeddings, while shared settings declare model profiles and each clone/satellite selects locally. Today the delivered Mac API acceptance covers Luna/Codex CLI chat only; clone-local profiles affect chat/reasoning/eval, and embeddings still use their separate provider path. MARR-12/MARR-13 track the remaining gateway and Product integration. Do not treat the target as live until their integrated acceptance and deployment receipts exist.
