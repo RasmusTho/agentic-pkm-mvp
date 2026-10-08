@@ -218,7 +218,7 @@ class BwsSecretReader:
             if not projects.success:
                 raise BwsLookupError()
             project_records = projects.data.data
-            if not isinstance(project_records, list) or len(project_records) != 2:
+            if not isinstance(project_records, list):
                 raise BwsLookupError()
             projects_by_name: dict[str, str] = {}
             project_ids: set[str] = set()
@@ -240,10 +240,9 @@ class BwsSecretReader:
                     raise BwsLookupError()
                 projects_by_name[name] = project_id
                 project_ids.add(project_id)
-            if (
-                set(projects_by_name) != {"non-prod", "prod"}
-                or projects_by_name.get(project) != self.config.project_id
-            ):
+            # Read-only tokens may list only their selected project or both
+            # canonical projects; the selected identity still must match exactly.
+            if projects_by_name.get(project) != self.config.project_id:
                 raise BwsLookupError()
             identifiers = client.secrets().list(self.config.organization_id)
             if not identifiers.success:

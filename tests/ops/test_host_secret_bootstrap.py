@@ -1746,11 +1746,47 @@ def test_bws_lookup_accepts_both_projects_and_fetches_only_selected_item(
     assert value not in journal and "fixture-machine-token" not in journal
 
 
+def test_bws_lookup_accepts_single_selected_project_and_fetches_only_selected_item(
+    tmp_path, capsys, caplog
+):
+    value = "fixture-selected-project-password"
+    reader, client, controller = _bws_fixture(
+        tmp_path,
+        project="non-prod",
+        identity="shared/openai.api-key",
+        value=value,
+    )
+    client.missing_peer_project = True
+    client.include_peer_project_item = True
+    client.peer_project_item_identity = "shared/openai.api-key"
+
+    resolved = resolve_host_secret_values(
+        channel="dev",
+        consumer="builderops-model-inquiry",
+        provider="bws",
+        bws_reader=reader,
+        controller=controller,
+    )
+
+    assert resolved == {"openai.api-key": value}
+    assert client.listed_project_count == 1
+    assert client.calls == [
+        ("login", None),
+        ("projects", _BWS_ORG),
+        ("list", _BWS_ORG),
+        ("get", _BWS_ITEM),
+    ]
+    assert not any(call == ("get", _BWS_PEER_ITEM) for call in client.calls)
+    diagnostics = capsys.readouterr().out + caplog.text
+    assert value not in diagnostics
+    journal = (controller.directory / "operations.jsonl").read_text()
+    assert value not in journal and "fixture-machine-token" not in journal
+
+
 @pytest.mark.parametrize(
     "fault",
     [
         "missing-selected-project",
-        "missing-peer-project",
         "wrong-selected-project-organization",
         "wrong-peer-project-organization",
         "wrong-selected-project-id",
