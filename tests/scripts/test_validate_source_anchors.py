@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from scripts.validate_source_anchors import validate_issue_body
 
 
@@ -200,3 +202,101 @@ def test_kernel_audit_invariant_ids_resolvable() -> None:
 
     assert ok is True
     assert errors == []
+
+
+@pytest.mark.parametrize(
+    "path, locator",
+    [
+        ("app/worker.py", "main"),
+        ("tests/test_worker.py", "test_main"),
+        ("Makefile", "PYTHON/test/lint"),
+        (".github/workflows/ci-smoke.yaml", "Unit tests (not pg)"),
+    ],
+)
+def test_validate_source_anchors_accepts_existing_factual_paths(
+    tmp_path: Path, path: str, locator: str,
+) -> None:
+    source = tmp_path / path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# Existing implementation evidence\n", encoding="utf-8")
+
+    ok, errors = validate_issue_body(
+        f"## Source Anchors\n- `{path} :: {locator}`\n", tmp_path,
+    )
+
+    assert ok is True, errors
+    assert errors == []
+
+
+def test_makefile_only_factual_anchors_keep_separate_source_doc_authority(tmp_path: Path) -> None:
+    """A bug contract can locate the fault in Makefile without fabricating a doc anchor."""
+    (tmp_path / "Makefile").write_text("PYTHON ?= python3\ntest:\n\tlint\nlint:\n", encoding="utf-8")
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "DEV_WORKFLOW.md").write_text("## Validation baseline\n", encoding="utf-8")
+    body = """
+## Source Anchors
+- `Makefile :: PYTHON/test/lint`
+## Source Docs
+- `docs/DEV_WORKFLOW.md`
+"""
+
+    ok, errors = validate_issue_body(body, tmp_path)
+
+    assert ok is True, errors
+    assert errors == []
+
+
+@pytest.mark.parametrize("entry", ["Makefile", "Makefile::test", "`Makefile` :: test", "`Makefile :: test`"])
+def test_validate_source_anchors_accepts_factual_path_spellings(tmp_path: Path, entry: str) -> None:
+    (tmp_path / "Makefile").write_text("test:\n", encoding="utf-8")
+    ok, errors = validate_issue_body(f"## Source Anchors\n- {entry}\n", tmp_path)
+
+    assert ok is True, errors
+    assert errors == []
+
+
+@pytest.mark.parametrize("path", ["app/missing.py", ".github/workflows/missing.yaml", "Makefile"])
+def test_validate_source_anchors_rejects_missing_factual_path_even_with_valid_doc(
+    tmp_path: Path, path: str,
+) -> None:
+    (tmp_path / "README.md").write_text("# Readme\n", encoding="utf-8")
+    ok, errors = validate_issue_body(
+        f"## Source Anchors\n- `README.md`\n- `{path} :: locator`\n", tmp_path,
+    )
+
+    assert ok is False
+    assert errors == [f"Anchor file not found: {path}"]
+
+
+def test_validate_source_anchors_rejects_factual_path_traversal_and_symlink_escape(tmp_path: Path) -> None:
+    outside = tmp_path / "outside.py"
+    outside.write_text("pass\n", encoding="utf-8")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "escape.py").symlink_to(outside)
+
+    for path, error in [
+        (str(outside), f"Anchor path must be repository-relative: {outside}"),
+        ("../outside.py", "Anchor path must be repository-relative: ../outside.py"),
+        ("escape.py", "Anchor path escapes repository root: escape.py"),
+    ]:
+        ok, errors = validate_issue_body(f"## Source Anchors\n- `{path}`\n", repo)
+        assert ok is False
+        assert errors == [error]
+
+
+def test_validate_source_anchors_rejects_directory_as_factual_file(tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir()
+    ok, errors = validate_issue_body("## Source Anchors\n- `app`\n", tmp_path)
+
+    assert ok is False
+    assert errors == ["Anchor path is not a file: app"]
+
+
+@pytest.mark.parametrize("path", ["app/missing.py", "docs/MISSING.md"])
+def test_github_reference_in_locator_cannot_hide_missing_file(tmp_path: Path, path: str) -> None:
+    ok, errors = validate_issue_body(f"## Source Anchors\n- `{path} :: context from PR #1234`\n", tmp_path)
+
+    assert ok is False
+    assert errors == [f"Anchor file not found: {path}"]

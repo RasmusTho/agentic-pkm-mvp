@@ -41,24 +41,27 @@ Load a matching skill before its workflow boundary. Publication actions never us
 - Keep code, tests, and owner docs consistent. If a runtime precondition is added, update every
   producer (bootstrap, migration, fixtures) and add a fail-loud preflight in the same change.
 - Do not present target-state docs as shipped truth. Keep normative content in its owner document.
-- Stop when authority is contradictory, scope must expand, required verification cannot run, or a
-  consequential external/irreversible action lacks approval. Report the smallest exact blocker.
+- Stop the affected effect for unresolved authority, expanded outcomes/reserved risk, missing required
+  verification, or missing external/irreversible authority; use authorized recovery and report the exact blocker.
 
 ## Total Cost of Development
 
-Choose the cheapest acceptable capability: workflow, model/reasoning, context, tools, verification,
-and review. Optimize first for owner time, rework, hidden defects, and delay; model cost is secondary.
-Use the configured Codex capability rather than hard-coded provider/model IDs. Escalate for unclear
-requirements, repeated failed attempts, hard-to-assess residual risk, or auth/security/data/migration/
-concurrency/external-API work; de-escalate when a local deterministic test bounds the change.
+Choose the cheapest acceptable workflow, capability, context, tools, verification, and review.
+Optimize owner time, rework, defects, and delay before model cost; use configured Codex capability.
+Escalate for unclear requirements, repeated failure, uncertain residual risk, or auth/security/data/
+migration/concurrency/external-API work; de-escalate when a deterministic test bounds the change.
 
-Detailed capability policy and output blocks belong in the selected skill and
-`docs/development/TOTAL_COST_OF_DEVELOPMENT.md`, not in this auto-loaded file.
+Detailed capability policy/output belongs in the selected skill and `docs/development/TOTAL_COST_OF_DEVELOPMENT.md`.
 
 ## Agency default
 
-Execute every applicable Builder skill transition under `.codex/skills/README.md :: Workflow continuation`; do not stop at a skill output or queued handoff. Delivery includes publication → verification-and-closure → verified merge and reconciliation until end-to-end automation is explicitly accepted. Leave an unmerged delivery PR only for documented stop-loss or an explicit user scope restriction.
-Proceed with authorized work; preserve operator gates and explicit planning/review-only scope. A retry count, a failed local/CI/type check, or a safe technical pause is not an owner decision; only its explicit authority categories may create `agent:needs-human`. Route real owner asks through `owner-decision-brief`; stop-loss follows `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
+Carry the current mandate through retries and skill transitions; later explicit owner direction can
+revise earlier restrictions. Record a revision once in the canonical contract through its owning
+workflow; do not infer authority or repeat answered asks. Preserve operator and explicit scope gates.
+Execute `.codex/skills/README.md :: Workflow continuation` through verified merge and reconciliation.
+Routine reversible agent work uses `decision-quality :: Routine agent-owned work`.
+A retry count, a failed local/CI/type check or technical repair is not an owner decision; only its explicit authority categories may create `agent:needs-human`. Route genuine owner asks through `owner-decision-brief`.
+An unmerged delivery requires explicit limited scope or `docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`.
 
 ## Parallel-agent execution
 
@@ -107,19 +110,17 @@ evidence in the durable receipt. Present genuine decisions as Problem -> Options
 
 ## Specialist subagent roles
 
-Skills remain the workflow contracts. `.codex/agents/**` are Codex execution adapters, not policy.
-Use `docs/development/BUILDER_SUBAGENT_ROLES.md` for role routing and handoff receipts. Do not activate
-legacy provider-specific worker paths from compatibility or provenance artifacts.
+Skills remain the workflow contracts; `.codex/agents/**` are execution adapters. Use
+`docs/development/BUILDER_SUBAGENT_ROLES.md` for role routing/handoff; never activate legacy
+provider-specific worker paths from compatibility or provenance artifacts.
 
 ## Docs authoring lane
 
-Issue-free docs authoring is allowed only for approved docs surfaces and must not change runtime
-behavior or shipped truth. Use `docs-governance` then `docs-authoring`.
+Issue-free docs authoring uses `docs-governance` then `docs-authoring` on approved surfaces; preserve runtime behavior/shipped truth.
 
 ## Governance lane
 
-Issue-free bounded changes to `AGENTS.md`, `.codex/skills/**`, governance tests/scripts/templates, and
-their owner docs may use the Governance lane. Product/runtime behavior requires Issue-first delivery.
+Issue-free bounded instruction, skill, governance test/script/template, and owner-doc changes may use the Governance lane; product/runtime behavior is Issue-first.
 
 ## GitHub delivery governance
 
@@ -146,16 +147,15 @@ their owner docs may use the Governance lane. Product/runtime behavior requires 
 
 ## Dispatcher policy
 
-The dispatcher is an optional collision guard, not lifecycle authority; Project Status is optional projection. Use only
-`scripts/issue_pickup_claim.sh` through `issue-to-code`; never reconstruct its claim/label handshake.
-During active work, `dispatcher heartbeat` runs about every 30 minutes and renews the current
-holder's unexpired lease from its persisted TTL. GitHub Issue state, blocked-state, and review-handoff
-labels remain durable truth; renewal atomically updates SQLite expiry and the task's `lease_expires_at` projection, while the default 90-minute TTL and holder/expiry validation remain unchanged.
+The dispatcher is an optional collision guard; GitHub is lifecycle truth and Project optional projection.
+Use `scripts/issue_pickup_claim.sh` through `issue-to-code`; never reconstruct the claim handshake.
+Heartbeat about every 30 minutes renews the holder's unexpired lease from its persisted TTL;
+the default 90-minute TTL and holder/expiry validation remain binding.
 
 ## Builder-session closeout gate
 
-Before a development-time builder session or builder agent returns a terminal response, hands off, goes idle, or otherwise stops, run `.codex/skills/klart/SKILL.md`. It is a read-only closeout
-assessment and does not govern Product/Runtime agents. Report the outcome, verification, and any
-remaining action or material risk concisely in the user's language; no fixed headings are required.
-This is a Builder System instruction, not a platform-level response interceptor; a skill cannot mechanically rewrite a response that bypasses it. An unqualified end requires `destination: end` and
-`secure_first: false`; otherwise execute the owning workflow, or document stop-loss/explicit user stop before a terminal handoff. `klart` never establishes Issue/PR delivery.
+Before a development-time builder session or builder agent returns a terminal response, hands off, goes idle, or otherwise stops, run `.codex/skills/klart/SKILL.md`.
+This read-only assessment does not govern Product/Runtime agents. Report outcome, verification,
+remaining action/risk in the user's language; no fixed headings are required. An unqualified end
+requires `destination: end` and `secure_first: false`; otherwise continue the owning workflow or
+document stop-loss/explicit user stop. `klart` never establishes Issue/PR delivery or intercepts responses.

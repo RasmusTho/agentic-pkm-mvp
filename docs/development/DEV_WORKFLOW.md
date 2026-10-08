@@ -438,6 +438,7 @@ Use this lane only when:
   - `tests/ops/test_review_before_ci_workflow_risk.py`
   - `tests/ops/test_host_global_lease.py`
   - `tests/scripts/test_validate_issue_readiness.py`
+  - `tests/scripts/test_validate_source_anchors.py`
   - `tests/scripts/test_docs_guard.py`
   - `tests/scripts/test_pr_body_generator.py`
   - `tests/fixtures/issue_readiness/**`
