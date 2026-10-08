@@ -46,6 +46,7 @@ from app.model_access.remote_contract import (
 from app.model_access.router import ModelAccessRouter
 from app.embedding_config import assert_embed_dim, l2_normalize
 from app.llm.embeddings import _chunk_for_embedding, _embedding_max_input_chars, _mean_pool
+from app.llm.trace import log_llm_call
 from app.services.llm import LLMBackendTimeout, call_llm
 from app.settings.runtime import get_settings_bundle
 from llm_contract import (
@@ -1057,6 +1058,20 @@ class ChatClient:
                                 response.dispatched_reasoning_effort
                             ),
                         }
+                    )
+                if record_content:
+                    log_llm_call(
+                        provider=response.route.provider,
+                        model=response.route.model,
+                        agent=agent or name or "unknown",
+                        kind=kind or name or "unknown",
+                        messages=[
+                            {"role": "system", "content": request.trusted_instructions},
+                            {"role": "user", "content": request.user_input},
+                        ],
+                        response={"content": response.content},
+                        response_text=response.content,
+                        trace_id=trace_id,
                     )
                 return response.content
             finally:

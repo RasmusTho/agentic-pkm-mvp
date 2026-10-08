@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -167,7 +167,7 @@ def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
             self.preflight_requests: list[object] = []
             self.completion_requests: list[object] = []
             self.embedding_requests: list[object] = []
-            self.completion_content = "fixture Product answer"
+            self.completion_content: str | Callable[[object], str] = "fixture Product answer"
             self.completion_usage = None
             self.embedding_error: Exception | None = None
             self._routes: dict[str, CompletionRouteIdentity] = {}
@@ -210,9 +210,14 @@ def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
         def complete_product_selected_path(self, request, *, receipt):
             self.completion_requests.append(request)
             route = self._routes.pop(receipt.receipt_id)
+            content = (
+                self.completion_content(request)
+                if callable(self.completion_content)
+                else self.completion_content
+            )
             return CompletionResponse(
                 route=route,
-                content=self.completion_content,
+                content=content,
                 dispatched_reasoning_effort=request.reasoning_effort,
                 usage=self.completion_usage,
             )

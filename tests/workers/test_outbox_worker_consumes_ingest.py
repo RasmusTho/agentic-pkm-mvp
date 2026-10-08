@@ -152,6 +152,12 @@ def _stub_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
         dim = 8
         normalize = False
 
+    class _FakeProductEmbedder:
+        identity = _Identity()
+
+        def close(self) -> None:
+            return None
+
     class _VectorIndex:
         def purge_vectors(self, *_a, **_k) -> None:
             return None
@@ -159,7 +165,9 @@ def _stub_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
         def upsert(self, *_a, **_k) -> None:
             return None
 
-    monkeypatch.setattr(indexer_module, "get_embedding_identity", lambda: _Identity())
+    monkeypatch.setattr(
+        indexer_module, "get_product_embedding_client", lambda: _FakeProductEmbedder()
+    )
     monkeypatch.setattr(indexer_module, "get_vector_index", lambda: _VectorIndex())
     # The fake outbox intentionally selects its Postgres path, but this worker
     # test is not an integration test of the separate runtime-health guard.
