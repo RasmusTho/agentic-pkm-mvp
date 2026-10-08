@@ -24,8 +24,18 @@ _deploy_channel_resolve_runtime_env_file() {
   local channel_env_file="${3:?channel env file required}"
   local runtime_env_ref
 
-  runtime_env_ref="$(
-    ROOT="${root}" CHANNEL_ENV_FILE="${channel_env_file}" "${PYTHON:-python3}" - 2>/dev/null <<'PY'
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+    runtime_env_ref="${BWS_DEPLOY_RUNTIME_ENV_FILE:-}"
+    case "${runtime_env_ref}" in
+      /*) ;;
+      *)
+        echo "BWS runtime env preflight: blocked reason=missing_or_relative_path" >&2
+        return 78
+        ;;
+    esac
+  else
+    runtime_env_ref="$(
+      ROOT="${root}" CHANNEL_ENV_FILE="${channel_env_file}" "${PYTHON:-python3}" - 2>/dev/null <<'PY'
 import os
 import sys
 from pathlib import Path
@@ -43,7 +53,8 @@ for line in channel_lines:
         print(compose_env_value(line.split("=", 1)[1]))
         break
 PY
-  )"
+    )"
+  fi
   if [ -z "${runtime_env_ref}" ]; then
     case "${channel}" in
       test) runtime_env_ref="./tmp-test/runtime.env" ;;

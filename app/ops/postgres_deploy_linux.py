@@ -64,9 +64,36 @@ def validate_database_inputs(environment: Any, paths: list[Path]) -> None:
                 credential_free_database_fields(source[key])
 
 
+def _runtime_env_file_path(value: Any) -> Path:
+    """Validate the configured BWS runtime env as an absolute regular file."""
+    try:
+        raw_path = os.fspath(value)
+    except TypeError:
+        raise PostgresDeployError() from None
+    if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
+        raise PostgresDeployError()
+    path = Path(raw_path)
+    if not path.is_absolute():
+        raise PostgresDeployError()
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise PostgresDeployError()
+    except (OSError, ValueError):
+        raise PostgresDeployError() from None
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    return path
+
+
 def database_input_files(cfg: LinuxConfig) -> list[Path]:
     from scripts.compose_env import compose_env_value
     pin = cfg.root / 'config/deploy' / (cfg.channel + '.env')
+    configured_runtime = getattr(cfg, 'runtime_env_file', None)
+    if configured_runtime is not None:
+        return [pin, _runtime_env_file_path(configured_runtime)]
     runtime = './tmp-test/runtime.env' if cfg.channel == 'test' else './tmp/runtime.env'
     try:
         lines = pin.read_text(encoding='utf-8').splitlines()
@@ -142,6 +169,9 @@ def require_file_protocol(root: Path, revision: str) -> None:
 def inherited_worker_guard(channel: str, compose_command: str | None = None) -> None:
     import fcntl
     cfg = LinuxConfig.load(channel)
+    runtime_env_file = _runtime_env_file_path(cfg.runtime_env_file)
+    if os.environ.get('BWS_DEPLOY_RUNTIME_ENV_FILE') != str(runtime_env_file):
+        raise PostgresDeployError()
     descriptor = int(os.environ['BWS_DEPLOY_LOCK_FD'])
     expected = cfg.root / 'config/deploy' / (channel + '.env.lock') / 'bws-owner'
     info, held = expected.lstat(), os.fstat(descriptor)
@@ -239,15 +269,27 @@ class LinuxConfig:
     gid: int
     organization_id: str
     project_id: str
+    runtime_env_file: Path | None = None
 
     @classmethod
     def load(cls, channel: str) -> LinuxConfig:
         if channel not in {'dev', 'test', 'prod'}:
             raise PostgresDeployError()
         data = _private_json(Path('/etc/yggdrasil/bws-deploy') / (channel + '.json'))
-        if set(data) != {'root', 'data_directory', 'uid', 'gid', 'organization_id', 'project_id'}:
+        if set(data) != {
+            'root', 'data_directory', 'uid', 'gid', 'organization_id', 'project_id', 'runtime_env_file'
+        }:
             raise PostgresDeployError()
-        cfg = cls(channel, Path(data['root']), Path(data['data_directory']), data['uid'], data['gid'], data['organization_id'], data['project_id'])
+        cfg = cls(
+            channel,
+            Path(data['root']),
+            Path(data['data_directory']),
+            data['uid'],
+            data['gid'],
+            data['organization_id'],
+            data['project_id'],
+            _runtime_env_file_path(data['runtime_env_file']),
+        )
         if (not cfg.root.is_absolute() or not cfg.data_directory.is_absolute()
             or cfg.root.is_symlink() or cfg.data_directory.is_symlink()
             or type(cfg.uid) is not int or type(cfg.gid) is not int or min(cfg.uid, cfg.gid) < 1
@@ -469,6 +511,7 @@ class LinuxEffects:
 
     def environment(self) -> dict[str, str]:
         cfg = self.config
+        runtime_env_file = database_input_files(cfg)[1]
         env = dict(os.environ)
         # Refuse ambient password-bearing DSNs before invoking Compose.
         for key in ('DATABASE_URL', 'DB_DSN'):
@@ -479,7 +522,9 @@ class LinuxEffects:
         env.update(HOST_SECRET_PROVIDER='bws', BWS_POSTGRES_PASSWORD_SOURCE=str(cfg.password_file),
                    BWS_DATABASE_NAME={'dev': 'app_dev', 'test': 'app_test', 'prod': 'app'}[cfg.channel],
                    LOCAL_UID=str(cfg.uid), LOCAL_GID=str(cfg.gid),
-                   BWS_DATABASE_VOLUME={'dev': 'pkm-dev_pgdata-dev', 'test': 'pkm-test_pgdata', 'prod': 'pkm-prod_pgdata'}[cfg.channel])
+                   BWS_DATABASE_VOLUME={'dev': 'pkm-dev_pgdata-dev', 'test': 'pkm-test_pgdata', 'prod': 'pkm-prod_pgdata'}[cfg.channel],
+                   BWS_DEPLOY_RUNTIME_ENV_FILE=str(runtime_env_file),
+                   WATCHER_RUNTIME_ENV_FILE=str(runtime_env_file))
         # Reader credentials stay in the worker. Child programs get no token handle.
         env.pop('BWS_ACCESS_TOKEN', None)
         for key in ('DEPLOY_CAPTURE_WATCH_CONFIGURED', 'DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING',
@@ -783,6 +828,11 @@ class DeploymentSupervisor:
         self.operation: SupervisedOperation | None = None
         self.mutex = threading.Lock()
 
+    def _require_current_config(self) -> None:
+        current = LinuxConfig.load(self.config.channel)
+        if current != self.config:
+            raise PostgresDeployError()
+
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
@@ -808,6 +858,10 @@ class DeploymentSupervisor:
                 # Only a new operation with no pending predecessor can be created.
                 if data['action'] != 'prepare' or (previous and previous.terminal_result is None):
                     raise PostgresDeployError()
+                # The service binds its root-owned channel config at startup.
+                # Refuse stale config before admitting a request or starting a worker;
+                # the operator can restart the idle service to apply the new config.
+                self._require_current_config()
                 self.operation = SupervisedOperation(LinuxEffects(self.config), operation_id, plan, data['bootstrap'])
                 self.operation.thread.start()
             operation = self.operation
