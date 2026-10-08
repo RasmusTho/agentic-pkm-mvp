@@ -105,6 +105,8 @@ if any(len(entries) != 1 for entries in values.values()):
 uid, gid = values["LOCAL_UID"][0], values["LOCAL_GID"][0]
 if not re.fullmatch(rb"[0-9]+", uid) or not re.fullmatch(rb"[0-9]+", gid):
     raise SystemExit(2)
+if not uid.lstrip(b"0") or not gid.lstrip(b"0"):
+    raise SystemExit(2)
 print(uid.decode("ascii") + "\t" + gid.decode("ascii"))
 PY
     )"; then
@@ -136,6 +138,32 @@ PY
   LOCAL_UID="${LOCAL_UID:-$(id -u)}"
   LOCAL_GID="${LOCAL_GID:-$(id -g)}"
   export LOCAL_UID LOCAL_GID
+}
+
+deploy_channel_runtime_identity_matches_snapshot() {
+  local runtime_env_snapshot="${1:?runtime env snapshot required}"
+  local expected_uid="${LOCAL_UID:-$(id -u)}"
+  local expected_gid="${LOCAL_GID:-$(id -g)}"
+  local actual_uid actual_gid preflight_rc
+
+  if deploy_channel_runtime_identity_preflight "${runtime_env_snapshot}"; then
+    actual_uid="${LOCAL_UID}"
+    actual_gid="${LOCAL_GID}"
+  else
+    preflight_rc=$?
+    LOCAL_UID="${expected_uid}"
+    LOCAL_GID="${expected_gid}"
+    export LOCAL_UID LOCAL_GID
+    return "${preflight_rc}"
+  fi
+
+  LOCAL_UID="${expected_uid}"
+  LOCAL_GID="${expected_gid}"
+  export LOCAL_UID LOCAL_GID
+  if [ "${actual_uid}" != "${expected_uid}" ] || [ "${actual_gid}" != "${expected_gid}" ]; then
+    echo "runtime identity preflight: blocked reason=runtime_identity_changed" >&2
+    return 78
+  fi
 }
 
 _deploy_channel_model_access_config_blocked() {
@@ -999,6 +1027,7 @@ deploy_channel_compose() {
     if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
       _deploy_channel_snapshot_runtime_env_file \
         "${runtime_env_file}" "${model_access_env_file}" "${runtime_env_snapshot_file}" || return $?
+      deploy_channel_runtime_identity_matches_snapshot "${runtime_env_snapshot_file}" || return $?
       runtime_env_ref="${runtime_env_snapshot_file}"
     fi
     export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"

@@ -3450,6 +3450,9 @@ def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
         ("LOCAL_UID=1000\n", "bws", 78),
         ("LOCAL_UID=1000\nLOCAL_GID=1001\nLOCAL_UID=1002\n", "bws", 78),
         ("LOCAL_UID=bad\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=0\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=1000\nLOCAL_GID=0\n", "bws", 78),
+        ("LOCAL_UID=0000\nLOCAL_GID=1001\n", "bws", 78),
         ("TTS_ENABLED=false\n", "keychain", 0),
     ],
 )
@@ -3499,3 +3502,30 @@ def test_bws_runtime_identity_preflight_fails_before_mutation(
             f"uid={os.getuid()} gid={os.getgid()}" in event
             for event in identity_events
         )
+
+
+def test_runtime_identity_snapshot_change_is_rejected(tmp_path: Path) -> None:
+    snapshot = tmp_path / "runtime.env"
+    snapshot.write_text("LOCAL_UID=1001\nLOCAL_GID=1002\n", encoding="utf-8")
+    script = REPO_ROOT / "scripts/lib/deploy_channel_compose.sh"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; LOCAL_UID=1000; LOCAL_GID=1002; export LOCAL_UID LOCAL_GID; '
+            'HOST_SECRET_PROVIDER=bws; '
+            'if deploy_channel_runtime_identity_matches_snapshot "$2"; then exit 0; '
+            'else rc=$?; test "$rc" -eq 78; fi; '
+            'test "$LOCAL_UID" = 1000; test "$LOCAL_GID" = 1002',
+            "runtime-identity-snapshot-test",
+            str(script),
+            str(snapshot),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "runtime identity preflight: blocked reason=runtime_identity_changed" in result.stderr
