@@ -1921,6 +1921,14 @@ def _configure_successful_channel_preflights(
     )
 
 
+def _set_bws_consumer_selection(env: dict[str, str], *, raw_migration: bool) -> None:
+    env.update(
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED='1',
+        BWS_EXPECTED_RAW_MIGRATION_PENDING='1' if raw_migration else '0',
+        BWS_DEPLOY_TARGET_REVISION=env['FAKE_SHA'],
+    )
+
+
 def _commit_har_raw_migration(root: Path, name: str) -> str:
     migration = root / "app" / "alembic" / "versions" / name
     migration.write_text(
@@ -2210,6 +2218,9 @@ class _BwsVmEffects:
         self.auth = auth
         self.quiet = quiet
 
+    def select_active_plan(self, plan):
+        return plan
+
     def preflight(self, plan):
         self.events.append('preflight:' + plan.channel)
         return 'fake-postgres-canary'
@@ -2429,6 +2440,280 @@ def test_inactive_optional_model_credentials_do_not_block_deploy(tmp_path):
     assert all('openai' not in identity and 'anthropic' not in identity for _, _, identity in provider.calls)
 
 
+def test_bws_deploy_selects_only_active_secret_consumers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan
+
+    root = tmp_path
+    cfg = SimpleNamespace(channel='test', root=root)
+    base = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+    monkeypatch.setattr(linux, 'database_input_files', lambda _cfg: [root / 'pin', root / 'runtime'])
+    monkeypatch.setattr(linux, 'validate_database_inputs', lambda *_args: None)
+    monkeypatch.setattr(linux, 'require_file_protocol', lambda *_args: None)
+    selected_state = {'capture': False, 'migration': False}
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _cfg: selected_state['capture'])
+    monkeypatch.setattr(linux, '_raw_representation_migration_pending',
+                        lambda _cfg, _revision: selected_state['migration'])
+
+    def selected(capture, migration):
+        selected_state.update(capture=capture, migration=migration)
+        return linux.LinuxEffects(cfg).select_active_plan(base).consumers
+
+    assert selected(False, False) == (*DATABASE_CONSUMERS, 'heimdal-api-ingress')
+    assert selected(True, False) == (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch')
+    assert selected(False, True) == (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-raw-migrate')
+    assert selected(True, True) == (
+        *DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate'
+    )
+
+
+def test_vm_raw_key_selection_matches_target_migration_delta_and_pending_marker(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    (root / 'app/alembic/versions').mkdir(parents=True)
+    subprocess.run(['git', 'init', '-q', str(root)], check=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@example.invalid'], cwd=root, check=True)
+    subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=root, check=True)
+    baseline_migration = root / 'app/alembic/versions/000000000000_baseline.py'
+    baseline_migration.write_text('reversibility = "reversible"\n', encoding='utf-8')
+    subprocess.run(['git', 'add', 'app'], cwd=root, check=True)
+    subprocess.run(['git', 'commit', '-qm', 'baseline'], cwd=root, check=True)
+    baseline = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+
+    target_migration = root / 'app/alembic/versions/e7b4c9d2a6f1_heimdal_raw_representation.py'
+    target_migration.write_text('reversibility = "forward-only"\n', encoding='utf-8')
+    subprocess.run(['git', 'add', 'app'], cwd=root, check=True)
+    subprocess.run(['git', 'commit', '-qm', 'add raw migration'], cwd=root, check=True)
+    target = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    cfg = linux.LinuxConfig('test', root, root / 'data', 1000, 1000, '', '')
+    pin = root / 'config/deploy/test.env'
+
+    pin.write_text(f'APP_IMAGE_TAG={baseline}\n', encoding='utf-8')
+    assert linux._raw_representation_migration_pending(cfg, target) is True
+    pin.write_text(f'APP_IMAGE_TAG={target}\n', encoding='utf-8')
+    assert linux._raw_representation_migration_pending(cfg, target) is False
+
+    pending = root / 'config/deploy/test.migration-pending.env'
+    pending.write_text(
+        f'FROM_SHA={baseline}\nTARGET_SHA={target}\nACK_FORWARD_ONLY=1\n', encoding='utf-8'
+    )
+    assert linux._raw_representation_migration_pending(cfg, target) is True
+    with pytest.raises(PostgresDeployError):
+        linux._raw_representation_migration_pending(cfg, 'f' * 40)
+
+
+@pytest.mark.parametrize('active_consumer', ['heimdal-capture-watch', 'heimdal-raw-migrate'])
+def test_bws_deploy_requires_raw_key_for_active_capture_and_migration(active_consumer):
+    from app.ops.bws_secret_reader import BwsItemAbsent
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan, PostgresDeployError, vm_selected_values
+
+    plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', active_consumer))
+
+    class Reader:
+        def lookup(self, _project, identity):
+            if identity.endswith('heimdal.raw-store-key'):
+                raise BwsItemAbsent()
+            return 'fake-role-password'
+
+    with pytest.raises(PostgresDeployError):
+        vm_selected_values(plan, Reader())
+
+
+def test_bws_host_and_vm_preflight_use_active_secret_consumers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.bws_secret_reader import BwsItemAbsent
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan, PostgresDeployError, deploy_from_host, vm_selected_values
+
+    admin, _provider, _old_plan, remote = _bws_host(tmp_path)
+    plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+    assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
+
+    cfg = SimpleNamespace(channel='test', root=tmp_path)
+    monkeypatch.setattr(linux, 'database_input_files', lambda _cfg: [tmp_path / 'pin', tmp_path / 'runtime'])
+    monkeypatch.setattr(linux, 'validate_database_inputs', lambda *_args: None)
+    monkeypatch.setattr(linux, 'require_file_protocol', lambda *_args: None)
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _cfg: False)
+    migration_pending = {'value': False}
+    monkeypatch.setattr(linux, '_raw_representation_migration_pending',
+                        lambda _cfg, _revision: migration_pending['value'])
+    selected = linux.LinuxEffects(cfg).select_active_plan(plan)
+
+    class Reader:
+        def lookup(self, _project, identity):
+            if identity.endswith('heimdal.raw-store-key') or identity.endswith('github.token'):
+                raise BwsItemAbsent()
+            return 'fake-role-password'
+
+    values = vm_selected_values(selected, Reader())
+    assert values['heimdal-api-ingress'] == {}
+    migration_pending['value'] = True
+    active = linux.LinuxEffects(cfg).select_active_plan(plan)
+    with pytest.raises(PostgresDeployError):
+        vm_selected_values(active, Reader())
+
+
+def test_vm_capture_watch_selection_uses_runtime_input_and_fails_on_ambiguity(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    pin_dir = tmp_path / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    pin.write_text('WATCHER_RUNTIME_ENV_FILE=./runtime.env\n', encoding='utf-8')
+    cfg = linux.LinuxConfig('test', tmp_path, tmp_path / 'data', 1000, 1000, '', '')
+    assert linux._capture_watch_configured(cfg) is False
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/capture\n', encoding='utf-8')
+    assert linux._capture_watch_configured(cfg) is True
+    alternate = tmp_path / 'alternate.env'
+    alternate.write_text('', encoding='utf-8')
+    pin.write_text(
+        'WATCHER_RUNTIME_ENV_FILE=./runtime.env\n'
+        'WATCHER_RUNTIME_ENV_FILE=./alternate.env\n',
+        encoding='utf-8',
+    )
+    assert linux._capture_watch_configured(cfg) is True
+    pin.write_text('WATCHER_RUNTIME_ENV_FILE=./runtime.env\n', encoding='utf-8')
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/first\nHEIMDAL_CAPTURE_WATCH_DIR=/second\n', encoding='utf-8')
+    with pytest.raises(PostgresDeployError):
+        linux._capture_watch_configured(cfg)
+
+
+def test_vm_and_deploy_shell_resolve_quoted_runtime_env_path_consistently(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'checkout'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    pin.write_text('WATCHER_RUNTIME_ENV_FILE="./runtime.env"\n', encoding='utf-8')
+    runtime = root / 'runtime.env'
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/capture\n', encoding='utf-8')
+    cfg = linux.LinuxConfig('test', root, tmp_path / 'data', 1000, 1000, '', '')
+
+    assert linux.database_input_files(cfg)[1] == runtime
+    assert linux._capture_watch_configured(cfg) is True
+
+    helper = REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'
+    result = subprocess.run(
+        [
+            'bash', '-c',
+            'source "$1"; _deploy_channel_resolve_runtime_env_file "$2" test "$3"; '
+            'printf "%s\\n" "$DEPLOY_CHANNEL_RUNTIME_ENV_FILE"',
+            'test', str(helper), str(root), str(pin),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(runtime)
+
+
+def test_empty_vm_and_deploy_shell_runtime_selector_use_channel_default(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'checkout'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    runtime = root / 'tmp-test/runtime.env'
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/capture\n', encoding='utf-8')
+    cfg = linux.LinuxConfig('test', root, tmp_path / 'data', 1000, 1000, '', '')
+    helper = REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'
+
+    for selector in ('', '""'):
+        pin.write_text(f'WATCHER_RUNTIME_ENV_FILE={selector}\n', encoding='utf-8')
+        assert linux.database_input_files(cfg)[1] == runtime
+        assert linux._capture_watch_configured(cfg) is True
+        result = subprocess.run(
+            [
+                'bash', '-c',
+                'source "$1"; _deploy_channel_resolve_runtime_env_file "$2" test "$3"; '
+                'printf "%s\\n" "$DEPLOY_CHANNEL_RUNTIME_ENV_FILE"',
+                'test', str(helper), str(root), str(pin),
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == str(runtime)
+
+
+def test_vm_and_deploy_shell_reject_directory_runtime_selector_source(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root = tmp_path / 'checkout'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    pin.mkdir()
+    cfg = linux.LinuxConfig('test', root, tmp_path / 'data', 1000, 1000, '', '')
+    with pytest.raises(PostgresDeployError):
+        linux.database_input_files(cfg)
+
+    helper = REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'
+    result = subprocess.run(
+        [
+            'bash', '-c',
+            'source "$1"; _deploy_channel_resolve_runtime_env_file "$2" test "$3"',
+            'test', str(helper), str(root), str(pin),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+
+
+def test_vm_selector_failure_records_abort_and_releases_channel_lock(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    _, journal, plan, identifier = _bws_worker(tmp_path, _BwsVmEffects())
+    root = tmp_path / 'checkout'
+    (root / 'config/deploy').mkdir(parents=True)
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    effects = linux.LinuxEffects(config)
+    effects.validate_plan = lambda selected: selected.validate()
+
+    def reject_selection(_selected):
+        raise PostgresDeployError()
+
+    effects.select_active_plan = reject_selection
+    effects.quiescent = lambda: pytest.fail('read-only selection refusal needs no Compose probe')
+    monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
+    supervisor = linux.DeploymentSupervisor(config)
+
+    result = supervisor.request({
+        'action': 'prepare', 'operation_id': identifier, 'plan': plan.__dict__, 'bootstrap': False,
+    })
+    assert supervisor.operation is not None
+    assert supervisor.operation.finished.wait(5)
+    assert result['receipt']['terminal_result'] == 'aborted'
+    receipt = journal.read()
+    assert receipt is not None and receipt.stage == 'aborted'
+    assert not (root / 'config/deploy/test.env.lock').exists()
+
+
 def test_deploy_lost_ack_reconciles_matching_remote_terminal_receipt(tmp_path):
     from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
     admin, _, plan, remote = _bws_host(tmp_path)
@@ -2615,6 +2900,8 @@ def test_deploy_does_not_create_plaintext_postgres_env_file(tmp_path, monkeypatc
     effects.source = SimpleNamespace(verify=lambda: None)
     effects.environment = lambda: {'HOST_SECRET_PROVIDER': 'bws'}
     effects.consumer_values = {'heimdal-api-ingress': {}, 'heimdal-capture-watch': {}, 'heimdal-raw-migrate': {}}
+    effects.active_consumers = (*DATABASE_CONSUMERS, 'heimdal-api-ingress',
+                                'heimdal-capture-watch', 'heimdal-raw-migrate')
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()), tuple(DATABASE_CONSUMERS))
     calls = []
     def command(argv, **kwargs):
@@ -2705,6 +2992,7 @@ def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, chann
     target = _commit_har_raw_migration(root, 'e7b4c9d2a6f1_heimdal_raw_representation.py')
     env.update(FAKE_SHA=target, DEPLOY_ACK_FORWARD_ONLY='1', HOST_SECRET_PROVIDER='bws', BWS_DATABASE_TARGET='local',
                FAKE_SECURITY_EVENT_LOG=env['FAKE_DEPLOY_EVENT_LOG'])
+    _set_bws_consumer_selection(env, raw_migration=True)
     _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
     if channel == 'prod':
         _configure_bws_retry_driver(tmp_path, env)
@@ -2734,7 +3022,7 @@ if os.environ.get('FAKE_BWS_REJECT_RECHECK') == '1' and prior == 1:
     if reject_recheck:
         assert result.returncode == 78
         assert not any(event.startswith('docker ') for event in events)
-        assert 'migration raw-key preflight failed' in result.stderr
+        assert 'active secret consumer preflight failed: output=redacted' in result.stderr
     else:
         assert result.returncode == 0, result.stdout + result.stderr
         second_guard = [i for i, event in enumerate(events) if event == 'bws-guard'][1]
@@ -2783,10 +3071,12 @@ def test_linux_effects_wrong_overridden_role_cannot_borrow_default_role_proof(tm
                           password_file=source / 'password', source_directory=source, journal=journal,
                           reader=lambda: None)
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate'))
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
     monkeypatch.setattr(linux, 'vm_selected_values', lambda selected, reader:
                         {name: {'postgres.password': 'fake-role-canary'} if name in DATABASE_CONSUMERS else {}
                          for name in selected.consumers})
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _cfg: False)
+    monkeypatch.setattr(linux, '_raw_representation_migration_pending', lambda *_args: False)
     commands, connections = [], []
     def command(argv, **kwargs):
         commands.append(argv)
@@ -2858,6 +3148,7 @@ def test_linux_effects_wrong_overridden_role_cannot_borrow_default_role_proof(tm
 def test_bws_prod_retry_preflight_uses_file_connection_and_preserves_availability_policy(tmp_path, host, failure):
     root, env, target = _deploy_harness(tmp_path)
     env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _set_bws_consumer_selection(env, raw_migration=False)
     _configure_prod_retry_preflight(root, env, tmp_path,
         rows=[('panel.scan.requested', {'_worker_retry_count': 3}, 0)],
         unreachable=failure == 'unreachable')
@@ -2940,7 +3231,11 @@ def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, 
     with (lock / 'bws-owner').open('w+') as owner:
         monkeypatch.setattr(os, 'environ', {'DATABASE_URL': 'postgresql://app@' + host + ':5432/app_test',
             'BWS_DEPLOY_LOCK_FD': str(owner.fileno()), 'BWS_DEPLOY_OPERATION_ID': 'operation',
-            'BWS_DATABASE_TARGET': target, 'COMPOSE_PROFILES': profiles})
+            'BWS_DATABASE_TARGET': target, 'COMPOSE_PROFILES': profiles,
+            'BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED': '0',
+            'BWS_EXPECTED_RAW_MIGRATION_PENDING': '0',
+            'BWS_DEPLOY_TARGET_REVISION': 'a' * 40,
+            'DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING': '0'})
         if accepted:
             linux.inherited_worker_guard('test', 'up')
             assert reads == ['source']
@@ -2956,6 +3251,7 @@ def test_bws_prod_preflight_rejects_container_loopback_before_driver(tmp_path, k
     from urllib.parse import urlencode
     root, env, target = _deploy_harness(tmp_path)
     env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _set_bws_consumer_selection(env, raw_migration=False)
     _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     _configure_bws_retry_driver(tmp_path, env)
     fields = {'host': 'database.example.invalid', 'port': '5432', 'user': 'reporter', 'dbname': 'custom', key: address}
@@ -2977,6 +3273,7 @@ def test_bws_prod_preflight_rejects_container_loopback_before_driver(tmp_path, k
 def test_bws_prod_preflight_rejects_libpq_socket_and_default_targets_before_driver(tmp_path, dsn):
     root, env, target = _deploy_harness(tmp_path)
     env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _set_bws_consumer_selection(env, raw_migration=False)
     _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     _configure_bws_retry_driver(tmp_path, env)
     env['DATABASE_URL'] = env['DB_DSN'] = dsn

@@ -164,6 +164,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "app/ops/host_secret_bootstrap.py",
         "config/secrets/host_secret_contract.json",
         "scripts/deploy_channel.sh",
+        "scripts/compose_env.py",
         "scripts/companion_ui_postdeploy_smoke.sh",
         "scripts/dev_test_environment_clobber_preflight.py",
         "scripts/prod_devui_gateway_preflight.py",

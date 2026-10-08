@@ -178,6 +178,13 @@ PY
       return 78
       ;;
   esac
+  DEPLOY_CAPTURE_WATCH_CONFIGURED="${CAPTURE_WATCH_CONFIGURED}"
+  export DEPLOY_CAPTURE_WATCH_CONFIGURED
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ] && \
+      [ "${BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED:-invalid}" != "${DEPLOY_CAPTURE_WATCH_CONFIGURED}" ]; then
+    echo "capture-watch config preflight: blocked reason=supervisor_selection_mismatch" >&2
+    return 78
+  fi
 }
 
 # Gate Product-channel MARR bindings before creating the channel lock, materializing
@@ -708,6 +715,11 @@ print("1" if pending else "0")
   MIGRATION_RECEIPT_JSON="${receipt_json}"
   DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING="${har_raw_pending}"
   export MIGRATION_RECEIPT_JSON DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ] && \
+      [ "${BWS_EXPECTED_RAW_MIGRATION_PENDING:-invalid}" != "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING}" ]; then
+    echo "migration gate blocked: supervisor consumer selection mismatch" >&2
+    return 78
+  fi
 }
 
 prepare_prod_forward_only_ack() {
@@ -750,8 +762,24 @@ prepare_prod_forward_only_ack() {
 }
 
 heimdal_raw_migration_secret_preflight() {
-  if [ "${action}" != "deploy" ] \
-      || [ "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING:-0}" != "1" ]; then
+  local rc=0
+  if [ "${action}" != "deploy" ]; then
+    return 0
+  fi
+
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+    # Also recheck active capture-watch selection when no raw migration is
+    # pending. The inherited guard validates the selected scope before mutation.
+    (cd "${ROOT}" && "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}") \
+      >/dev/null 2>/dev/null || rc=$?
+    if [ "${rc}" -ne 0 ]; then
+      echo "active secret consumer preflight failed: output=redacted" >&2
+      return "${rc}"
+    fi
+    return 0
+  fi
+
+  if [ "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING:-0}" != "1" ]; then
     return 0
   fi
 
@@ -759,15 +787,9 @@ heimdal_raw_migration_secret_preflight() {
   # mutation (pin/marker/volume/Docker/writer stop). The later one-shot
   # Compose wrapper resolves it again immediately before Alembic, closing the
   # check/use window without retaining a secret value or temporary handle.
-  local rc=0
   (
     cd "${ROOT}" || exit 1
     export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
-    if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
-      # The same-ID supervisor already owns admission and its project reader.
-      # Recheck through that inherited guard; the Mac child-launch path refuses BWS.
-      exec "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}"
-    fi
     exec "${PYTHON}" -m app.ops.host_secret_bootstrap \
       --channel "${channel}" \
       --consumer heimdal-raw-migrate \

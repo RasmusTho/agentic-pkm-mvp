@@ -149,17 +149,18 @@ class SecretAdmin:
         operation.require_active(channel)
         if operation.kind not in {'check', 'deploy'} or not consumers:
             raise SecretAdminError()
-        selected: set[str] = set()
+        selected: dict[str, set[str]] = {}
         for consumer in consumers:
             if consumer in DATABASE_CONSUMERS:
                 self.contract.file_binding(channel=channel, consumer=consumer, secret='postgres.password')
-                selected.add('postgres.password')
+                selected.setdefault('postgres.password', set()).add(consumer)
             else:
                 bindings = {secret for ch, name, secret in self.contract.allowed
                             if ch == channel and name == consumer}
                 if not bindings:
                     raise SecretAdminError()
-                selected.update(bindings)
+                for secret in bindings:
+                    selected.setdefault(secret, set()).add(consumer)
         statuses = []
         for secret in sorted(selected):
             identity, projects = self._identity(channel, secret)
@@ -167,7 +168,14 @@ class SecretAdmin:
             absent = sum(copy is None for copy in copies)
             status = 'ok'
             if absent:
-                status = 'skipped' if absent == len(copies) and secret != 'postgres.password' and self.contract.is_optional(secret) else 'missing'
+                all_selected_consumers_allow_absence = (
+                    secret != 'postgres.password'
+                    and all(self.contract.is_optional_for_consumer(
+                        channel=channel, consumer=consumer, secret=secret
+                    ) for consumer in selected[secret])
+                )
+                status = ('skipped' if absent == len(copies)
+                          and all_selected_consumers_allow_absence else 'missing')
             if any(copy is not None and not validate_secret_value(self._kind(secret), copy.value)
                    for copy in copies):
                 status = 'invalid'

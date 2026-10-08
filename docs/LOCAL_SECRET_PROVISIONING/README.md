@@ -80,11 +80,12 @@ or live channel qualification. Parent #5667 remains open until those owner gates
    grants or change the dev capture watcher's least-privilege grant.
 3. **Fail closed.** A missing, malformed, or inaccessible required secret prevents the named process
    from starting; it does not select a default, print the value, or silently weaken encryption. Since
-   #4489 "required" is a property the schema states rather than assumes: every declaration carries an
-   explicit `optional` boolean, and only a declaration marked `optional` may be *absent* without
-   failing its consumer. Optionality never covers a value that is present and malformed — that still
-   fails closed, for optional and required secrets alike — so this constraint is unweakened for every
-   secret that guards a shipped lane.
+   #4489 "required" is a property the schema states rather than assumes: each secret carries an
+   explicit global `optional` boolean, and a consumer may separately declare that an otherwise
+   required secret can be absent for that consumer. The raw-store key remains globally required and
+   is optional only for `heimdal-api-ingress`, whose media/screen lanes report unavailable without
+   encryption; capture-watch and raw-migration still require it when selected. Optionality never
+   covers a value that is present and malformed — that still fails closed.
 4. **Key material stays outside the raw volume and database.** This preserves Heimdal's raw-store
    trust boundary.
 5. **Mac Keychain remains the source for existing Mac secrets and the BWS bootstrap token.** TSO-07
@@ -148,7 +149,11 @@ cipher domain. The consumer receives it only through HSP's mode-0600 temporary f
 the fixed sparsebundle command over standard input. The tracked metadata, startup/deploy gates,
 runbook, and receipts remain value-free; provisioning a host item is an explicit operator action.
 
-`github.token` (#4489) is the one **optional** declaration. It is granted to `heimdal-api-ingress`
+`github.token` (#4489) is the one **globally optional** declaration. `heimdal.raw-store-key` is
+globally required but absent material is tolerated by the `heimdal-api-ingress` consumer only; the
+active capture-watch and raw-migration consumers require it. This preserves degraded API operation
+without weakening encryption for consumers that write or transform raw data. `github.token` is
+granted to `heimdal-api-ingress`
 so the BuilderOps cockpit's `github-live` plane can read GitHub from inside the `api` container via
 `gh`, which reads `GITHUB_TOKEN` from its own environment. It must be optional because the
 bootstrap is fail-closed over every declared secret for a consumer: a required GitHub token would
@@ -160,10 +165,11 @@ both are deliberate:
   flat lists, so `github.token` is declared on all three channels. It is inert wherever nothing is
   provisioned and wherever no channel binds `COCKPIT_GITHUB_REPO` (`dev` and `prod` bind it; `test`
   does not), so least privilege holds in effect.
-- **The token inherits the layer's activation condition.** `deploy_channel_compose.sh` only wraps
-  compose with this consumer's bootstrap when `heimdal.raw-store-key` resolves, so a host without
-  that key materializes no layer and therefore receives no `GITHUB_TOKEN` either — provisioning the
-  token alone is not sufficient on the governed deploy path.
+- **The Keychain path keeps its existing layer coupling.** Its Compose helper only wraps the API
+  with this bootstrap when `heimdal.raw-store-key` resolves, so that path delivers no `GITHUB_TOKEN`
+  while the raw key is absent. The BWS VM path resolves the API consumer's bindings directly and
+  may deliver `GITHUB_TOKEN` without the raw key; in that case only the media/screen ingress lanes
+  are unavailable. Provisioning the token alone remains insufficient for those raw-data lanes.
 
 The external-alert binding `discord.webhook` is declared for the Heimdal-owned
 `heimdal-external-alerts` consumer on `dev`, `test`, and `prod`. The consumer receives only the
