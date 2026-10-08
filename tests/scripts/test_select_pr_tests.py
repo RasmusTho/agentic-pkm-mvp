@@ -278,6 +278,18 @@ def test_contract_selection_remains_conservative_after_deduplication() -> None:
     assert mixed_runtime.subsystems == ("unowned",)
     assert mixed_runtime.unowned_paths == ("app/new_unowned_surface.py",)
 
+    selector_owner = select_tests(["scripts/select_pr_tests.py"])
+    assert "governance" in selector_owner.subsystems
+    assert selector_owner.unowned_paths == ()
+    assert "tests/scripts" in selector_owner.targets
+    assert "tests/architecture" in selector_owner.targets
+
+    builder_owner = select_tests(["app/builderops/publication.py"])
+    assert builder_owner.subsystems == ("builder_system",)
+    assert builder_owner.unowned_paths == ()
+    assert "tests/builderops" in builder_owner.targets
+    assert "tests/architecture/test_pr_hot_path_governance.py" in builder_owner.targets
+
 
 def test_shared_note_path_normalization_has_exact_vault_ownership() -> None:
     selection = select_tests(
