@@ -196,6 +196,8 @@ PY
 # repeats that action or deploy validation before it snapshots the runtime env.
 if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
   _deploy_channel_resolve_runtime_env_file "${ROOT}" "${channel}" "${pin_file}"
+  deploy_channel_runtime_identity_preflight \
+    "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" || exit $?
   deploy_channel_model_access_preflight \
     "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" \
     "/etc/yggdrasil/model-access/runtime.env" || exit $?
