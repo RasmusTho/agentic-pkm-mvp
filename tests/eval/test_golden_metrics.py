@@ -14,7 +14,7 @@ from app.eval.golden import (
     precision_at_k,
 )
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 BILINGUAL_CORPUS_PATH = Path("data/golden/bilingual_corpus.jsonl")
 BILINGUAL_JUDGMENTS_PATH = Path("data/golden/bilingual_judgments.json")

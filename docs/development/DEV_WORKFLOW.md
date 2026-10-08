@@ -138,6 +138,12 @@ ambiguous. Review remains responsible for those cases.
   - `ruff check app tests companion-ui/companion-app`
   - `mypy app`
   - run the governing Issue's `Verify:` targets and the affected subsystem's focused tests
+  - Functional tests that exercise Product model access through ingest, worker, retrieval, or
+    evaluation callers must enroll the module-level `product_model_access_gateway` fixture
+    explicitly. It supplies typed deterministic Product responses at the fabric router seam and
+    does not require a host endpoint or certificate configuration. Keep executor transport and
+    admission tests outside that enrollment so missing path configuration still fails before
+    transport creation; never make the fixture autouse or provide fake host credentials.
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 

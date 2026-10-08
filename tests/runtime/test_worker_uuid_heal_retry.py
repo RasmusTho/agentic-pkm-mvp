@@ -3,6 +3,8 @@ from __future__ import annotations
 import errno
 from pathlib import Path
 
+import pytest
+
 from app.services.note_uuid import ensure_note_uuid as real_ensure_note_uuid
 from app.objects import ObjectStore
 from app.workers import outbox_worker
@@ -10,6 +12,8 @@ from scripts.yaml_roundtrip import load_frontmatter
 from tests.runtime.test_worker_ingest_event import _write_layout_note
 from tests.helpers.pkm_alpha_helper import reset_memory_stores
 
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 def test_handle_ingest_vault_changed_retries_uuid_heal_on_eperm(tmp_path: Path, monkeypatch) -> None:
     reset_memory_stores()

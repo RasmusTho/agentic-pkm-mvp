@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from app.agents.qa import agent as qa_agent
 from app.retrieval.hybrid import get_store
 
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 def test_qa_agent_answer(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "mock")
