@@ -168,6 +168,13 @@ def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
     )
     from llm_contract import ModelCapabilities
 
+    # The compiled Product embedding target is Ollama/nomic by design.  Tests
+    # enrolled in this fixture exercise the request/response seam, so give that
+    # seam an explicit deterministic provider while leaving admission tests
+    # outside the fixture untouched.  Individual route tests can still override
+    # this with their own monkeypatch (including the Ollama path proof).
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "mock")
+
     class _Gateway:
         def __init__(self) -> None:
             self.preflight_requests: list[object] = []
