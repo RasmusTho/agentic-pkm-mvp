@@ -34,7 +34,11 @@ Read the live PR identity, base, head, title/body, complete changed-file list, c
 review feedback once. Read the governing contract and exact closing Issues; use an existing scoped
 context when still current. A governing parent not in the closing set stays open. Issue-free work
 uses the PR's lane or Direct Repair contract. Do not create an Issue after the fact solely for a
-bounded direct repair. Compare source anchors and scope; stop on ambiguous authority.
+bounded direct repair. Routine BuilderOps evidence may remain in the Issue, PR, or reviewed repo
+artifact; optional record infrastructure is not a verification prerequisite. If it is unavailable,
+report the limitation once and preserve substantial findings in that existing authority. Compare
+source anchors and scope; stop on ambiguous authority or an unresolved substantial finding with no
+durable home.
 
 Apply `_shared/BLOCKER_ACTION_CONTRACT.md` only when blocker/action labels need reconciliation.
 Apply `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` before publication effects.
@@ -48,6 +52,10 @@ Apply `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` before publicati
   implementation validation again. Required current-head CI cannot be replaced by local evidence.
 - Confirm scope, Builder/Product ownership, owner-doc writeback and acceptance claims. Do this once
   and retain the inspected paths and conclusion in the PR's existing Validation section.
+- Confirm unresolved material learning, promotion, freshness, or adoption findings have a BuilderOps
+  record, bounded Issue, PromotionIntent, or explicit `none` reason. Reuse ordinary Issue/PR/reviewed
+  artifact evidence; do not create duplicate records merely to satisfy closeout. Protected executor
+  and in-flight receipts, current-head CI, exact review, merge, and closure gates remain mandatory.
 - If acceptance requires a post-merge producer, keep its parent or explicit acceptance Issue open;
   do not pretend a pre-merge test proves the later outcome.
 - For pre-API startup failures, read `.codex/skills/verification-and-closure/FULL_PATH.md :: Pre-API startup failure classification`.

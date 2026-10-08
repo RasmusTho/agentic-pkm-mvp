@@ -815,3 +815,36 @@ def test_validation_policy_reuses_evidence_without_relaxing_required_checks() ->
     implementation = _read(".codex/skills/issue-to-code/SKILL.md")
     assert "currently fails against the unchanged code path" not in implementation
     assert "One meaningful test may cover several ACs" in implementation
+
+
+def test_routine_evidence_policy_preserves_material_and_executor_boundaries() -> None:
+    """Routine evidence can stay in existing artifacts without weakening delivery gates."""
+    readme = _read(".codex/skills/README.md")
+    issue_to_code = _read(".codex/skills/issue-to-code/SKILL.md")
+    capture = _read(".codex/skills/capture-learning/SKILL.md")
+    retrospective = _read(".codex/skills/learning-retrospective/SKILL.md")
+    coordinator = _read(".codex/skills/deliver-issue-set/SKILL.md")
+    closeout = _read(".codex/skills/klart/SKILL.md")
+    verification = _read(".codex/skills/verification-and-closure/SKILL.md")
+    feedback = _read("docs/development/DELIVERY_FEEDBACK_LOOP.md")
+    proportionality = _read("docs/development/GOVERNANCE_PROPORTIONALITY.md")
+    closeout_normalized = " ".join(closeout.split())
+    coordinator_normalized = " ".join(coordinator.split())
+    feedback_normalized = " ".join(feedback.split())
+
+    assert "Routine delivery already represented by its Issue, PR, or reviewed repo artifact is" in " ".join(
+        issue_to_code.split()
+    )
+    assert "material, actionable-now" in issue_to_code
+    assert "weekly cold-path" in capture
+    assert "weekly cold-path review" in retrospective
+    assert "existing durable authority" in readme
+    assert "optional BuilderOps record availability is not an additional gate" in closeout_normalized
+    assert "protected executor" in readme
+    assert "Executor/in-flight delivery" in verification
+    assert "current-head CI cannot be replaced by local evidence" in verification
+    assert "identified worker/operation against live Issue/PR/SHA/worktree authority" in coordinator_normalized
+    assert "event/cursor wait surface" in coordinator_normalized
+    assert "known required check is failed" in coordinator_normalized
+    assert "No new queue, evidence" in proportionality
+    assert "material upstream repair is actionable now" in feedback_normalized

@@ -62,6 +62,12 @@ Count repeated input, agent starts, oversized context packs, compactions, and co
 costs. Use a fresh issue context for independent non-trivial Issue work. Add a bounded read-only helper
 only when its saved delay/rework/defect risk exceeds its added context and coordination cost.
 
+Read-path accounting follows the same rule: count each section that is mandatory for normal startup,
+delivery, and `klart` closeout once; count recovery, retrospective, full-path executor, and other
+conditional sections only when their trigger fires. If the mandatory route exceeds the 5,000-word
+planning goal, report the measured excess and remove real duplication rather than hiding a required
+read or inventing a new summary ledger.
+
 Planning chooses capability and context topology separately from serial-versus-concurrent scheduling.
 Verification may use stronger capability than implementation when that lowers hidden-defect risk.
 

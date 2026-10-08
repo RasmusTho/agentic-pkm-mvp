@@ -12,7 +12,9 @@ workflows. Never publish unrelated changes or bypass a failed command.
 ## Entry conditions
 
 - The lane and governing contract are known and the local change is complete enough to publish.
-- Focused checks have passed; BuilderOps routing and owner-doc resolution are concrete.
+- Focused checks have passed; BuilderOps routing and owner-doc resolution are concrete. Existing
+  Issue/PR/reviewed-artifact evidence may satisfy routine routing, and optional record availability is
+  not a publication gate.
 - The dedicated worktree, intended branch, base, file set, commit intent, PR title, and generated PR
   body inputs are explicit. Commit messages may use `Refs #<id>` but no closing-keyword reference.
 - TCD risk classification is complete. A declared high-risk surface routes to the full path below;
@@ -137,8 +139,10 @@ attachment, branch-drift, or review-repair need. Otherwise immediately load and 
 `verification-and-closure`. Publication does not make the Issue or delivery Done.
 
 Report branch, commit, PR number, plan/receipt hashes, validation, BuilderOps routing, and the next
-owner workflow. On a plan divergence, invoke `capture-learning`; never append new operational state
-to `docs/learning-log.md`.
+owner workflow. For routine evidence, state `none` with the existing authority as the reason. On a
+material, actionable-now plan divergence, invoke `capture-learning`; if optional record infrastructure
+is unavailable, report that limitation once and preserve the finding in the existing authority. Never
+append new operational state to `docs/learning-log.md` outside its explicit compatibility fallback.
 
 ## Workflow continuation
 
