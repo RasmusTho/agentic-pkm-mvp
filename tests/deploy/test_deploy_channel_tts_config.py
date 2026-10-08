@@ -401,7 +401,7 @@ def test_duplicate_tts_selector_is_rejected_before_mutation(
     assert not (tmp_path / "docker-called").exists()
 
 
-def test_runtime_env_open_error_is_redacted_and_stops_before_mutation(
+def test_runtime_env_directory_is_rejected_and_stops_before_mutation(
     tmp_path: Path,
 ) -> None:
     root, env, sha = _deploy_harness(tmp_path)
@@ -414,8 +414,8 @@ def test_runtime_env_open_error_is_redacted_and_stops_before_mutation(
     result = _run_deploy(root, env, sha, "--dry-run")
     output = result.stdout + result.stderr
 
-    assert result.returncode == 91
-    assert "reason=validation_failed" in result.stderr
+    assert result.returncode == 78
+    assert "runtime identity preflight: blocked reason=invalid_runtime_env" in result.stderr
     assert str(runtime_env) not in output
     assert unrelated_dsn not in output
     assert not (root / "config/deploy/dev.env").exists()
