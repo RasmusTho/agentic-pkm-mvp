@@ -2536,6 +2536,92 @@ def test_bws_deploy_requires_raw_key_for_active_capture_and_migration(active_con
         vm_selected_values(plan, Reader())
 
 
+@pytest.mark.parametrize(
+    'active_consumer,capture,migration',
+    [('heimdal-capture-watch', True, False), ('heimdal-raw-migrate', False, True)],
+)
+@pytest.mark.parametrize('quiescent', [True, False])
+def test_missing_active_raw_key_stops_supervisor_before_activation(
+    tmp_path, monkeypatch, active_consumer, capture, migration, quiescent
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.bws_secret_reader import BwsItemAbsent
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+
+    class Reader:
+        def lookup(self, _project, identity):
+            if identity.endswith('heimdal.raw-store-key'):
+                raise BwsItemAbsent()
+            if identity.endswith('postgres.password'):
+                return 'fake-role-password'
+            if identity.endswith('github.token'):
+                return 'ghp_' + 'x' * 36
+            raise AssertionError(identity)
+
+    config = SimpleNamespace(
+        channel='test', root=root, journal=journal, reader=lambda: Reader()
+    )
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'),
+    )
+    monkeypatch.setattr(
+        linux, 'database_input_files', lambda _config: [root / 'pin', root / 'runtime']
+    )
+    monkeypatch.setattr(linux, 'validate_database_inputs', lambda *_args: None)
+    monkeypatch.setattr(linux, 'require_file_protocol', lambda *_args: None)
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _config: capture)
+    monkeypatch.setattr(
+        linux, '_raw_representation_migration_pending', lambda _config, _revision: migration
+    )
+
+    effects = linux.LinuxEffects(config)
+    effects.quiescent = lambda: quiescent
+    activation_events = []
+
+    def unexpected_activation(event, *_args):
+        activation_events.append(event)
+
+    for method in (
+        'initialized', 'materialize', 'local_database', 'database_running',
+        'start_database_only', 'authenticate', 'stop_database', 'activate',
+    ):
+        setattr(effects, method, lambda *args, _event=method: unexpected_activation(_event, *args))
+    monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
+    supervisor = linux.DeploymentSupervisor(config)
+    operation_id = str(uuid4())
+    request = {
+        'action': 'prepare', 'operation_id': operation_id,
+        'plan': plan.__dict__, 'bootstrap': False,
+    }
+
+    if quiescent:
+        result = supervisor.request(request)
+        assert result['receipt']['terminal_result'] == 'aborted'
+        assert journal.read().stage == 'aborted'
+        assert not (root / 'config/deploy/test.env.lock').exists()
+    else:
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(request)
+        receipt = journal.read()
+        assert receipt is not None and receipt.stage == 'prepared'
+        assert receipt.terminal_result is None
+        assert (root / 'config/deploy/test.env.lock').is_dir()
+        retry = {**request, 'operation_id': str(uuid4())}
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(retry)
+
+    assert activation_events == []
+
+
 def test_bws_host_and_vm_preflight_use_active_secret_consumers(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from app.ops import postgres_deploy_linux as linux
