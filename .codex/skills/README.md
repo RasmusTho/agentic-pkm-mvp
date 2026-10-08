@@ -50,8 +50,10 @@ human involvement is reserved for genuine exceptions, not transitions between sk
 
 1. Bind the requested outcome, scope, authority, and any explicit stopping point before starting.
    A planning, analysis-only, review-only, intake-only, or draft-only request does not authorize the
-   downstream implementation, merge, or deployment. A delivery request includes its required
-   verification and closure; do not ask for that authority again at each skill boundary.
+   downstream implementation, merge, or deployment. Carry delivery authority through retries and
+   skill transitions while its scope/effects/constraints hold; do not repeat answered asks. Resolve
+   later explicit owner revisions once in the canonical contract through its owning workflow.
+   A transition creates no new authority; delivery still includes verification and closure.
 2. On completing a step, load and execute the next applicable skill now. Naming, recommending,
    reporting, or queuing it is not execution. Conditional routes run only when triggered. A skill
    output is intermediate evidence until the requested outcome has been verified.
@@ -264,9 +266,9 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `capture-learning`
   - micro-skill: create one BuilderOps `LearningSignal` when a builder-workflow plan divergence occurs; invoke on divergence, not on normal work; use `docs/learning-log.md` only as historical/compatibility fallback; never treat builder learning as runtime/user memory without Product System authority
 - `owner-decision-brief`
-  - thin Yggdrasil profile: invoke at the moment any workflow is about to ask the owner for a decision (`agent:needs-human`, an operator ask, an inline question); load the repo-local `decision-quality` skill as the single decision method, preserve contractual operator and local vault-binding gates, apply repo authority and no-parallel-store constraints, and render the resulting owner ask as one standalone plain-language brief
+  - thin Yggdrasil profile for material owner decisions and required operator acknowledgments; use full Decision Quality, preserve operator and local vault-binding gates, and render one plain-language brief
 - `decision-quality`
-  - universal decision method for human or authorized-agent choices; classifies agent action, access, acceptance observation, and genuine decisions before escalation, then uses context passes and weakest-link control
+  - compact mandate/risk/verification check for routine reversible agent work; full two-pass, seven-dimension method for material human decisions, irreversible commitments, and operator gates; decision-support design review
 - `learning-retrospective`
   - cadence-triggered: read BuilderOps `LearningSignal` records and the generated learning-summary projection, include historical `docs/learning-log.md` compatibility entries only when needed, cluster by upstream artifact, and propose concrete edits for human review; when explicitly requested, run autonomous maintenance by applying safe governance fixes, creating Issues for unresolved work, and recording a BuilderOps retrospective receipt
 - `learning-to-issue`

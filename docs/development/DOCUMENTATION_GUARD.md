@@ -30,6 +30,12 @@ development document is not sufficient. Mixing a non-governance temporal path
 into the same change requires both every changed governance script's paired
 contract and the normal high-risk temporal owner document.
 
+Source-anchor enforcement in `scripts/validate_source_anchors.py` is paired with
+`docs/development/DEV_WORKFLOW.md :: Source-anchor rule for backlog creation`.
+Changes to that validator require this exact owner document; an Issue-contract
+summary or unrelated governance document alone cannot satisfy the pairing.
+Mixed runtime/config changes still require the normal temporal owner writeback.
+
 This document is the paired owner contract for both `scripts/docs_guard.py`
 and `scripts/docs_guard_logic.py`. When either script's policy, base/diff
 handling, documentation scope, language heuristic, or temporal-owner routing

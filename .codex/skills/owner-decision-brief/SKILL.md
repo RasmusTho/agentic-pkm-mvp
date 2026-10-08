@@ -9,51 +9,37 @@ An owner escalation applies exactly one compatible `action:human-*` label and th
 `blocker_action.v1` receipt (`_shared/BLOCKER_ACTION_CONTRACT.md`); it is not a generic blocker.
 
 This is a thin Yggdrasil profile for the repo-local `decision-quality` skill. It applies whenever a
-repository workflow is about to ask the owner for a decision: an `agent:needs-human` label, an
-operator acknowledgment, an inline question, or an open question in an Issue or PR.
+repository workflow has established a material owner decision or required operator acknowledgment,
+including an `agent:needs-human` escalation. Routine agent-owned technical work uses
+`decision-quality :: Routine agent-owned work` and resumes its caller without entering this profile.
+An ordinary fact request or acceptance observation alone does not require an owner-decision brief.
 
 ## Required method
 
-Load and follow the complete `decision-quality` skill before researching, recommending, or drafting
-the ask. Its seven-dimension diagnosis, weakest-link rule, decision ownership gate, decision-support
-method, and post-decision activation handoff are the single authoritative decision method. This
-profile adds repository constraints only; it must not copy, abbreviate, or redefine that method.
+For a material owner decision or required operator acknowledgment, load the complete
+`.codex/skills/decision-quality/SKILL.md`. It owns the decision method; this profile supplies repo
+constraints and placement only. `scripts/install_skills.sh` provisions it. If unavailable, report
+the missing capability and continue only independently safe work; do not invent an owner ask.
 
-The method lives at `.codex/skills/decision-quality/SKILL.md` and `scripts/install_skills.sh`
-installs it together with the other repo-local skills for legacy compatibility environments. Successful
-provisioning is a precondition for environments that execute this profile.
+Apply `decision-quality :: Yggdrasil profile` and these authorities:
 
-If `decision-quality` is unavailable, do not reconstruct a local substitute or send a free-form
-owner ask. Report the missing capability through the current workflow and keep only independently
-safe, reversible work moving.
-
-Apply the `decision-quality :: Yggdrasil profile` together with these repo authorities:
-
-- `AGENTS.md :: Agency default` is canonical for whether a discretionary escalation may reach the
-  owner.
-- `AGENTS.md :: Communicating with the owner` is canonical for owner-facing language and the
-  Problem -> Options -> Consequences shape.
-- For system facts, current repo owner docs and live GitHub, Git, CI, dispatcher, or BuilderOps
-  evidence outrank screens, plans, generated projections, and agent memory. This evidence ordering
-  does not override explicit user instructions; resolve the current mandate through
-  `decision-quality :: Current mandate and delegated choices` before applying repo constraints.
-- Keep observation, proposal, decision, command, and receipt distinct. This skill does not create a
-  decision log, task store, lifecycle authority, or execution tracker.
+- `AGENTS.md :: Agency default` owns escalation scope; `AGENTS.md :: Communicating with the owner`
+  owns language and Problem -> Options -> Consequences.
+- For system facts, current owner docs and live GitHub/Git/CI/dispatcher/BuilderOps evidence outrank
+  screens, projections, plans, and memory. This does not override explicit user instructions; resolve
+  them through `decision-quality :: Current mandate and delegated choices`.
+- Keep observation, proposal, decision, command, and receipt distinct; create no decision/task store.
 
 ## Contractual operator gates
 
 Never use the decision ownership gate to remove an unconditional operator gate that remains
-applicable after resolving instruction priority and the current mandate. Promotion acknowledgment,
-consent-class changes, and any prod-touching action whose owning workflow independently requires
-explicit human acknowledgment still fire exactly as defined. Use
-`decision-quality` to diagnose and prepare the ask, while this profile shapes its repository-safe
-form.
+applicable after current-mandate resolution. Promotion acknowledgment, consent-class changes, and
+prod actions retain their owning workflow's exact human-acknowledgment requirements. Full Decision
+Quality prepares the ask; this profile supplies its repository-safe form.
 
-For discretionary escalations, apply the canonical `AGENTS.md :: Agency default` gate during the
-Decision Quality diagnosis. When no irreversible effect, external-facing consequence, material
-authority ambiguity, or owner-reserved value choice remains, do not escalate. Take the authorized,
-reversible action or route it through agent review, leave evidence in the existing authoritative
-record, and report the decision afterwards.
+When no irreversible effect, external-facing consequence, material authority ambiguity, or
+owner-reserved value remains, resume the authorized reversible action/review. A technical failure
+alone does not justify escalation. Keep evidence in the existing authoritative record.
 
 ## Contract-dominance preflight
 
@@ -97,10 +83,9 @@ acknowledgment, and an unknown rollback baseline must not become an asserted abs
 
 ## Local vault-binding preflight
 
-When a missing local vault binding, mount, or path appears to be the blocker, first complete the
-mandatory Decision Quality diagnosis. If the diagnosis identifies missing binding evidence as the
-weakest material link, use this preflight as the focused next action before adding
-`agent:needs-human` or asking the owner.
+When a missing local vault binding, mount, or path appears to be the blocker, resolve permitted
+technical evidence through this preflight before adding `agent:needs-human` or asking the owner.
+Use the full Decision Quality method if a material owner choice or operator gate remains.
 
 1. Inspect the deploy environment files selected for the target channel and identify the variables
    that supply the vault source and target. Use a non-emitting parser or check that returns only
@@ -130,25 +115,16 @@ or raw startup/Compose output.
 
 ## Owner-facing profile
 
-When the diagnosis and ownership gate establish that the owner must decide, produce the proportionate
-Decision Quality brief with these additional presentation constraints:
+For an established owner choice, present one plain-language decision in the owner's current language:
 
-- Lead with the exact decision and why it belongs to the owner or which contractual gate requires it.
-- Present one decision per brief and two or three genuine options, including deferral or the safe
-  status quo when relevant.
-- State each option's owner-visible consequence, then give one recommendation, confidence, material
-  uncertainty, and the safe no-answer default.
-- Keep the lead brief readable in under a minute. Link durable evidence instead of embedding paths,
-  IDs, labels, internal codenames, or a reasoning trace.
-- Use the owner's current language. Remove unexplained repository jargon and say what the owner will
-  notice, gain, lose, pay, or risk.
+- why it belongs to the owner or which gate requires it;
+- two or three genuine options, including safe deferral/status quo where relevant, with consequences;
+- recommendation/confidence, material uncertainty, and safe no-answer default.
 
-Place the brief at the decision boundary: at the top of the chat or session summary, in the same
-Issue comment that adds `agent:needs-human`, or in the PR body/top-level comment when the PR is
-waiting on that decision. Never block unrelated reversible work while waiting.
-
-After the decision, use the repo-local skill's activation handoff and route any longer-lived execution
-to the existing domain or delivery workflow. Do not track it here.
+Keep the lead readable in under a minute. Link durable evidence; omit internal jargon, machine
+fields, and reasoning traces. Place it at the decision boundary: chat/session lead, the same Issue
+comment as `agent:needs-human`, or the waiting PR's body/top-level comment. Continue unrelated
+reversible work, then resume the same owning workflow after the answer; do not track execution here.
 
 ## Workflow continuation
 

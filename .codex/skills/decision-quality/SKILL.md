@@ -1,233 +1,205 @@
 ---
 name: decision-quality
-description: Prepare, assess, or improve a decision process in any domain. Use to determine what a decision maker needs to know, decide whether an agent may act autonomously, improve decision support, or review a workflow against the seven dimensions of Decision Quality.
+description: Prepare material human decisions and review decision support against seven dimensions. Use a compact mandate, risk, and verification check for routine reversible agent-owned choices; use the full method for material human decisions, irreversible commitments, and required operator acknowledgments.
 ---
 
 # Decision Quality
 
-Help a person or an authorized agent make a high-quality decision at the time of choice. Judge the process and the quality of decision support, not whether hindsight later makes the outcome look fortunate.
+Improve the decision process at the time of choice, not its apparent quality in hindsight. A ticket,
+alert, failed test, plan, or conflict is an incoming signal, not automatically a decision or authority.
 
-This is a general decision method. It applies to product, technical, operational, career, purchasing, personal, and organizational choices. A ticket, label, alert, plan, test failure, conflict, or dashboard state is only an incoming signal; it is not itself a decision, decision record, or authority.
+Choose the proportionate mode:
 
-The method has two modes:
-
-- **Decision support:** prepare or repair proportionate support for a real choice by a person or an authorized agent.
-- **Design review:** assess whether a UI, workflow, policy, or skill enables the seven dimensions. Do not treat the review itself as a decision or authorization to act.
+- **Routine agent work:** use the compact check below and resume the owning workflow.
+- **Decision support:** use the full method for material human decisions, irreversible commitments,
+  and required operator acknowledgments.
+- **Design review:** assess support for the seven dimensions; review does not authorize execution.
 
 ## Core rule: begin with the decision maker's context
 
-Start from the decision maker's actual context, never from the agent's preferred technical framing. Establish what the person is trying to achieve, what they are responsible for, what they will notice, the relevant time horizon, constraints, and which consequences matter to them. Do this before deciding what information to collect, what model to use, or which alternatives to compare.
+Establish the intended outcome, decision maker, responsibility, time horizon, constraints, and
+consequences that matter before selecting information, alternatives, or a model.
 
-Decision Quality protects a decision maker's attention, but it also makes appropriate autonomous action possible. An agent may decide and act when all of these hold:
+An agent may act when its current mandate authorizes the effect, evidence is sufficient, downside
+is bounded and recoverable, and no person's values, rights, risk tolerance, budget, relationships,
+long-term direction, or other reserved boundary is selected. Otherwise seek the smallest missing
+fact, observation, authority, or decision. Technical difficulty alone is not a human decision.
 
-- the decision is within its established mandate or a safe default is already authorized;
-- the decision-relevant evidence is proportionate and sufficiently reliable;
-- downside is low, bounded, or reversibly recoverable; and
-- the decision does not select a person's values, risk tolerance, rights, budget, relationships, long-term direction, or another explicitly reserved boundary.
-
-Otherwise the agent must seek the smallest missing fact, observation, authority, or decision. A technical choice, disagreement between implementation paths, missing credential, or difficult recovery does not by itself become a human decision.
-
-Do not overload the person with this internal method. Unless they ask for detail, show only the decision they need to make (if any), the recommendation, the meaningful human consequence and trade-off, uncertainty that could change the outcome, and what follows from their answer. Keep evidence, models, ratings, and working notes available behind that short view.
+Keep the method internal. Show only a necessary choice, recommendation, meaningful consequence,
+material uncertainty, and what follows; make deeper evidence available when useful.
 
 ## Evidence discipline
 
-Separate each statement into one of these classes:
-
-- **Established:** verified decision-relevant evidence, with source and freshness where material.
-- **Assumption:** plausible but unverified input that could influence the choice.
-- **Unknown:** information that is missing or unavailable.
-- **Interpretation:** reasoning from established evidence and stated assumptions.
-
-Do not hide uncertainty through confident prose or invent background, authority, objectives, alternatives, or agreement. A label, task, plan, generated view, screen, agent history, or linked record is routing evidence only unless a current authoritative source explicitly makes it binding.
+Distinguish established facts, assumptions, unknowns, and interpretations. Use attributable sources
+with freshness where material; never invent agreement or promote a label, projection, screen, or
+agent history into authority.
 
 Bind negative evidence to the actual target and query coverage: not found locally is not absent on
 the remote system; not checked is unknown. Health or successful execution does not prove ownership,
-exclusive write authority, attestation, or recoverability. Keep those claims separate until their
-own evidence is verified. Reused observations retain their original freshness; do not describe them
-as a new live readback. Claim use of this method only for the steps actually performed, not merely
-because the skill was loaded.
+exclusive write authority, attestation, or recoverability. Reused observations retain their original
+freshness. Claim use of this method only for the steps actually performed.
 
 ## Current mandate and delegated choices
 
-Before applying a prior decision or asking again, reconcile the latest explicit instructions with
-earlier instructions by priority and scope. A later instruction from the same decision maker can
-revise their earlier restriction; an old ask or an agent-authored plan cannot freeze that restriction
-forever. Record what changed and what remains reserved. Source evidence establishes system facts;
-it does not outrank the user's instructions or supply execution authority.
+Reconcile the latest explicit instructions with earlier instructions by priority and scope. A later
+instruction from the same decision maker can revise their earlier restriction. Record what changed
+and what remains reserved once in the canonical contract through its owning workflow before relying
+on the revision; create no parallel mandate store. Source facts do not override user instructions or
+supply effect authority.
 
-Treat an explicit delegation such as "you decide" as authority to make the in-scope technical
-choice, not as a request to return that choice for the person to repeat. Carry existing authorization
-through retries and workflow transitions while its target, scope, constraints, and validity still
-hold. Delegation does not itself prove safety, approve additional effects, or satisfy a separately
-required human acknowledgment. If the apparent conflict remains material after instruction-priority
-resolution, keep the affected effect blocked; do not invent supersession or an approval receipt.
+Carry existing authorization through retries and workflow transitions while its target, scope,
+constraints, and validity hold. An explicit delegation such as "you decide" settles the in-scope
+technical choice. Delegation does not itself prove safety, approve additional effects, or satisfy a
+separately required human acknowledgment. For unresolved material conflicts, block the affected
+effect; do not invent supersession or an approval receipt.
 
-Complete accessible technical preparation before any remaining ask: resolve exact identities,
-candidate evidence, validation and recovery facts using permitted sources. The agent owns those
-details and the recommendation. Never ask a person to discover or copy back machine fields merely
-to echo the agent's choice. If an independently applicable gate still requires human acknowledgment,
-present the prepared choice and its human consequence once, in the gate's required form; mark agent
+Complete accessible technical preparation before any remaining ask: verify identities, candidate,
+validation, and recovery facts. Never ask a person to discover or copy back machine fields merely to
+echo the agent's choice. Present a remaining acknowledgment in the gate's required form, with agent
 selections as proposals, not operator decisions. Missing facts stay unknown, not guessed defaults.
 
-When a gate fails, separate authority to choose, evidence to execute, and authority for the effect.
-Pause exactly the prohibited work, including further reads if an immediate-stop rule requires it.
-Continue other authorized preparation or repair, then revalidate before the effect. A failed gate
-is neither permission to bypass it nor an automatic reason to end the whole task or repeat an ask.
+A failed gate pauses its prohibited effect, including reads when an immediate-stop rule requires
+it. Continue independently authorized preparation/repair, then revalidate; failure neither waives
+the gate nor requires repeating an answered ask.
+
+## Routine agent-owned work
+
+For familiar, bounded, reversible work, check:
+
+1. **Mandate:** current instructions authorize the outcome/effect and required constraints hold.
+2. **Risk:** no owner-reserved value, rights, budget, production/credential authority, or irreversible
+   commitment is selected; downside is bounded and recoverable.
+3. **Verification:** concrete success signals and applicable checks can establish the result.
+
+If all hold, act and report through the owning workflow. No two-pass challenge, seven-dimension
+ledger, or owner-decision brief is required. Retries, failed checks, skill transitions, and bounded
+technical contract repair alone do not change this route or weaken required proof. Use existing
+repair/access and stop-loss procedures. Apply the full method when a material human choice,
+irreversible commitment, operator gate, or unresolved authority/risk makes this check insufficient.
 
 ## Universal preflight: classify the situation before escalating
 
-Run this preflight for every material incoming problem, question, alert, proposal, or apparent blocker. Use current authoritative sources where they exist.
+For full-method work:
 
-1. State the provisional decision-maker context and the apparent problem in ordinary human terms.
-2. Apply `Current mandate and delegated choices`, then check whether a still-applicable contract, policy, prior decision, acceptance criterion, law, or explicit operator gate already settles the desired outcome. Remove options that violate it.
-3. Classify the situation into exactly one current route:
-   - **Agent-actionable:** the agent can investigate, interpret, repair, recover, or make an authorized low-risk decision.
-   - **Technical or external access:** the outcome is already established, but a system, credential, service, host, supplier, or other external dependency is unavailable. Route it technically; do not manufacture a value choice. If granting access would itself create a new rights, cost, or risk commitment, classify that commitment as a human decision instead.
-   - **Acceptance observation:** an already agreed outcome needs a real observation, trial, or confirmation from the appropriate person or environment. Request the precise observation and success signal; do not ask for a new choice.
-   - **Genuine decision:** two or more still-authorized paths differ materially in value, human experience, trust, safety, rights, cost, reversibility, or reserved strategy.
-4. Record the authoritative source, scope, classification, and next action. A human escalation or `agent:needs-human` equivalent is invalid without this record.
+1. State the decision-maker context and problem plainly.
+2. Resolve the current mandate; remove options that violate applicable authority, accepted outcomes,
+   policy, law, or operator gates.
+3. Classify as **agent-actionable**, **technical/external access**, **acceptance observation**, or
+   **genuine decision**. Access is technical unless granting it selects new rights, cost, or risk.
+   Observation needs the precise success signal; a genuine decision leaves authorized alternatives
+   with materially different human consequences.
+4. Record source, scope, classification, and next action in the existing record before escalating.
 
-For recovery or exception authority, bind the authority to the actual object and boundary: the system or artifact, intended action, scope, expiry or review trigger, and relevant constraints. Contextually linked records do not substitute for that scope.
-
-If classification is not yet possible, the next action is normally agent investigation, not a broad question to the decision maker.
+Bind recovery/exception authority to the actual object, action, scope, constraints, and expiry or
+review trigger. Linked context alone is insufficient. Investigate when classification is unclear.
 
 ## Two-or-more-pass context discipline
 
-For every material decision or material problem that may become one, complete at least two passes before presenting a final decision request or committing an irreversible course. Do not fix the process at exactly two: repeat when a later pass materially changes the frame. For low-stakes, familiar, reversible work, the second pass may be brief but may not be skipped.
+For full-method work, complete at least two passes before a final decision request or irreversible
+commitment. Routine agent work uses the compact check. Repeat when new evidence changes the frame.
 
 ### Pass one: concrete context and provisional frame
 
-Work in this order:
-
-1. Establish the decision-maker context and classify the situation with the universal preflight.
-2. State the provisional frame: who may decide, what exact change is in scope, what is excluded, timing, and existing constraints.
-3. Identify the smallest set of real alternatives, including no change, deferral, or a reversible trial when relevant.
-4. Identify only the information whose answer could change the frame, alternative ranking, a material risk, or reversibility.
-5. Identify the values and trade-offs that distinguish the alternatives.
-
-Do not begin detailed reasoning, model selection, or broad research before these earlier steps are proportionate. A later discovery that changes an earlier step invalidates dependent downstream work and returns the process to the affected step.
+Establish who may decide, intended outcome, exact scope/exclusions, timing, and constraints. Identify
+real authorized alternatives (including deferral, status quo, or reversible trial where relevant),
+decision-changing information, and the values/trade-offs distinguishing those alternatives.
 
 ### Pass two: scope challenge and reframe
 
-Actively attempt to falsify the first pass rather than merely checking it for consistency:
-
-- Is the frame too narrow, too broad, or centered on a symptom rather than the person's actual outcome?
-- Is this really a human decision, or should it be classified as agent action, access, or acceptance observation?
-- Does an accepted contract or specific prior decision already settle the outcome?
-- What credible alternative framing, stakeholder, consequence, or outside/reference-class view could change the information needed or the preferred action?
-- Are the stated alternatives genuinely authorized, or merely technically describable?
-
-If the frame changes, restart from the affected step in pass one. If it holds, proceed to reasoning. Further passes are required whenever new evidence or a changed frame could materially alter the decision.
+Attempt to falsify the frame: is it a symptom, the wrong scope, or an already-settled technical task?
+Could another stakeholder, consequence, reference class, or authorized alternative change the
+information or preferred action? If the frame changes, restart its dependent reasoning; otherwise
+proceed. Do not confuse technically describable options with authorized ones.
 
 ## The seven dimensions and weakest-link control
 
-Assess every material decision on all seven dimensions at the start of each pass and after each meaningful strengthening action:
+Assess full-method decisions on all seven dimensions at each pass and after meaningful improvement:
 
-1. **Appropriate frame** — the exact choice, decision maker, scope, timing, and higher-order dependencies.
-2. **Creative, doable alternatives** — distinct, authorized options, including deferral, status quo, and reversible experiments where relevant.
-3. **Relevant, reliable information** — decision-changing evidence that is current, attributable, and clear about uncertainty.
-4. **Clear values and trade-offs** — outcomes, constraints, risks, stakeholders, and compromises that actually matter to the decision maker.
-5. **Sound reasoning** — a traceable, context-appropriate comparison from evidence and assumptions to conclusion.
-6. **Commitment to action** — actual authority, access, tools, time, dependencies, capability, difficulty, and recovery path.
-7. **Psychological decision readiness** — enough understanding and agency to choose without jargon, pressure, false urgency, or unnecessary cognitive load.
+1. **Appropriate frame:** choice, decision maker, scope, timing, and dependencies.
+2. **Creative, doable alternatives:** distinct authorized options, including safe deferral/trials.
+3. **Relevant, reliable information:** current attributable evidence and explicit uncertainty.
+4. **Clear values and trade-offs:** human outcomes, constraints, risks, and compromises.
+5. **Sound reasoning:** a traceable comparison from evidence/assumptions to conclusion.
+6. **Commitment to action:** authority, access, resources, capability, dependencies, and recovery.
+7. **Psychological decision readiness:** understanding and agency without jargon, pressure, or
+   unnecessary cognitive load.
 
-For each dimension keep an internal rating of `strong`, `adequate`, `weak`, or `unknown`, with evidence, material gap, whether resolving it could change the outcome, and the smallest strengthening action. Do not present this ledger to the decision maker by default.
-
-The process is constrained by its weakest material link. Improve the lowest-quality link whose prerequisites have been met; if that link depends on an earlier stage, strengthen the earlier stage first. Do not compensate for a weak frame, missing value, or uncertain authority by adding more volume elsewhere. Reassess all seven after each meaningful action and follow the newly weakest material link.
+Internally rate each as strong, adequate, weak, or unknown with evidence, material gap, and smallest
+strengthening action. Improve the weakest decision-changing link whose prerequisites are met;
+strengthen earlier prerequisites first. More information elsewhere cannot compensate for unclear
+values or authority. Reassess after each meaningful action; do not display the ledger by default.
 
 ## Information gate and research assistance
 
-Before asking a person for missing information:
+Before asking, identify the exact missing item and its effect on the recommendation/risk. Retrieve
+accessible authoritative evidence first. Use bounded independent research or challenge subagents
+only when the likely improvement justifies cost; keep them read-only and source-grounded, without
+contacting the decision maker, escalating, or mutating systems. The primary agent owns synthesis.
 
-1. Name the exact missing item and how it could change the frame, recommendation, or risk.
-2. Retrieve it from suitable authoritative sources when the agent can do so safely.
-3. Use one or more bounded subagents when independent domain research, a credible outside view, or a focused scope challenge is likely to improve the decision enough to justify the cost.
-4. Ask the person only when the item is genuinely unavailable to the agent.
-
-Every human request for unavailable information must be one of these:
-
-- a **fact request** for a personal constraint, preference, or private knowledge only that person has;
-- an **acceptance request** for a specific observation only the appropriate person or environment can make; or
-- a **decision request** for a remaining human value, mandate, rights, cost, risk, or irreversibility choice.
-
-Never disguise a missing fact or observation as “what would you like to do?”
-
-Subagents are research and challenge aids, not decision delegates. Give each the smallest useful scope and require sources, established facts, assumptions, unknowns, and how findings could alter the frame. Keep them read-only by default. They must not contact the decision maker, create escalation state, mutate external systems, or decide the final question. The primary agent verifies and synthesizes their findings.
+A remaining request must be a personal **fact**, a specific **acceptance observation**, or a human
+**decision** about values, mandate, rights, cost, risk, or irreversibility. Facts/observations alone
+need no decision brief. Never disguise them as "what would you like to do?"
 
 ## Reasoning after the frame is sound
 
-Select a proven decision model only after context, scope, alternatives, information needs, and values are proportionate. Explain internally why the model fits and what it cannot establish. Models clarify trade-offs; they do not set human values or fabricate precision.
-
-Use a model that fits the mechanism of the decision, for example:
-
-- **Total cost of ownership** when lifecycle cost, maintenance, operation, replacement, or disposal matters more than purchase price.
-- **Multi-criteria decision analysis** when several criteria must be compared and the decision maker's weights are explicit.
-- **Scenarios or expected-value analysis** when uncertainty, likelihood, and consequences are central and estimates are defensible.
-- **Outside view or reference class** when a plan-based forecast may be optimistic or unusually framed.
-- **Reversible experiment or real-options reasoning** when uncertainty is high but learning can be bought cheaply and safely.
-- **Minimax regret** when an irreversible or asymmetric downside dominates.
-
-State material assumptions, sensitivity, and the one uncertainty most likely to reverse the recommendation. Do not use a model merely because it is available or sophisticated.
+Choose a proven model only when useful: lifecycle/total cost, explicit multi-criteria trade-offs,
+scenarios/expected value with defensible estimates, outside view, reversible experiment, or minimax
+regret for asymmetric irreversible downside. Explain its fit and limits internally; models cannot
+set human values or fabricate precision. State material assumptions, sensitivity, and the uncertainty
+most likely to reverse the recommendation.
 
 ## Authority and human-decision gate
 
-An agent should take the authorized autonomous action rather than escalate when the universal preflight identifies agent-actionable work and the autonomy conditions in the core rule hold. Report the result compactly afterwards.
+Take authorized agent-actionable work when the compact check or full-method findings support it.
+Escalate only when full-method preparation leaves a genuine human-owned choice. Confirm:
 
-Escalate only after the two-or-more-pass discipline, the information gate, and weakest-link work leave a genuine human-owned choice. Before asking, confirm in order:
+1. **Necessity:** a material human consequence/authority choice remains.
+2. **Ownership:** it is reserved rather than delegated.
+3. **Readiness:** evidence, consequences, uncertainty, recommendation, and safe default are available.
+4. **Cognitive load:** the plain-language request is worth the person's attention.
 
-1. **Necessity:** a real value, user, trust, safety, rights, authority, cost, or strategy choice remains.
-2. **Ownership:** the choice is reserved for this person rather than within the agent's mandate.
-3. **Readiness:** current evidence, meaningful consequences, uncertainty, a recommendation, and a safe default are available.
-4. **Cognitive load:** the request is worth the person's attention and is phrased without domain jargon.
-
-If any answer is no, do not escalate. Take the authorized action, seek the missing information, or route the technical/access/acceptance work instead. Do not use a stale label or prior escalation as evidence that the person must decide now.
+If a condition fails, investigate or resume technical/access/observation work. A stale escalation
+label does not prove the person must decide; independently required operator gates remain binding.
 
 ## Owner-facing output
 
-Lead with the smallest usable decision view. Unless the person asks for analysis, include only:
-
-- the decision requested, in plain language;
-- the recommendation and confidence;
-- the material human consequence and trade-off;
-- uncertainty that could change the answer; and
-- what happens after the response, including the safe default if they defer.
-
-Do not make the person reconstruct repository state, technical mechanisms, or the seven-dimension analysis. Offer deeper evidence, sources, assumptions, alternatives, model detail, and the internal quality ledger on request.
-
-After an action or decision, record the selected path, accountable decision maker or agent, first concrete action, required access or dependencies, success signal, and review trigger. This is a handoff, not permission to create a parallel task store or an unbounded delivery plan.
+Show the decision, recommendation/confidence, human consequence/trade-off, material uncertainty,
+and next action/safe deferral default. Offer deeper evidence on request. After a choice, record the
+selected path, accountable decision maker/agent, first action, dependencies, success signal, and
+review trigger in the owning workflow; create no parallel task store or execution plan.
 
 ## Design review
 
-For a workflow, UI, or policy review, identify the intended decision-maker context and evaluate whether it enables the universal preflight, two-or-more-pass challenge, information gate, seven dimensions, proportionate autonomy, and low-cognitive-load output. Rate each of the seven dimensions with evidence and one concrete improvement. Do not score a design as strong merely because it displays a lot of information.
+Identify decision-maker context. Evaluate whether routine work uses the compact route and material
+human decisions receive the full method and low-load output. Rate the seven dimensions with evidence
+and concrete improvements; information volume alone is not quality.
 
 ## Context profiles
 
-The core method is general. A context profile may add non-negotiable checks without redefining the seven dimensions.
+Profiles add non-negotiable checks without redefining the method.
 
 ### Yggdrasil profile
 
-When used for Yggdrasil or Agentic PKM work:
-
-- establish the applicable human or agent authority and authoritative sources before action or recommendation;
-- distinguish current delivered state, target state, advisory material, and operational projection;
-- treat GitHub labels, linked Issues, screens, plans, generated views, and agent history as routing evidence, not decision, lifecycle, or authorization proof;
-- preserve boundaries between observation, proposal, decision, command, and receipt; and
-- bind recovery authorization to the actual PR, repository, branch or SHA, action, and boundary; a linked Issue is context only.
+Establish current authority and sources; distinguish delivered, target, advisory, and projected
+state. Labels, linked Issues, screens, plans, and agent history do not prove decisions/lifecycle or
+authorization. Preserve observation, proposal, decision, command, and receipt boundaries. Bind
+recovery authority to the actual PR/repo/branch or SHA/action; linked Issues are context only.
 
 ## Scale the work
 
-- **Low stakes / reversible:** retain both passes, but make the scope challenge and evidence proportionate.
-- **Material or partially irreversible:** require explicit alternatives, trade-offs, evidence, uncertainty, model choice, and execution ownership.
-- **High stakes or hard to reverse:** require source verification, explicit authority, scenario/risk analysis, independent challenge where useful, and a defined reconsideration trigger.
+- **Routine/reversible agent work:** compact mandate/risk/verification check.
+- **Material or partly irreversible:** full method with alternatives, trade-offs, evidence, and ownership.
+- **High stakes/hard to reverse:** verify sources/authority, scenario risk, useful independent
+  challenge, and reconsideration trigger.
 
 ## Output standard
 
-Be concise enough to be used. State exactly what cannot yet be decided, the smallest evidence that could change that, and whether the agent can safely act now. Do not expose internal process detail unless it is material to the person's decision or they ask for it.
+State what remains undecided, the smallest useful evidence, and whether the agent can safely act.
+Keep internal method detail private unless material or requested.
 
 ## Workflow continuation
 
-Follow `.codex/skills/README.md :: Workflow continuation`. For a repo Builder workflow, return an
-agent-owned decision to the calling skill and execute its next authorized action. A genuine
-human-owned choice retains the decision gate; continue independent evidence work where useful.
-Standalone decision support ends with its requested assessment and does not automatically create a
-delivery task.
+Follow `.codex/skills/README.md :: Workflow continuation`. Return agent-owned findings to the caller
+and execute its next authorized action. Preserve genuine human/operator gates and continue useful
+independent work. Standalone decision support ends with its requested assessment; it creates no
+additional delivery authority.
