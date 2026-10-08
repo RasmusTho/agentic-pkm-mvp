@@ -751,9 +751,15 @@ def create_codex_executor_app(
                     product_request.provider,
                     product_request.model,
                 )
+                if (
+                    product_request.service_tier is not None
+                    and route.transport_id != "openai_api"
+                ):
+                    raise _RequestFailure(422, "service_tier_unavailable")
                 preflight_request = PreflightRequest(
                     route=route,
                     reasoning_effort=product_request.reasoning_effort,
+                    service_tier=product_request.service_tier,
                     capability_intent=product_request.capability_intent,
                 )
                 _validate_capability_intent(
@@ -854,7 +860,10 @@ def create_codex_executor_app(
                 raise _RequestFailure(502, "empty_completion")
             if len(content.encode("utf-8")) > max_output_bytes:
                 raise _RequestFailure(502, "completion_too_large")
-            response = CompletionResponse(route=completion_request.route, content=content)
+            response = CompletionResponse(
+                route=completion_request.route,
+                content=content,
+            )
             return JSONResponse(
                 content=response.model_dump(mode="json", exclude_none=True)
             )
@@ -892,10 +901,16 @@ def create_codex_executor_app(
                     product_request.provider,
                     product_request.model,
                 )
+                if (
+                    product_request.service_tier is not None
+                    and route.transport_id != "openai_api"
+                ):
+                    raise _RequestFailure(422, "service_tier_unavailable")
                 try:
                     completion_request = CompletionRequest(
                         route=route,
                         reasoning_effort=product_request.reasoning_effort,
+                        service_tier=product_request.service_tier,
                         capability_intent=product_request.capability_intent,
                         trusted_instructions=product_request.trusted_instructions,
                         user_input=product_request.user_input,
@@ -938,7 +953,18 @@ def create_codex_executor_app(
                 raise _RequestFailure(502, "empty_completion")
             if len(content.encode("utf-8")) > max_output_bytes:
                 raise _RequestFailure(502, "completion_too_large")
-            response = CompletionResponse(route=route, content=content, usage=usage)
+            response = CompletionResponse(
+                route=route,
+                content=content,
+                dispatched_reasoning_effort=(
+                    completion_request.reasoning_effort
+                    if product_request.service_tier is not None
+                    else None
+                ),
+                usage=(
+                    usage if product_request.service_tier is not None else None
+                ),
+            )
             return JSONResponse(
                 content=response.model_dump(mode="json", exclude_none=True)
             )

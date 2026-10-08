@@ -459,8 +459,11 @@ class CodexRemoteTransport:
     ) -> PreflightResponse:
         """Check one exact remote route through the no-inference operation."""
         try:
+            payload = request.model_dump(mode="json")
+            if payload.get("service_tier") is None:
+                payload.pop("service_tier", None)
             request_body = json.dumps(
-                request.model_dump(mode="json"),
+                payload,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 allow_nan=False,
@@ -595,8 +598,11 @@ class CodexRemoteTransport:
         self, request: CompletionRequest | ProductCompletionRequest
     ) -> CompletionResponse:
         try:
+            payload = request.model_dump(mode="json")
+            if payload.get("service_tier") is None:
+                payload.pop("service_tier", None)
             request_body = json.dumps(
-                request.model_dump(mode="json"),
+                payload,
                 ensure_ascii=False,
                 separators=(",", ":"),
                 allow_nan=False,
@@ -675,6 +681,13 @@ class CodexRemoteTransport:
                 )
             ):
                 raise RemoteCompletionError("executor_route_mismatch", indeterminate=True)
+        if (
+            request.service_tier is not None
+            and result.dispatched_reasoning_effort != request.reasoning_effort
+        ):
+            raise RemoteCompletionError(
+                "executor_reasoning_effort_mismatch", indeterminate=True
+            )
         try:
             content_bytes = result.content.encode("utf-8", errors="strict")
         except UnicodeEncodeError:

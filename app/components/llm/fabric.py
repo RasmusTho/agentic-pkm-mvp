@@ -361,12 +361,25 @@ def _exact_product_model_route(
         factory.describe(adapter_id, provider=descriptor.provider, model=model_id)
     except ValueError as exc:
         raise LLMRouteError("explicit Product model transport is not declared") from exc
+    eval_reasoning_effort = None
+    if intent.task_kind == "eval" and adapter_id == "openai_api":
+        try:
+            declared_efforts = factory.model_reasoning_efforts(
+                descriptor.provider, model_id
+            )
+        except ValueError as exc:
+            raise LLMRouteError(
+                "explicit Product model has no declared reasoning capability"
+            ) from exc
+        if declared_efforts is not None and "none" in declared_efforts:
+            eval_reasoning_effort = "none"
     return LLMRoute(
         provider=descriptor.provider,
         model=model_id,
         mode="chat",
         reason=f"explicit-model:{intent.task_kind}",
         transport_id=adapter_id,
+        reasoning_effort=eval_reasoning_effort,
     )
 
 
@@ -467,7 +480,32 @@ def _resolve_product_access_route(
         if selected_model == selected.model
         else factory.describe(adapter_id, provider=selected.provider, model=selected_model)
     )
-    reasoning_effort = selected.reasoning_effort or "low"
+    declared_reasoning_efforts = None
+    if selected.provider != "mock":
+        try:
+            declared_reasoning_efforts = factory.model_reasoning_efforts(
+                selected.provider, selected_model
+            )
+        except ValueError as exc:
+            raise LLMRouteError(
+                "selected Product model has no declared reasoning capability"
+            ) from exc
+    if selected.reasoning_effort is not None:
+        if (
+            declared_reasoning_efforts is None
+            or selected.reasoning_effort not in declared_reasoning_efforts
+        ):
+            raise LLMRouteError(
+                "selected Product model does not declare the requested reasoning effort"
+            )
+        # The provider-neutral ModelAccessIntent intentionally has no `none`
+        # value. Keep an explicit Product `none` choice on LLMRoute and use a
+        # valid neutral intent while forwarding `none` only at the API boundary.
+        reasoning_effort = (
+            "low" if selected.reasoning_effort == "none" else selected.reasoning_effort
+        )
+    else:
+        reasoning_effort = "low"
     access_intent = ModelAccessIntent(
         capability_tier=(
             "frontier"
@@ -553,6 +591,7 @@ def _product_completion_request(
     *,
     response_format: dict[str, Any] | str | None,
     max_output_tokens: int | None = None,
+    reasoning_effort_override: str | None = None,
 ) -> ProductCompletionRequest:
     output_schema: dict[str, Any] | None
     if isinstance(response_format, dict):
@@ -563,13 +602,40 @@ def _product_completion_request(
         output_schema = None
     if not _is_remote_executor_route(route):
         raise ValueError("selected route is not bound to the Product portal")
-    reasoning_effort = (
-        route.request.intent.reasoning_effort if route.provider == "openai" else None
+    reasoning_effort = None
+    if route.provider == "openai":
+        try:
+            declared_efforts = _adapter_factory().model_reasoning_efforts(
+                route.provider, route.model
+            )
+        except ValueError as exc:
+            raise LLMRouteError(
+                "selected Product model has no declared reasoning capability"
+            ) from exc
+        if declared_efforts != frozenset():
+            requested_effort = (
+                reasoning_effort_override
+                if reasoning_effort_override is not None
+                else route.request.intent.reasoning_effort
+            )
+            if (
+                declared_efforts is not None
+                and requested_effort not in declared_efforts
+            ):
+                raise LLMRouteError(
+                    "selected Product model does not declare the requested reasoning effort"
+                )
+            reasoning_effort = requested_effort
+    service_tier = (
+        "default"
+        if route.request.role_profile == "eval" and route.transport_id == "openai_api"
+        else None
     )
     return ProductCompletionRequest(
         provider=route.provider,
         model=route.model,
         reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
         capability_intent=CompletionCapabilityIntent(
             structured_output=output_schema is not None,
             native_tools=route.request.requirements.native_tools,
@@ -590,17 +656,20 @@ def _product_preflight_request(
     *,
     response_format: dict[str, Any] | str | None,
     max_output_tokens: int | None = None,
+    reasoning_effort_override: str | None = None,
 ) -> ProductPreflightRequest:
     completion = _product_completion_request(
         route,
         {"system": "", "user": "preflight"},
         response_format=response_format,
         max_output_tokens=max_output_tokens,
+        reasoning_effort_override=reasoning_effort_override,
     )
     return ProductPreflightRequest(
         provider=completion.provider,
         model=completion.model,
         reasoning_effort=completion.reasoning_effort,
+        service_tier=completion.service_tier,
         capability_intent=completion.capability_intent,
     )
 
@@ -702,11 +771,13 @@ def _select_and_bind_product_preflight(
     remote_transport: ExecutorNetworkPathRouter,
     response_format: dict[str, Any] | str | None,
     max_output_tokens: int | None,
+    reasoning_effort_override: str | None = None,
 ) -> tuple[ModelAccessRoute, Any]:
     primary_request = _product_preflight_request(
         primary,
         response_format=response_format,
         max_output_tokens=max_output_tokens,
+        reasoning_effort_override=reasoning_effort_override,
     )
     fallback_request = None
     if fallback is not None:
@@ -816,6 +887,7 @@ class ChatClient:
                     {"type": "object"} if self._intent.json_schema_required else None
                 ),
                 max_output_tokens=max_tokens,
+                reasoning_effort_override=self.route.reasoning_effort,
             )
             _require_explicit_eval_transport(
                 bound_route,
@@ -835,6 +907,7 @@ class ChatClient:
                     reason=self._fallback_route.reason,
                     timeout_seconds=self._fallback_route.timeout_seconds,
                     temperature=self._fallback_route.temperature,
+                    reasoning_effort=self._fallback_route.reasoning_effort,
                 )
             else:
                 self.route = LLMRoute.from_model_access_route(
@@ -844,6 +917,7 @@ class ChatClient:
                     embedding_identity=self.route.embedding_identity,
                     timeout_seconds=self.route.timeout_seconds,
                     temperature=self.route.temperature,
+                    reasoning_effort=self.route.reasoning_effort,
                 )
             self._output_limit_route_resolved = True
         finally:
@@ -906,6 +980,7 @@ class ChatClient:
                     remote_transport=transport,
                     response_format=response_format,
                     max_output_tokens=max_tokens,
+                    reasoning_effort_override=self.route.reasoning_effort,
                 )
                 _require_explicit_eval_transport(
                     bound_route,
@@ -921,6 +996,7 @@ class ChatClient:
                         reason=self._fallback_route.reason,
                         timeout_seconds=self._fallback_route.timeout_seconds,
                         temperature=self._fallback_route.temperature,
+                        reasoning_effort=self._fallback_route.reasoning_effort,
                     )
                 else:
                     self.route = LLMRoute.from_model_access_route(
@@ -930,6 +1006,7 @@ class ChatClient:
                         embedding_identity=self.route.embedding_identity,
                         timeout_seconds=self.route.timeout_seconds,
                         temperature=self.route.temperature,
+                        reasoning_effort=self.route.reasoning_effort,
                     )
                 self.model_access_route = bound_route
                 request = _product_completion_request(
@@ -937,6 +1014,7 @@ class ChatClient:
                     pack,
                     response_format=response_format,
                     max_output_tokens=max_tokens,
+                    reasoning_effort_override=self.route.reasoning_effort,
                 )
                 complete_selected = getattr(
                     transport, "complete_product_selected_path", None
@@ -953,6 +1031,14 @@ class ChatClient:
                     raise RemoteCompletionError(
                         "executor_route_mismatch", indeterminate=True
                     )
+                if (
+                    request.service_tier is not None
+                    and response.dispatched_reasoning_effort
+                    != request.reasoning_effort
+                ):
+                    raise RemoteCompletionError(
+                        "executor_reasoning_effort_mismatch", indeterminate=True
+                    )
                 self.last_execution_route = response.route
                 if usage_observer is not None:
                     usage = response.usage
@@ -966,6 +1052,9 @@ class ChatClient:
                             ),
                             "service_tier": (
                                 usage.service_tier if usage is not None else None
+                            ),
+                            "dispatched_reasoning_effort": (
+                                response.dispatched_reasoning_effort
                             ),
                         }
                     )
@@ -1118,6 +1207,7 @@ def get_chat_client_for_route(
                     {"type": "object"} if intent.json_schema_required else None
                 ),
                 max_output_tokens=max_output_tokens,
+                reasoning_effort_override=selected.reasoning_effort,
             )
             _require_explicit_eval_transport(
                 model_access_route,
@@ -1155,6 +1245,11 @@ def get_chat_client_for_route(
                 fallback.temperature
                 if model_access_route.fallback_provenance.used and fallback
                 else selected.temperature
+            ),
+            reasoning_effort=(
+                fallback.reasoning_effort
+                if model_access_route.fallback_provenance.used and fallback
+                else selected.reasoning_effort
             ),
         )
         return ChatClient(

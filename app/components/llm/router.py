@@ -49,6 +49,7 @@ class LLMRoute:
         embedding_identity: EmbeddingIdentity | None = None,
         timeout_seconds: float | None = None,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> "LLMRoute":
         """Project a neutral route into the legacy Product route shape.
 
@@ -66,7 +67,11 @@ class LLMRoute:
             timeout_seconds=timeout_seconds,
             temperature=temperature,
             transport_id=route.transport_id,
-            reasoning_effort=route.request.intent.reasoning_effort,
+            reasoning_effort=(
+                reasoning_effort
+                if reasoning_effort is not None
+                else route.request.intent.reasoning_effort
+            ),
         )
 
 

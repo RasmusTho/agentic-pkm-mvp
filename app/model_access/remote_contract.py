@@ -99,6 +99,7 @@ class ProductCompletionRequest(ProductModelTarget):
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
+    service_tier: Literal["default"] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent
     )
@@ -124,6 +125,7 @@ class ProductPreflightRequest(ProductModelTarget):
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
+    service_tier: Literal["default"] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent
     )
@@ -208,6 +210,7 @@ class CompletionRequest(_StrictModel):
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
+    service_tier: Literal["default"] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent
     )
@@ -222,6 +225,8 @@ class CompletionRequest(_StrictModel):
             raise ValueError("Codex CLI routes require an explicit reasoning effort")
         if self.route.transport_id == "ollama_http" and self.reasoning_effort is not None:
             raise ValueError("Ollama routes do not accept Codex reasoning effort")
+        if self.service_tier is not None and self.route.transport_id != "openai_api":
+            raise ValueError("service tier is supported only by OpenAI API routes")
         if self.capability_intent.structured_output != (self.output_schema is not None):
             raise ValueError("structured output intent must match the supplied schema")
         if self.capability_intent.max_output_tokens_required != (
@@ -238,6 +243,7 @@ class PreflightRequest(_StrictModel):
     reasoning_effort: Literal[
         "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
     ] | None = None
+    service_tier: Literal["default"] | None = None
     capability_intent: CompletionCapabilityIntent = Field(
         default_factory=CompletionCapabilityIntent
     )
@@ -248,6 +254,8 @@ class PreflightRequest(_StrictModel):
             raise ValueError("Codex CLI preflight requires an explicit reasoning effort")
         if self.route.transport_id == "ollama_http" and self.reasoning_effort is not None:
             raise ValueError("Ollama preflight does not accept Codex reasoning effort")
+        if self.service_tier is not None and self.route.transport_id != "openai_api":
+            raise ValueError("service tier is supported only by OpenAI API routes")
         return self
 
 
@@ -290,6 +298,9 @@ class CompletionResponse(_StrictModel):
 
     route: CompletionRouteIdentity
     content: str = Field(min_length=1, max_length=512_000)
+    dispatched_reasoning_effort: Literal[
+        "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"
+    ] | None = None
     usage: CompletionUsageMetadata | None = None
 
 

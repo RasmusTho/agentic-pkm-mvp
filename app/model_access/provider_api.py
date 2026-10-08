@@ -504,6 +504,8 @@ class ProductProviderApiAdapter:
             body["max_completion_tokens"] = output_limit
             if effort is not None:
                 body["reasoning_effort"] = effort
+            if request.service_tier is not None:
+                body["service_tier"] = request.service_tier
             if request.output_schema is not None:
                 body["response_format"] = {
                     "type": "json_schema",

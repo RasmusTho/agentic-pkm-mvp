@@ -25,7 +25,8 @@ def test_configure_eval_route_uses_shared_product_client(monkeypatch) -> None:
 
     client = _Client()
     monkeypatch.setenv("EVAL_LLM_MODE", "run")
-    monkeypatch.setenv("EVAL_LLM_MODEL", "llama3.1:8b")
+    monkeypatch.setenv("EVAL_LLM_MODEL", "gpt-5.6-luna")
+    monkeypatch.setenv("EVAL_LLM_TRANSPORT", "openai_api")
     monkeypatch.setenv("EVAL_LLM_BASE_URL", "http://eval-only.local/v1")
     monkeypatch.setenv("OPENAI_BASE_URL", "http://openai-fallback.local/v1")
     monkeypatch.setenv("EVAL_LLM_API_KEY", "eval-secret")
@@ -42,25 +43,22 @@ def test_configure_eval_route_uses_shared_product_client(monkeypatch) -> None:
     assert len(calls) == 1
     intent, kwargs = calls[0]
     assert intent.task_kind == "eval"
-    assert kwargs["model_id"] == "llama3.1:8b"
-    runtime = kwargs["adapter_runtime_config"]
-    assert runtime.base_url == "http://eval-only.local/v1"
-    assert runtime.api_key == "eval-secret"
+    assert kwargs["model_id"] == "gpt-5.6-luna"
+    assert kwargs["transport_id"] == "openai_api"
+    assert "adapter_runtime_config" not in kwargs
     assert cfg.chat_client is client
     assert cfg.model == "gpt-6-luna"
-    assert cfg.base_url == "http://eval-only.local/v1"
-    assert cfg.api_key == "eval-secret"
     assert "eval-secret" not in repr(cfg)
     assert "eval-only.local" not in repr(cfg)
 
 
-def test_eval_env_precedence_and_private_runtime_config(monkeypatch) -> None:
+def test_local_eval_credentials_and_endpoints_do_not_override_portal(monkeypatch) -> None:
     captured = {}
     client = type("Client", (), {"route": types.SimpleNamespace(model="llama3.1:8b")})()
     monkeypatch.setenv("EVAL_LLM_MODE", "run")
     monkeypatch.setenv("EVAL_LLM_MODEL", "llama3.1:8b")
-    monkeypatch.delenv("EVAL_LLM_BASE_URL", raising=False)
-    monkeypatch.delenv("EVAL_LLM_API_KEY", raising=False)
+    monkeypatch.setenv("EVAL_LLM_BASE_URL", "http://eval-local.invalid/v1")
+    monkeypatch.setenv("EVAL_LLM_API_KEY", "eval-local-secret")
     monkeypatch.setenv("OPENAI_BASE_URL", "http://fallback.local/v1")
     monkeypatch.setenv("OPENAI_API_KEY", "fallback-secret")
 
@@ -72,32 +70,12 @@ def test_eval_env_precedence_and_private_runtime_config(monkeypatch) -> None:
     monkeypatch.setattr(llm_client, "get_chat_client", _get_chat_client)
     cfg = configure_eval_openai_env()
 
-    runtime = captured["adapter_runtime_config"]
-    assert runtime.base_url == "http://fallback.local/v1"
-    assert runtime.api_key == "fallback-secret"
     assert captured["intent"].task_kind == "eval"
-    assert cfg.base_url == "http://fallback.local/v1"
-    assert cfg.api_key == "fallback-secret"
-    assert "fallback-secret" not in repr(runtime)
-
-
-def test_eval_explicit_empty_key_does_not_fall_back_to_openai_key(monkeypatch) -> None:
-    captured = {}
-    client = type("Client", (), {"route": types.SimpleNamespace(model="llama3.1:8b")})()
-    monkeypatch.setenv("EVAL_LLM_MODE", "run")
-    monkeypatch.setenv("EVAL_LLM_MODEL", "llama3.1:8b")
-    monkeypatch.setenv("EVAL_LLM_BASE_URL", "http://127.0.0.1:11434/v1")
-    monkeypatch.setenv("EVAL_LLM_API_KEY", "")
-    monkeypatch.setenv("OPENAI_API_KEY", "must-not-win")
-
-    def _get_chat_client(_intent, **kwargs):
-        captured.update(kwargs)
-        return client
-
-    monkeypatch.setattr(llm_client, "get_chat_client", _get_chat_client)
-    configure_eval_openai_env()
-
-    assert captured["adapter_runtime_config"].api_key == ""
+    assert "adapter_runtime_config" not in captured
+    assert "eval-local-secret" not in repr(cfg)
+    assert "fallback-secret" not in repr(cfg)
+    assert "eval-local.invalid" not in repr(cfg)
+    assert "fallback.local" not in repr(cfg)
 
 
 def test_eval_rejects_undeclared_exact_model(monkeypatch) -> None:
@@ -137,7 +115,7 @@ def test_eval_skip_mode_needs_no_credentials_or_route(monkeypatch) -> None:
     cfg = configure_eval_openai_env()
 
     assert cfg.mode == "skip"
-    assert cfg.base_url == cfg.api_key == cfg.model == ""
+    assert cfg.model == ""
     assert cfg.chat_client is None
 
 

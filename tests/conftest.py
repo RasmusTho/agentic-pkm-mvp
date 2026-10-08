@@ -213,6 +213,7 @@ def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
             return CompletionResponse(
                 route=route,
                 content=self.completion_content,
+                dispatched_reasoning_effort=request.reasoning_effort,
                 usage=self.completion_usage,
             )
 

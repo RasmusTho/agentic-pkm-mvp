@@ -16,6 +16,8 @@ from app.components.llm.fabric import (
     ChatClient,
     LLMRoute,
     LLMTaskIntent,
+    _product_completion_request,
+    _product_preflight_request,
     _resolve_product_access_route,
     get_chat_client,
     get_chat_client_for_route,
@@ -638,6 +640,7 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
             return CompletionResponse(
                 route=refreshed_route,
                 content="remote eval",
+                dispatched_reasoning_effort=request.reasoning_effort,
                 usage=CompletionUsageMetadata(
                     model="gpt-5.6-luna-2026-10-08",
                     service_tier="default",
@@ -712,6 +715,7 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
                 "prompt_tokens_details": {"cached_tokens": 10},
             },
             "service_tier": "default",
+            "dispatched_reasoning_effort": "low",
         }
     ]
     assert client.last_execution_route is not None
@@ -725,11 +729,54 @@ def test_eval_exact_model_binds_declared_transport_without_catalog_promotion(
         request.model,
     )
     assert preflight_request.reasoning_effort == request.reasoning_effort
+    assert preflight_request.service_tier is None
+    assert request.service_tier is None
     assert preflight_request.capability_intent == request.capability_intent
     assert preflight_request.capability_intent.structured_output is True
     assert receipt is not None
     assert len(remotes) == 2
     assert state["closed"] == 2
+
+
+def test_nonreasoning_openai_route_omits_default_effort_from_portal_requests() -> None:
+    route = _resolve_product_access_route(
+        LLMTaskIntent(task_kind="qa"),
+        LLMRoute(
+            provider="openai",
+            model="gpt-4.1",
+            mode="chat",
+            reason="settings",
+            transport_id="openai_api",
+        ),
+        allow_catalog_promotion=False,
+    )
+    completion = _product_completion_request(
+        route,
+        {"system": "trusted", "user": "hello"},
+        response_format=None,
+    )
+    preflight = _product_preflight_request(route, response_format=None)
+
+    assert route.request.intent.reasoning_effort == "low"
+    assert completion.reasoning_effort is None
+    assert preflight.reasoning_effort is None
+
+    unsupported = LLMRoute(
+        provider="openai",
+        model="gpt-4.1",
+        mode="chat",
+        reason="settings",
+        transport_id="openai_api",
+        reasoning_effort="high",
+    )
+    with pytest.raises(
+        LLMRouteError, match="does not declare the requested reasoning effort"
+    ):
+        _resolve_product_access_route(
+            LLMTaskIntent(task_kind="qa"),
+            unsupported,
+            allow_catalog_promotion=False,
+        )
 
 
 def test_product_trusted_and_user_messages_remain_separate_on_remote_route() -> None:

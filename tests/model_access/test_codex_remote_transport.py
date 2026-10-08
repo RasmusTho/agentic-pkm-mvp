@@ -242,7 +242,9 @@ def test_remote_preflight_is_route_bound_and_single_request() -> None:
         assert "tailscale-app-capabilities" not in http_request.headers
         assert "authorization" not in http_request.headers
         sent = json.loads(http_request.content)
-        assert sent == request.model_dump(mode="json")
+        expected = request.model_dump(mode="json")
+        expected.pop("service_tier", None)
+        assert sent == expected
         assert "trusted_instructions" not in sent
         assert "user_input" not in sent
         response = PreflightResponse(
@@ -529,6 +531,7 @@ def test_product_transport_sends_only_logical_provider_and_model() -> None:
         sent = json.loads(http_request.content)
         assert "transport_id" not in sent
         assert "catalog_snapshot_ref" not in sent
+        assert "service_tier" not in sent
         if http_request.url.path.endswith("/preflight"):
             assert str(http_request.url) == ENDPOINT + "/v1/product/preflight"
             return httpx.Response(

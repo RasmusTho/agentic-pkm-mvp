@@ -106,6 +106,11 @@ select a different compatible registry-backed model through its local profile. O
 required local service or health dependency when it is unselected; provider-neutral health reports
 the selected logical `llm_access` capabilities.
 
+Product evaluation uses the same Mac portal and host-owned provider credentials/endpoints; local
+`EVAL_LLM_API_KEY`, `EVAL_LLM_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_BASE_URL` do not override
+that authority. Measured classification evaluation additionally pins one registry model and the
+`openai_api` transport, with no catalog promotion or transport fallback.
+
 For embeddings, a blank compiled task target also permits the operator activation seam
 `EMBED_PROFILE` to select one complete named identity (provider, model, dimension, and
 normalization) before the generic `EMBED_MODEL` / `OLLAMA_EMBED_MODEL` environment fallback is

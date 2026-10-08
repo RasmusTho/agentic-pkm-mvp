@@ -10,7 +10,7 @@ import os
 import re
 from typing import Any
 
-from app.components.llm.constrained import registered_schema, validate_payload
+from app.components.llm.constrained import validate_payload
 from app.components.settings.models_loader import load_models
 from app.eval.classification import (
     CLASSIFICATION_GOLDEN_PATH,
@@ -25,6 +25,23 @@ class LiveEvaluationError(RuntimeError):
     """Static errors only: provider messages, keys and content are never echoed."""
 
 
+_CLASSIFICATION_PROVIDER_OUTPUT_SCHEMA: dict[str, Any] = {
+    # Keep provider-side structured output broad enough to return a semantically
+    # invalid class with usage metadata. The local registered schema below still
+    # rejects it and maps the result to UNKNOWN without another provider call.
+    "type": "object",
+    "properties": {
+        "intent_class": {"type": "string"},
+        "action_type": {
+            "anyOf": [{"type": "string"}, {"type": "null"}]
+        },
+        "rationale": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+    },
+    "required": ["intent_class", "action_type", "rationale"],
+    "additionalProperties": False,
+}
+
+
 def configure_classification_eval() -> EvalLLMConfig:
     if os.getenv("EVAL_LLM_MODE", "").strip().lower() != "run":
         raise LiveEvaluationError("live classification requires EVAL_LLM_MODE=run")
@@ -37,11 +54,8 @@ def configure_classification_eval() -> EvalLLMConfig:
         cfg = configure_eval_openai_env()
         if cfg.chat_client is None or cfg.chat_client.route.provider != "openai":
             raise ValueError("unsupported route")
-        if not cfg.api_key.strip():
-            raise ValueError("missing credential")
-        # Standard OpenAI prices cannot attest a compatible proxy's billing.
-        if cfg.base_url.rstrip("/") != "https://api.openai.com/v1":
-            raise ValueError("unpriced endpoint")
+        # get_chat_client returns only after the Mac portal's exact-route
+        # no-inference preflight succeeds; endpoint and credentials stay host-local.
     except Exception:
         raise LiveEvaluationError(
             "live classification route or credentials are unavailable"
@@ -61,10 +75,14 @@ class ClassificationCompletion:
             route.provider != "openai"
             or route.transport_id != "openai_api"
             or route.model != cfg.model
+            or route.reasoning_effort != "none"
         ):
-            raise LiveEvaluationError("live evaluation requires its exact API route")
+            raise LiveEvaluationError(
+                "live evaluation requires its exact standard OpenAI API route"
+            )
         self.client = client
         self.model = route.model
+        self.reasoning_effort = route.reasoning_effort
         self.records: list[dict[str, Any]] = []
         self.failures = 0
         self.completed_calls = 0
@@ -82,7 +100,7 @@ class ClassificationCompletion:
                 kind="eval",
                 trace_id=trace_id,
                 max_tokens=max_tokens,
-                response_format=registered_schema(INTENT_CLASSIFICATION_SCHEMA_REF),
+                response_format=_CLASSIFICATION_PROVIDER_OUTPUT_SCHEMA,
                 usage_observer=observed.append,
                 record_content=False,
             )
@@ -90,7 +108,14 @@ class ClassificationCompletion:
             self.failures += 1
             raise LiveEvaluationError("live evaluation provider call failed") from None
         self.completed_calls += 1
-        self.records.append(_billing_record(observed, self.model))
+        record = _billing_record(
+            observed, self.model, expected_reasoning_effort=self.reasoning_effort
+        )
+        self.records.append(record)
+        if not record["valid"]:
+            # Do not begin another potentially billable case without complete
+            # route, execution-setting, and usage evidence for this one.
+            self.failures += 1
         # Sanitize before the cognition's logging boundary. Its own constrained
         # validation still runs on every result, including UNKNOWN safe-fails.
         try:
@@ -100,7 +125,12 @@ class ClassificationCompletion:
         return raw
 
 
-def _billing_record(observed: list[dict[str, Any]], model: str) -> dict[str, Any]:
+def _billing_record(
+    observed: list[dict[str, Any]],
+    model: str,
+    *,
+    expected_reasoning_effort: str,
+) -> dict[str, Any]:
     if len(observed) != 1:
         return {"valid": False}
     event = observed[0]
@@ -108,6 +138,9 @@ def _billing_record(observed: list[dict[str, Any]], model: str) -> dict[str, Any
     if not isinstance(served, str) or not (
         served == model or re.fullmatch(re.escape(model) + r"-\d{4}-\d{2}-\d{2}", served)
     ):
+        return {"valid": False}
+    dispatched_effort = event.get("dispatched_reasoning_effort")
+    if dispatched_effort != expected_reasoning_effort:
         return {"valid": False}
     usage = event.get("usage")
     if not isinstance(usage, dict) or event.get("service_tier") != "default":
@@ -135,7 +168,13 @@ def _billing_record(observed: list[dict[str, Any]], model: str) -> dict[str, Any
         for k in ("audio_tokens", "cache_write_tokens", "cache_creation_tokens")
     ):
         return {"valid": False}
-    return {"valid": True, "served_model": served, **values}
+    return {
+        "valid": True,
+        "served_model": served,
+        "reasoning_effort": dispatched_effort,
+        "service_tier": event["service_tier"],
+        **values,
+    }
 
 
 def run_live_classification(cfg: EvalLLMConfig | None = None) -> dict[str, Any]:
@@ -186,8 +225,16 @@ def run_live_classification(cfg: EvalLLMConfig | None = None) -> dict[str, Any]:
             "provider": "openai",
             "model": cfg.model,
             "transport": "openai_api",
-            "reasoning_effort": "none",
-            "service_tier": "default",
+            "reasoning_effort": (
+                records[0]["reasoning_effort"]
+                if len(records) == len(cases) and all(r["valid"] for r in records)
+                else None
+            ),
+            "service_tier": (
+                records[0]["service_tier"]
+                if len(records) == len(cases) and all(r["valid"] for r in records)
+                else None
+            ),
         },
         "served_models": sorted({r["served_model"] for r in records if r["valid"]}),
         "dataset": {
@@ -213,6 +260,7 @@ def main() -> int:
                 {
                     "schema_version": "classification_live_run.v1",
                     "complete": False,
+                    "cost": None,
                     "failure": "live_evaluation_unavailable",
                 }
             )

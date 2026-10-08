@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import os
 from typing import Any
 
-from app.components.llm.fabric import AdapterRuntimeConfig, ChatClient, get_chat_client
+from app.components.llm.fabric import ChatClient, get_chat_client
 from app.components.llm.router import LLMTaskIntent
 
 DEFAULT_MODE = "skip"  # run | skip
@@ -15,8 +15,6 @@ DEFAULT_MODE = "skip"  # run | skip
 class EvalLLMConfig:
     """The resolved Product route used by opt-in evaluation frameworks."""
 
-    base_url: str = field(default="", repr=False)
-    api_key: str = field(default="", repr=False)
     model: str = ""
     mode: str = DEFAULT_MODE
     chat_client: ChatClient | None = field(default=None, repr=False)
@@ -30,37 +28,16 @@ def configure_eval_openai_env() -> EvalLLMConfig:
     model = os.getenv("EVAL_LLM_MODEL", "").strip()
     if not model:
         raise RuntimeError("Missing eval LLM config: EVAL_LLM_MODEL")
-    base_url, base_url_configured = _resolved_eval_override(
-        "EVAL_LLM_BASE_URL", "OPENAI_BASE_URL"
-    )
-    api_key, api_key_configured = _resolved_eval_override(
-        "EVAL_LLM_API_KEY", "OPENAI_API_KEY"
-    )
     client = get_chat_client(
         LLMTaskIntent(task_kind="eval"),
         model_id=model,
         transport_id=os.getenv("EVAL_LLM_TRANSPORT", "").strip() or None,
-        adapter_runtime_config=AdapterRuntimeConfig(
-            base_url=base_url if base_url_configured else None,
-            api_key=api_key if api_key_configured else None,
-        ),
     )
     return EvalLLMConfig(
-        base_url=base_url,
-        api_key=api_key,
         model=client.route.model,
         mode=mode,
         chat_client=client,
     )
-
-
-def _resolved_eval_override(primary: str, fallback: str) -> tuple[str, bool]:
-    if primary in os.environ:
-        return os.environ[primary].strip(), True
-    if fallback in os.environ:
-        return os.environ[fallback].strip(), True
-    return "", False
-
 
 def _output_schema(schema: Any | None) -> dict[str, Any] | None:
     if schema is None:

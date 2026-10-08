@@ -185,6 +185,7 @@ def test_complete_dispatches_one_declared_transport(transport_id: str) -> None:
         )
 
     assert response.status_code == 200
+    assert "dispatched_reasoning_effort" not in response.json()
     body = response.json()
     assert body["route"]["provider"] == _payload(transport_id)["route"]["provider"]
     assert body["route"]["model"] == _payload(transport_id)["route"]["model"]

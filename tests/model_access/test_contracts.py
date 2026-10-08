@@ -3,6 +3,11 @@ from __future__ import annotations
 from pydantic import ValidationError
 import pytest
 
+from app.model_access.remote_contract import (
+    CompletionRequest,
+    CompletionRouteIdentity,
+    PreflightRequest,
+)
 from llm_contract import (
     CapabilityProvenance,
     FallbackProvenance,
@@ -86,6 +91,34 @@ def _route(
     }
     values.update(overrides)
     return ModelAccessRoute(**values)
+
+
+def test_service_tier_is_rejected_for_codex_cli_routes() -> None:
+    route = CompletionRouteIdentity(
+        provider="openai", model="gpt-5.6-luna", transport_id="codex_cli"
+    )
+
+    with pytest.raises(ValidationError, match="supported only by OpenAI API routes"):
+        PreflightRequest(
+            route=route,
+            reasoning_effort="low",
+            service_tier="default",
+        )
+    with pytest.raises(ValidationError, match="supported only by OpenAI API routes"):
+        CompletionRequest(
+            route=route,
+            reasoning_effort="low",
+            service_tier="default",
+            trusted_instructions="",
+            user_input="hello",
+        )
+
+    api_route = route.model_copy(update={"transport_id": "openai_api"})
+    assert PreflightRequest(
+        route=api_route,
+        reasoning_effort="low",
+        service_tier="default",
+    ).service_tier == "default"
 
 
 def _resolved(
