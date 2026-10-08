@@ -64,7 +64,6 @@ def test_run_health_does_not_create_default_outbox_path(
         "_check_yt_dlp",
         "_check_dead_letters",
         "_check_panel_actions",
-        "_check_ollama",
         "_check_obsidian_dependencies",
         "_check_llm_router",
         "_check_llm_providers",

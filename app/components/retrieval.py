@@ -6,6 +6,8 @@ from app.components.embeddings import EmbeddingClientProtocol, EmbeddingIdentity
 from app.components.llm.fabric import (
     get_product_embedding_client,
 )
+from app.index.embedding_identity import ensure_index_primary_identity
+from app.stores import get_vector_index
 
 
 def _embedding_client_for_profile(profile: str) -> EmbeddingClientProtocol:
@@ -15,6 +17,9 @@ def _embedding_client_for_profile(profile: str) -> EmbeddingClientProtocol:
 def embed_query(text: str, *, profile: str = "default") -> tuple[list[float], EmbeddingIdentity]:
     client = _embedding_client_for_profile(profile)
     try:
+        # Query embeddings must share the persisted index's complete identity;
+        # equal vector dimensions alone do not imply compatible embedding spaces.
+        ensure_index_primary_identity(get_vector_index(), client.identity)
         vector, identity = client.embed_text(text), client.identity
     finally:
         close = getattr(client, "close", None)

@@ -52,13 +52,13 @@ retrieval assumptions.
 - [ ] Product embeddings call the real `POST /v1/product/embed` contract, and a satellite can select
   a registry-backed embedding model without bypassing identity/dimension validation. Test through
   the ASGI service + `CodexRemoteTransport`, not a standalone fake `ProductGateway`.
-  - Verify: `tests/components/llm/test_product_model_access_gateway.py::test_embedding_route_uses_gateway_and_preserves_identity`
+  - Verify: `tests/components/llm/test_product_model_access_gateway.py::test_embedding_route_uses_gateway_and_preserves_identity` and `tests/components/llm/test_product_model_access_gateway.py::test_query_identity_mismatch_fails_before_embedding_dispatch`
 - [ ] Unknown profiles, stale catalog routes, incompatible dimensions, and unsupported capabilities
   fail before inference or index writes; no hidden local provider call is made.
   - Verify: `tests/components/llm/test_product_model_access_gateway.py::test_invalid_route_fails_before_provider_dispatch`
 - [ ] Provider-neutral health remains green when the selected model access route is healthy and
   Ollama is absent or unselected.
-  - Verify: `tests/model_access/test_capability_health.py::test_unselected_provider_absence_does_not_fail_health`
+  - Verify: `tests/model_access/test_capability_health.py::test_unselected_provider_absence_does_not_fail_health` and `tests/cli/test_health_llm_routing.py::test_selected_ollama_product_route_uses_portal_not_local_health`
 - [ ] Owner docs distinguish current shipped Luna chat support from the full portal until the
   parent acceptance is complete.
   - Verify: doc writeback at `docs/LLM_ROUTING.md :: Current policy and future work`

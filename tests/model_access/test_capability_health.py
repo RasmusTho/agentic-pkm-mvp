@@ -5,8 +5,6 @@ import importlib
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-import pytest
-
 from app.api.routes import health as health_route
 from app.model_access.codex_remote_transport import RemotePreflightError
 from app.model_access.capability_health import (
@@ -267,7 +265,6 @@ def test_health_is_no_inference_and_preserves_readiness_boundaries(monkeypatch) 
         return _Client()
 
     monkeypatch.setattr(health_module, "get_chat_client_for_route", _get_chat_client_for_route)
-    monkeypatch.setattr(health_module, "_check_ollama", lambda **_kwargs: pytest.fail("embedding route was probed"))
 
     result = health_module._check_llm_access(
         {

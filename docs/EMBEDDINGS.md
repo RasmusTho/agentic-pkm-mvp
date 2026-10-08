@@ -184,6 +184,9 @@ This identity must be:
 - resolved **before** embedding,
 - recorded with the vector index metadata / provenance,
 - attached to emitted indexing events.
+- checked against the stored primary index identity before retrieval-query embedding is dispatched;
+  equal dimensions do not make different provider/model spaces compatible. A mismatch fails through
+  the governed rebuild/reconcile path rather than scoring against the wrong index.
 
 **Provider-name resolution posture.** Provider precedence remains
 `override_provider` → `EMBED_PRIMARY_PROVIDER` → embedding-profile

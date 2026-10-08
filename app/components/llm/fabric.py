@@ -1337,6 +1337,7 @@ class _RemoteProductEmbeddingClient:
 
 def describe_default_routes() -> dict[str, dict[str, str]]:
     router = LLMRouter()
+    factory = _adapter_factory()
     intents = [intent for intent in router.verification_intents() if intent.task_kind in {"embed", "decide", "plan"}]
     routes = router.default_routes(intents)
     return {
@@ -1345,10 +1346,11 @@ def describe_default_routes() -> dict[str, dict[str, str]]:
             "model": route.model,
             "transport_id": (
                 route.transport_id
-                or (
-                    _adapter_factory().default_adapter_id(route.provider)
-                    if route.mode != "embeddings"
-                    else ""
+                or _product_adapter_id(
+                    route.provider,
+                    route.model,
+                    factory=factory,
+                    model_kind="embedding" if route.mode == "embeddings" else "chat",
                 )
             ),
             "reasoning_effort": route.reasoning_effort or "",
@@ -1373,7 +1375,11 @@ def describe_default_route_policies() -> dict[str, dict[str, object]]:
                 continue
             provider = str(route.get("provider") or "")
             if provider:
-                route["transport_id"] = route.get("transport_id") or factory.default_adapter_id(provider)
+                route["transport_id"] = route.get("transport_id") or _product_adapter_id(
+                    provider,
+                    str(route.get("model") or ""),
+                    factory=factory,
+                )
                 route["reasoning_effort"] = route.get("reasoning_effort") or "low"
     return policies
 

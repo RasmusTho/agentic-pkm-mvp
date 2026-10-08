@@ -350,11 +350,6 @@ def test_health_luna_route_is_not_blocked_by_unselected_ollama(
         health_module, "_check_embedding_index", lambda: {"ok": True}
     )
 
-    def _unexpected_ollama_probe(**_kwargs):
-        raise AssertionError("unselected Ollama must not be probed")
-
-    monkeypatch.setattr(health_module, "_check_ollama", _unexpected_ollama_probe)
-
     class _Client:
         preflight_transport_observation = {
             "status": "available",
@@ -462,9 +457,9 @@ def test_health_skips_eval_route_by_default(monkeypatch, tmp_path) -> None:
     probed: list[str] = []
     real_probe = health_module._probe_selected_route
 
-    def _record_probe(task_kind, effective, intent, *, ollama_probe=None):
+    def _record_probe(task_kind, effective, intent):
         probed.append(task_kind)
-        return real_probe(task_kind, effective, intent, ollama_probe=ollama_probe)
+        return real_probe(task_kind, effective, intent)
 
     monkeypatch.setattr(health_module, "_probe_selected_route", _record_probe)
     resp = client.get("/api/health")

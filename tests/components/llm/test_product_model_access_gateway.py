@@ -8,9 +8,12 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import app.components.retrieval as retrieval
 import app.components.llm.fabric as fabric
 import app.model_access.codex_remote_transport as remote_transport_module
+from app.components.embeddings import EmbeddingIdentity
 from app.components.llm.router import LLMRouteError, LLMRouter, LLMTaskIntent
+from app.index.embedding_identity import IndexEmbeddingIdentityMismatch
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
 from app.model_access.codex_executor_service import create_codex_executor_app
 from app.model_access.codex_remote_transport import CodexRemoteTransport
@@ -467,6 +470,40 @@ def test_indexer_ingest_entrypoint_embeds_through_product_portal(
     assert upserts[0]["identity"].provider == "gemini"
     assert upserts[0]["identity"].model == "gemini-embedding-001"
     assert embedded_events[0]["provider"] == "gemini"
+    assert closed == [True]
+
+
+def test_query_identity_mismatch_fails_before_embedding_dispatch(monkeypatch) -> None:
+    requested = EmbeddingIdentity(
+        provider="gemini", model="gemini-embedding-001", dim=768
+    )
+    stored = EmbeddingIdentity(
+        provider="ollama", model="nomic-embed-text", dim=768
+    )
+    dispatches: list[str] = []
+    closed: list[bool] = []
+
+    class _Client:
+        identity = requested
+
+        def embed_text(self, _text: str) -> list[float]:
+            dispatches.append("embed")
+            raise AssertionError("identity mismatch must fail before embedding")
+
+        def close(self) -> None:
+            closed.append(True)
+
+    class _Index:
+        def get_identity(self) -> EmbeddingIdentity:
+            return stored
+
+    monkeypatch.setattr(retrieval, "_embedding_client_for_profile", lambda _profile: _Client())
+    monkeypatch.setattr(retrieval, "get_vector_index", lambda: _Index())
+
+    with pytest.raises(IndexEmbeddingIdentityMismatch, match="index rebuild"):
+        retrieval.embed_query("same dimensions, different embedding space", profile="work-satellite")
+
+    assert dispatches == []
     assert closed == [True]
 
 
