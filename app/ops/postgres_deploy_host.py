@@ -39,13 +39,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
     parser.add_argument('revision')
+    parser.add_argument(
+        '--ack-forward-only', action='store_true',
+        help='acknowledge forward-only migrations in this exact deployment request',
+    )
     args = parser.parse_args(argv)
     try:
         controller = HostSecretController()
         # The controller can inspect DB credentials and the API's degrade-visibly
         # binding. VM-only consumers are selected from VM runtime/migration state.
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),
-                          (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+                          (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only)
         admin = SecretAdmin(configured_admin(), controller=controller)
         receipt = deploy_from_host(admin, SshDeployRemote('ygg-' + args.channel), plan,
                                    qualified=lambda: require_qualification(controller))

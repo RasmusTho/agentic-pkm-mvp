@@ -595,7 +595,7 @@ class LinuxEffects:
         self.active_revision = plan.revision
         self.capture_watch_configured = capture
         self.raw_migration_pending = migration
-        return DeployPlan(plan.channel, plan.revision, plan.services, candidate)
+        return DeployPlan(plan.channel, plan.revision, plan.services, candidate, plan.ack_forward_only)
 
     def preflight(self, plan: DeployPlan) -> str:
         selected_plan = self.select_active_plan(plan)
@@ -682,6 +682,9 @@ class LinuxEffects:
             raise PostgresDeployError()
         self.source.verify()
         env = self.environment()
+        # A supervisor environment variable is ambient to every operation. Only
+        # the persisted request may authorize this one deployment's migration.
+        env.pop('DEPLOY_ACK_FORWARD_ONLY', None)
         env['BWS_DEPLOY_LOCK_FD'] = str(self.lock_fd)
         receipt = self.config.journal.read()
         if receipt is None or receipt.stage != 'activating':
@@ -712,8 +715,11 @@ class LinuxEffects:
                     os.fsync(stream.fileno())
                 env[handle] = str(path)
             # Existing deployment owns image, pin, migration and writer semantics.
-            _command(['bash', str(self.config.root / 'scripts/deploy_channel.sh'), 'deploy', plan.channel, plan.revision],
-                     cwd=self.config.root, env=env, pass_fds=(self.lock_fd,))
+            argv = ['bash', str(self.config.root / 'scripts/deploy_channel.sh'),
+                    'deploy', plan.channel, plan.revision]
+            if plan.ack_forward_only:
+                argv.append('--ack-forward-only')
+            _command(argv, cwd=self.config.root, env=env, pass_fds=(self.lock_fd,))
         finally:
             for path in paths:
                 path.unlink()
@@ -846,7 +852,12 @@ class DeploymentSupervisor:
         if str(UUID(operation_id)) != operation_id or type(data['bootstrap']) is not bool:
             raise PostgresDeployError()
         raw = data['plan']
-        plan = DeployPlan(raw['channel'], raw['revision'], tuple(raw['services']), tuple(raw['consumers']))
+        if not isinstance(raw, dict) or set(raw) != {
+            'channel', 'revision', 'services', 'consumers', 'ack_forward_only'
+        }:
+            raise PostgresDeployError()
+        plan = DeployPlan(raw['channel'], raw['revision'], tuple(raw['services']),
+                          tuple(raw['consumers']), raw['ack_forward_only'])
         plan.validate()
         if plan.channel != self.config.channel or data['action'] not in {'prepare', 'activate', 'join'}:
             raise PostgresDeployError()
