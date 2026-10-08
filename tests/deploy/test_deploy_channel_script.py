@@ -2786,7 +2786,10 @@ def test_bws_runtime_env_config_path_is_used_consistently(tmp_path, monkeypatch)
     assert result.stdout.strip() == str(runtime)
 
 
-@pytest.mark.parametrize('invalid_path_kind', ['missing', 'malformed', 'relative', 'unreadable', 'directory', 'symlink'])
+@pytest.mark.parametrize(
+    'invalid_path_kind',
+    ['missing_config_key', 'missing', 'malformed', 'relative', 'unreadable', 'directory', 'symlink'],
+)
 def test_bws_runtime_env_config_preflight_fails_before_mutation(tmp_path, monkeypatch, invalid_path_kind):
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import PostgresDeployError
@@ -2821,8 +2824,9 @@ def test_bws_runtime_env_config_preflight_fails_before_mutation(tmp_path, monkey
         'gid': 1000,
         'organization_id': '00000000-0000-4000-8000-000000000001',
         'project_id': '00000000-0000-4000-8000-000000000002',
-        'runtime_env_file': runtime_value,
     }
+    if invalid_path_kind != 'missing_config_key':
+        config['runtime_env_file'] = runtime_value
     monkeypatch.setattr(linux, '_private_json', lambda _path: config)
     mutations: list[object] = []
     monkeypatch.setattr(linux, '_command', lambda *args, **kwargs: mutations.append((args, kwargs)) or '')
@@ -2840,6 +2844,44 @@ def test_bws_runtime_env_config_preflight_fails_before_mutation(tmp_path, monkey
         linux.LinuxConfig.load('test')
     assert mutations == []
     assert pin.read_bytes() == original_pin
+
+
+@pytest.mark.parametrize('runtime_path_state', ['absent', 'malformed', 'missing_file', 'unreadable_file'])
+def test_bws_token_push_does_not_require_runtime_env_config(tmp_path, monkeypatch, runtime_path_state):
+    from app.ops import bws_token_push
+    from app.ops import postgres_deploy_linux as linux
+
+    config = {
+        'root': str(tmp_path / 'checkout'),
+        'data_directory': str(tmp_path / 'data'),
+        'uid': 1000,
+        'gid': 1000,
+        'organization_id': '00000000-0000-4000-8000-000000000001',
+        'project_id': '00000000-0000-4000-8000-000000000002',
+    }
+    if runtime_path_state == 'malformed':
+        config['runtime_env_file'] = 17
+    elif runtime_path_state in {'missing_file', 'unreadable_file'}:
+        runtime = tmp_path / 'runtime.env'
+        if runtime_path_state == 'unreadable_file':
+            runtime.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+            monkeypatch.setattr(
+                linux,
+                '_runtime_env_file_path',
+                lambda _path: pytest.fail('token-push must not inspect the runtime env file'),
+            )
+        config['runtime_env_file'] = str(runtime)
+    monkeypatch.setattr(linux, '_private_json', lambda _path: config)
+    calls = []
+
+    def remote_main(args, *, app_root):
+        calls.append((args, app_root))
+        return 0
+
+    monkeypatch.setattr(bws_token_push, 'remote_main', remote_main)
+
+    assert linux.main(['token-push-inspect', 'test']) == 0
+    assert calls == [(['token-push-inspect', 'test'], tmp_path / 'checkout')]
 
 
 def test_bws_worker_guard_rejects_runtime_env_path_override_before_provider_access(tmp_path, monkeypatch):

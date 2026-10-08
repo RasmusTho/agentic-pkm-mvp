@@ -272,14 +272,20 @@ class LinuxConfig:
     runtime_env_file: Path | None = None
 
     @classmethod
-    def load(cls, channel: str) -> LinuxConfig:
+    def load(cls, channel: str, *, require_runtime_env: bool = True) -> LinuxConfig:
         if channel not in {'dev', 'test', 'prod'}:
             raise PostgresDeployError()
         data = _private_json(Path('/etc/yggdrasil/bws-deploy') / (channel + '.json'))
-        if set(data) != {
-            'root', 'data_directory', 'uid', 'gid', 'organization_id', 'project_id', 'runtime_env_file'
-        }:
+        base_keys = {'root', 'data_directory', 'uid', 'gid', 'organization_id', 'project_id'}
+        runtime_env_key = 'runtime_env_file'
+        data_keys = frozenset(data)
+        if data_keys not in {frozenset(base_keys), frozenset((*base_keys, runtime_env_key))}:
             raise PostgresDeployError()
+        if require_runtime_env and runtime_env_key not in data:
+            raise PostgresDeployError()
+        runtime_env_file = None
+        if require_runtime_env:
+            runtime_env_file = _runtime_env_file_path(data[runtime_env_key])
         cfg = cls(
             channel,
             Path(data['root']),
@@ -288,7 +294,7 @@ class LinuxConfig:
             data['gid'],
             data['organization_id'],
             data['project_id'],
-            _runtime_env_file_path(data['runtime_env_file']),
+            runtime_env_file,
         )
         if (not cfg.root.is_absolute() or not cfg.data_directory.is_absolute()
             or cfg.root.is_symlink() or cfg.data_directory.is_symlink()
@@ -1003,7 +1009,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return remote_main(
                 selected,
-                app_root=LinuxConfig.load(args.channel).root,
+                app_root=LinuxConfig.load(args.channel, require_runtime_env=False).root,
             )
         if args.action == 'serve':
             serve(LinuxConfig.load(args.channel))
