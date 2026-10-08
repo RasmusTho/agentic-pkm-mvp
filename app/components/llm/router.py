@@ -652,8 +652,16 @@ class LLMRouter:
                     )
         routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
         profile_target = self._profile_target(routing, intent, self._profile_id_for(intent))
+        policy = self._task_policy(intent)
+        default_target = policy.primary if policy is not None else None
+        has_configured_default_target = bool(
+            default_target
+            and (default_target.model_id or default_target.provider or default_target.model)
+        )
         has_explicit_task_policy = bool(
-            (routing and intent.task_kind in routing.tasks) or profile_target is not None
+            (routing and intent.task_kind in routing.tasks)
+            or profile_target is not None
+            or has_configured_default_target
         )
         if self._llm_provider_env is not None and intent.task_kind != "embed":
             enforce = _provider_enforced()

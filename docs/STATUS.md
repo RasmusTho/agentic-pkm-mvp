@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-08 (PR #5835 merge/deploy-selection evidence and PR #5822 Model Access merge checked; PR #5838 repository evidence checked; no host credentials, route settings, database, or deployment changed)
+Last reviewed: 2026-10-08 (PR #5835 merge/deploy-selection evidence and PR #5822 Model Access merge checked; PR #5838 repository evidence and PR #5847 routing candidate checked; no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -81,6 +81,8 @@ Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md
 The owner decision recorded in [Issue #5618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5989039472) puts production in scope: Product chat/planning (`decide` and `plan`) should use the VLAN-only Model Access Router path to the Luna Codex CLI executor, with Ollama reserved for embeddings. This supersedes the 2026-10-04 note that production was excluded. It is the product outcome, not a finding that Luna is technically unsuitable. It does not qualify a production caller identity or replace the existing credential and release gates; live Product `llm_routing` settings remain the route authority.
 
 The additional owner decision in [Issue #5819](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5819) (2026-10-07) sets a broader target: the Mac mini is the portal for all registry-declared Product inference, including embeddings, while each clone or satellite selects its own model/profile through settings. MARR-12 (#5821) delivered provider egress/catalog support in PR #5822 (merge commit `3330ca0d01d7fffdddc931569de3ac67eb387067`). MARR-13 (#5820; PR #5838) owns the Product caller and embedding migration. Repository implementation and merge are not live acceptance: the designated Luna/Codex CLI receipt above remains the only proven live route, and Product embedding use of the portal still requires integrated host verification.
+
+The PR #5847 candidate for Issue #5846 seeds Luna chat/reasoning and Ollama Nomic embeddings when vault initialization finds neither canonical nor supported legacy routing settings. Configured defaults take precedence over the channel's non-enforced `LLM_PROVIDER=mock`; an enforced provider still applies. Initialization preserves existing canonical and legacy owner policies, so this code does not activate routing in an already initialized production vault. Live production route settings, deployment, and acceptance remain under #5819/#5618; no live route or deployment change is claimed here.
 
 The current single-operator VLAN boundary uses mTLS at ingress and a loopback-only executor. No Tailscale path, per-release-channel credentials, or separate per-channel/action capability header is required. Ollama remains optional and is not a readiness prerequisite for routes that do not select it. Product and Builder policy resolvers and credential profiles remain separate. The accepted single-operator ingress risk and its multi-operator revisit condition are recorded in ADR-0067; no universal portal, Product caller migration, or production activation is inferred here.
 

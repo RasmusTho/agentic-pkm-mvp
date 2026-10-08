@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from app.instance.vault_registry import AppLocalSettingsStore, KnownVaultRef
 from app.knowledge.multiwriter import is_conflict_artifact
+from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
 from app.settings.models import DEFAULT_ASK_SYSTEM_PROMPT
 
@@ -726,6 +727,15 @@ class VaultManager:
         ):
             path = settings_dir / filename
             path.parent.mkdir(parents=True, exist_ok=True)
+            if filename == "llm_routing.md":
+                selected_path = resolve_settings_file(
+                    expanded,
+                    filename,
+                    legacy_paths=(LEGACY_COMPILED_DIR / filename,),
+                )
+                if selected_path != path.resolve():
+                    skipped.append(str(selected_path.relative_to(expanded.resolve())))
+                    continue
             if self.markdown_store.write_missing(path, frontmatter, body):
                 created.append(str(path.relative_to(expanded)))
             else:

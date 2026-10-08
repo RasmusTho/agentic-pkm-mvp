@@ -113,8 +113,8 @@ def test_profile_embedding_target_rejects_chat_model() -> None:
 
 
 def test_initialized_vault_default_profile_routes_luna_and_nomic(tmp_path, monkeypatch) -> None:
-    monkeypatch.delenv("LLM_PROVIDER", raising=False)
-    monkeypatch.delenv("LLM_PROVIDER_ENFORCE", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    monkeypatch.setenv("LLM_PROVIDER_ENFORCE", "0")
     monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)
     monkeypatch.delenv("LLM_FORCE_MODEL", raising=False)
     vault_root = tmp_path / "fresh-vault"
@@ -140,7 +140,7 @@ def test_initialized_vault_default_profile_routes_luna_and_nomic(tmp_path, monke
     )
     assert chat.fallback.mode == reasoning.fallback.mode == "never"
     router = LLMRouter(settings=bundle)
-    for task_kind in ("ask", "plan"):
+    for task_kind in ("ask", "qa", "decide", "plan"):
         route = router.route(LLMTaskIntent(task_kind=task_kind))
         assert (route.provider, route.model) == ("openai", "gpt-6-luna")
     assert (
@@ -156,6 +156,35 @@ def test_initialized_vault_default_profile_routes_luna_and_nomic(tmp_path, monke
     )
     assert embedding.fallback.mode == "never"
     assert embedding.require_compatible_identity is True
+
+
+def test_initialize_vault_does_not_shadow_legacy_routing_policy(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    vault_root = tmp_path / "legacy-vault"
+    legacy_path = vault_root / "@Settings" / "llm_routing.md"
+    legacy_path.parent.mkdir(parents=True)
+    legacy_policy = (
+        "---\nscope: vault-shared\n---\n"
+        "# Legacy owner routing policy\n\n"
+        "```yaml settings\n"
+        "default_chat:\n"
+        "  primary:\n"
+        "    model_id: openai.chat.gpt_5_6_sol\n"
+        "```\n"
+    )
+    legacy_path.write_text(legacy_policy, encoding="utf-8")
+    monkeypatch.setattr(compiler, "RUNTIME", tmp_path / "runtime" / "settings")
+
+    result = VaultManager().initialize_vault(vault_root, remember=False)
+
+    canonical_path = vault_root / "settings" / "llm_routing.md"
+    assert not canonical_path.exists()
+    assert legacy_path.read_text(encoding="utf-8") == legacy_policy
+    assert "@Settings/llm_routing.md" in result.skipped_existing_files
+    bundle = compiler.compile_all(vault_root=vault_root, auto_heal=False)
+    assert bundle.llm_routing.default_chat.primary.model_id == "openai.chat.gpt_5_6_sol"
+    route = LLMRouter(settings=bundle).route(LLMTaskIntent(task_kind="ask"))
+    assert (route.provider, route.model) == ("openai", "gpt-5.6-sol")
 
 
 def test_clone_local_profile_is_compiled_into_instance_runtime(tmp_path, monkeypatch) -> None:
