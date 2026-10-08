@@ -64,9 +64,9 @@ def _issue() -> dict[str, object]:
     return {"number": 3602, "state": "open"}
 
 
-@pytest.mark.parametrize("review_rounds", [0, 1])
+@pytest.mark.parametrize("review_rounds,explicit", [(0, False), (1, False), (1, True), (2, False)])
 def test_ordinary_request_cli_runs_without_site_packages(
-    tmp_path: Path, review_rounds: int
+    tmp_path: Path, review_rounds: int, explicit: bool
 ) -> None:
     pr = _pr()
     pr["body"] = str(pr["body"]).replace(
@@ -105,14 +105,15 @@ def test_ordinary_request_cli_runs_without_site_packages(
             "--artifact-workflow-run-id", "123",
             "--artifact-repository-id", "456",
             "--github-output", str(github_output),
+            *(["--executor-request"] if explicit else []),
         ],
         cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=20,
     )
     assert result.returncode == 0, result.stderr
-    if review_rounds == 0:
+    if review_rounds == 0 or (review_rounds == 1 and not explicit):
         assert not output_json.exists()
         assert not output_markdown.exists()
-        assert "reason=light-path" in github_output.read_text()
+        assert f"reason={'light-path' if review_rounds == 0 else 'native-review'}" in github_output.read_text()
     else:
         request = json.loads(output_json.read_text())
         assert request == build_request(event=_event(), pr=pr, issue=_issue())
@@ -600,3 +601,18 @@ def test_malformed_builder_pr_number_is_noop(malformed_number: object) -> None:
     pr["number"] = malformed_number
 
     assert build_request(event=_event(), pr=pr, issue=_issue()) is None
+
+
+def test_native_review_round_skips_automatic_dispatch(tmp_path: Path) -> None:
+    # Missing closing-reference readback is irrelevant for a native PR. The
+    # automatic builder must return before inspecting it or constructing output.
+    pr = _pr()
+    pr.pop("live_closing_issues")
+    assert build_request(event=_event(), pr=pr, issue=_issue(), automatic=True) is None
+    for rounds in (1, 2):
+        pr = _pr()
+        pr["body"] = str(pr["body"]).replace("Rounds: 1", f"Rounds: {rounds}")
+        explicit = build_request(event=_event(), pr=pr, issue=_issue())
+        assert explicit is not None and explicit["final_review_rounds"] == rounds
+        if rounds == 2:
+            assert build_request(event=_event(), pr=pr, issue=_issue(), automatic=True) == explicit

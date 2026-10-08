@@ -10,10 +10,10 @@ closure, release, deployment, or claim release.
 
 | Trigger | Required route inside this procedure |
 | --- | --- |
-| Existing PR or review repair | Refresh exact PR scope, then use `pr-integration` before publication effects. |
-| Pre-existing branch commit, non-`main` base, remote head, or any open/closed/merged head-branch history | Preserve the state and run the authority/collision checks below; never coerce it into normal plan/apply. |
-| Multi-Issue PR | Apply `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`. |
-| Issue-free docs/governance or Direct Repair | Apply the matching lane contract in `docs/development/PR_HOT_PATH.md`. |
+| Existing PR or review repair outside the exact native binding | Refresh exact PR scope, then use `pr-integration` before publication effects. |
+| Unbounded/merge history, non-`main` base, unexplained remote head, or closed/merged/duplicate/mismatched head-branch history | Preserve the state and run the authority/collision checks below; never coerce it into native plan/apply. |
+| Issue batches outside the explicit native contract | Apply `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`. Never waive its ten-Issue limit. |
+| Direct Repair or issue-free work outside docs/governance | Apply the matching lane contract in `docs/development/PR_HOT_PATH.md`. |
 | Tier 3 or auth/security/data/migration/concurrency/external-API/credential-durability/state-machine risk | Complete `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: Mechanism Convergence Gate` on the local publishable SHA before expensive proof or an external effect. |
 | Ambiguous transport/readback | Stop with the observed state and use `pr-integration`; no blind retry or alternate transport. |
 

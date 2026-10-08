@@ -50,25 +50,37 @@ Default rule:
 
 ## Publication Routing
 
-`.codex/skills/publish-pr/SKILL.md` owns the publication decision. Its normal command is restricted
-to a new single-Issue Tier 1/2 PR targeting `main`, with strict credential-free fetch/push repository
-identity, one live base SHA, an absent head branch, and empty all-state PR history. Every existing-PR,
-non-`main`, pre-existing-commit, remote-head/history, multi-Issue, special-lane, high-risk, or
-ambiguous-readback case routes to `.codex/skills/publish-pr/FULL_PATH.md :: Procedure`; that file is
-the canonical full-path publication owner. Neither route owns merge, Issue closure, release, or
-deployment.
+`.codex/skills/publish-pr/SKILL.md` owns the publication decision. Its native plan/apply command
+supports Tier 1/2 publication to `main`: issue-free docs/governance, bounded resumed linear
+candidates, exact explicitly named open-PR updates, and explicit batches of at most ten closing
+Issues. It binds strict credential-free fetch/push repository identity, live base SHA, the complete
+intended candidate file set, and exact governing/closing authority. New PRs require an absent head
+branch and empty all-state history; updates bind one exact open PR and retain scope revalidation.
+Native review rounds 0 and 1 do not automatically create executor requests or artifacts. Explicit
+executor round-1 construction and legacy round-2 requests remain supported; authenticated in-flight
+executor ownership never changes routes merely because an artifact exists.
+
+Resumed history retains the commit-message authority guard: every candidate commit after the
+bound base may use `Refs` but must not contain closing-keyword Issue references. This keeps prior
+commit messages from adding undeclared closing authority.
+
+Non-`main`, unbounded/merge history, conflicting or terminal PR history, Direct Repair, declared
+high-risk, and ambiguous readback cases route to `.codex/skills/publish-pr/FULL_PATH.md :: Procedure`.
+That file is the canonical full-path publication owner.
+Neither publication route owns merge, Issue closure, release, or deployment.
 
 ## PR Body Preparation
 
 `scripts/pr_body_generator.py` is the authoritative body constructor for implementation,
 docs-authoring, governance, and direct-repair lanes. It accepts one explicit JSON mapping
 (`--input-json`) or equivalent explicit arguments and emits the complete body without writing to
-GitHub. The normal new single-Issue Tier 1/2 path invokes it through
+GitHub. The supported native path invokes it through
 `scripts/publication.py plan/apply` and binds the exact generated body digest into the plan.
 Unsupported publication paths still generate and inspect the body before their owning workflow
 opens or updates a PR. Required lane inputs must be concrete:
 
-- implementation lane requires a linked issue;
+- implementation lane requires a governing issue; an explicit `closing_issues` list may name up to
+  ten unique positive IDs independently of that governing parent; the generator does not infer a set;
 - closing authority must be declared only on a dedicated `Fixes #<id>`, `Closes #<id>`, or
   `Resolves #<id>` line; narrative prose must never place a closing keyword directly adjacent to
   `#<id>`;
