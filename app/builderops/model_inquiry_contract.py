@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass
 from typing import Any, Mapping
 from urllib.parse import urlparse
@@ -55,6 +56,113 @@ RESPONSE_FIELDS = frozenset(
 )
 STANCES = frozenset({"draft", "accept", "revise", "refuse"})
 ISSUE_PROPOSAL_FIELDS = frozenset({"schema_version", "title", "body"})
+
+# The existing inquiry shape is two independent drafts followed by three review
+# rounds for both perspectives.  The budget is deliberately independent from a
+# caller's per-run ``max_rounds`` so a resume cannot enlarge it by changing a
+# command-line option.  Each adapter is already bounded to 1200 seconds.
+DEFAULT_DIAGNOSTIC_MAX_CALLS = 8
+DEFAULT_DIAGNOSTIC_MAX_ELAPSED_SECONDS = 9_600.0
+
+
+@dataclass(frozen=True)
+class DiagnosticBudget:
+    """One finite, provider-neutral execution envelope for an inquiry run.
+
+    Calls and elapsed time are always enforced. Token and monetary ceilings are
+    optional because adapters do not promise that telemetry. Supplying either
+    optional ceiling requires explicit authority; absent telemetry remains
+    unknown and is never interpreted as zero consumption.
+    """
+
+    max_calls: int = DEFAULT_DIAGNOSTIC_MAX_CALLS
+    max_elapsed_seconds: float = DEFAULT_DIAGNOSTIC_MAX_ELAPSED_SECONDS
+    max_units: int | None = None
+    max_cost_usd: float | None = None
+    authorized: bool = False
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.max_calls, bool)
+            or not isinstance(self.max_calls, int)
+            or self.max_calls < 1
+        ):
+            raise BuilderOpsValidationError("diagnostic budget max_calls must be a positive integer")
+        if (
+            isinstance(self.max_elapsed_seconds, bool)
+            or not isinstance(self.max_elapsed_seconds, (int, float))
+            or not math.isfinite(float(self.max_elapsed_seconds))
+            or self.max_elapsed_seconds <= 0
+        ):
+            raise BuilderOpsValidationError(
+                "diagnostic budget max_elapsed_seconds must be a finite positive number"
+            )
+        if self.max_units is not None and (
+            isinstance(self.max_units, bool)
+            or not isinstance(self.max_units, int)
+            or self.max_units < 1
+        ):
+            raise BuilderOpsValidationError(
+                "diagnostic budget max_units must be a positive integer or null"
+            )
+        if self.max_cost_usd is not None and (
+            isinstance(self.max_cost_usd, bool)
+            or not isinstance(self.max_cost_usd, (int, float))
+            or not math.isfinite(float(self.max_cost_usd))
+            or self.max_cost_usd < 0
+        ):
+            raise BuilderOpsValidationError(
+                "diagnostic budget max_cost_usd must be a finite non-negative number or null"
+            )
+        if not isinstance(self.authorized, bool):
+            raise BuilderOpsValidationError("diagnostic budget authorized must be boolean")
+        if (self.max_units is not None or self.max_cost_usd is not None) and not self.authorized:
+            raise BuilderOpsValidationError(
+                "token/cost diagnostic ceilings require explicit budget authority"
+            )
+
+    @classmethod
+    def for_rounds(cls, max_rounds: int, *, role_count: int = 2) -> "DiagnosticBudget":
+        """Derive a finite envelope from the established inquiry shape."""
+        if (
+            isinstance(max_rounds, bool)
+            or not isinstance(max_rounds, int)
+            or max_rounds < 1
+            or max_rounds > 20
+            or isinstance(role_count, bool)
+            or not isinstance(role_count, int)
+            or role_count < 1
+        ):
+            raise BuilderOpsValidationError("invalid inquiry shape for diagnostic budget")
+        calls = role_count * (max_rounds + 1)
+        return cls(max_calls=calls, max_elapsed_seconds=float(calls * 1200))
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "max_calls": self.max_calls,
+            "max_elapsed_seconds": self.max_elapsed_seconds,
+            "max_units": self.max_units,
+            "max_cost_usd": self.max_cost_usd,
+            "authorized": self.authorized,
+        }
+
+
+@dataclass(frozen=True)
+class DiagnosticUsage:
+    """Consumption reconstructed from existing immutable inquiry artifacts."""
+
+    calls: int
+    elapsed_seconds: float
+    units: int | None
+    cost_usd: float | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "calls": self.calls,
+            "elapsed_seconds": self.elapsed_seconds,
+            "units": self.units,
+            "cost_usd": self.cost_usd,
+        }
 
 
 @dataclass(frozen=True)

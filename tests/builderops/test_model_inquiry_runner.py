@@ -22,6 +22,7 @@ from app.builderops.model_inquiry_adapters import (
     ScriptedAdapter,
 )
 from app.builderops.model_inquiry_contract import (
+    DiagnosticBudget,
     MODEL_TURN_SYSTEM_PROMPT,
     RESPONSE_SCHEMA_VERSION,
     canonical_hash,
@@ -295,6 +296,70 @@ def test_single_target_max_round_terminal_is_readable_and_resume_is_idempotent(
         "synthesis",
         "verification",
     }
+
+
+def test_budget_refuses_next_turn_before_adapter_call(tmp_path: Path) -> None:
+    service, _ = _start(tmp_path, "inq_runner_call_budget")
+    fable = _scripted("fable", [_response("draft"), _response("draft")])
+    gpt = _scripted("gpt_codex", [_response("draft")])
+    runner = ModelInquiryRunner(
+        service,
+        {"fable": fable, "gpt_codex": gpt},
+        diagnostic_budget=DiagnosticBudget(max_calls=1),
+    )
+
+    result = runner.run("inq_runner_call_budget", max_rounds=1)
+
+    assert result["outcome"] == "budget_exhausted"
+    assert len(fable.calls) == 1
+    assert len(gpt.calls) == 0
+    terminal = next(
+        item
+        for item in service.trace("inq_runner_call_budget")["receipts"]
+        if item["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["details"]["reason"] == "call_limit"
+
+
+def test_resume_cannot_reset_diagnostic_budget(tmp_path: Path) -> None:
+    service, _ = _start(tmp_path, "inq_runner_budget_resume")
+    fable = _scripted("fable", [_response("draft"), _response("draft")])
+    gpt = _scripted("gpt_codex", [_response("draft")])
+    runner = ModelInquiryRunner(
+        service,
+        {"fable": fable, "gpt_codex": gpt},
+        diagnostic_budget=DiagnosticBudget(max_calls=1),
+    )
+
+    first = runner.run("inq_runner_budget_resume", max_rounds=1)
+    calls_after_first_run = (len(fable.calls), len(gpt.calls))
+    second = runner.run(
+        "inq_runner_budget_resume",
+        max_rounds=1,
+        diagnostic_budget=DiagnosticBudget(max_calls=8),
+    )
+
+    assert first["outcome"] == "budget_exhausted"
+    assert second["terminal_receipt_id"] == first["terminal_receipt_id"]
+    assert (len(fable.calls), len(gpt.calls)) == calls_after_first_run
+
+
+def test_unknown_usage_is_not_zero_cost(tmp_path: Path) -> None:
+    service, _ = _start(tmp_path, "inq_runner_unknown_usage")
+    fable = _scripted("fable", [_response("draft")])
+    gpt = _scripted("gpt_codex", [_response("draft")])
+    runner = ModelInquiryRunner(
+        service,
+        {"fable": fable, "gpt_codex": gpt},
+        diagnostic_budget=DiagnosticBudget(max_calls=3, max_units=1, authorized=True),
+    )
+
+    result = runner.run("inq_runner_unknown_usage", max_rounds=1)
+
+    assert result["outcome"] == "budget_exhausted"
+    assert result["details"]["reason"] == "usage_unknown"
+    assert result["details"]["usage"]["units"] is None
+    assert len(gpt.calls) == 0
 
 
 def test_independent_drafts_share_context_hash(tmp_path: Path) -> None:

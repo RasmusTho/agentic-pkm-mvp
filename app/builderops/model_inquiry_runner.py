@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from app.builderops.model_access_resolver import BuilderModelAccessResolver
 from app.builderops.model_inquiry import (
@@ -24,6 +25,8 @@ from app.builderops.model_inquiry_adapters import (
     sanitized_adapter_identity,
 )
 from app.builderops.model_inquiry_contract import (
+    DiagnosticBudget,
+    DiagnosticUsage,
     MODEL_TURN_SYSTEM_PROMPT,
     ModelTurnResponse,
     canonical_hash,
@@ -61,6 +64,9 @@ class ModelInquiryRunner:
         env: Mapping[str, str] | None = None,
         resolver: BuilderModelAccessResolver | None = None,
         allow_operational_fallback: bool | None = None,
+        diagnostic_budget: DiagnosticBudget | None = None,
+        budget: DiagnosticBudget | None = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self.service = service
         self._adapters = dict(adapters) if adapters is not None else None
@@ -69,6 +75,10 @@ class ModelInquiryRunner:
         # declared sources explicitly; it is never a provider or credential.
         self._resolver = resolver
         self._allow_operational_fallback = allow_operational_fallback
+        if diagnostic_budget is not None and budget is not None and diagnostic_budget != budget:
+            raise BuilderOpsValidationError("conflicting diagnostic budgets")
+        self._diagnostic_budget = diagnostic_budget or budget or DiagnosticBudget()
+        self._clock = clock or time.monotonic
 
     def plan(self, inquiry_id: str, *, max_rounds: int) -> dict[str, Any]:
         _validate_max_rounds(max_rounds)
@@ -124,6 +134,15 @@ class ModelInquiryRunner:
             "context_hash": context["context_hash"],
             "question_artifact_hash": trace["question"]["artifact_hash"],
             "max_rounds": max_rounds,
+            "diagnostic_budget": self._diagnostic_budget.to_dict()
+            if hasattr(self._diagnostic_budget, "to_dict")
+            else {
+                "max_calls": self._diagnostic_budget.max_calls,
+                "max_elapsed_seconds": self._diagnostic_budget.max_elapsed_seconds,
+                "max_units": self._diagnostic_budget.max_units,
+                "max_cost_usd": self._diagnostic_budget.max_cost_usd,
+                "authorized": self._diagnostic_budget.authorized,
+            },
             "adapter_descriptors": descriptors,
             "unavailable_roles": unavailable,
             "planned_turns": [
@@ -146,7 +165,10 @@ class ModelInquiryRunner:
         *,
         max_rounds: int = 3,
         dry_run: bool = False,
+        diagnostic_budget: DiagnosticBudget | None = None,
     ) -> dict[str, Any]:
+        if diagnostic_budget is not None:
+            self._diagnostic_budget = diagnostic_budget
         if dry_run:
             return self.plan(inquiry_id, max_rounds=max_rounds)
         _validate_max_rounds(max_rounds)
@@ -371,6 +393,10 @@ class ModelInquiryRunner:
         last_failure: tuple[str, dict[str, Any]] | None = None
         for adapter in adapters:
             trace = self.service.trace(inquiry_id)
+            usage = _diagnostic_usage(trace)
+            budget_reason = self._budget_reason(usage)
+            if budget_reason is not None:
+                return self._budget_terminate(inquiry_id, budget_reason, usage)
             request = self._request_packet(
                 trace,
                 role=role,
@@ -401,36 +427,64 @@ class ModelInquiryRunner:
                     last_failure = (prior_outcome, prior_details)
                     continue
                 return self._terminate(inquiry_id, prior_outcome, prior_details, trace)
+            started = self._clock()
             try:
                 result = adapter.execute(request)
             except AdapterUnavailableError as exc:
+                elapsed_seconds = _elapsed_since(self._clock, started)
                 if _single_target_mode(trace):
                     return self._attempt_failure(
-                        inquiry_id, "provider_error", request, trace, exc
+                        inquiry_id,
+                        "provider_error",
+                        request,
+                        trace,
+                        exc,
+                        elapsed_seconds=elapsed_seconds,
                     )
                 details = self._record_attempt_failure(
-                    inquiry_id, "provider_unavailable", request, trace, exc
+                    inquiry_id,
+                    "provider_unavailable",
+                    request,
+                    trace,
+                    exc,
+                    elapsed_seconds=elapsed_seconds,
                 )
                 last_failure = ("provider_unavailable", details)
                 continue
             except AdapterExecutionError as exc:
+                elapsed_seconds = _elapsed_since(self._clock, started)
                 if exc.failure_class not in FALLBACK_ADAPTER_FAILURE_CLASSES:
                     return self._attempt_failure(
-                        inquiry_id, "provider_error", request, trace, exc
+                        inquiry_id,
+                        "provider_error",
+                        request,
+                        trace,
+                        exc,
+                        elapsed_seconds=elapsed_seconds,
                     )
                 details = self._record_attempt_failure(
-                    inquiry_id, "provider_error", request, trace, exc
+                    inquiry_id,
+                    "provider_error",
+                    request,
+                    trace,
+                    exc,
+                    elapsed_seconds=elapsed_seconds,
                 )
                 last_failure = ("provider_error", details)
                 continue
             except Exception as exc:
+                elapsed_seconds = _elapsed_since(self._clock, started)
                 return self._attempt_failure(
                     inquiry_id,
                     "provider_error",
                     request,
                     trace,
                     exc,
+                    elapsed_seconds=elapsed_seconds,
                 )
+            elapsed_seconds = _elapsed_since(self._clock, started)
+            usage_payload = _adapter_usage(result)
+            cost_usd = _adapter_cost(result)
             output_hash = canonical_hash(result.response_text)
             try:
                 provider_request_id = _safe_provider_request_id(result.provider_request_id)
@@ -442,6 +496,9 @@ class ModelInquiryRunner:
                     trace,
                     exc,
                     output_hash=output_hash,
+                    elapsed_seconds=elapsed_seconds,
+                    usage=usage_payload,
+                    cost_usd=cost_usd,
                 )
             try:
                 response = parse_model_turn_response(result.response_text)
@@ -458,6 +515,9 @@ class ModelInquiryRunner:
                         trace,
                         RuntimeError("provider returned refusal stance"),
                         output_hash=output_hash,
+                        elapsed_seconds=elapsed_seconds,
+                        usage=usage_payload,
+                        cost_usd=cost_usd,
                     )
                 if phase == "draft" and response.stance != "draft":
                     raise BuilderOpsValidationError("independent draft must use draft stance")
@@ -479,6 +539,9 @@ class ModelInquiryRunner:
                     trace,
                     exc,
                     output_hash=output_hash,
+                    elapsed_seconds=elapsed_seconds,
+                    usage=usage_payload,
+                    cost_usd=cost_usd,
                 )
                 last_failure = ("malformed_output", details)
                 continue
@@ -496,6 +559,9 @@ class ModelInquiryRunner:
                 "round_index": round_index,
                 "stance": response.stance,
                 "accepted_artifact_hash": response.accepted_artifact_hash,
+                "elapsed_seconds": elapsed_seconds,
+                "usage": usage_payload,
+                "cost_usd": cost_usd,
             }
             sequence = max((turn["sequence"] for turn in trace["turns"]), default=-1) + 1
             try:
@@ -517,6 +583,9 @@ class ModelInquiryRunner:
                     trace,
                     exc,
                     output_hash=output_hash,
+                    elapsed_seconds=elapsed_seconds,
+                    usage=usage_payload,
+                    cost_usd=cost_usd,
                 )
             self.service.commit_terminal_turn_receipt(
                 inquiry_id,
@@ -606,6 +675,9 @@ class ModelInquiryRunner:
         error: Exception,
         *,
         output_hash: str | None = None,
+        elapsed_seconds: float | None = None,
+        usage: Mapping[str, Any] | None = None,
+        cost_usd: float | None = None,
     ) -> dict[str, Any]:
         details = self._record_attempt_failure(
             inquiry_id,
@@ -614,6 +686,9 @@ class ModelInquiryRunner:
             trace,
             error,
             output_hash=output_hash,
+            elapsed_seconds=elapsed_seconds,
+            usage=usage,
+            cost_usd=cost_usd,
         )
         return self._terminate(inquiry_id, outcome, details, self.service.trace(inquiry_id))
 
@@ -626,6 +701,9 @@ class ModelInquiryRunner:
         error: Exception,
         *,
         output_hash: str | None = None,
+        elapsed_seconds: float | None = None,
+        usage: Mapping[str, Any] | None = None,
+        cost_usd: float | None = None,
     ) -> dict[str, Any]:
         details: dict[str, Any] = {
             "adapter_request_id": request["adapter_request_id"],
@@ -641,6 +719,12 @@ class ModelInquiryRunner:
                 error,
                 adapter_id=str(request["adapter_identity"]["adapter_id"]),
             )
+        if elapsed_seconds is not None:
+            details["elapsed_seconds"] = elapsed_seconds
+        if usage is not None:
+            details["usage"] = dict(usage)
+        if cost_usd is not None:
+            details["cost_usd"] = cost_usd
         self.service.commit_provider_attempt_receipt(
             inquiry_id,
             adapter_request_id=str(request["adapter_request_id"]),
@@ -649,6 +733,43 @@ class ModelInquiryRunner:
             source_refs=trace["source_refs"],
         )
         return details
+
+    def _budget_reason(self, usage: DiagnosticUsage) -> str | None:
+        budget = self._diagnostic_budget
+        if usage.calls >= budget.max_calls:
+            return "call_limit"
+        if usage.elapsed_seconds >= budget.max_elapsed_seconds:
+            return "elapsed_limit"
+        if budget.max_units is not None and usage.calls:
+            if usage.units is None:
+                return "usage_unknown"
+            if usage.units >= budget.max_units:
+                return "unit_limit"
+        if budget.max_cost_usd is not None and usage.calls:
+            if usage.cost_usd is None:
+                return "usage_unknown"
+            if usage.cost_usd >= budget.max_cost_usd:
+                return "cost_limit"
+        return None
+
+    def _budget_terminate(
+        self,
+        inquiry_id: str,
+        reason: str,
+        usage: DiagnosticUsage,
+    ) -> dict[str, Any]:
+        details = {
+            "reason": reason,
+            "budget": self._diagnostic_budget.to_dict(),
+            "usage": usage.to_dict(),
+        }
+        receipt = self.service.commit_run_terminal_receipt(
+            inquiry_id,
+            outcome="budget_exhausted",
+            details=details,
+            source_refs=list(self.service.trace(inquiry_id)["source_refs"]),
+        )
+        return self._finalize_terminal(inquiry_id, receipt, replayed=False)
 
     def _candidate_adapters(
         self,
@@ -772,6 +893,113 @@ def _initial_context(trace: Mapping[str, Any]) -> dict[str, Any]:
         source_refs=list(trace["question"]["source_refs"]),
     )
     return {"packet": packet, "context_hash": canonical_hash(packet)}
+
+
+def _diagnostic_usage(trace: Mapping[str, Any]) -> DiagnosticUsage:
+    """Reconstruct consumption from turns and provider-attempt receipts."""
+    call_ids: set[str] = set()
+    elapsed = 0.0
+    unit_total = 0
+    cost_total = 0.0
+    units_known = True
+    cost_known = True
+    for turn in trace.get("turns", []):
+        request_id = turn.get("adapter_request_id")
+        if isinstance(request_id, str):
+            call_ids.add(request_id)
+        elapsed += _nonnegative_number(turn.get("elapsed_seconds"))
+        usage = turn.get("usage")
+        if not _known_usage(usage):
+            units_known = False
+        else:
+            unit_total += int(usage["total_units"])
+        cost = turn.get("cost_usd")
+        if not _known_cost(cost):
+            cost_known = False
+        else:
+            cost_total += float(cost)
+    for receipt in trace.get("receipts", []):
+        if receipt.get("event_type") != "inquiry_provider_attempt_terminal":
+            continue
+        request_id = receipt.get("adapter_request_id")
+        if request_id in {"adapter_req_configuration", "adapter_req_credential"}:
+            continue
+        if isinstance(request_id, str) and request_id in call_ids:
+            # A turn and its attempt receipt can coexist after a crash at the
+            # immutable-write boundary; count that adapter call once.
+            continue
+        if isinstance(request_id, str):
+            call_ids.add(request_id)
+        details = receipt.get("details", {})
+        elapsed += _nonnegative_number(details.get("elapsed_seconds"))
+        usage = details.get("usage")
+        if not _known_usage(usage):
+            units_known = False
+        else:
+            unit_total += int(usage["total_units"])
+        cost = details.get("cost_usd")
+        if not _known_cost(cost):
+            cost_known = False
+        else:
+            cost_total += float(cost)
+    calls = len(call_ids)
+    return DiagnosticUsage(
+        calls=calls,
+        elapsed_seconds=elapsed,
+        units=unit_total if calls and units_known else None,
+        cost_usd=cost_total if calls and cost_known else None,
+    )
+
+
+def _known_usage(value: Any) -> bool:
+    return isinstance(value, Mapping) and value.get("state") == "known" and isinstance(
+        value.get("total_units"), int
+    )
+
+
+def _known_cost(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+
+
+def _nonnegative_number(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0.0
+    return max(0.0, float(value))
+
+
+def _elapsed_since(clock: Callable[[], float], started: float) -> float:
+    try:
+        return _nonnegative_number(clock() - started)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _adapter_usage(result: Any) -> dict[str, Any]:
+    raw = getattr(result, "usage", None)
+    if isinstance(raw, Mapping):
+        total = raw.get("total_units", raw.get("total_tokens"))
+        input_units = raw.get("input_units", raw.get("input_tokens"))
+        output_units = raw.get("output_units", raw.get("output_tokens"))
+        if total is None and isinstance(input_units, int) and isinstance(output_units, int):
+            total = input_units + output_units
+        if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+            payload: dict[str, Any] = {"state": "known", "total_units": total}
+            if isinstance(input_units, int) and input_units >= 0:
+                payload["input_units"] = input_units
+            if isinstance(output_units, int) and output_units >= 0:
+                payload["output_units"] = output_units
+            return payload
+    return {"state": "unknown", "reason": "adapter usage telemetry unavailable"}
+
+
+def _adapter_cost(result: Any) -> float | None:
+    raw = getattr(result, "cost_usd", None)
+    if raw is None:
+        raw_usage = getattr(result, "usage", None)
+        raw = raw_usage.get("cost_usd") if isinstance(raw_usage, Mapping) else None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw >= 0:
+        return float(raw)
+    return None
 
 
 def _single_target_mode(trace: Mapping[str, Any]) -> bool:
