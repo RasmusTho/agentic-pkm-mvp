@@ -151,6 +151,7 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture
 def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
     """Deterministic Mac-portal fake for Product tests that are not API tests."""
+    import os
     from datetime import datetime, timedelta, timezone
     from types import SimpleNamespace
 
@@ -168,12 +169,20 @@ def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
     )
     from llm_contract import ModelCapabilities
 
-    # The compiled Product embedding target is Ollama/nomic by design.  Tests
-    # enrolled in this fixture exercise the request/response seam, so give that
-    # seam an explicit deterministic provider while leaving admission tests
-    # outside the fixture untouched.  Individual route tests can still override
-    # this with their own monkeypatch (including the Ollama path proof).
-    monkeypatch.setenv("LLM_FORCE_PROVIDER", "mock")
+    from app.components.llm.router import LLMRouter
+
+    original_router_route = LLMRouter.route
+
+    def _route_for_fixture(self, intent):
+        if intent.task_kind not in {"embed", "extract.summary"}:
+            return original_router_route(self, intent)
+        if os.getenv("LLM_FORCE_PROVIDER") or os.getenv("LLM_FORCE_MODEL"):
+            return original_router_route(self, intent)
+        with monkeypatch.context() as scoped:
+            scoped.setenv("LLM_FORCE_PROVIDER", "mock")
+            return original_router_route(self, intent)
+
+    monkeypatch.setattr(LLMRouter, "route", _route_for_fixture)
 
     class _Gateway:
         def __init__(self) -> None:
