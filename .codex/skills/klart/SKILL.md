@@ -75,6 +75,12 @@ lifecycle drift, important unsaved delta, or missing authority forbids `end`. Me
 closure always route through `verification-and-closure`; lifecycle correction routes through
 `issue-maintenance-change-control`.
 
+Routine closeout may reuse the Issue, PR, or reviewed repo artifact as durable evidence; optional
+BuilderOps record availability is not an additional gate. If that service is unavailable, report the
+limitation once and continue when substantial findings are preserved by an existing authority. If a
+substantial finding has no durable home, route it before closeout. Preserve current-head CI, exact
+merge/closure evidence, and protected executor or in-flight receipts.
+
 For issue-free work, do not invent or derive an Issue. Assess the current branch/worktree, any
 governance or docs PR, and the deliverable named by the request. Route unfinished work through
 `resume-work` or `publish-pr` as appropriate. When a standalone analysis is itself the terminal

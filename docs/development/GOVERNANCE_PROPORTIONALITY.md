@@ -93,6 +93,27 @@ unrelated product gates from text-only CI. The existing selector remains the sin
 check selection; contract coverage stays conservative for unclassified docs. No new queue, evidence
 registry, or runtime executor authority is added.
 
+For the routine-route evaluation, count the actual mandatory sections from startup through normal
+delivery and the mandatory `klart` closeout; do not make the total fit by excluding closeout. On the
+current candidate, the section-scoped inventory is approximately 6,974 whitespace-delimited words:
+
+| Mandatory route | Sections counted | Words |
+| --- | --- | ---: |
+| Shared startup | README `BuilderOps workflow checkpoints` and `Workflow continuation` | 936 |
+| Coordinator | `deliver-issue-set` `First Context To Load`, `Coordinator Buffer Contract`, `Delivery Procedure`, `Workflow continuation` | 869 |
+| Issue worker | `issue-to-code` `Read scope`, `Pre-implementation classification`, `Canonical workflow`, `BuilderOps routing`, `Implementation workflow`, `PR handoff`, `Workflow continuation` | 2,715 |
+| Publication | `publish-pr` entry, supported path, publication workflow, handoff, continuation | 1,033 |
+| Verification | `verification-and-closure` routing, inputs, validation, review, native merge, continuation | 1,058 |
+| Closeout | `klart` assessment and continuation | 363 |
+
+The counts use the repository's section-scoped read rule and a deterministic word-count script; they
+exclude conditional recovery, retrospective, `pr-integration`, full-path executor, and parent-closure
+sections when their triggers are absent. The route is about 1,974 words above the 5,000-word planning
+goal even after removing duplicated coordinator handoff text. That excess is reported rather than
+hidden; a later reduction must delete genuine duplicate contract text while preserving lifecycle,
+current-head CI, executor/in-flight, and owner-gate protections. No new ledger or scheduler is added
+for this measurement.
+
 Use the next 20 accepted deliveries as a bounded evaluation, from existing CI and session records:
 compare tokens per accepted change, validation reruns, control calls, and post-merge defects with a
 like-for-like prior sample. Report unavailable token data as unknown. A 50% routine-token reduction

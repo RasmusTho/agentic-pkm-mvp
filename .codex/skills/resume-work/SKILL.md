@@ -215,8 +215,11 @@ while work is unfinished. Progressive and opportunistic — not a report after e
 - This scratch note never replaces or authorizes a lifecycle-owner change. A replacement still
   requires the durable authenticated `lifecycle_handoff_receipt.v1` above.
 - Do this without asking the user. It is cheap insurance, not a checkpoint system.
-- BuilderOps Vault is available and this is `AgentWorklog` material (`app/builderops/cli.py ::
-  create-worklog`). The file stays the always-on default; never block recovery on the Vault.
+- BuilderOps Vault is optional recovery evidence (`app/builderops/cli.py :: create-worklog`); never
+  block recovery on it. Prefer the existing Issue, PR, or reviewed working artifact for substantial
+  findings. If the service is unavailable and no such authority exists, use the explicit compatibility
+  fallback owned by `capture-learning` and report the limitation once. Never fake a write, invent a
+  store, or leave material findings only in this scratch note.
 
 ## Stay in bounds
 

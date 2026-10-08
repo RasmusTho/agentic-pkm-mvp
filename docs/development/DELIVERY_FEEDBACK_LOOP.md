@@ -106,8 +106,9 @@ operational surface, and explicit promotion is the only path into GitHub/repo au
 
 ### 1. `capture-learning` skill
 
-Single-job micro-skill. Creates one `LearningSignal` record in BuilderOps Vault when a divergence
-is concrete enough to name an upstream artifact now.
+Single-job micro-skill. Creates one `LearningSignal` record in BuilderOps Vault when a material,
+actionable-now divergence is concrete enough to name an upstream artifact. Routine evidence already
+preserved by an Issue, PR, or reviewed repo artifact does not need a duplicate signal.
 
 **Inputs (required):**
 - **what diverged** — one sentence: the plan said X, reality was Y
@@ -122,7 +123,11 @@ Diverged: <one sentence>
 Upstream artifact: <path or section>
 ```
 
-**Trigger rule (the important part):** invoke only when you do something you did not expect to do, or discover an earlier artifact was wrong. Not when work went as planned. The heuristic: *if the next agent doing a similar task would benefit from an upstream artifact being different, log it — otherwise don't.*
+**Trigger rule (the important part):** invoke when you do something unexpected or discover an earlier
+artifact was wrong and a material upstream repair is actionable now. Minor, repetitive, or
+not-yet-actionable observations enter the weekly cold-path retrospective; routine delivery does not
+pause for them. The heuristic: *if the next agent doing a similar task needs an upstream artifact to
+change now, log it — otherwise batch it or use the existing delivery authority.*
 
 **The "name an artifact" gate** kills venting. You cannot log without proposing where the fix lives.
 
@@ -156,7 +161,8 @@ LearningSignal records.
 
 ### 4. `learning-retrospective` skill
 
-Cadence-triggered (manual, after an epic closes, or roughly every 10 delivery-learning records).
+Weekly cold-path or manual (including after an epic closes), with roughly 10 delivery-learning
+records as a batching hint rather than a scheduler or hot-path gate.
 Reads BuilderOps `LearningSignal`
 records and may generate the `learning-summary` projection for a repo-readable view. It reads
 `docs/learning-log.md` only for historical compatibility entries that have not yet been represented
@@ -285,7 +291,13 @@ Usually blank. When filled, enables tracing whether retro edits actually improve
 
 Every skill in `.codex/skills/` carries this addendum:
 
-> **Capturing learning:** if during this work you notice a divergence from plan — you did something you didn't expect to do, or discovered an earlier artifact was wrong — invoke `capture-learning` before continuing. Capture a BuilderOps `LearningSignal`; use `docs/learning-log.md` only as an explicit compatibility fallback. Do not batch to end of task; context is freshest now. Only capture if you can name an upstream artifact that could absorb the fix.
+> **Capturing learning:** if during this work you notice a material divergence from plan — you did
+> something unexpected or discovered an earlier artifact was wrong and an upstream repair is
+> actionable now — invoke `capture-learning` before continuing. Minor, repetitive, or
+> not-yet-actionable observations enter the bounded weekly cold path. Existing Issue, PR, or reviewed
+> repo-artifact evidence counts as durable coverage; if optional record infrastructure is unavailable,
+> report the limitation once and preserve substantial findings in that authority or the explicit
+> compatibility fallback. Only capture if you can name an upstream artifact that could absorb the fix.
 
 ## Workflow and automation enforcement
 
@@ -299,8 +311,9 @@ BuilderOps adoption is enforced at workflow boundaries, not by human recall.
 - `verification-and-closure` verifies that unresolved BuilderOps material is represented by a
   BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason before merge.
 - `automation-maintenance` audits recurring Codex app prompts for BuilderOps-first routing.
-- Learning-retro automations must read `LearningSignal` records and generated learning projections
-  first, using `docs/learning-log.md` only for historical or explicit compatibility fallback entries.
+- Learning-retrospective cold paths must read `LearningSignal` records and generated learning
+  projections first, using `docs/learning-log.md` only for historical or explicit compatibility
+  fallback entries; this issue adds no app scheduler.
 - Epic-runner automation must preserve improvement inputs in run-state when they are discovered
   during issue-set delivery: review findings, repeated constraints, TCD signals, learning
   candidates, CKM/reevaluation candidates, unresolved follow-ups, and terminal closure outcome.
@@ -318,7 +331,8 @@ BuilderOps adoption is enforced at workflow boundaries, not by human recall.
 - Not product telemetry, runtime memory, or auto-classification authority
 - Not a blocking gate in the delivery path — the loop is asynchronous, delivery velocity is unchanged
 - Not a second Project board or new agent
-- Not mandatory per-delivery — log only on divergence
+- Not mandatory per-delivery — log only material, actionable-now divergence; batch routine observations
+  in the weekly cold path
 - Not product/runtime memory; BuilderOps learning governs the building system only
 
 ## Success criteria
