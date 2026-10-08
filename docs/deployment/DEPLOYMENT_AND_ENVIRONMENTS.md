@@ -556,8 +556,16 @@ The root-owned `config/systemd/yggdrasil-bws-deploy@.service` and installed
 `scripts/postgres_deploy_service.py` launcher supervise VM work independently of SSH. Operator setup
 places the launcher at `/usr/local/libexec/yggdrasil-bws-deploy` and an owner-only (`root:root`, `0600`)
 `/etc/yggdrasil/bws-deploy/<channel>.json` containing the root-owned, non-writable checkout `root`,
-actual existing named-volume `data_directory`, non-root service `uid`/`gid`, `organization_id`, and
-channel-project `project_id`. The service consumes only the project reader credential at the BWS-03
+actual existing named-volume `data_directory`, non-root service `uid`/`gid`, `organization_id`,
+channel-project `project_id`, and an absolute `runtime_env_file` path to that channel's generated
+runtime environment. The service validates this path as a readable regular file and refuses a new
+operation before admission if the root config changed since service startup. Apply config changes
+only with no deployment in flight, then restart the service before starting another operation. The
+service uses the same selected file for database inputs, active-consumer selection, and the
+supervised channel deploy. The deploy shell receives it through `BWS_DEPLOY_RUNTIME_ENV_FILE`; local non-BWS
+deployments continue to resolve the path from the channel pin or its existing default. The runtime
+environment remains a Compose service `env_file`, never the CLI `--env-file`. The service consumes
+only the project reader credential at the BWS-03
 stable encrypted source `/var/lib/yggdrasil/bws-tokens/<channel>/current`. The config must name the
 actual channel volume; a missing volume, foreign/anonymous existing mount, or unproved data directory
 is refused. This task neither provisions volumes nor migrates retained plaintext/anonymous data.

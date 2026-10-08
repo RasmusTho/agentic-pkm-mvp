@@ -1191,7 +1191,7 @@ def test_deploy_launcher_parses_and_forwards_token_push_worker_arguments(
     monkeypatch.setattr(
         postgres_deploy_linux.LinuxConfig,
         "load",
-        classmethod(lambda _cls, _channel: SimpleNamespace(root=app_root)),
+        classmethod(lambda _cls, _channel, **_kwargs: SimpleNamespace(root=app_root)),
     )
     monkeypatch.setattr(sys, "stdin", StringIO(_CANARY))
 

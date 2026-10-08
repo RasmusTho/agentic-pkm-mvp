@@ -16,7 +16,7 @@ from tests.deploy.test_deploy_channel import (
     _configure_prod_retry_preflight,
     _configure_bws_retry_driver,
     _deploy_events,
-    _deploy_harness,
+    _deploy_harness as _base_deploy_harness,
     _run_deploy,
 )
 
@@ -24,6 +24,14 @@ from tests.deploy.test_deploy_channel import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts/deploy_channel.sh"
 MAKEFILE = REPO_ROOT / "Makefile"
+
+
+def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
+    root, env, sha = _base_deploy_harness(tmp_path)
+    # BWS deployment callers supply the runtime env path from private host
+    # config. Keep the shell harness explicit so it tests the same boundary.
+    env["BWS_DEPLOY_RUNTIME_ENV_FILE"] = str(root / "tmp/runtime.env")
+    return root, env, sha
 
 
 class _ComposeLoader(yaml.SafeLoader):
@@ -2597,6 +2605,7 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
         'start_database_only', 'authenticate', 'stop_database', 'activate',
     ):
         setattr(effects, method, lambda *args, _event=method: unexpected_activation(_event, *args))
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
     monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
     supervisor = linux.DeploymentSupervisor(config)
     operation_id = str(uuid4())
@@ -2721,12 +2730,177 @@ def test_vm_and_deploy_shell_resolve_quoted_runtime_env_path_consistently(tmp_pa
             'test', str(helper), str(root), str(pin),
         ],
         cwd=REPO_ROOT,
+        env={**os.environ, 'HOST_SECRET_PROVIDER': '', 'BWS_DEPLOY_RUNTIME_ENV_FILE': ''},
         check=False,
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == str(runtime)
+
+
+def test_bws_runtime_env_config_path_is_used_consistently(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+
+    for key in ('DATABASE_URL', 'DB_DSN', 'POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE'):
+        monkeypatch.delenv(key, raising=False)
+    root = tmp_path / 'controller'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    pin.write_text('WATCHER_RUNTIME_ENV_FILE=./wrong-runtime.env\n', encoding='utf-8')
+    runtime = tmp_path / 'channel-runtime' / 'runtime.env'
+    runtime.parent.mkdir()
+    runtime.write_text(
+        'DATABASE_URL=postgresql://app@db:5432/app_test\n'
+        'HEIMDAL_CAPTURE_WATCH_DIR=/capture\n',
+        encoding='utf-8',
+    )
+    cfg = linux.LinuxConfig('test', root, tmp_path / 'data', 1000, 1000, '', '', runtime)
+
+    assert linux.database_input_files(cfg) == [pin, runtime]
+    assert linux._capture_watch_configured(cfg) is True
+    selected_environment = linux.LinuxEffects(cfg).environment()
+    assert selected_environment['BWS_DEPLOY_RUNTIME_ENV_FILE'] == str(runtime)
+    assert selected_environment['WATCHER_RUNTIME_ENV_FILE'] == str(runtime)
+
+    helper = REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'
+    result = subprocess.run(
+        [
+            'bash', '-c',
+            'source "$1"; _deploy_channel_resolve_runtime_env_file "$2" test "$3"; '
+            'printf "%s\\n" "$DEPLOY_CHANNEL_RUNTIME_ENV_FILE"',
+            'test', str(helper), str(root), str(pin),
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            'HOST_SECRET_PROVIDER': 'bws',
+            'BWS_DEPLOY_RUNTIME_ENV_FILE': str(runtime),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(runtime)
+
+
+@pytest.mark.parametrize(
+    'invalid_path_kind',
+    ['missing_config_key', 'missing', 'malformed', 'relative', 'unreadable', 'directory', 'symlink'],
+)
+def test_bws_runtime_env_config_preflight_fails_before_mutation(tmp_path, monkeypatch, invalid_path_kind):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root = tmp_path / 'controller'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    original_pin = b'APP_IMAGE_TAG=' + b'a' * 40 + b'\n'
+    pin.write_bytes(original_pin)
+    runtime = tmp_path / 'runtime.env'
+    runtime_value: object = str(runtime)
+    if invalid_path_kind in {'unreadable', 'symlink'}:
+        runtime.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+    elif invalid_path_kind == 'directory':
+        runtime.mkdir()
+    elif invalid_path_kind == 'relative':
+        runtime_value = 'relative/runtime.env'
+    elif invalid_path_kind == 'malformed':
+        runtime_value = 17
+    elif invalid_path_kind == 'missing':
+        runtime_value = str(tmp_path / 'missing.env')
+    if invalid_path_kind == 'symlink':
+        link = tmp_path / 'runtime-link.env'
+        link.symlink_to(runtime)
+        runtime_value = str(link)
+
+    config = {
+        'root': str(root),
+        'data_directory': str(tmp_path / 'data'),
+        'uid': 1000,
+        'gid': 1000,
+        'organization_id': '00000000-0000-4000-8000-000000000001',
+        'project_id': '00000000-0000-4000-8000-000000000002',
+    }
+    if invalid_path_kind != 'missing_config_key':
+        config['runtime_env_file'] = runtime_value
+    monkeypatch.setattr(linux, '_private_json', lambda _path: config)
+    mutations: list[object] = []
+    monkeypatch.setattr(linux, '_command', lambda *args, **kwargs: mutations.append((args, kwargs)) or '')
+    if invalid_path_kind == 'unreadable':
+        original_open = os.open
+
+        def deny_runtime_file(path, flags, *args, **kwargs):
+            if str(path) == str(runtime):
+                raise PermissionError('unreadable test runtime env')
+            return original_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(linux.os, 'open', deny_runtime_file)
+
+    with pytest.raises(PostgresDeployError):
+        linux.LinuxConfig.load('test')
+    assert mutations == []
+    assert pin.read_bytes() == original_pin
+
+
+@pytest.mark.parametrize('runtime_path_state', ['absent', 'malformed', 'missing_file', 'unreadable_file'])
+def test_bws_token_push_does_not_require_runtime_env_config(tmp_path, monkeypatch, runtime_path_state):
+    from app.ops import bws_token_push
+    from app.ops import postgres_deploy_linux as linux
+
+    config = {
+        'root': str(tmp_path / 'checkout'),
+        'data_directory': str(tmp_path / 'data'),
+        'uid': 1000,
+        'gid': 1000,
+        'organization_id': '00000000-0000-4000-8000-000000000001',
+        'project_id': '00000000-0000-4000-8000-000000000002',
+    }
+    if runtime_path_state == 'malformed':
+        config['runtime_env_file'] = 17
+    elif runtime_path_state in {'missing_file', 'unreadable_file'}:
+        runtime = tmp_path / 'runtime.env'
+        if runtime_path_state == 'unreadable_file':
+            runtime.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+            monkeypatch.setattr(
+                linux,
+                '_runtime_env_file_path',
+                lambda _path: pytest.fail('token-push must not inspect the runtime env file'),
+            )
+        config['runtime_env_file'] = str(runtime)
+    monkeypatch.setattr(linux, '_private_json', lambda _path: config)
+    calls = []
+
+    def remote_main(args, *, app_root):
+        calls.append((args, app_root))
+        return 0
+
+    monkeypatch.setattr(bws_token_push, 'remote_main', remote_main)
+
+    assert linux.main(['token-push-inspect', 'test']) == 0
+    assert calls == [(['token-push-inspect', 'test'], tmp_path / 'checkout')]
+
+
+def test_bws_worker_guard_rejects_runtime_env_path_override_before_provider_access(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    configured = tmp_path / 'configured-runtime.env'
+    configured.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+    ambient = tmp_path / 'ambient-runtime.env'
+    ambient.write_text('LLM_PROVIDER=other\n', encoding='utf-8')
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: SimpleNamespace(runtime_env_file=configured))
+    monkeypatch.setattr(os, 'environ', {'BWS_DEPLOY_RUNTIME_ENV_FILE': str(ambient)})
+    provider_reads: list[str] = []
+    monkeypatch.setattr(linux.PasswordSource, 'verify', lambda _self: provider_reads.append('read'))
+
+    with pytest.raises(PostgresDeployError):
+        linux.inherited_worker_guard('test')
+    assert provider_reads == []
 
 
 def test_empty_vm_and_deploy_shell_runtime_selector_use_channel_default(tmp_path):
@@ -2807,6 +2981,7 @@ def test_vm_selector_failure_records_abort_and_releases_channel_lock(tmp_path, m
 
     effects.select_active_plan = reject_selection
     effects.quiescent = lambda: pytest.fail('read-only selection refusal needs no Compose probe')
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
     monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
     supervisor = linux.DeploymentSupervisor(config)
 
@@ -2819,6 +2994,44 @@ def test_vm_selector_failure_records_abort_and_releases_channel_lock(tmp_path, m
     receipt = journal.read()
     assert receipt is not None and receipt.stage == 'aborted'
     assert not (root / 'config/deploy/test.env.lock').exists()
+
+
+def test_supervisor_rejects_changed_root_config_before_admission(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+    from uuid import uuid4
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    startup_config = linux.LinuxConfig(
+        'test', tmp_path / 'checkout', tmp_path / 'data', 1000, 1000,
+        '00000000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000002',
+        tmp_path / 'runtime-a.env',
+    )
+    current_config = replace(startup_config, runtime_env_file=tmp_path / 'runtime-b.env')
+    monkeypatch.setattr(linux.LinuxConfig, 'journal', property(lambda _self: journal))
+    monkeypatch.setattr(
+        linux.LinuxConfig, 'load',
+        classmethod(lambda _cls, _channel: current_config),
+    )
+    created_effects = []
+    monkeypatch.setattr(
+        linux, 'LinuxEffects',
+        lambda _config: created_effects.append('created') or pytest.fail('stale config reached effects'),
+    )
+    supervisor = linux.DeploymentSupervisor(startup_config)
+    plan = DeployPlan('test', 'a' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'))
+
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({
+            'action': 'prepare', 'operation_id': str(uuid4()),
+            'plan': plan.__dict__, 'bootstrap': False,
+        })
+
+    assert supervisor.operation is None
+    assert created_effects == []
+    assert journal.read() is None
 
 
 def test_deploy_lost_ack_reconciles_matching_remote_terminal_receipt(tmp_path):
@@ -2924,6 +3137,7 @@ def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(tmp_pat
         assert release.wait(5)
 
     effects.channel_lock, effects.activate = channel_lock, activate
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: effects.config)
     monkeypatch.setattr(linux, 'LinuxEffects', lambda cfg: effects)
     supervisor = linux.DeploymentSupervisor(effects.config)
     request = {'action': 'prepare', 'operation_id': identifier, 'plan': asdict(plan), 'bootstrap': False}
@@ -3326,7 +3540,10 @@ def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, 
     lock.mkdir()
     password = tmp_path / 'password'
     password.write_text('fake-target-binding-password')
+    runtime_env_file = tmp_path / 'runtime.env'
+    runtime_env_file.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
     cfg = SimpleNamespace(root=tmp_path, channel='test', password_file=password,
+                          runtime_env_file=runtime_env_file,
                           reader=lambda: object(), journal=SimpleNamespace(read=lambda:
                           SimpleNamespace(stage='activating', operation_id='operation')))
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda channel: cfg)
@@ -3338,6 +3555,7 @@ def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, 
     with (lock / 'bws-owner').open('w+') as owner:
         monkeypatch.setattr(os, 'environ', {'DATABASE_URL': 'postgresql://app@' + host + ':5432/app_test',
             'BWS_DEPLOY_LOCK_FD': str(owner.fileno()), 'BWS_DEPLOY_OPERATION_ID': 'operation',
+            'BWS_DEPLOY_RUNTIME_ENV_FILE': str(runtime_env_file),
             'BWS_DATABASE_TARGET': target, 'COMPOSE_PROFILES': profiles,
             'BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED': '0',
             'BWS_EXPECTED_RAW_MIGRATION_PENDING': '0',
