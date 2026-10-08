@@ -72,9 +72,10 @@ those subsequent callers and their operation-specific terminal verifiers.
   --channel dev --consumer <declared-consumer>` reads non-secret `BWS_READER_PROJECT`,
   `BWS_PROJECT_ID`, and `BWS_ORGANIZATION_ID` settings. The project name must be `non-prod` or
   `prod` as fixed by the requested channel. The pinned Bitwarden Python SDK authenticates in
-  memory with no state file. Its organization inventory must contain exactly the `non-prod` and
-  `prod` projects, both in the configured organization, and the configured project ID must match
-  the requested channel's project name. It lists value-free identifiers, requires the selected
+  memory with no state file. Its organization inventory may contain only the configured channel
+  project or both canonical projects; every listed project must belong to the configured
+  organization, and the configured project ID must match the requested channel's project name. It
+  lists value-free identifiers, requires the selected
   identity to belong only to that project, and fetches only that item; access to the peer project
   does not widen the runtime lookup. PostgreSQL password validation accepts the existing nonempty
   one-line printable UTF-8 value, including ordinary spaces; it imposes no API-key length limits.
