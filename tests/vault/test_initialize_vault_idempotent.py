@@ -6,7 +6,14 @@ from pathlib import Path
 
 from app.vault.manager import VaultManager
 
-SHARED_FILES = ("vault.md", "paths.md", "workflow.md", "design-handoff.md", "companion-ui.md")
+SHARED_FILES = (
+    "vault.md",
+    "paths.md",
+    "workflow.md",
+    "design-handoff.md",
+    "companion-ui.md",
+    "llm_routing.md",
+)
 
 
 def test_init_creates_settings_and_selects(tmp_path: Path) -> None:
@@ -30,6 +37,17 @@ def test_init_then_reinit_no_overwrite(tmp_path: Path) -> None:
     vault_md = vault / vault_md_rel
     tampered = vault_md.read_text(encoding="utf-8") + "\n<!-- operator note -->\n"
     vault_md.write_text(tampered, encoding="utf-8")
+    routing_file = vault / "settings" / "llm_routing.md"
+    custom_routing = (
+        "---\nscope: vault-shared\n---\n"
+        "# Owner routing policy\n\n"
+        "```yaml settings\n"
+        "default_chat:\n"
+        "  primary:\n"
+        "    model_id: openai.chat.gpt_5_6_sol\n"
+        "```\n"
+    )
+    routing_file.write_text(custom_routing, encoding="utf-8")
 
     second = VaultManager().initialize_vault(
         vault, vault_name="Different Name", machine_role="primary", remember=False
@@ -38,3 +56,4 @@ def test_init_then_reinit_no_overwrite(tmp_path: Path) -> None:
     assert second.created_files == ()
     assert second.context.status == "selected"
     assert "<!-- operator note -->" in vault_md.read_text(encoding="utf-8")
+    assert routing_file.read_text(encoding="utf-8") == custom_routing

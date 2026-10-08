@@ -106,6 +106,14 @@ select a different compatible registry-backed model through its local profile. O
 required local service or health dependency when it is unselected; provider-neutral health reports
 the selected logical `llm_access` capabilities.
 
+Vault initialization seeds these shared Luna and Nomic defaults in `settings/llm_routing.md` only
+when neither that canonical file nor a supported legacy `@Settings/llm_routing.md` source exists.
+Reinitializing an existing vault preserves its owner-authored routing policy. Configured default
+chat/reasoning targets are routing policy and take precedence over the channel's `LLM_PROVIDER`
+default when `LLM_PROVIDER_ENFORCE=0`; the channel provider remains the fallback when no target is
+configured. No Ollama chat fallback is configured for Luna chat and planning; existing failure
+handling applies when the Mac route is unavailable.
+
 Product evaluation uses the same Mac portal and host-owned provider credentials/endpoints; local
 `EVAL_LLM_API_KEY`, `EVAL_LLM_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_BASE_URL` do not override
 that authority. Measured classification evaluation additionally pins one registry model and the
@@ -138,7 +146,7 @@ Current state:
 - Chat, reasoning, eval, and embedding routes can each carry separate preferred model choices. A preflight-approved text fallback, if policy allows one, occurs before inference; a failure after inference starts is terminal and cannot cause another provider call.
 - Product embeddings preserve the dimension and identity/reconcile rules in `docs/EMBEDDINGS.md`, but the Mac portal owns provider egress and credentials. The Product caller does not inspect a local Gemini key or invoke a provider SDK. Once `/v1/product/embed` has entered the HTTP transport, the outcome is terminal: no queue retry and no client-side provider fallback. Any future Product fallback must be selected and capability-preflighted by the Mac before its single inference dispatch; its returned provider/model/transport/snapshot provenance remains authoritative. A mixed-identity write, if the host later supports that posture, still requires the existing `index doctor` / `index reconcile` discipline.
 - Endpoint repair is operational and separate from provider substitution.
-- The router never emits a route whose `model` belongs to a different provider than the one that will execute the call. `LLM_PROVIDER` binds the executing provider on the enforced path **and** on the no-explicit-policy default path: the env provider is bound only when `LLM_PROVIDER_ENFORCE=1` (enforce) or when the task has no explicit policy (`router.py`: `if enforce or not has_explicit_task_policy`). For a task that *does* carry an explicit policy (e.g. `tasks.qa` with a cloud primary) and `LLM_PROVIDER` set **without** enforce, the router falls through to the policy primary — so `LLM_PROVIDER` does not necessarily run that call. To force an explicit-policy task onto the env provider, set `LLM_PROVIDER_ENFORCE=1`; then the resolved route uses a candidate (primary or fallback) that provider actually serves — e.g. an `ollama`-enforced chat task with a cloud-primary policy resolves to the local `ollama` fallback model, not the cloud model. When `LLM_PROVIDER_ENFORCE=1` and no candidate is served by the enforced provider, the router fails loud (`LLMRouteError`) rather than guessing a cross-provider route. The model swap is surfaced via `LLMRoute.reason` (`enforced-provider:<provider>`).
+- The router never emits a route whose `model` belongs to a different provider than the one that will execute the call. `LLM_PROVIDER` binds the executing provider on the enforced path and on the no-policy default path. A configured task policy, profile target, or default chat/reasoning target takes precedence when enforcement is disabled; set `LLM_PROVIDER_ENFORCE=1` to bind every chat task to the environment provider. The resolved route must then use a candidate (primary or fallback) that provider actually serves — e.g. an `ollama`-enforced chat task with a cloud-primary policy resolves to the local `ollama` fallback model, not the cloud model. When `LLM_PROVIDER_ENFORCE=1` and no candidate is served by the enforced provider, the router fails loud (`LLMRouteError`) rather than guessing a cross-provider route. The model swap is surfaced via `LLMRoute.reason` (`enforced-provider:<provider>`).
 
 Tests: `tests/components/llm/test_router.py::test_router_respects_env_defaults`, `tests/components/llm/test_router_enforced_provider.py`
 
