@@ -66,6 +66,7 @@ commit messages from adding undeclared closing authority.
 
 Non-`main`, unbounded/merge history, conflicting or terminal PR history, Direct Repair, declared
 high-risk, and ambiguous readback cases route to `.codex/skills/publish-pr/FULL_PATH.md :: Procedure`.
+That file is the canonical full-path publication owner.
 Neither publication route owns merge, Issue closure, release, or deployment.
 
 ## PR Body Preparation

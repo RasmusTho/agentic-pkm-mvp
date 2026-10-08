@@ -665,10 +665,10 @@ def test_publish_pr_full_path_owner_is_exact_and_resolvable() -> None:
         full_path.index(heading) for heading in headings
     )
     for trigger in (
-        "Existing PR or review repair",
-        "Pre-existing branch commit, non-`main` base",
-        "Multi-Issue PR",
-        "Issue-free docs/governance or Direct Repair",
+        "Existing PR or review repair outside the exact native binding",
+        "Unbounded/merge history, non-`main` base",
+        "Issue batches outside the explicit native contract",
+        "Direct Repair or issue-free work outside docs/governance",
         "Tier 3 or auth/security/data/migration/concurrency/external-API/",
         "Ambiguous transport/readback",
     ):
