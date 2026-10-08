@@ -1,6 +1,7 @@
 """Actual canvas -> Product client -> authenticated MARR -> pinned SDK, fake provider only."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -95,12 +96,25 @@ def judgment_path(monkeypatch, tmp_path):
                 raise AssertionError("unexpected synthetic BWS identity")
             return "synthetic-test-api-key"
 
+    class SyntheticCheckOperation:
+        operation_id = "synthetic-intent-check"
+
+        def finish(self, _evidence):
+            pass
+
+    class SyntheticSecretController:
+        @contextmanager
+        def admit(self, operation, channel):
+            assert (operation, channel) == ("check", "dev")
+            yield SyntheticCheckOperation()
+
     profile = tmp_path / "profile.json"
     profile.write_bytes(Path("config/model_access/product_typesafe_profile.json").read_bytes())
     executor = ProductTypeSafeExecutor(
         mode="accepted_dev", runtime_channel="dev", profile_path=profile,
         adapter=TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(provider)),
         keychain_lookup=lookup, bws_reader=SyntheticBwsReader(),
+        secret_controller=SyntheticSecretController(),
     )
     factory = ModelAccessAdapterFactory.from_declared_sources(
         adapters_path=Path("docs/settings/models/adapters.yaml"),
@@ -206,6 +220,30 @@ def test_intent_fixture_uses_synthetic_bws_reader(judgment_path, canvas_path):
 
     assert response.status_code == 200
     assert response.json()["status"] == "exploratory_no_edit"
+    assert judgment_path.bws_lookups == [("non-prod", "dev/typesafe.api-key")]
+    assert judgment_path.lookups == []
+
+
+def test_intent_fixture_does_not_access_host_secret_controller(
+    monkeypatch, request,
+):
+    controller_attempts = []
+
+    def forbidden_controller(*args, **kwargs):
+        controller_attempts.append(True)
+        raise AssertionError("unexpected host secret controller construction")
+
+    monkeypatch.setattr(
+        "app.ops.host_secret_bootstrap.HostSecretController", forbidden_controller
+    )
+    judgment_path = request.getfixturevalue("judgment_path")
+    canvas_path = request.getfixturevalue("canvas_path")
+    response = canvas_path.client.post(canvas_path.url, json={"intent": "Compare two plans."})
+
+    assert controller_attempts == []
+    assert response.status_code == 200
+    assert response.json()["status"] == "exploratory_no_edit"
+    assert len(judgment_path.sent) == len(judgment_path.calls) == 1
     assert judgment_path.bws_lookups == [("non-prod", "dev/typesafe.api-key")]
     assert judgment_path.lookups == []
 
