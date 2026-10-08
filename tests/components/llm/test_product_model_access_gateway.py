@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 import app.components.retrieval as retrieval
 import app.components.llm.fabric as fabric
 import app.model_access.codex_remote_transport as remote_transport_module
+import app.stores as stores
 from app.components.embeddings import EmbeddingIdentity
 from app.components.llm.router import LLMRouteError, LLMRouter, LLMTaskIntent
 from app.index.embedding_identity import IndexEmbeddingIdentityMismatch
@@ -562,7 +563,7 @@ def test_query_identity_mismatch_fails_before_embedding_dispatch(monkeypatch) ->
             return stored
 
     monkeypatch.setattr(retrieval, "_embedding_client_for_profile", lambda _profile: _Client())
-    monkeypatch.setattr(retrieval, "get_vector_index", lambda: _Index())
+    monkeypatch.setattr(stores, "get_vector_index", lambda: _Index())
 
     with pytest.raises(IndexEmbeddingIdentityMismatch, match="index rebuild"):
         retrieval.embed_query("same dimensions, different embedding space", profile="work-satellite")

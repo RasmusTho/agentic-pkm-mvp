@@ -14,7 +14,7 @@ try:
 except ImportError:
     process = None
 
-from app.components.embeddings import get_embedding_identity
+from app.components.embeddings import EmbeddingIdentity, get_embedding_identity
 from app.components.retrieval import embed_docs, embed_query
 from app.retrieval.hook_adapter import maybe_rerank
 from app.retrieval.tuning import get_retrieval_tuning
@@ -511,6 +511,14 @@ def embed_text(text: str, language: Optional[str] = None) -> list[float]:
     return vector
 
 
+def ensure_query_embedding_identity(identity: EmbeddingIdentity) -> None:
+    """Check query-embedding compatibility at the retrieval/store boundary."""
+    from app.index.embedding_identity import ensure_index_primary_identity
+    from app.stores import get_vector_index
+
+    ensure_index_primary_identity(get_vector_index(), identity)
+
+
 def embed_batches(texts: Iterable[str], batch_size: int = 32) -> Iterator[list[list[float]]]:
     """Backwards-compatible batch embedding helper for tests that patch this symbol."""
     del batch_size
@@ -887,4 +895,5 @@ __all__ = [
     "Document",
     "rebuild_from_durable_index",
     "reset_durable_rebuild_state",
+    "ensure_query_embedding_identity",
 ]
