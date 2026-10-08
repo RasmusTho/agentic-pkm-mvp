@@ -554,6 +554,77 @@ def test_populated_mvr05_registry_converges_matching_legacy_ledger_before_floor(
     assert release["released"] is True
 
 
+def test_mount_blind_v1_complete_converged_path_chain_migrates(tmp_path) -> None:
+    command, registry_path, ledger, _legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path)
+    )
+    _set_v1_path_ancestor_fingerprints(
+        ledger,
+        "binding-existing",
+        tmp_path / "existing-test-vault",
+    )
+
+    assert runtime_module.main(command) == 0
+
+    migrated = ledger.require_existing()
+    assert migrated.schema == ownership_ledger_module.LEDGER_SCHEMA
+    assert migrated.legacy_bootstrap_complete
+    assert set(migrated.leases) == {"binding-existing", "binding-foreign"}
+    registry = VaultRegistryStore(registry_path).load()
+    assert registry.authority == "dormant"
+    assert registry.revision == 2
+    assert registry.extensions["runtimeFloors"]["minimumRuntimeSchema"] == "mvr-05"
+    assert set(registry.registrations) == {"binding-existing"}
+
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
+@pytest.mark.parametrize("chain_shape", ["partial", "altered"])
+def test_mount_blind_v1_partial_or_mismatched_path_chain_fails_closed(
+    tmp_path,
+    chain_shape: str,
+) -> None:
+    command, registry_path, ledger, _legacy_path, controller_start_token = (
+        _populated_legacy_floor_case(tmp_path)
+    )
+    _set_v1_path_ancestor_fingerprints(
+        ledger,
+        "binding-existing",
+        tmp_path / "existing-test-vault",
+        omit_one=chain_shape == "partial",
+        alter_one=chain_shape == "altered",
+    )
+    ledger_before = ledger.path.read_bytes()
+    key_before = ledger.key_path.read_bytes()
+    registry_before = registry_path.read_bytes()
+
+    with pytest.raises(
+        runtime_module.InstanceStatePreflightError,
+        match="owner fields are not registry-authenticated",
+    ):
+        runtime_module.main(command)
+
+    assert ledger.path.read_bytes() == ledger_before
+    assert ledger.key_path.read_bytes() == key_before
+    assert registry_path.read_bytes() == registry_before
+    assert "minimumRuntimeSchema" not in VaultRegistryStore(registry_path).load().extensions.get(
+        "runtimeFloors", {}
+    )
+    release = runtime_module._release_instance_state_deployment_lease(
+        channel="test",
+        host_global_root=ledger.root,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    assert release["released"] is True
+
+
 def test_populated_mvr05_registry_converges_authenticated_legacy_tombstone(
     tmp_path,
 ) -> None:
@@ -2019,6 +2090,34 @@ def _rewrite_ledger_as_authenticated_v1(
     return before
 
 
+def _set_v1_path_ancestor_fingerprints(
+    ledger: OwnershipLedger,
+    binding_id: str,
+    root: Path,
+    *,
+    omit_one: bool = False,
+    alter_one: bool = False,
+) -> None:
+    key_payload = json.loads(ledger.key_path.read_text(encoding="utf-8"))
+    secret = base64.b64decode(key_payload["secret"], validate=True)
+    path_ancestors = sorted(
+        f"path:{ancestor}" for ancestor in root.resolve(strict=False).parents
+    )
+    fingerprints = [
+        hmac.new(secret, identity.encode("utf-8"), hashlib.sha256).hexdigest()
+        for identity in path_ancestors
+    ]
+    if omit_one:
+        fingerprints = fingerprints[:-1]
+    if alter_one:
+        fingerprints[0] = "f" * 64
+
+    payload = json.loads(ledger.path.read_text(encoding="utf-8"))
+    payload["leases"][binding_id]["ancestor_fingerprints"] = fingerprints
+    ledger.path.write_text(json.dumps(payload), encoding="utf-8")
+    ledger.path.chmod(0o600)
+
+
 def test_existing_ancestor_fingerprints_converge_before_new_representation_is_required(
     tmp_path,
 ) -> None:
@@ -2105,7 +2204,7 @@ def test_mount_blind_legacy_ancestor_tampering_fails_closed_before_migration(
     assert ledger.path.read_bytes() == before
 
 
-def test_mount_blind_v1_path_only_ancestor_evidence_fails_closed(
+def test_mount_blind_v1_partial_path_ancestor_evidence_fails_closed(
     tmp_path,
 ) -> None:
     ownership_root = tmp_path / "host-global"
@@ -2131,7 +2230,7 @@ def test_mount_blind_v1_path_only_ancestor_evidence_fails_closed(
             hashlib.sha256,
         ).hexdigest()
         for ancestor in root.resolve(strict=False).parents
-    ]
+    ][:-1]
     ledger.path.write_text(json.dumps(payload), encoding="utf-8")
     ledger.path.chmod(0o600)
     before = ledger.path.read_bytes()
