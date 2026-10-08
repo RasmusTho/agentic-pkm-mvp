@@ -2433,6 +2433,127 @@ def test_postgres_password_preflight_precedes_remote_and_vm_mutation(tmp_path):
     assert effects.events == [] and journal.read() is None
 
 
+def test_existing_secret_deploy_skips_bootstrap_qualification(tmp_path):
+    from app.ops.postgres_deploy import deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path)
+    provider.seed('test/postgres.password', 'fake-role-password', ('non-prod',))
+    receipt = deploy_from_host(
+        admin,
+        remote,
+        plan,
+        qualified=lambda: pytest.fail('existing-value deployment must not require BWS-write qualification'),
+        allow_bootstrap=False,
+    )
+
+    assert receipt.stage == 'committed'
+    assert remote.activation_count == 1
+    assert not any(call[0] == 'put' for call in provider.calls)
+
+
+def test_existing_secret_deploy_refuses_missing_password_before_remote_mutation(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(
+            admin, remote, plan, qualified=lambda: pytest.fail('bootstrap is forbidden'),
+            allow_bootstrap=False,
+        )
+
+    assert remote.events == []
+    assert not any(call[0] == 'put' for call in provider.calls)
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor) is None
+
+
+def test_deploy_controller_binds_bootstrap_mode_before_rpc(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path)
+    provider.seed('test/postgres.password', 'fake-role-password', ('non-prod',))
+
+    def lose_prepare_ack(operation_id, selected, *, bootstrap):
+        remote.events.append(('prepare', operation_id, bootstrap))
+        raise RuntimeError('simulated lost prepare acknowledgment')
+
+    remote.prepare = lose_prepare_ack
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(
+            admin, remote, plan, qualified=lambda: None, allow_bootstrap=False,
+        )
+    with admin.controller._locked_journal() as descriptor:
+        pending = admin.controller._pending(descriptor)
+    assert pending is not None and pending['allow_bootstrap'] is False
+    prior_provider_calls = len(provider.calls)
+    prior_remote_events = list(remote.events)
+
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(
+            admin, remote, plan, qualified=lambda: pytest.fail('changed mode reached qualification'),
+            allow_bootstrap=True,
+        )
+
+    assert len(provider.calls) == prior_provider_calls
+    assert remote.events == prior_remote_events
+
+
+def test_legacy_pending_deploy_must_reconcile_before_bootstrap_mode_is_bound(tmp_path):
+    from app.ops.host_secret_controller import (
+        HostSecretAdmissionError,
+        HostSecretController,
+        TerminalEvidence,
+    )
+
+    controller = HostSecretController(tmp_path)
+    with controller.deploy_operation('test') as (operation, resumed):
+        assert not resumed
+        legacy_operation_id = operation.operation_id
+        operation.prepare_mutation()
+
+    with controller._locked_journal() as descriptor:
+        pending = controller._pending(descriptor)
+    assert pending is not None
+    assert pending['operation_id'] == legacy_operation_id
+    assert 'allow_bootstrap' not in pending
+
+    with pytest.raises(HostSecretAdmissionError):
+        with controller.deploy_operation('test', allow_bootstrap=False):
+            pytest.fail('a new mode must not adopt an unbound legacy operation')
+
+    with controller._locked_journal() as descriptor:
+        still_pending = controller._pending(descriptor)
+    assert still_pending is not None and still_pending['operation_id'] == legacy_operation_id
+
+    controller.reconcile(
+        lambda operation_id, kind, target: TerminalEvidence(
+            operation_id, kind, target, 'committed', 'remote-terminal'
+        )
+    )
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        assert operation.operation_id != legacy_operation_id
+        assert operation.allow_bootstrap is False
+
+
+def test_postgres_bootstrap_requires_qualification_before_remote_mutation(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+
+    def reject_qualification():
+        assert remote.events == []
+        raise PostgresDeployError()
+
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=reject_qualification, allow_bootstrap=True)
+
+    assert remote.events == []
+    assert not any(call[0] == 'put' for call in provider.calls)
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor) is None
+
+
 def test_vm_reader_recheck_is_project_scoped_and_precedes_compose(tmp_path):
     from app.ops.postgres_deploy import vm_selected_values
     _, _, plan, _ = _bws_host(tmp_path)
@@ -3094,6 +3215,15 @@ def test_postgres_bootstrap_retry_reuses_stored_secret_after_interruption(tmp_pa
     with pytest.raises(PostgresDeployError):
         deploy_from_host(admin, remote, plan, qualified=lambda: None)
     provider.put = original
+    prior_remote_events = list(remote.events)
+
+    def reject_recovery_without_qualification():
+        assert remote.events == prior_remote_events
+        raise PostgresDeployError()
+
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=reject_recovery_without_qualification)
+    assert remote.events == prior_remote_events
     assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
     assert sum(call[0] == 'put' for call in provider.calls) == 1
 
@@ -3178,17 +3308,20 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
     monkeypatch.setattr(host, 'SshDeployRemote', lambda _host: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
 
-    def deploy(_admin, _remote, plan, *, qualified):
-        captured.append(plan)
-        qualified()
+    def deploy(_admin, _remote, plan, *, qualified, allow_bootstrap):
+        captured.append((plan, allow_bootstrap))
         return DeployReceipt(str(uuid4()), 'test', 'deploy', 'committed', 'committed')
 
     monkeypatch.setattr(host, 'deploy_from_host', deploy)
 
     assert host.main(['test', 'a' * 40]) == 0
-    assert captured[-1].ack_forward_only is False
+    assert captured[-1][0].ack_forward_only is False
+    assert captured[-1][1] is True
     assert host.main(['test', 'b' * 40, '--ack-forward-only']) == 0
-    assert captured[-1].ack_forward_only is True
+    assert captured[-1][0].ack_forward_only is True
+    assert captured[-1][1] is True
+    assert host.main(['test', 'c' * 40, '--existing-secrets-only']) == 0
+    assert captured[-1][1] is False
 
 
 def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_path, monkeypatch):
