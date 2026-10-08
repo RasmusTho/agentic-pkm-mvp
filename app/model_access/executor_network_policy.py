@@ -96,7 +96,7 @@ class _PathProfile(_StrictConfig):
     adapter: Literal["private_https_ingress", "tailscale_serve_https"]
     endpoint_ref: str
     authentication_profile_ref: str
-    caller_policy_ref: Literal["policy.product_channel_actions"]
+    caller_policy_ref: Literal["policy.vlan_mtls_authenticated_caller"]
 
     @model_validator(mode="after")
     def _valid_references(self) -> "_PathProfile":

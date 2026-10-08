@@ -1,8 +1,8 @@
 """Actual canvas -> Product client -> authenticated MARR -> pinned SDK, fake provider only."""
 from __future__ import annotations
 
-from contextlib import contextmanager
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -31,6 +31,19 @@ from app.panel.confirmation import (
 )
 from app.settings.models import InstanceSettings, LLMRoutingSettings, SettingsBundle
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+
+
+class _FakeCheckOperation:
+    operation_id = "fixture-component-judgment-check"
+
+    def finish(self, _evidence) -> None:
+        pass
+
+
+class _FakeSecretController:
+    @contextmanager
+    def admit(self, _operation: str, _channel: str):
+        yield _FakeCheckOperation()
 
 
 @pytest.fixture
@@ -96,25 +109,14 @@ def judgment_path(monkeypatch, tmp_path):
                 raise AssertionError("unexpected synthetic BWS identity")
             return "synthetic-test-api-key"
 
-    class SyntheticCheckOperation:
-        operation_id = "synthetic-intent-check"
-
-        def finish(self, _evidence):
-            pass
-
-    class SyntheticSecretController:
-        @contextmanager
-        def admit(self, operation, channel):
-            assert (operation, channel) == ("check", "dev")
-            yield SyntheticCheckOperation()
-
     profile = tmp_path / "profile.json"
     profile.write_bytes(Path("config/model_access/product_typesafe_profile.json").read_bytes())
     executor = ProductTypeSafeExecutor(
         mode="accepted_dev", runtime_channel="dev", profile_path=profile,
         adapter=TypeSafeAdapter(transport_factory=lambda: httpx2.MockTransport(provider)),
-        keychain_lookup=lookup, bws_reader=SyntheticBwsReader(),
-        secret_controller=SyntheticSecretController(),
+        keychain_lookup=lookup,
+        bws_reader=SyntheticBwsReader(),
+        secret_controller=_FakeSecretController(),
     )
     factory = ModelAccessAdapterFactory.from_declared_sources(
         adapters_path=Path("docs/settings/models/adapters.yaml"),
@@ -122,32 +124,52 @@ def judgment_path(monkeypatch, tmp_path):
     )
     server_app = create_codex_executor_app(
         codex_executor=object(), ollama_adapter=object(), adapter_factory=factory,
-        serve_capability_name="test/cap/judgment", product_judgment_executor=executor,
+        product_judgment_executor=executor,
     )
     policy = tmp_path / "network.yaml"
     policy.write_text(yaml.safe_dump({
         "version": 1,
         "endpoint_references": {"test_endpoint": {"endpoint_env": "TEST_PRODUCT_ENDPOINT"}},
-        "authentication_profiles": {"test_auth": {"mode": "tailscale_serve_app_capability"}},
-        "path_profiles": {"test_path": {"adapter": "tailscale_serve_https",
+        "authentication_profiles": {"test_auth": {
+            "mode": "mutual_tls",
+            "ca_bundle_env": "TEST_CA_BUNDLE",
+            "client_certificate_env": "TEST_CLIENT_CERT",
+            "client_key_env": "TEST_CLIENT_KEY",
+        }},
+        "path_profiles": {"test_path": {"adapter": "private_https_ingress",
             "endpoint_ref": "host_config.test_endpoint", "authentication_profile_ref": "host_config.test_auth",
-            "caller_policy_ref": "policy.product_channel_actions"}},
+            "caller_policy_ref": "policy.vlan_mtls_authenticated_caller"}},
         "executor_path_policies": {"profile.codex_remote_host": {"order": ["test_path"]}},
     }))
+    ca_bundle = tmp_path / "test-ca.pem"
+    client_certificate = tmp_path / "test-client.pem"
+    client_key = tmp_path / "test-client.key"
+    for fixture_file in (ca_bundle, client_certificate, client_key):
+        fixture_file.write_text("synthetic mTLS test material")
+    monkeypatch.setattr(
+        "app.model_access.codex_remote_transport._private_ingress_ssl_context",
+        lambda **_kwargs: object(),
+    )
     monkeypatch.setattr(classifier, "resolve_executor_paths", lambda profile: resolve_executor_paths(
-        profile, policy_path=policy, environment={"TEST_PRODUCT_ENDPOINT": "https://executor.test.ts.net"},
+        profile,
+        policy_path=policy,
+        environment={
+            "TEST_PRODUCT_ENDPOINT": "https://10.42.42.10:8443",
+            "TEST_CA_BUNDLE": str(ca_bundle),
+            "TEST_CLIENT_CERT": str(client_certificate),
+            "TEST_CLIENT_KEY": str(client_key),
+        },
     ))
     with TestClient(server_app, client=("127.0.0.1", 12345)) as server:
         def bridge(request):
             sent.append(request)
-            # Integration-equivalent trusted local ingress; production server
-            # authorization still evaluates the Product action below.
-            headers = {"Content-Type": "application/json", "Tailscale-App-Capabilities": json.dumps({
-                "test/cap/judgment": [{"channel": "product", "actions": ["judgment"]}],
-            })}
             if state["failure"] == "unauthorized":
-                headers["Tailscale-App-Capabilities"] = "{}"
-            response = server.post(request.url.path, content=request.content, headers=headers)
+                return httpx.Response(403, json={"error": "mTLS admission rejected"})
+            response = server.post(
+                request.url.path,
+                content=request.content,
+                headers={"Content-Type": "application/json"},
+            )
             return httpx.Response(response.status_code, content=response.content)
 
         monkeypatch.setattr(classifier, "CodexRemoteTransport", lambda **kwargs: CodexRemoteTransport(

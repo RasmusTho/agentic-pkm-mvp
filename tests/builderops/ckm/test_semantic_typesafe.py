@@ -26,7 +26,6 @@ from app.model_access.typesafe_adapter import TypeSafeAdapter
 from app.ops.host_secret_bootstrap import create_marr_typesafe_bws_reader
 
 
-CAPABILITY = "model-access.example/cap/complete"
 FAKE_KEY = "synthetic-server-only-key-5768"
 MARR_BWS_IDENTITY = ("non-prod", "dev/typesafe.api-key")
 ENV = {
@@ -50,8 +49,10 @@ class _FakeSecretController:
         yield _FakeCheckOperation()
 
 
-def _headers(channel="builder", action="ckm_judgment"):
-    return {"Tailscale-App-Capabilities": json.dumps({CAPABILITY: [{"channel": channel, "actions": [action]}]})}
+def _headers():
+    # The remote VLAN mTLS ingress is the caller boundary; the loopback executor
+    # does not require a second per-channel/action claim.
+    return {}
 
 
 def _artifact(store, *, index=0, excerpt="Synthetic evidence for retrieval"):
@@ -141,7 +142,7 @@ def _rig(monkeypatch, tmp_path, *, provider=None, mode="accepted_dev", key=FAKE_
     )
     root = Path(__file__).resolve().parents[3]
     app = create_codex_executor_app(
-        codex_executor=object(), ollama_adapter=object(), serve_capability_name=CAPABILITY,
+        codex_executor=object(), ollama_adapter=object(),
         adapter_factory=ModelAccessAdapterFactory.from_declared_sources(
             adapters_path=root / "docs/settings/models/adapters.yaml",
             provider_census_path=root / "docs/settings/models/providers.yaml",
