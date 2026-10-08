@@ -1333,6 +1333,24 @@ def test_embedding_router_identity_change_selects_complete_llm_coverage() -> Non
     assert "tests/index/test_identity_migration.py" in selection.targets
 
 
+@pytest.mark.parametrize(
+    ("source_path", "subsystem", "target"),
+    (
+        ("app/cli/embed_probe.py", "llm_eval", "tests/cli/test_embed_probe.py"),
+        ("app/components/retrieval.py", "memory_retrieval", "tests/retrieval"),
+    ),
+)
+def test_product_embedding_adapters_select_their_regression_coverage(
+    source_path: str, subsystem: str, target: str
+) -> None:
+    selection = select_tests([source_path])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == (subsystem,)
+    assert selection.unowned_paths == ()
+    assert target in selection.targets
+
+
 def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:
     selection = select_tests(
         [
