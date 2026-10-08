@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-07 (owner portal decision and #5819–#5821 target/implementation state reconciled; repository and GitHub evidence only, no host credentials, route settings, database, or deployment changed)
+Last reviewed: 2026-10-08 (owner portal decision and #5819–#5821 target/implementation state reconciled; Issue #5828/PR #5835 repository candidate reviewed and validated; no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -101,6 +101,14 @@ credential-restriction or shared-fencing gate, and live channel qualification re
 Neither the implementation nor its fake-adapter/static-render proof changes the live runtime
 posture. The detailed contract remains in `docs/CLOUD_SECRET_PROVISIONING/README.md` and
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Linux channel secret provisioning`.
+
+The Issue #5828 candidate in PR #5835 (`2f2660edcacc84e082c7ec7daf3c3ecd25c1d912`) adds
+consumer-specific deploy selection: a missing raw-store key may degrade API ingress visibly,
+capture-watch is selected only when configured, and raw migration only when the target migration is
+pending. Missing keys for active capture or migration still block; malformed present values fail
+closed. The current candidate passed 462 issue/deployment/docs tests and Ruff and received an
+independent review with no P0/P1/P2 findings. This is repository evidence only; no BWS value write,
+token rotation, live channel qualification, or runtime-state change is claimed.
 
 At the 2026-09-23 MARR-08 repository checkpoint, Issue #5635 had added a bounded Product client and
 one host-side completion operation that dispatches an exact Product-selected route to Codex CLI or
