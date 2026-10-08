@@ -47,10 +47,12 @@ APP_ROOT = REPO_ROOT / "app"
 # NEVER run against a real vault -- they are not part of this census.
 
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 176): (
+    ("app/services/indexer.py", 175): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
-        "would be a duplicate, not completeness (formal-model.md T-materialize)."
+        "would be a duplicate, not completeness (formal-model.md T-materialize). "
+        "Line drifted 176 -> 175 (site unchanged) when #5820 simplified llm_embed_text "
+        "above while routing Product embeddings through the Mac portal."
     ),
     ("app/promotion/consumer.py", 98): (
         "_apply_promotion_to_store: the caller (consume_promotion_intents) emits "
