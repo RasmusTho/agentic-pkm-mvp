@@ -42,8 +42,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         controller = HostSecretController()
+        # The controller can inspect DB credentials and the API's degrade-visibly
+        # binding. VM-only consumers are selected from VM runtime/migration state.
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),
-                          (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate'))
+                          (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
         admin = SecretAdmin(configured_admin(), controller=controller)
         receipt = deploy_from_host(admin, SshDeployRemote('ygg-' + args.channel), plan,
                                    qualified=lambda: require_qualification(controller))

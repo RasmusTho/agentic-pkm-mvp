@@ -87,6 +87,7 @@ def _render_channel_with_synthetic_runtime_env(
         "docker-compose.yaml",
         compose_overlay,
         "config/runtime.defaults.env",
+        "scripts/compose_env.py",
     ):
         source = REPO_ROOT / relative_path
         destination = synthetic_root / relative_path

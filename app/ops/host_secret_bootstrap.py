@@ -498,12 +498,14 @@ def _resolve_consumer_environment(
             try:
                 value = keychain_lookup(contract.keychain_service, account)
             except Exception as exc:
-                # An optional declaration tolerates *absence* only, and the
+                # An optional declaration for this consumer tolerates absence only, and the
                 # lookup cannot distinguish "no such item" from any other
                 # failure, so an unresolvable optional secret simply does not
                 # bind. Its consumer runs without it; a required one still
                 # fails the whole bootstrap (#4489).
-                if contract.is_optional(secret):
+                if contract.is_optional_for_consumer(
+                    channel=channel, consumer=consumer, secret=secret
+                ):
                     continue
                 raise _secret_failure(secret=secret, kind=kind) from exc
             # Validation is deliberately outside that tolerance: a value that
@@ -609,7 +611,9 @@ def _resolve_bws_consumer_values(channel: str, consumer: str, contract: HostSecr
         try:
             value = reader.lookup(project, identity)
         except BwsItemAbsent:
-            if secret != "postgres.password" and contract.is_optional(secret):
+            if secret != "postgres.password" and contract.is_optional_for_consumer(
+                channel=channel, consumer=consumer, secret=secret
+            ):
                 continue
             raise
         kind = "password" if secret == "postgres.password" else contract.kind_for(secret)

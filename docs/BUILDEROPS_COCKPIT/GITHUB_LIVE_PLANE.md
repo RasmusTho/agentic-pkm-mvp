@@ -85,11 +85,12 @@ committed things plus one host-supplied value:
 With the slug set and the token absent, the plane is *configured but failing* — an honest outage,
 not an opt-out. With the slug unset, nobody asked for it and nothing is claimed either way.
 
-The committed repository binding is not deployment or credential-presence evidence. For prod,
-`github.token` and the coupled `heimdal.raw-store-key` must both be present through the declared
-`heimdal-api-ingress` host-secret consumer before the governed layer can support the read. The
-value-free prerequisite command is documented in `docs/OPERATIONS.md`; it neither provisions nor
-prints either credential.
+The committed repository binding is not deployment or credential-presence evidence. On the BWS VM
+path, `github.token` can support this read even when `heimdal.raw-store-key` is absent; that absence
+only disables the API's media/screen ingress lanes. The Keychain-backed Compose helper retains its
+existing coupled-layer behavior and skips the API secret layer while the raw key is absent. The
+value-free prerequisite command in `docs/OPERATIONS.md` checks both bindings for the full API ingress
+setup; it neither provisions nor prints either credential.
 
 ## Why This Matters
 

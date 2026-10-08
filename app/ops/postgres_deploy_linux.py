@@ -68,9 +68,21 @@ def database_input_files(cfg: LinuxConfig) -> list[Path]:
     from scripts.compose_env import compose_env_value
     pin = cfg.root / 'config/deploy' / (cfg.channel + '.env')
     runtime = './tmp-test/runtime.env' if cfg.channel == 'test' else './tmp/runtime.env'
-    for line in pin.read_text().splitlines():
+    try:
+        lines = pin.read_text(encoding='utf-8').splitlines()
+    except FileNotFoundError:
+        lines = []
+    except (OSError, UnicodeError):
+        raise PostgresDeployError() from None
+    for line in lines:
         if line.startswith('WATCHER_RUNTIME_ENV_FILE='):
-            runtime = compose_env_value(line.split('=', 1)[1])
+            selected_runtime = compose_env_value(line.split('=', 1)[1])
+            if selected_runtime:
+                runtime = selected_runtime
+            # Match deploy_channel_compose.sh::_deploy_channel_env_value,
+            # which deliberately resolves the first declaration and falls
+            # back to the channel default when its value is empty.
+            break
     path = Path(runtime)
     return [pin, path if path.is_absolute() else cfg.root / path]
 
@@ -139,6 +151,30 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
     receipt = cfg.journal.read()
     if receipt is None or receipt.stage != 'activating' or receipt.operation_id != os.environ.get('BWS_DEPLOY_OPERATION_ID'):
         raise PostgresDeployError()
+    expected_capture = os.environ.get('BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED')
+    expected_migration = os.environ.get('BWS_EXPECTED_RAW_MIGRATION_PENDING')
+    target_revision = os.environ.get('BWS_DEPLOY_TARGET_REVISION', '')
+    if (expected_capture not in {'0', '1'} or expected_migration not in {'0', '1'}
+        or not re.fullmatch(r'[0-9a-f]{40}', target_revision)):
+        raise PostgresDeployError()
+    # The worker selected these consumers before any deployment mutation. Check
+    # capture config again for every Compose call. Before the shell runs its
+    # migration gate, independently derive HAR-02 from the current pin/marker;
+    # afterward, require the shell's gate result to match the immutable choice.
+    if _capture_watch_configured(cfg) != (expected_capture == '1'):
+        raise PostgresDeployError()
+    actual_capture = os.environ.get('DEPLOY_CAPTURE_WATCH_CONFIGURED')
+    if actual_capture is not None and actual_capture != expected_capture:
+        raise PostgresDeployError()
+    actual_migration = os.environ.get('DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING')
+    if actual_migration is None:
+        migration_pending = _raw_representation_migration_pending(cfg, target_revision)
+    elif actual_migration in {'0', '1'}:
+        migration_pending = actual_migration == '1'
+    else:
+        raise PostgresDeployError()
+    if migration_pending != (expected_migration == '1'):
+        raise PostgresDeployError()
     if compose_command in {'up', 'run', 'start', 'restart'}:
         # Automatic rollback may restore an older pin. It cannot recreate clients
         # from a legacy image that bypasses the file-aware resolver.
@@ -156,8 +192,12 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
     validate_database_inputs(os.environ, database_input_files(cfg))
     # Recheck the same selected scope before every Compose call, including
     # calls made by the preserved migration/pin/rollback machinery.
-    plan = DeployPlan(channel, '0' * 40, tuple(DATABASE_CONSUMERS.values()),
-                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate'))
+    consumers = [*DATABASE_CONSUMERS, 'heimdal-api-ingress']
+    if expected_capture == '1':
+        consumers.append('heimdal-capture-watch')
+    if expected_migration == '1':
+        consumers.append('heimdal-raw-migrate')
+    plan = DeployPlan(channel, target_revision, tuple(DATABASE_CONSUMERS.values()), tuple(consumers))
     values = vm_selected_values(plan, cfg.reader())
     if values['postgres-db']['postgres.password'].encode() != cfg.password_file.read_bytes():
         raise PostgresDeployError()
@@ -238,6 +278,121 @@ class LinuxConfig:
         }))
 
 
+_BASE_DEPLOY_CONSUMERS = frozenset((*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+
+
+def _git_bytes(root: Path, *args: str) -> bytes:
+    result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, check=False)
+    if result.returncode:
+        raise PostgresDeployError()
+    return result.stdout
+
+
+def _capture_watch_configured(config: LinuxConfig) -> bool:
+    """Mirror deploy_channel.sh's fail-closed runtime-file selection."""
+    from scripts.compose_env import compose_env_value
+
+    runtime_path = database_input_files(config)[1]
+    try:
+        runtime_path.lstat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        raise PostgresDeployError() from None
+    if not runtime_path.is_file() or not os.access(runtime_path, os.R_OK):
+        raise PostgresDeployError()
+    try:
+        lines = runtime_path.read_text(encoding='utf-8').splitlines()
+    except (OSError, UnicodeError):
+        raise PostgresDeployError() from None
+    values = [line[len('HEIMDAL_CAPTURE_WATCH_DIR='):]
+              for line in lines if line.startswith('HEIMDAL_CAPTURE_WATCH_DIR=')]
+    if len(values) > 1:
+        raise PostgresDeployError()
+    return bool(values and compose_env_value(values[0]))
+
+
+def _pin_value(config: LinuxConfig, key: str) -> str:
+    pin = config.root / 'config/deploy' / (config.channel + '.env')
+    try:
+        lines = pin.read_text(encoding='utf-8').splitlines()
+    except FileNotFoundError:
+        return ''
+    except (OSError, UnicodeError):
+        raise PostgresDeployError() from None
+    values = [line[len(key) + 1:] for line in lines if line.startswith(key + '=')]
+    if len(values) > 1:
+        raise PostgresDeployError()
+    return values[0] if values else ''
+
+
+def _migration_baseline(config: LinuxConfig, target_revision: str) -> str:
+    """Use the deploy script's pending marker or current pin as migration base."""
+    pending = config.root / 'config/deploy' / (config.channel + '.migration-pending.env')
+    try:
+        info = pending.lstat()
+        if not stat.S_ISREG(info.st_mode) or pending.is_symlink():
+            raise PostgresDeployError()
+    except FileNotFoundError:
+        current = _pin_value(config, 'APP_IMAGE_TAG')
+        return current
+    except OSError:
+        raise PostgresDeployError() from None
+    try:
+        lines = pending.read_text(encoding='utf-8').splitlines()
+    except (OSError, UnicodeError):
+        raise PostgresDeployError() from None
+    fields: dict[str, str] = {}
+    for line in lines:
+        if '=' not in line:
+            raise PostgresDeployError()
+        key, value = line.split('=', 1)
+        if key not in {'FROM_SHA', 'TARGET_SHA', 'ACK_FORWARD_ONLY'} or key in fields:
+            raise PostgresDeployError()
+        fields[key] = value
+    if set(fields) != {'FROM_SHA', 'TARGET_SHA', 'ACK_FORWARD_ONLY'}:
+        raise PostgresDeployError()
+    if fields['TARGET_SHA'] != target_revision or fields['ACK_FORWARD_ONLY'] not in {'0', '1'}:
+        raise PostgresDeployError()
+    if fields['FROM_SHA'] == '__NO_BASELINE__':
+        return ''
+    return fields['FROM_SHA']
+
+
+def _raw_representation_migration_pending(config: LinuxConfig, target_revision: str) -> bool:
+    """Select the same changed migration set and HAR-02 predicate as deploy_channel.sh."""
+    from app.release_channels.reversibility import (
+        HEIMDAL_RAW_REPRESENTATION_MIGRATION,
+        check_migration_snapshots,
+        heimdal_raw_representation_migration_pending,
+    )
+
+    baseline = _migration_baseline(config, target_revision)
+    has_baseline = bool(baseline) and subprocess.run(
+        ['git', '-C', str(config.root), 'rev-parse', '--verify', baseline + '^{commit}'],
+        capture_output=True, check=False,
+    ).returncode == 0
+    if has_baseline:
+        paths = _git_bytes(config.root, 'diff', '--diff-filter=AMCR', '--name-only',
+                           baseline + '..' + target_revision, '--', 'app/alembic/versions')
+    else:
+        paths = _git_bytes(config.root, 'ls-tree', '-r', '--name-only', target_revision,
+                           '--', 'app/alembic/versions')
+    snapshots = []
+    for raw_path in paths.decode('utf-8').splitlines():
+        if not raw_path.endswith('.py'):
+            continue
+        name = Path(raw_path).name
+        snapshots.append((name, _git_bytes(config.root, 'show', target_revision + ':' + raw_path)))
+    receipt = check_migration_snapshots(snapshots)
+    pending = heimdal_raw_representation_migration_pending(receipt)
+    if pending and HEIMDAL_RAW_REPRESENTATION_MIGRATION not in {
+        name for name, _content in snapshots
+    }:
+        raise PostgresDeployError()
+    return pending
+
+
 class PasswordSource:
     def __init__(self, config: LinuxConfig) -> None:
         self.config = config
@@ -307,6 +462,10 @@ class LinuxEffects:
         self.lock_fd: int | None = None
         self.operation_id: str | None = None
         self.database_fields: dict[str, str] | None = None
+        self.active_consumers: tuple[str, ...] | None = None
+        self.active_revision: str | None = None
+        self.capture_watch_configured: bool | None = None
+        self.raw_migration_pending: bool | None = None
 
     def environment(self) -> dict[str, str]:
         cfg = self.config
@@ -323,6 +482,16 @@ class LinuxEffects:
                    BWS_DATABASE_VOLUME={'dev': 'pkm-dev_pgdata-dev', 'test': 'pkm-test_pgdata', 'prod': 'pkm-prod_pgdata'}[cfg.channel])
         # Reader credentials stay in the worker. Child programs get no token handle.
         env.pop('BWS_ACCESS_TOKEN', None)
+        for key in ('DEPLOY_CAPTURE_WATCH_CONFIGURED', 'DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING',
+                    'BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED', 'BWS_EXPECTED_RAW_MIGRATION_PENDING',
+                    'BWS_DEPLOY_TARGET_REVISION'):
+            env.pop(key, None)
+        if self.active_consumers is not None:
+            env.update(
+                BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED='1' if self.capture_watch_configured else '0',
+                BWS_EXPECTED_RAW_MIGRATION_PENDING='1' if self.raw_migration_pending else '0',
+                BWS_DEPLOY_TARGET_REVISION=self.active_revision or '',
+            )
         fields = effective_database_fields(cfg, env)
         if self.database_fields is not None and fields != self.database_fields:
             raise PostgresDeployError()
@@ -349,14 +518,37 @@ class LinuxEffects:
     def validate_plan(self, plan: DeployPlan) -> None:
         plan.validate()
         if (set(plan.services) != set(DATABASE_CONSUMERS.values())
-            or set(plan.consumers) != {*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate'}):
+            or set(plan.consumers) != _BASE_DEPLOY_CONSUMERS):
             raise PostgresDeployError()
         validate_database_inputs(os.environ, database_input_files(self.config))
         require_file_protocol(self.config.root, plan.revision)
 
-    def preflight(self, plan: DeployPlan) -> str:
+    def select_active_plan(self, plan: DeployPlan) -> DeployPlan:
         self.validate_plan(plan)
-        values = vm_selected_values(plan, self.config.reader())
+        capture = _capture_watch_configured(self.config)
+        migration = _raw_representation_migration_pending(self.config, plan.revision)
+        selected = list(plan.consumers)
+        if capture:
+            selected.append('heimdal-capture-watch')
+        if migration:
+            selected.append('heimdal-raw-migrate')
+        candidate = tuple(selected)
+        if self.active_consumers is not None and (
+            self.active_consumers != candidate
+            or self.capture_watch_configured != capture
+            or self.raw_migration_pending != migration
+            or self.active_revision != plan.revision
+        ):
+            raise PostgresDeployError()
+        self.active_consumers = candidate
+        self.active_revision = plan.revision
+        self.capture_watch_configured = capture
+        self.raw_migration_pending = migration
+        return DeployPlan(plan.channel, plan.revision, plan.services, candidate)
+
+    def preflight(self, plan: DeployPlan) -> str:
+        selected_plan = self.select_active_plan(plan)
+        values = vm_selected_values(selected_plan, self.config.reader())
         passwords = {value['postgres.password'] for consumer, value in values.items() if consumer in DATABASE_CONSUMERS}
         if len(passwords) != 1:
             raise PostgresDeployError()
@@ -434,7 +626,8 @@ class LinuxEffects:
             raise PostgresDeployError()
 
     def activate(self, plan: DeployPlan) -> None:
-        if self.lock_fd is None or set(plan.services) != set(DATABASE_CONSUMERS.values()):
+        if (self.lock_fd is None or set(plan.services) != set(DATABASE_CONSUMERS.values())
+            or self.active_consumers is None):
             raise PostgresDeployError()
         self.source.verify()
         env = self.environment()
@@ -455,7 +648,9 @@ class LinuxEffects:
             for consumer, handle in handles.items():
                 values = self.consumer_values.get(consumer)
                 if values is None:
-                    raise PostgresDeployError()
+                    if consumer in self.active_consumers:
+                        raise PostgresDeployError()
+                    values = {}
                 path = self.config.source_directory / (consumer + '.env')
                 descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
                 paths.append(path)
@@ -525,18 +720,27 @@ class SupervisedOperation:
         previous = self.effects.config.journal.read()
         if previous and previous.terminal_result is None:
             raise PostgresDeployError()
-        self.effects.validate_plan(self.plan)
         self.effects.config.journal.bind_request(self.operation_id, self.plan, self.bootstrap, create=True)
         worker = DeployWorker(self.effects.config.journal, self.effects)
         # Coordination only: no pins, writers, volumes or Docker mutation.
         worker.prepare(self.operation_id)
+        try:
+            self.effects.validate_plan(self.plan)
+            selected_plan = self.effects.select_active_plan(self.plan)
+        except Exception:
+            # Selection is read-only. Persist a terminal refusal before releasing
+            # the channel lock so a corrected selector can be retried safely.
+            self.effects.config.journal.write(self.operation_id, 'aborted')
+            raise
         if self.bootstrap:
             reader = self.effects.config.reader()
             from app.ops.host_secret_bootstrap import _resolve_bws_consumer_values
             from app.ops.host_secret_contract import load_host_secret_contract
-            for consumer in self.plan.consumers:
+            for consumer in selected_plan.consumers:
                 if consumer not in DATABASE_CONSUMERS:
-                    _resolve_bws_consumer_values(self.plan.channel, consumer, load_host_secret_contract(), reader)
+                    self.effects.consumer_values[consumer] = _resolve_bws_consumer_values(
+                        self.plan.channel, consumer, load_host_secret_contract(), reader
+                    )
             if self.effects.initialized():
                 raise PostgresDeployError()
             self.empty = True
