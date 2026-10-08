@@ -111,14 +111,15 @@ jobs:
 
           pr = json.loads(Path("verification-dispatch/pr.json").read_text())
           rounds = resolve_final_review_rounds(pr.get("body"))
-          full_path = rounds in {1, 2}
+          full_path = rounds == 2
           with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
               output.write("full_path=true\n" if full_path else "full_path=false\n")
           if full_path:
               Path("verification-dispatch/full-path").touch()
           PY
-          # Light-path PRs declare Final-Review-Rounds: 0 and never enter
-          # verification dispatch. Stop before the closing-link GraphQL query.
+          # Native review rounds 0 and 1 do not request executor ownership.
+          # Stop before closing-reference lookup, request construction or upload.
+          # Round 2 retains legacy automatic request compatibility.
           if [ ! -f verification-dispatch/full-path ]; then
             exit 0
           fi

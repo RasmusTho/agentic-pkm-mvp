@@ -7,7 +7,11 @@ skill-only changes.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import NoReturn, Sequence
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -326,10 +330,44 @@ def test_pr_template_includes_builderops_routing_receipt() -> None:
         assert fragment in text, fragment
 
 
-def test_publication_surfaces_require_governing_issue_identity() -> None:
+@pytest.mark.parametrize("lane", ["implementation", "docs-authoring", "governance"])
+def test_publication_surfaces_require_governing_issue_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], lane: str
+) -> None:
+    from scripts.publication import main
+
+    class ObservationReached(RuntimeError):
+        pass
+
+    class ReadOnlyProbe:
+        def __init__(self) -> None:
+            self.commands: list[tuple[str, ...]] = []
+
+        def run(self, argv: Sequence[str], *, cwd: Path, input_text: str | None = None) -> NoReturn:
+            self.commands.append(tuple(argv))
+            # Stop at the first local observation. Existing publication tests
+            # exercise the complete accepted lanes through exact PR readback.
+            assert tuple(argv) == ("git", "rev-parse", "--show-toplevel")
+            raise ObservationReached
+
+    body_input = tmp_path / "body.json"
+    body_input.write_text(json.dumps({"lane": lane, "issue_number": None}), encoding="utf-8")
+    argv = ["plan", "--repository", "RasmusTho/agentic-pkm-mvp", "--worktree", str(tmp_path),
+            "--branch", "codex/issue-free-contract", "--path", "docs/example.md", "--lane", lane,
+            "--tier", "2", "--risk-assessment-complete", "--review-gate-complete",
+            "--commit-message", "Bounded native publication", "--pr-title", "Bounded native publication",
+            "--pr-body-input-json", str(body_input)]
+    probe = ReadOnlyProbe()
+    if lane == "implementation":
+        assert main(argv, executor=probe) == 3
+        assert "implementation requires a governing Issue" in capsys.readouterr().err
+        assert probe.commands == []
+    else:
+        with pytest.raises(ObservationReached):
+            main(argv, executor=probe)
+        assert len(probe.commands) == 1
     publication_adapter = _read("app/builderops/publication.py")
 
-    assert 'plan.add_argument("--governing-issue", type=int, required=True)' in publication_adapter
     assert 'values.get("issue_number") != request.governing_issue' in publication_adapter
     assert 'argv.extend(["--issue-number", str(values["issue_number"])])' in publication_adapter
 
