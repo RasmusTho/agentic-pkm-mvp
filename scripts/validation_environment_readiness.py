@@ -12,10 +12,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import stat
 import subprocess
 import sys
 from typing import Mapping, Sequence
+from urllib.parse import parse_qs, urlsplit
 
 
 _TARGET_MODULES: dict[str, tuple[str, ...]] = {
@@ -167,6 +169,55 @@ def _helper_status(
     return "visible" if result.returncode == 0 else "unknown"
 
 
+def _primary_target_status(primary: str, *, root: Path) -> str:
+    """Classify one explicit DSN without retaining or printing its value."""
+
+    try:
+        if str(root) not in sys.path:
+            sys.path.insert(0, str(root))
+        from app.db.dsn import looks_like_prod_dsn
+
+        if looks_like_prod_dsn(primary):
+            return "forbidden"
+    except Exception:
+        return "ambiguous"
+
+    lowered = primary.casefold()
+    if "service=" in lowered or "servicefile=" in lowered:
+        return "forbidden"
+
+    if "://" in primary:
+        try:
+            parsed = urlsplit(primary)
+            if parsed.scheme.casefold() not in {"postgres", "postgresql"}:
+                return "ambiguous"
+            # An empty URI host selects a local socket, which is not an
+            # explicit disposable target and must fail closed.
+            if not parsed.hostname:
+                return "forbidden"
+            has_port = parsed.port is not None or bool(parse_qs(parsed.query).get("port"))
+        except (ValueError, UnicodeError):
+            return "ambiguous"
+    else:
+        try:
+            fields = shlex.split(primary)
+        except ValueError:
+            return "forbidden"
+        options = {
+            key.casefold(): value
+            for key, separator, value in (field.partition("=") for field in fields)
+            if separator
+        }
+        # Keyword conninfo without a host uses the local socket/default host.
+        if not options.get("host", "").strip():
+            return "forbidden"
+        has_port = bool(options.get("port", "").strip())
+
+    # A target that delegates the port to libpq is still guessed at this
+    # boundary, even when its host is explicit.
+    return "disposable_candidate" if has_port else "ambiguous"
+
+
 def _pg_status(environment: Mapping[str, str], *, root: Path) -> str:
     configured = any(
         _nonempty(environment, key)
@@ -181,25 +232,17 @@ def _pg_status(environment: Mapping[str, str], *, root: Path) -> str:
         # runtime writer is present; leave the effective target unresolved.
         return "ambiguous"
 
-    primary = next(
-        (environment.get(key, "").strip() for key in _PRIMARY_DB_KEYS if _nonempty(environment, key)),
-        "",
+    primaries = tuple(
+        environment.get(key, "").strip()
+        for key in _PRIMARY_DB_KEYS
+        if _nonempty(environment, key)
     )
-    if primary:
-        try:
-            # Reuse the production classifier; this diagnostic does not maintain
-            # a second DSN policy or attempt a connection.
-            if str(root) not in sys.path:
-                sys.path.insert(0, str(root))
-            from app.db.dsn import looks_like_prod_dsn
-
-            if looks_like_prod_dsn(primary):
-                return "forbidden"
-        except Exception:
-            return "ambiguous"
-        lowered = primary.casefold()
-        if "service=" in lowered or "servicefile=" in lowered:
+    if primaries:
+        statuses = {_primary_target_status(primary, root=root) for primary in primaries}
+        if "forbidden" in statuses:
             return "forbidden"
+        if "ambiguous" in statuses or len(set(primaries)) > 1:
+            return "ambiguous"
         return "disposable_candidate"
 
     # Runtime, ambient, and control-plane writers cannot authorize the ordinary

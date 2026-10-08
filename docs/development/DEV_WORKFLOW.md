@@ -160,9 +160,11 @@ selecting an existing supported interpreter or fixing the invocation context. He
 The PG classification is `absent`, `forbidden`, `ambiguous`, or `disposable_candidate`. `absent`
 matches the existing no-DSN skip banner and is never a pass. A primary disposable DSN remains
 `ambiguous` when runtime or ambient writers are also configured, so one value cannot hide another
-target. Only an explicit disposable candidate such as the documented `app_test` target may proceed
-to the existing PG guard and host-lease workflow; the diagnostic never connects, provisions,
-installs, or authorizes a lane. For
+target. Multiple primary DSNs are also unresolved unless they repeat the same value. URI or
+keyword conninfo without an explicit host is a forbidden local-socket target, and a host without an
+explicit port remains ambiguous. Only an explicit disposable candidate such as the documented
+`app_test` target may proceed to the existing PG guard and host-lease workflow; the diagnostic never
+connects, provisions, installs, or authorizes a lane. For
 `unavailable` or `import_incompatible`, select an existing supported interpreter or set a valid
 explicit override and rerun. For `missing` or `restricted`, use the existing helper path with the
 current checkout/sandbox visibility; for `unknown`, inspect the helper's bounded invocation result

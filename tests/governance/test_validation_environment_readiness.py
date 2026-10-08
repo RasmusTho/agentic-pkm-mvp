@@ -144,6 +144,25 @@ def test_readiness_diagnostics_are_scoped_and_value_free(tmp_path: Path) -> None
     }
 
     (module_root / "pytest.py").write_text("", encoding="utf-8")
+    conflicting_primary = _run_diagnostic(
+        tmp_path=tmp_path,
+        wrapper=wrapper,
+        helper=visible_helper,
+        database_url="postgresql://app:app@127.0.0.1:15434/app_test",
+        pythonpath=module_root,
+        extra_environment={"DB_DSN": "postgresql://app:app@127.0.0.1:15432/app"},
+    )
+    assert conflicting_primary["pg"] == {"status": "forbidden"}
+
+    implicit_socket = _run_diagnostic(
+        tmp_path=tmp_path,
+        wrapper=wrapper,
+        helper=visible_helper,
+        database_url="postgresql:///app_test",
+        pythonpath=module_root,
+    )
+    assert implicit_socket["pg"] == {"status": "forbidden"}
+
     disposable = _run_diagnostic(
         tmp_path=tmp_path,
         wrapper=wrapper,
