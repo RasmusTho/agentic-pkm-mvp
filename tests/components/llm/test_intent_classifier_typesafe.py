@@ -246,6 +246,30 @@ def test_intent_fixture_uses_synthetic_bws_reader(judgment_path, canvas_path):
     assert judgment_path.lookups == []
 
 
+def test_intent_fixture_does_not_access_host_secret_controller(
+    monkeypatch, request,
+):
+    controller_attempts = []
+
+    def forbidden_controller(*args, **kwargs):
+        controller_attempts.append(True)
+        raise AssertionError("unexpected host secret controller construction")
+
+    monkeypatch.setattr(
+        "app.ops.host_secret_bootstrap.HostSecretController", forbidden_controller
+    )
+    judgment_path = request.getfixturevalue("judgment_path")
+    canvas_path = request.getfixturevalue("canvas_path")
+    response = canvas_path.client.post(canvas_path.url, json={"intent": "Compare two plans."})
+
+    assert controller_attempts == []
+    assert response.status_code == 200
+    assert response.json()["status"] == "exploratory_no_edit"
+    assert len(judgment_path.sent) == len(judgment_path.calls) == 1
+    assert judgment_path.bws_lookups == [("non-prod", "dev/typesafe.api-key")]
+    assert judgment_path.lookups == []
+
+
 def test_typesafe_input_allowlist_and_size_limit(judgment_path, canvas_path):
     cognition = classifier.IntentClassifierCognition()
     for key in ("current_body", "note_title", "vault_path", "prior_turns", "unexpected", "model", "profile"):
