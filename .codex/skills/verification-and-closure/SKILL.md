@@ -86,6 +86,10 @@ and re-read those same threads before terminal closure. Do not scan unrelated hi
 1. Confirm the exact closing set and all its ACs, current head, relevant required/repo-standard CI,
    review disposition, and owner-doc conclusion. Approved multi-Issue work must satisfy
    `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`; Issue count alone adds no review round.
+   For current-head CI eligibility, follow `.codex/skills/_shared/CI_WAIT_CONTRACT.md :: Blessed path`: run
+   `scripts/await_pr_checks.sh <PR>` in merge-gating mode (omit `--sha`), require exit status `0`,
+   and preserve that helper exit status as the gate. A direct aggregate CLI display cannot replace
+   substantive same-head execution evidence; the shared contract owns the selector and wait rules.
 2. Immediately before merge, refresh head/base/title/body, repository default branch and GitHub closing references. Compare
    with the inspected authority and exact closing set; reject unexpected refs, scope, or head drift.
    Inspect commit messages for unintended closing keywords. On drift, stop the effect and resolve
