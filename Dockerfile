@@ -5,12 +5,12 @@
 # subtree — see .dockerignore and tests/deploy/test_dockerfile_hardening.py).
 #
 # Python minor version must match CI (ci-smoke.yaml python-version). The digest
-# pins the multi-arch index for reproducibility; to refresh it after a base bump:
-# token from auth.docker.io (scope repository:library/python:pull), then HEAD
-# registry-1.docker.io/v2/library/python/manifests/<tag> (Accept: oci.image.index.v1+json).
+# pins the multi-arch index for reproducibility. The explicit cache source must
+# match verified upstream content; cache absence fails without a Hub fallback.
+# See docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md for the source contract.
 # BOTH stages must reference the same pinned digest
 # (tests/deploy/test_dockerfile_python_alignment.py).
-FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28 AS builder
+FROM mirror.gcr.io/library/python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28 AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir -r requirements-tts.txt
 
 
-FROM python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28 AS runtime
+FROM mirror.gcr.io/library/python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28 AS runtime
 
 # Build-time arguments for version observability.
 # Pass via: docker build --build-arg VCS_REF=$(git rev-parse HEAD) \
