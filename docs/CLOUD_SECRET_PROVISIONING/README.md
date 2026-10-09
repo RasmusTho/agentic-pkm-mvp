@@ -26,6 +26,43 @@ A decision is still required for production Heimdal raw-store-key rotation. The 
 
 Live shared-copy parity and BWS administration retain an explicit owner gate: the local controller lock coordinates only cooperating commands on one host. The owner must approve one designated BWS admin writer and provide live evidence that its admin credential is unavailable outside that controller, or adopt a shared fencing mechanism. Keep BWS administration, bootstrap writes, and claims that parity is externally fenced blocked until that gate passes. A Product deployment explicitly run with `--existing-secrets-only` may read and validate existing selected values without this write-qualification gate; it must stop before RPC when the required PostgreSQL password is missing and must never call the BWS writer. This path does not claim global fencing or full live BWS qualification.
 
+## Proposed operator decision for single-operator recovery (Issue #5855)
+
+This is a preparation proposal, pending the owner decision recorded on #5667. It does not grant
+access, install a token, import a value, qualify a VM, or change the current security and promotion
+gates.
+
+The concrete decision is whether the organization can approve the following normal writer path for
+dev/test recovery and later live qualification:
+
+- `scripts/secrets`, the host-secret controller, and the supervised channel deploy path are the one
+  designated agent-host writer path for normal BWS administration, bootstrap, and recovery.
+- The admin credential is restricted to that controller. The human organization administrator keeps
+  retained administrative rights as a break-glass or maintenance path; those rights are outside the
+  normal writer path and any out-of-band write requires fresh value-free parity and terminal-receipt
+  evidence before qualification resumes.
+- The host-local lock serializes only cooperating entrypoints on that host. It does not fence another
+  host, a direct BWS client, a retained human administrator, or an already-sent provider request.
+- Every operation remains bound to its selected channel, consumer set, target, operation ID, and
+  durable terminal receipt. Unknown provider outcomes stay pending; a lock release, missing marker,
+  or absent readback is not permission to retry, compensate, import again, or deploy.
+
+The recommended default is to approve this single-operator model only when the credential-restriction
+and no-second-writer evidence can be observed. If that condition cannot be met, the owner should
+require shared/distributed fencing before BWS administration, first-initialization bootstrap, or a
+claim that shared-copy parity is safe. Deferral keeps all existing gates active and leaves
+`--existing-secrets-only` as the only read/validate path that does not need writer qualification.
+
+| Owner choice | Consequence |
+| --- | --- |
+| Approve the proposed designated normal writer, with retained human administration and the limits above | Permit a bounded dev/test qualification journey after the exact controller, credential restriction, selected-target parity, and operation-ID terminal receipts are evidenced. This still does not authorize live access changes or secret import by itself. |
+| Require shared/distributed fencing | Keep administration, bootstrap, and parity qualification blocked until the fencing mechanism and its recovery evidence are delivered and accepted. Existing read-only checks and explicitly existing-secrets-only deployment remain available where their contracts pass. |
+| Defer the decision | Preserve the current gates and no live qualification claim; no replacement implementation is inferred from this proposal. |
+
+The acceptance observation belongs on #5667 and must identify the selected model, exact controller and
+target/channel, approval scope, and redacted readback/terminal evidence. A repository PR or fake-value
+test cannot supply that observation.
+
 ## Fixed constraints
 
 1. The active identity is shared/<logical-secret> for openai.api-key, anthropic.api-key, github.token, and discord.webhook, and <channel>/<logical-secret> for heimdal.raw-store-key, heimdal.archive-pass, postgres.password, and the MARR-only `dev/typesafe.api-key`. The shared identities are the narrow exception to per-channel value separation approved by the owner in #5667: each externally issued provider value is mirrored in prod and non-prod, so either read-only channel account may retrieve the approved copy. `typesafe.api-key` remains available only to the `dev/marr-server-dev` consumer in code and resolves from the existing non-prod project through the existing non-prod reader identity; both reader identities may have broader store-level access under the accepted one-operator policy. The existing admin writer can read pre-state and write only through the designated controller. The separate direct-agent #5778 path and its reported pre-existing local-helper BWS item do not grant a runtime consumer binding. Product and Builder callers receive no provider key. No other secret uses a shared identity. BWS import updates the store only and does not create or rotate provider credentials.

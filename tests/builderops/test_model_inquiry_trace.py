@@ -610,9 +610,10 @@ def test_trace_accepts_legacy_prompt_lineage_after_role_prompts(tmp_path: Path) 
         {"fable": fable, "gpt_codex": gpt},
     ).run("inq_test_legacy_prompt", max_rounds=1)
 
-    assert resumed["outcome"] == "malformed_output"
-    assert [call["phase"] for call in fable.calls] == ["review"]
-    assert [call["phase"] for call in gpt.calls] == ["draft"]
+    assert resumed["outcome"] == "budget_exhausted"
+    assert resumed["details"]["reason"] == "elapsed_unknown"
+    assert fable.calls == []
+    assert gpt.calls == []
 
 
 def test_trace_rejects_forged_canonical_run_terminal_receipt(tmp_path: Path) -> None:
