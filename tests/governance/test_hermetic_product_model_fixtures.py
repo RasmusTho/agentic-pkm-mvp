@@ -33,7 +33,6 @@ _AFFECTED_MODULES = (
     "tests/invariants/test_retrieval_spine_invariants.py",
     "tests/jobs/test_backfill.py",
     "tests/knowledge_acquisition/test_summary_extractor.py",
-    "tests/llm/test_provider_registry.py",
     "tests/mcp/test_mimer_server_smoke.py",
     "tests/properties/test_receipt_before_ack.py",
     "tests/quality_wave/test_registry_chain.py",

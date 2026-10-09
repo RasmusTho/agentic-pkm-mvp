@@ -41,8 +41,6 @@ from app.settings.models import EmbeddingProfile
 # Helpers
 # ---------------------------------------------------------------------------
 
-pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
-
 def _make_payload_response(url: str, status_code: int, payload: dict) -> httpx.Response:
     return httpx.Response(status_code, json=payload, request=httpx.Request("POST", url))
 
