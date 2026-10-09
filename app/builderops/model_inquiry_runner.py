@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
@@ -77,7 +78,8 @@ class ModelInquiryRunner:
         self._allow_operational_fallback = allow_operational_fallback
         if diagnostic_budget is not None and budget is not None and diagnostic_budget != budget:
             raise BuilderOpsValidationError("conflicting diagnostic budgets")
-        self._diagnostic_budget = diagnostic_budget or budget or DiagnosticBudget()
+        self._requested_diagnostic_budget = diagnostic_budget or budget
+        self._diagnostic_budget = self._requested_diagnostic_budget or DiagnosticBudget()
         self._clock = clock or time.monotonic
 
     def plan(self, inquiry_id: str, *, max_rounds: int) -> dict[str, Any]:
@@ -167,13 +169,14 @@ class ModelInquiryRunner:
         dry_run: bool = False,
         diagnostic_budget: DiagnosticBudget | None = None,
     ) -> dict[str, Any]:
-        if diagnostic_budget is not None:
-            self._diagnostic_budget = diagnostic_budget
         if dry_run:
+            if diagnostic_budget is not None:
+                self._diagnostic_budget = diagnostic_budget
             return self.plan(inquiry_id, max_rounds=max_rounds)
         _validate_max_rounds(max_rounds)
         with self.service.inquiry_runner_lock(inquiry_id):
             trace = self.service.trace(inquiry_id)
+            self._bind_diagnostic_budget(trace, diagnostic_budget)
             roles = _inquiry_roles(trace)
             terminal = _terminal_run_receipt(trace)
             if terminal is not None:
@@ -738,17 +741,21 @@ class ModelInquiryRunner:
         budget = self._diagnostic_budget
         if usage.calls >= budget.max_calls:
             return "call_limit"
-        if usage.elapsed_seconds >= budget.max_elapsed_seconds:
+        if usage.calls and usage.elapsed_seconds is None:
+            return "elapsed_unknown"
+        if usage.elapsed_seconds is not None and usage.elapsed_seconds >= budget.max_elapsed_seconds:
             return "elapsed_limit"
         if budget.max_units is not None and usage.calls:
             if usage.units is None:
                 return "usage_unknown"
             if usage.units >= budget.max_units:
                 return "unit_limit"
-        if budget.max_cost_usd is not None and usage.calls:
-            if usage.cost_usd is None:
+        if budget.max_cost_usd is not None:
+            if not usage.calls and budget.max_cost_usd == 0:
                 return "usage_unknown"
-            if usage.cost_usd >= budget.max_cost_usd:
+            if usage.calls and usage.cost_usd is None:
+                return "usage_unknown"
+            if usage.cost_usd is not None and usage.cost_usd >= budget.max_cost_usd:
                 return "cost_limit"
         return None
 
@@ -770,6 +777,35 @@ class ModelInquiryRunner:
             source_refs=list(self.service.trace(inquiry_id)["source_refs"]),
         )
         return self._finalize_terminal(inquiry_id, receipt, replayed=False)
+
+    def _bind_diagnostic_budget(
+        self,
+        trace: Mapping[str, Any],
+        requested: DiagnosticBudget | None,
+    ) -> None:
+        """Use the immutable manifest envelope and reject caller widening."""
+        configured = self._requested_diagnostic_budget
+        if requested is not None and configured is not None and requested != configured:
+            raise BuilderOpsValidationError("conflicting diagnostic budgets")
+        requested = requested or configured
+        manifest = trace["inquiry"]
+        persisted_payload = manifest.get("diagnostic_budget")
+        if isinstance(persisted_payload, Mapping):
+            persisted = DiagnosticBudget.from_dict(persisted_payload)
+            if requested is not None and requested != persisted:
+                raise BuilderOpsValidationError("diagnostic budget is frozen for this inquiry")
+            self._diagnostic_budget = persisted
+            return
+        if persisted_payload is not None:
+            raise BuilderOpsValidationError("persisted diagnostic budget must be an object")
+        # Legacy manifests predate the durable envelope. They can continue with
+        # the documented fixed default, but a caller-selected ceiling cannot be
+        # admitted because there is no immutable binding to prove it was frozen
+        # before an earlier adapter effect.
+        default = DiagnosticBudget()
+        if requested is not None and requested != default:
+            raise BuilderOpsValidationError("legacy inquiry has no persisted diagnostic budget")
+        self._diagnostic_budget = default
 
     def _candidate_adapters(
         self,
@@ -899,6 +935,7 @@ def _diagnostic_usage(trace: Mapping[str, Any]) -> DiagnosticUsage:
     """Reconstruct consumption from turns and provider-attempt receipts."""
     call_ids: set[str] = set()
     elapsed = 0.0
+    elapsed_known = True
     unit_total = 0
     cost_total = 0.0
     units_known = True
@@ -907,7 +944,10 @@ def _diagnostic_usage(trace: Mapping[str, Any]) -> DiagnosticUsage:
         request_id = turn.get("adapter_request_id")
         if isinstance(request_id, str):
             call_ids.add(request_id)
-        elapsed += _nonnegative_number(turn.get("elapsed_seconds"))
+        if "elapsed_seconds" not in turn:
+            elapsed_known = False
+        else:
+            elapsed += _nonnegative_number(turn.get("elapsed_seconds"))
         usage = turn.get("usage")
         if not _known_usage(usage):
             units_known = False
@@ -931,7 +971,10 @@ def _diagnostic_usage(trace: Mapping[str, Any]) -> DiagnosticUsage:
         if isinstance(request_id, str):
             call_ids.add(request_id)
         details = receipt.get("details", {})
-        elapsed += _nonnegative_number(details.get("elapsed_seconds"))
+        if "elapsed_seconds" not in details:
+            elapsed_known = False
+        else:
+            elapsed += _nonnegative_number(details.get("elapsed_seconds"))
         usage = details.get("usage")
         if not _known_usage(usage):
             units_known = False
@@ -945,7 +988,7 @@ def _diagnostic_usage(trace: Mapping[str, Any]) -> DiagnosticUsage:
     calls = len(call_ids)
     return DiagnosticUsage(
         calls=calls,
-        elapsed_seconds=elapsed,
+        elapsed_seconds=elapsed if elapsed_known else (0.0 if not calls else None),
         units=unit_total if calls and units_known else None,
         cost_usd=cost_total if calls and cost_known else None,
     )
@@ -962,16 +1005,22 @@ def _known_cost(value: Any) -> bool:
 
 
 def _nonnegative_number(value: Any) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return 0.0
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+    ):
+        raise ValueError("elapsed telemetry is unavailable")
     return max(0.0, float(value))
 
 
-def _elapsed_since(clock: Callable[[], float], started: float) -> float:
+def _elapsed_since(clock: Callable[[], float], started: float) -> float | None:
     try:
         return _nonnegative_number(clock() - started)
     except (TypeError, ValueError):
-        return 0.0
+        # A failed clock read is unknown consumption, not a free call. The
+        # caller records no elapsed field and the next resume fails closed.
+        return None
 
 
 def _adapter_usage(result: Any) -> dict[str, Any]:

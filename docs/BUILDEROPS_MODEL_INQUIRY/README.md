@@ -106,9 +106,12 @@ operational fallback, and resume. The documented default is eight adapter calls 
 seconds of cumulative adapter time: two roles multiplied by the default three review rounds plus
 the initial draft, with the existing 1,200-second per-call bound. Existing persisted turns and
 provider-attempt receipts carry the elapsed time and any adapter-reported usage or billing
-observations, so a resumed runner reconstructs consumption before admitting another call. A
-budget terminal receipt records the bound, observed usage, and the reason for stopping; it is
-replayed on resume and cannot be replaced by a new budget.
+observations, so a resumed runner reconstructs consumption before admitting another call. The
+bound is written into the immutable inquiry manifest before the first adapter effect; a resume
+must use that persisted envelope and rejects a caller-selected widening or removal. A budget
+terminal receipt records the bound, observed usage, and the reason for stopping; it is replayed
+on resume and cannot be replaced by a new budget. Older traces without elapsed telemetry fail
+closed rather than treating the missing time as zero.
 
 Token or cost ceilings are enforced only when the ceiling is explicitly authorized and the
 adapter supplies the corresponding supported evidence. Missing usage or billing data remains

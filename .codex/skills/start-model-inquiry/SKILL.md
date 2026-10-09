@@ -65,8 +65,11 @@ derived from two roles, three review rounds, one draft per role, and the existin
 per-call bound. Persisted turns and provider-attempt receipts carry consumption forward. Token or
 cost ceilings require explicit authority and supported adapter telemetry; missing telemetry stays
 unknown and blocks a call that would otherwise exceed an authorized ceiling. An unchanged
-authorized diagnostic may reuse its approval while it remains within this envelope. Exhaustion is
-a technical stop/replan result; it does not grant a new launcher, provider, or credential path.
+authorized diagnostic may reuse its approval while it remains within this envelope. The envelope is
+bound in the immutable inquiry manifest before the first adapter effect; resume rejects a caller
+that widens or removes the persisted ceiling. Missing historical elapsed telemetry fails closed
+instead of becoming zero consumed time. Exhaustion is a technical stop/replan result; it does not
+grant a new launcher, provider, or credential path.
 
 ## Route, single-flight and recovery invariants
 

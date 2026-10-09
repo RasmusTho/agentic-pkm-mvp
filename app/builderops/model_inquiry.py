@@ -18,6 +18,7 @@ from uuid import uuid4
 from app.builderops.config import load_paths
 from app.builderops.devui_model_inquiry_command import validate_approval_identity
 from app.builderops.model_inquiry_contract import (
+    DiagnosticBudget,
     MODEL_TURN_SYSTEM_PROMPT,
     canonical_hash,
     github_issue_url_matches,
@@ -123,6 +124,7 @@ class ModelInquiryService:
         created_by: Mapping[str, Any] | str | None = None,
         inquiry_id: str | None = None,
         after_persist: Callable[[str], None] | None = None,
+        diagnostic_budget: DiagnosticBudget | None = None,
     ) -> dict[str, Any]:
         if not isinstance(question, str) or not question.strip():
             raise BuilderOpsValidationError("question must be non-empty UTF-8 text")
@@ -159,6 +161,20 @@ class ModelInquiryService:
         )
         manifest_path = directory / "manifest.json"
         manifest_existing = self._read_optional(manifest_path)
+        persisted_budget = _persisted_diagnostic_budget(manifest_existing)
+        if persisted_budget is not None:
+            if diagnostic_budget is not None and diagnostic_budget != persisted_budget:
+                raise BuilderOpsConflictError("diagnostic budget binding conflicts")
+            bound_budget = persisted_budget
+        elif manifest_existing is None:
+            bound_budget = diagnostic_budget or DiagnosticBudget()
+        else:
+            # Preserve exact retries of manifests written before this envelope
+            # existed. They cannot safely accept a new caller-selected budget
+            # because the old manifest is already immutable and unbound.
+            if diagnostic_budget is not None:
+                raise BuilderOpsConflictError("legacy inquiry has no persisted diagnostic budget")
+            bound_budget = None
         if acceptance_mode not in {None, "single_target"}:
             raise BuilderOpsValidationError("unsupported inquiry acceptance_mode")
         manifest = {
@@ -184,6 +200,8 @@ class ModelInquiryService:
                     "independence": False,
                 }
             )
+        if bound_budget is not None:
+            manifest["diagnostic_budget"] = bound_budget.to_dict()
         manifest["artifact_hash"] = _artifact_hash(manifest)
         self._write_immutable(
             manifest_path,
@@ -1442,6 +1460,7 @@ class ModelInquiryService:
         schema = manifest.get("schema")
         if schema not in {LEGACY_INQUIRY_SCHEMA, INQUIRY_SCHEMA} or manifest.get("inquiry_id") != inquiry_id:
             raise BuilderOpsValidationError("invalid inquiry manifest")
+        _persisted_diagnostic_budget(manifest)
         if schema == INQUIRY_SCHEMA and (
             manifest.get("acceptance_mode") != "single_target"
             or manifest.get("perspectives") != ["synthesis", "verification"]
@@ -2241,7 +2260,9 @@ def _validate_sha256(value: Any, field: str) -> None:
         raise BuilderOpsValidationError(f"{field} must be lowercase sha256")
 
 
-def _validate_elapsed_seconds(value: Any) -> None:
+def _validate_elapsed_seconds(value: Any, *, allow_unknown: bool = False) -> None:
+    if allow_unknown and value is None:
+        return
     if (
         isinstance(value, bool)
         or not isinstance(value, (int, float))
@@ -2340,6 +2361,7 @@ def _validate_budget_terminal_details(details: Mapping[str, Any]) -> None:
     if details["reason"] not in {
         "call_limit",
         "elapsed_limit",
+        "elapsed_unknown",
         "unit_limit",
         "cost_limit",
         "usage_unknown",
@@ -2380,7 +2402,7 @@ def _validate_budget_terminal_details(details: Mapping[str, Any]) -> None:
         or usage["calls"] < 0
     ):
         raise BuilderOpsValidationError("invalid diagnostic budget call usage")
-    _validate_elapsed_seconds(usage["elapsed_seconds"])
+    _validate_elapsed_seconds(usage["elapsed_seconds"], allow_unknown=True)
     if usage["units"] is not None and (
         isinstance(usage["units"], bool)
         or not isinstance(usage["units"], int)
@@ -2787,6 +2809,18 @@ def _dedupe_source_refs(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 seen.add(key)
                 result.append(ref)
     return result
+
+
+def _persisted_diagnostic_budget(
+    manifest: Mapping[str, Any] | None,
+) -> DiagnosticBudget | None:
+    """Read the immutable inquiry envelope, preserving legacy manifests."""
+    if manifest is None or "diagnostic_budget" not in manifest:
+        return None
+    value = manifest["diagnostic_budget"]
+    if not isinstance(value, Mapping):
+        raise BuilderOpsValidationError("persisted diagnostic budget must be an object")
+    return DiagnosticBudget.from_dict(value)
 
 
 __all__ = ["ModelInquiryService"]

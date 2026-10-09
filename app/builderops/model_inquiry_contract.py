@@ -146,13 +146,30 @@ class DiagnosticBudget:
             "authorized": self.authorized,
         }
 
+    @classmethod
+    def from_dict(cls, value: Mapping[str, Any]) -> "DiagnosticBudget":
+        """Rehydrate the exact persisted envelope without accepting extensions."""
+        fields = {"max_calls", "max_elapsed_seconds", "max_units", "max_cost_usd", "authorized"}
+        if set(value) != fields:
+            raise BuilderOpsValidationError("diagnostic budget fields do not match contract")
+        try:
+            return cls(
+                max_calls=value["max_calls"],
+                max_elapsed_seconds=value["max_elapsed_seconds"],
+                max_units=value["max_units"],
+                max_cost_usd=value["max_cost_usd"],
+                authorized=value["authorized"],
+            )
+        except (TypeError, ValueError) as exc:
+            raise BuilderOpsValidationError("invalid persisted diagnostic budget") from exc
+
 
 @dataclass(frozen=True)
 class DiagnosticUsage:
     """Consumption reconstructed from existing immutable inquiry artifacts."""
 
     calls: int
-    elapsed_seconds: float
+    elapsed_seconds: float | None
     units: int | None
     cost_usd: float | None
 
