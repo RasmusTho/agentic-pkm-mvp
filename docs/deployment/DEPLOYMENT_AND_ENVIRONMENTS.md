@@ -77,6 +77,33 @@ The first inventory receipt is produced and validated only through the linked ow
 [`devsystem_vm102_component_inventory.v1` executable boundary](../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract);
 this deployment contract does not collect host evidence or duplicate its schema.
 
+### Infrastructure-to-application interface (Issue #5856; preparation only)
+
+A future private infrastructure repository may prepare the selected host and guest prerequisites,
+but it does not become a second deployment owner. Its redaction-safe interface to this document is
+limited to the selected guest identity, private endpoint or ingress reference, storage/network
+attachment references, and prerequisite readiness. It must not publish secrets, private host
+identifiers, database paths, vault paths, or a mutable application checkout.
+
+The application side supplies an immutable image/source identity, selected channel configuration,
+migration classification, and release/deployment receipt. Application artifacts and image builds,
+Compose service topology, migrations, database/data and vault semantics, channel selection,
+promotion, rollback, and runtime health remain owned by this deployment contract and their linked
+Product/Runtime owners. A future normal sequence is infrastructure plan and approved effect → guest
+prerequisite check → this document's deploy/migration/health gates; a plan or guest check cannot
+authorize the next stage.
+
+The finite pilot described in [the Platform and Operations owner](../YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md#proposed-separate-infrastructure-repository-and-disposable-pilot-issue-5856-preparation-only)
+uses one disposable dev/test resource and proves provider import/plan, least-privilege scope,
+protected state and guest checks. It does not qualify VM-102, admit the complete Dev System, select
+a Product Runtime channel, or change the current deployment sequence. Host/VM qualification remains
+[#5052](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5052), the BuilderOps control-plane
+contract remains [#3788](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3788), the startup
+validation chain remains [#4913](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4913), and
+secret/provider qualification remains [#5667](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667).
+Those issues retain their lifecycle owners; this preparation neither adopts their children nor
+introduces a new complete-platform admission gate.
+
 ## Product Runtime channel placement
 
 The intended Product Runtime placement for all three channels (`dev`, `test`, and `prod`) is the
