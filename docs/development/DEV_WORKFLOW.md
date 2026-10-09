@@ -144,6 +144,10 @@ ambiguous. Review remains responsible for those cases.
     does not require a host endpoint or certificate configuration. Keep executor transport and
     admission tests outside that enrollment so missing path configuration still fails before
     transport creation; never make the fixture autouse or provide fake host credentials.
+- API tests that exercise model-backed request handlers should request the explicit
+  `tests/api/conftest.py::mock_product_api_routes` fixture only on those test functions. It forces
+  the deterministic mock provider because compiled model routing can override `LLM_PROVIDER=mock`;
+  keep selected-route health and admission tests outside this fixture. Do not make it autouse.
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 

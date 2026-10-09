@@ -69,6 +69,7 @@ def _outbox_events(path: Path) -> list[dict]:
 def test_capture_appends_to_inbox_through_governed_pipeline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mock_product_api_routes,
 ) -> None:
     vault, outbox = _setup_vault(tmp_path, monkeypatch)
 
@@ -155,6 +156,7 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
 def test_capture_has_no_task_semantics(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mock_product_api_routes,
 ) -> None:
     vault, _ = _setup_vault(tmp_path, monkeypatch)
     client = TestClient(app)

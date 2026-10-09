@@ -27,6 +27,7 @@ def _setup_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_capture_append_adds_separator_when_existing_file_has_no_trailing_newline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mock_product_api_routes,
 ) -> None:
     vault = _setup_vault(tmp_path, monkeypatch)
     inbox = vault / "Inbox" / "inbox.md"
@@ -47,6 +48,7 @@ def test_capture_append_adds_separator_when_existing_file_has_no_trailing_newlin
 def test_capture_append_preserves_empty_and_newline_terminated_inbox_behavior(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mock_product_api_routes,
 ) -> None:
     vault = _setup_vault(tmp_path, monkeypatch)
     client = TestClient(app)
@@ -132,6 +134,7 @@ def test_capture_rejects_sources_zone_overlap_before_write(
 def test_capture_allows_disjoint_sources_and_inbox(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mock_product_api_routes,
 ) -> None:
     vault = _setup_vault(tmp_path, monkeypatch)
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "InboxArchive")
@@ -154,6 +157,7 @@ def test_capture_respects_filesystem_case_alias_for_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     sources_exists: bool,
+    mock_product_api_routes,
 ) -> None:
     vault = _setup_vault(tmp_path, monkeypatch)
     if sources_exists:

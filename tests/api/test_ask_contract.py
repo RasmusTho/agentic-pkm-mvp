@@ -18,7 +18,7 @@ def _stub_embeddings(monkeypatch) -> None:
     )
 
 
-def test_ask_contract_structure(monkeypatch) -> None:
+def test_ask_contract_structure(monkeypatch, mock_product_api_routes) -> None:
     # Minimal embeddings stub to keep determinism
     _stub_embeddings(monkeypatch)
 
