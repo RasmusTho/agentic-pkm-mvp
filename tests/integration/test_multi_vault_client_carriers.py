@@ -10,6 +10,8 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 import app.api.compatibility_mutation as compatibility_mutation
 import app.api.routes.capture as capture_routes
 from app.api.app import app
