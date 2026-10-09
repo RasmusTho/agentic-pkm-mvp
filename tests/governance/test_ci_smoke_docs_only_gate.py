@@ -11,12 +11,10 @@ selected pytest run) was `skipped`, and the job still concluded `success` -- a
 required check that looked green without executing the tests that cover the
 change.
 
-Note: `tests/architecture/test_pr_hot_path_governance.py` is NOT part of this
-gap -- the `smoke` job's "Hot path governance architecture test" step runs it
-unconditionally (no `if:` on that step, and no job-level `if:` on `smoke`), so
-it already executes on every PR regardless of this filter. The original issue
-text named it as an example of asserting content; it was never actually
-skipped.
+The hot-path governance module is selected by `scripts/select_pr_tests.py` for
+governance changes, so it runs through the Unit tests (not pg) lane together
+with the other selected architecture targets. It does not need a second,
+unconditional CI Smoke step.
 
 These tests prove the fix two ways: the paths-filter now includes the
 previously-excluded surface (static parse of the workflow), and
