@@ -2572,6 +2572,44 @@ def test_vm_reader_recheck_is_project_scoped_and_precedes_compose(tmp_path):
     assert effects.events[activation - 1] == 'preflight:test'
 
 
+def test_vm_selected_values_deduplicates_bws_identity_per_preflight():
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan, vm_selected_values
+
+    consumers = tuple(DATABASE_CONSUMERS)
+    plan = DeployPlan(
+        'dev',
+        'a' * 40,
+        tuple(DATABASE_CONSUMERS.values()),
+        consumers,
+    )
+
+    class Reader:
+        def __init__(self):
+            self.calls = []
+
+        def lookup(self, project, identity):
+            self.calls.append((project, identity))
+            return f'fake-role-password-{len(self.calls)}'
+
+    reader = Reader()
+    first = vm_selected_values(plan, reader)
+    second = vm_selected_values(plan, reader)
+
+    assert first == {
+        consumer: {'postgres.password': 'fake-role-password-1'}
+        for consumer in consumers
+    }
+    assert second == {
+        consumer: {'postgres.password': 'fake-role-password-2'}
+        for consumer in consumers
+    }
+    assert reader.calls == [
+        ('non-prod', 'dev/postgres.password'),
+        ('non-prod', 'dev/postgres.password'),
+    ]
+
+
 def test_inactive_optional_model_credentials_do_not_block_deploy(tmp_path):
     from app.ops.postgres_deploy import deploy_from_host
     admin, provider, plan, remote = _bws_host(tmp_path)
@@ -2655,15 +2693,20 @@ def test_bws_deploy_requires_raw_key_for_active_capture_and_migration(active_con
 
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
                       (*DATABASE_CONSUMERS, 'heimdal-api-ingress', active_consumer))
+    calls = []
 
     class Reader:
-        def lookup(self, _project, identity):
+        def lookup(self, project, identity):
+            calls.append((project, identity))
             if identity.endswith('heimdal.raw-store-key'):
                 raise BwsItemAbsent()
+            if identity.endswith('github.token'):
+                return 'ghp_' + 'x' * 36
             return 'fake-role-password'
 
     with pytest.raises(PostgresDeployError):
         vm_selected_values(plan, Reader())
+    assert calls.count(('non-prod', 'test/heimdal.raw-store-key')) == 1
 
 
 @pytest.mark.parametrize(
