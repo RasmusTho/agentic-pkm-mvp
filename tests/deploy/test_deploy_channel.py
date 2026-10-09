@@ -3304,6 +3304,15 @@ def test_rendered_compose_uses_postgres_secret_file_without_value(tmp_path, chan
     assert rendered['services']['db']['environment']['POSTGRES_PASSWORD_FILE'] == '/run/secrets/postgres_password'
 
 
+@pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
+def test_bws_postgres_compose_entrypoint_retains_postgres_command(tmp_path, channel):
+    rendered = _render_bws_compose(tmp_path, channel)
+    database = rendered['services']['db']
+
+    assert database['entrypoint'] == ['/bin/bash', '/usr/local/bin/yggdrasil-postgres-entrypoint.sh']
+    assert database['command'] == ['postgres']
+
+
 def test_postgres_secret_mount_is_limited_to_database_clients(tmp_path):
     from app.ops.host_secret_contract import DATABASE_CONSUMERS
     rendered = _render_bws_compose(tmp_path, 'test')
