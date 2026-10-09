@@ -414,11 +414,13 @@ Companion docs:
   is wrapped with the declared `heimdal-raw-migrate` consumer from the existing shared raw-store-key
   domain. The trusted migration receipt selects this gate only for HAR-02's exact revision; unrelated
   inventories perform no raw-key lookup. A value-free resolution preflight runs after migration
-  inventory/dry-run but before any deploy mutation; the exact one-shot wrapper resolves again
-  immediately before Alembic and delivers only a temporary migrate-specific handle. Missing,
-  malformed, or domain-divergent material therefore cannot stop active writers or advance deployment
-  state, and diagnostics remain value-free. This wiring does not create, rotate, read back, or
-  otherwise mutate host secret material.
+  inventory/dry-run but before deploy mutation; the exact one-shot wrapper resolves again immediately
+  before Alembic and delivers only a temporary migrate-specific handle. An absent key is allowed for
+  this consumer so HAR-02 can decide under its source-table lock: an empty table needs no key, while
+  rows without a valid key roll back the migration before legacy schema or bytes change. Present
+  malformed or domain-divergent material still fails before migration, and configured capture-watch
+  continues to require the key. Diagnostics remain value-free. This wiring does not create, rotate,
+  read back, or otherwise mutate host secret material.
 - The repository's Linux BWS deploy path keeps its systemd supervisor root-owned for BWS and Docker
   control while host-global instance-ownership state stays owned by the configured runtime UID/GID;
   see [Deployment and environments](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#root-owned-image-bake-vs-host-uid-remapped-runtime-user-2991-3047)

@@ -731,9 +731,10 @@ _deploy_channel_needs_capture_secret() {
 # HAR-02's migration cryptographic preflight is itself a declared raw-store
 # consumer. Restrict this bootstrap to the explicit one-shot migration command
 # used by apply_changed_migrations: implicit dependency starts and unrelated
-# service ups must not receive or borrow its handle. Unlike the API ingress
-# layer, this required migration authority never degrades open — a missing,
-# malformed, or shared-domain-divergent key prevents Docker from starting.
+# service ups must not receive or borrow its handle. An absent key is allowed
+# for this consumer; HAR-02's locked transaction decides whether rows require
+# it. A present malformed or shared-domain-divergent key still prevents Docker
+# from starting.
 _deploy_channel_needs_migration_secret() {
   local channel="${1:?channel required}"
   shift

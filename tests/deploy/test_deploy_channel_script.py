@@ -1850,14 +1850,14 @@ def test_raw_migration_production_wrapper_bootstraps_before_compose(
     assert "HEIMDAL_RAW_STORE_KEY" not in result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("failure", ["missing", "malformed", "divergent"])
+@pytest.mark.parametrize("failure", ["malformed", "divergent"])
 @pytest.mark.parametrize("channel", ["dev", "test", "prod"])
 def test_raw_migration_production_wrapper_fails_before_compose_and_redacts(
     tmp_path: Path,
     failure: str,
     channel: str,
 ) -> None:
-    """Unusable migration authority cannot reach Docker or disclose details."""
+    """Present malformed or domain-divergent migration authority fails closed."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker_marker = tmp_path / "docker-called"
@@ -1868,9 +1868,7 @@ def test_raw_migration_production_wrapper_fails_before_compose_and_redacts(
     )
     docker.chmod(0o755)
     security = bin_dir / "security"
-    if failure == "missing":
-        security_body = "echo private-lookup-detail >&2\nexit 44"
-    elif failure == "malformed":
+    if failure == "malformed":
         security_body = "printf '%s\\n' private-malformed-material"
     else:
         security_body = (
@@ -2012,7 +2010,7 @@ def test_full_deploy_preflights_raw_migration_key_before_any_docker(
 
 
 @pytest.mark.parametrize("channel", ["dev", "test", "prod"])
-@pytest.mark.parametrize("failure", ["missing", "malformed", "divergent"])
+@pytest.mark.parametrize("failure", ["malformed", "divergent"])
 def test_full_deploy_raw_migration_key_failure_is_redacted_and_nonmutating(
     tmp_path: Path,
     channel: str,
@@ -2087,10 +2085,10 @@ def test_full_deploy_unrelated_migration_skips_raw_key_lookup(
     assert any(" stop api worker watcher" in event for event in events[:migrate_index])
 
 
-def test_full_deploy_mixed_migration_inventory_still_gates_raw_key(
+def test_full_deploy_mixed_migration_inventory_allows_absent_key_to_reach_har02(
     tmp_path: Path,
 ) -> None:
-    """Presence of HAR-02 among unrelated migrations keeps the gate active."""
+    """An absent key does not preflight-block the governed HAR-02 invocation."""
     root, env, _initial_sha = _deploy_harness(tmp_path)
     _commit_migration(root, "unrelated_before_har.py")
     target = _commit_har_raw_migration(
@@ -2098,23 +2096,47 @@ def test_full_deploy_mixed_migration_inventory_still_gates_raw_key(
         "e7b4c9d2a6f1_heimdal_raw_representation.py",
     )
     env["FAKE_SHA"] = target
-    env["DEPLOY_ACK_FORWARD_ONLY"] = "1"
     env["FAKE_SECURITY_MODE"] = "missing"
     env["FAKE_SECURITY_EVENT_LOG"] = env["FAKE_DEPLOY_EVENT_LOG"]
+    _configure_successful_channel_preflights(
+        root,
+        env,
+        tmp_path,
+        channel="dev",
+    )
+    runtime_env = root / "tmp" / "runtime.env"
+    runtime_env.write_text(
+        runtime_env.read_text(encoding="utf-8").replace(
+            "HEIMDAL_CAPTURE_WATCH_DIR=/fixture/capture-inbox",
+            "HEIMDAL_CAPTURE_WATCH_DIR=",
+        ),
+        encoding="utf-8",
+    )
+    # Stop at a deliberate post-migration sentinel so this boundary test does
+    # not depend on later runtime health/API fixture completeness.
+    env["FAKE_DOCKER_FAIL_MATCH"] = "up -d --force-recreate api worker watcher companion-ui"
 
     result = _run_deploy(root, env, target, channel="dev")
 
     combined = result.stdout + result.stderr
-    assert result.returncode != 0
-    assert combined.count("migration raw-key preflight failed: output=redacted") == 1
+    assert "service recreate/liveness gate failed" in combined, combined
+    assert "migration raw-key preflight failed" not in combined
     events = _deploy_events(env)
+    assert "security migrate-primary" in events
+    assert any("exit-code-from migrate" in event for event in events)
+    assert any(event.startswith("migration-full ack=") for event in events)
     assert events[0] == "archive-preflight dev"
-    assert any(
-        event == "security migrate-primary"
-        for event in events[1:]
+    assert events.index("security migrate-primary") < next(
+        index for index, event in enumerate(events) if event.startswith("docker ")
     )
-    assert all(event.startswith("security ") for event in events[1:])
-    assert not (tmp_path / "docker-called").exists()
+    stop_index = next(
+        index for index, event in enumerate(events) if " stop api worker watcher" in event
+    )
+    migration_index = next(
+        index for index, event in enumerate(events) if "exit-code-from migrate" in event
+    )
+    assert stop_index < migration_index
+    assert (tmp_path / "docker-called").exists()
 
 
 @pytest.mark.parametrize(
@@ -2699,14 +2721,13 @@ def test_vm_raw_key_selection_matches_target_migration_delta_and_pending_marker(
         linux._raw_representation_migration_pending(cfg, 'f' * 40)
 
 
-@pytest.mark.parametrize('active_consumer', ['heimdal-capture-watch', 'heimdal-raw-migrate'])
-def test_bws_deploy_requires_raw_key_for_active_capture_and_migration(active_consumer):
+def test_bws_deploy_requires_raw_key_for_active_capture():
     from app.ops.bws_secret_reader import BwsItemAbsent
     from app.ops.host_secret_contract import DATABASE_CONSUMERS
     from app.ops.postgres_deploy import DeployPlan, PostgresDeployError, vm_selected_values
 
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', active_consumer))
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch'))
     calls = []
 
     class Reader:
@@ -2723,13 +2744,9 @@ def test_bws_deploy_requires_raw_key_for_active_capture_and_migration(active_con
     assert calls.count(('non-prod', 'test/heimdal.raw-store-key')) == 1
 
 
-@pytest.mark.parametrize(
-    'active_consumer,capture,migration',
-    [('heimdal-capture-watch', True, False), ('heimdal-raw-migrate', False, True)],
-)
 @pytest.mark.parametrize('quiescent', [True, False])
 def test_missing_active_raw_key_stops_supervisor_before_activation(
-    tmp_path, monkeypatch, active_consumer, capture, migration, quiescent
+    tmp_path, monkeypatch, quiescent
 ):
     from types import SimpleNamespace
     from uuid import uuid4
@@ -2767,9 +2784,9 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
     )
     monkeypatch.setattr(linux, 'validate_database_inputs', lambda *_args: None)
     monkeypatch.setattr(linux, 'require_file_protocol', lambda *_args: None)
-    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _config: capture)
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _config: True)
     monkeypatch.setattr(
-        linux, '_raw_representation_migration_pending', lambda _config, _revision: migration
+        linux, '_raw_representation_migration_pending', lambda _config, _revision: False
     )
 
     effects = linux.LinuxEffects(config)
@@ -2809,7 +2826,7 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
         with pytest.raises(PostgresDeployError):
             supervisor.request(retry)
 
-    assert active_consumer in effects.active_consumers
+    assert 'heimdal-capture-watch' in effects.active_consumers
     assert effects.password is None
     assert effects.consumer_values == {}
     # The absent raw key is cached for the remaining consumers in this preflight.
@@ -2822,7 +2839,7 @@ def test_bws_host_and_vm_preflight_use_active_secret_consumers(tmp_path, monkeyp
     from app.ops import postgres_deploy_linux as linux
     from app.ops.bws_secret_reader import BwsItemAbsent
     from app.ops.host_secret_contract import DATABASE_CONSUMERS
-    from app.ops.postgres_deploy import DeployPlan, PostgresDeployError, deploy_from_host, vm_selected_values
+    from app.ops.postgres_deploy import DeployPlan, deploy_from_host, vm_selected_values
 
     admin, _provider, _old_plan, remote = _bws_host(tmp_path)
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
@@ -2849,8 +2866,8 @@ def test_bws_host_and_vm_preflight_use_active_secret_consumers(tmp_path, monkeyp
     assert values['heimdal-api-ingress'] == {}
     migration_pending['value'] = True
     active = linux.LinuxEffects(cfg).select_active_plan(plan)
-    with pytest.raises(PostgresDeployError):
-        vm_selected_values(active, Reader())
+    values = vm_selected_values(active, Reader())
+    assert values['heimdal-raw-migrate'] == {}
 
 
 def test_vm_capture_watch_selection_uses_runtime_input_and_fails_on_ambiguity(tmp_path):

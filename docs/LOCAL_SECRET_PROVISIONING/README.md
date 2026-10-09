@@ -83,9 +83,10 @@ or live channel qualification. Parent #5667 remains open until those owner gates
    #4489 "required" is a property the schema states rather than assumes: each secret carries an
    explicit global `optional` boolean, and a consumer may separately declare that an otherwise
    required secret can be absent for that consumer. The raw-store key remains globally required and
-   is optional only for `heimdal-api-ingress`, whose media/screen lanes report unavailable without
-   encryption; capture-watch and raw-migration still require it when selected. Optionality never
-   covers a value that is present and malformed — that still fails closed.
+   is optional for `heimdal-api-ingress`, whose media/screen lanes report unavailable without
+   encryption, and for `heimdal-raw-migrate`, whose locked Alembic transaction reads it only when
+   legacy rows need identity verification. Capture-watch still requires it when selected.
+   Optionality never covers a value that is present and malformed — that still fails closed.
 4. **Key material stays outside the raw volume and database.** This preserves Heimdal's raw-store
    trust boundary.
 5. **Mac Keychain remains the source for existing Mac secrets and the BWS bootstrap token.** TSO-07
@@ -133,15 +134,16 @@ or live-validating the provider identity remains external operational work.
 
 HAR-02 adds no key, rotation, or provisioning authority. Its governed deploy path bootstraps the
 `heimdal-raw-migrate` consumer only when the trusted migration inventory contains HAR-02's exact
-revision filename. A value-free preflight then runs before any pin, marker, volume, Docker, or
-writer-stop mutation. The exact one-shot migration invocation resolves the consumer again, renames
-the temporary bootstrap handle for the `migrate` service, and removes it when that invocation exits.
-This second resolution closes the check/use window: missing, malformed, or shared-domain-divergent
-material stops before deployment mutation, while a later change still stops before Alembic.
-Unrelated migration inventories do not resolve or borrow this consumer. Long-lived services cannot
-read the migrate-only handle, and an ordinary Compose invocation does not acquire one. The
-repository declares and validates this delivery path; it does not claim that a host item was
-created or changed.
+revision filename. A value-free preflight runs before pin, marker, volume, Docker, or writer-stop
+mutation. The migration consumer tolerates an absent key; HAR-02's source-table lock and transaction
+decide whether the key is needed. An empty legacy table migrates without a key, while rows without a
+valid key roll back before legacy schema or encrypted bytes change. The exact one-shot migration
+invocation resolves the consumer again, renames the temporary bootstrap handle for the `migrate`
+service, and removes it when that invocation exits. Present malformed or shared-domain-divergent
+material fails before migration. Unrelated migration inventories do not resolve or borrow this
+consumer. Long-lived services cannot read the migrate-only handle, and an ordinary Compose invocation
+does not acquire one. The repository declares and validates this delivery path; it does not claim
+that a host item was created or changed.
 
 HAR-03 adds the required `heimdal.archive-pass` identifier for the dedicated
 `heimdal-cold-volume` consumer on `dev`, `test`, and `prod`. It is not shared with the raw-store
@@ -150,9 +152,10 @@ the fixed sparsebundle command over standard input. The tracked metadata, startu
 runbook, and receipts remain value-free; provisioning a host item is an explicit operator action.
 
 `github.token` (#4489) is the one **globally optional** declaration. `heimdal.raw-store-key` is
-globally required but absent material is tolerated by the `heimdal-api-ingress` consumer only; the
-active capture-watch and raw-migration consumers require it. This preserves degraded API operation
-without weakening encryption for consumers that write or transform raw data. `github.token` is
+globally required but absent material is tolerated by `heimdal-api-ingress` and
+`heimdal-raw-migrate`; HAR-02's table lock and transaction decide whether the key is needed for
+existing legacy rows. The active capture-watch consumer always requires it. This preserves degraded
+API operation without weakening identity verification or encryption for raw data. `github.token` is
 granted to `heimdal-api-ingress`
 so the BuilderOps cockpit's `github-live` plane can read GitHub from inside the `api` container via
 `gh`, which reads `GITHUB_TOKEN` from its own environment. It must be optional because the
