@@ -19,7 +19,7 @@ def _stub_embeddings(monkeypatch) -> None:
     monkeypatch.setattr("app.retrieval.hybrid.embed_batches", _fake_embed_batches)
 
 
-def test_rerank_prefers_vault_origin(monkeypatch) -> None:
+def test_rerank_prefers_vault_origin(monkeypatch, mock_product_api_routes) -> None:
     _stub_embeddings(monkeypatch)
     hybrid = get_store()
     hybrid.set_documents(
@@ -52,7 +52,7 @@ def test_rerank_prefers_vault_origin(monkeypatch) -> None:
         ask_module._HYBRID_WARMED = False
 
 
-def test_rerank_ignores_payload_zone(monkeypatch) -> None:
+def test_rerank_ignores_payload_zone(monkeypatch, mock_product_api_routes) -> None:
     """Zone should not be read from payload; it is derived, not stored artifact truth."""
     _stub_embeddings(monkeypatch)
     hybrid = get_store()
