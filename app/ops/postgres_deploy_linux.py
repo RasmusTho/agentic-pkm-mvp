@@ -32,6 +32,8 @@ from app.ops.postgres_deploy import (
     password_authenticate, vm_selected_values,
 )
 
+_ONE_SHOT_COMPOSE_SERVICES = frozenset({'instance-state-init', 'migrate'})
+
 
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
              pass_fds: tuple[int, ...] = ()) -> str:
@@ -760,14 +762,22 @@ class LinuxEffects:
 
     def quiescent(self) -> bool:
         # Called by the worker after each synchronous subprocess has been reaped.
-        # Docker may still be restarting/starting after its CLI returns.
+        # Docker may still be starting after its CLI returns. Stable long-running
+        # services are expected, but daemon-owned one-shot services can outlive
+        # the Docker CLI and continue mutating state after their supervisor exits.
         try:
             rows = self.compose('ps', '--all', '--format', 'json').strip()
             if not rows:
                 return True
             records = json.loads(rows) if rows.startswith('[') else [json.loads(line) for line in rows.splitlines()]
-            return all(row.get('State') in {'running', 'exited', 'created'}
-                       and row.get('Health') not in {'starting'} for row in records)
+            return isinstance(records, list) and all(
+                isinstance(row, dict)
+                and isinstance(row.get('Service'), str) and bool(row['Service'])
+                and row.get('State') in {'running', 'exited', 'created'}
+                and not (row['Service'] in _ONE_SHOT_COMPOSE_SERVICES and row['State'] == 'running')
+                and row.get('Health') not in {'starting'}
+                for row in records
+            )
         except Exception:
             return False
 

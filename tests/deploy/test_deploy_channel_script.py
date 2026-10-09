@@ -3439,8 +3439,28 @@ def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
     assert journal.read().terminal_result is None
 
 
+@pytest.mark.parametrize(('service', 'state', 'expected'), [
+    ('api', 'running', True),
+    ('migrate', 'running', False),
+    ('instance-state-init', 'running', False),
+    ('migrate', 'exited', True),
+])
+def test_linux_quiescence_waits_for_one_shot_compose_services(monkeypatch, service, state, expected):
+    import json
+    from app.ops import postgres_deploy_linux as linux
+
+    effects = object.__new__(linux.LinuxEffects)
+    monkeypatch.setattr(
+        effects, 'compose',
+        lambda *args: json.dumps([{'Service': service, 'State': state, 'Health': ''}]),
+    )
+
+    assert effects.quiescent() is expected
+
+
 def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence(tmp_path, monkeypatch):
     from dataclasses import asdict
+    import json
     from types import SimpleNamespace
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import PostgresDeployError
@@ -3463,7 +3483,11 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
         path.write_bytes(content)
     config = SimpleNamespace(channel='test', root=root, journal=journal)
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
-    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda _self: True)
+    compose_state = {'rows': [{'Service': 'migrate', 'State': 'exited', 'Health': ''}]}
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'compose',
+        lambda _self, *_args: json.dumps(compose_state['rows']),
+    )
     supervisor = linux.DeploymentSupervisor(config)
 
     request = {
@@ -3486,6 +3510,14 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
     monkeypatch.setattr(
         linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(original_retire)
     )
+    # A terminal receipt can outlive lock retirement. Do not finish cleanup
+    # while Docker still owns the one-shot migration container.
+    compose_state['rows'] = [{'Service': 'migrate', 'State': 'running', 'Health': ''}]
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({**request, 'action': 'join'})
+    assert lock_dir.is_dir()
+
+    compose_state['rows'] = [{'Service': 'migrate', 'State': 'exited', 'Health': ''}]
     # A normal same-ID join must finish interrupted cleanup before exposing the
     # already-written failed receipt to a host retry.
     ordinary_retry = {**request, 'action': 'join'}
@@ -3512,11 +3544,13 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
 
 
 @pytest.mark.parametrize('blocker', [
-    'live-worker', 'held-lock', 'non-quiescent', 'changed-request', 'different-operation', 'malformed-journal',
+    'live-worker', 'held-lock', 'non-quiescent', 'running-migrate',
+    'running-instance-state-init', 'changed-request', 'different-operation', 'malformed-journal',
 ])
 def test_failed_bws_activation_reconciliation_preserves_ambiguous_state(tmp_path, monkeypatch, blocker):
     from dataclasses import asdict, replace
     import fcntl
+    import json
     import os
     import threading
     from types import SimpleNamespace
@@ -3549,7 +3583,13 @@ def test_failed_bws_activation_reconciliation_preserves_ambiguous_state(tmp_path
     }
     config = SimpleNamespace(channel='test', root=root, journal=journal)
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
-    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda _self: blocker != 'non-quiescent')
+    compose_row = {'Service': 'api', 'State': 'running', 'Health': ''}
+    if blocker == 'non-quiescent':
+        compose_row = {'Service': 'api', 'State': 'restarting', 'Health': ''}
+    elif blocker in {'running-migrate', 'running-instance-state-init'}:
+        service = 'migrate' if blocker == 'running-migrate' else 'instance-state-init'
+        compose_row = {'Service': service, 'State': 'running', 'Health': ''}
+    monkeypatch.setattr(linux.LinuxEffects, 'compose', lambda _self, *_args: json.dumps([compose_row]))
     supervisor = linux.DeploymentSupervisor(config)
     if blocker == 'live-worker':
         supervisor.operation = SimpleNamespace(
