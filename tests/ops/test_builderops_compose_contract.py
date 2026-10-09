@@ -128,7 +128,7 @@ def test_builderops_db_healthcheck_probes_the_container_network_address() -> Non
 
 def test_builderops_image_has_a_dedicated_non_root_entrypoint() -> None:
     dockerfile = (ROOT / "Dockerfile.builderops").read_text(encoding="utf-8")
-    assert "FROM python:3.12-slim" in dockerfile
+    assert "FROM mirror.gcr.io/library/python:3.12-slim@sha256:" in dockerfile
     assert "USER builderops" in dockerfile
     assert "app.builderops.control_plane.service:production_app" in dockerfile
     assert '"--factory"' in dockerfile
@@ -314,7 +314,7 @@ def test_builderops_postgres_pin_has_a_rebuildable_candidate_producer() -> None:
     dockerfile = (ROOT / "Dockerfile.builderops-postgres").read_text(encoding="utf-8")
     workflow = (ROOT / ".github/workflows/app-image-build.yml").read_text(encoding="utf-8")
 
-    assert "FROM postgres:16-bookworm" in dockerfile
+    assert "FROM mirror.gcr.io/library/postgres:16-bookworm@sha256:" in dockerfile
     assert 'org.opencontainers.image.durability="rebuildable"' in dockerfile
     assert "wal-g" not in dockerfile.lower()
     assert "Dockerfile.builderops-postgres" in workflow
