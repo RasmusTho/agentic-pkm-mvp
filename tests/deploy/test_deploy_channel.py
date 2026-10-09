@@ -312,12 +312,13 @@ fi
 case "$*" in
   *"run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate"*)
     probe_selector=1
+    printf 'migration-token-image=%s:%s\\n' "${{APP_IMAGE_REPOSITORY:-unset}}" "${{APP_IMAGE_TAG:-unset}}" >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
     printf 'migration-token-probe selector=%s ack=%s\\n' \
       "${{probe_selector}}" \
       "${{PROD_MIGRATION_FORWARD_ONLY_ACK:-}}" \
       >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
     if [ "${{probe_selector}}" = "1" ]; then
-      printf '%s\\n' "${{FAKE_MIGRATION_GATE_TOKEN:-prod-migration-ack.v1:0000000000000000000000000000000000000000000000000000000000000000}}"
+      printf '%s\\n' "${{FAKE_MIGRATION_GATE_RESULT:-${{FAKE_MIGRATION_GATE_TOKEN:-prod-migration-no-forward-only-pending.v1}}}}"
       if [ -n "${{FAKE_MIGRATION_GATE_EXTRA_OUTPUT:-}}" ]; then
         printf '%s\\n' "${{FAKE_MIGRATION_GATE_EXTRA_OUTPUT}}"
       fi
@@ -2015,6 +2016,68 @@ def test_forward_only_migration_failure_retains_compatible_target_image(tmp_path
     assert len(strict_recreates) == 1
 
 
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_nonprod_forward_only_migration_does_not_require_operator_ack(
+    tmp_path: Path, channel: str
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    if channel == "test":
+        _configure_dev_test_environment_clobber_preflight(
+            root, env, tmp_path, channel="test", overlay_content=_HEIMDAL_FIXED_OVERLAY
+        )
+        test_runtime_env = root / "tmp-test/runtime.env"
+        test_runtime_env.write_text(
+            test_runtime_env.read_text(encoding="utf-8") + "TTS_ENABLED=false\n",
+            encoding="utf-8",
+        )
+    pin_path = root / f"config/deploy/{channel}.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_nonprod.py"
+    migration.write_text(
+        'revision = "forward_only_nonprod"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", f"add {channel} forward-only migration"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env["FAKE_SHA"] = target_sha
+
+    result = _run_deploy(root, env, target_sha, channel=channel)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "migration gate ok: 1 migration(s), forward_only=1" in result.stdout
+    events = _deploy_events(env)
+    assert any(event.startswith("migration-full ack=") for event in events)
+    assert not any(event.startswith("migration-token-probe ") for event in events)
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    receipt = json.loads(
+        (root / "ops/deployments" / f"{channel}-latest.json").read_text(
+            encoding="utf-8"
+        )
+    )["migration_receipt"]
+    assert receipt["forward_only"] == ["forward_only_nonprod.py"]
+    assert receipt["ack_forward_only"] is False
+    assert receipt["classification_decisions"] == [
+        {
+            "migration": "forward_only_nonprod.py",
+            "classification": "forward-only",
+            "is_forward_only": True,
+        }
+    ]
+
+
 def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
     tmp_path: Path,
 ) -> None:
@@ -2039,6 +2102,7 @@ def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
     env.update(
         {
             "FAKE_SHA": target_sha,
+            "APP_IMAGE_REPOSITORY": "example.invalid/pkm-app",
             "FAKE_MIGRATION_GATE_TOKEN": token,
             "DEPLOY_ACK_FORWARD_ONLY": "1",
         }
@@ -2056,6 +2120,7 @@ def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
     full_index = next(index for index, event in enumerate(events) if event.startswith("migration-full "))
     assert probe_index < stop_index < full_index
     assert "selector=1 ack=" in events[probe_index]
+    assert events[probe_index - 1] == f"migration-token-image=example.invalid/pkm-app:{target_sha}"
     assert events[full_index] == f"migration-full ack={token}"
 
 
@@ -2144,10 +2209,11 @@ def test_prod_forward_only_ambiguous_token_probe_prevents_writer_stop(
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
 
 
-def test_prod_forward_only_requires_existing_ack_before_token_probe(
+def test_prod_forward_only_requires_ack_before_writer_stop_when_pending(
     tmp_path: Path,
 ) -> None:
     root, env, previous_sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     pin_path = root / "config/deploy/prod.env"
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
@@ -2164,17 +2230,214 @@ def test_prod_forward_only_requires_existing_ack_before_token_probe(
     subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
     subprocess.run(["git", "commit", "-qm", "add ack-required migration"], cwd=root, check=True)
     target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-    env["FAKE_SHA"] = target_sha
+    env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_TOKEN": "prod-migration-ack.v1:" + "3" * 64,
+        }
+    )
 
     result = _run_deploy(root, env, target_sha, channel="prod")
 
     assert result.returncode == 42
-    assert "forward-only migrations require" in result.stderr
+    assert "--ack-forward-only is required before writer stop" in result.stderr
     events = _deploy_events(env)
-    assert not any(event.startswith("migration-token-probe ") for event in events)
+    assert any(event.startswith("migration-token-probe ") for event in events)
+    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{target_sha}" in events
     assert not any(" stop api worker watcher" in event for event in events)
     assert not (root / "config/deploy/prod.migration-pending.env").exists()
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+
+
+def test_prod_pending_forward_only_requires_ack_even_when_changed_migrations_are_reversible(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/reversible_source_delta.py"
+    migration.write_text(
+        'revision = "reversible_source_delta"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "reversible"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "add reversible migration delta"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_TOKEN": "prod-migration-ack.v1:" + "4" * 64,
+        }
+    )
+
+    result = _run_deploy(root, env, target_sha, channel="prod")
+
+    assert result.returncode == 42
+    assert "--ack-forward-only is required before writer stop" in result.stderr
+    events = _deploy_events(env)
+    assert any(event.startswith("migration-token-probe ") for event in events)
+    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{target_sha}" in events
+    assert not any(" stop api worker watcher" in event for event in events)
+    assert not (root / "config/deploy/prod.migration-pending.env").exists()
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+
+
+def test_prod_empty_migration_delta_still_requires_ack_for_live_pending_forward_only(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={current_sha}\n",
+        encoding="utf-8",
+    )
+    env.update(
+        {
+            "FAKE_SHA": current_sha,
+            "FAKE_MIGRATION_GATE_TOKEN": "prod-migration-ack.v1:" + "5" * 64,
+        }
+    )
+
+    result = _run_deploy(root, env, current_sha, channel="prod")
+
+    assert result.returncode == 42
+    assert "--ack-forward-only is required before writer stop" in result.stderr
+    events = _deploy_events(env)
+    assert "migration gate ok: 0 migration(s), forward_only=0" in result.stdout
+    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{current_sha}" in events
+    assert any(event.startswith("migration-token-probe ") for event in events)
+    assert not any(" stop api worker watcher" in event for event in events)
+    assert not (root / "config/deploy/prod.migration-pending.env").exists()
+    assert f"APP_IMAGE_TAG={current_sha}" in pin_path.read_text(encoding="utf-8")
+
+
+def test_prod_empty_delta_forward_only_failure_retries_through_durable_marker(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha = _deploy_harness(tmp_path)
+    (root / "code_only_change.py").write_text(
+        '"""A deployment commit with no migration-tree changes."""\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "code_only_change.py"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "add code-only deployment change"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={current_sha}\n",
+        encoding="utf-8",
+    )
+    token = "prod-migration-ack.v1:" + "6" * 64
+    env.update(
+        {
+            "APP_IMAGE_REPOSITORY": "example.invalid/pkm-app",
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_TOKEN": token,
+            "DEPLOY_ACK_FORWARD_ONLY": "1",
+            "FAKE_DOCKER_FAIL_MATCH": "exit-code-from migrate",
+        }
+    )
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+
+    first = _run_deploy(root, env, target_sha, channel="prod")
+
+    pending = root / "config/deploy/prod.migration-pending.env"
+    assert first.returncode == 24
+    assert "forward-only migration execution started and its commit state is ambiguous" in first.stderr
+    marker = pending.read_text(encoding="utf-8")
+    assert f"FROM_SHA={current_sha}" in marker
+    assert f"TARGET_SHA={target_sha}" in marker
+    assert "ACK_FORWARD_ONLY=1" in marker
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"migration-token-image=example.invalid/pkm-app:{target_sha}" in _deploy_events(env)
+
+    env.pop("FAKE_DOCKER_FAIL_MATCH")
+    env["FAKE_MIGRATION_GATE_RESULT"] = "prod-migration-no-forward-only-pending.v1"
+
+    second = _run_deploy(root, env, target_sha, channel="prod")
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "migration retry: revalidating" in second.stdout
+    assert not pending.exists()
+    migrate_events = [
+        event for event in _deploy_events(env) if "exit-code-from migrate" in event
+    ]
+    assert len(migrate_events) == 2
+
+
+def test_prod_metadata_only_forward_marker_delta_needs_no_ack_when_none_pending(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_marker_update.py"
+    migration.write_text(
+        'revision = "forward_only_marker_update"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "add forward-only classification marker"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_RESULT": "prod-migration-no-forward-only-pending.v1",
+        }
+    )
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+
+    result = _run_deploy(root, env, target_sha, channel="prod")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "no forward-only migration is pending; acknowledgement not required" in result.stdout
+    events = _deploy_events(env)
+    probe_index = next(
+        index for index, event in enumerate(events) if event.startswith("migration-token-probe ")
+    )
+    stop_index = next(index for index, event in enumerate(events) if " stop api worker watcher" in event)
+    full_index = next(index for index, event in enumerate(events) if event.startswith("migration-full "))
+    assert probe_index < stop_index < full_index
+    assert events[full_index] == "migration-full ack="
+    receipt = json.loads(
+        (root / "ops/deployments/prod-latest.json").read_text(encoding="utf-8")
+    )["migration_receipt"]
+    assert receipt["forward_only"] == ["forward_only_marker_update.py"]
+    assert receipt["ack_forward_only"] is False
 
 
 def test_forward_only_pull_failure_restores_previous_pin_before_migration(tmp_path: Path) -> None:
@@ -2224,10 +2487,13 @@ def test_target_commit_migration_is_classified_when_target_is_not_checked_out(
 
     result = _run_deploy(root, env, target_sha)
 
-    assert result.returncode == 42
-    assert "forward-only migrations require" in result.stderr
-    assert "migration gate blocked before recreate" in result.stderr
-    assert not (tmp_path / "docker-called").exists()
+    # DEV accepts a classified forward-only migration without PROD's
+    # acknowledgement. The fixture's version probe reports the old pin, so
+    # reaching that later gate proves classification read the target commit
+    # even though it is not checked out.
+    assert result.returncode == 1
+    assert "migration gate ok: 1 migration(s), forward_only=1" in result.stdout
+    assert "version gate failed" in result.stderr
 
 
 def test_migration_materialization_failure_blocks_before_pin_or_compose(

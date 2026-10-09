@@ -370,7 +370,7 @@ def test_prod_migration_gate_fails_closed_after_readiness_exhaustion(
     assert not token_log.exists()
 
 
-def test_gate_token_only_mode_fails_closed_without_forward_only_pending(
+def test_gate_token_only_reports_when_forward_only_is_not_pending_without_upgrading(
     tmp_path: Path,
 ) -> None:
     at_head_root, _child_path, at_head_log = _make_fixture(
@@ -380,8 +380,8 @@ def test_gate_token_only_mode_fails_closed_without_forward_only_pending(
     )
     at_head = _run_migration(at_head_root, at_head_log, gate_token_only=True)
 
-    assert at_head.returncode == 78
-    assert "token-only migration probe found no pending migration" in at_head.stderr
+    assert at_head.returncode == 0, at_head.stderr
+    assert at_head.stdout == "prod-migration-no-forward-only-pending.v1\n"
     assert "upgrade head" not in at_head_log.read_text(encoding="utf-8")
 
     reversible_root, _child_path, reversible_log = _make_fixture(
@@ -390,11 +390,8 @@ def test_gate_token_only_mode_fails_closed_without_forward_only_pending(
     )
     reversible = _run_migration(reversible_root, reversible_log, gate_token_only=True)
 
-    assert reversible.returncode == 78
-    assert (
-        "token-only migration probe found no forward-only pending migration"
-        in reversible.stderr
-    )
+    assert reversible.returncode == 0, reversible.stderr
+    assert reversible.stdout == "prod-migration-no-forward-only-pending.v1\n"
     assert "upgrade head" not in reversible_log.read_text(encoding="utf-8")
 
 

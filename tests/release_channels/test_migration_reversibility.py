@@ -71,6 +71,34 @@ class TestMarkerTaxonomy:
         assert result.is_forward_only is False
 
 
+def test_all_alembic_migrations_have_valid_reversibility_markers() -> None:
+    versions = Path(__file__).resolve().parents[2] / "app/alembic/versions"
+    migrations = sorted(path for path in versions.glob("*.py") if path.name != "__init__.py")
+
+    receipt = check_all_migrations(migrations)
+
+    assert receipt["migrations_checked"] == len(migrations)
+    assert migrations
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        ("202510241200_sot41_amg_core.py", FORWARD_ONLY),
+        ("5b8ff54bed0f_v4_5_fix_views_indexes.py", FORWARD_ONLY),
+        ("6841f6d42913_merge_heads.py", REVERSIBLE),
+        ("a80043832e29_v4_5_baseline_stores_decisions_.py", FORWARD_ONLY),
+        ("fe9a3607841f_bootstrap.py", FORWARD_ONLY),
+    ],
+)
+def test_legacy_migration_markers_reflect_authored_downgrades(
+    filename: str, expected: str
+) -> None:
+    path = Path(__file__).resolve().parents[2] / "app/alembic/versions" / filename
+
+    assert read_migration_marker(path) == expected
+
+
 # ---------------------------------------------------------------------------
 # AC2 — Pre-promotion checks fail when marker is missing or invalid
 # ---------------------------------------------------------------------------

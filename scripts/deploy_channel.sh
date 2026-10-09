@@ -26,7 +26,8 @@ usage:
 
 Environment:
   DEPLOY_DRY_RUN=1                  print the plan and stop before writes/docker
-  DEPLOY_ACK_FORWARD_ONLY=1         acknowledge forward-only migrations
+  DEPLOY_ACK_FORWARD_ONLY=1         PROD-only acknowledgment for forward-only migrations
+                                    DEV/TEST classify and record without requiring acknowledgment
   DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED=1
                                     acknowledge only the embedding-index rebuild transition
   DEPLOY_HEALTH_TIMEOUT_SECONDS=90  health gate timeout
@@ -273,6 +274,7 @@ resolve_target_sha() {
 
 MIGRATIONS_CHECKED=0
 FORWARD_ONLY_COUNT=0
+PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING=0
 DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING=0
 export DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
 FORWARD_ONLY_MIGRATION_STARTED=0
@@ -283,6 +285,7 @@ MIGRATION_EXECUTION_APPLIED=0
 # retry inherits a marker from an earlier migration attempt whose commit state
 # remains ambiguous until that retry reaches a successful migration execution.
 MIGRATION_PENDING_MARKER_CREATED=0
+MIGRATION_PENDING_ACK=0
 migration_materialize_dir="$(mktemp -d "${TMPDIR:-/tmp}/pkm-deploy-migrations.XXXXXX")"
 deploy_lock_dir=""
 trap 'rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
@@ -692,12 +695,6 @@ paths = [Path(p) for p in sys.argv[2:]]
 receipt = check_all_migrations(paths)
 receipt["ack_forward_only"] = ack
 print(json.dumps(receipt, sort_keys=True))
-if receipt["forward_only"] and not ack:
-    print(
-        "forward-only migrations require DEPLOY_ACK_FORWARD_ONLY=1 or --ack-forward-only",
-        file=sys.stderr,
-    )
-    sys.exit(42)
 PY
 )"
   else
@@ -759,22 +756,26 @@ print("1" if pending else "0")
 
 prepare_prod_forward_only_ack() {
   local gate_output gate_rc token token_lines
-  if [ "${action}" != "deploy" ] || [ "${channel}" != "prod" ] || \
-      [ "${FORWARD_ONLY_COUNT}" -eq 0 ]; then
+  if [ "${action}" != "deploy" ] || [ "${channel}" != "prod" ]; then
     return 0
   fi
 
-  # DEPLOY_ACK_FORWARD_ONLY is operator intent, not migration authority. Ask
-  # the production migrate producer for the exact live, target-bound token
-  # before any pin, pending marker, runtime mutation, or writer stop. A failed
-  # probe therefore leaves the current runtime untouched.
-  if [ "${ack_forward_only}" != "1" ]; then
-    echo "production forward-only migration requires the existing deploy acknowledgement" >&2
-    return 42
-  fi
+  # Probe every production deploy: an empty changed-migration delta does not
+  # prove the database is at the candidate's head (for example, after restore).
+  # The candidate's graph must be used, not whichever image remains in the
+  # channel pin. Bind both Compose image selectors to this resolved target for
+  # this invocation without writing the pin. Compose may fetch the candidate
+  # if it is not cached; token-only mode does not mutate the database or
+  # long-lived services. Any pending forward-only migration still requires
+  # acknowledgement before a pin, pending marker, runtime mutation, or writer
+  # stop.
   set +e
   export DEPLOY_MIGRATION_GATE_TOKEN_ONLY=1
-  gate_output="$(compose run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate)"
+  gate_output="$(
+    APP_IMAGE_REPOSITORY="${image_repository}" \
+      APP_IMAGE_TAG="${target_sha}" \
+      compose run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate
+  )"
   gate_rc=$?
   unset DEPLOY_MIGRATION_GATE_TOKEN_ONLY
   set -e
@@ -787,9 +788,20 @@ prepare_prod_forward_only_ack() {
     return 78
   }
   token="${token_lines}"
+  if [ "${token}" = "prod-migration-no-forward-only-pending.v1" ]; then
+    echo "production migration probe accepted: no forward-only migration is pending; acknowledgement not required"
+    return 0
+  fi
   if [[ ! "${token}" =~ ^prod-migration-ack\.v1:[0-9a-f]{64}$ ]]; then
     echo "production migration token probe returned an invalid decision token before writer stop" >&2
     return 78
+  fi
+  if [ "${ack_forward_only}" != "1" ]; then
+    echo "production forward-only migration is pending; --ack-forward-only is required before writer stop" >&2
+    return 42
+  fi
+  if [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
+    PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING=1
   fi
   PROD_MIGRATION_FORWARD_ONLY_ACK="${token}"
   export PROD_MIGRATION_FORWARD_ONLY_ACK
@@ -1153,7 +1165,8 @@ apply_changed_migrations() {
   # Rollback migrations are governed separately by rollback-promotion. Running
   # an older target image's `alembic upgrade head` against a newer stamped
   # database would fail before the known-good runtime can be restored.
-  if [ "${action}" != "deploy" ] || [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
+  if [ "${action}" != "deploy" ] || { [ "${MIGRATIONS_CHECKED}" -eq 0 ] && \
+      [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" != "1" ]; }; then
     return 0
   fi
 
@@ -1163,7 +1176,8 @@ apply_changed_migrations() {
   # migration authority explicitly before any target runtime is recreated.
   compose stop api worker watcher heimdal-capture-watch companion-ui || return $?
   MIGRATION_EXECUTION_STARTED=1
-  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ]; then
+  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ] || \
+      [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; then
     # From this point a nonzero Docker result is ambiguous: Alembic may have
     # committed before the client lost the container result. Fail closed by
     # retaining the schema-compatible target unless unchanged DB revision is
@@ -1172,7 +1186,8 @@ apply_changed_migrations() {
   fi
   compose up --abort-on-container-exit --exit-code-from migrate --force-recreate migrate || return $?
   MIGRATION_EXECUTION_APPLIED=1
-  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ]; then
+  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ] || \
+      [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; then
     FORWARD_ONLY_MIGRATION_APPLIED=1
   fi
   rm -f "${migration_pending_file}"
@@ -1189,7 +1204,8 @@ rollback_failed_startup() {
     forward_only_count="$("${PYTHON}" -c 'import json,os; print(len(json.loads(os.environ["MIGRATION_RECEIPT_JSON"]).get("forward_only", [])))' 2>/dev/null || printf 'unknown')"
   fi
   if [ "${MIGRATION_EXECUTION_STARTED}" = "1" ]; then
-    if [ "${forward_only_count}" = "0" ]; then
+    if [ "${forward_only_count}" = "0" ] && \
+        [ "${FORWARD_ONLY_MIGRATION_STARTED}" != "1" ]; then
       if [ "${MIGRATION_EXECUTION_APPLIED}" = "1" ]; then
         echo "${reason} (status ${original_status}); reversible migration(s) were applied but are not reversed by the deploy hot path; the target pin is retained until rollback-promotion proves and executes the governed reversal" >&2
       else
@@ -1202,6 +1218,10 @@ rollback_failed_startup() {
     else
       echo "${reason} (status ${original_status}); forward-only migration execution started and its commit state is ambiguous; the target pin is retained until unchanged database revision is proven or a compatible forward fix is applied" >&2
     fi
+    return 0
+  fi
+  if [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; then
+    echo "${reason} (status ${original_status}); retaining the target pin and same-target forward-only migration marker for explicit retry" >&2
     return 0
   fi
   if [ -n "${current_sha}" ] && \
@@ -1633,10 +1653,20 @@ if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then
   fi
   if [ "${pending_ack}" = "1" ]; then
     ack_forward_only=1
+    MIGRATION_PENDING_ACK=1
   fi
   echo "migration retry: revalidating ${migration_from_sha:-<no-baseline>}..${target_sha} from durable pending marker"
 fi
 migration_gate "${migration_from_sha}" "${target_sha}"
+if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ] && \
+    [ "${MIGRATION_PENDING_ACK}" = "1" ] && [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
+  # A prior acknowledged empty-delta attempt may have committed its live
+  # forward-only migration before losing the client result. The durable
+  # same-target marker plus a freshly recomputed empty Git migration delta
+  # keeps retry execution explicit even when the new probe says the DB is at
+  # the candidate head. FROM_SHA and TARGET_SHA may be different code commits.
+  PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING=1
+fi
 
 if [ "${dry_run}" = "1" ]; then
   echo "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
@@ -1648,12 +1678,6 @@ fi
 # must be established before the Keychain-backed migration secret is read.
 heimdal_raw_migration_secret_preflight || exit $?
 
-# Prime the same live production gate that the real migration container will
-# re-run after writer drain. This joins the existing deploy acknowledgement to
-# the target-bound token without permitting a missing/false acknowledgement to
-# create a stopped-writer recovery state.
-prepare_prod_forward_only_ack || exit $?
-
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2
   exit 86
@@ -1663,6 +1687,26 @@ if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ]; then
   "${PYTHON}" "${ROOT}/scripts/prod_devui_gateway_preflight.py" \
     "${ROOT}/docker-compose.prod.yml" || exit $?
 fi
+
+# Deploy-only by contract (#3903 Constraints): rollback must stay ungated so
+# the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).
+if [ "${channel}" = "prod" ] && [ "${action}" = "deploy" ]; then
+  prod_pending_retry_preflight || exit 87
+fi
+
+# Same deploy-only-by-contract posture as the prod gate above (#4230): dev and
+# test never previously ran any Compose environment:-vs-env_file: precedence
+# check before mutation.
+if { [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; } && [ "${action}" = "deploy" ]; then
+  dev_test_environment_env_file_clobber_preflight || exit 90
+fi
+
+# Prime the same live production gate that the real migration container will
+# re-run after writer drain. Run all no-Docker admission preflights first, so a
+# blocked host or channel preflight remains Docker-free. This joins the deploy
+# acknowledgment to the target-bound token before any host-state, pin, volume,
+# runtime, writer-stop, or database mutation.
+prepare_prod_forward_only_ack || exit $?
 
 prepare_instance_ownership_host_state_dir
 classify_rollback_runtime || exit $?
@@ -1678,25 +1722,14 @@ else
 fi
 export INSTANCE_STATE_LEGACY_ROLLBACK
 
-# Deploy-only by contract (#3903 Constraints): rollback must stay ungated so
-# the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).
-if [ "${channel}" = "prod" ] && [ "${action}" = "deploy" ]; then
-  prod_pending_retry_preflight || exit 87
-fi
-
-# Same deploy-only-by-contract posture as the prod gate above (#4230): dev and
-# test never previously ran any Compose environment:-vs-env_file: precedence
-# check before mutation.
-if { [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; } && [ "${action}" = "deploy" ]; then
-  dev_test_environment_env_file_clobber_preflight || exit 90
-fi
-
 ensure_prod_instance_state_volume
 
 DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 
-if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ] && \
+if [ "${action}" = "deploy" ] && \
+    { [ "${MIGRATIONS_CHECKED}" -gt 0 ] || \
+      [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; } && \
     [ ! -f "${migration_pending_file}" ]; then
   write_pending_migration "${migration_from_sha}" "${target_sha}"
   MIGRATION_PENDING_MARKER_CREATED=1

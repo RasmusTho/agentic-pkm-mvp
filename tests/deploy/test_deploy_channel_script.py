@@ -120,7 +120,10 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert "migration_gate" in text
     assert "DEPLOY_ACK_FORWARD_ONLY" in text
     assert "--ack-forward-only" in text
-    assert "forward-only migrations require" in text
+    assert (
+        "production forward-only migration is pending; --ack-forward-only is required"
+        in text
+    )
     assert "migration gate blocked before recreate" in text
     runtime_env_resolve = text.index(
         "_deploy_channel_resolve_runtime_env_file", text.index("pin_file=")
@@ -141,6 +144,17 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert run_block.index("heimdal_raw_migration_secret_preflight") < run_block.index(
         "write_pin"
     )
+    forward_only_probe = run_block.index("prepare_prod_forward_only_ack || exit")
+    for preflight in (
+        "heimdal_raw_migration_secret_preflight || exit $?",
+        "scripts/companion_ui_postdeploy_smoke.sh preflight",
+        "prod_devui_gateway_preflight",
+        "prod_pending_retry_preflight || exit 87",
+        "dev_test_environment_env_file_clobber_preflight || exit 90",
+    ):
+        assert run_block.index(preflight) < forward_only_probe
+    assert forward_only_probe < run_block.index("prepare_instance_ownership_host_state_dir")
+    assert forward_only_probe < run_block.index("ensure_prod_instance_state_volume")
     assert run_block.index("write_pin") < run_block.index("pull_channel_images")
     assert run_block.index("pull_channel_images") < run_block.index(
         "prepare_instance_state_deployment"

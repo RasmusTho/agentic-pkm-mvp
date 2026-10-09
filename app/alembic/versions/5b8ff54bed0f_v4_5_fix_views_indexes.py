@@ -4,6 +4,7 @@ import sqlalchemy as sa
 # Alembic identifiers
 revision = "5b8ff54bed0f"
 down_revision = "a80043832e29"
+reversibility = "forward-only"
 branch_labels = None
 depends_on = None
 
