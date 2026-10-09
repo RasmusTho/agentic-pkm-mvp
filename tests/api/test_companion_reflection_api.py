@@ -18,7 +18,10 @@ def client() -> TestClient:
 
 
 def test_workspace_offer_is_inert_until_explicit_reflection_action(
-    client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_product_api_routes,
 ) -> None:
     vault = tmp_path / "vault"
     manager = bind_initialized_vault(monkeypatch, vault)

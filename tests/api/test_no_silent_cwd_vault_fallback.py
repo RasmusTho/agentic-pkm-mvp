@@ -125,6 +125,7 @@ def test_api_request_endpoints_preserve_selected_vault_behavior(
     client: TestClient,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    mock_product_api_routes,
 ) -> None:
     vault = tmp_path / "selected-vault"
     bind_initialized_vault(monkeypatch, vault, store_dir=tmp_path)

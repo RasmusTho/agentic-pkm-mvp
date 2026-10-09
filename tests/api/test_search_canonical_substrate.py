@@ -64,7 +64,7 @@ def _seed_durable_index() -> list[UUID]:
     return ids
 
 
-def test_search_reads_durable_index() -> None:
+def test_search_reads_durable_index(mock_product_api_routes) -> None:
     """/search results vary with the query and surface freshly indexed notes,
     from the same durable substrate /api/ask retrieval reads."""
     _seed_durable_index()
