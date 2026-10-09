@@ -1,6 +1,15 @@
 .PHONY: fmt lint test eval docs smoke ci-smoke setup-merge-driver hygiene-logs indexer-run transcribe qa cold-boot start verify verify-runtime doctor persist-runtime-repairs install-skills test-vault-init bootstrap-test-channel bootstrap-test-channel-config start-test-system test-bootstrap prepare-instance-ownership dev-up dev-down dev-start-full prod-up prod-down prod-start-full test-start-full test-up test-down deploy-dev deploy-test deploy-prod rollback-dev rollback-test rollback-prod check-test-channel check-prod-channel live-prod-probe live-prod-backup-probe dev-ui dev-ui-doctor test-ui test-ui-doctor prod-ui prod-ui-doctor dispatcher-init dispatcher-sync db-snapshot db-restore db-dump-prod
 
-PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
+DEFAULT_PYTHON = $(shell if [ -x .venv/bin/python ]; then printf '%s' .venv/bin/python; elif command -v python3.12 >/dev/null 2>&1; then command -v python3.12; elif command -v python3 >/dev/null 2>&1; then command -v python3; elif command -v python >/dev/null 2>&1; then command -v python; fi)
+PYTHON ?= $(DEFAULT_PYTHON)
+# Validation needs target-specific tools; an executable partial venv is not
+# sufficient. Leave explicit command-line/environment overrides authoritative.
+# With no complete candidate, keep the default so the command fails visibly.
+python_with_modules = $(or $(shell for candidate in .venv/bin/python python3.12 python3 python; do if command -v "$$candidate" >/dev/null 2>&1 && "$$candidate" -c 'import $(1)$(if $(2),; import $(2))' >/dev/null 2>&1; then command -v "$$candidate"; break; fi; done),$(DEFAULT_PYTHON))
+ifeq ($(origin PYTHON),file)
+test: PYTHON = $(call python_with_modules,pytest)
+lint: PYTHON = $(call python_with_modules,ruff,mypy)
+endif
 # Test vault root for bootstrap / seeded test startup lanes. Honors an
 # explicit TEST_VAULT_ROOT make/env override first, then VAULT_ROOT_TEST, then
 # the repo-local scratch vault. Plain VAULT_ROOT is a runtime binding and may
