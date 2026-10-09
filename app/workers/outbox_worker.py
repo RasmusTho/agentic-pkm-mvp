@@ -62,7 +62,7 @@ from app.services.indexer import (
     purge_object_vectors,
     resolve_event_object_id,
 )
-from app.services.companion_note import CompanionNote, scan_attachments, write_companion
+from app.services.companion_note import CompanionNote, is_companion_path, scan_attachments, write_companion
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import (
@@ -564,7 +564,7 @@ def _trace_id_from_envelope(envelope: object) -> str | None:
     return str(raw) if raw else None
 
 
-def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
+def handle_ingest_object_deleted(payload: Mapping[str, Any], *, vault_root: Path | None = None) -> None:
     """Purge the deleted object's vectors from the durable index (T-delete).
 
     The purge itself is delegated to
@@ -601,6 +601,14 @@ def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
     on for their own purge+upsert writes -- this handler does not need its
     own bespoke cache-eviction path to stay consistent with that contract.
     """
+    resolved_root = _resolve_optional_vault_root(vault_root)
+    if any(
+        is_companion_path(Path(str(payload[key])), resolved_root)
+        for key in ("path", "relative_path", "vault_path", "source_ref")
+        if payload.get(key)
+    ):
+        logger.info("ingest delete skipped: companion continuity file")
+        return
     raw_uuid = resolve_event_object_id(dict(payload))
     object_id: UUID | None = None
     if raw_uuid:
@@ -1568,6 +1576,9 @@ def handle_panel_scan_requested(
 ) -> WorkerPanelSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
+    if is_companion_path(note_path, resolved_root):
+        logger.info("panel scan skipped: companion continuity file")
+        return WorkerPanelSummary(emitted=0)
 
     # Capture runtime start timestamp for latency tracking
     runtime_start_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -1733,6 +1744,9 @@ def handle_ingest_vault_changed(
 ) -> WorkerIngestSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
+    if is_companion_path(note_path, resolved_root):
+        logger.info("ingest skipped: companion continuity file")
+        return WorkerIngestSummary(ingested=0)
 
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
@@ -1830,7 +1844,7 @@ def handle_ingest_vault_changed(
         "kind": "note",
     }
 
-    handle_ingest_object_created(ingest_obj)
+    handle_ingest_object_created(ingest_obj, vault_root=resolved_root)
     return WorkerIngestSummary(ingested=1)
 
 

@@ -36,6 +36,7 @@ from app.knowledge.write_ops import read_note_text_with_version
 from app.knowledge.write_ops import write_note_from_absolute
 from app.journaling.review import process_journal_reviews_tick
 from app.objects import resolve_canonical_object_id
+from app.services.companion_note import is_companion_path
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
@@ -164,6 +165,8 @@ def _scan_markdown_many(
             _mark_scan_incomplete(summary, reason="relative_path")
             continue
         if any(part.startswith(".") for part in rel.parts):
+            continue
+        if is_companion_path(path, vault_root):
             continue
         # Settings sources are a runtime control surface, not ordinary
         # watcher content.  Always include them even when a user narrows
@@ -1442,6 +1445,11 @@ def _next_incremental_markdown(
 
         frame = state.scan_stack[-1]
         directory = selected_real / frame["dir"]
+        # A retained pre-fix DFS checkpoint may resume inside companions.
+        # Advance that cursor without publishing its shared source UUID.
+        if is_companion_path(directory, selected_real):
+            state.scan_stack.pop()
+            continue
         try:
             resolved_directory = directory.resolve()
             resolved_directory.relative_to(selected_real)
@@ -1504,6 +1512,8 @@ def _next_incremental_markdown(
         if candidate_is_dir:
             if candidate_is_symlink:
                 continue
+            if candidate.name == "companions" and is_companion_path(candidate, selected_real):
+                continue
             marker = candidate.joinpath("settings", "vault.md")
             try:
                 marker_is_file = stat_module.S_ISREG(marker.stat().st_mode)
@@ -1523,6 +1533,8 @@ def _next_incremental_markdown(
         if not candidate.name.endswith(".md") or not candidate_is_file:
             continue
         if is_conflict_artifact(candidate.name):
+            continue
+        if is_companion_path(candidate, selected_real):
             continue
         try:
             rel = candidate.relative_to(selected_real)
@@ -2494,6 +2506,9 @@ def _run_spec_tick(
         )
     if scan_completed and scan_clean and not delivery_failed:
         if state._observation_store is not None:
+            # Excluded historical companion rows are observations only.
+            # Prune them here, never via a source-delete/UUID purge: the note
+            # and its continuity file deliberately share identity.
             state.prune_unseen_generation(
                 retain=pending_runtime_gating_deletions
                 | pending_settings_source_deletions

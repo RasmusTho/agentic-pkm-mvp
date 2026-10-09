@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.vault.paths import get_vault_system_dir_rel
+from app.vault.paths import get_vault_system_dir_rel, resolve_vault_system_dir_rel_or_default
 from app.write_guard import DEFAULT_WRITE_GUARD
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
@@ -117,6 +117,35 @@ def _heal_log_path(vault_root: Path | None = None) -> Path:
 def companion_path(uuid: str, vault_root: Path | None = None) -> Path:
     """Return the vault-relative path for a companion file."""
     return _companions_dir(vault_root) / f"{uuid}.md"
+
+
+def is_companion_path(path: Path, vault_root: Path | None = None) -> bool:
+    """Whether a locator belongs to the retained companion continuity set.
+
+    Accept vault-relative paths and absolute paths inside the bound vault,
+    including missing files during deletion/replay. Exclude only canonical and
+    legacy companion subtrees, preserving ordinary system-folder sources.
+    """
+    directories = [_LEGACY_COMPANIONS_DIR]
+    if vault_root is not None:
+        root = vault_root.expanduser().resolve()
+        candidate = path if path.is_absolute() else root / path
+        directories.append(Path(resolve_vault_system_dir_rel_or_default(root)) / "companions")
+        # Preserve the lexical system-owned boundary even for a missing file
+        # or a symlink. An ordinary symlink to a companion is excluded too.
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            return False
+        if any(relative.is_relative_to(directory) for directory in directories):
+            return True
+        try:
+            path = candidate.resolve().relative_to(root)
+        except (OSError, ValueError):
+            return False
+    elif path.is_absolute():
+        return False
+    return any(path.is_relative_to(directory) for directory in directories)
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +515,7 @@ __all__ = [
     "IDENTITY_HISTORY_MAX",
     "IdentityHistoryEntry",
     "companion_path",
+    "is_companion_path",
     "find_companion_by_content_hash",
     "find_duplicate_companions",
     "read_companion",
