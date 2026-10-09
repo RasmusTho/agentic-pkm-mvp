@@ -56,12 +56,13 @@ def test_ranking_rejects_non_object_json_without_raising(
     assert run.result == {"ranking": []}
 
 
-def test_review_uses_mock_result_when_provider_is_unconfigured(
+def test_review_uses_mock_result_when_effective_provider_is_mock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("REASONING_PROVIDER", "llm")
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "mock")
     monkeypatch.delenv("CI", raising=False)
     reset_store_backends()
     object_id = _store_note()
@@ -102,12 +103,13 @@ def test_review_honors_forced_real_provider_before_mock_result(
     assert len(calls) == 1
 
 
-def test_ranking_uses_mock_result_when_provider_is_unconfigured(
+def test_ranking_uses_mock_result_when_effective_provider_is_mock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("STORE_BACKEND", "memory")
     monkeypatch.setenv("REASONING_PROVIDER", "llm")
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "mock")
     monkeypatch.delenv("CI", raising=False)
     reset_store_backends()
     object_id = _store_note()

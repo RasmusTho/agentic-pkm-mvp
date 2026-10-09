@@ -217,6 +217,8 @@ def test_provider_failure_trace_preserves_degraded_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_reasoning_env(monkeypatch)
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_FORCE_MODEL", "gpt-6-luna")
     reset_store_backends()
     store = get_object_store()
     object_id = UUID("66666666-6666-6666-6666-666666666666")
@@ -244,8 +246,8 @@ def test_provider_failure_trace_preserves_degraded_outcome(
     assert run.result["degraded_reason"] == "provider_failure"
     assert captured == [
         {
-            "provider": "ollama",
-            "model": "llama3.1:8b",
+            "provider": "openai",
+            "model": "gpt-6-luna",
             "agent": "reasoning",
             "kind": "reasoning.claims",
             "messages": [],

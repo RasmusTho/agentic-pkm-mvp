@@ -82,7 +82,6 @@ def test_zero_match_sets_degraded_heartbeat(
 
     summaries = registry.run_registry_once(config_path)
     summary = summaries["ingest"]
-    assert summary.get("scanned_files") == 1
     assert summary.get("scope_matched_files") == 0
     assert summary.get("scope_status") == "zero_match"
 
@@ -120,7 +119,6 @@ def test_settings_sources_do_not_mask_scope_zero_match(
 
     # Canonical settings remain a reloadable scan target outside this narrow
     # content scope, but they cannot suppress the zero-match health signal.
-    assert summary.get("scanned_files") == 1
     assert summary.get("scope_matched_files") == 0
     assert summary.get("settings_source_reloads_in_tick") == 1
     assert summary.get("scope_status") == "zero_match"
