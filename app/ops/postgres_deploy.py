@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 
 from app.config.database import resolve_database_url, normalize_database_url
 from app.ops.bws_secret_admin import SecretCopy
+from app.ops.bws_secret_reader import BwsItemAbsent
 from app.ops.host_secret_bootstrap import _resolve_bws_consumer_values, validate_secret_value
 from app.ops.host_secret_contract import CHANNEL_PROJECTS, DATABASE_CONSUMERS, load_host_secret_contract
 from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
@@ -68,8 +69,8 @@ class DeployReceipt:
     def validate(self) -> None:
         if (str(UUID(self.operation_id)) != self.operation_id or self.channel not in CHANNEL_PROJECTS
             or self.kind != 'deploy'
-            or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'committed', 'aborted'}
-            or self.terminal_result != (self.stage if self.stage in {'committed', 'aborted'} else None)):
+            or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'committed', 'aborted', 'failed'}
+            or self.terminal_result != (self.stage if self.stage in {'committed', 'aborted', 'failed'} else None)):
             raise PostgresDeployError()
 
     def evidence(self) -> TerminalEvidence:
@@ -173,13 +174,13 @@ class DeployJournal:
 
     def write(self, operation_id: str, stage: str) -> DeployReceipt:
         receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
-                                stage if stage in {'committed', 'aborted'} else None)
+                                stage if stage in {'committed', 'aborted', 'failed'} else None)
         receipt.validate()
         previous = self.read()
         successors = {
             'prepared': {'preflighted', 'aborted'}, 'preflighted': {'materialized', 'aborted'},
             'materialized': {'authenticating', 'activating', 'aborted'},
-            'authenticating': {'activating', 'aborted'}, 'activating': {'committed', 'aborted'},
+            'authenticating': {'activating', 'aborted'}, 'activating': {'committed', 'aborted', 'failed'},
         }
         if previous and previous.terminal_result is None:
             if previous.operation_id != operation_id or stage not in successors.get(previous.stage, set()):
@@ -207,9 +208,16 @@ class DeployJournal:
 def vm_selected_values(plan: DeployPlan, reader: Any) -> dict[str, dict[str, str]]:
     plan.validate()
     contract = load_host_secret_contract()
+    # Reuse one successful or absent lookup only within this preflight. The
+    # worker calls this function again at each boundary to re-read BWS state.
+    lookup_cache: dict[tuple[str, str], str | BwsItemAbsent] = {}
     try:
-        return {consumer: _resolve_bws_consumer_values(plan.channel, consumer, contract, reader)
-                for consumer in plan.consumers}
+        values = {}
+        for consumer in plan.consumers:
+            values[consumer] = _resolve_bws_consumer_values(
+                plan.channel, consumer, contract, reader, lookup_cache=lookup_cache
+            )
+        return values
     except Exception:
         raise PostgresDeployError() from None
 

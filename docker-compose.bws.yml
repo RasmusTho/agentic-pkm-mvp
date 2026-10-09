@@ -15,6 +15,7 @@ services:
     entrypoint:
       - /bin/bash
       - /usr/local/bin/yggdrasil-postgres-entrypoint.sh
+    command: ["postgres"]
     volumes:
       - type: volume
         source: bws_pgdata

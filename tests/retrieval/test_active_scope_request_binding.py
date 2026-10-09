@@ -33,7 +33,10 @@ from app.retrieval.capability import RetrievalHit, RetrievalRequest, retrieve
 from app.retrieval.hybrid import get_store
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 @pytest.fixture(autouse=True)
+
 def _isolated_store(monkeypatch):
     """Clean store around every test, so scope decides membership rather than leftover state."""
     monkeypatch.setenv("LLM_PROVIDER", "mock")

@@ -116,9 +116,20 @@ if any(len(entries) != 1 for entries in values.values()):
 uid, gid = values["LOCAL_UID"][0], values["LOCAL_GID"][0]
 if not re.fullmatch(rb"[0-9]+", uid) or not re.fullmatch(rb"[0-9]+", gid):
     raise SystemExit(2)
-if not uid.lstrip(b"0") or not gid.lstrip(b"0"):
+uid_text = uid.lstrip(b"0") or b"0"
+gid_text = gid.lstrip(b"0") or b"0"
+if len(uid_text) > 10 or len(gid_text) > 10:
     raise SystemExit(2)
-print(uid.decode("ascii") + "\t" + gid.decode("ascii"))
+uid_value = int(uid_text)
+gid_value = int(gid_text)
+if (
+    uid_value == 0
+    or gid_value == 0
+    or uid_value > 4_294_967_294
+    or gid_value > 4_294_967_294
+):
+    raise SystemExit(2)
+print(str(uid_value) + "\t" + str(gid_value))
 PY
     )"; then
       echo "runtime identity preflight: blocked reason=invalid_runtime_env" >&2

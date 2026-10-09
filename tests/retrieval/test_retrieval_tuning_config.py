@@ -33,7 +33,7 @@ from app.retrieval.tuning import (
 )
 from app.settings import runtime
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 _TUNING_ENV_KEYS = (
     "RERANK_ENABLE",

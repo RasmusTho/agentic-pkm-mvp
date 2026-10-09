@@ -39,6 +39,8 @@ from app.vault.manager import VaultManager
 # test exercise the real init-only vault state instead of the fixture's
 # explicit defaults masking the missing layout note (same rationale as
 # tests/relevance/test_relevance_tick_initialized_vault.py::clear_layout_env).
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 _LAYOUT_ENV_VARS = (
     "VAULT_SYSTEM_DIR_REL",
     "VAULT_INBOX_DIR_REL",

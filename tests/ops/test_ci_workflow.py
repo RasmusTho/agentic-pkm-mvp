@@ -1135,13 +1135,75 @@ def test_dispatch_only_ci_workflows_are_retired_without_stale_references() -> No
     assert "- CI Smoke" in failure_context
 
 
-def test_ci_smoke_runs_import_linter_on_app_paths() -> None:
-    job = _contract_job_text()
+def test_pr_ci_runs_each_owned_contract_check_once() -> None:
+    """PR and non-PR graphs each have one owner for the import check."""
+    smoke = yaml.safe_load(_smoke_text())
+    import_linter = yaml.safe_load(
+        IMPORT_LINTER_WORKFLOW.read_text(encoding="utf-8")
+    )
 
-    assert "import-linter==2.11" in job
-    assert "lint-imports --config importlinter.ini" in job
-    assert "'app/**'" in job
-    assert "'importlinter.ini'" in job
+    import_workflow = IMPORT_LINTER_WORKFLOW.read_text(encoding="utf-8")
+    assert import_workflow.count("lint-imports --config importlinter.ini") == 1
+    smoke_import_steps = [
+        step
+        for step in smoke["jobs"]["contract-validation"]["steps"]
+        if "lint-imports --config importlinter.ini" in step.get("run", "")
+    ]
+    assert len(smoke_import_steps) == 1
+    assert smoke_import_steps[0]["if"] == "github.event_name != 'pull_request'"
+
+    smoke_runs = "\n".join(
+        step.get("run", "")
+        for job in smoke["jobs"].values()
+        for step in job.get("steps", [])
+    )
+    assert "pytest -c /dev/null tests/architecture/test_pr_hot_path_governance.py" not in smoke_runs
+
+    # PyYAML 1.1 parses the YAML 1.2 `on` key as boolean True.
+    trigger = import_linter[True]
+    assert "pull_request" in trigger
+    assert "workflow_dispatch" in trigger
+    assert set(trigger["pull_request"]["paths"]) >= {
+        "app/**",
+        "importlinter.ini",
+        ".github/workflows/import-linter.yaml",
+        ".github/workflows/ci-smoke.yaml",
+    }
+
+
+def test_deduplicated_contract_checks_preserve_failure_and_trigger_coverage() -> None:
+    smoke = yaml.safe_load(_smoke_text())
+    import_workflow = IMPORT_LINTER_WORKFLOW.read_text(encoding="utf-8")
+    contract_job = _contract_job_text()
+    unit_job = _unit_tests_job_text()
+
+    # The dedicated import-boundary job remains blocking and covers the same
+    # PR surfaces that previously reached the duplicate CI Smoke invocation.
+    assert "continue-on-error" not in import_workflow
+    assert "lint-imports --config importlinter.ini" in import_workflow
+    smoke_import_steps = [
+        step
+        for step in smoke["jobs"]["contract-validation"]["steps"]
+        if "lint-imports --config importlinter.ini" in step.get("run", "")
+    ]
+    assert len(smoke_import_steps) == 1
+    assert smoke_import_steps[0]["if"] == "github.event_name != 'pull_request'"
+    assert "'app/**'" in import_workflow
+    assert "'importlinter.ini'" in import_workflow
+    assert "'.github/workflows/ci-smoke.yaml'" in import_workflow
+
+    # CI Smoke keeps its unique contract gates and owns import-linter only for
+    # non-PR events, where the dedicated pull_request workflow does not run.
+    assert "openapi:" in contract_job
+    assert "yaml_json:" in contract_job
+    assert "import-linter" in contract_job
+    assert "lint-imports --config importlinter.ini" in contract_job
+
+    # The selector-owned governance test remains a real failure-propagating
+    # pytest target in the scoped Unit tests lane.
+    assert "tests/architecture" in unit_job
+    assert "Run scoped not-pg unit tests" in unit_job
+    assert "pytest ${{ steps.select-tests.outputs.pytest_args }} --durations=20" in unit_job
 
 
 def test_ci_smoke_validates_openapi_and_contract_surfaces() -> None:
@@ -1164,7 +1226,6 @@ def test_ci_smoke_new_gates_skip_docs_only_pull_requests() -> None:
     assert "steps.changes.outputs.code == 'true'" in unit_job
 
     assert "uses: dorny/paths-filter@v3" in contract_job
-    assert "steps.changes.outputs.imports == 'true'" in contract_job
     assert "steps.changes.outputs.openapi == 'true'" in contract_job
     assert "steps.changes.outputs.yaml_json == 'true'" in contract_job
 

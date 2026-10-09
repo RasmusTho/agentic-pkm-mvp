@@ -38,6 +38,7 @@ def _merged_compose(
     explicit_vault: Path | None = None,
     llm_provider: str | None = None,
     model_access_bindings: dict[str, str] | None = None,
+    project_name: str = "pkm-test-contract",
 ) -> dict[str, object]:
     env = os.environ.copy()
     for key in (
@@ -81,7 +82,7 @@ def _merged_compose(
                 str(TEST_VAULT_COMPOSE),
             ]
         )
-    command.extend(["-p", "pkm-test-contract", "config", "--format", "json"])
+    command.extend(["-p", project_name, "config", "--format", "json"])
 
     result = subprocess.run(
         command,
@@ -236,6 +237,18 @@ def test_test_migrate_uses_app_test_dsn(tmp_path: Path) -> None:
     assert migrate["DATABASE_URL"] == "postgresql+psycopg://app:app@db:5432/app_test"
     assert migrate["DB_DSN"] == "postgresql+psycopg://app:app@db:5432/app_test"
     assert migrate["LLM_PROVIDER"] == "mock"
+
+
+def test_test_db_uses_named_channel_volume(tmp_path: Path) -> None:
+    runtime_env = tmp_path / "runtime.env"
+    runtime_env.write_text("", encoding="utf-8")
+    compose = _merged_compose(runtime_env, project_name="pkm-test")
+    services = _services(compose)
+    volumes = compose["volumes"]
+    assert isinstance(volumes, dict)
+
+    assert _mount_source(services["db"], "/var/lib/postgresql/data") == "pgdata"
+    assert volumes["pgdata"]["name"] == "pkm-test_pgdata"
 
 
 def test_test_runtime_services_idle_without_vault_binding(tmp_path: Path) -> None:

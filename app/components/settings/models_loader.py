@@ -9,7 +9,8 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 
-DEFAULT_MODEL_REGISTRY_PATH = Path("docs/settings/models/registry.yaml")
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_MODEL_REGISTRY_PATH = _REPOSITORY_ROOT / "docs/settings/models/registry.yaml"
 
 
 class ModelRegistryEntry(BaseModel):
@@ -72,11 +73,14 @@ def load_model_registry(path: Path | None = None) -> ModelRegistry:
 
 
 def load_models(path: Path | None = None) -> Dict[str, ModelDescriptor]:
+    using_default_registry = not os.getenv("MODEL_REGISTRY_PATH") and path is None
     reg = load_model_registry(path=path)
     result: Dict[str, ModelDescriptor] = {}
 
     for entry in reg.models:
         p = Path(entry.path)
+        if using_default_registry and not p.is_absolute():
+            p = _REPOSITORY_ROOT / p
         if not p.exists():
             raise FileNotFoundError(f"Model file not found for {entry.id}: {p}")
 

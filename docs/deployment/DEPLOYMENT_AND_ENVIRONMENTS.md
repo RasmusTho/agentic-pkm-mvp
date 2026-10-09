@@ -77,6 +77,33 @@ The first inventory receipt is produced and validated only through the linked ow
 [`devsystem_vm102_component_inventory.v1` executable boundary](../BUILDEROPS_CONTROL_PLANE/README.md#vm-102-evidence-and-receipt-contract);
 this deployment contract does not collect host evidence or duplicate its schema.
 
+### Infrastructure-to-application interface (Issue #5856; preparation only)
+
+A future private infrastructure repository may prepare the selected host and guest prerequisites,
+but it does not become a second deployment owner. Its redaction-safe interface to this document is
+limited to the selected guest identity, private endpoint or ingress reference, storage/network
+attachment references, and prerequisite readiness. It must not publish secrets, private host
+identifiers, database paths, vault paths, or a mutable application checkout.
+
+The application side supplies an immutable image/source identity, selected channel configuration,
+migration classification, and release/deployment receipt. Application artifacts and image builds,
+Compose service topology, migrations, database/data and vault semantics, channel selection,
+promotion, rollback, and runtime health remain owned by this deployment contract and their linked
+Product/Runtime owners. A future normal sequence is infrastructure plan and approved effect → guest
+prerequisite check → this document's deploy/migration/health gates; a plan or guest check cannot
+authorize the next stage.
+
+The finite pilot described in [the Platform and Operations owner](../YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md#proposed-separate-infrastructure-repository-and-disposable-pilot-issue-5856-preparation-only)
+uses one disposable dev/test resource and proves provider import/plan, least-privilege scope,
+protected state and guest checks. It does not qualify VM-102, admit the complete Dev System, select
+a Product Runtime channel, or change the current deployment sequence. Host/VM qualification remains
+[#5052](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5052), the BuilderOps control-plane
+contract remains [#3788](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3788), the startup
+validation chain remains [#4913](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4913), and
+secret/provider qualification remains [#5667](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667).
+Those issues retain their lifecycle owners; this preparation neither adopts their children nor
+introduces a new complete-platform admission gate.
+
 ## Product Runtime channel placement
 
 The intended Product Runtime placement for all three channels (`dev`, `test`, and `prod`) is the
@@ -197,10 +224,14 @@ and identical fail-loud preflight for API, worker, watcher, and Heimdal capture 
 resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`. It does not invent a
 missing registry or ledger during consumer preflight. The host bind source is resolved before
 Compose interpolation to the canonical absolute
-`${XDG_STATE_HOME:-$HOME/.local/state}/agentic-pkm/instance-ownership` path (or an explicit absolute
-override), so separate checkouts and all three channel projects mount the same ledger. Compose may
-not create a checkout-relative substitute. Every consumer rejects any active host-global deployment
-lease, including a lease owned by another channel, before reading or mutating channel state.
+`${XDG_STATE_HOME:-$HOME/.local/state}/agentic-pkm/instance-ownership` path for a non-root caller. The
+root BWS systemd supervisor uses an explicit `XDG_STATE_HOME` when configured and otherwise derives
+that same default from the validated runtime UID's passwd home, so it never selects a state directory
+below `/root`; an explicit absolute `INSTANCE_OWNERSHIP_HOST_STATE_DIR` remains authoritative.
+Separate checkouts and all three channel projects therefore mount the same ledger. Compose may not
+create a checkout-relative substitute.
+Every consumer rejects any active host-global deployment lease, including a lease owned by another
+channel, before reading or mutating channel state.
 
 Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
 `scripts/lib/instance_state_deployment.sh`. Before the first init or any lease/fence mutation, the
@@ -467,7 +498,9 @@ runs the digest.
 
 Every channel's `api`/`worker`/`watcher`/`heimdal-capture-watch` service runs as `user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"` (`docker-compose.yaml`), populated from the host user via `scripts/export_runtime_env.sh` — not as `root`, and not as a fixed container uid. The image itself is built as `root` (`Dockerfile` has no `USER` directive), so every path `COPY . .` creates, and every directory that exists in the repo tree at build time, is `root:root`-owned in the resulting image.
 
-For pinned channel deployments, `scripts/deploy_channel.sh` reads only the numeric `LOCAL_UID` and `LOCAL_GID` fields from the selected governed runtime env and exports them before its first Compose call. This gives Compose interpolation (including each service's `user:`) and `instance-state-init` the same process identity. The runtime env remains a service `env_file`, not Compose's CLI `--env-file`, so its DSNs and other runtime values are not interpolated into the deployment model. BWS deployments stop before pin or Docker mutation when the governed identity is missing, duplicated, or malformed; local use without a generated runtime env retains its host-identity fallback.
+For pinned channel deployments, `scripts/deploy_channel.sh` reads only the numeric `LOCAL_UID` and `LOCAL_GID` fields from the selected governed runtime env and exports them before its first Compose call. This gives Compose interpolation (including each service's `user:`) and `instance-state-init` the same process identity. The runtime env remains a service `env_file`, not Compose's CLI `--env-file`, so its DSNs and other runtime values are not interpolated into the deployment model. BWS deployments stop before pin or Docker mutation when the governed identity is missing, duplicated, malformed, or outside the supported UID/GID range; local use without a generated runtime env retains its host-identity fallback.
+
+The systemd BWS deployment service runs as root to use its encrypted credentials and control Docker. Root is the deployment supervisor; host-global instance-ownership state remains owned by the validated `LOCAL_UID`/`LOCAL_GID`. The ownership directory stays canonical and mode `0700`. Its ledger lock, any recovery of a journaled key rotation, and ledger reads that produce deployment evidence run under that runtime identity, so ledger files remain private and runtime-owned. Host-produced MVR-05 fence plans are atomically delivered with mode `0600` and runtime ownership before the runtime one-shot reads them. New settings-rebind floor receipts are written with mode `0600` and runtime ownership; the root rollback guard also accepts an older private receipt that the previous supervisor wrote as `root:root`. An existing ownership directory with an unexpected owner is rejected before permissions or ownership are changed.
 
 This is a structural mismatch: any code path that lazily creates a directory under `/app` at first use (`Path(...).mkdir(parents=True, exist_ok=True)`) fails with `PermissionError` under the non-root runtime uid unless that directory was pre-created **and** made writable by all uids at build time. Two runtime-writable surfaces have needed this treatment so far:
 
@@ -557,6 +590,7 @@ prove BWS permissions, token installation, host cleanup, deployment, or live cha
 | Normal writer / missing-copy recovery | `scripts/secrets import <channel> <secret> --stdin`; `SecretAdmin.import_stdin` through `HostSecretController` | Value arrives only on stdin; the controller lock is held; both project pre-states or absence tombstones and the prepared operation record are fsynced before the first provider write; shared values are read back before terminal commit. | `tests/ops/test_secret_admin.py` stdin, parity, history, partial-failure, and unknown-outcome tests. The one-normal-writer restriction and human-admin boundary require the #5667 owner decision and redacted live evidence. |
 | VM reader-token recovery | `scripts/secrets push-token <vm>`; the `bws_token_push` actions (`token-push-inspect`, `token-push`, `token-push-worker`, `token-push-status`) via the installed `yggdrasil-bws-deploy` launcher | Existing target mapping; root-owned supervised launcher and systemd credential contract; stdin-only token handoff; same operation ID, generation, per-channel lock, and durable remote terminal receipt; no SSH-session ownership assumption. | `tests/deploy/test_secret_token_push.py` covers stdin/redaction, generation, lock, worker, systemd binding, and terminality. Live encrypted credential installation and VM qualification remain #5667. |
 | Existing-password dev/test deployment | `python3 -m app.ops.postgres_deploy_host <channel> <revision> --existing-secrets-only` | Existing selected PostgreSQL password must pass host and VM checks before remote or local mutation; request mode is journal-bound before RPC; no BWS bootstrap is allowed; promotion/migration acknowledgement and target identity still come from this document and release-channel owners. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover preflight ordering, file-backed secret use, and target coupling. Live VM/Compose readiness remains #4913 and #5667. |
+| Interrupted existing-secrets-only deployment | `python3 -m app.ops.postgres_deploy_host <channel> <exact-request-revision> --existing-secrets-only --reconcile-pending [--ack-forward-only]` | Use the revision and forward-only acknowledgement from the exact persisted request. The authenticated same-ID RPC refuses a live worker, mismatched request or receipt, held channel lock, malformed lock state, or non-quiescent Compose state, including a still-running `migrate` or `instance-state-init` one-shot. It records `failed` only after the worker ended and the existing lock is acquired; reconciliation changes no pin, migration marker, container, database, vault, or BWS value. | `tests/deploy/test_deploy_channel_script.py::test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence`, `::test_failed_bws_activation_reconciliation_preserves_ambiguous_state`, `::test_linux_quiescence_waits_for_one_shot_compose_services`, and `::test_host_reconciles_matching_failed_bws_deploy_receipt` cover the receipt and refusal boundaries. |
 | First initialization / recovery | The same host entrypoint without `--existing-secrets-only`, supervised by `scripts/postgres_deploy_service.py` and `app.ops.postgres_deploy_linux` | Only an actually empty managed database directory qualifies; agent-host and VM locks are acquired in order; absence tombstone and prepared ID are durable; one generated value is written and marker/readback verified before deployment-state mutation. The host config JSON is opened as a root-owned regular `0600` file with `O_NOFOLLOW` and a single-link check; its configured runtime-env reference must be absolute and regular. Pending-marker parsing rejects symlinked, non-regular, unreadable, or malformed markers on the Linux preflight, while an absent marker is the documented no-pending baseline. Generated runtime env is published through a private temporary file and rename. The managed root/data paths must be absolute and non-symlinked; the source directory must be an absolute root-owned `0700` tmpfs path, and the password source must be root-owned `0440` with the configured service group; the file-backed consumer map must match. | `tests/deploy/test_deploy_channel.py::test_postgres_secret_source_uses_root_only_tmpfs_and_service_gid`, `::test_postgres_secret_is_readable_by_configured_non_root_service_user`, `::test_bws_runtime_export_produces_only_credential_free_database_defaults`, and `tests/ops/test_host_secret_bootstrap.py::test_runtime_secret_reader_rejects_unsafe_files` cover related source/runtime-file protections; `::test_missing_bws_access_token_file_fails_before_provider_request` covers token-file fail-closed behavior. No focused test currently exercises the Linux host-config JSON, pending-marker symlink branches, or atomic runtime-env publication; that qualification gap remains with #5667/#4913. |
 | Channel wrapper / end-to-end acceptance | `scripts/deploy_channel.sh <channel>` with `scripts/export_runtime_env.sh` and the BWS guard | Request-bound candidate and migration acknowledgement; explicit channel environment; `/etc/yggdrasil/bws-deploy/<channel>.json`; selected capture-watch/raw-migration consumers; BWS guard before temporary state, pin, or Docker mutation; first healthy release and rollback receipts remain authoritative. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover ordering and failure isolation. Startup receipt and immutable target coupling remain #4913; TARS host/executor qualification remains #5052. |
 
@@ -578,6 +612,20 @@ explicitly allowed and the password is missing, the owner-installed `qualificati
 required before the first RPC; it must be owner-only (`0600`) and record the exact `controller` path,
 `sole_writer_approved: true`, `credentials_restricted: true`, and a `live_receipt` comment on #5667.
 No CLI flag creates this approval. The admin token remains on the agent host.
+
+When such a deployment remains pending after its supervised worker has ended, reconcile only the
+same operation using its exact request revision and original `--ack-forward-only` choice. The
+`--reconcile-pending` command is limited to a pending `--existing-secrets-only` operation and asks
+the remote supervisor for authenticated terminal evidence under the same operation ID. Ordinary
+same-ID `prepare`, `activate`, or `join` retries run the same lock-reconciliation proof before they
+return an existing `failed` receipt, so a receipt cannot clear host state while a retained lock still
+blocks the channel. A `failed` receipt means deployment was not verified and effects may need the
+normal deployment reconciliation;
+it does not mean the deployment was rolled back or that no effects occurred. The supervisor requires
+the worker to be inactive, the existing per-channel lock to be available, and Compose state to be
+quiescent before writing that receipt. Any unavailable or mismatched proof leaves the local operation
+pending. A later deploy uses a new operation ID and still runs the regular candidate, migration,
+backup, and health gates.
 
 The root-owned `config/systemd/yggdrasil-bws-deploy@.service` and installed
 `scripts/postgres_deploy_service.py` launcher supervise VM work independently of SSH. Operator setup

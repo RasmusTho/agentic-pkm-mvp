@@ -14,6 +14,8 @@ from scripts.yaml_roundtrip import load_frontmatter
 from tests.helpers.pkm_alpha_helper import reset_memory_stores
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 def _read_events(path: Path) -> list[str]:
     if not path.exists():
         return []

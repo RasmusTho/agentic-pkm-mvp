@@ -19,6 +19,7 @@ from tests.deploy.test_deploy_channel import (
     _deploy_harness as _base_deploy_harness,
     _run_deploy,
 )
+from tests.helpers.runtime_identity import runtime_reachable_test_root
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -2571,6 +2572,44 @@ def test_vm_reader_recheck_is_project_scoped_and_precedes_compose(tmp_path):
     assert effects.events[activation - 1] == 'preflight:test'
 
 
+def test_vm_selected_values_deduplicates_bws_identity_per_preflight():
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan, vm_selected_values
+
+    consumers = tuple(DATABASE_CONSUMERS)
+    plan = DeployPlan(
+        'dev',
+        'a' * 40,
+        tuple(DATABASE_CONSUMERS.values()),
+        consumers,
+    )
+
+    class Reader:
+        def __init__(self):
+            self.calls = []
+
+        def lookup(self, project, identity):
+            self.calls.append((project, identity))
+            return f'fake-role-password-{len(self.calls)}'
+
+    reader = Reader()
+    first = vm_selected_values(plan, reader)
+    second = vm_selected_values(plan, reader)
+
+    assert first == {
+        consumer: {'postgres.password': 'fake-role-password-1'}
+        for consumer in consumers
+    }
+    assert second == {
+        consumer: {'postgres.password': 'fake-role-password-2'}
+        for consumer in consumers
+    }
+    assert reader.calls == [
+        ('non-prod', 'dev/postgres.password'),
+        ('non-prod', 'dev/postgres.password'),
+    ]
+
+
 def test_inactive_optional_model_credentials_do_not_block_deploy(tmp_path):
     from app.ops.postgres_deploy import deploy_from_host
     admin, provider, plan, remote = _bws_host(tmp_path)
@@ -2654,15 +2693,20 @@ def test_bws_deploy_requires_raw_key_for_active_capture_and_migration(active_con
 
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
                       (*DATABASE_CONSUMERS, 'heimdal-api-ingress', active_consumer))
+    calls = []
 
     class Reader:
-        def lookup(self, _project, identity):
+        def lookup(self, project, identity):
+            calls.append((project, identity))
             if identity.endswith('heimdal.raw-store-key'):
                 raise BwsItemAbsent()
+            if identity.endswith('github.token'):
+                return 'ghp_' + 'x' * 36
             return 'fake-role-password'
 
     with pytest.raises(PostgresDeployError):
         vm_selected_values(plan, Reader())
+    assert calls.count(('non-prod', 'test/heimdal.raw-store-key')) == 1
 
 
 @pytest.mark.parametrize(
@@ -2754,7 +2798,8 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
     assert active_consumer in effects.active_consumers
     assert effects.password is None
     assert effects.consumer_values == {}
-    assert sum(identity.endswith('heimdal.raw-store-key') for identity in lookups) == 2
+    # The absent raw key is cached for the remaining consumers in this preflight.
+    assert sum(identity.endswith('heimdal.raw-store-key') for identity in lookups) == 1
     assert activation_events == []
 
 
@@ -3438,6 +3483,291 @@ def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
     assert journal.read().terminal_result is None
 
 
+@pytest.mark.parametrize(('service', 'state', 'expected'), [
+    ('api', 'running', True),
+    ('migrate', 'running', False),
+    ('instance-state-init', 'running', False),
+    ('migrate', 'exited', True),
+])
+def test_linux_quiescence_waits_for_one_shot_compose_services(monkeypatch, service, state, expected):
+    import json
+    from app.ops import postgres_deploy_linux as linux
+
+    effects = object.__new__(linux.LinuxEffects)
+    monkeypatch.setattr(
+        effects, 'compose',
+        lambda *args: json.dumps([{'Service': service, 'State': state, 'Health': ''}]),
+    )
+
+    assert effects.quiescent() is expected
+
+
+def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    import json
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    _, journal, plan, operation_id = _bws_worker(tmp_path, _BwsVmEffects())
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    root = tmp_path / 'checkout'
+    deploy_dir = root / 'config/deploy'
+    deploy_dir.mkdir(parents=True)
+    lock_dir = deploy_dir / 'test.env.lock'
+    lock_dir.mkdir(mode=0o700)
+    (lock_dir / 'bws-owner').touch(mode=0o600)
+    pin = deploy_dir / 'test.pin'
+    pending_marker = deploy_dir / 'test.migration-pending'
+    data = tmp_path / 'data/state'
+    for path, content in ((pin, b'prior-pin\n'), (pending_marker, b'forward-only\n'), (data, b'preserve\n')):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    compose_state = {'rows': [{'Service': 'migrate', 'State': 'exited', 'Health': ''}]}
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'compose',
+        lambda _self, *_args: json.dumps(compose_state['rows']),
+    )
+    supervisor = linux.DeploymentSupervisor(config)
+
+    request = {
+        'action': 'reconcile-failed', 'operation_id': operation_id,
+        'plan': asdict(plan), 'bootstrap': False,
+    }
+    original_retire = linux.LinuxEffects.retire_reconciled_channel_lock
+
+    def interrupt_cleanup(_handle):
+        raise PostgresDeployError()
+
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(interrupt_cleanup)
+    )
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(request)
+    assert journal.read().terminal_result == 'failed'
+    assert lock_dir.is_dir()
+
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(original_retire)
+    )
+    # A terminal receipt can outlive lock retirement. Do not finish cleanup
+    # while Docker still owns the one-shot migration container.
+    compose_state['rows'] = [{'Service': 'migrate', 'State': 'running', 'Health': ''}]
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({**request, 'action': 'join'})
+    assert lock_dir.is_dir()
+
+    compose_state['rows'] = [{'Service': 'migrate', 'State': 'exited', 'Health': ''}]
+    # A normal same-ID join must finish interrupted cleanup before exposing the
+    # already-written failed receipt to a host retry.
+    ordinary_retry = {**request, 'action': 'join'}
+    result = supervisor.request(ordinary_retry)
+
+    assert result['receipt']['stage'] == 'failed'
+    assert result['receipt']['terminal_result'] == 'failed'
+    assert journal.read().evidence().result == 'failed'
+    assert not lock_dir.exists()
+    assert pin.read_bytes() == b'prior-pin\n'
+    assert pending_marker.read_bytes() == b'forward-only\n'
+    assert data.read_bytes() == b'preserve\n'
+    assert supervisor.request(request) == result
+
+    # After exact cleanup a new operation can acquire the channel lock.
+    from uuid import uuid4
+    next_effects = linux.LinuxEffects(config)
+    next_effects.operation_id = str(uuid4())
+    with next_effects.channel_lock():
+        assert lock_dir.is_dir()
+    assert lock_dir.is_dir()  # nonterminal new operation keeps its admission lock
+    (lock_dir / 'bws-owner').unlink()
+    lock_dir.rmdir()
+
+
+@pytest.mark.parametrize('blocker', [
+    'live-worker', 'held-lock', 'non-quiescent', 'running-migrate',
+    'running-instance-state-init', 'changed-request', 'different-operation', 'malformed-journal',
+])
+def test_failed_bws_activation_reconciliation_preserves_ambiguous_state(tmp_path, monkeypatch, blocker):
+    from dataclasses import asdict, replace
+    import fcntl
+    import json
+    import os
+    import threading
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    _, journal, plan, operation_id = _bws_worker(tmp_path, _BwsVmEffects())
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    root = tmp_path / 'checkout'
+    deploy_dir = root / 'config/deploy'
+    deploy_dir.mkdir(parents=True)
+    lock_dir = deploy_dir / 'test.env.lock'
+    lock_dir.mkdir(mode=0o700)
+    marker = lock_dir / 'bws-owner'
+    marker.touch(mode=0o600)
+    pin = deploy_dir / 'test.pin'
+    migration_marker = deploy_dir / 'test.migration-pending'
+    data = tmp_path / 'data/state'
+    for path, content in ((pin, b'prior-pin\n'), (migration_marker, b'pending\n'), (data, b'preserve\n')):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    before = {
+        'journal': (journal.directory / 'test.json').read_bytes(),
+        'request': (journal.directory / 'test.request.json').read_bytes(),
+        'marker': marker.read_bytes(), 'pin': pin.read_bytes(),
+        'migration': migration_marker.read_bytes(), 'data': data.read_bytes(),
+    }
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    compose_row = {'Service': 'api', 'State': 'running', 'Health': ''}
+    if blocker == 'non-quiescent':
+        compose_row = {'Service': 'api', 'State': 'restarting', 'Health': ''}
+    elif blocker in {'running-migrate', 'running-instance-state-init'}:
+        service = 'migrate' if blocker == 'running-migrate' else 'instance-state-init'
+        compose_row = {'Service': service, 'State': 'running', 'Health': ''}
+    monkeypatch.setattr(linux.LinuxEffects, 'compose', lambda _self, *_args: json.dumps([compose_row]))
+    supervisor = linux.DeploymentSupervisor(config)
+    if blocker == 'live-worker':
+        supervisor.operation = SimpleNamespace(
+            operation_id=operation_id, plan=plan, bootstrap=False, failed=True,
+            finished=threading.Event(), thread=SimpleNamespace(is_alive=lambda: True),
+        )
+        supervisor.operation.finished.set()
+    if blocker == 'malformed-journal':
+        (journal.directory / 'test.json').write_text('{"invalid":true}\n')
+        before['journal'] = (journal.directory / 'test.json').read_bytes()
+    request_plan = replace(plan, revision='b' * 40) if blocker == 'changed-request' else plan
+    request = {
+        'action': 'reconcile-failed',
+        'operation_id': str(uuid4()) if blocker == 'different-operation' else operation_id,
+        'plan': asdict(request_plan), 'bootstrap': False,
+    }
+    held_fd = None
+    if blocker == 'held-lock':
+        held_fd = os.open(marker, os.O_RDWR)
+        fcntl.flock(held_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(request)
+    finally:
+        if held_fd is not None:
+            os.close(held_fd)
+
+    assert (journal.directory / 'test.json').read_bytes() == before['journal']
+    assert (journal.directory / 'test.request.json').read_bytes() == before['request']
+    assert marker.read_bytes() == before['marker']
+    assert pin.read_bytes() == before['pin']
+    assert migration_marker.read_bytes() == before['migration']
+    assert data.read_bytes() == before['data']
+    assert lock_dir.is_dir()
+
+
+def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_path):
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import DeployReceipt, PostgresDeployError
+
+    controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        operation_id = operation.operation_id
+        operation.prepare_mutation()
+    captured = []
+    ordinary_retries = []
+
+    class Admin:
+        def __init__(self, _provider, *, controller):
+            self.controller = controller
+
+        def check_selected(self, *_args):
+            return []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def prepare(self, selected_id, plan, bootstrap):
+            assert selected_id == operation_id
+            assert plan.revision == 'a' * 40
+            assert bootstrap is False
+            ordinary_retries.append(selected_id)
+            # Models refusal while the remote failed receipt still owns its lock.
+            raise PostgresDeployError()
+
+        def reconcile_failed(self, selected_id, plan):
+            assert selected_id == operation_id
+            assert plan.revision == 'a' * 40
+            captured.append(selected_id)
+            return DeployReceipt(selected_id, 'test', 'deploy', 'failed', 'failed')
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, 'configured_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', Admin)
+
+    assert host.main(['dev', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 78
+    assert captured == []
+    with controller._locked_journal() as descriptor:
+        still_pending = controller._pending(descriptor)
+    assert still_pending is not None and still_pending['operation_id'] == operation_id
+
+    assert host.main(['test', 'a' * 40, '--existing-secrets-only']) == 78
+    assert ordinary_retries == [operation_id]
+    with controller._locked_journal() as descriptor:
+        still_pending = controller._pending(descriptor)
+    assert still_pending is not None and still_pending['operation_id'] == operation_id
+
+    assert host.main(['test', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 0
+    assert captured == [operation_id]
+    with controller._locked_journal() as descriptor:
+        assert controller._pending(descriptor) is None
+
+
+def test_ssh_reconcile_failed_sends_exact_same_id_and_existing_secrets_mode(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployPlan
+
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), True)
+    response = {
+        'receipt': {
+            'operation_id': operation_id, 'channel': 'test', 'kind': 'deploy',
+            'stage': 'failed', 'terminal_result': 'failed',
+        }
+    }
+    calls = []
+
+    def ssh(argv, **kwargs):
+        calls.append((argv, json.loads(kwargs['input'])))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(response))
+
+    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    receipt = linux.SshDeployRemote('ygg-test').reconcile_failed(operation_id, plan)
+
+    assert receipt.operation_id == operation_id
+    assert receipt.terminal_result == 'failed'
+    assert calls[0][1] == {
+        'action': 'reconcile-failed', 'operation_id': operation_id,
+        'plan': {
+            'channel': 'test', 'revision': 'a' * 40,
+            'services': ['db'], 'consumers': ['postgres-db'],
+            'ack_forward_only': True,
+        },
+        'bootstrap': False,
+    }
+
+
 def test_vm_channel_lock_is_retained_until_matching_terminal_receipt(tmp_path):
     from types import SimpleNamespace
     from app.ops.postgres_deploy_linux import LinuxEffects
@@ -3920,6 +4250,140 @@ def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
     )
 
 
+def test_root_bws_deploy_accepts_runtime_owned_host_state_before_mutation(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    root, env, sha = _deploy_harness(test_root)
+    actual_root = os.geteuid() == 0
+    runtime_uid = 65534 if actual_root else os.getuid()
+    runtime_gid = 65534 if actual_root else os.getgid()
+    (root / "tmp/runtime.env").write_text(
+        f"LOCAL_UID={runtime_uid}\nLOCAL_GID={runtime_gid}\nTTS_ENABLED=false\n",
+        encoding="utf-8",
+    )
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(f"APP_IMAGE_TAG={sha}\n", encoding="utf-8")
+    ownership = Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+    ownership.mkdir(mode=0o700)
+    if actual_root:
+        os.chown(ownership, runtime_uid, runtime_gid)
+    ledger = ownership / "ownership-ledger.json"
+    ledger.write_text("existing-runtime-ledger\n", encoding="utf-8")
+    ledger.chmod(0o600)
+    if actual_root:
+        os.chown(ledger, runtime_uid, runtime_gid)
+
+    # The production helper reads its shell caller identity through `id`.
+    # Reporting the BWS root supervisor here exercises that branch while its
+    # embedded Python still runs as this fixture's runtime UID/GID.
+    fake_id = Path(env["PATH"].split(os.pathsep)[0]) / "id"
+    fake_id.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "${1:-}" in\n'
+        '  -u) printf "host-state-identity\\n" >> "${FAKE_DEPLOY_EVENT_LOG:?}"; printf "0\\n" ;;\n'
+        f'  -g) printf "{runtime_gid}\\n" ;;\n'
+        "  *) exit 2 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_id.chmod(0o755)
+    _install_bws_identity_guard_fixture(root)
+    env.update(
+        FAKE_SHA=sha,
+        FAKE_CAPTURE_RUNTIME_IDENTITY="1",
+        HOST_SECRET_PROVIDER="bws",
+        BWS_DATABASE_TARGET="local",
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="0",
+        BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        LOCAL_UID=str(runtime_uid),
+        LOCAL_GID=str(runtime_gid),
+    )
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    assert "host-state-identity" in events
+    assert "bws-guard" in events
+    assert any("instance-state-init" in event for event in events)
+    assert pin_path.is_file()
+    assert ledger.read_text(encoding="utf-8") == "existing-runtime-ledger\n"
+    ledger_metadata = ledger.stat()
+    assert ledger_metadata.st_uid == runtime_uid
+    assert ledger_metadata.st_gid == runtime_gid
+    assert ledger_metadata.st_mode & 0o777 == 0o600
+    ownership_metadata = ownership.stat()
+    assert ownership_metadata.st_uid == runtime_uid
+    assert ownership_metadata.st_gid == runtime_gid
+    assert ownership_metadata.st_mode & 0o777 == 0o700
+
+    # A later rollback reader must accept a private receipt owned by the
+    # configured runtime even though the deployment shell represents root.
+    floor_receipt = ownership / "settings-rebind-runtime-floor-dev.json"
+    floor_receipt.write_text(
+        '{"channel":"dev","minimum_settings_rebind_runtime":"1",'
+        '"phase":"pending","schema":"agentic-pkm.settings-rebind-runtime-floor.v1"}\n',
+        encoding="utf-8",
+    )
+    floor_receipt.chmod(0o600)
+    if actual_root:
+        os.chown(floor_receipt, runtime_uid, runtime_gid)
+    original_pin = pin_path.read_text(encoding="utf-8")
+    Path(env["FAKE_DEPLOY_EVENT_LOG"]).write_text("", encoding="utf-8")
+
+    rollback = _run_rollback(root, env, sha)
+
+    assert rollback.returncode == 78
+    assert "settings rebind floor installation is pending" in rollback.stderr
+    assert pin_path.read_text(encoding="utf-8") == original_pin
+    assert not any(event.startswith("docker ") for event in _deploy_events(env))
+    receipt_metadata = floor_receipt.stat()
+    assert receipt_metadata.st_uid == runtime_uid
+    assert receipt_metadata.st_gid == runtime_gid
+    assert receipt_metadata.st_mode & 0o777 == 0o600
+    if actual_root:
+        runtime_read = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())",
+                str(floor_receipt),
+            ],
+            user=runtime_uid,
+            group=runtime_gid,
+            extra_groups=[],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert runtime_read.returncode == 0, runtime_read.stderr
+        assert '"phase":"pending"' in runtime_read.stdout
+
+        # Preserve rollback from a durable receipt written by the old root
+        # supervisor; new receipts above are still runtime-owned.
+        floor_receipt.unlink()
+        floor_receipt.write_text(
+            '{"channel":"dev","minimum_settings_rebind_runtime":"1",'
+            '"phase":"pending","schema":"agentic-pkm.settings-rebind-runtime-floor.v1"}\n',
+            encoding="utf-8",
+        )
+        floor_receipt.chmod(0o600)
+        assert floor_receipt.stat().st_uid == 0
+        assert floor_receipt.stat().st_gid == 0
+        Path(env["FAKE_DEPLOY_EVENT_LOG"]).write_text("", encoding="utf-8")
+
+        legacy_receipt_rollback = _run_rollback(root, env, sha)
+
+        assert legacy_receipt_rollback.returncode == 78
+        assert "settings rebind floor installation is pending" in legacy_receipt_rollback.stderr
+        assert pin_path.read_text(encoding="utf-8") == original_pin
+        assert not any(
+            event.startswith("docker ") for event in _deploy_events(env)
+        )
+
+
 @pytest.mark.parametrize(
     ("runtime_env", "provider", "expected_returncode"),
     [
@@ -3930,6 +4394,8 @@ def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
         ("LOCAL_UID=0\nLOCAL_GID=1001\n", "bws", 78),
         ("LOCAL_UID=1000\nLOCAL_GID=0\n", "bws", 78),
         ("LOCAL_UID=0000\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=4294967295\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=1000\nLOCAL_GID=4294967296\n", "bws", 78),
         ("TTS_ENABLED=false\n", "keychain", 0),
     ],
 )

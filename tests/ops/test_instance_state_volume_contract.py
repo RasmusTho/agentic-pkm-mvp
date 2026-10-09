@@ -43,6 +43,7 @@ from app.instance.runtime import (
     _preflight_runtime,
     _prove_instance_state_quiescence,
 )
+from tests.helpers.runtime_identity import runtime_reachable_test_root
 from app.instance.vault_registry import (
     AppLocalSettingsStore,
     CapabilityNotReadyError,
@@ -2097,14 +2098,35 @@ def test_real_deployment_wrapper_probes_all_domains_twice_before_proof() -> None
     assert producer.index("deployment-prove") < producer.index("deployment-finish")
 
 
-def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window(
+def test_root_deploy_handoffs_runtime_owned_fence_and_floor_receipts(
     tmp_path,
+    request: pytest.FixtureRequest,
 ) -> None:
     """A fresh rollout derives owners before init, lease, fence, or writer stop."""
 
-    event_log = tmp_path / "events.log"
-    fake_bin = tmp_path / "bin"
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    actual_root = os.geteuid() == 0
+    runtime_uid = 65534 if actual_root else os.getuid()
+    runtime_gid = 65534 if actual_root else os.getgid()
+    event_log = test_root / "events.log"
+    fake_bin = test_root / "bin"
     fake_bin.mkdir()
+    runtime_reader = test_root / "read-runtime-receipt.py"
+    runtime_reader.write_text(
+        "import os, subprocess, sys\n"
+        "path, event_log = sys.argv[1:]\n"
+        "read = subprocess.run(\n"
+        "    [sys.executable, '-c', 'from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())', path],\n"
+        "    user=int(os.environ['LOCAL_UID']), group=int(os.environ['LOCAL_GID']),\n"
+        "    extra_groups=[], capture_output=True, text=True, check=False,\n"
+        ")\n"
+        "if read.returncode != 0 or not read.stdout.strip():\n"
+        "    sys.stderr.write(read.stderr)\n"
+        "    raise SystemExit(read.returncode or 1)\n"
+        "with open(event_log, 'a', encoding='utf-8') as output:\n"
+        "    output.write('fence-plan-readable-as-runtime\\n')\n",
+        encoding="utf-8",
+    )
     python = fake_bin / "python3"
     python.write_text(
         "#!/usr/bin/env bash\n"
@@ -2124,7 +2146,12 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
         "    done\n"
         "    exit 2 ;;\n"
         "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
-        "  *' compose-fence-plan '*) printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
+        "  *' compose-fence-plan '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --receipt-output ]; then printf \'{"schema":"fixture"}\\n\' > "$2"; chmod 0600 "$2"; break; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
         "  *' prove-quiescent '*)\n"
         '    while [ "$#" -gt 0 ]; do\n'
         '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
@@ -2144,13 +2171,21 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
         encoding="utf-8",
     )
     python.chmod(0o755)
-    harness = tmp_path / "run-wrapper.sh"
+    harness = test_root / "run-wrapper.sh"
     harness.write_text(
         "#!/usr/bin/env bash\n"
         "set -u\n"
         f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
         "fake_compose() {\n"
         "  printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"\n"
+        '  case " $* " in\n'
+        '    *" mvr05-record-floor "*)\n'
+        '      for plan in "$INSTANCE_OWNERSHIP_HOST_STATE_DIR"/mvr05-fence-plan-*.json; do\n'
+        '        [ -f "$plan" ] || continue\n'
+        '        "$REAL_PYTHON" -c \'import os,stat,sys; s=os.stat(sys.argv[1]); print(f"fence-plan-owner:{s.st_uid}:{s.st_gid}:{stat.S_IMODE(s.st_mode):04o}")\' "$plan" >> "$EVENT_LOG"\n'
+        '        if [ "${CHECK_RUNTIME_RECEIPTS:-0}" = "1" ]; then "$REAL_PYTHON" "$RUNTIME_RECEIPT_READER" "$plan" "$EVENT_LOG"; fi\n'
+        '      done ;;\n'
+        '  esac\n'
         f"  if [ \"${{1:-}}\" = config ]; then cat '{REPO_ROOT / 'docker-compose.yaml'}'; fi\n"
         "  return 0\n"
         "}\n"
@@ -2158,8 +2193,10 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
         encoding="utf-8",
     )
     harness.chmod(0o755)
-    ownership_root = tmp_path / "instance-ownership"
+    ownership_root = test_root / "instance-ownership"
     ownership_root.mkdir(mode=0o700)
+    if actual_root:
+        os.chown(ownership_root, runtime_uid, runtime_gid)
     result = subprocess.run(
         ["bash", str(harness)],
         env={
@@ -2168,6 +2205,10 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
             "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
             "REAL_PYTHON": sys.executable,
+            "LOCAL_UID": str(runtime_uid),
+            "LOCAL_GID": str(runtime_gid),
+            "CHECK_RUNTIME_RECEIPTS": "1" if actual_root else "0",
+            "RUNTIME_RECEIPT_READER": str(runtime_reader),
         },
         capture_output=True,
         text=True,
@@ -2176,6 +2217,32 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
 
     assert result.returncode == 0, result.stderr
     events = event_log.read_text(encoding="utf-8").splitlines()
+    assert f"fence-plan-owner:{runtime_uid}:{runtime_gid}:0600" in events
+    if actual_root:
+        assert "fence-plan-readable-as-runtime" in events
+    floor_receipt = ownership_root / "settings-rebind-runtime-floor-prod.json"
+    floor_metadata = floor_receipt.stat()
+    assert floor_metadata.st_uid == runtime_uid
+    assert floor_metadata.st_gid == runtime_gid
+    assert floor_metadata.st_mode & 0o777 == 0o600
+    assert json.loads(floor_receipt.read_text(encoding="utf-8"))["phase"] == "installed"
+    if actual_root:
+        runtime_read = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())",
+                str(floor_receipt),
+            ],
+            user=runtime_uid,
+            group=runtime_gid,
+            extra_groups=[],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert runtime_read.returncode == 0, runtime_read.stderr
+        assert '"phase":"installed"' in runtime_read.stdout
     assert "produce-legacy-owners" in events[0]
     assert "instance-state-init" in events[1]
     produce_index = next(i for i, event in enumerate(events) if "produce-legacy-owners" in event)
@@ -2185,6 +2252,102 @@ def test_real_deployment_wrapper_produces_owner_inventory_before_mutation_window
     validate_index = next(i for i, event in enumerate(events) if "validate-legacy-owners" in event)
     finish_index = next(i for i, event in enumerate(events) if "deployment-finish" in event)
     assert produce_index < begin_index < stop_index < proof_index < validate_index < finish_index
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="requires root to inject runtime handoff failure")
+def test_root_ledger_handoff_failure_stops_before_writer_stop_or_floor(
+    tmp_path,
+    request: pytest.FixtureRequest,
+) -> None:
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    runtime_uid = 65534
+    runtime_gid = 65534
+    ownership_root = test_root / "ownership"
+    ownership_root.mkdir(mode=0o700)
+    vault = test_root / "vault"
+    vault.mkdir()
+
+    from app.instance.ownership_ledger import LegacyOwner, OwnershipLedger
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    identity = writer_inventory._owner_identity_material(
+        vault, domain="dev", source="docker_env"
+    )
+    ledger = OwnershipLedger(ownership_root)
+    ledger.bootstrap_legacy_owners(
+        [LegacyOwner("dev", "binding-handoff", vault, *identity)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    before = {
+        path.name: path.read_bytes()
+        for path in ownership_root.iterdir()
+        if path.is_file()
+    }
+
+    fake_bin = test_root / "bin"
+    fake_bin.mkdir()
+    python = fake_bin / "python3"
+    python.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys\n"
+        f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
+        "from pathlib import Path\n"
+        "from scripts import instance_state_writer_inventory as writer\n"
+        "arguments = sys.argv[1:]\n"
+        "if len(arguments) > 1 and Path(arguments[0]).name == 'instance_state_writer_inventory.py' and arguments[1] == 'produce-legacy-owners':\n"
+        "    writer._docker_legacy_owner_sources = lambda: ([], ['docker:empty'])\n"
+        "    writer._config_legacy_owner_sources = lambda repo_root, *, active_channel: ([], ['config:empty'])\n"
+        "    real_run = writer.subprocess.run\n"
+        "    def fail_runtime_handoff(command, *args, **kwargs):\n"
+        "        if command and str(command[-1]) == '_ownership-ledger-runtime':\n"
+        "            raise PermissionError('injected runtime handoff failure')\n"
+        "        return real_run(command, *args, **kwargs)\n"
+        "    writer.subprocess.run = fail_runtime_handoff\n"
+        "    raise SystemExit(writer.main(arguments[1:]))\n"
+        "os.execv(os.environ['REAL_PYTHON'], [os.environ['REAL_PYTHON'], *sys.argv[1:]])\n",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    harness = test_root / "run-wrapper.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -u\n"
+        f"source '{REPO_ROOT / 'scripts/lib/instance_state_deployment.sh'}'\n"
+        "fake_compose() { printf 'compose:%s\\n' \"$*\" >> \"$EVENT_LOG\"; }\n"
+        "prepare_instance_state_deployment fake_compose prod\n",
+        encoding="utf-8",
+    )
+    harness.chmod(0o755)
+    event_log = test_root / "events.log"
+    result = subprocess.run(
+        ["bash", str(harness)],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "REAL_PYTHON": sys.executable,
+            "EVENT_LOG": str(event_log),
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership_root),
+            "LOCAL_UID": str(runtime_uid),
+            "LOCAL_GID": str(runtime_gid),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "ownership ledger runtime identity could not be entered" in result.stderr
+    assert not event_log.exists()
+    assert not (ownership_root / "settings-rebind-runtime-floor-prod.json").exists()
+    after = {
+        path.name: path.read_bytes()
+        for path in ownership_root.iterdir()
+        if path.is_file()
+    }
+    assert after == before
 
 
 @pytest.mark.parametrize(
@@ -2421,7 +2584,12 @@ def test_real_deployment_wrapper_mounts_selected_root_at_cutover_alias(
         "    done\n"
         "    exit 2 ;;\n"
         "  *' controller-token '*) printf 'linux:%064d\\n' 0; exit 0 ;;\n"
-        "  *' compose-fence-plan '*) printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
+        "  *' compose-fence-plan '*)\n"
+        '    while [ "$#" -gt 0 ]; do\n'
+        '      if [ "$1" = --receipt-output ]; then printf \'{"schema":"fixture"}\\n\' > "$2"; chmod 0600 "$2"; break; fi\n'
+        "      shift\n"
+        "    done\n"
+        "    printf 'api worker watcher heimdal-capture-watch\\n'; exit 0 ;;\n"
         "  *' prove-quiescent '*)\n"
         '    while [ "$#" -gt 0 ]; do\n'
         '      if [ "$1" = --output ]; then printf \'{}\\n\' > "$2"; exit 0; fi\n'
@@ -3936,6 +4104,8 @@ def test_host_global_bind_source_resolves_identically_across_checkouts_and_chann
         # still derive the path from the subprocess' HOME when no explicit
         # value is supplied, so do not let the parent test runner pre-seed it.
         env.pop("INSTANCE_OWNERSHIP_HOST_STATE_DIR", None)
+        env.pop("LOCAL_UID", None)
+        env.pop("LOCAL_GID", None)
         result = subprocess.run(
             [
                 "/bin/bash",
@@ -4018,6 +4188,211 @@ def test_host_global_bind_source_resolves_identically_across_checkouts_and_chann
                 "bind": {"create_host_path": False},
             }
         ]
+
+
+def test_root_host_state_prepare_preserves_runtime_owner_and_private_mode(
+    tmp_path,
+) -> None:
+    """A root BWS caller may prepare host state owned by the container runtime."""
+
+    runtime_uid = os.getuid()
+    runtime_gid = os.getgid()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_id = fake_bin / "id"
+    fake_id.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  -u) printf '0\\n' ;;\n"
+        f"  -g) printf '{runtime_gid}\\n' ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_id.chmod(0o755)
+    ownership = tmp_path / "runtime-owned-state"
+    resolver = REPO_ROOT / "scripts/lib/instance_ownership_host_state.sh"
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            f"source '{resolver}'; prepare_instance_ownership_host_state_dir",
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership),
+            "LOCAL_UID": str(runtime_uid),
+            "LOCAL_GID": str(runtime_gid),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    metadata = ownership.stat()
+    assert metadata.st_uid == runtime_uid
+    assert metadata.st_gid == runtime_gid
+    assert metadata.st_mode & 0o777 == 0o700
+
+
+def test_host_state_prepare_rejects_mismatched_runtime_owner_before_chmod(
+    tmp_path,
+    request: pytest.FixtureRequest,
+) -> None:
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    ownership = test_root / "runtime-owned-state"
+    ownership.mkdir(mode=0o711)
+    ownership.chmod(0o711)
+    before = ownership.stat()
+    resolver = REPO_ROOT / "scripts/lib/instance_ownership_host_state.sh"
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            f"source '{resolver}'; prepare_instance_ownership_host_state_dir",
+        ],
+        env={
+            **os.environ,
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership),
+            "LOCAL_UID": str(os.getuid() + 1),
+            "LOCAL_GID": str(os.getgid() + 1),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    after = ownership.stat()
+    if os.geteuid() == 0:
+        assert result.returncode != 0
+        assert "unexpected owner" in result.stderr
+    else:
+        assert result.returncode == 64
+        assert "non-root host-state access must use the caller's runtime identity" in result.stderr
+    assert after.st_uid == before.st_uid
+    assert after.st_gid == before.st_gid
+    assert after.st_mode & 0o777 == 0o711
+
+
+@pytest.mark.parametrize(
+    ("runtime_uid", "runtime_gid"),
+    (("4294967295", "1001"), ("1000", "4294967296")),
+)
+def test_host_state_prepare_rejects_out_of_range_identity_before_creation(
+    tmp_path,
+    runtime_uid: str,
+    runtime_gid: str,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_id = fake_bin / "id"
+    fake_id.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in -u|-g) printf "0\\n" ;; *) exit 2 ;; esac\n',
+        encoding="utf-8",
+    )
+    fake_id.chmod(0o755)
+    ownership = tmp_path / "missing" / "ownership"
+    resolver = REPO_ROOT / "scripts/lib/instance_ownership_host_state.sh"
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            f"source '{resolver}'; prepare_instance_ownership_host_state_dir",
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership),
+            "LOCAL_UID": runtime_uid,
+            "LOCAL_GID": runtime_gid,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "runtime identity is out of range" in result.stderr
+    assert not ownership.parent.exists()
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="requires root to establish runtime ownership")
+def test_root_host_state_prepare_creates_missing_directory_for_runtime_owner(
+    tmp_path,
+    request: pytest.FixtureRequest,
+) -> None:
+    runtime_uid = 65534
+    runtime_gid = 65534
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    ownership = test_root / "new" / "ownership"
+    resolver = REPO_ROOT / "scripts/lib/instance_ownership_host_state.sh"
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            f"source '{resolver}'; prepare_instance_ownership_host_state_dir",
+        ],
+        env={
+            **os.environ,
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership),
+            "LOCAL_UID": str(runtime_uid),
+            "LOCAL_GID": str(runtime_gid),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    for path in (test_root / "new", ownership):
+        metadata = path.stat()
+        assert metadata.st_uid == runtime_uid
+        assert metadata.st_gid == runtime_gid
+        assert metadata.st_mode & 0o777 == 0o700
+
+
+@pytest.mark.skipif(os.geteuid() != 0, reason="requires root to establish foreign ownership")
+def test_root_host_state_prepare_rejects_foreign_directory_without_chmod(
+    tmp_path,
+    request: pytest.FixtureRequest,
+) -> None:
+    runtime_uid = 65534
+    runtime_gid = 65534
+    foreign_uid = runtime_uid + 1
+    foreign_gid = runtime_gid + 1
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    ownership = test_root / "foreign-owned"
+    ownership.mkdir(mode=0o711)
+    os.chown(ownership, foreign_uid, foreign_gid)
+    ownership.chmod(0o711)
+    before = ownership.stat()
+    resolver = REPO_ROOT / "scripts/lib/instance_ownership_host_state.sh"
+    result = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            f"source '{resolver}'; prepare_instance_ownership_host_state_dir",
+        ],
+        env={
+            **os.environ,
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(ownership),
+            "LOCAL_UID": str(runtime_uid),
+            "LOCAL_GID": str(runtime_gid),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    after = ownership.stat()
+    assert result.returncode != 0
+    assert "unexpected owner" in result.stderr
+    assert after.st_uid == before.st_uid == foreign_uid
+    assert after.st_gid == before.st_gid == foreign_gid
+    assert after.st_mode & 0o777 == before.st_mode & 0o777 == 0o711
 
 
 def test_runtime_preflight_rejects_missing_mounts_before_mutation(tmp_path) -> None:

@@ -402,9 +402,39 @@ import sys
 
 path, channel = sys.argv[1:]
 metadata = os.lstat(path)
+raw_uid = os.environ.get("INSTANCE_OWNERSHIP_HOST_STATE_UID", os.environ.get("LOCAL_UID"))
+raw_gid = os.environ.get("INSTANCE_OWNERSHIP_HOST_STATE_GID", os.environ.get("LOCAL_GID"))
+if raw_uid is None and raw_gid is None:
+    runtime_uid, runtime_gid = os.geteuid(), os.getegid()
+elif (
+    raw_uid is None
+    or raw_gid is None
+    or not raw_uid.isascii()
+    or not raw_uid.isdecimal()
+    or not raw_gid.isascii()
+    or not raw_gid.isdecimal()
+):
+    raise SystemExit("settings rebind runtime floor identity is invalid")
+else:
+    uid_text = raw_uid.lstrip("0") or "0"
+    gid_text = raw_gid.lstrip("0") or "0"
+    if (
+        len(uid_text) > 10
+        or len(gid_text) > 10
+    ):
+        raise SystemExit("settings rebind runtime floor identity is out of range")
+    runtime_uid, runtime_gid = int(uid_text), int(gid_text)
+    if runtime_uid > 4_294_967_294 or runtime_gid > 4_294_967_294:
+        raise SystemExit("settings rebind runtime floor identity is out of range")
+if os.geteuid() != 0 and (runtime_uid != os.geteuid() or runtime_gid != os.getegid()):
+    raise SystemExit("settings rebind runtime floor identity differs from the caller")
+runtime_owned = metadata.st_uid == runtime_uid and metadata.st_gid == runtime_gid
+legacy_supervisor_owned = (
+    os.geteuid() == 0 and metadata.st_uid == 0 and metadata.st_gid == 0
+)
 if (
     not stat.S_ISREG(metadata.st_mode)
-    or metadata.st_uid != os.geteuid()
+    or not (runtime_owned or legacy_supervisor_owned)
     or stat.S_IMODE(metadata.st_mode) != 0o600
 ):
     raise SystemExit("settings rebind runtime floor receipt is not private")
