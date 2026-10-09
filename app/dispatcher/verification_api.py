@@ -2063,7 +2063,7 @@ class BuilderOpsVerificationLedger:
         if self.effect_outbox is None:
             raise ValueError("verification effect outbox is unavailable")
         retained = self._effect_claims.get(operation_key)
-        if retained is not None:
+        if retained is not None and effect_type == "github.merge":
             expiry = datetime.fromisoformat(str(retained["expires_at"]).replace("Z", "+00:00"))
             if expiry > datetime.now(timezone.utc):
                 self._validate_effect_claim(retained, operation_key=operation_key, run_id=run_id,
