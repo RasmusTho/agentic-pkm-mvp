@@ -19,6 +19,7 @@ from tests.deploy.test_deploy_channel import (
     _deploy_harness as _base_deploy_harness,
     _run_deploy,
 )
+from tests.helpers.runtime_identity import runtime_reachable_test_root
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -3920,6 +3921,140 @@ def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
     )
 
 
+def test_root_bws_deploy_accepts_runtime_owned_host_state_before_mutation(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    root, env, sha = _deploy_harness(test_root)
+    actual_root = os.geteuid() == 0
+    runtime_uid = 65534 if actual_root else os.getuid()
+    runtime_gid = 65534 if actual_root else os.getgid()
+    (root / "tmp/runtime.env").write_text(
+        f"LOCAL_UID={runtime_uid}\nLOCAL_GID={runtime_gid}\nTTS_ENABLED=false\n",
+        encoding="utf-8",
+    )
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(f"APP_IMAGE_TAG={sha}\n", encoding="utf-8")
+    ownership = Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+    ownership.mkdir(mode=0o700)
+    if actual_root:
+        os.chown(ownership, runtime_uid, runtime_gid)
+    ledger = ownership / "ownership-ledger.json"
+    ledger.write_text("existing-runtime-ledger\n", encoding="utf-8")
+    ledger.chmod(0o600)
+    if actual_root:
+        os.chown(ledger, runtime_uid, runtime_gid)
+
+    # The production helper reads its shell caller identity through `id`.
+    # Reporting the BWS root supervisor here exercises that branch while its
+    # embedded Python still runs as this fixture's runtime UID/GID.
+    fake_id = Path(env["PATH"].split(os.pathsep)[0]) / "id"
+    fake_id.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "${1:-}" in\n'
+        '  -u) printf "host-state-identity\\n" >> "${FAKE_DEPLOY_EVENT_LOG:?}"; printf "0\\n" ;;\n'
+        f'  -g) printf "{runtime_gid}\\n" ;;\n'
+        "  *) exit 2 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_id.chmod(0o755)
+    _install_bws_identity_guard_fixture(root)
+    env.update(
+        FAKE_SHA=sha,
+        FAKE_CAPTURE_RUNTIME_IDENTITY="1",
+        HOST_SECRET_PROVIDER="bws",
+        BWS_DATABASE_TARGET="local",
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="0",
+        BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        LOCAL_UID=str(runtime_uid),
+        LOCAL_GID=str(runtime_gid),
+    )
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    assert "host-state-identity" in events
+    assert "bws-guard" in events
+    assert any("instance-state-init" in event for event in events)
+    assert pin_path.is_file()
+    assert ledger.read_text(encoding="utf-8") == "existing-runtime-ledger\n"
+    ledger_metadata = ledger.stat()
+    assert ledger_metadata.st_uid == runtime_uid
+    assert ledger_metadata.st_gid == runtime_gid
+    assert ledger_metadata.st_mode & 0o777 == 0o600
+    ownership_metadata = ownership.stat()
+    assert ownership_metadata.st_uid == runtime_uid
+    assert ownership_metadata.st_gid == runtime_gid
+    assert ownership_metadata.st_mode & 0o777 == 0o700
+
+    # A later rollback reader must accept a private receipt owned by the
+    # configured runtime even though the deployment shell represents root.
+    floor_receipt = ownership / "settings-rebind-runtime-floor-dev.json"
+    floor_receipt.write_text(
+        '{"channel":"dev","minimum_settings_rebind_runtime":"1",'
+        '"phase":"pending","schema":"agentic-pkm.settings-rebind-runtime-floor.v1"}\n',
+        encoding="utf-8",
+    )
+    floor_receipt.chmod(0o600)
+    if actual_root:
+        os.chown(floor_receipt, runtime_uid, runtime_gid)
+    original_pin = pin_path.read_text(encoding="utf-8")
+    Path(env["FAKE_DEPLOY_EVENT_LOG"]).write_text("", encoding="utf-8")
+
+    rollback = _run_rollback(root, env, sha)
+
+    assert rollback.returncode == 78
+    assert "settings rebind floor installation is pending" in rollback.stderr
+    assert pin_path.read_text(encoding="utf-8") == original_pin
+    assert not any(event.startswith("docker ") for event in _deploy_events(env))
+    receipt_metadata = floor_receipt.stat()
+    assert receipt_metadata.st_uid == runtime_uid
+    assert receipt_metadata.st_gid == runtime_gid
+    assert receipt_metadata.st_mode & 0o777 == 0o600
+    if actual_root:
+        runtime_read = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())",
+                str(floor_receipt),
+            ],
+            user=runtime_uid,
+            group=runtime_gid,
+            extra_groups=[],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert runtime_read.returncode == 0, runtime_read.stderr
+        assert '"phase":"pending"' in runtime_read.stdout
+
+        # Preserve rollback from a durable receipt written by the old root
+        # supervisor; new receipts above are still runtime-owned.
+        floor_receipt.unlink()
+        floor_receipt.write_text(
+            '{"channel":"dev","minimum_settings_rebind_runtime":"1",'
+            '"phase":"pending","schema":"agentic-pkm.settings-rebind-runtime-floor.v1"}\n',
+            encoding="utf-8",
+        )
+        floor_receipt.chmod(0o600)
+        assert floor_receipt.stat().st_uid == 0
+        assert floor_receipt.stat().st_gid == 0
+        Path(env["FAKE_DEPLOY_EVENT_LOG"]).write_text("", encoding="utf-8")
+
+        legacy_receipt_rollback = _run_rollback(root, env, sha)
+
+        assert legacy_receipt_rollback.returncode == 78
+        assert "settings rebind floor installation is pending" in legacy_receipt_rollback.stderr
+        assert pin_path.read_text(encoding="utf-8") == original_pin
+        assert not any(
+            event.startswith("docker ") for event in _deploy_events(env)
+        )
+
+
 @pytest.mark.parametrize(
     ("runtime_env", "provider", "expected_returncode"),
     [
@@ -3930,6 +4065,8 @@ def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
         ("LOCAL_UID=0\nLOCAL_GID=1001\n", "bws", 78),
         ("LOCAL_UID=1000\nLOCAL_GID=0\n", "bws", 78),
         ("LOCAL_UID=0000\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=4294967295\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=1000\nLOCAL_GID=4294967296\n", "bws", 78),
         ("TTS_ENABLED=false\n", "keychain", 0),
     ],
 )
