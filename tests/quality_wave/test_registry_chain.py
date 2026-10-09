@@ -20,7 +20,7 @@ from scripts.yaml_roundtrip import load_frontmatter
 from tests.helpers.pkm_alpha_helper import reset_memory_stores
 from tests.helpers.vault_settings import initialize_test_vault
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 SEED_SCOPE_GLOB = "Test/AgenticPKM-UAT/*.md,Test/AgenticPKM-UAT/**/*.md"
 

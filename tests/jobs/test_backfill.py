@@ -16,6 +16,8 @@ from app.agents.set_evaluator.agent import run as evaluate_run
 from app.jobs.backfill import BackfillSummary, run_backfill
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 def _normalize(path: Path, text: str, trace_id: str) -> str:
     path.write_text(text)
     res = normalize_run(str(path), trace_id=trace_id)

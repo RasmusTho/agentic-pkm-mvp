@@ -17,6 +17,8 @@ import importlib
 import pytest
 
 # slug -> (test module, test function). Targeted = converted by this slice (must run+pass).
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 TARGETED: dict[str, tuple[str, str]] = {
     "capture_stamps_scope": ("tests.invariants.test_metadata_bundle", "test_capture_stamps_scope"),
     "provenance_survives_derivation": ("tests.invariants.test_metadata_bundle", "test_provenance_survives_derivation"),

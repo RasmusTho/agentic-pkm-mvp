@@ -121,6 +121,8 @@ from app.panel.confirmation import (
 # ---------------------------------------------------------------------------
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 def _setup_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     vault = tmp_path / "vault"
     vault.mkdir(parents=True, exist_ok=True)

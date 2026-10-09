@@ -13,7 +13,7 @@ import pytest
 
 from app.eval import run as eval_run
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 
 def _thresholds_with_impossible_floor() -> dict:

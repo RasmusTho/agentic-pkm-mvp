@@ -101,6 +101,7 @@ def test_managed_configuration_keeps_listener_private() -> None:
 def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
     import copy
     import hashlib
+    import httpx
     import socket
     import threading
     import time
@@ -108,7 +109,7 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
     from types import SimpleNamespace
 
     import uvicorn
-    from app.builderops import devui_runtime
+    from app.builderops import devui_runtime, devui_sources
     from app.builderops.control_plane.auth import CredentialRegistry
     from app.builderops.control_plane.service import create_app as create_service
     from app.builderops.control_plane.store import PostgresBuilderOpsStore
@@ -153,7 +154,14 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
         )
     )
     state = SimpleNamespace(
-        mode="ok", epoch=settings.get("epoch", 7), calls=[], http_calls=[], tasks=[task], addressed_tasks=[]
+        mode="ok",
+        epoch=settings.get("epoch", 7),
+        calls=[],
+        http_calls=[],
+        tasks=[task],
+        addressed_tasks=[],
+        healthy_source_latency_observed=0.0,
+        receipt_response_lost=False,
     )
 
     class Store:
@@ -164,11 +172,6 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
 
         def readiness(self):
             state.calls.append("status")
-            if state.mode == "receipt_timeout" and any(
-                isinstance(call, tuple) and call[0] == "get_receipt"
-                for call in state.calls
-            ):
-                time.sleep(0.15)
             return {"schema_version": 1, "authority_epoch": state.epoch}
 
         def list_tasks(self, repository, **kwargs):
@@ -179,6 +182,10 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
                 raise OSError("fixture-secret-never-export")
             if state.mode == "timeout":
                 time.sleep(0.15)
+            if state.mode == "receipt_timeout":
+                started = time.monotonic()
+                time.sleep(0.08)
+                state.healthy_source_latency_observed = time.monotonic() - started
             return copy.deepcopy(state.tasks)
 
         def get_task(self, repository, task_id):
@@ -203,8 +210,6 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
                 return state.native_store.get_record(repository, record_id)
             if state.mode == "receipt_missing":
                 raise KeyError(record_id)
-            if state.mode == "receipt_timeout":
-                time.sleep(0.15)
             if state.mode == "receipt_epoch_changed":
                 state.epoch += 1
             return {
@@ -363,6 +368,33 @@ print(json.dumps(result))
     monkeypatch.setenv("GH_CONFIG_DIR", str(gh_config))
     monkeypatch.setenv("FIXTURE_GH_CALLS", str(gh_calls))
     monkeypatch.setenv("FIXTURE_GH_MODE", str(gh_mode))
+
+    original_client = devui_sources.BuilderOpsControlPlaneClient
+
+    def receipt_timeout_client(config, **kwargs):
+        """Use one real client instance while modeling addressed response loss."""
+        client = original_client(config, **kwargs)
+        request = client._http.request
+
+        def request_with_response_loss(method, url, **request_kwargs):
+            response = request(method, url, **request_kwargs)
+            request_path = response.request.url.path
+            receipt_response = request_path.startswith("/v1/receipts/")
+            status_after_receipt = request_path == "/v1/status" and state.receipt_response_lost
+            if receipt_response or status_after_receipt:
+                response.read()
+                response.close()
+                if receipt_response:
+                    state.receipt_response_lost = True
+                raise httpx.ReadTimeout(
+                    "fixture addressed response was lost after the service read",
+                    request=response.request,
+                )
+            return response
+
+        client._http.request = request_with_response_loss
+        return client
+
     receipts = tmp_path / "receipts"
     receipts.mkdir()
     env = {
@@ -376,11 +408,20 @@ print(json.dumps(result))
     }
     state.environment, state.auth, state.credential = env, auth, credential
     state.root, state.manifest, state.gh_mode, state.gh_calls = root, manifest, gh_mode, gh_calls
-    state.client = lambda: TestClient(
-        create_app(load_configuration(env)),
-        client=("127.0.0.1", 1000),
-        base_url="http://127.0.0.1:8113",
-    )
+
+    def client() -> TestClient:
+        monkeypatch.setattr(
+            devui_sources,
+            "BuilderOpsControlPlaneClient",
+            receipt_timeout_client if state.mode == "receipt_timeout" else original_client,
+        )
+        return TestClient(
+            create_app(load_configuration(env)),
+            client=("127.0.0.1", 1000),
+            base_url="http://127.0.0.1:8113",
+        )
+
+    state.client = client
     try:
         yield state
     finally:
@@ -805,10 +846,12 @@ def test_managed_source_failure_matrix(managed_sources, case: str, monkeypatch) 
         source.tasks[:] = [copy.deepcopy(source.tasks[0]) for _ in range(201)]
     elif case == "duplicate_task":
         source.tasks.append(copy.deepcopy(source.tasks[0]))
-    elif case in {"timeout", "receipt_timeout"}:
+    elif case == "timeout":
         from app.builderops.control_plane import client as source_client
 
         monkeypatch.setattr(source_client, "_DEFAULT_TIMEOUT_SECONDS", 0.05)
+        source.mode = case
+    elif case == "receipt_timeout":
         source.mode = case
     elif case == "credential_revoked":
         source.auth.write_text(json.dumps({"credentials": []}))
@@ -864,12 +907,8 @@ def test_managed_source_failure_matrix(managed_sources, case: str, monkeypatch) 
 
 def test_managed_source_receipt_timeout_preserves_admitted_work_deterministically(
     managed_sources,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.builderops.control_plane import client as source_client
-
     source = managed_sources
-    monkeypatch.setattr(source_client, "_DEFAULT_TIMEOUT_SECONDS", 0.05)
     source.mode = "receipt_timeout"
 
     with source.client() as client:
@@ -878,6 +917,8 @@ def test_managed_source_receipt_timeout_preserves_admitted_work_deterministicall
     assert response.status_code == 200
     payload = response.json()
     assert [item["display_label"] for item in payload["now"]] == ["Fixture work"]
+    assert source.healthy_source_latency_observed >= 0.05
+    assert source.receipt_response_lost is True
     assert _managed_source(payload, "dispatcher-store")["transport"]["outcome"] == "available"
     assert _managed_source(payload, "verification-runs")["state"] == "unavailable"
     assert _managed_source(payload, "verification-runs")["transport"]["outcome"] == "partial"

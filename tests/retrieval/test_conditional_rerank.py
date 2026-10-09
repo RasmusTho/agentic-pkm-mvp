@@ -19,7 +19,7 @@ from app.retrieval.hook_adapter import maybe_rerank
 from app.retrieval.hybrid import get_store, scoped_hybrid_search
 from app.retrieval.tuning import get_retrieval_tuning, reset_retrieval_tuning_cache
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 
 @pytest.fixture(autouse=True)
