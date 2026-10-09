@@ -54,7 +54,7 @@ fi
   --disable-pip-version-check \
   --requirement "$repo_root/requirements-bws-deploy.txt"
 if ! PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" "$runtime_python" -c \
-  'import bitwarden_sdk, psycopg, app.ops.postgres_deploy_linux' >/dev/null 2>&1; then
+  'import bitwarden_sdk, psycopg, yaml, app.ops.postgres_deploy_linux' >/dev/null 2>&1; then
   echo "BWS deploy runtime dependency check failed" >&2
   exit 78
 fi

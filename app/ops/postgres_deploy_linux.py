@@ -561,7 +561,10 @@ class LinuxEffects:
             env['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] = str(
                 _runtime_user_ownership_state_dir(cfg.uid, env.get('XDG_STATE_HOME'))
             )
-        env.update(HOST_SECRET_PROVIDER='bws', BWS_POSTGRES_PASSWORD_SOURCE=str(cfg.password_file),
+        # The installed supervisor runtime also owns the shell's Python helpers
+        # and inherited guard; an ambient PYTHON cannot select a different host runtime.
+        env.update(PYTHON=sys.executable,
+                   HOST_SECRET_PROVIDER='bws', BWS_POSTGRES_PASSWORD_SOURCE=str(cfg.password_file),
                    BWS_DATABASE_NAME={'dev': 'app_dev', 'test': 'app_test', 'prod': 'app'}[cfg.channel],
                    LOCAL_UID=str(cfg.uid), LOCAL_GID=str(cfg.gid),
                    BWS_DATABASE_VOLUME={'dev': 'pkm-dev_pgdata-dev', 'test': 'pkm-test_pgdata', 'prod': 'pkm-prod_pgdata'}[cfg.channel],

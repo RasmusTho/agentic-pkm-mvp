@@ -3726,6 +3726,7 @@ def test_bws_supervisor_launcher_uses_declared_runtime_dependencies():
     assert manifest.splitlines() == [
         'bitwarden-sdk==2.1.0',
         'psycopg[binary]==3.2.10',
+        'PyYAML==6.0.3',
         'python-dateutil==2.9.0.post0',
         'six==1.17.0',
         'typing-extensions==4.15.0',
@@ -3756,6 +3757,7 @@ printf 'runtime:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
 if [[ \"$1\" == \"-m\" && \"$2\" == \"pip\" && \"${BWS_FAIL_RUNTIME_PIP:-0}\" == \"1\" ]]; then exit 1; fi
 if [[ \"$1\" == \"-c\" && \"${BWS_FAIL_RUNTIME_VERSION:-0}\" == \"1\" ]]; then exit 1; fi
 if [[ \"$1\" == \"-c\" && \"$*\" == *bitwarden_sdk* && \"${BWS_FAIL_RUNTIME_CHECK:-0}\" == \"1\" ]]; then exit 1; fi
+if [[ \"$1\" == \"-c\" && -n \"${BWS_REAL_RUNTIME_PYTHON:-}\" ]]; then exec \"$BWS_REAL_RUNTIME_PYTHON\" \"$@\"; fi
 RUNTIME_PYTHON
   chmod 755 \"$runtime_root/bin/python3\"
   printf 'bootstrap:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
@@ -3813,7 +3815,7 @@ def test_bws_supervisor_runtime_setup_is_idempotent_and_preserves_credentials(tm
     requirements = REPO_ROOT / 'requirements-bws-deploy.txt'
     bootstrap_check = 'bootstrap:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
     runtime_version_check = 'runtime:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
-    runtime_import_check = 'runtime:-c import bitwarden_sdk, psycopg, app.ops.postgres_deploy_linux'
+    runtime_import_check = 'runtime:-c import bitwarden_sdk, psycopg, yaml, app.ops.postgres_deploy_linux'
     assert len(calls) == 10
     assert calls[0] == bootstrap_check
     assert calls[1] == f'bootstrap:-m venv {runtime_root}'
@@ -3834,6 +3836,56 @@ def test_bws_supervisor_runtime_setup_is_idempotent_and_preserves_credentials(tm
     assert installed_launcher.stat().st_mode & 0o777 == 0o755
     assert unit_path.read_bytes() == original_unit
     assert 'LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current' in original_unit.decode()
+
+
+@pytest.mark.parametrize('missing_import', [None, 'yaml', 'bitwarden_sdk', 'psycopg'])
+def test_bws_runtime_declares_and_probes_yaml_for_child_guard(tmp_path, missing_import):
+    application_manifest = (REPO_ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()
+    runtime_manifest = (REPO_ROOT / 'requirements-bws-deploy.txt').read_text(encoding='utf-8').splitlines()
+    yaml_pin = next(line for line in application_manifest if line.startswith('PyYAML=='))
+    assert yaml_pin in runtime_manifest
+
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    installed_launcher = install_root / 'yggdrasil-bws-deploy'
+    installed_launcher.parent.mkdir()
+    installed_launcher.write_bytes(b'previous-launcher\n')
+    instrumentation = tmp_path / 'instrumentation'
+    instrumentation.mkdir()
+    # Execute the installer's actual import command through Python. Inject an
+    # unavailable dependency at the import boundary without running pip.
+    (instrumentation / 'sitecustomize.py').write_text(
+        'import importlib.abc, os, sys\n'
+        'class MissingDependency(importlib.abc.MetaPathFinder):\n'
+        '    def find_spec(self, fullname, path=None, target=None):\n'
+        '        if fullname == os.environ.get("BWS_MISSING_IMPORT"):\n'
+        '            raise ModuleNotFoundError(fullname)\n'
+        'sys.meta_path.insert(0, MissingDependency())\n',
+        encoding='utf-8',
+    )
+    trace = tmp_path / 'setup.trace'
+    result = subprocess.run(
+        ['bash', str(REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'),
+         '--runtime-root', str(runtime_root), '--install-root', str(install_root)],
+        cwd=REPO_ROOT,
+        env=_bws_setup_environment(
+            fake_bin, trace, BWS_REAL_RUNTIME_PYTHON=sys.executable,
+            BWS_MISSING_IMPORT=missing_import or '', PYTHONPATH=str(instrumentation),
+        ),
+        capture_output=True, text=True, check=False,
+    )
+
+    if missing_import is None:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert installed_launcher.read_bytes().startswith(f'#!{runtime_root}/bin/python3\n'.encode())
+    else:
+        assert result.returncode == 78, result.stdout + result.stderr
+        assert 'BWS deploy runtime dependency check failed' in result.stderr
+        assert installed_launcher.read_bytes() == b'previous-launcher\n'
+    assert any('import bitwarden_sdk, psycopg, yaml, app.ops.postgres_deploy_linux' in call
+               for call in trace.read_text(encoding='utf-8').splitlines())
 
 
 def test_bws_supervisor_runtime_rejects_old_bootstrap_python_before_mutation(tmp_path):

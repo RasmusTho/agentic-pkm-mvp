@@ -2936,6 +2936,80 @@ def test_vm_and_deploy_shell_resolve_quoted_runtime_env_path_consistently(tmp_pa
     assert result.stdout.strip() == str(runtime)
 
 
+@pytest.mark.parametrize('entrypoint', ['deploy', 'compose'])
+@pytest.mark.parametrize('ambient_python', ['unset', 'conflicting'])
+def test_managed_deploy_child_uses_declared_supervisor_interpreter(
+    tmp_path, monkeypatch, entrypoint, ambient_python,
+):
+    import json
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+    trace = tmp_path / 'child.json'
+    conflicting_python = tmp_path / 'host-python'
+    wrong_interpreter_used = tmp_path / 'wrong-interpreter-used'
+    conflicting_python.write_text(
+        '#!/bin/sh\n: > "$WRONG_INTERPRETER_USED"\nexit 19\n', encoding='utf-8',
+    )
+    conflicting_python.chmod(0o755)
+    instrumentation = tmp_path / 'instrumentation'
+    instrumentation.mkdir()
+    # Observe the real shell-selected interpreter, then refuse the real guard's
+    # host-config read before it can reach credentials or other host state.
+    (instrumentation / 'sitecustomize.py').write_text(
+        'import json, os, sys\n'
+        'from pathlib import Path\n'
+        'Path(os.environ["CHILD_TRACE"]).write_text(json.dumps({\n'
+        '    "executable": sys.executable, "argv": sys.orig_argv,\n'
+        '}))\n'
+        'def refuse_host_config(event, args):\n'
+        '    if event == "open" and args[0] == "/etc/yggdrasil/bws-deploy/test.json":\n'
+        '        raise PermissionError("test refuses host config")\n'
+        'sys.addaudithook(refuse_host_config)\n',
+        encoding='utf-8',
+    )
+    ambient = {
+        'PATH': os.environ['PATH'],
+        'HOME': str(tmp_path),
+        'PYTHONPATH': os.pathsep.join((str(instrumentation), str(REPO_ROOT))),
+        'INSTANCE_OWNERSHIP_HOST_STATE_DIR': str(tmp_path / 'ownership'),
+        'CHILD_TRACE': str(trace),
+        'WRONG_INTERPRETER_USED': str(wrong_interpreter_used),
+    }
+    if ambient_python == 'conflicting':
+        ambient['PYTHON'] = str(conflicting_python)
+    monkeypatch.setattr(os, 'environ', ambient)
+    cfg = SimpleNamespace(
+        root=tmp_path, channel='test', uid=1000, gid=1000,
+        password_file=tmp_path / 'password', runtime_env_file=runtime,
+    )
+    child_environment = linux.LinuxEffects(cfg).environment()
+    assert child_environment['PYTHON'] == sys.executable
+
+    if entrypoint == 'deploy':
+        argv = ['bash', str(SCRIPT), 'deploy', 'test', 'a' * 40, '--dry-run']
+    else:
+        argv = [
+            'bash', '-c',
+            'source "$1/scripts/lib/deploy_channel_compose.sh"; '
+            'deploy_channel_compose "$1" test docker-compose.test.yml pkm-test "$2" config',
+            'test', str(REPO_ROOT), str(tmp_path / 'test.env'),
+        ]
+    result = subprocess.run(
+        argv, cwd=REPO_ROOT, env=child_environment,
+        capture_output=True, text=True, check=False,
+    )
+
+    assert result.returncode == 78, result.stdout + result.stderr
+    assert 'database deployment refused; operation remains pending' in result.stderr
+    observed = json.loads(trace.read_text(encoding='utf-8'))
+    assert observed['executable'] == sys.executable
+    assert observed['argv'][1:5] == ['-m', 'app.ops.postgres_deploy_linux', 'guard', 'test']
+    assert not wrong_interpreter_used.exists()
+
+
 def test_bws_runtime_env_config_path_is_used_consistently(tmp_path, monkeypatch):
     from app.ops import postgres_deploy_linux as linux
 

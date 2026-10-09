@@ -652,10 +652,16 @@ The root-owned `config/systemd/yggdrasil-bws-deploy@.service` and installed
 `scripts/postgres_deploy_service.py` launcher supervise VM work independently of SSH. Operator setup
 runs `sudo scripts/install_bws_deploy_runtime.sh` from the checkout. That idempotent command
 requires Python 3.12 or newer, creates or updates `/opt/yggdrasil/bws-deploy-runtime` from the
-pinned `requirements-bws-deploy.txt` manifest, imports the BWS SDK, PostgreSQL driver, and Linux
+pinned `requirements-bws-deploy.txt` manifest, imports the BWS SDK, PostgreSQL driver, YAML, and Linux
 supervisor module through that runtime, then installs the root-owned launcher at
 `/usr/local/libexec/yggdrasil-bws-deploy` with the matching interpreter path. The service and RPC
 launcher use that interpreter; it is one shared runtime for the host's dev, test, and prod channels.
+Managed deployment children receive `PYTHON` bound to the running supervisor's `sys.executable`,
+including the deploy shell's inherited guard and every guarded Compose call. An ambient `PYTHON`
+selection is replaced on this managed path. The manifest includes the application's existing
+`PyYAML==6.0.3` pin for the deployment tooling's YAML reads. This host control runtime is installed
+independently of the authorized application image; updating it does not select a new application
+candidate or authorize a channel deployment, credential/grant change, or migration acknowledgment.
 Re-run it after changing the manifest, with no deployment operation in flight, then restart every
 active supervisor instance before starting another operation. If dependency installation or its
 import check fails, keep supervisor work idle and rerun setup after correcting the runtime issue;
