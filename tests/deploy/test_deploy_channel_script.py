@@ -2936,7 +2936,7 @@ def test_vm_and_deploy_shell_resolve_quoted_runtime_env_path_consistently(tmp_pa
     assert result.stdout.strip() == str(runtime)
 
 
-@pytest.mark.parametrize('entrypoint', ['deploy', 'compose'])
+@pytest.mark.parametrize('entrypoint', ['deploy', 'compose', 'signboard', 'inventory'])
 @pytest.mark.parametrize('ambient_python', ['unset', 'conflicting'])
 def test_managed_deploy_child_uses_declared_supervisor_interpreter(
     tmp_path, monkeypatch, entrypoint, ambient_python,
@@ -2954,6 +2954,9 @@ def test_managed_deploy_child_uses_declared_supervisor_interpreter(
         '#!/bin/sh\n: > "$WRONG_INTERPRETER_USED"\nexit 19\n', encoding='utf-8',
     )
     conflicting_python.chmod(0o755)
+    conflicting_bin = tmp_path / 'host-bin'
+    conflicting_bin.mkdir()
+    (conflicting_bin / 'python3').symlink_to(conflicting_python)
     instrumentation = tmp_path / 'instrumentation'
     instrumentation.mkdir()
     # Observe the real shell-selected interpreter, then refuse the real guard's
@@ -2971,42 +2974,69 @@ def test_managed_deploy_child_uses_declared_supervisor_interpreter(
         encoding='utf-8',
     )
     ambient = {
-        'PATH': os.environ['PATH'],
+        'PATH': os.pathsep.join((str(conflicting_bin), os.environ['PATH'])),
         'HOME': str(tmp_path),
         'PYTHONPATH': os.pathsep.join((str(instrumentation), str(REPO_ROOT))),
         'INSTANCE_OWNERSHIP_HOST_STATE_DIR': str(tmp_path / 'ownership'),
         'CHILD_TRACE': str(trace),
         'WRONG_INTERPRETER_USED': str(wrong_interpreter_used),
+        'PLAYWRIGHT_BROWSERS_PATH': str(tmp_path / 'ambient-browsers'),
+        'SIGNBOARD_ROOT': str(tmp_path / 'signboard'),
     }
     if ambient_python == 'conflicting':
         ambient['PYTHON'] = str(conflicting_python)
     monkeypatch.setattr(os, 'environ', ambient)
     cfg = SimpleNamespace(
-        root=tmp_path, channel='test', uid=1000, gid=1000,
+        root=tmp_path, channel='test', uid=os.getuid(), gid=os.getgid(),
         password_file=tmp_path / 'password', runtime_env_file=runtime,
     )
     child_environment = linux.LinuxEffects(cfg).environment()
     assert child_environment['PYTHON'] == sys.executable
+    runtime_bin = Path(sys.executable).parent
+    assert child_environment['PATH'].split(os.pathsep)[0] == str(runtime_bin)
+    assert child_environment['PLAYWRIGHT_BROWSERS_PATH'] == str(runtime_bin.parent / 'browsers')
 
     if entrypoint == 'deploy':
         argv = ['bash', str(SCRIPT), 'deploy', 'test', 'a' * 40, '--dry-run']
-    else:
+    elif entrypoint == 'compose':
         argv = [
             'bash', '-c',
             'source "$1/scripts/lib/deploy_channel_compose.sh"; '
             'deploy_channel_compose "$1" test docker-compose.test.yml pkm-test "$2" config',
             'test', str(REPO_ROOT), str(tmp_path / 'test.env'),
         ]
+    elif entrypoint == 'signboard':
+        argv = ['bash', '-c',
+                'source "$1/scripts/lib/signboard_root.sh"; '
+                'resolve_signboard_root_env; printf "%s" "$SIGNBOARD_ROOT"',
+                'test', str(REPO_ROOT)]
+    else:
+        (tmp_path / 'ownership').mkdir(mode=0o700)
+        argv = ['bash', '-c',
+                'source "$1/scripts/lib/instance_state_deployment.sh"; '
+                '_write_settings_rebind_floor_receipt test pending',
+                'test', str(REPO_ROOT)]
     result = subprocess.run(
         argv, cwd=REPO_ROOT, env=child_environment,
         capture_output=True, text=True, check=False,
     )
 
-    assert result.returncode == 78, result.stdout + result.stderr
-    assert 'database deployment refused; operation remains pending' in result.stderr
+    if entrypoint in {'deploy', 'compose'}:
+        assert result.returncode == 78, result.stdout + result.stderr
+        assert 'database deployment refused; operation remains pending' in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        if entrypoint == 'signboard':
+            assert result.stdout == str(tmp_path / 'signboard')
+        else:
+            receipt = json.loads((tmp_path / 'ownership/settings-rebind-runtime-floor-test.json').read_text())
+            assert receipt['channel'] == 'test' and receipt['phase'] == 'pending'
     observed = json.loads(trace.read_text(encoding='utf-8'))
     assert observed['executable'] == sys.executable
-    assert observed['argv'][1:5] == ['-m', 'app.ops.postgres_deploy_linux', 'guard', 'test']
+    if entrypoint in {'deploy', 'compose'}:
+        assert observed['argv'][1:5] == ['-m', 'app.ops.postgres_deploy_linux', 'guard', 'test']
+    else:
+        assert observed['argv'][1] == ('-c' if entrypoint == 'signboard' else '-')
     assert not wrong_interpreter_used.exists()
 
 

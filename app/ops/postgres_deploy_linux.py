@@ -563,7 +563,10 @@ class LinuxEffects:
             )
         # The installed supervisor runtime also owns the shell's Python helpers
         # and inherited guard; an ambient PYTHON cannot select a different host runtime.
+        runtime_bin = Path(sys.executable).parent
         env.update(PYTHON=sys.executable,
+                   PATH=os.pathsep.join((str(runtime_bin), env.get('PATH', os.defpath))),
+                   PLAYWRIGHT_BROWSERS_PATH=str(runtime_bin.parent / 'browsers'),
                    HOST_SECRET_PROVIDER='bws', BWS_POSTGRES_PASSWORD_SOURCE=str(cfg.password_file),
                    BWS_DATABASE_NAME={'dev': 'app_dev', 'test': 'app_test', 'prod': 'app'}[cfg.channel],
                    LOCAL_UID=str(cfg.uid), LOCAL_GID=str(cfg.gid),
