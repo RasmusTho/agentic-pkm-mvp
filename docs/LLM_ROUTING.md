@@ -76,7 +76,7 @@ each clone and is not committed.
 
 For the dev, test, and prod channels, Compose forwards the governed `LLM_PROVIDER` value to only the
 Product `api`, `worker`, and `watcher` callers, defaulting to `mock` when the channel has no
-provider selection. Production pins that import-time default to `mock` and sets
+provider selection. Each channel pins that import-time default to `mock` and sets
 `LLM_PROVIDER_ENFORCE=0` for those callers, allowing explicit `llm_routing` task policies to use
 their configured provider. The value `mock` remains the fallback when a task has no explicit policy.
 These overlays also accept the optional host-local
