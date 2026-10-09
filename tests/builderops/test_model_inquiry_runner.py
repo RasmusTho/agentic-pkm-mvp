@@ -22,6 +22,7 @@ from app.builderops.model_inquiry_adapters import (
     ScriptedAdapter,
 )
 from app.builderops.model_inquiry_contract import (
+    DiagnosticBudget,
     MODEL_TURN_SYSTEM_PROMPT,
     RESPONSE_SCHEMA_VERSION,
     canonical_hash,
@@ -45,6 +46,7 @@ def _start(
     inquiry_id: str,
     *,
     acceptance_mode: str | None = None,
+    diagnostic_budget: DiagnosticBudget | None = None,
 ) -> tuple[ModelInquiryService, Path]:
     vault = tmp_path / inquiry_id
     vault.mkdir()
@@ -55,6 +57,7 @@ def _start(
         acceptance_mode=acceptance_mode,
         inquiry_id=inquiry_id,
         source_refs=[{"ref_type": "github_issue", "ref": "#3291"}],
+        diagnostic_budget=diagnostic_budget,
     )
     return service, vault
 
@@ -295,6 +298,126 @@ def test_single_target_max_round_terminal_is_readable_and_resume_is_idempotent(
         "synthesis",
         "verification",
     }
+
+
+def test_budget_refuses_next_turn_before_adapter_call(tmp_path: Path) -> None:
+    budget = DiagnosticBudget(max_calls=1)
+    service, _ = _start(tmp_path, "inq_runner_call_budget", diagnostic_budget=budget)
+    fable = _scripted("fable", [_response("draft"), _response("draft")])
+    gpt = _scripted("gpt_codex", [_response("draft")])
+    runner = ModelInquiryRunner(
+        service,
+        {"fable": fable, "gpt_codex": gpt},
+        diagnostic_budget=budget,
+    )
+
+    result = runner.run("inq_runner_call_budget", max_rounds=1)
+
+    assert result["outcome"] == "budget_exhausted"
+    assert len(fable.calls) == 1
+    assert len(gpt.calls) == 0
+    terminal = next(
+        item
+        for item in service.trace("inq_runner_call_budget")["receipts"]
+        if item["event_type"] == "inquiry_run_terminal"
+    )
+    assert terminal["details"]["reason"] == "call_limit"
+
+
+def test_resume_cannot_reset_diagnostic_budget(tmp_path: Path) -> None:
+    budget = DiagnosticBudget(max_calls=1)
+    service, _ = _start(tmp_path, "inq_runner_budget_resume", diagnostic_budget=budget)
+    fable = _scripted("fable", [_response("draft"), _response("draft")])
+    gpt = _scripted("gpt_codex", [_response("draft")])
+    runner = ModelInquiryRunner(
+        service,
+        {"fable": fable, "gpt_codex": gpt},
+        diagnostic_budget=budget,
+    )
+
+    first = runner.run("inq_runner_budget_resume", max_rounds=1)
+    calls_after_first_run = (len(fable.calls), len(gpt.calls))
+    assert first["outcome"] == "budget_exhausted"
+    with pytest.raises(BuilderOpsValidationError, match="conflicting diagnostic budgets"):
+        runner.run(
+            "inq_runner_budget_resume",
+            max_rounds=1,
+            diagnostic_budget=DiagnosticBudget(max_calls=8),
+        )
+    assert (len(fable.calls), len(gpt.calls)) == calls_after_first_run
+
+
+def test_interrupted_resume_uses_frozen_budget_before_next_adapter_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    budget = DiagnosticBudget(max_calls=1)
+    service, _ = _start(tmp_path, "inq_runner_interrupted_budget", diagnostic_budget=budget)
+    original = service.commit_terminal_turn_receipt
+    interrupted = True
+
+    def interrupt_before_turn_receipt(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        nonlocal interrupted
+        if interrupted:
+            interrupted = False
+            raise KeyboardInterrupt("interrupted before run terminal")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service, "commit_terminal_turn_receipt", interrupt_before_turn_receipt)
+    fable = _scripted("fable", [_response("draft")])
+    gpt = _scripted("gpt_codex", [_response("draft")])
+    with pytest.raises(KeyboardInterrupt, match="interrupted before run terminal"):
+        ModelInquiryRunner(service, {"fable": fable, "gpt_codex": gpt}, diagnostic_budget=budget).run(
+            "inq_runner_interrupted_budget", max_rounds=1
+        )
+    assert len(fable.calls) == 1
+    assert len(gpt.calls) == 0
+
+    fresh_fable = _scripted("fable", [_response("draft")])
+    fresh_gpt = _scripted("gpt_codex", [_response("draft")])
+    result = ModelInquiryRunner(service, {"fable": fresh_fable, "gpt_codex": fresh_gpt}).run(
+        "inq_runner_interrupted_budget", max_rounds=1
+    )
+
+    assert result["outcome"] == "budget_exhausted"
+    assert result["details"]["reason"] == "call_limit"
+    assert len(fresh_fable.calls) == 0
+    assert len(fresh_gpt.calls) == 0
+
+
+def test_unknown_usage_is_not_zero_cost(tmp_path: Path) -> None:
+    budget = DiagnosticBudget(max_calls=3, max_units=1, authorized=True)
+    service, _ = _start(tmp_path, "inq_runner_unknown_usage", diagnostic_budget=budget)
+    fable = _scripted("fable", [_response("draft")])
+    gpt = _scripted("gpt_codex", [_response("draft")])
+    runner = ModelInquiryRunner(
+        service,
+        {"fable": fable, "gpt_codex": gpt},
+        diagnostic_budget=budget,
+    )
+
+    result = runner.run("inq_runner_unknown_usage", max_rounds=1)
+
+    assert result["outcome"] == "budget_exhausted"
+    assert result["details"]["reason"] == "usage_unknown"
+    assert result["details"]["usage"]["units"] is None
+    assert len(gpt.calls) == 0
+
+
+def test_zero_cost_ceiling_refuses_unknown_first_call(tmp_path: Path) -> None:
+    budget = DiagnosticBudget(max_calls=3, max_cost_usd=0, authorized=True)
+    service, _ = _start(tmp_path, "inq_runner_zero_cost", diagnostic_budget=budget)
+    fable = _scripted("fable", [_response("draft")])
+    gpt = _scripted("gpt_codex", [_response("draft")])
+
+    result = ModelInquiryRunner(service, {"fable": fable, "gpt_codex": gpt}).run(
+        "inq_runner_zero_cost", max_rounds=1
+    )
+
+    assert result["outcome"] == "budget_exhausted"
+    assert result["details"]["reason"] == "usage_unknown"
+    assert result["details"]["usage"]["cost_usd"] is None
+    assert len(fable.calls) == 0
+    assert len(gpt.calls) == 0
 
 
 def test_independent_drafts_share_context_hash(tmp_path: Path) -> None:
@@ -928,8 +1051,10 @@ def test_legacy_failed_attempt_is_not_retried_on_resume(tmp_path: Path) -> None:
         allow_operational_fallback=True,
     ).run(inquiry_id, max_rounds=1)
 
-    assert result["outcome"] == "degraded_consensus"
-    assert [call["phase"] for call in primary.calls] == ["review"]
+    assert result["outcome"] == "budget_exhausted"
+    assert result["details"]["reason"] == "elapsed_unknown"
+    assert primary.calls == []
+    assert alternate.calls == []
 
 
 def test_resume_and_persistence_failure_fail_closed(tmp_path: Path, monkeypatch) -> None:

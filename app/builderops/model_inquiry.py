@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import threading
@@ -17,6 +18,7 @@ from uuid import uuid4
 from app.builderops.config import load_paths
 from app.builderops.devui_model_inquiry_command import validate_approval_identity
 from app.builderops.model_inquiry_contract import (
+    DiagnosticBudget,
     MODEL_TURN_SYSTEM_PROMPT,
     canonical_hash,
     github_issue_url_matches,
@@ -63,6 +65,7 @@ RUN_TERMINAL_OUTCOMES = frozenset(
         "provider_unavailable",
         "provider_error",
         "persistence_failed",
+        "budget_exhausted",
     }
 )
 PROVIDER_TURN_FIELDS = frozenset(
@@ -121,6 +124,7 @@ class ModelInquiryService:
         created_by: Mapping[str, Any] | str | None = None,
         inquiry_id: str | None = None,
         after_persist: Callable[[str], None] | None = None,
+        diagnostic_budget: DiagnosticBudget | None = None,
     ) -> dict[str, Any]:
         if not isinstance(question, str) or not question.strip():
             raise BuilderOpsValidationError("question must be non-empty UTF-8 text")
@@ -157,6 +161,20 @@ class ModelInquiryService:
         )
         manifest_path = directory / "manifest.json"
         manifest_existing = self._read_optional(manifest_path)
+        persisted_budget = _persisted_diagnostic_budget(manifest_existing)
+        if persisted_budget is not None:
+            if diagnostic_budget is not None and diagnostic_budget != persisted_budget:
+                raise BuilderOpsConflictError("diagnostic budget binding conflicts")
+            bound_budget = persisted_budget
+        elif manifest_existing is None:
+            bound_budget = diagnostic_budget or DiagnosticBudget()
+        else:
+            # Preserve exact retries of manifests written before this envelope
+            # existed. They cannot safely accept a new caller-selected budget
+            # because the old manifest is already immutable and unbound.
+            if diagnostic_budget is not None:
+                raise BuilderOpsConflictError("legacy inquiry has no persisted diagnostic budget")
+            bound_budget = None
         if acceptance_mode not in {None, "single_target"}:
             raise BuilderOpsValidationError("unsupported inquiry acceptance_mode")
         manifest = {
@@ -182,6 +200,8 @@ class ModelInquiryService:
                     "independence": False,
                 }
             )
+        if bound_budget is not None:
+            manifest["diagnostic_budget"] = bound_budget.to_dict()
         manifest["artifact_hash"] = _artifact_hash(manifest)
         self._write_immutable(
             manifest_path,
@@ -1440,6 +1460,7 @@ class ModelInquiryService:
         schema = manifest.get("schema")
         if schema not in {LEGACY_INQUIRY_SCHEMA, INQUIRY_SCHEMA} or manifest.get("inquiry_id") != inquiry_id:
             raise BuilderOpsValidationError("invalid inquiry manifest")
+        _persisted_diagnostic_budget(manifest)
         if schema == INQUIRY_SCHEMA and (
             manifest.get("acceptance_mode") != "single_target"
             or manifest.get("perspectives") != ["synthesis", "verification"]
@@ -1675,6 +1696,9 @@ class ModelInquiryService:
             raise BuilderOpsValidationError(
                 "single-target acceptance requires a v2 inquiry manifest"
             )
+        if outcome == "budget_exhausted":
+            _validate_budget_terminal_details(details)
+            return
         if outcome == "single_target_acceptance":
             self._validate_single_target_acceptance(
                 manifest,
@@ -2152,7 +2176,11 @@ def _validate_provider_metadata(value: Mapping[str, Any] | None) -> dict[str, An
     if value is None:
         return {}
     payload = dict(value)
-    if set(payload) != PROVIDER_TURN_FIELDS:
+    optional_fields = {"elapsed_seconds", "usage", "cost_usd"}
+    if not PROVIDER_TURN_FIELDS <= set(payload) or not set(payload) <= {
+        *PROVIDER_TURN_FIELDS,
+        *optional_fields,
+    }:
         raise BuilderOpsValidationError("provider turn metadata fields do not match contract")
     for field in (
         "adapter_request_id",
@@ -2198,6 +2226,12 @@ def _validate_provider_metadata(value: Mapping[str, Any] | None) -> dict[str, An
         raise BuilderOpsValidationError("accept provider turn requires accepted artifact hash")
     if payload["stance"] != "accept" and accepted is not None:
         raise BuilderOpsValidationError("only accept provider turn may set accepted artifact hash")
+    if "elapsed_seconds" in payload:
+        _validate_elapsed_seconds(payload["elapsed_seconds"])
+    if "usage" in payload:
+        _validate_usage(payload["usage"])
+    if "cost_usd" in payload:
+        _validate_cost_usd(payload["cost_usd"])
     round_index = payload["round_index"]
     if isinstance(round_index, bool) or not isinstance(round_index, int) or round_index < 0:
         raise BuilderOpsValidationError("provider turn round_index must be non-negative")
@@ -2210,7 +2244,9 @@ def _validate_provider_metadata_from_turn(turn: Mapping[str, Any]) -> None:
         return
     if present != PROVIDER_TURN_FIELDS:
         raise BuilderOpsValidationError("persisted provider turn metadata is incomplete")
-    _validate_provider_metadata({field: turn[field] for field in PROVIDER_TURN_FIELDS})
+    _validate_provider_metadata(
+        {field: turn[field] for field in set(turn) & {*PROVIDER_TURN_FIELDS, "elapsed_seconds", "usage", "cost_usd"}}
+    )
     if turn["output_hash"] != turn.get("content_hash"):
         raise BuilderOpsValidationError("provider turn output hash does not match stored response")
 
@@ -2222,6 +2258,52 @@ def _validate_sha256(value: Any, field: str) -> None:
         or any(char not in "0123456789abcdef" for char in value)
     ):
         raise BuilderOpsValidationError(f"{field} must be lowercase sha256")
+
+
+def _validate_elapsed_seconds(value: Any, *, allow_unknown: bool = False) -> None:
+    if allow_unknown and value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or value < 0
+    ):
+        raise BuilderOpsValidationError("elapsed_seconds must be a finite non-negative number")
+
+
+def _validate_usage(value: Any) -> None:
+    if not isinstance(value, Mapping):
+        raise BuilderOpsValidationError("usage must be an object")
+    allowed = {"input_units", "output_units", "total_units", "state", "reason"}
+    if not {"state"} <= set(value) or not set(value) <= allowed:
+        raise BuilderOpsValidationError("usage fields do not match contract")
+    if value["state"] not in {"known", "unknown"}:
+        raise BuilderOpsValidationError("usage state must be known or unknown")
+    for field in ("input_units", "output_units", "total_units"):
+        if field in value and (
+            isinstance(value[field], bool)
+            or not isinstance(value[field], int)
+            or value[field] < 0
+        ):
+            raise BuilderOpsValidationError(f"usage {field} must be a non-negative integer")
+    if value["state"] == "known":
+        if "total_units" not in value or "reason" in value:
+            raise BuilderOpsValidationError("known usage requires total_units and no reason")
+    elif "reason" not in value or not isinstance(value["reason"], str) or not value["reason"].strip():
+        raise BuilderOpsValidationError("unknown usage requires a reason")
+
+
+def _validate_cost_usd(value: Any) -> None:
+    if value is None:
+        return
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or value < 0
+    ):
+        raise BuilderOpsValidationError("cost_usd must be a finite non-negative number or null")
 
 
 def _validate_receipt_details(value: Mapping[str, Any]) -> dict[str, Any]:
@@ -2271,6 +2353,63 @@ def _validate_run_terminal_receipt(
     ):
         raise BuilderOpsValidationError("invalid inquiry run terminal receipt")
     _validate_receipt_details(cast(Mapping[str, Any], receipt["details"]))
+
+
+def _validate_budget_terminal_details(details: Mapping[str, Any]) -> None:
+    if set(details) != {"reason", "budget", "usage"}:
+        raise BuilderOpsValidationError("budget terminal details do not match contract")
+    if details["reason"] not in {
+        "call_limit",
+        "elapsed_limit",
+        "elapsed_unknown",
+        "unit_limit",
+        "cost_limit",
+        "usage_unknown",
+    }:
+        raise BuilderOpsValidationError("unsupported diagnostic budget exhaustion reason")
+    budget = details["budget"]
+    usage = details["usage"]
+    if not isinstance(budget, Mapping) or not isinstance(usage, Mapping):
+        raise BuilderOpsValidationError("budget terminal details require objects")
+    if set(budget) != {"max_calls", "max_elapsed_seconds", "max_units", "max_cost_usd", "authorized"}:
+        raise BuilderOpsValidationError("budget terminal budget fields do not match contract")
+    if set(usage) != {"calls", "elapsed_seconds", "units", "cost_usd"}:
+        raise BuilderOpsValidationError("budget terminal usage fields do not match contract")
+    if (
+        isinstance(budget["max_calls"], bool)
+        or not isinstance(budget["max_calls"], int)
+        or budget["max_calls"] < 1
+        or not isinstance(budget["authorized"], bool)
+    ):
+        raise BuilderOpsValidationError("invalid diagnostic budget call bound")
+    _validate_elapsed_seconds(budget["max_elapsed_seconds"])
+    if budget["max_units"] is not None and (
+        isinstance(budget["max_units"], bool)
+        or not isinstance(budget["max_units"], int)
+        or budget["max_units"] < 1
+    ):
+        raise BuilderOpsValidationError("invalid diagnostic budget unit bound")
+    _validate_cost_usd(budget["max_cost_usd"])
+    if (
+        budget["max_units"] is not None or budget["max_cost_usd"] is not None
+    ) and not budget["authorized"]:
+        raise BuilderOpsValidationError(
+            "token/cost diagnostic ceilings require explicit budget authority"
+        )
+    if (
+        isinstance(usage["calls"], bool)
+        or not isinstance(usage["calls"], int)
+        or usage["calls"] < 0
+    ):
+        raise BuilderOpsValidationError("invalid diagnostic budget call usage")
+    _validate_elapsed_seconds(usage["elapsed_seconds"], allow_unknown=True)
+    if usage["units"] is not None and (
+        isinstance(usage["units"], bool)
+        or not isinstance(usage["units"], int)
+        or usage["units"] < 0
+    ):
+        raise BuilderOpsValidationError("invalid diagnostic budget unit usage")
+    _validate_cost_usd(usage["cost_usd"])
 
 
 def _validate_readiness_terminal_receipt(
@@ -2558,13 +2697,22 @@ def _validate_provider_attempt_receipt(
     if outcome == "provider_error":
         allowed_fields.add(frozenset({*expected_fields, "diagnostic"}))
         allowed_fields.add(frozenset({*candidate_fields, "diagnostic"}))
+    optional_fields = {"elapsed_seconds", "usage", "cost_usd"}
+    detail_fields = frozenset(details)
+    base_detail_fields = frozenset(detail_fields - optional_fields)
     if (
-        frozenset(details) not in allowed_fields
+        base_detail_fields not in allowed_fields
         or details.get("classification") != expected_classifications.get(str(outcome))
     ):
         raise BuilderOpsValidationError("provider attempt details do not match outcome contract")
     if "diagnostic" in details:
         _validate_adapter_failure_diagnostic(details["diagnostic"])
+    if "elapsed_seconds" in details:
+        _validate_elapsed_seconds(details["elapsed_seconds"])
+    if "usage" in details:
+        _validate_usage(details["usage"])
+    if "cost_usd" in details:
+        _validate_cost_usd(details["cost_usd"])
     candidate_adapter_id = details.get("candidate_adapter_id")
     if candidate_adapter_id is not None:
         _safe_id(str(candidate_adapter_id), "candidate_adapter_id")
@@ -2661,6 +2809,18 @@ def _dedupe_source_refs(*groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 seen.add(key)
                 result.append(ref)
     return result
+
+
+def _persisted_diagnostic_budget(
+    manifest: Mapping[str, Any] | None,
+) -> DiagnosticBudget | None:
+    """Read the immutable inquiry envelope, preserving legacy manifests."""
+    if manifest is None or "diagnostic_budget" not in manifest:
+        return None
+    value = manifest["diagnostic_budget"]
+    if not isinstance(value, Mapping):
+        raise BuilderOpsValidationError("persisted diagnostic budget must be an object")
+    return DiagnosticBudget.from_dict(value)
 
 
 __all__ = ["ModelInquiryService"]
