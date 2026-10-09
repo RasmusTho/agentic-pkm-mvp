@@ -68,8 +68,8 @@ class DeployReceipt:
     def validate(self) -> None:
         if (str(UUID(self.operation_id)) != self.operation_id or self.channel not in CHANNEL_PROJECTS
             or self.kind != 'deploy'
-            or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'committed', 'aborted'}
-            or self.terminal_result != (self.stage if self.stage in {'committed', 'aborted'} else None)):
+            or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'committed', 'aborted', 'failed'}
+            or self.terminal_result != (self.stage if self.stage in {'committed', 'aborted', 'failed'} else None)):
             raise PostgresDeployError()
 
     def evidence(self) -> TerminalEvidence:
@@ -173,13 +173,13 @@ class DeployJournal:
 
     def write(self, operation_id: str, stage: str) -> DeployReceipt:
         receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
-                                stage if stage in {'committed', 'aborted'} else None)
+                                stage if stage in {'committed', 'aborted', 'failed'} else None)
         receipt.validate()
         previous = self.read()
         successors = {
             'prepared': {'preflighted', 'aborted'}, 'preflighted': {'materialized', 'aborted'},
             'materialized': {'authenticating', 'activating', 'aborted'},
-            'authenticating': {'activating', 'aborted'}, 'activating': {'committed', 'aborted'},
+            'authenticating': {'activating', 'aborted'}, 'activating': {'committed', 'aborted', 'failed'},
         }
         if previous and previous.terminal_result is None:
             if previous.operation_id != operation_id or stage not in successors.get(previous.stage, set()):

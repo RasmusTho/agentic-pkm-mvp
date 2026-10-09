@@ -9,8 +9,8 @@ import sys
 
 from app.ops.bws_secret_admin import configured_admin
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
-from app.ops.host_secret_controller import HostSecretController
-from app.ops.postgres_deploy import DeployPlan, PostgresDeployError, deploy_from_host
+from app.ops.host_secret_controller import HostSecretController, TerminalEvidence
+from app.ops.postgres_deploy import DeployPlan, DeployReceipt, PostgresDeployError, deploy_from_host
 from app.ops.postgres_deploy_linux import SshDeployRemote
 from app.ops.secret_admin import SecretAdmin
 
@@ -47,6 +47,10 @@ def main(argv: list[str] | None = None) -> int:
         '--existing-secrets-only', action='store_true',
         help='refuse a missing PostgreSQL password before remote mutation; never bootstrap a BWS value',
     )
+    parser.add_argument(
+        '--reconcile-pending', action='store_true',
+        help='reconcile this exact existing-secrets-only operation after remote terminal evidence',
+    )
     args = parser.parse_args(argv)
     try:
         controller = HostSecretController()
@@ -54,6 +58,26 @@ def main(argv: list[str] | None = None) -> int:
         # binding. VM-only consumers are selected from VM runtime/migration state.
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),
                           (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only)
+        if args.reconcile_pending:
+            if not args.existing_secrets_only:
+                raise PostgresDeployError()
+            remote = SshDeployRemote('ygg-' + args.channel)
+            receipts: list[DeployReceipt] = []
+
+            def readback(operation_id: str, kind: str, target: str) -> TerminalEvidence:
+                if kind != 'deploy' or target != args.channel:
+                    raise PostgresDeployError()
+                receipt = remote.reconcile_failed(operation_id, plan)
+                receipts.append(receipt)
+                return receipt.evidence()
+
+            controller.reconcile(
+                readback,
+                expected=('deploy', args.channel, False),
+            )
+            receipt = receipts[-1]
+            print(json.dumps(receipt.__dict__, sort_keys=True))
+            return 0
         admin = SecretAdmin(configured_admin(), controller=controller)
         receipt = deploy_from_host(admin, SshDeployRemote('ygg-' + args.channel), plan,
                                    qualified=lambda: require_qualification(controller),

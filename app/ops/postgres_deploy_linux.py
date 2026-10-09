@@ -21,7 +21,7 @@ import subprocess
 import sys
 import threading
 from typing import Any, Iterator
-from uuid import UUID
+from uuid import UUID, uuid4
 from urllib.parse import urlencode, quote
 
 from app.config.database import credential_free_database_fields, host_database_fields
@@ -31,6 +31,8 @@ from app.ops.postgres_deploy import (
     DeployJournal, DeployPlan, DeployReceipt, DeployWorker, PostgresDeployError,
     password_authenticate, vm_selected_values,
 )
+
+_ONE_SHOT_COMPOSE_SERVICES = frozenset({'instance-state-init', 'migrate'})
 
 
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
@@ -760,14 +762,22 @@ class LinuxEffects:
 
     def quiescent(self) -> bool:
         # Called by the worker after each synchronous subprocess has been reaped.
-        # Docker may still be restarting/starting after its CLI returns.
+        # Docker may still be starting after its CLI returns. Stable long-running
+        # services are expected, but daemon-owned one-shot services can outlive
+        # the Docker CLI and continue mutating state after their supervisor exits.
         try:
             rows = self.compose('ps', '--all', '--format', 'json').strip()
             if not rows:
                 return True
             records = json.loads(rows) if rows.startswith('[') else [json.loads(line) for line in rows.splitlines()]
-            return all(row.get('State') in {'running', 'exited', 'created'}
-                       and row.get('Health') not in {'starting'} for row in records)
+            return isinstance(records, list) and all(
+                isinstance(row, dict)
+                and isinstance(row.get('Service'), str) and bool(row['Service'])
+                and row.get('State') in {'running', 'exited', 'created'}
+                and not (row['Service'] in _ONE_SHOT_COMPOSE_SERVICES and row['State'] == 'running')
+                and row.get('Health') not in {'starting'}
+                for row in records
+            )
         except Exception:
             return False
 
@@ -793,6 +803,65 @@ class LinuxEffects:
                 path.rmdir()
             # Pending or unreadable state retains the mkdir lock as a durable
             # admission refusal. Never clear it merely because this thread ended.
+
+    @contextmanager
+    def failed_reconciliation_lock(self) -> Iterator[tuple[Path, int, int, int]]:
+        """Acquire the existing BWS channel lock without creating or changing it."""
+        import fcntl
+
+        path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
+        parent_fd = directory_fd = lock_fd = None
+        try:
+            parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            directory_fd = os.open(
+                path.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd
+            )
+            directory_info = os.fstat(directory_fd)
+            names = set(os.listdir(directory_fd))
+            if (directory_info.st_uid != os.geteuid() or stat.S_IMODE(directory_info.st_mode) != 0o700
+                or names != {'bws-owner'}):
+                raise PostgresDeployError()
+            lock_fd = os.open(
+                'bws-owner', os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd
+            )
+            lock_info = os.fstat(lock_fd)
+            if (not stat.S_ISREG(lock_info.st_mode) or lock_info.st_uid != os.geteuid()
+                or stat.S_IMODE(lock_info.st_mode) != 0o600 or lock_info.st_nlink != 1):
+                raise PostgresDeployError()
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if set(os.listdir(directory_fd)) != {'bws-owner'}:
+                raise PostgresDeployError()
+            yield path, parent_fd, directory_fd, lock_fd
+        except Exception:
+            raise PostgresDeployError() from None
+        finally:
+            for descriptor in (lock_fd, directory_fd, parent_fd):
+                if descriptor is not None:
+                    os.close(descriptor)
+
+    @staticmethod
+    def retire_reconciled_channel_lock(
+        handle: tuple[Path, int, int, int],
+    ) -> None:
+        """Atomically release admission, then remove the detached lock directory."""
+        path, parent_fd, directory_fd, lock_fd = handle
+        current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        opened = os.fstat(directory_fd)
+        marker = os.stat('bws-owner', dir_fd=directory_fd, follow_symlinks=False)
+        held = os.fstat(lock_fd)
+        if ((current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
+            or (marker.st_dev, marker.st_ino) != (held.st_dev, held.st_ino)
+            or set(os.listdir(directory_fd)) != {'bws-owner'}):
+            raise PostgresDeployError()
+        tombstone = path.name + '.reconciled-' + uuid4().hex
+        os.rename(path.name, tombstone, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        # A crash from here can leave only a uniquely named, detached directory;
+        # it cannot block or be mistaken for the channel's admission lock.
+        os.unlink('bws-owner', dir_fd=directory_fd)
+        os.fsync(directory_fd)
+        os.rmdir(tombstone, dir_fd=parent_fd)
+        os.fsync(parent_fd)
 
 
 class SupervisedOperation:
@@ -879,6 +948,43 @@ class DeploymentSupervisor:
         if current != self.config:
             raise PostgresDeployError()
 
+    def _reconcile_failed(self, operation_id: str, plan: DeployPlan, bootstrap: bool) -> dict[str, Any]:
+        self._require_current_config()
+        previous = self.config.journal.read()
+        if previous is None or previous.operation_id != operation_id:
+            raise PostgresDeployError()
+        self.config.journal.bind_request(operation_id, plan, bootstrap)
+        operation = self.operation
+        if operation is not None and operation.operation_id != operation_id:
+            raise PostgresDeployError()
+        if previous.terminal_result is not None:
+            if previous.terminal_result == 'failed':
+                lock_path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
+                try:
+                    os.stat(lock_path, follow_symlinks=False)
+                except FileNotFoundError:
+                    return {'receipt': asdict(previous)}
+                effects = LinuxEffects(self.config)
+                with effects.failed_reconciliation_lock() as lock:
+                    if not effects.quiescent():
+                        raise PostgresDeployError()
+                    effects.retire_reconciled_channel_lock(lock)
+            return {'receipt': asdict(previous)}
+        if previous.stage != 'activating':
+            raise PostgresDeployError()
+        if operation is not None and (
+            operation.plan != plan or operation.bootstrap != bootstrap
+            or not operation.finished.is_set() or operation.thread.is_alive() or not operation.failed
+        ):
+            raise PostgresDeployError()
+        effects = LinuxEffects(self.config)
+        with effects.failed_reconciliation_lock() as lock:
+            if not effects.quiescent():
+                raise PostgresDeployError()
+            receipt = self.config.journal.write(operation_id, 'failed')
+            effects.retire_reconciled_channel_lock(lock)
+        return {'receipt': asdict(receipt)}
+
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
@@ -893,12 +999,20 @@ class DeploymentSupervisor:
         plan = DeployPlan(raw['channel'], raw['revision'], tuple(raw['services']),
                           tuple(raw['consumers']), raw['ack_forward_only'])
         plan.validate()
-        if plan.channel != self.config.channel or data['action'] not in {'prepare', 'activate', 'join'}:
+        if plan.channel != self.config.channel or data['action'] not in {
+            'prepare', 'activate', 'join', 'reconcile-failed'
+        }:
             raise PostgresDeployError()
         with self.mutex:
+            if data['action'] == 'reconcile-failed':
+                return self._reconcile_failed(operation_id, plan, data['bootstrap'])
             previous = self.config.journal.read()
             if previous and previous.operation_id == operation_id and previous.terminal_result:
                 self.config.journal.bind_request(operation_id, plan, data['bootstrap'])
+                if previous.terminal_result == 'failed':
+                    # Never expose failed terminal evidence until an interrupted
+                    # lock retirement has been completed through the same proof.
+                    return self._reconcile_failed(operation_id, plan, data['bootstrap'])
                 return {'receipt': asdict(previous)}
             if self.operation and self.operation.operation_id != operation_id:
                 if not self.operation.finished.is_set():
@@ -1029,6 +1143,16 @@ class SshDeployRemote:
 
     def join(self, operation_id: str, plan: DeployPlan) -> DeployReceipt:
         return self._terminal('join', operation_id, plan)
+
+    def reconcile_failed(self, operation_id: str, plan: DeployPlan) -> DeployReceipt:
+        self.bootstrap = False
+        response = self._request('reconcile-failed', operation_id, plan)
+        receipt = DeployReceipt(**response['receipt'])
+        receipt.validate()
+        if (receipt.operation_id != operation_id or receipt.channel != plan.channel
+            or receipt.terminal_result not in {'committed', 'aborted', 'failed'}):
+            raise PostgresDeployError()
+        return receipt
 
 
 def main(argv: list[str] | None = None) -> int:

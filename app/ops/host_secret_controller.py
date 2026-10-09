@@ -135,7 +135,11 @@ class HostSecretOperation:
             evidence.operation_id != self.operation_id
             or evidence.kind != self.kind
             or evidence.target != self.target
-            or evidence.result not in {"committed", "aborted"}
+            or evidence.result not in {"committed", "aborted", "failed"}
+            or (
+                evidence.result == "failed"
+                and (self.kind != "deploy" or self.allow_bootstrap is not False)
+            )
             or not valid_source
         ):
             raise HostSecretAdmissionError()
@@ -291,6 +295,10 @@ class HostSecretController:
                         raise HostSecretAdmissionError()
                     if record["kind"] == "deploy" and record.get("allow_bootstrap") != pending.get("allow_bootstrap"):
                         raise HostSecretAdmissionError()
+                    if record["stage"] == "failed" and (
+                        record["kind"] != "deploy" or pending.get("allow_bootstrap") is not False
+                    ):
+                        raise HostSecretAdmissionError()
                     if (
                         record["stage"] == "sent"
                         and record["source"] is None
@@ -298,8 +306,11 @@ class HostSecretController:
                     ):
                         pending = record
                         continue
+                    terminal_stages = {"committed", "aborted"}
+                    if record["kind"] == "deploy":
+                        terminal_stages.add("failed")
                     if (
-                        record["stage"] not in {"committed", "aborted"}
+                        record["stage"] not in terminal_stages
                         or not (
                             record["source"] == _TERMINAL_SOURCES[record["kind"]]
                             or (
@@ -334,7 +345,12 @@ class HostSecretController:
                 # Never clear a pending operation merely because the process unwound.
                 operation._active = False
 
-    def reconcile(self, readback: Callable[[str, str, str], TerminalEvidence]) -> None:
+    def reconcile(
+        self,
+        readback: Callable[[str, str, str], TerminalEvidence],
+        *,
+        expected: tuple[str, str, bool] | None = None,
+    ) -> None:
         """Read authoritative operation-specific terminal evidence under the host lock.
 
         Downstream adapters own authentication, durable receipt and provider terminality
@@ -343,6 +359,10 @@ class HostSecretController:
         with self._locked_journal() as descriptor:
             pending = self._pending(descriptor)
             if pending is None:
+                raise HostSecretAdmissionError()
+            if expected is not None and (
+                pending["kind"], pending["target"], pending.get("allow_bootstrap")
+            ) != expected:
                 raise HostSecretAdmissionError()
             prior_generation = pending.get("prior_generation")
             allow_bootstrap = pending.get("allow_bootstrap")
