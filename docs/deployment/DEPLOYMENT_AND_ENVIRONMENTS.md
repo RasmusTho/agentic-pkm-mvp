@@ -441,6 +441,30 @@ The `App Image Build` GitHub workflow has two deliberately different paths:
 - A push to `main` builds and publishes the multi-architecture SHA-tagged GHCR image. That is the
   normal registry-artifact path.
 
+The declared CI image pulls use these explicit `mirror.gcr.io` references. Each digest was verified
+against the corresponding upstream Docker Hub content before adoption; the application retains its
+established Python index digest in both stages.
+
+| Pull surface | Exact image reference |
+| --- | --- |
+| Application Python stages | `mirror.gcr.io/library/python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28` |
+| BuilderOps Python base | `mirror.gcr.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1` |
+| Index PG contracts service | `mirror.gcr.io/pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a` |
+| BuilderOps PostgreSQL base | `mirror.gcr.io/library/postgres:16-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4` |
+| Both Buildx driver images | `mirror.gcr.io/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea` |
+| Both QEMU helper images | `mirror.gcr.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
+
+Buildx receives its image through `driver-opts: image=...`; QEMU receives its `image` input.
+The service uses its exact image before checkout, and each Dockerfile declares its base directly.
+A cache miss or pull error fails the affected job: these references add no authentication or Hub
+fallback. Google documents daemon-configured cache use and may evict cached content, so this direct
+source recovery has no permanent availability guarantee.
+See [Google's cache contract](https://docs.cloud.google.com/artifact-registry/docs/pull-cached-dockerhub-images)
+and [Docker's BuildKit image input](https://docs.docker.com/build/ci/github-actions/configure-builder/).
+Successful registry metadata reads establish content identity and observed availability only.
+Acceptance still requires successful PG execution, image builds and the existing runtime/TTS probes
+on the current PR head; those results establish no live deployment.
+
 Nightly integration runs are test execution, not a third artifact-publication path. A green PR
 image check therefore proves that the Dockerfile builds and that the runner-local image reports the
 expected identity; it does not prove that a mac-mini channel can pull or run that PR SHA.

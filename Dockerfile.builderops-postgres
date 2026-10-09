@@ -1,4 +1,4 @@
-FROM postgres:16-bookworm
+FROM mirror.gcr.io/library/postgres:16-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4
 
 # BuilderOps is rebuildable operational state. This image deliberately contains
 # no backup client or recovery-egress configuration: deployment recreates from

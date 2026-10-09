@@ -11,6 +11,10 @@ from pathlib import Path
 
 DOCKERFILE_PATH = Path("Dockerfile")
 CI_SMOKE_PATH = Path(".github/workflows/ci-smoke.yaml")
+APP_PYTHON_IMAGE = (
+    "mirror.gcr.io/library/python:3.12-slim@sha256:"
+    "c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28"
+)
 
 
 def _dockerfile_from_lines() -> list[str]:
@@ -29,9 +33,9 @@ def test_dockerfile_base_image_is_digest_pinned() -> None:
     # (an optional `AS <stage>` suffix names the stage).
     for from_line in _dockerfile_from_lines():
         assert re.fullmatch(
-            r"FROM python:3\.\d+-slim@sha256:[0-9a-f]{64}(?: AS [A-Za-z0-9_.-]+)?",
+            rf"FROM {re.escape(APP_PYTHON_IMAGE)}(?: AS [A-Za-z0-9_.-]+)?",
             from_line,
-        ), f"FROM line must be python:3.x-slim pinned by sha256 digest, got: {from_line}"
+        ), f"FROM line must use the verified cached app Python digest, got: {from_line}"
 
 
 def test_dockerfile_python_minor_matches_ci_smoke() -> None:
