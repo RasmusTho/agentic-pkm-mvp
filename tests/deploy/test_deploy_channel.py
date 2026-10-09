@@ -2213,6 +2213,7 @@ def test_prod_forward_only_requires_ack_before_writer_stop_when_pending(
     tmp_path: Path,
 ) -> None:
     root, env, previous_sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     pin_path = root / "config/deploy/prod.env"
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
@@ -2252,6 +2253,7 @@ def test_prod_pending_forward_only_requires_ack_even_when_changed_migrations_are
     tmp_path: Path,
 ) -> None:
     root, env, previous_sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     pin_path = root / "config/deploy/prod.env"
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
@@ -2297,6 +2299,7 @@ def test_prod_empty_migration_delta_still_requires_ack_for_live_pending_forward_
     tmp_path: Path,
 ) -> None:
     root, env, current_sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     pin_path = root / "config/deploy/prod.env"
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"

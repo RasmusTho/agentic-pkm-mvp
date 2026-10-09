@@ -1678,12 +1678,6 @@ fi
 # must be established before the Keychain-backed migration secret is read.
 heimdal_raw_migration_secret_preflight || exit $?
 
-# Prime the same live production gate that the real migration container will
-# re-run after writer drain. This joins the existing deploy acknowledgement to
-# the target-bound token without permitting a missing/false acknowledgement to
-# create a stopped-writer recovery state.
-prepare_prod_forward_only_ack || exit $?
-
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2
   exit 86
@@ -1693,6 +1687,26 @@ if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ]; then
   "${PYTHON}" "${ROOT}/scripts/prod_devui_gateway_preflight.py" \
     "${ROOT}/docker-compose.prod.yml" || exit $?
 fi
+
+# Deploy-only by contract (#3903 Constraints): rollback must stay ungated so
+# the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).
+if [ "${channel}" = "prod" ] && [ "${action}" = "deploy" ]; then
+  prod_pending_retry_preflight || exit 87
+fi
+
+# Same deploy-only-by-contract posture as the prod gate above (#4230): dev and
+# test never previously ran any Compose environment:-vs-env_file: precedence
+# check before mutation.
+if { [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; } && [ "${action}" = "deploy" ]; then
+  dev_test_environment_env_file_clobber_preflight || exit 90
+fi
+
+# Prime the same live production gate that the real migration container will
+# re-run after writer drain. Run all no-Docker admission preflights first, so a
+# blocked host or channel preflight remains Docker-free. This joins the deploy
+# acknowledgment to the target-bound token before any host-state, pin, volume,
+# runtime, writer-stop, or database mutation.
+prepare_prod_forward_only_ack || exit $?
 
 prepare_instance_ownership_host_state_dir
 classify_rollback_runtime || exit $?
@@ -1707,19 +1721,6 @@ else
   INSTANCE_STATE_LEGACY_ROLLBACK=0
 fi
 export INSTANCE_STATE_LEGACY_ROLLBACK
-
-# Deploy-only by contract (#3903 Constraints): rollback must stay ungated so
-# the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).
-if [ "${channel}" = "prod" ] && [ "${action}" = "deploy" ]; then
-  prod_pending_retry_preflight || exit 87
-fi
-
-# Same deploy-only-by-contract posture as the prod gate above (#4230): dev and
-# test never previously ran any Compose environment:-vs-env_file: precedence
-# check before mutation.
-if { [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; } && [ "${action}" = "deploy" ]; then
-  dev_test_environment_env_file_clobber_preflight || exit 90
-fi
 
 ensure_prod_instance_state_volume
 
