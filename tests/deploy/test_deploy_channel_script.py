@@ -2966,6 +2966,7 @@ def test_managed_deploy_child_uses_declared_supervisor_interpreter(
         'from pathlib import Path\n'
         'Path(os.environ["CHILD_TRACE"]).write_text(json.dumps({\n'
         '    "executable": sys.executable, "argv": sys.orig_argv,\n'
+        '    "prefix": sys.prefix,\n'
         '}))\n'
         'def refuse_host_config(event, args):\n'
         '    if event == "open" and args[0] == "/etc/yggdrasil/bws-deploy/test.json":\n'
@@ -3032,10 +3033,14 @@ def test_managed_deploy_child_uses_declared_supervisor_interpreter(
             receipt = json.loads((tmp_path / 'ownership/settings-rebind-runtime-floor-test.json').read_text())
             assert receipt['channel'] == 'test' and receipt['phase'] == 'pending'
     observed = json.loads(trace.read_text(encoding='utf-8'))
-    assert observed['executable'] == sys.executable
+    assert observed['prefix'] == sys.prefix
     if entrypoint in {'deploy', 'compose'}:
+        assert observed['executable'] == sys.executable
         assert observed['argv'][1:5] == ['-m', 'app.ops.postgres_deploy_linux', 'guard', 'test']
     else:
+        # Bare python3 uses the trusted runtime's sibling alias even when the
+        # supervisor was launched as python; both must select the same prefix.
+        assert observed['executable'] == str(runtime_bin / 'python3')
         assert observed['argv'][1] == ('-c' if entrypoint == 'signboard' else '-')
     assert not wrong_interpreter_used.exists()
 
