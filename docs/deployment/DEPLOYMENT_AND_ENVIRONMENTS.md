@@ -224,10 +224,14 @@ and identical fail-loud preflight for API, worker, watcher, and Heimdal capture 
 resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`. It does not invent a
 missing registry or ledger during consumer preflight. The host bind source is resolved before
 Compose interpolation to the canonical absolute
-`${XDG_STATE_HOME:-$HOME/.local/state}/agentic-pkm/instance-ownership` path (or an explicit absolute
-override), so separate checkouts and all three channel projects mount the same ledger. Compose may
-not create a checkout-relative substitute. Every consumer rejects any active host-global deployment
-lease, including a lease owned by another channel, before reading or mutating channel state.
+`${XDG_STATE_HOME:-$HOME/.local/state}/agentic-pkm/instance-ownership` path for a non-root caller. The
+root BWS systemd supervisor uses an explicit `XDG_STATE_HOME` when configured and otherwise derives
+that same default from the validated runtime UID's passwd home, so it never selects a state directory
+below `/root`; an explicit absolute `INSTANCE_OWNERSHIP_HOST_STATE_DIR` remains authoritative.
+Separate checkouts and all three channel projects therefore mount the same ledger. Compose may not
+create a checkout-relative substitute.
+Every consumer rejects any active host-global deployment lease, including a lease owned by another
+channel, before reading or mutating channel state.
 
 Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
 `scripts/lib/instance_state_deployment.sh`. Before the first init or any lease/fence mutation, the

@@ -3191,6 +3191,74 @@ deploy_channel_compose "$2" "$3" "docker-compose.$3.yml" "pkm-$3" "$4" up -d --f
         assert ('docker-compose.bws-external.yml' in ' '.join(record['argv'])) == (host != 'db')
 
 
+@pytest.mark.parametrize(
+    ('overrides', 'expected'),
+    [
+        ({}, '/home/runtime/.local/state/agentic-pkm/instance-ownership'),
+        ({'XDG_STATE_HOME': '/srv/state'}, '/srv/state/agentic-pkm/instance-ownership'),
+        ({'INSTANCE_OWNERSHIP_HOST_STATE_DIR': '/custom/state'}, '/custom/state'),
+    ],
+)
+def test_root_bws_supervisor_uses_runtime_state_path(tmp_path, monkeypatch, overrides, expected):
+    """The root supervisor avoids /root defaults and preserves explicit state roots."""
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    password = tmp_path / 'password'
+    password.write_text('fixture-password')
+    monkeypatch.setattr(os, 'environ', {'HOME': '/root', **overrides})
+    monkeypatch.setattr(os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(linux.pwd, 'getpwuid', lambda uid: SimpleNamespace(pw_dir='/home/runtime'))
+
+    cfg = SimpleNamespace(
+        root=root,
+        channel='dev',
+        uid=1000,
+        gid=1000,
+        password_file=password,
+        runtime_env_file=runtime,
+    )
+
+    produced = linux.LinuxEffects(cfg).environment()
+
+    assert produced['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == expected
+    assert produced['LOCAL_UID'] == '1000'
+
+
+def test_non_root_bws_caller_uses_own_home_without_runtime_passwd_lookup(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    password = tmp_path / 'password'
+    password.write_text('fixture-password')
+    monkeypatch.setattr(os, 'environ', {'HOME': '/home/caller'})
+    monkeypatch.setattr(os, 'geteuid', lambda: 501)
+    monkeypatch.setattr(linux.pwd, 'getpwuid', lambda uid: pytest.fail('runtime passwd lookup is root-only'))
+
+    cfg = SimpleNamespace(
+        root=root,
+        channel='dev',
+        uid=1000,
+        gid=1000,
+        password_file=password,
+        runtime_env_file=runtime,
+    )
+
+    produced = linux.LinuxEffects(cfg).environment()
+
+    assert produced['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == (
+        '/home/caller/.local/state/agentic-pkm/instance-ownership'
+    )
+
+
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
 def test_rendered_compose_uses_postgres_secret_file_without_value(tmp_path, channel):
     rendered = _render_bws_compose(tmp_path, channel)

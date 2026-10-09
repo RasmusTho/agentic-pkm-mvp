@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 import json
 import os
 from pathlib import Path
+import pwd
 import re
 import socket
 import socketserver
@@ -326,6 +327,30 @@ class LinuxConfig:
         }))
 
 
+def _runtime_user_ownership_state_dir(runtime_uid: int, xdg_state_home: str | None = None) -> Path:
+    """Return the canonical host-global state default for the Compose user.
+
+    The root BWS supervisor cannot use its own HOME for state owned by the
+    non-root Compose identity, so it derives that path from the runtime UID.
+    Non-root callers keep their own HOME default. An explicitly configured XDG
+    state root takes precedence for either caller.
+    """
+    if xdg_state_home:
+        return Path(xdg_state_home) / 'agentic-pkm' / 'instance-ownership'
+    if type(runtime_uid) is not int or runtime_uid < 0:
+        raise PostgresDeployError()
+    if os.geteuid() == 0:
+        try:
+            home = Path(pwd.getpwuid(runtime_uid).pw_dir)
+        except (KeyError, OSError):
+            raise PostgresDeployError() from None
+    else:
+        home = Path(os.environ.get('HOME', ''))
+    if not home.is_absolute() or home == Path('/'):
+        raise PostgresDeployError()
+    return home / '.local' / 'state' / 'agentic-pkm' / 'instance-ownership'
+
+
 _BASE_DEPLOY_CONSUMERS = frozenset((*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
 
 
@@ -525,6 +550,15 @@ class LinuxEffects:
                 credential_free_database_fields(env[key])
         if any(env.get(key) for key in ('POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE')):
             raise PostgresDeployError()
+        # The systemd supervisor has HOME=/root, but the host-global ledger is
+        # owned and traversed by the configured non-root Compose identity. Keep
+        # the same default path as a deploy run by that identity; an explicit
+        # XDG root or host override remains authoritative and is validated by
+        # the shell.
+        if not env.get('INSTANCE_OWNERSHIP_HOST_STATE_DIR'):
+            env['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] = str(
+                _runtime_user_ownership_state_dir(cfg.uid, env.get('XDG_STATE_HOME'))
+            )
         env.update(HOST_SECRET_PROVIDER='bws', BWS_POSTGRES_PASSWORD_SOURCE=str(cfg.password_file),
                    BWS_DATABASE_NAME={'dev': 'app_dev', 'test': 'app_test', 'prod': 'app'}[cfg.channel],
                    LOCAL_UID=str(cfg.uid), LOCAL_GID=str(cfg.gid),
