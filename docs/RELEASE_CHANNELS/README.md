@@ -281,7 +281,9 @@ production Compose overlay supplies the production-only gate marker and target i
 `alembic upgrade head`. Unclassified migrations fail closed, and forward-only migrations require a
 decision token bound to `pkm-prod/app`, the current database revision, and the exact pending
 migration contents. The production deploy path in `scripts/deploy_channel.sh` checks the live
-pending migration delta through a read-only probe before writer stop. A result with no pending
+pending migrations through a read-only probe before writer stop on every PROD deploy,
+including when the Git migration delta is empty. The probe runs the resolved candidate
+image's migration graph against pkm-prod/app, not the still-pinned prior image. A result with no pending
 forward-only migration needs no acknowledgment, even when the deploy also adds or changes
 classification metadata for an already-applied migration. When the probe finds pending
 forward-only migrations, the operator acknowledgment and the matching target-bound token are both
