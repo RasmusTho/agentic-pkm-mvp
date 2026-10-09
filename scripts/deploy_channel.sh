@@ -26,7 +26,8 @@ usage:
 
 Environment:
   DEPLOY_DRY_RUN=1                  print the plan and stop before writes/docker
-  DEPLOY_ACK_FORWARD_ONLY=1         acknowledge forward-only migrations
+  DEPLOY_ACK_FORWARD_ONLY=1         PROD-only acknowledgment for forward-only migrations
+                                    DEV/TEST classify and record without requiring acknowledgment
   DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED=1
                                     acknowledge only the embedding-index rebuild transition
   DEPLOY_HEALTH_TIMEOUT_SECONDS=90  health gate timeout
@@ -650,7 +651,7 @@ migration_gate() {
     [ -n "${path}" ] && migration_paths+=("${path}")
   done <<<"${migration_output}"
   if [ "${#migration_paths[@]}" -gt 0 ]; then
-    receipt_json="$("${PYTHON}" - "$ack_forward_only" "${migration_paths[@]}" <<'PY'
+    receipt_json="$("${PYTHON}" - "$ack_forward_only" "$channel" "${migration_paths[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -658,11 +659,12 @@ from pathlib import Path
 from app.release_channels.reversibility import check_all_migrations
 
 ack = sys.argv[1] == "1"
-paths = [Path(p) for p in sys.argv[2:]]
+channel = sys.argv[2]
+paths = [Path(p) for p in sys.argv[3:]]
 receipt = check_all_migrations(paths)
 receipt["ack_forward_only"] = ack
 print(json.dumps(receipt, sort_keys=True))
-if receipt["forward_only"] and not ack:
+if channel == "prod" and receipt["forward_only"] and not ack:
     print(
         "forward-only migrations require DEPLOY_ACK_FORWARD_ONLY=1 or --ack-forward-only",
         file=sys.stderr,

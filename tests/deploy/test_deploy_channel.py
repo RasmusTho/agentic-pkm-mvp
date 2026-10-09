@@ -2015,6 +2015,68 @@ def test_forward_only_migration_failure_retains_compatible_target_image(tmp_path
     assert len(strict_recreates) == 1
 
 
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_nonprod_forward_only_migration_does_not_require_operator_ack(
+    tmp_path: Path, channel: str
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    if channel == "test":
+        _configure_dev_test_environment_clobber_preflight(
+            root, env, tmp_path, channel="test", overlay_content=_HEIMDAL_FIXED_OVERLAY
+        )
+        test_runtime_env = root / "tmp-test/runtime.env"
+        test_runtime_env.write_text(
+            test_runtime_env.read_text(encoding="utf-8") + "TTS_ENABLED=false\n",
+            encoding="utf-8",
+        )
+    pin_path = root / f"config/deploy/{channel}.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_nonprod.py"
+    migration.write_text(
+        'revision = "forward_only_nonprod"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", f"add {channel} forward-only migration"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env["FAKE_SHA"] = target_sha
+
+    result = _run_deploy(root, env, target_sha, channel=channel)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "migration gate ok: 1 migration(s), forward_only=1" in result.stdout
+    events = _deploy_events(env)
+    assert any(event.startswith("migration-full ack=") for event in events)
+    assert not any(event.startswith("migration-token-probe ") for event in events)
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    receipt = json.loads(
+        (root / "ops/deployments" / f"{channel}-latest.json").read_text(
+            encoding="utf-8"
+        )
+    )["migration_receipt"]
+    assert receipt["forward_only"] == ["forward_only_nonprod.py"]
+    assert receipt["ack_forward_only"] is False
+    assert receipt["classification_decisions"] == [
+        {
+            "migration": "forward_only_nonprod.py",
+            "classification": "forward-only",
+            "is_forward_only": True,
+        }
+    ]
+
+
 def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
     tmp_path: Path,
 ) -> None:
