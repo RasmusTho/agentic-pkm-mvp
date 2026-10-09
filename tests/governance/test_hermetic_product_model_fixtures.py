@@ -37,6 +37,7 @@ _AFFECTED_MODULES = (
     "tests/properties/test_receipt_before_ack.py",
     "tests/quality_wave/test_registry_chain.py",
     "tests/retrieval/test_active_scope_request_binding.py",
+    "tests/retrieval/test_envelope_consumption.py",
     "tests/retrieval/test_conditional_rerank.py",
     "tests/retrieval/test_hybrid_stored_vectors.py",
     "tests/retrieval/test_mixed_identity_observability.py",
