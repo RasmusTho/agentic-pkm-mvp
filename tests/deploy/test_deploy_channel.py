@@ -317,7 +317,7 @@ case "$*" in
       "${{PROD_MIGRATION_FORWARD_ONLY_ACK:-}}" \
       >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
     if [ "${{probe_selector}}" = "1" ]; then
-      printf '%s\\n' "${{FAKE_MIGRATION_GATE_TOKEN:-prod-migration-ack.v1:0000000000000000000000000000000000000000000000000000000000000000}}"
+      printf '%s\\n' "${{FAKE_MIGRATION_GATE_RESULT:-${{FAKE_MIGRATION_GATE_TOKEN:-prod-migration-ack.v1:0000000000000000000000000000000000000000000000000000000000000000}}}}"
       if [ -n "${{FAKE_MIGRATION_GATE_EXTRA_OUTPUT:-}}" ]; then
         printf '%s\\n' "${{FAKE_MIGRATION_GATE_EXTRA_OUTPUT}}"
       fi
@@ -2206,7 +2206,7 @@ def test_prod_forward_only_ambiguous_token_probe_prevents_writer_stop(
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
 
 
-def test_prod_forward_only_requires_existing_ack_before_token_probe(
+def test_prod_forward_only_requires_ack_before_writer_stop_when_pending(
     tmp_path: Path,
 ) -> None:
     root, env, previous_sha = _deploy_harness(tmp_path)
@@ -2231,12 +2231,65 @@ def test_prod_forward_only_requires_existing_ack_before_token_probe(
     result = _run_deploy(root, env, target_sha, channel="prod")
 
     assert result.returncode == 42
-    assert "forward-only migrations require" in result.stderr
+    assert "--ack-forward-only is required before writer stop" in result.stderr
     events = _deploy_events(env)
-    assert not any(event.startswith("migration-token-probe ") for event in events)
+    assert any(event.startswith("migration-token-probe ") for event in events)
     assert not any(" stop api worker watcher" in event for event in events)
     assert not (root / "config/deploy/prod.migration-pending.env").exists()
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+
+
+def test_prod_metadata_only_forward_marker_delta_needs_no_ack_when_none_pending(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_marker_update.py"
+    migration.write_text(
+        'revision = "forward_only_marker_update"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "add forward-only classification marker"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_RESULT": "prod-migration-no-forward-only-pending.v1",
+        }
+    )
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+
+    result = _run_deploy(root, env, target_sha, channel="prod")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "no forward-only migration is pending; acknowledgement not required" in result.stdout
+    events = _deploy_events(env)
+    probe_index = next(
+        index for index, event in enumerate(events) if event.startswith("migration-token-probe ")
+    )
+    stop_index = next(index for index, event in enumerate(events) if " stop api worker watcher" in event)
+    full_index = next(index for index, event in enumerate(events) if event.startswith("migration-full "))
+    assert probe_index < stop_index < full_index
+    assert events[full_index] == "migration-full ack="
+    receipt = json.loads(
+        (root / "ops/deployments/prod-latest.json").read_text(encoding="utf-8")
+    )["migration_receipt"]
+    assert receipt["forward_only"] == ["forward_only_marker_update.py"]
+    assert receipt["ack_forward_only"] is False
 
 
 def test_forward_only_pull_failure_restores_previous_pin_before_migration(tmp_path: Path) -> None:

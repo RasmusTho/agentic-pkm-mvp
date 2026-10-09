@@ -681,7 +681,7 @@ migration_gate() {
     [ -n "${path}" ] && migration_paths+=("${path}")
   done <<<"${migration_output}"
   if [ "${#migration_paths[@]}" -gt 0 ]; then
-    receipt_json="$("${PYTHON}" - "$ack_forward_only" "$channel" "${migration_paths[@]}" <<'PY'
+    receipt_json="$("${PYTHON}" - "$ack_forward_only" "${migration_paths[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -689,17 +689,10 @@ from pathlib import Path
 from app.release_channels.reversibility import check_all_migrations
 
 ack = sys.argv[1] == "1"
-channel = sys.argv[2]
-paths = [Path(p) for p in sys.argv[3:]]
+paths = [Path(p) for p in sys.argv[2:]]
 receipt = check_all_migrations(paths)
 receipt["ack_forward_only"] = ack
 print(json.dumps(receipt, sort_keys=True))
-if channel == "prod" and receipt["forward_only"] and not ack:
-    print(
-        "forward-only migrations require DEPLOY_ACK_FORWARD_ONLY=1 or --ack-forward-only",
-        file=sys.stderr,
-    )
-    sys.exit(42)
 PY
 )"
   else
@@ -766,14 +759,11 @@ prepare_prod_forward_only_ack() {
     return 0
   fi
 
-  # DEPLOY_ACK_FORWARD_ONLY is operator intent, not migration authority. Ask
-  # the production migrate producer for the exact live, target-bound token
-  # before any pin, pending marker, runtime mutation, or writer stop. A failed
-  # probe therefore leaves the current runtime untouched.
-  if [ "${ack_forward_only}" != "1" ]; then
-    echo "production forward-only migration requires the existing deploy acknowledgement" >&2
-    return 42
-  fi
+  # The read-only production probe distinguishes changed classification
+  # metadata from a forward-only migration actually pending in pkm-prod/app.
+  # It never mutates the database or runtime. If a forward-only migration is
+  # pending, the explicit operator acknowledgement remains required before any
+  # pin, pending marker, runtime mutation, or writer stop.
   set +e
   export DEPLOY_MIGRATION_GATE_TOKEN_ONLY=1
   gate_output="$(compose run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate)"
@@ -789,9 +779,17 @@ prepare_prod_forward_only_ack() {
     return 78
   }
   token="${token_lines}"
+  if [ "${token}" = "prod-migration-no-forward-only-pending.v1" ]; then
+    echo "production migration probe accepted: no forward-only migration is pending; acknowledgement not required"
+    return 0
+  fi
   if [[ ! "${token}" =~ ^prod-migration-ack\.v1:[0-9a-f]{64}$ ]]; then
     echo "production migration token probe returned an invalid decision token before writer stop" >&2
     return 78
+  fi
+  if [ "${ack_forward_only}" != "1" ]; then
+    echo "production forward-only migration is pending; --ack-forward-only is required before writer stop" >&2
+    return 42
   fi
   PROD_MIGRATION_FORWARD_ONLY_ACK="${token}"
   export PROD_MIGRATION_FORWARD_ONLY_ACK
