@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import importlib
 from datetime import datetime, timedelta, timezone
+from threading import Event
+import time
 from types import SimpleNamespace
 
 from app.api.routes import health as health_route
@@ -11,6 +13,7 @@ from app.model_access.capability_health import (
     aggregate_capability_health,
     aggregate_transport_health,
 )
+from app.model_access.health_observer import ProductHealthObserver
 
 health_module = importlib.import_module("app.cli.health")
 
@@ -177,7 +180,7 @@ def test_required_capability_status_controls_aggregate_health(monkeypatch) -> No
     monkeypatch.setattr(health_module, "_check_authority_spine", lambda: {})
 
     payload = health_module.run_health()
-    monkeypatch.setattr(health_route, "run_health", lambda: payload)
+    monkeypatch.setattr(health_route, "run_health", lambda **_kwargs: payload)
     public_payload = asyncio.run(health_route.health())
 
     assert payload["checks"]["llm_access"]["ok"] is False
@@ -422,3 +425,155 @@ def test_transport_failure_is_separate_from_route_capability_failure() -> None:
     assert path_unavailable["reason_code"] == "transport_unavailable"
     assert route_unavailable["status"] == "available"
     assert route_unavailable["reason_code"] == "transport_reachable"
+
+
+def test_stale_or_failed_health_refresh_cannot_preserve_success() -> None:
+    clock_value = [NOW]
+    observer = ProductHealthObserver(
+        max_workers=1,
+        max_in_flight=1,
+        refresh_after_seconds=15,
+        clock=lambda: clock_value[0],
+    )
+    success_started = Event()
+
+    def successful_probe():
+        success_started.set()
+        return {"status": "available", "reason_code": "adapter_ready"}
+
+    def capability_result(sample):
+        return aggregate_capability_health(
+            ["text_generation"],
+            [
+                {
+                    "capability_id": "text_generation",
+                    "status": sample["status"],
+                    "reason_code": sample["reason_code"],
+                    "observed_at": sample["observed_at"],
+                }
+            ],
+            now=clock_value[0],
+            max_age_seconds=30,
+        )
+
+    assert observer.observe("route-generation-one", successful_probe) is None
+    assert success_started.wait(1)
+    deadline = time.monotonic() + 2
+    success = None
+    while success is None and time.monotonic() < deadline:
+        success = observer.observe("route-generation-one", successful_probe)
+        if success is None:
+            Event().wait(0.01)
+    assert success is not None
+    assert capability_result(success)["ok"] is True
+
+    original_observed_at = success["observed_at"]
+    clock_value[0] += timedelta(seconds=31)
+    expired = capability_result(success)
+    assert expired["ok"] is False
+    assert expired["capabilities"]["text_generation"]["freshness"] == "stale"
+
+    failed_refresh_started = Event()
+
+    def failed_probe():
+        failed_refresh_started.set()
+        return {
+            "status": "unavailable",
+            "reason_code": "adapter_unavailable",
+        }
+
+    pending = observer.observe("route-generation-one", failed_probe)
+    assert pending is not None
+    assert pending["observed_at"] == original_observed_at
+    assert failed_refresh_started.wait(1)
+
+    deadline = time.monotonic() + 2
+    refreshed = pending
+    while (
+        refreshed.get("status") != "unavailable"
+        and time.monotonic() < deadline
+    ):
+        refreshed = observer.observe("route-generation-one", failed_probe) or pending
+        if refreshed.get("status") != "unavailable":
+            Event().wait(0.01)
+    assert refreshed["status"] == "unavailable"
+    assert refreshed["observed_at"] != original_observed_at
+    assert capability_result(refreshed)["ok"] is False
+
+
+def test_health_observer_prioritizes_cold_routes_with_bounded_pending_work() -> None:
+    clock_value = [NOW]
+    observer = ProductHealthObserver(
+        max_workers=1,
+        max_in_flight=1,
+        max_observations=4,
+        max_pending=1,
+        refresh_after_seconds=15,
+        clock=lambda: clock_value[0],
+    )
+
+    def available_probe():
+        return {"status": "available", "reason_code": "adapter_ready"}
+
+    def wait_for_observation(key, sampler=available_probe):
+        deadline = time.monotonic() + 2
+        observation = None
+        while observation is None and time.monotonic() < deadline:
+            observation = observer.observe(key, sampler)
+            if observation is None:
+                Event().wait(0.01)
+        assert observation is not None
+
+    wait_for_observation("cached-route-a")
+    wait_for_observation("cached-route-b")
+    clock_value[0] += timedelta(seconds=16)
+
+    refresh_a_started = Event()
+    release_refresh_a = Event()
+    refresh_b_started = Event()
+    cold_route_started = Event()
+    release_cold_route = Event()
+    overflow_route_started = Event()
+
+    def slow_refresh_a():
+        refresh_a_started.set()
+        assert release_refresh_a.wait(2)
+        return {"status": "available", "reason_code": "adapter_ready"}
+
+    def refresh_b():
+        refresh_b_started.set()
+        return available_probe()
+
+    def cold_route():
+        cold_route_started.set()
+        assert release_cold_route.wait(2)
+        return available_probe()
+
+    try:
+        observer.observe("cached-route-a", slow_refresh_a)
+        assert refresh_a_started.wait(1)
+        observer.observe("cached-route-b", refresh_b)
+        observer.observe("cold-route", cold_route)
+        observer.observe(
+            "overflow-route",
+            lambda: (overflow_route_started.set() or available_probe()),
+        )
+
+        with observer._lock:
+            assert len(observer._pending_cold) + len(observer._pending_refresh) == 1
+            assert list(observer._pending_cold) == ["cold-route"]
+            assert not observer._pending_refresh
+
+        release_refresh_a.set()
+        assert cold_route_started.wait(1)
+        assert not refresh_b_started.is_set()
+        assert not overflow_route_started.is_set()
+    finally:
+        release_refresh_a.set()
+        release_cold_route.set()
+
+    wait_for_observation("cold-route", cold_route)
+    assert not overflow_route_started.is_set()
+
+    observer.observe("cached-route-b", refresh_b)
+    assert refresh_b_started.wait(1)

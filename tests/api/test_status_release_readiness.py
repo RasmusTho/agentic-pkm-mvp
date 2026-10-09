@@ -161,7 +161,13 @@ def test_matrix_does_not_affect_health_passfail(monkeypatch, tmp_path: Path) -> 
     monkeypatch.setattr(
         health_route,
         "run_health",
-        lambda: {"ok": True, "required_ok": True, "checks": {}, "runtime": {}, "suggested_actions": []},
+        lambda **_kwargs: {
+            "ok": True,
+            "required_ok": True,
+            "checks": {},
+            "runtime": {},
+            "suggested_actions": [],
+        },
     )
 
     status_response = TestClient(app).get("/api/status")

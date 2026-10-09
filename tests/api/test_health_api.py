@@ -5,6 +5,7 @@ import time
 import asyncio
 import importlib
 from pathlib import Path
+from threading import Event
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,7 @@ from fastapi.testclient import TestClient
 from app.api.app import app
 from app.api.routes import health as health_route
 from app.config import llm as llm_config
+from app.model_access.health_observer import ProductHealthObserver
 from app.runtime.worker_heartbeat import resolve_worker_heartbeat_path
 from app.settings.models import SettingsBundle
 from app.vault.paths import get_vault_inbox_dir_rel
@@ -136,7 +138,7 @@ def _assert_check_metadata(payload: dict) -> None:
 
 
 def test_health_endpoint_does_not_block_event_loop(monkeypatch) -> None:
-    def slow_run_health() -> dict[str, object]:
+    def slow_run_health(**_kwargs) -> dict[str, object]:
         time.sleep(0.2)
         return {"ok": True}
 
@@ -149,6 +151,75 @@ def test_health_endpoint_does_not_block_event_loop(monkeypatch) -> None:
         assert await health_task == {"ok": True}
 
     asyncio.run(assert_nonblocking())
+
+
+def test_health_model_preflight_pending_is_fast_and_fails_closed(
+    monkeypatch, tmp_path
+) -> None:
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    monkeypatch.setattr(health_module, "PRODUCT_HEALTH_OBSERVER", ProductHealthObserver())
+    monkeypatch.setattr(
+        health_module,
+        "_check_llm_router",
+        lambda: {
+            "ok": True,
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "openai",
+                        "model": "gpt-6-luna",
+                        "transport_id": "codex_cli_tailscale",
+                        "reasoning_effort": "low",
+                    },
+                    "intent": {},
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(health_module, "_check_embedding_index", lambda: {"ok": True})
+    started = Event()
+    release = Event()
+
+    def blocked_probe(_task_kind, _route, _intent, *, timeout_seconds=None):
+        assert timeout_seconds == 30.0
+        started.set()
+        release.wait(2)
+        return {
+            "status": "available",
+            "reason_code": "adapter_ready",
+            "capabilities": {},
+            "transport_observation": {
+                "status": "available",
+                "reason_code": "transport_reachable",
+            },
+        }
+
+    monkeypatch.setattr(health_module, "_probe_selected_route", blocked_probe)
+
+    try:
+        started_at = time.monotonic()
+        response = client.get("/api/health")
+        elapsed = time.monotonic() - started_at
+
+        assert response.status_code == 200
+        assert elapsed < 3
+        assert started.wait(1)
+        assert response.json()["required_ok"] is False
+        assert (
+            response.json()["checks"]["llm_access"]["capabilities"]["text_generation"]["status"]
+            == "unknown"
+        )
+
+        release.set()
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            response = client.get("/api/health")
+            if response.json()["checks"]["llm_access"]["ok"] is True:
+                break
+            Event().wait(0.01)
+        assert response.json()["required_ok"] is True
+    finally:
+        release.set()
 
 
 def test_health_success(monkeypatch, tmp_path) -> None:
@@ -349,6 +420,7 @@ def test_health_luna_route_is_not_blocked_by_unselected_ollama(
     monkeypatch.setattr(
         health_module, "_check_embedding_index", lambda: {"ok": True}
     )
+    monkeypatch.setattr(health_module, "PRODUCT_HEALTH_OBSERVER", ProductHealthObserver())
 
     class _Client:
         preflight_transport_observation = {
@@ -381,6 +453,11 @@ def test_health_luna_route_is_not_blocked_by_unselected_ollama(
     )
 
     response = client.get("/api/health")
+    assert response.status_code == 200
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline and not response.json()["required_ok"]:
+        Event().wait(0.01)
+        response = client.get("/api/health")
 
     assert response.status_code == 200
     data = response.json()
@@ -491,7 +568,7 @@ def test_health_db_dsn_is_masked_in_response(monkeypatch, tmp_path) -> None:
 def test_health_api_sanitizes_exception_details(monkeypatch) -> None:
     client = TestClient(app)
 
-    def fake_run_health() -> dict[str, object]:
+    def fake_run_health(**_kwargs) -> dict[str, object]:
         return {
             "ok": False,
             "required_ok": False,
@@ -526,7 +603,7 @@ def test_health_api_sanitizes_exception_details(monkeypatch) -> None:
 def test_health_api_omits_selected_route_identity(monkeypatch) -> None:
     client = TestClient(app)
 
-    def fake_run_health() -> dict[str, object]:
+    def fake_run_health(**_kwargs) -> dict[str, object]:
         return {
             "ok": True,
             "required_ok": True,

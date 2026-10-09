@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib
+import hashlib
+import json
 import os
 import shutil
 import subprocess
@@ -30,6 +32,12 @@ from app.model_access.capability_health import (
     aggregate_transport_health,
 )
 from app.model_access.codex_remote_transport import RemotePreflightError
+from app.model_access.executor_network_policy import (
+    DEFAULT_EXECUTOR_NETWORK_POLICY_PATH,
+    ExecutorNetworkConfigurationError,
+    executor_network_policy_environment_references,
+)
+from app.model_access.health_observer import PRODUCT_HEALTH_OBSERVER
 from app.cli.settings_explain import mask_dsn
 from app.observability.log import span, with_trace_id
 from app.version import get_runtime_version
@@ -39,6 +47,7 @@ from app.settings.panel_actions import get_panel_actions_diagnostics
 from app.stores.db_health import ping_postgres, resolve_dsn
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_BACKGROUND_MODEL_ACCESS_PROBE_TIMEOUT_SECONDS = 30.0
 
 def _result(ok: bool, detail: str, *, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {"ok": ok, "detail": detail}
@@ -419,6 +428,8 @@ def _probe_selected_route(
     task_kind: str,
     effective: Dict[str, Any],
     intent: Dict[str, Any],
+    *,
+    timeout_seconds: float | None = None,
 ) -> Dict[str, Any]:
     """Ask the selected adapter for no-inference readiness and declared capabilities."""
     provider = str(effective.get("provider") or "").strip().lower()
@@ -481,7 +492,11 @@ def _probe_selected_route(
                     mode="chat",
                     reason="health-preflight",
                     degraded=policy_degraded,
-                    timeout_seconds=_health_probe_timeout(),
+                    timeout_seconds=(
+                        timeout_seconds
+                        if timeout_seconds is not None
+                        else _health_probe_timeout()
+                    ),
                     transport_id=transport_id,
                     reasoning_effort=reasoning_effort,
                 ),
@@ -663,7 +678,136 @@ def _route_capability_observations(
     return observations
 
 
-def _check_llm_access(router_check: Dict[str, Any]) -> Dict[str, Any]:
+def _route_health_observation_key(
+    effective: Dict[str, Any],
+    intent: Dict[str, Any],
+) -> str:
+    """Bind a sample to the selected probe inputs and configuration generation."""
+    settings_state = get_settings_ingestion_state()
+    provider = str(effective.get("provider") or "").strip().lower()
+    model = str(effective.get("model") or "").strip()
+    transport_id = str(effective.get("transport_id") or "").strip() or None
+    reasoning_effort = str(effective.get("reasoning_effort") or "").strip() or None
+    degraded = effective.get("degraded") is True or str(
+        effective.get("degraded") or ""
+    ).strip().lower() == "true"
+    runtime_config: dict[str, Any] = {
+        name: value
+        for name, value in os.environ.items()
+        if name.startswith("MODEL_ACCESS_")
+    }
+    for name, value in tuple(runtime_config.items()):
+        if not name.endswith(("_CA_BUNDLE", "_CLIENT_CERT", "_CLIENT_KEY")):
+            continue
+        path_value = value.strip()
+        if not path_value:
+            file_generation = None
+        else:
+            try:
+                file_state = Path(path_value).stat()
+                file_generation = (
+                    file_state.st_ino,
+                    file_state.st_size,
+                    file_state.st_mtime_ns,
+                    file_state.st_ctime_ns,
+                    file_state.st_mode,
+                )
+            except OSError:
+                file_generation = None
+        runtime_config[name] = {"value": value, "file_generation": file_generation}
+    try:
+        policy_references = executor_network_policy_environment_references(
+            policy_path=DEFAULT_EXECUTOR_NETWORK_POLICY_PATH
+        )
+    except ExecutorNetworkConfigurationError:
+        policy_references = {}
+    policy_runtime_config: dict[str, Any] = {}
+    for name, roles in policy_references.items():
+        value = os.getenv(name)
+        reference_state: dict[str, Any] = {"roles": roles, "value": value}
+        for role in roles:
+            if role == "endpoint" or value is None:
+                continue
+            path_value = value.strip()
+            if not path_value:
+                file_generation = None
+            else:
+                try:
+                    file_state = Path(path_value).stat()
+                    file_generation = (
+                        file_state.st_ino,
+                        file_state.st_size,
+                        file_state.st_mtime_ns,
+                        file_state.st_ctime_ns,
+                        file_state.st_mode,
+                    )
+                except OSError:
+                    file_generation = None
+            reference_state.setdefault("file_generations", {})[role] = file_generation
+        policy_runtime_config[name] = reference_state
+    try:
+        policy_file = DEFAULT_EXECUTOR_NETWORK_POLICY_PATH.stat()
+        network_policy_generation = (
+            policy_file.st_ino,
+            policy_file.st_size,
+            policy_file.st_mtime_ns,
+            policy_file.st_ctime_ns,
+            policy_file.st_mode,
+        )
+    except OSError:
+        network_policy_generation = None
+    generation = {
+        "settings": {
+            "state": settings_state.state,
+            "source": settings_state.source,
+            "loaded_at": settings_state.loaded_at,
+        },
+        # The selected-route preflight always uses task_kind="health". Key on
+        # the target and capability fields it actually sends so equivalent
+        # caller tasks share a sample instead of starving behind the worker cap.
+        "route": {
+            "provider": provider,
+            "model": model,
+            "transport_id": transport_id,
+            "reasoning_effort": reasoning_effort,
+            "degraded": degraded,
+        },
+        "capability_intent": {
+            field: intent.get(field) is True
+            for field in (
+                "json_schema_required",
+                "native_tools_required",
+                "literal_system_role_required",
+                "determinism_required",
+            )
+        },
+        "executor_network_policy_generation": network_policy_generation,
+        "executor_network_policy_runtime_config": policy_runtime_config,
+        "runtime_config": runtime_config,
+        "enforcement": os.getenv("LLM_PROVIDER_ENFORCE"),
+    }
+    encoded = json.dumps(generation, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _pending_route_observation() -> Dict[str, Any]:
+    observed_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "status": "unknown",
+        "reason_code": "readiness_unknown",
+        "observed_at": observed_at,
+        "capabilities": {},
+        "transport_observation": _transport_observation(
+            "unknown", "transport_unknown", observed_at
+        ),
+    }
+
+
+def _check_llm_access(
+    router_check: Dict[str, Any],
+    *,
+    background_probes: bool = False,
+) -> Dict[str, Any]:
     """Aggregate configured text-route readiness as logical capabilities."""
     policies = router_check.get("route_policies") or {}
     text_policies = {
@@ -725,9 +869,23 @@ def _check_llm_access(router_check: Dict[str, Any]) -> Dict[str, Any]:
             intent = {}
         route_required = _required_capabilities(intent)
         required.update(route_required)
-        probe = _probe_selected_route(
-            str(task_kind), effective if isinstance(effective, dict) else {}, intent,
-        )
+        route = effective if isinstance(effective, dict) else {}
+        provider = str(route.get("provider") or "").strip().lower()
+        if background_probes and provider not in {"", "mock", "deterministic"}:
+            key = _route_health_observation_key(route, intent)
+            probe = PRODUCT_HEALTH_OBSERVER.observe(
+                key,
+                lambda task_kind=str(task_kind), route=route, intent=dict(intent): _probe_selected_route(
+                    task_kind,
+                    route,
+                    intent,
+                    timeout_seconds=_BACKGROUND_MODEL_ACCESS_PROBE_TIMEOUT_SECONDS,
+                ),
+            )
+            if probe is None:
+                probe = _pending_route_observation()
+        else:
+            probe = _probe_selected_route(str(task_kind), route, intent)
         observations.extend(_route_capability_observations(route_required, probe))
         transport_observation = probe.get("transport_observation")
         if not isinstance(transport_observation, dict):
@@ -1061,7 +1219,12 @@ def _settings_ingestion_status() -> Dict[str, Any]:
 
 
 @span("health.check")
-def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
+def run_health(
+    *,
+    trace_id: str | None = None,
+    background_model_access_probes: bool = False,
+    **kwargs: Any,
+) -> Dict[str, Any]:
     trace_id = with_trace_id(trace_id)
     checks = {
         "ffmpeg": _annotate_required(_check_ffmpeg(), required=False),
@@ -1075,7 +1238,10 @@ def run_health(*, trace_id: str | None = None, **kwargs: Any) -> Dict[str, Any]:
         "obsidian": _annotate_required(_check_obsidian_dependencies(), required=_obsidian_required()),
     }
     checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)
-    llm_access = _check_llm_access(checks["llm_router"])
+    llm_access = _check_llm_access(
+        checks["llm_router"],
+        background_probes=background_model_access_probes,
+    )
     checks["llm_access"] = _annotate_required(llm_access, required=True)
     checks["llm_task_routes"] = _annotate_required(
         {

@@ -1,14 +1,171 @@
 from __future__ import annotations
 
 import importlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from threading import Barrier, Event
+import time
 from types import SimpleNamespace
 
 from app.config import llm as llm_config
 from app.model_access.codex_remote_transport import RemotePreflightError
+from app.model_access.health_observer import ProductHealthObserver
 from app.settings.models import LLMRoutingSettings, SettingsBundle
 
 health_module = importlib.import_module("app.cli.health")
+
+
+def test_health_preflight_is_single_flight_per_exact_route_intent(
+    monkeypatch, tmp_path
+) -> None:
+    settings_state = SimpleNamespace(
+        state="ok",
+        source="vault",
+        loaded_at="generation-one",
+    )
+    monkeypatch.setattr(
+        health_module, "get_settings_ingestion_state", lambda: settings_state
+    )
+    route = {
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "transport_id": "codex_cli_tailscale",
+        "reasoning_effort": "low",
+    }
+    intent = {"task_kind": "qa", "json_schema_required": True}
+    policy_path = tmp_path / "executor_network_paths.yaml"
+    policy_text = health_module.DEFAULT_EXECUTOR_NETWORK_POLICY_PATH.read_text(
+        encoding="utf-8"
+    )
+    policy_text = policy_text.replace(
+        "MODEL_ACCESS_CODEX_VLAN_ENDPOINT", "CUSTOM_EXECUTOR_ENDPOINT"
+    )
+    policy_text = policy_text.replace(
+        "MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE", "CUSTOM_EXECUTOR_TRUST"
+    )
+    policy_text = policy_text.replace(
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT", "CUSTOM_EXECUTOR_CERTIFICATE"
+    )
+    policy_text = policy_text.replace(
+        "MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY", "CUSTOM_EXECUTOR_PRIVATE_KEY"
+    )
+    policy_path.write_text(policy_text, encoding="utf-8")
+    monkeypatch.setattr(
+        health_module, "DEFAULT_EXECUTOR_NETWORK_POLICY_PATH", policy_path
+    )
+    trust_files = {
+        "CUSTOM_EXECUTOR_TRUST": tmp_path / "trust-bundle",
+        "CUSTOM_EXECUTOR_CERTIFICATE": tmp_path / "client-certificate",
+        "CUSTOM_EXECUTOR_PRIVATE_KEY": tmp_path / "client-key",
+    }
+    for path in trust_files.values():
+        path.write_text("initial material", encoding="utf-8")
+    extra_certificate = tmp_path / "extra-client-certificate"
+    extra_certificate.write_text("initial extra certificate", encoding="utf-8")
+    monkeypatch.setenv("CUSTOM_EXECUTOR_ENDPOINT", "https://first.invalid")
+    for variable, path in trust_files.items():
+        value = f" {path} " if variable == "CUSTOM_EXECUTOR_CERTIFICATE" else str(path)
+        monkeypatch.setenv(variable, value)
+    monkeypatch.setenv("MODEL_ACCESS_EXTRA_CLIENT_CERT", f" {extra_certificate} ")
+    key = health_module._route_health_observation_key(route, intent)
+    assert health_module._route_health_observation_key(
+        route, {**intent, "task_kind": "plan"}
+    ) == key
+    assert health_module._route_health_observation_key(
+        {**route, "reason": "per-task explanation"}, intent
+    ) == key
+    assert health_module._route_health_observation_key(
+        {**route, "reasoning_effort": "high"}, intent
+    ) != key
+    assert health_module._route_health_observation_key(
+        route, {"json_schema_required": False}
+    ) != key
+    settings_state.loaded_at = "generation-two"
+    assert health_module._route_health_observation_key(route, intent) != key
+    settings_state.loaded_at = "generation-one"
+    policy_path.write_text("paths: generation-two\n", encoding="utf-8")
+    assert health_module._route_health_observation_key(route, intent) != key
+    policy_path.write_text(policy_text, encoding="utf-8")
+    key = health_module._route_health_observation_key(route, intent)
+    monkeypatch.setenv("CUSTOM_EXECUTOR_ENDPOINT", "https://second.invalid")
+    assert health_module._route_health_observation_key(route, intent) != key
+    monkeypatch.setenv("CUSTOM_EXECUTOR_ENDPOINT", "https://first.invalid")
+    key = health_module._route_health_observation_key(route, intent)
+    for path in trust_files.values():
+        previous_key = key
+        path.write_text("updated authentication material", encoding="utf-8")
+        key = health_module._route_health_observation_key(route, intent)
+        assert key != previous_key
+    previous_key = key
+    extra_certificate.write_text("updated extra certificate", encoding="utf-8")
+    key = health_module._route_health_observation_key(route, intent)
+    assert key != previous_key
+    monkeypatch.setenv("MODEL_ACCESS_CODEX_VLAN_ENDPOINT", "https://changed.invalid")
+    assert health_module._route_health_observation_key(route, intent) != key
+
+    now = datetime.now(timezone.utc)
+    observer = ProductHealthObserver(
+        max_workers=1,
+        max_in_flight=1,
+        refresh_after_seconds=15,
+        clock=lambda: now,
+    )
+    started = Event()
+    release = Event()
+    distinct_started = Event()
+    calls = 0
+
+    def slow_sampler():
+        nonlocal calls
+        calls += 1
+        started.set()
+        release.wait(2)
+        return {"status": "available", "reason_code": "adapter_ready"}
+
+    def distinct_sampler():
+        distinct_started.set()
+        return {"status": "available", "reason_code": "adapter_ready"}
+
+    try:
+        assert observer.observe(key, slow_sampler) is None
+        assert started.wait(1)
+        callers_ready = Barrier(8)
+
+        def observe_same_key():
+            callers_ready.wait()
+            return observer.observe(key, slow_sampler)
+
+        with ThreadPoolExecutor(max_workers=8) as callers:
+            results = list(callers.map(lambda _index: observe_same_key(), range(8)))
+        assert results == [None] * 8
+        assert calls == 1
+        distinct_key = health_module._route_health_observation_key(
+            {**route, "model": "gpt-6-luna-next"}, intent
+        )
+        assert observer.observe(distinct_key, distinct_sampler) is None
+        assert not distinct_started.is_set()
+
+        release.set()
+        deadline = time.monotonic() + 2
+        sample = None
+        while sample is None and time.monotonic() < deadline:
+            sample = observer.observe(key, slow_sampler)
+            if sample is None:
+                Event().wait(0.01)
+        assert sample is not None
+        assert sample["status"] == "available"
+
+        assert distinct_started.wait(1)
+        deadline = time.monotonic() + 2
+        distinct_sample = None
+        while distinct_sample is None and time.monotonic() < deadline:
+            distinct_sample = observer.observe(distinct_key, distinct_sampler)
+            if distinct_sample is None:
+                Event().wait(0.01)
+        assert distinct_sample is not None
+        assert distinct_sample["status"] == "available"
+    finally:
+        release.set()
 
 
 def test_health_llm_router_reports_route_policies(monkeypatch) -> None:
