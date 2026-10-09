@@ -42,6 +42,14 @@ require a provider-specific environment variable or installation just to report 
   top-level `/api/health.required_ok` and `/api/health.ok` false. Optional diagnostics do not change
   required-capability aggregation. `/healthz`, `/readyz`, and embedding-index checks keep their
   separate contracts.
+- The API may finish a slow no-inference route preflight in a bounded background sampler. Cold or
+  pending observations remain `unknown`; equivalent route, intent, and configuration generations
+  (including policy-referenced host environment values and authentication files) share an in-flight
+  sample, and the aggregate is recomputed on every health read from the raw
+  observation timestamp. The 30-second Model Access client timeout applies per transport operation,
+  not to total preflight wall-clock time; the process still caps active probes at two. A failed
+  refresh replaces a prior result. The sampler cannot select or authorize a completion: Product
+  execution still performs its own preflight.
 - Network-path reachability is reported as a separate transport observation. A configured
   pre-completion path fallback may preserve capability availability and is reported as degraded
   transport; route/path identity is excluded from the observation. A typed path outage makes the

@@ -288,6 +288,42 @@ def _load_policy(path: Path) -> _ExecutorNetworkPolicy:
         raise ExecutorNetworkConfigurationError("path_policy_invalid") from None
 
 
+def executor_network_policy_environment_references(
+    executor_profile: str = EXECUTOR_NETWORK_PROFILE,
+    *,
+    policy_path: Path = DEFAULT_EXECUTOR_NETWORK_POLICY_PATH,
+) -> dict[str, tuple[str, ...]]:
+    """Return host environment references used by an executor and their roles."""
+
+    policy = _load_policy(policy_path)
+    executor_policy = policy.executor_path_policies.get(executor_profile)
+    if executor_policy is None:
+        raise ExecutorNetworkConfigurationError("path_policy_missing")
+
+    references: dict[str, list[str]] = {}
+
+    def add(variable: str, role: str) -> None:
+        roles = references.setdefault(variable, [])
+        if role not in roles:
+            roles.append(role)
+
+    for path_id in executor_policy.order:
+        profile = policy.path_profiles[path_id]
+        endpoint_ref = profile.endpoint_ref.removeprefix("host_config.")
+        auth_ref = profile.authentication_profile_ref.removeprefix("host_config.")
+        add(policy.endpoint_references[endpoint_ref].endpoint_env, "endpoint")
+        authentication = policy.authentication_profiles[auth_ref]
+        if authentication.mode == "mutual_tls":
+            assert authentication.ca_bundle_env is not None
+            assert authentication.client_certificate_env is not None
+            assert authentication.client_key_env is not None
+            add(authentication.ca_bundle_env, "ca_bundle")
+            add(authentication.client_certificate_env, "client_certificate")
+            add(authentication.client_key_env, "client_key")
+
+    return {variable: tuple(roles) for variable, roles in references.items()}
+
+
 def _required_host_value(
     environment: Mapping[str, str], variable: str, *, code: str = "path_configuration_missing"
 ) -> str:
@@ -612,5 +648,6 @@ __all__ = [
     "ProductExecutorPathPreflight",
     "ProductExecutorPathReceipt",
     "ResolvedExecutorPath",
+    "executor_network_policy_environment_references",
     "resolve_executor_paths",
 ]

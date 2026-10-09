@@ -140,7 +140,10 @@ def _sanitize_health_value(value: Any, *, parent_key: str | None = None) -> Any:
 
 @router.get("/health")
 async def health() -> dict[str, Any]:
-    payload = await run_in_threadpool(run_health)
+    payload = await run_in_threadpool(
+        run_health,
+        background_model_access_probes=True,
+    )
     if isinstance(payload, dict):
         payload = _neutralize_llm_diagnostics(payload)
     return _sanitize_health_value(payload)
