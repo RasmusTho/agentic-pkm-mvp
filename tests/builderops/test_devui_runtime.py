@@ -110,7 +110,6 @@ def managed_sources(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request):
 
     import uvicorn
     from app.builderops import devui_runtime, devui_sources
-    from app.builderops.control_plane import client as control_plane_client
     from app.builderops.control_plane.auth import CredentialRegistry
     from app.builderops.control_plane.service import create_app as create_service
     from app.builderops.control_plane.store import PostgresBuilderOpsStore
@@ -372,40 +371,29 @@ print(json.dumps(result))
 
     original_client = devui_sources.BuilderOpsControlPlaneClient
 
-    class ReceiptTimeoutTransport(httpx.BaseTransport):
-        """Consume real fixture responses, then model addressed response loss."""
+    def receipt_timeout_client(config, **kwargs):
+        """Use one real client instance while modeling addressed response loss."""
+        client = original_client(config, **kwargs)
+        request = client._http.request
 
-        def __init__(self) -> None:
-            self._inner = httpx.HTTPTransport()
-
-        def handle_request(self, request: httpx.Request) -> httpx.Response:
-            response = self._inner.handle_request(request)
-            receipt_response = request.url.path.startswith("/v1/receipts/")
-            status_after_receipt = request.url.path == "/v1/status" and state.receipt_response_lost
-            if state.mode == "receipt_timeout" and (receipt_response or status_after_receipt):
+        def request_with_response_loss(method, url, **request_kwargs):
+            response = request(method, url, **request_kwargs)
+            request_path = response.request.url.path
+            receipt_response = request_path.startswith("/v1/receipts/")
+            status_after_receipt = request_path == "/v1/status" and state.receipt_response_lost
+            if receipt_response or status_after_receipt:
                 response.read()
                 response.close()
                 if receipt_response:
                     state.receipt_response_lost = True
                 raise httpx.ReadTimeout(
                     "fixture addressed response was lost after the service read",
-                    request=request,
+                    request=response.request,
                 )
             return response
 
-        def close(self) -> None:
-            self._inner.close()
-
-    class ReceiptTimeoutClient(original_client):
-        def __init__(self, config, **kwargs):
-            super().__init__(config, **kwargs)
-            self._http.close()
-            self._http = httpx.Client(
-                base_url=config.base_url,
-                timeout=control_plane_client._DEFAULT_TIMEOUT_SECONDS,
-                transport=ReceiptTimeoutTransport(),
-            )
-            self._owns_client = True
+        client._http.request = request_with_response_loss
+        return client
 
     receipts = tmp_path / "receipts"
     receipts.mkdir()
@@ -425,7 +413,7 @@ print(json.dumps(result))
         monkeypatch.setattr(
             devui_sources,
             "BuilderOpsControlPlaneClient",
-            ReceiptTimeoutClient if state.mode == "receipt_timeout" else original_client,
+            receipt_timeout_client if state.mode == "receipt_timeout" else original_client,
         )
         return TestClient(
             create_app(load_configuration(env)),
