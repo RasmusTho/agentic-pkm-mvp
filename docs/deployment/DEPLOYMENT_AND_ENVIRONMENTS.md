@@ -613,6 +613,27 @@ required before the first RPC; it must be owner-only (`0600`) and record the exa
 `sole_writer_approved: true`, `credentials_restricted: true`, and a `live_receipt` comment on #5667.
 No CLI flag creates this approval. The admin token remains on the agent host.
 
+After a host session restart, the same invocation recovers missing `BWS_ORGANIZATION_ID`,
+`BWS_NON_PROD_PROJECT_ID`, and `BWS_PROD_PROJECT_ID` from the installed canonical
+`/etc/yggdrasil/bws-deploy/<channel>.json` on `ygg-dev`, `ygg-test`, and `ygg-prod`.
+For example, `python3 -m app.ops.postgres_deploy_host test <authorized-revision>
+--existing-secrets-only` needs no metadata exports when those protected sources are available.
+Complete explicit metadata remains supported without remote reads; any supplied partial metadata
+must match the installed mapping. The host requires canonical UUIDs, one organization, the same
+dev/test non-prod project, and a distinct prod project before constructing the admin client.
+
+This fallback uses only strict host-key SSH, noninteractive sudo, and a bounded read-only Python
+reader with a 20-second timeout per alias. It checks root-owned, non-writable, nonsymlink directory
+ancestry and a root-owned, single-link, regular `0600` channel file no larger than 64 KiB. It accepts
+only the existing channel-config fields and returns only organization/project metadata. Unavailable
+SSH, unsafe files, malformed or unexpected output, and conflicting mappings refuse before operation
+admission with the existing value-free diagnostic. Metadata stays in process memory; the fallback
+does not load runtime env or token files, mutate `os.environ`, persist configuration, or contact BWS.
+Keychain authentication, selected-consumer checks, the host controller, VM journal/lock, exact
+request reconciliation, existing-secrets-only mode, and bootstrap/prod acknowledgment gates retain
+their existing authority. Repository tests establish this recovery path; live channel qualification
+remains with #5667.
+
 When such a deployment remains pending after its supervised worker has ended, reconcile only the
 same operation using its exact request revision and original `--ack-forward-only` choice. The
 `--reconcile-pending` command is limited to a pending `--existing-secrets-only` operation and asks

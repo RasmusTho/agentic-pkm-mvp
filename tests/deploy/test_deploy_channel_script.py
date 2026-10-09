@@ -3379,7 +3379,7 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
     controller = SimpleNamespace(directory=tmp_path)
     captured = []
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
-    monkeypatch.setattr(host, 'configured_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
     monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
     monkeypatch.setattr(host, 'SshDeployRemote', lambda _host: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
@@ -3741,7 +3741,7 @@ def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_pat
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, 'configured_admin', lambda: object())
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
     monkeypatch.setattr(host, 'SecretAdmin', Admin)
 
     assert host.main(['dev', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 78
