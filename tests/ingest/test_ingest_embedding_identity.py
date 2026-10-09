@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 
@@ -274,3 +275,119 @@ def test_ingest_api_carries_no_hardcoded_embedding_model() -> None:
     assert "app.config.agent" not in source, (
         "the dead app.config.agent settings guard must be removed"
     )
+
+
+def test_indexer_rejects_unservable_selected_embedding_route_after_capture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid selected route is loud before inference/index effects on replay."""
+    from app.components.embeddings import legacy
+    from app.services import indexer
+
+    stored: dict[str, Any] = {}
+    saves: list[dict[str, Any]] = []
+
+    class _ObjectStore:
+        def get_object(self, object_id):
+            return stored.get(str(object_id))
+
+        def save_object(self, domain, **kwargs):
+            stored[str(domain.uuid)] = domain
+            saves.append(kwargs)
+
+    def _unexpected(*_args, **_kwargs):
+        raise AssertionError("invalid admission must precede client or index access")
+
+    monkeypatch.setattr(legacy, "get_settings_bundle", lambda: None)
+    monkeypatch.setattr(indexer, "ObjectStore", _ObjectStore)
+    monkeypatch.setattr(indexer, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(indexer, "embed_with_fallback", _unexpected)
+    monkeypatch.setattr(indexer, "get_vector_index", _unexpected)
+    monkeypatch.setattr(indexer, "emit_index_embedding_failed", _unexpected)
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_FORCE_MODEL", "nomic-embed-text:latest")
+    monkeypatch.setenv("EMBED_PRIMARY_PROVIDER", "mock")
+    event = {
+        "object_id": str(UUID(int=5882)),
+        "content": "must not become a mock vector",
+        "source_ref": "unit-test-admission",
+        "trace_id": "trace-admission",
+        "payload": {},
+    }
+
+    for _ in range(2):
+        with pytest.raises(ValueError, match=r"openai.*override_provider"):
+            indexer.handle_ingest_object_created(event)
+
+    assert stored[event["object_id"]].payload["content"] == event["content"]
+    assert len(stored) == 1
+    assert saves == [{"emit_outbox": False, "trace_id": "trace-admission"}] * 2
+
+
+def test_indexer_valid_synthetic_ingest_preserves_selected_identity_and_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stronger explicit route retains precedence over an inactive legacy value."""
+    from app.components.embeddings import legacy
+    from app.objects import ObjectStore
+    from app.services import indexer
+
+    monkeypatch.setattr(legacy, "get_settings_bundle", lambda: None)
+    monkeypatch.setenv("EMBED_PRIMARY_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "mock")
+    monkeypatch.setenv("EMBED_DIM", "4")
+    monkeypatch.delenv("EMBED_FALLBACK_PROVIDER", raising=False)
+    monkeypatch.setattr(indexer, "resolve_canonical_object_id", lambda value: value)
+
+    class _Index:
+        def __init__(self):
+            self.rows: dict[UUID, dict[str, Any]] = {}
+            self.purges: list[UUID] = []
+
+        def purge_vectors(self, object_id, *, view):
+            self.purges.append(object_id)
+            return int(self.rows.pop(object_id, None) is not None)
+
+        def upsert(self, object_id, **kwargs):
+            self.rows[object_id] = kwargs
+
+    vector_index = _Index()
+    created: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    monkeypatch.setattr(indexer, "get_vector_index", lambda: vector_index)
+    monkeypatch.setattr(indexer, "emit_index_object_embedded", lambda **kwargs: created.append(kwargs))
+    monkeypatch.setattr(indexer, "emit_index_embedding_failed", lambda **kwargs: failed.append(kwargs))
+    object_id = str(UUID(int=58820))
+    event = {
+        "object_id": object_id,
+        "kind": "note",
+        "content": "valid synthetic body",
+        "source_ref": "unit-test-valid-admission",
+        "trace_id": "trace-valid-admission",
+        "payload": {},
+    }
+
+    for _ in range(2):
+        indexer.handle_ingest_object_created(event)
+
+    stored = ObjectStore().get_object(object_id)
+    assert stored is not None
+    assert stored.payload["content"] == event["content"]
+    assert "embedding_identity" not in stored.payload
+    assert len(vector_index.rows) == 1
+    row = vector_index.rows[UUID(object_id)]
+    expected = {"provider": "mock", "model": "mock-embedding", "dim": 4, "normalize": True}
+    assert embedding_identity_provenance(row["identity"]) == expected
+    assert row["payload"]["provenance"]["embedding_identity"] == expected
+    assert len(row["embedding"]) == 4
+    assert vector_index.purges == []
+    assert failed == []
+    assert created == [{
+        "object_id": object_id,
+        "trace_id": event["trace_id"],
+        "source_ref": event["source_ref"],
+        "provider": "mock",
+        "model": "mock-embedding",
+        "dim": 4,
+        "meta": None,
+    }] * 2
