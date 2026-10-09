@@ -2327,6 +2327,19 @@ def test_prod_empty_delta_forward_only_failure_retries_through_durable_marker(
     tmp_path: Path,
 ) -> None:
     root, env, current_sha = _deploy_harness(tmp_path)
+    (root / "code_only_change.py").write_text(
+        '"""A deployment commit with no migration-tree changes."""\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "code_only_change.py"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "add code-only deployment change"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
     pin_path = root / "config/deploy/prod.env"
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
@@ -2337,29 +2350,30 @@ def test_prod_empty_delta_forward_only_failure_retries_through_durable_marker(
     env.update(
         {
             "APP_IMAGE_REPOSITORY": "example.invalid/pkm-app",
-            "FAKE_SHA": current_sha,
+            "FAKE_SHA": target_sha,
             "FAKE_MIGRATION_GATE_TOKEN": token,
             "DEPLOY_ACK_FORWARD_ONLY": "1",
             "FAKE_DOCKER_FAIL_MATCH": "exit-code-from migrate",
         }
     )
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
 
-    first = _run_deploy(root, env, current_sha, channel="prod")
+    first = _run_deploy(root, env, target_sha, channel="prod")
 
     pending = root / "config/deploy/prod.migration-pending.env"
     assert first.returncode == 24
     assert "forward-only migration execution started and its commit state is ambiguous" in first.stderr
     marker = pending.read_text(encoding="utf-8")
     assert f"FROM_SHA={current_sha}" in marker
-    assert f"TARGET_SHA={current_sha}" in marker
+    assert f"TARGET_SHA={target_sha}" in marker
     assert "ACK_FORWARD_ONLY=1" in marker
-    assert f"APP_IMAGE_TAG={current_sha}" in pin_path.read_text(encoding="utf-8")
-    assert f"migration-token-image=example.invalid/pkm-app:{current_sha}" in _deploy_events(env)
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"migration-token-image=example.invalid/pkm-app:{target_sha}" in _deploy_events(env)
 
     env.pop("FAKE_DOCKER_FAIL_MATCH")
     env["FAKE_MIGRATION_GATE_RESULT"] = "prod-migration-no-forward-only-pending.v1"
 
-    second = _run_deploy(root, env, current_sha, channel="prod")
+    second = _run_deploy(root, env, target_sha, channel="prod")
 
     assert second.returncode == 0, second.stdout + second.stderr
     assert "migration retry: revalidating" in second.stdout

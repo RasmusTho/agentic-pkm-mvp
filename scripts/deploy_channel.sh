@@ -285,6 +285,7 @@ MIGRATION_EXECUTION_APPLIED=0
 # retry inherits a marker from an earlier migration attempt whose commit state
 # remains ambiguous until that retry reaches a successful migration execution.
 MIGRATION_PENDING_MARKER_CREATED=0
+MIGRATION_PENDING_ACK=0
 migration_materialize_dir="$(mktemp -d "${TMPDIR:-/tmp}/pkm-deploy-migrations.XXXXXX")"
 deploy_lock_dir=""
 trap 'rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
@@ -1652,17 +1653,20 @@ if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then
   fi
   if [ "${pending_ack}" = "1" ]; then
     ack_forward_only=1
-  fi
-  if [ "${pending_ack}" = "1" ] && [ "${pending_from}" = "${target_sha}" ]; then
-    # An empty-delta same-SHA epoch can only have been created after the live
-    # PROD probe found forward-only work. Keep it explicit when the DB has
-    # already advanced and a retry's fresh probe therefore returns the
-    # no-pending sentinel.
-    PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING=1
+    MIGRATION_PENDING_ACK=1
   fi
   echo "migration retry: revalidating ${migration_from_sha:-<no-baseline>}..${target_sha} from durable pending marker"
 fi
 migration_gate "${migration_from_sha}" "${target_sha}"
+if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ] && \
+    [ "${MIGRATION_PENDING_ACK}" = "1" ] && [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
+  # A prior acknowledged empty-delta attempt may have committed its live
+  # forward-only migration before losing the client result. The durable
+  # same-target marker plus a freshly recomputed empty Git migration delta
+  # keeps retry execution explicit even when the new probe says the DB is at
+  # the candidate head. FROM_SHA and TARGET_SHA may be different code commits.
+  PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING=1
+fi
 
 if [ "${dry_run}" = "1" ]; then
   echo "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
