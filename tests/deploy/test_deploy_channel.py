@@ -3191,6 +3191,105 @@ deploy_channel_compose "$2" "$3" "docker-compose.$3.yml" "pkm-$3" "$4" up -d --f
         assert ('docker-compose.bws-external.yml' in ' '.join(record['argv'])) == (host != 'db')
 
 
+@pytest.mark.parametrize(
+    ('overrides', 'expected'),
+    [
+        ({}, '/home/runtime/.local/state/agentic-pkm/instance-ownership'),
+        ({'XDG_STATE_HOME': '/srv/state'}, '/srv/state/agentic-pkm/instance-ownership'),
+        ({'INSTANCE_OWNERSHIP_HOST_STATE_DIR': '/custom/state'}, '/custom/state'),
+    ],
+)
+def test_root_bws_supervisor_uses_runtime_state_path(tmp_path, monkeypatch, overrides, expected):
+    """The root supervisor avoids /root defaults and preserves explicit state roots."""
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    password = tmp_path / 'password'
+    password.write_text('fixture-password')
+    monkeypatch.setattr(os, 'environ', {'HOME': '/root', **overrides})
+    monkeypatch.setattr(os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(linux.pwd, 'getpwuid', lambda uid: SimpleNamespace(pw_dir='/home/runtime'))
+
+    cfg = SimpleNamespace(
+        root=root,
+        channel='dev',
+        uid=1000,
+        gid=1000,
+        password_file=password,
+        runtime_env_file=runtime,
+    )
+
+    produced = linux.LinuxEffects(cfg).environment()
+
+    assert produced['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == expected
+    assert produced['LOCAL_UID'] == '1000'
+
+
+def test_non_root_bws_caller_uses_own_home_without_runtime_passwd_lookup(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    password = tmp_path / 'password'
+    password.write_text('fixture-password')
+    monkeypatch.setattr(os, 'environ', {'HOME': '/home/caller'})
+    monkeypatch.setattr(os, 'geteuid', lambda: 501)
+    monkeypatch.setattr(linux.pwd, 'getpwuid', lambda uid: pytest.fail('runtime passwd lookup is root-only'))
+
+    cfg = SimpleNamespace(
+        root=root,
+        channel='dev',
+        uid=1000,
+        gid=1000,
+        password_file=password,
+        runtime_env_file=runtime,
+    )
+
+    produced = linux.LinuxEffects(cfg).environment()
+
+    assert produced['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == (
+        '/home/caller/.local/state/agentic-pkm/instance-ownership'
+    )
+
+
+def test_root_bws_supervisor_fails_closed_when_runtime_uid_has_no_passwd_entry(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    password = tmp_path / 'password'
+    password.write_text('fixture-password')
+    monkeypatch.setattr(os, 'environ', {'HOME': '/root'})
+    monkeypatch.setattr(os, 'geteuid', lambda: 0)
+
+    def missing_runtime_user(uid):
+        raise KeyError(uid)
+
+    monkeypatch.setattr(linux.pwd, 'getpwuid', missing_runtime_user)
+
+    cfg = SimpleNamespace(
+        root=root,
+        channel='dev',
+        uid=1000,
+        gid=1000,
+        password_file=password,
+        runtime_env_file=runtime,
+    )
+
+    with pytest.raises(linux.PostgresDeployError):
+        linux.LinuxEffects(cfg).environment()
+
+
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
 def test_rendered_compose_uses_postgres_secret_file_without_value(tmp_path, channel):
     rendered = _render_bws_compose(tmp_path, channel)
@@ -3341,6 +3440,181 @@ def test_compose_secret_source_lifecycle_covers_restart_recreate_and_boot(tmp_pa
     assert 'KillMode=control-group' in unit
     assert 'ExecStopPost=/usr/local/libexec/yggdrasil-bws-deploy cleanup %i' in unit
     assert 'LoadCredentialEncrypted=' in unit and 'BWS_ACCESS_TOKEN_FILE=%d/' in unit
+
+
+def test_bws_supervisor_launcher_uses_declared_runtime_dependencies():
+    runtime_python = '/opt/yggdrasil/bws-deploy-runtime/bin/python3'
+    manifest = (REPO_ROOT / 'requirements-bws-deploy.txt').read_text(encoding='utf-8')
+    launcher = (REPO_ROOT / 'scripts/postgres_deploy_service.py').read_text(encoding='utf-8')
+    unit = (REPO_ROOT / 'config/systemd/yggdrasil-bws-deploy@.service').read_text(encoding='utf-8')
+
+    assert manifest.splitlines() == [
+        'bitwarden-sdk==2.1.0',
+        'psycopg[binary]==3.2.10',
+        'python-dateutil==2.9.0.post0',
+        'six==1.17.0',
+        'typing-extensions==4.15.0',
+    ]
+    assert launcher.splitlines()[0] == f'#!{runtime_python}'
+    assert 'ExecStart=/usr/local/libexec/yggdrasil-bws-deploy serve %i' in unit
+    assert 'ExecStopPost=/usr/local/libexec/yggdrasil-bws-deploy cleanup %i' in unit
+
+
+def _write_fake_bws_runtime_python(fake_bin):
+    fake_bin.mkdir()
+    bootstrap_python = fake_bin / 'python3.12'
+    bootstrap_python.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ \"$1\" == \"-c\" ]]; then
+  printf 'bootstrap:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
+  [[ \"${BWS_FAIL_BOOTSTRAP_CHECK:-0}\" != \"1\" ]]
+  exit
+fi
+if [[ \"$1\" == \"-m\" && \"$2\" == \"venv\" ]]; then
+  if [[ \"$3\" == \"--upgrade\" ]]; then runtime_root=\"$4\"; else runtime_root=\"$3\"; fi
+  mkdir -p \"$runtime_root/bin\"
+  cat > \"$runtime_root/bin/python3\" <<'RUNTIME_PYTHON'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'runtime:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
+if [[ \"$1\" == \"-m\" && \"$2\" == \"pip\" && \"${BWS_FAIL_RUNTIME_PIP:-0}\" == \"1\" ]]; then exit 1; fi
+if [[ \"$1\" == \"-c\" && \"${BWS_FAIL_RUNTIME_VERSION:-0}\" == \"1\" ]]; then exit 1; fi
+if [[ \"$1\" == \"-c\" && \"$*\" == *bitwarden_sdk* && \"${BWS_FAIL_RUNTIME_CHECK:-0}\" == \"1\" ]]; then exit 1; fi
+RUNTIME_PYTHON
+  chmod 755 \"$runtime_root/bin/python3\"
+  printf 'bootstrap:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
+  exit 0
+fi
+echo 'unexpected bootstrap invocation' >&2
+exit 1
+""",
+        encoding='utf-8',
+    )
+    bootstrap_python.chmod(0o755)
+
+
+def _bws_setup_environment(fake_bin, trace, **overrides):
+    return {
+        **_without_macos_malloc_stack_logging(),
+        'PATH': f'{fake_bin}{os.pathsep}{os.environ.get("PATH", "")}',
+        'BWS_SETUP_TRACE': str(trace),
+        **overrides,
+    }
+
+
+def test_bws_supervisor_runtime_setup_is_idempotent_and_preserves_credentials(tmp_path):
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    trace = tmp_path / 'setup.trace'
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    env = _bws_setup_environment(fake_bin, trace)
+    setup = REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'
+    unit_path = REPO_ROOT / 'config/systemd/yggdrasil-bws-deploy@.service'
+    original_unit = unit_path.read_bytes()
+    source_launcher = REPO_ROOT / 'scripts/postgres_deploy_service.py'
+    installed_launcher = install_root / 'yggdrasil-bws-deploy'
+
+    for _ in range(2):
+        result = subprocess.run(
+            [
+                'bash',
+                str(setup),
+                '--runtime-root',
+                str(runtime_root),
+                '--install-root',
+                str(install_root),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    calls = trace.read_text(encoding='utf-8').splitlines()
+    requirements = REPO_ROOT / 'requirements-bws-deploy.txt'
+    bootstrap_check = 'bootstrap:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
+    runtime_version_check = 'runtime:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
+    runtime_import_check = 'runtime:-c import bitwarden_sdk, psycopg, app.ops.postgres_deploy_linux'
+    assert len(calls) == 10
+    assert calls[0] == bootstrap_check
+    assert calls[1] == f'bootstrap:-m venv {runtime_root}'
+    assert calls[2] == runtime_version_check
+    assert calls[3] == (
+        f'runtime:-m pip install --disable-pip-version-check --requirement {requirements}'
+    )
+    assert calls[4].startswith(runtime_import_check)
+    assert calls[5] == bootstrap_check
+    assert calls[6] == f'bootstrap:-m venv --upgrade {runtime_root}'
+    assert calls[7] == runtime_version_check
+    assert calls[8] == (
+        f'runtime:-m pip install --disable-pip-version-check --requirement {requirements}'
+    )
+    assert calls[9].startswith(runtime_import_check)
+    source_body = source_launcher.read_bytes().partition(b'\n')[2]
+    assert installed_launcher.read_bytes() == f'#!{runtime_root}/bin/python3\n'.encode() + source_body
+    assert installed_launcher.stat().st_mode & 0o777 == 0o755
+    assert unit_path.read_bytes() == original_unit
+    assert 'LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current' in original_unit.decode()
+
+
+def test_bws_supervisor_runtime_rejects_old_bootstrap_python_before_mutation(tmp_path):
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    trace = tmp_path / 'setup.trace'
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    installed_launcher = install_root / 'yggdrasil-bws-deploy'
+    installed_launcher.parent.mkdir()
+    installed_launcher.write_bytes(b'previous-launcher\n')
+
+    result = subprocess.run(
+        ['bash', str(REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'),
+         '--runtime-root', str(runtime_root), '--install-root', str(install_root)],
+        cwd=REPO_ROOT,
+        env=_bws_setup_environment(fake_bin, trace, BWS_FAIL_BOOTSTRAP_CHECK='1'),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 78
+    assert trace.read_text(encoding='utf-8').splitlines() == [
+        'bootstrap:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
+    ]
+    assert not runtime_root.exists()
+    assert installed_launcher.read_bytes() == b'previous-launcher\n'
+
+
+@pytest.mark.parametrize(
+    'failure',
+    ['BWS_FAIL_RUNTIME_VERSION', 'BWS_FAIL_RUNTIME_PIP', 'BWS_FAIL_RUNTIME_CHECK'],
+)
+def test_bws_supervisor_runtime_failure_keeps_installed_launcher(tmp_path, failure):
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    trace = tmp_path / 'setup.trace'
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    installed_launcher = install_root / 'yggdrasil-bws-deploy'
+    installed_launcher.parent.mkdir()
+    installed_launcher.write_bytes(b'previous-launcher\n')
+
+    result = subprocess.run(
+        ['bash', str(REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'),
+         '--runtime-root', str(runtime_root), '--install-root', str(install_root)],
+        cwd=REPO_ROOT,
+        env=_bws_setup_environment(fake_bin, trace, **{failure: '1'}),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert installed_launcher.read_bytes() == b'previous-launcher\n'
 
 
 def _bws_runtime_export_fixture(tmp_path):

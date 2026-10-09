@@ -10,7 +10,10 @@ from app.ingest import handle_post_ingest, normalize_payload
 import app.ingest.lifecycle as lifecycle
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 @pytest.fixture()
+
 def lifecycle_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     logs_dir = tmp_path / "logs"
     reflect_dir = tmp_path / "reflect"

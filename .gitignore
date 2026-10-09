@@ -39,6 +39,7 @@ scripts/ingest_real.sh
 !requirements-smoke.txt
 !requirements-builderops.txt
 !requirements-tts.txt
+!requirements-bws-deploy.txt
 .pytest_cache/
 .hypothesis/
 tmp/index-outbox.jsonl

@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-08 (PR #5835 merge/deploy-selection evidence and PR #5822 Model Access merge checked; PR #5838 repository evidence and PR #5847 routing candidate checked; no host credentials, route settings, database, or deployment changed)
+Last reviewed: 2026-10-09 (Issue #5868 existing-value TARS deployment candidate checked alongside the PR #5835, #5822, #5838, and #5847 evidence; no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -88,7 +88,7 @@ The current single-operator VLAN boundary uses mTLS at ingress and a loopback-on
 
 The same 2026-10-05 readback found that `ygg-prod` still reports `required_ok=false` and `mock` for `decide`, `plan`, and `embed`; its embedding index has 10 objects without vectors, and the production Ollama container has no model installed. No production MARR caller identity or binding was present. PR #5798 adds repository support for production caller binding, but does not activate a live route. `ygg-test` has only API and DB containers, with no worker or watcher, so candidate-bound test verification is not available. The latest dev readback reported container health only, not functional application health, and no MARR caller bindings.
 
-Production remains on the current `main`-tracking deployment baseline; the `stable` ref is dormant. Before promotion, qualify the production caller identity and BWS deployment boundary, obtain candidate-bound test verification (or follow the governed bypass procedure), and prepare the exact release plan. Forward-only migrations require acknowledgment for that exact plan. Ollama model installation and embedding-index rebuild are separate operational steps. The live readback and decision do not claim that any of these actions occurred.
+Production remains on the current `main`-tracking deployment baseline; the `stable` ref is dormant. The Issue #5868 repository candidate adds an explicit existing-value TARS deployment mode: it validates the selected values, refuses a missing PostgreSQL password before RPC, binds the mode to the host operation journal, and performs no BWS write. Once merged, that path will not require bootstrap-only writer qualification; BWS bootstrap writes remain under #5667. This is repository-candidate evidence only and does not qualify the production caller or change live routing/deployment. Before promotion, verify the production caller binding and selected existing values, obtain candidate-bound TEST verification (or follow the governed bypass procedure), and prepare the exact release plan. Forward-only migrations require acknowledgment for that exact plan. Ollama model installation and embedding-index rebuild are separate operational steps. The live readback and decision do not claim that any of these actions occurred.
 
 ### Live environment baseline (2026-08-22)
 

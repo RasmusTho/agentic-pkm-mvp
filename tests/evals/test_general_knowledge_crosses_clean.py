@@ -12,9 +12,13 @@ conservative role, never over-granting toward ``evidence``).
 
 from __future__ import annotations
 
+import pytest
+
 from tests.evals import _app_adapter as gov
 from tests.evals._helpers import load_group
 
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 def test_general_fixtures_marked_eligible() -> None:
     # Static precondition (passes today): general fixtures carry general_knowledge source role and

@@ -110,10 +110,37 @@ import tempfile
 
 path, channel, phase = sys.argv[1:]
 directory = os.path.dirname(path)
+raw_uid = os.environ.get("INSTANCE_OWNERSHIP_HOST_STATE_UID", os.environ.get("LOCAL_UID"))
+raw_gid = os.environ.get("INSTANCE_OWNERSHIP_HOST_STATE_GID", os.environ.get("LOCAL_GID"))
+if raw_uid is None and raw_gid is None:
+    runtime_uid, runtime_gid = os.geteuid(), os.getegid()
+elif (
+    raw_uid is None
+    or raw_gid is None
+    or not raw_uid.isascii()
+    or not raw_uid.isdecimal()
+    or not raw_gid.isascii()
+    or not raw_gid.isdecimal()
+):
+    raise SystemExit("settings rebind receipt runtime identity is invalid")
+else:
+    uid_text = raw_uid.lstrip("0") or "0"
+    gid_text = raw_gid.lstrip("0") or "0"
+    if (
+        len(uid_text) > 10
+        or len(gid_text) > 10
+    ):
+        raise SystemExit("settings rebind receipt runtime identity is out of range")
+    runtime_uid, runtime_gid = int(uid_text), int(gid_text)
+    if runtime_uid > 4_294_967_294 or runtime_gid > 4_294_967_294:
+        raise SystemExit("settings rebind receipt runtime identity is out of range")
+if os.geteuid() != 0 and (runtime_uid != os.geteuid() or runtime_gid != os.getegid()):
+    raise SystemExit("settings rebind receipt runtime identity differs from the caller")
 metadata = os.lstat(directory)
 if (
     not stat.S_ISDIR(metadata.st_mode)
-    or metadata.st_uid != os.geteuid()
+    or metadata.st_uid != runtime_uid
+    or metadata.st_gid != runtime_gid
     or stat.S_IMODE(metadata.st_mode) != 0o700
 ):
     raise SystemExit("settings rebind receipt directory is not private")
@@ -127,8 +154,10 @@ descriptor, temporary = tempfile.mkstemp(
     prefix=os.path.basename(path) + ".tmp.", dir=directory
 )
 try:
-    os.fchmod(descriptor, 0o600)
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        if os.geteuid() == 0:
+            os.fchown(handle.fileno(), runtime_uid, runtime_gid)
         json.dump(payload, handle, sort_keys=True, separators=(",", ":"))
         handle.write("\n")
         handle.flush()
@@ -341,7 +370,7 @@ prepare_instance_state_deployment() {
   local principal_loopback_flag=""
   local mvr05_stop_services
   local -a mvr05_stop_service_args
-  local mvr05_effective_compose_path mvr05_fence_plan_host_path
+  local mvr05_effective_compose_path mvr05_fence_plan_host_path mvr05_fence_plan_source_path
   if ! legacy_path="$(_instance_state_deployment_effective_legacy_path \
     "${channel}" "${channel_env_file}")"; then
     return 78
@@ -527,13 +556,30 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
   mvr05_fence_plan_host_path="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/mvr05-fence-plan-${controller_pid}.json"
+  mvr05_fence_plan_source_path="$(mktemp "${TMPDIR:-/tmp}/agentic-pkm-fence-plan.XXXXXX")"
+  inventory_rc=$?
+  if [ "${inventory_rc}" -ne 0 ]; then
+    rm -f -- "${mvr05_effective_compose_path}"
+    _release_abandoned_instance_state_deployment_lease \
+      "${compose_function}" "${channel}" "${runtime_user}" \
+      "${controller_pid}" "${controller_start_token}"
+    return "${inventory_rc}"
+  fi
   rm -f -- "${mvr05_fence_plan_host_path}"
   mvr05_stop_services="$(
     python3 "${inventory_helper}" compose-fence-plan \
       --compose-path "${mvr05_effective_compose_path}" \
-      --receipt-output "${mvr05_fence_plan_host_path}"
+      --receipt-output "${mvr05_fence_plan_source_path}"
   )"
   inventory_rc=$?
+  if [ "${inventory_rc}" -eq 0 ] && [ -n "${mvr05_stop_services}" ]; then
+    _instance_state_deployment_deliver_private_inventory \
+      "${mvr05_fence_plan_source_path}" \
+      "${mvr05_fence_plan_host_path}" \
+      "${runtime_uid}" "${runtime_gid}"
+    inventory_rc=$?
+  fi
+  rm -f -- "${mvr05_fence_plan_source_path}"
   rm -f -- "${mvr05_effective_compose_path}"
   if [ "${inventory_rc}" -ne 0 ] || [ -z "${mvr05_stop_services}" ]; then
     rm -f -- "${inventory_host_path}"

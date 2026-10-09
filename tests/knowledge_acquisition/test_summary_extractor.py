@@ -26,6 +26,8 @@ from app.knowledge_acquisition.extractors.summary_extractor import (
     run,
 )
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 NORMALIZED_FIXTURE = {
     "stage": "normalize",
     "stage_version": 1,

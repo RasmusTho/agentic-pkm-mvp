@@ -365,15 +365,23 @@ def bootstrap_password(admin: SecretAdmin, operation: HostSecretOperation, *, em
 
 
 def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
-                     *, qualified: Callable[[], None]) -> DeployReceipt:
+                     *, qualified: Callable[[], None], allow_bootstrap: bool = True) -> DeployReceipt:
     """Hold the shared controller lock through matching remote terminal evidence."""
+    if type(allow_bootstrap) is not bool:
+        raise PostgresDeployError()
     plan.validate()
-    qualified()  # The owner-controlled sole-writer/credential restriction gate.
     try:
-        with admin.controller.deploy_operation(plan.channel) as (operation, resumed):
+        with admin.controller.deploy_operation(
+            plan.channel, allow_bootstrap=allow_bootstrap
+        ) as (operation, resumed):
             with SecretHistory.open(admin.controller.directory) as history:
                 bootstrap_history = bool(history.records(operation.operation_id)) if resumed else False
             if bootstrap_history:
+                if not allow_bootstrap:
+                    raise PostgresDeployError()
+                # A resumed bootstrap may still send a BWS create; retain the
+                # owner qualification before its first remote recovery call.
+                qualified()
                 empty = remote.prepare(operation.operation_id, plan, bootstrap=True)
                 if empty:
                     bootstrap_password(admin, operation, empty=True)
@@ -386,6 +394,14 @@ def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
                 missing_password = any(row == {'secret': 'postgres.password', 'status': 'missing'} for row in statuses)
                 if any(row['status'] not in {'ok', 'skipped'} and row != {'secret': 'postgres.password', 'status': 'missing'} for row in statuses):
                     raise PostgresDeployError()
+                if missing_password and not allow_bootstrap:
+                    # Read-only Product rollouts must stop before persisting a
+                    # host mutation or asking the VM to inspect/bootstrap data.
+                    raise PostgresDeployError()
+                if missing_password:
+                    # A missing password can proceed only on the explicitly
+                    # allowed first-init path, qualified before any RPC.
+                    qualified()
                 operation.prepare_mutation()
                 empty = remote.prepare(operation.operation_id, plan, bootstrap=missing_password)
                 if missing_password:

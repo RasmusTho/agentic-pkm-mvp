@@ -151,16 +151,38 @@ def clean_llm_env(monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture
 def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
     """Deterministic Mac-portal fake for Product tests that are not API tests."""
+    import os
+    from datetime import datetime, timedelta, timezone
     from types import SimpleNamespace
 
     from app.components.llm import fabric
+    from app.model_access.catalog import CatalogModelDescriptor, CatalogSnapshot
+    from app.model_access.codex_remote_transport import RemoteCatalogError
     from app.model_access.remote_contract import (
+        CatalogResponse,
         CompletionResponse,
         CompletionRouteIdentity,
         EmbeddingRouteIdentity,
         PreflightResponse,
+        ProductCatalogRequest,
         ProductEmbeddingResponse,
     )
+    from llm_contract import ModelCapabilities
+
+    from app.components.llm.router import LLMRouter
+
+    original_router_route = LLMRouter.route
+
+    def _route_for_fixture(self, intent):
+        if intent.task_kind not in {"embed", "extract.summary"}:
+            return original_router_route(self, intent)
+        if os.getenv("LLM_FORCE_PROVIDER") or os.getenv("LLM_FORCE_MODEL"):
+            return original_router_route(self, intent)
+        with monkeypatch.context() as scoped:
+            scoped.setenv("LLM_FORCE_PROVIDER", "mock")
+            return original_router_route(self, intent)
+
+    monkeypatch.setattr(LLMRouter, "route", _route_for_fixture)
 
     class _Gateway:
         def __init__(self) -> None:
@@ -202,6 +224,42 @@ def product_model_access_gateway(monkeypatch: pytest.MonkeyPatch):
                 response=PreflightResponse(route=route, preflight_status="passed"),
                 receipt=receipt,
             )
+
+        def catalog(self, request):
+            if not isinstance(request, ProductCatalogRequest) or request.provider != "openai":
+                raise RemoteCatalogError("catalog_unavailable")
+            now = datetime.now(timezone.utc)
+            snapshot = CatalogSnapshot.create(
+                provider="openai",
+                transport_id="codex_cli",
+                source_id="fixture_model_catalog",
+                fetched_at=now,
+                models=(
+                    CatalogModelDescriptor(
+                        provider="openai",
+                        model="gpt-5.6-luna",
+                        transports=("codex_cli",),
+                        capabilities=ModelCapabilities(
+                            structured_output=True,
+                            system_prompt_channel=True,
+                        ),
+                        reasoning_efforts=("low", "xhigh"),
+                        release_at=now - timedelta(seconds=1),
+                    ),
+                    CatalogModelDescriptor(
+                        provider="openai",
+                        model="gpt-6-luna",
+                        transports=("codex_cli",),
+                        capabilities=ModelCapabilities(
+                            structured_output=True,
+                            system_prompt_channel=True,
+                        ),
+                        reasoning_efforts=("low", "xhigh"),
+                        release_at=now,
+                    ),
+                ),
+            )
+            return CatalogResponse(snapshot=snapshot)
 
         def discard_product_path_receipt(self, receipt) -> None:
             if receipt is not None:

@@ -29,12 +29,17 @@ learning provenance`.
 ## When to invoke
 
 Invoke only when:
-- you did something you did not expect to do, OR
-- you discovered an earlier artifact was wrong
+- you did something you did not expect to do and the divergence needs a material, actionable
+  upstream repair now, OR
+- you discovered an earlier artifact was wrong, the correction is material and actionable now, and it
+  is not already represented by the Issue, PR, or reviewed repo artifact
 
 Do NOT invoke when work went exactly as planned.
 
-This is not a hot-path routine for every small divergence. If the signal is minor, repetitive, or not yet actionable, batch it for `learning-retrospective` instead of interrupting the current task.
+This is not a hot-path routine for every small divergence. If the signal is minor, repetitive, or not
+yet actionable, batch it for the weekly cold-path `learning-retrospective` instead of interrupting
+the current task. A routine delivery whose evidence is already in its Issue, PR, or reviewed repo
+artifact needs no duplicate signal.
 
 The "name an artifact" gate: you must name an upstream artifact before logging. If you cannot name one, do not log.
 
@@ -53,7 +58,8 @@ All three are required:
 
 ## Behavior
 
-Create one `LearningSignal` through the BuilderOps CLI. Use `signal_type=workflow_divergence`
+Create one `LearningSignal` through the BuilderOps CLI after confirming that the material is not
+already preserved by an existing durable authority. Use `signal_type=workflow_divergence`
 unless a more specific workflow signal type is clearly better.
 
 Suggested command shape (`<agent-id>` is the invoking agent, e.g. `codex`, `claude`):
@@ -81,8 +87,10 @@ block capture. Preserve the configured store binding; never substitute an empty 
 make a command succeed. If a write times out or returns an ambiguous result, read back the same
 idempotency key before retrying or creating a fallback.
 
-If the BuilderOps write is genuinely unavailable, append an explicit compatibility fallback entry to
-`docs/learning-log.md` in this shape:
+If the BuilderOps write is genuinely unavailable and the substantial finding is not already preserved
+by an Issue, PR, or reviewed repo artifact, append an explicit compatibility fallback entry to
+`docs/learning-log.md` in this shape. If an existing authority already preserves it, report the
+limitation once and do not create a duplicate fallback or fake a successful write:
 
 ```markdown
 ## YYYY-MM-DD — #<issue> (<slice title>)
@@ -98,7 +106,9 @@ records before they are treated as current operational learning.
 
 ## Timing
 
-Invoke before continuing only when the divergence needs immediate upstream repair. Otherwise, collect the signal and let the next retrospective convert batched notes into a concrete edit.
+Invoke before continuing only when the divergence needs immediate upstream repair. Otherwise, collect
+the routine note for the weekly cold-path retrospective and let that bounded selection convert it
+into a concrete edit.
 
 ## Output format
 

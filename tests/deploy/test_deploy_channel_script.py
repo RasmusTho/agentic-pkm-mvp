@@ -19,6 +19,7 @@ from tests.deploy.test_deploy_channel import (
     _deploy_harness as _base_deploy_harness,
     _run_deploy,
 )
+from tests.helpers.runtime_identity import runtime_reachable_test_root
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -2433,6 +2434,127 @@ def test_postgres_password_preflight_precedes_remote_and_vm_mutation(tmp_path):
     assert effects.events == [] and journal.read() is None
 
 
+def test_existing_secret_deploy_skips_bootstrap_qualification(tmp_path):
+    from app.ops.postgres_deploy import deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path)
+    provider.seed('test/postgres.password', 'fake-role-password', ('non-prod',))
+    receipt = deploy_from_host(
+        admin,
+        remote,
+        plan,
+        qualified=lambda: pytest.fail('existing-value deployment must not require BWS-write qualification'),
+        allow_bootstrap=False,
+    )
+
+    assert receipt.stage == 'committed'
+    assert remote.activation_count == 1
+    assert not any(call[0] == 'put' for call in provider.calls)
+
+
+def test_existing_secret_deploy_refuses_missing_password_before_remote_mutation(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(
+            admin, remote, plan, qualified=lambda: pytest.fail('bootstrap is forbidden'),
+            allow_bootstrap=False,
+        )
+
+    assert remote.events == []
+    assert not any(call[0] == 'put' for call in provider.calls)
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor) is None
+
+
+def test_deploy_controller_binds_bootstrap_mode_before_rpc(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path)
+    provider.seed('test/postgres.password', 'fake-role-password', ('non-prod',))
+
+    def lose_prepare_ack(operation_id, selected, *, bootstrap):
+        remote.events.append(('prepare', operation_id, bootstrap))
+        raise RuntimeError('simulated lost prepare acknowledgment')
+
+    remote.prepare = lose_prepare_ack
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(
+            admin, remote, plan, qualified=lambda: None, allow_bootstrap=False,
+        )
+    with admin.controller._locked_journal() as descriptor:
+        pending = admin.controller._pending(descriptor)
+    assert pending is not None and pending['allow_bootstrap'] is False
+    prior_provider_calls = len(provider.calls)
+    prior_remote_events = list(remote.events)
+
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(
+            admin, remote, plan, qualified=lambda: pytest.fail('changed mode reached qualification'),
+            allow_bootstrap=True,
+        )
+
+    assert len(provider.calls) == prior_provider_calls
+    assert remote.events == prior_remote_events
+
+
+def test_legacy_pending_deploy_must_reconcile_before_bootstrap_mode_is_bound(tmp_path):
+    from app.ops.host_secret_controller import (
+        HostSecretAdmissionError,
+        HostSecretController,
+        TerminalEvidence,
+    )
+
+    controller = HostSecretController(tmp_path)
+    with controller.deploy_operation('test') as (operation, resumed):
+        assert not resumed
+        legacy_operation_id = operation.operation_id
+        operation.prepare_mutation()
+
+    with controller._locked_journal() as descriptor:
+        pending = controller._pending(descriptor)
+    assert pending is not None
+    assert pending['operation_id'] == legacy_operation_id
+    assert 'allow_bootstrap' not in pending
+
+    with pytest.raises(HostSecretAdmissionError):
+        with controller.deploy_operation('test', allow_bootstrap=False):
+            pytest.fail('a new mode must not adopt an unbound legacy operation')
+
+    with controller._locked_journal() as descriptor:
+        still_pending = controller._pending(descriptor)
+    assert still_pending is not None and still_pending['operation_id'] == legacy_operation_id
+
+    controller.reconcile(
+        lambda operation_id, kind, target: TerminalEvidence(
+            operation_id, kind, target, 'committed', 'remote-terminal'
+        )
+    )
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        assert operation.operation_id != legacy_operation_id
+        assert operation.allow_bootstrap is False
+
+
+def test_postgres_bootstrap_requires_qualification_before_remote_mutation(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+
+    def reject_qualification():
+        assert remote.events == []
+        raise PostgresDeployError()
+
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=reject_qualification, allow_bootstrap=True)
+
+    assert remote.events == []
+    assert not any(call[0] == 'put' for call in provider.calls)
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor) is None
+
+
 def test_vm_reader_recheck_is_project_scoped_and_precedes_compose(tmp_path):
     from app.ops.postgres_deploy import vm_selected_values
     _, _, plan, _ = _bws_host(tmp_path)
@@ -3094,6 +3216,15 @@ def test_postgres_bootstrap_retry_reuses_stored_secret_after_interruption(tmp_pa
     with pytest.raises(PostgresDeployError):
         deploy_from_host(admin, remote, plan, qualified=lambda: None)
     provider.put = original
+    prior_remote_events = list(remote.events)
+
+    def reject_recovery_without_qualification():
+        assert remote.events == prior_remote_events
+        raise PostgresDeployError()
+
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=reject_recovery_without_qualification)
+    assert remote.events == prior_remote_events
     assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
     assert sum(call[0] == 'put' for call in provider.calls) == 1
 
@@ -3178,17 +3309,20 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
     monkeypatch.setattr(host, 'SshDeployRemote', lambda _host: object())
     monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
 
-    def deploy(_admin, _remote, plan, *, qualified):
-        captured.append(plan)
-        qualified()
+    def deploy(_admin, _remote, plan, *, qualified, allow_bootstrap):
+        captured.append((plan, allow_bootstrap))
         return DeployReceipt(str(uuid4()), 'test', 'deploy', 'committed', 'committed')
 
     monkeypatch.setattr(host, 'deploy_from_host', deploy)
 
     assert host.main(['test', 'a' * 40]) == 0
-    assert captured[-1].ack_forward_only is False
+    assert captured[-1][0].ack_forward_only is False
+    assert captured[-1][1] is True
     assert host.main(['test', 'b' * 40, '--ack-forward-only']) == 0
-    assert captured[-1].ack_forward_only is True
+    assert captured[-1][0].ack_forward_only is True
+    assert captured[-1][1] is True
+    assert host.main(['test', 'c' * 40, '--existing-secrets-only']) == 0
+    assert captured[-1][1] is False
 
 
 def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_path, monkeypatch):
@@ -3787,6 +3921,140 @@ def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
     )
 
 
+def test_root_bws_deploy_accepts_runtime_owned_host_state_before_mutation(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    root, env, sha = _deploy_harness(test_root)
+    actual_root = os.geteuid() == 0
+    runtime_uid = 65534 if actual_root else os.getuid()
+    runtime_gid = 65534 if actual_root else os.getgid()
+    (root / "tmp/runtime.env").write_text(
+        f"LOCAL_UID={runtime_uid}\nLOCAL_GID={runtime_gid}\nTTS_ENABLED=false\n",
+        encoding="utf-8",
+    )
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(f"APP_IMAGE_TAG={sha}\n", encoding="utf-8")
+    ownership = Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+    ownership.mkdir(mode=0o700)
+    if actual_root:
+        os.chown(ownership, runtime_uid, runtime_gid)
+    ledger = ownership / "ownership-ledger.json"
+    ledger.write_text("existing-runtime-ledger\n", encoding="utf-8")
+    ledger.chmod(0o600)
+    if actual_root:
+        os.chown(ledger, runtime_uid, runtime_gid)
+
+    # The production helper reads its shell caller identity through `id`.
+    # Reporting the BWS root supervisor here exercises that branch while its
+    # embedded Python still runs as this fixture's runtime UID/GID.
+    fake_id = Path(env["PATH"].split(os.pathsep)[0]) / "id"
+    fake_id.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "${1:-}" in\n'
+        '  -u) printf "host-state-identity\\n" >> "${FAKE_DEPLOY_EVENT_LOG:?}"; printf "0\\n" ;;\n'
+        f'  -g) printf "{runtime_gid}\\n" ;;\n'
+        "  *) exit 2 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_id.chmod(0o755)
+    _install_bws_identity_guard_fixture(root)
+    env.update(
+        FAKE_SHA=sha,
+        FAKE_CAPTURE_RUNTIME_IDENTITY="1",
+        HOST_SECRET_PROVIDER="bws",
+        BWS_DATABASE_TARGET="local",
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="0",
+        BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        LOCAL_UID=str(runtime_uid),
+        LOCAL_GID=str(runtime_gid),
+    )
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    assert "host-state-identity" in events
+    assert "bws-guard" in events
+    assert any("instance-state-init" in event for event in events)
+    assert pin_path.is_file()
+    assert ledger.read_text(encoding="utf-8") == "existing-runtime-ledger\n"
+    ledger_metadata = ledger.stat()
+    assert ledger_metadata.st_uid == runtime_uid
+    assert ledger_metadata.st_gid == runtime_gid
+    assert ledger_metadata.st_mode & 0o777 == 0o600
+    ownership_metadata = ownership.stat()
+    assert ownership_metadata.st_uid == runtime_uid
+    assert ownership_metadata.st_gid == runtime_gid
+    assert ownership_metadata.st_mode & 0o777 == 0o700
+
+    # A later rollback reader must accept a private receipt owned by the
+    # configured runtime even though the deployment shell represents root.
+    floor_receipt = ownership / "settings-rebind-runtime-floor-dev.json"
+    floor_receipt.write_text(
+        '{"channel":"dev","minimum_settings_rebind_runtime":"1",'
+        '"phase":"pending","schema":"agentic-pkm.settings-rebind-runtime-floor.v1"}\n',
+        encoding="utf-8",
+    )
+    floor_receipt.chmod(0o600)
+    if actual_root:
+        os.chown(floor_receipt, runtime_uid, runtime_gid)
+    original_pin = pin_path.read_text(encoding="utf-8")
+    Path(env["FAKE_DEPLOY_EVENT_LOG"]).write_text("", encoding="utf-8")
+
+    rollback = _run_rollback(root, env, sha)
+
+    assert rollback.returncode == 78
+    assert "settings rebind floor installation is pending" in rollback.stderr
+    assert pin_path.read_text(encoding="utf-8") == original_pin
+    assert not any(event.startswith("docker ") for event in _deploy_events(env))
+    receipt_metadata = floor_receipt.stat()
+    assert receipt_metadata.st_uid == runtime_uid
+    assert receipt_metadata.st_gid == runtime_gid
+    assert receipt_metadata.st_mode & 0o777 == 0o600
+    if actual_root:
+        runtime_read = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())",
+                str(floor_receipt),
+            ],
+            user=runtime_uid,
+            group=runtime_gid,
+            extra_groups=[],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert runtime_read.returncode == 0, runtime_read.stderr
+        assert '"phase":"pending"' in runtime_read.stdout
+
+        # Preserve rollback from a durable receipt written by the old root
+        # supervisor; new receipts above are still runtime-owned.
+        floor_receipt.unlink()
+        floor_receipt.write_text(
+            '{"channel":"dev","minimum_settings_rebind_runtime":"1",'
+            '"phase":"pending","schema":"agentic-pkm.settings-rebind-runtime-floor.v1"}\n',
+            encoding="utf-8",
+        )
+        floor_receipt.chmod(0o600)
+        assert floor_receipt.stat().st_uid == 0
+        assert floor_receipt.stat().st_gid == 0
+        Path(env["FAKE_DEPLOY_EVENT_LOG"]).write_text("", encoding="utf-8")
+
+        legacy_receipt_rollback = _run_rollback(root, env, sha)
+
+        assert legacy_receipt_rollback.returncode == 78
+        assert "settings rebind floor installation is pending" in legacy_receipt_rollback.stderr
+        assert pin_path.read_text(encoding="utf-8") == original_pin
+        assert not any(
+            event.startswith("docker ") for event in _deploy_events(env)
+        )
+
+
 @pytest.mark.parametrize(
     ("runtime_env", "provider", "expected_returncode"),
     [
@@ -3797,6 +4065,8 @@ def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
         ("LOCAL_UID=0\nLOCAL_GID=1001\n", "bws", 78),
         ("LOCAL_UID=1000\nLOCAL_GID=0\n", "bws", 78),
         ("LOCAL_UID=0000\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=4294967295\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=1000\nLOCAL_GID=4294967296\n", "bws", 78),
         ("TTS_ENABLED=false\n", "keychain", 0),
     ],
 )

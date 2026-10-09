@@ -162,12 +162,17 @@ Conditional / maintenance path:
 
 Before editing and again before PR handoff, decide whether the work produced BuilderOps material.
 This is a required workflow checkpoint, not an optional memory aid. Route each record type per
-`.codex/skills/README.md :: BuilderOps Vault routing` (the canonical record-to-trigger map), and name
-a `LearningSignal` through `capture-learning` for any plan divergence.
+`.codex/skills/README.md :: BuilderOps Vault routing` (the canonical record-to-trigger map). Routine
+delivery already represented by its Issue, PR, or reviewed repo artifact is `BuilderOps routing: none`.
+Name a `LearningSignal` through `capture-learning` only for a material, actionable-now divergence or
+an authority crossing not represented by those artifacts; minor or repetitive observations go to the
+weekly cold-path retrospective.
 
 If no BuilderOps record is needed, record `BuilderOps routing: none` with the reason in the PR
-handoff. Never append to `docs/learning-log.md` except as an explicit compatibility fallback when a
-BuilderOps write is unavailable.
+handoff. If optional record infrastructure is unavailable, preserve substantial material in the
+existing durable authority and report the limitation once; use `docs/learning-log.md` only through
+the explicit compatibility fallback. Never fake a write or weaken protected executor/in-flight
+receipt requirements.
 
 Bind execution to the current, reconciled Issue contract. Apply
 `.codex/skills/_shared/ISSUE_CONTRACT.md :: Outcome and implementation discretion` to distinguish required outcomes
@@ -605,13 +610,17 @@ Before handing off to `publish-pr`, confirm:
 - acceptance criteria are satisfied
 - docs were updated in the same change when needed
 - owner docs and roadmap/plan wording were updated when the work became shipped reality
-- BuilderOps routing is represented by records/projections/receipts or by a short `none` reason
+- BuilderOps routing is represented by records/projections/receipts or by a short `none` reason;
+  routine Issue/PR/reviewed-artifact evidence is a valid reason
 - the next step is the short PR hot path unless an escalation trigger exists
 
 
 ## Capturing learning
 
-On a plan divergence (you did something unexpected, or discovered an earlier artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the "name an upstream artifact or don't log" gate.
+On a material, actionable-now plan divergence (you did something unexpected, or discovered an earlier
+artifact was wrong), route it through `capture-learning` — it owns the invocation timing and the
+"name an upstream artifact or don't log" gate. Minor or repetitive observations wait for the weekly
+cold-path retrospective.
 
 ## Output format
 

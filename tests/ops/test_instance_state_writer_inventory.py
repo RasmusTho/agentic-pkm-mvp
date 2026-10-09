@@ -33,6 +33,7 @@ import pytest
 
 import scripts.instance_state_writer_inventory as writer_inventory
 from scripts.instance_state_writer_inventory import InventoryError
+from tests.helpers.runtime_identity import runtime_reachable_test_root
 
 CONTAINER_ID = "a" * 64
 
@@ -618,6 +619,120 @@ def test_direct_cli_established_ledger_works_for_produce_and_validate(tmp_path):
     assert json.loads(validated.read_text(encoding="utf-8"))["owners"] == json.loads(
         inventory.read_text(encoding="utf-8")
     )["owners"]
+
+
+def test_root_inventory_uses_runtime_identity_for_established_ledger(
+    tmp_path, monkeypatch, request: pytest.FixtureRequest
+):
+    """Exercise dispatch and, when root, the actual supervisor-to-runtime drop."""
+
+    from app.instance.ownership_ledger import LegacyOwner, OwnershipLedger
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    actual_root = os.geteuid() == 0
+    runtime_uid = 65534 if actual_root else os.getuid()
+    runtime_gid = 65534 if actual_root else os.getgid()
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    vault = test_root / "vault"
+    vault.mkdir()
+    ownership = test_root / "ownership"
+    ownership.mkdir(mode=0o700)
+    identity = writer_inventory._owner_identity_material(
+        vault, domain="dev", source="docker_env"
+    )
+    ledger = OwnershipLedger(ownership)
+    ledger.bootstrap_legacy_owners(
+        [LegacyOwner("dev", "binding-runtime-owner", vault, *identity)],
+        inventory_complete=True,
+        writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    with pytest.raises(RuntimeError, match="key_commit"):
+        ledger.rotate_key(
+            precondition=lambda *_args: None,
+            crash_after="key_commit",
+            _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    assert ledger.rotation_path.is_file()
+
+    if actual_root:
+        for path in ownership.iterdir():
+            os.chown(path, runtime_uid, runtime_gid)
+        os.chown(ownership, runtime_uid, runtime_gid)
+
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_HOST_STATE_DIR", str(ownership))
+    monkeypatch.setenv("LOCAL_UID", str(runtime_uid))
+    monkeypatch.setenv("LOCAL_GID", str(runtime_gid))
+    if not actual_root:
+        # Exercise the root dispatch branch while this process keeps its real
+        # UID; the privileged keyword arguments are captured below.
+        monkeypatch.setattr(writer_inventory, "_effective_uid", lambda: 0)
+        monkeypatch.setattr(writer_inventory, "_effective_gid", lambda: 0)
+    real_run = subprocess.run
+    handoff = {}
+
+    def run_as_runtime(command, *args, **kwargs):
+        if command and str(command[-1]) == "_ownership-ledger-runtime":
+            handoff.update(kwargs)
+            if not actual_root:
+                # Unprivileged runners cannot call setgroups, even with an
+                # empty list. The separate root run below preserves the real
+                # identity transition and all kwargs.
+                kwargs.pop("user")
+                kwargs.pop("group")
+                kwargs.pop("extra_groups")
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(writer_inventory.subprocess, "run", run_as_runtime)
+    response = writer_inventory._run_ownership_ledger_as_runtime(
+        {
+            "operation": "enrich",
+            "ownership_root": str(ownership),
+            "owners": [{"channel_id": "dev", "root": str(vault.resolve())}],
+            "owner_identities": [
+                {
+                    "channel_id": "dev",
+                    "root": str(vault.resolve()),
+                    "identity": identity[0],
+                    "ancestor_identities": sorted(identity[1]),
+                    "legacy_ancestor_identities": list(identity[2]),
+                }
+            ],
+        }
+    )
+
+    assert handoff["user"] == runtime_uid
+    assert handoff["group"] == runtime_gid
+    assert handoff["extra_groups"] == []
+    assert response["owners"] == [
+        {
+            "channel_id": "dev",
+            "root": str(vault.resolve()),
+            "vault_binding_id": "binding-runtime-owner",
+        }
+    ]
+    assert not ledger.rotation_path.exists()
+    for path in (ledger.path, ledger.key_path, ledger.lock_path):
+        metadata = path.stat()
+        assert metadata.st_uid == runtime_uid
+        assert metadata.st_gid == runtime_gid
+        assert metadata.st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize(
+    ("runtime_uid", "runtime_gid"),
+    (("4294967295", "1001"), ("1000", "4294967296")),
+)
+def test_inventory_rejects_out_of_range_runtime_identity(
+    monkeypatch, runtime_uid: str, runtime_gid: str
+) -> None:
+    monkeypatch.setenv("LOCAL_UID", runtime_uid)
+    monkeypatch.setenv("LOCAL_GID", runtime_gid)
+    monkeypatch.setattr(writer_inventory, "_effective_uid", lambda: 0)
+    monkeypatch.setattr(writer_inventory, "_effective_gid", lambda: 0)
+
+    with pytest.raises(InventoryError, match="runtime identity is out of range"):
+        writer_inventory._ownership_state_runtime_identity()
 
 
 # --- Issue #4434: macOS ps row parsing --------------------------------------

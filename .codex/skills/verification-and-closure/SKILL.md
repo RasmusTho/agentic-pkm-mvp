@@ -34,7 +34,11 @@ Read the live PR identity, base, head, title/body, complete changed-file list, c
 review feedback once. Read the governing contract and exact closing Issues; use an existing scoped
 context when still current. A governing parent not in the closing set stays open. Issue-free work
 uses the PR's lane or Direct Repair contract. Do not create an Issue after the fact solely for a
-bounded direct repair. Compare source anchors and scope; stop on ambiguous authority.
+bounded direct repair. Routine BuilderOps evidence may remain in the Issue, PR, or reviewed repo
+artifact; optional record infrastructure is not a verification prerequisite. If it is unavailable,
+report the limitation once and preserve substantial findings in that existing authority. Compare
+source anchors and scope; stop on ambiguous authority or an unresolved substantial finding with no
+durable home.
 
 Apply `_shared/BLOCKER_ACTION_CONTRACT.md` only when blocker/action labels need reconciliation.
 Apply `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` before publication effects.
@@ -48,6 +52,10 @@ Apply `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` before publicati
   implementation validation again. Required current-head CI cannot be replaced by local evidence.
 - Confirm scope, Builder/Product ownership, owner-doc writeback and acceptance claims. Do this once
   and retain the inspected paths and conclusion in the PR's existing Validation section.
+- Confirm unresolved material learning, promotion, freshness, or adoption findings have a BuilderOps
+  record, bounded Issue, PromotionIntent, or explicit `none` reason. Reuse ordinary Issue/PR/reviewed
+  artifact evidence; do not create duplicate records merely to satisfy closeout. Protected executor
+  and in-flight receipts, current-head CI, exact review, merge, and closure gates remain mandatory.
 - If acceptance requires a post-merge producer, keep its parent or explicit acceptance Issue open;
   do not pretend a pre-merge test proves the later outcome.
 - For pre-API startup failures, read `.codex/skills/verification-and-closure/FULL_PATH.md :: Pre-API startup failure classification`.
@@ -78,6 +86,10 @@ and re-read those same threads before terminal closure. Do not scan unrelated hi
 1. Confirm the exact closing set and all its ACs, current head, relevant required/repo-standard CI,
    review disposition, and owner-doc conclusion. Approved multi-Issue work must satisfy
    `docs/development/PR_HOT_PATH.md :: Multi-Issue PR Scope`; Issue count alone adds no review round.
+   For current-head CI eligibility, follow `.codex/skills/_shared/CI_WAIT_CONTRACT.md :: Blessed path`: run
+   `scripts/await_pr_checks.sh <PR>` in merge-gating mode (omit `--sha`), require exit status `0`,
+   and preserve that helper exit status as the gate. A direct aggregate CLI display cannot replace
+   substantive same-head execution evidence; the shared contract owns the selector and wait rules.
 2. Immediately before merge, refresh head/base/title/body, repository default branch and GitHub closing references. Compare
    with the inspected authority and exact closing set; reject unexpected refs, scope, or head drift.
    Inspect commit messages for unintended closing keywords. On drift, stop the effect and resolve

@@ -24,6 +24,8 @@ from app.components.embeddings import EmbeddingIdentity
 from app.retrieval import hybrid
 from app.stores import get_vector_index, reset_store_backends
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_ROOT = REPO_ROOT / "app"
 
