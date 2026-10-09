@@ -3259,6 +3259,37 @@ def test_non_root_bws_caller_uses_own_home_without_runtime_passwd_lookup(tmp_pat
     )
 
 
+def test_root_bws_supervisor_fails_closed_when_runtime_uid_has_no_passwd_entry(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    password = tmp_path / 'password'
+    password.write_text('fixture-password')
+    monkeypatch.setattr(os, 'environ', {'HOME': '/root'})
+    monkeypatch.setattr(os, 'geteuid', lambda: 0)
+
+    def missing_runtime_user(uid):
+        raise KeyError(uid)
+
+    monkeypatch.setattr(linux.pwd, 'getpwuid', missing_runtime_user)
+
+    cfg = SimpleNamespace(
+        root=root,
+        channel='dev',
+        uid=1000,
+        gid=1000,
+        password_file=password,
+        runtime_env_file=runtime,
+    )
+
+    with pytest.raises(linux.PostgresDeployError):
+        linux.LinuxEffects(cfg).environment()
+
+
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
 def test_rendered_compose_uses_postgres_secret_file_without_value(tmp_path, channel):
     rendered = _render_bws_compose(tmp_path, channel)
