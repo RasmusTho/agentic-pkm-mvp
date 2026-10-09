@@ -3439,6 +3439,216 @@ def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
     assert journal.read().terminal_result is None
 
 
+def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    _, journal, plan, operation_id = _bws_worker(tmp_path, _BwsVmEffects())
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    root = tmp_path / 'checkout'
+    deploy_dir = root / 'config/deploy'
+    deploy_dir.mkdir(parents=True)
+    lock_dir = deploy_dir / 'test.env.lock'
+    lock_dir.mkdir(mode=0o700)
+    (lock_dir / 'bws-owner').touch(mode=0o600)
+    pin = deploy_dir / 'test.pin'
+    pending_marker = deploy_dir / 'test.migration-pending'
+    data = tmp_path / 'data/state'
+    for path, content in ((pin, b'prior-pin\n'), (pending_marker, b'forward-only\n'), (data, b'preserve\n')):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda _self: True)
+    supervisor = linux.DeploymentSupervisor(config)
+
+    request = {
+        'action': 'reconcile-failed', 'operation_id': operation_id,
+        'plan': asdict(plan), 'bootstrap': False,
+    }
+    original_retire = linux.LinuxEffects.retire_reconciled_channel_lock
+
+    def interrupt_cleanup(_handle):
+        raise PostgresDeployError()
+
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(interrupt_cleanup)
+    )
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(request)
+    assert journal.read().terminal_result == 'failed'
+    assert lock_dir.is_dir()
+
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(original_retire)
+    )
+    result = supervisor.request(request)
+
+    assert result['receipt']['stage'] == 'failed'
+    assert result['receipt']['terminal_result'] == 'failed'
+    assert journal.read().evidence().result == 'failed'
+    assert not lock_dir.exists()
+    assert pin.read_bytes() == b'prior-pin\n'
+    assert pending_marker.read_bytes() == b'forward-only\n'
+    assert data.read_bytes() == b'preserve\n'
+    assert supervisor.request(request) == result
+
+
+@pytest.mark.parametrize('blocker', [
+    'live-worker', 'held-lock', 'non-quiescent', 'changed-request', 'different-operation', 'malformed-journal',
+])
+def test_failed_bws_activation_reconciliation_preserves_ambiguous_state(tmp_path, monkeypatch, blocker):
+    from dataclasses import asdict, replace
+    import fcntl
+    import os
+    import threading
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    _, journal, plan, operation_id = _bws_worker(tmp_path, _BwsVmEffects())
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    root = tmp_path / 'checkout'
+    deploy_dir = root / 'config/deploy'
+    deploy_dir.mkdir(parents=True)
+    lock_dir = deploy_dir / 'test.env.lock'
+    lock_dir.mkdir(mode=0o700)
+    marker = lock_dir / 'bws-owner'
+    marker.touch(mode=0o600)
+    pin = deploy_dir / 'test.pin'
+    migration_marker = deploy_dir / 'test.migration-pending'
+    data = tmp_path / 'data/state'
+    for path, content in ((pin, b'prior-pin\n'), (migration_marker, b'pending\n'), (data, b'preserve\n')):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    before = {
+        'journal': (journal.directory / 'test.json').read_bytes(),
+        'request': (journal.directory / 'test.request.json').read_bytes(),
+        'marker': marker.read_bytes(), 'pin': pin.read_bytes(),
+        'migration': migration_marker.read_bytes(), 'data': data.read_bytes(),
+    }
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda _self: blocker != 'non-quiescent')
+    supervisor = linux.DeploymentSupervisor(config)
+    if blocker == 'live-worker':
+        supervisor.operation = SimpleNamespace(
+            operation_id=operation_id, plan=plan, bootstrap=False, failed=True,
+            finished=threading.Event(), thread=SimpleNamespace(is_alive=lambda: True),
+        )
+        supervisor.operation.finished.set()
+    if blocker == 'malformed-journal':
+        (journal.directory / 'test.json').write_text('{"invalid":true}\n')
+        before['journal'] = (journal.directory / 'test.json').read_bytes()
+    request_plan = replace(plan, revision='b' * 40) if blocker == 'changed-request' else plan
+    request = {
+        'action': 'reconcile-failed',
+        'operation_id': str(uuid4()) if blocker == 'different-operation' else operation_id,
+        'plan': asdict(request_plan), 'bootstrap': False,
+    }
+    held_fd = None
+    if blocker == 'held-lock':
+        held_fd = os.open(marker, os.O_RDWR)
+        fcntl.flock(held_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(request)
+    finally:
+        if held_fd is not None:
+            os.close(held_fd)
+
+    assert (journal.directory / 'test.json').read_bytes() == before['journal']
+    assert (journal.directory / 'test.request.json').read_bytes() == before['request']
+    assert marker.read_bytes() == before['marker']
+    assert pin.read_bytes() == before['pin']
+    assert migration_marker.read_bytes() == before['migration']
+    assert data.read_bytes() == before['data']
+    assert lock_dir.is_dir()
+
+
+def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_path):
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import DeployReceipt
+
+    controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        operation_id = operation.operation_id
+        operation.prepare_mutation()
+    captured = []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def reconcile_failed(self, selected_id, plan):
+            assert selected_id == operation_id
+            assert plan.revision == 'a' * 40
+            captured.append(selected_id)
+            return DeployReceipt(selected_id, 'test', 'deploy', 'failed', 'failed')
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, 'configured_admin', lambda: pytest.fail('reconciliation must not read BWS credentials'))
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: pytest.fail('reconciliation must not create an admin'))
+
+    assert host.main(['dev', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 78
+    assert captured == []
+    with controller._locked_journal() as descriptor:
+        still_pending = controller._pending(descriptor)
+    assert still_pending is not None and still_pending['operation_id'] == operation_id
+
+    assert host.main(['test', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 0
+    assert captured == [operation_id]
+    with controller._locked_journal() as descriptor:
+        assert controller._pending(descriptor) is None
+
+
+def test_ssh_reconcile_failed_sends_exact_same_id_and_existing_secrets_mode(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployPlan
+
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), True)
+    response = {
+        'receipt': {
+            'operation_id': operation_id, 'channel': 'test', 'kind': 'deploy',
+            'stage': 'failed', 'terminal_result': 'failed',
+        }
+    }
+    calls = []
+
+    def ssh(argv, **kwargs):
+        calls.append((argv, json.loads(kwargs['input'])))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(response))
+
+    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    receipt = linux.SshDeployRemote('ygg-test').reconcile_failed(operation_id, plan)
+
+    assert receipt.operation_id == operation_id
+    assert receipt.terminal_result == 'failed'
+    assert calls[0][1] == {
+        'action': 'reconcile-failed', 'operation_id': operation_id,
+        'plan': {
+            'channel': 'test', 'revision': 'a' * 40,
+            'services': ['db'], 'consumers': ['postgres-db'],
+            'ack_forward_only': True,
+        },
+        'bootstrap': False,
+    }
+
+
 def test_vm_channel_lock_is_retained_until_matching_terminal_receipt(tmp_path):
     from types import SimpleNamespace
     from app.ops.postgres_deploy_linux import LinuxEffects
