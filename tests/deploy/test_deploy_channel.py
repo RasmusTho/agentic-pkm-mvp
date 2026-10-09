@@ -2286,10 +2286,13 @@ def test_target_commit_migration_is_classified_when_target_is_not_checked_out(
 
     result = _run_deploy(root, env, target_sha)
 
-    assert result.returncode == 42
-    assert "forward-only migrations require" in result.stderr
-    assert "migration gate blocked before recreate" in result.stderr
-    assert not (tmp_path / "docker-called").exists()
+    # DEV accepts a classified forward-only migration without PROD's
+    # acknowledgement. The fixture's version probe reports the old pin, so
+    # reaching that later gate proves classification read the target commit
+    # even though it is not checked out.
+    assert result.returncode == 1
+    assert "migration gate ok: 1 migration(s), forward_only=1" in result.stdout
+    assert "version gate failed" in result.stderr
 
 
 def test_migration_materialization_failure_blocks_before_pin_or_compose(
