@@ -174,3 +174,27 @@ repository authority: a bounded issue where implementation is needed, the releva
 and Builder/release owners for crossed boundaries, and current-state documentation writeback after
 the behavior is proven. This specification neither authorizes a new runtime subsystem nor changes
 product behavior by itself.
+
+### Proposed single-operator recovery boundary (Issue #5855; pending owner decision)
+
+For the existing Linux secret and channel-recovery surfaces, the proposed normal operating model is
+one designated agent-host controller coordinating the checked-in CLI/API producers and supervised VM
+worker. The controller's lock is cooperative host-local serialization, not global fencing. Retained
+human organization administration remains valid, but it is a separate break-glass/maintenance path;
+an out-of-band write invalidates the qualification observation until selected-target parity and the
+matching operation-ID terminal receipt are re-established.
+
+Platform and Operations owns host, VM, systemd, Compose, channel, file-ownership, and recovery
+mechanics. Builder System owns the repository delivery and evidence workflow. Product/Runtime owners
+retain product data, database-role, vault/context, migration intent, provider-key, and product
+side-effect authority. A platform wrapper may execute only already-authorized inputs and may report
+execution evidence; it cannot approve a credential scope, choose a target, rotate a secret, grant
+access, or treat a local lock as a global writer fence.
+
+The proposed model remains preparation-only until #5667 records one concrete owner choice: approve
+the designated normal writer with retained human administration and credential-restriction evidence,
+or require shared/distributed fencing before BWS administration, first-init bootstrap, and parity
+qualification. `--existing-secrets-only` remains a read/validate path where its own preconditions
+pass. No preparation receipt in this document claims live access, token installation, deployment,
+first healthy release, rollback, host cleanup, or channel qualification; those effects require their
+existing deployment, security, release, and operator gates.
