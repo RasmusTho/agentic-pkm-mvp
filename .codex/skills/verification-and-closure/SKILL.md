@@ -22,6 +22,7 @@ Choose once, before collecting evidence:
   explicitly requires that protocol, or this is a release/promotion operation. Read
   `.codex/skills/verification-and-closure/FULL_PATH.md :: Merge Rules` and the conditional sections relevant to that execution. Never
   switch an in-flight attempt to native delivery to escape a refusal.
+  Recoverable post-effect consumers require the deployed capability and v2 authority in that contract.
 
 `scripts/closure.py plan/apply` still supports only its existing single-Issue Tier 1/2,
 `Final-Review-Rounds: 0` subset. Its refusal is not permission to bypass it; choose the applicable

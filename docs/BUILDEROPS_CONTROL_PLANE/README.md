@@ -788,6 +788,21 @@ not by rewriting that merge. The BCP-05 filename and historical Demerzel label r
 the current candidate runtime placement is the Bob-1/VM-ID-102 `builder-system` target, and no Demerzel
 residency or activation is implied by the document name or the repository baseline.
 
+## Post-effect merge readback
+
+The #4897 API repair uses the existing nullable outbox columns and authenticated principal/fence
+boundary. Outbox GET returns persisted post-effect phase, original pending anchors, reconciled
+sequence/LSN, outcome and closed exact merge evidence. A recovery claim for `github.merge` retains
+the original pending identity. Ordinary negative reads remain retryable; they cannot finalize a
+merge effect. Exact governed positive readback may reconcile once, and replay rejects changed
+evidence. Other effect types retain their existing compatible recovery contract.
+
+Consumers require `post_effect_merge_readback.v1` plus a fresh exact independent deployment/pin
+readback. The API's source/image diagnostics are checked against the attested deployment receipt,
+selected image pair, schema and authority epoch. Missing or drifting evidence refuses activation.
+This repository mechanism does not establish a deployed host or authorize credential provisioning;
+[the independent deployment contract](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md) owns rollout.
+
 ## Cross-task invariants / partial-failure safety
 
 1. **One authority epoch.** At most one production PostgreSQL authority epoch accepts mutations.

@@ -677,8 +677,25 @@ def _authority_comment(authority: Mapping[str, object]) -> dict[str, object]:
     )
 
 
+def _phase_cli_gate(tmp_path, monkeypatch):
+    from app.builderops.control_plane import client as client_module
+    from tests.dispatcher.test_verification_merge import deployed_post_effect, deployed_status
+    class Client:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return None
+        def status(self):
+            return deployed_status()
+    monkeypatch.setattr(client_module.ClientConfig, "from_env", lambda: None)
+    monkeypatch.setattr(client_module, "BuilderOpsControlPlaneClient", lambda _config: Client())
+    path = tmp_path / "deployed-post-effect.json"
+    path.write_text(json.dumps(deployed_post_effect()), encoding="utf-8")
+    return ["--post-effect-deployment-json", str(path)]
+
+
 def _phase_cli_inputs(
-    tmp_path: Path, *, later_observation: bool = False,
+    tmp_path: Path, monkeypatch, *, later_observation: bool = False,
 ) -> tuple[list[str], Path, dict[str, object], dict[str, object], dict[str, object]]:
     authority, neutralized_body, _, convergence = _projection_fixture()
     pr = _canonical_pr(neutralized_body)
@@ -695,7 +712,7 @@ def _phase_cli_inputs(
         "final-projection-observation-json": final_observation,
         "pr-json": pr,
     }
-    argv = ["--phase", "prepared"]
+    argv = ["--phase", "prepared", *_phase_cli_gate(tmp_path, monkeypatch)]
     for option, payload in inputs.items():
         path = tmp_path / f"{option}.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
@@ -705,9 +722,9 @@ def _phase_cli_inputs(
     return argv, output_path, authority, pr, convergence
 
 
-def test_phase_cli_rejects_nonembedded_final_observation(tmp_path: Path) -> None:
+def test_phase_cli_rejects_nonembedded_final_observation(tmp_path: Path, monkeypatch) -> None:
     argv, output_path, _, _, _ = _phase_cli_inputs(
-        tmp_path, later_observation=True,
+        tmp_path, monkeypatch, later_observation=True,
     )
 
     with pytest.raises(ValueError, match="projection convergence"):
@@ -717,8 +734,8 @@ def test_phase_cli_rejects_nonembedded_final_observation(tmp_path: Path) -> None
     assert not output_path.parent.exists()
 
 
-def test_phase_cli_canonical_final_observation_roundtrips(tmp_path: Path) -> None:
-    argv, output_path, authority, pr, convergence = _phase_cli_inputs(tmp_path)
+def test_phase_cli_canonical_final_observation_roundtrips(tmp_path: Path, monkeypatch) -> None:
+    argv, output_path, authority, pr, convergence = _phase_cli_inputs(tmp_path, monkeypatch)
 
     assert build_phase.main(argv) == 0
     prepared = json.loads(output_path.read_text(encoding="utf-8"))
@@ -859,6 +876,7 @@ def test_new_head_convergence_replay_and_phase_readback_preserve_history(
         paths[name].write_text(json.dumps(value), encoding="utf-8")
     phase_path = tmp_path / "phase.json"
     assert build_phase.main([
+        *_phase_cli_gate(tmp_path, monkeypatch),
         "--authority-json", str(paths["authority"]), "--comments-json", str(paths["comments"]),
         "--projection-convergence-json", str(paths["convergence"]),
         "--final-projection-observation-json", str(paths["final"]),

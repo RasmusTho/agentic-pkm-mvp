@@ -771,10 +771,17 @@ def _new_verification_ledger(
 ) -> Any:
     from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 
+    deployment_path = os.environ.get("BUILDEROPS_POST_EFFECT_DEPLOYMENT_READBACK_FILE")
+    deployment = None
+    if deployment_path:
+        deployment = json.loads(Path(deployment_path).read_text(encoding="utf-8"))
+        if not isinstance(deployment, dict):
+            raise ValueError("post-effect deployment readback must be an object")
     return BuilderOpsVerificationLedger(
         client,
         repository=repository,
         effect_outbox=effect_outbox,
+        post_effect_deployment=deployment,
     )
 
 

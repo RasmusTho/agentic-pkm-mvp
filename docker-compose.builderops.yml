@@ -61,6 +61,8 @@ services:
     command: ["uvicorn", "app.builderops.control_plane.service:production_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       BUILDEROPS_DATABASE_URL_FILE: /run/secrets/builderops_database_url
+      BUILDEROPS_SOURCE_SHA: ${BUILDEROPS_SOURCE_SHA:?BuilderOps source pin is required}
+      BUILDEROPS_IMAGE_DIGEST: ${BUILDEROPS_IMAGE_DIGEST:?BuilderOps image pin is required}
       BUILDEROPS_CREDENTIAL_MANIFEST_FILE: /run/secrets/builderops_api_credentials
       BUILDEROPS_LOCAL_DURABILITY_MODE: ${BUILDEROPS_LOCAL_DURABILITY_MODE:?Local BuilderOps durability mode is required}
       BUILDEROPS_PROBE_TOKEN_FILE: /run/secrets/builderops_probe_token

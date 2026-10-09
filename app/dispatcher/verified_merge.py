@@ -14,7 +14,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final, cast
+from typing import Any, Final, cast
 
 from app.dispatcher.verification_contract import (
     IssueAuthority,
@@ -32,6 +32,7 @@ from app.dispatcher.verification_contract import (
 VERIFIED_MERGE_AUTHORITY_CONTRACT = "verified_issue_set_merge_authority.v1"
 VERIFIED_MERGE_AUTHORITY_MARKER = "verified issue-set merge authority:"
 VERIFIED_MERGE_PHASE_CONTRACT = "verified_issue_set_merge_phase.v1"
+VERIFIED_MERGE_PHASE_V2_CONTRACT = "verified_issue_set_merge_phase.v2"
 VERIFIED_MERGE_PHASE_MARKER = "verified issue-set merge phase:"
 VERIFIED_MERGE_READINESS_CONTRACT = "verified_issue_set_merge_readiness.v1"
 ISSUE_FREE_REVIEWED_LANE_RECEIPT_CONTRACT = "issue_free_reviewed_lane_receipt.v1"
@@ -123,6 +124,7 @@ _PHASE_RECEIPT_FIELDS: Final = frozenset(
         "run_id",
     }
 )
+_PHASE_V2_RECEIPT_FIELDS: Final = _PHASE_RECEIPT_FIELDS | {"post_effect_authority"}
 _LEGACY_PHASE_RECEIPT_FIELDS: Final = _PHASE_RECEIPT_FIELDS - {
     "final_projection_observation_sha256",
     "projection_convergence_sha256",
@@ -1872,6 +1874,50 @@ def _projection_convergence_matches_authority(
     return True
 
 
+_POST_EFFECT_FIELDS = frozenset({
+    "repository", "operation_key", "task_id", "run_id", "pr_number", "head_sha", "merge_commit_sha",
+    "fencing_token", "intent_lsn", "claim_lsn", "pending_receipt_sequence", "reconciled_receipt_sequence",
+    "deployment", "phase",
+})
+_DEPLOYMENT_FIELDS = frozenset({
+    "source_sha", "image_digest", "postgres_image_digest", "schema_version", "authority_epoch",
+    "candidate_receipt_sha", "capability",
+})
+
+
+def valid_post_effect_authority(value: object, authority: Mapping[str, object], merge_sha: object) -> bool:
+    """Validate the exact deployed, row-derived reconciled projection."""
+    if not isinstance(value, Mapping) or set(value) != _POST_EFFECT_FIELDS:
+        return False
+    value = cast(Mapping[str, Any], value)
+    deployment = value.get("deployment")
+    if not isinstance(deployment, Mapping) or set(deployment) != _DEPLOYMENT_FIELDS:
+        return False
+    return bool(
+        value.get("phase") == "reconciled"
+        and value.get("repository") == str(authority.get("repository")).lower()
+        and value.get("task_id") == value.get("run_id") == authority.get("run_id")
+        and value.get("pr_number") == authority.get("pr_number")
+        and value.get("head_sha") == authority.get("head_sha")
+        and value.get("merge_commit_sha") == merge_sha
+        and isinstance(merge_sha, str) and _SHA_PATTERN.fullmatch(merge_sha)
+        and isinstance(value.get("operation_key"), str) and _DIGEST_PATTERN.fullmatch(value["operation_key"])
+        and all(type(value.get(key)) is int and 0 < value[key] <= 9007199254740991 for key in
+                ("fencing_token", "pending_receipt_sequence", "reconciled_receipt_sequence"))
+        and value["reconciled_receipt_sequence"] > value["pending_receipt_sequence"]
+        and all(isinstance(value.get(key), str) and re.fullmatch(r"[0-9A-F]+/[0-9A-F]+", value[key])
+                for key in ("intent_lsn", "claim_lsn"))
+        and deployment.get("capability") == "post_effect_merge_readback.v1"
+        and isinstance(deployment.get("source_sha"), str) and _SHA_PATTERN.fullmatch(deployment["source_sha"])
+        and isinstance(deployment.get("candidate_receipt_sha"), str)
+        and _DIGEST_PATTERN.fullmatch(deployment["candidate_receipt_sha"])
+        and all(isinstance(deployment.get(key), str) and re.fullmatch(r"sha256:[0-9a-f]{64}", deployment[key])
+                for key in ("image_digest", "postgres_image_digest"))
+        and all(type(deployment.get(key)) is int and 0 < deployment[key] <= 9007199254740991
+                for key in ("schema_version", "authority_epoch"))
+    )
+
+
 def _projection_phase_matches_authority(
     phase: Mapping[str, object],
     *,
@@ -1880,7 +1926,12 @@ def _projection_phase_matches_authority(
 ) -> bool:
     """Authenticate a retained phase before a consumer selects its live chain."""
     name = phase.get("phase")
-    if name not in _PHASES or set(phase) != _PHASE_RECEIPT_FIELDS:
+    v2 = phase.get("contract") == VERIFIED_MERGE_PHASE_V2_CONTRACT
+    if name not in _PHASES or set(phase) != (_PHASE_V2_RECEIPT_FIELDS if v2 else _PHASE_RECEIPT_FIELDS):
+        return False
+    if v2 and ((name in {"reconciled", "restored"} and not valid_post_effect_authority(
+            phase.get("post_effect_authority"), authority_receipt, phase.get("merge_commit_sha")))
+            or (name not in {"reconciled", "restored"} and phase.get("post_effect_authority") is not None)):
         return False
     reconciled = name in {"reconciled", "restored"}
     try:
@@ -1913,6 +1964,8 @@ def _projection_phase_matches_authority(
         "reopened_unauthorized_issues": list(reopened),
         "repository": authority_receipt["repository"], "run_id": authority_receipt["run_id"],
     }
+    if v2:
+        expected.update(contract=VERIFIED_MERGE_PHASE_V2_CONTRACT, post_effect_authority=phase["post_effect_authority"])
     return phase == expected
 
 
@@ -2055,6 +2108,10 @@ def _authenticated_projection_convergence_receipts(
             delivered_chains += 1
             if any(phase["merge_commit_sha"] != merged["merge_commit_sha"] for name, phase in chain.items() if name != "prepared"):
                 return None
+        if len({phase["contract"] for phase in chain.values()}) != 1:
+            return None
+        if "restored" in chain and chain["restored"].get("post_effect_authority") != chain["reconciled"].get("post_effect_authority"):
+            return None
         if "restored" in chain and any(
             chain["restored"][field] != chain["reconciled"][field]
             for field in ("closed_issues", "reopened_unauthorized_issues")
@@ -2200,6 +2257,8 @@ def build_verified_merge_phase(
     authority_comment: Mapping[str, object] | None = None,
     projection_convergence_receipt: Mapping[str, object] | None = None,
     final_projection_observation: Mapping[str, object] | None = None,
+    phase_version: int = 1,
+    post_effect_authority: Mapping[str, object] | None = None,
     closed_issues: Sequence[int] = (),
     reopened_unauthorized_issues: Sequence[int] = (),
 ) -> dict[str, object]:
@@ -2328,6 +2387,13 @@ def build_verified_merge_phase(
         "repository": authority_receipt["repository"],
         "run_id": authority_receipt["run_id"],
     }
+    if phase_version == 2:
+        if (reconciled_phase and not valid_post_effect_authority(post_effect_authority, authority_receipt, merge_commit_sha)
+                or not reconciled_phase and post_effect_authority is not None):
+            raise ValueError("v2 phase requires exact deployed reconciled post-effect authority")
+        receipt.update(contract=VERIFIED_MERGE_PHASE_V2_CONTRACT, post_effect_authority=post_effect_authority)
+    elif phase_version != 1 or post_effect_authority is not None:
+        raise ValueError("post-effect authority requires a continuous v2 phase chain")
     receipt_json = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
     return {
         "phase_receipt": receipt,
@@ -2406,14 +2472,15 @@ def resolve_verified_merge_phase(
     for candidate in phase_receipts:
         phase = candidate.get("phase")
         candidate_fields = frozenset(candidate)
-        current_schema = candidate_fields == _PHASE_RECEIPT_FIELDS
+        v2 = candidate.get("contract") == VERIFIED_MERGE_PHASE_V2_CONTRACT
+        current_schema = candidate_fields == (_PHASE_V2_RECEIPT_FIELDS if v2 else _PHASE_RECEIPT_FIELDS)
         legacy_schema = candidate_fields == _LEGACY_PHASE_RECEIPT_FIELDS
         same_authority_identity = (
             candidate.get("authority_sha256") == authority_digest
         )
         matching_identity = (
             same_authority_identity
-            and candidate.get("contract") == VERIFIED_MERGE_PHASE_CONTRACT
+            and candidate.get("contract") in {VERIFIED_MERGE_PHASE_CONTRACT, VERIFIED_MERGE_PHASE_V2_CONTRACT}
             and phase in _PHASES
         )
         if not matching_identity:
@@ -2430,6 +2497,10 @@ def resolve_verified_merge_phase(
             ):
                 invalid_current_projection_phase = True
             continue
+        if v2 and ((phase in {"reconciled", "restored"} and not valid_post_effect_authority(
+                candidate.get("post_effect_authority"), authority_receipt, pr.get("merge_commit_sha")))
+                or (phase not in {"reconciled", "restored"} and candidate.get("post_effect_authority") is not None)):
+            return None
         convergence_digest = candidate.get("projection_convergence_sha256")
         final_observation_digest = candidate.get(
             "final_projection_observation_sha256"
@@ -2542,6 +2613,8 @@ def resolve_verified_merge_phase(
     ) -> dict[str, object] | None:
         highest: dict[str, object] | None = None
         reconciled_evidence: tuple[tuple[int, ...], tuple[int, ...]] | None = None
+        chain_contract: object = None
+        post_effect_identity: object = None
         for phase in _PHASES:
             candidates = valid_by_phase[phase]
             if not candidates:
@@ -2554,6 +2627,14 @@ def resolve_verified_merge_phase(
             if len({_canonical_digest(candidate) for candidate in candidates}) != 1:
                 return None
             highest = dict(candidates[-1])
+            if chain_contract is None:
+                chain_contract = highest["contract"]
+            elif highest["contract"] != chain_contract:
+                return None
+            if phase == "reconciled":
+                post_effect_identity = highest.get("post_effect_authority")
+            elif phase == "restored" and highest.get("post_effect_authority") != post_effect_identity:
+                return None
             phase_evidence = (
                 tuple(cast(Sequence[int], highest["closed_issues"])),
                 tuple(

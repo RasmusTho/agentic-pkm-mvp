@@ -411,9 +411,34 @@ jobs:
 
             // Standalone github-script has no Python carrier. Mirror the shared
             // verified_merge.py owner and prove parity for every retained phase.
+            const POST_EFFECT_FIELDS = ["repository", "operation_key", "task_id", "run_id", "pr_number", "head_sha", "merge_commit_sha", "fencing_token", "intent_lsn", "claim_lsn", "pending_receipt_sequence", "reconciled_receipt_sequence", "deployment", "phase"].sort();
+            const DEPLOYMENT_FIELDS = ["source_sha", "image_digest", "postgres_image_digest", "schema_version", "authority_epoch", "candidate_receipt_sha", "capability"].sort();
+            const positiveInteger = value => Number.isSafeInteger(value) && value > 0;
+            const validPostEffectAuthority = (value, authority, mergeSha) => {
+              if (!hasExactFields(value, POST_EFFECT_FIELDS) || !hasExactFields(value.deployment, DEPLOYMENT_FIELDS)) return false;
+              const deployed = value.deployment;
+              return value.phase === "reconciled" && value.repository === authority.repository.toLowerCase() &&
+                value.task_id === authority.run_id && value.run_id === authority.run_id &&
+                value.pr_number === authority.pr_number && value.head_sha === authority.head_sha &&
+                value.merge_commit_sha === mergeSha && typeof mergeSha === "string" && /^[0-9a-f]{40}$/.test(mergeSha) &&
+                typeof value.operation_key === "string" && /^[0-9a-f]{64}$/.test(value.operation_key) &&
+                ["fencing_token", "pending_receipt_sequence", "reconciled_receipt_sequence"].every(key => positiveInteger(value[key])) &&
+                value.reconciled_receipt_sequence > value.pending_receipt_sequence &&
+                ["intent_lsn", "claim_lsn"].every(key => typeof value[key] === "string" && /^[0-9A-F]+\/[0-9A-F]+$/.test(value[key])) &&
+                deployed.capability === "post_effect_merge_readback.v1" &&
+                typeof deployed.source_sha === "string" && /^[0-9a-f]{40}$/.test(deployed.source_sha) &&
+                typeof deployed.candidate_receipt_sha === "string" && /^[0-9a-f]{64}$/.test(deployed.candidate_receipt_sha) &&
+                ["image_digest", "postgres_image_digest"].every(key => typeof deployed[key] === "string" && /^sha256:[0-9a-f]{64}$/.test(deployed[key])) &&
+                ["schema_version", "authority_epoch"].every(key => positiveInteger(deployed[key]));
+            };
+
             const validProjectionPhase = (phase, authorityReceipt, convergence) => {
               const name = phase.phase;
-              if (!PHASES.includes(name) || !hasExactFields(phase, PHASE_FIELDS)) return false;
+              const v2 = phase.contract === "verified_issue_set_merge_phase.v2";
+              if (!PHASES.includes(name) || !hasExactFields(phase, v2 ? [...PHASE_FIELDS, "post_effect_authority"].sort() : PHASE_FIELDS)) return false;
+              if (v2 && (["reconciled", "restored"].includes(name)
+                ? !validPostEffectAuthority(phase.post_effect_authority, authorityReceipt, phase.merge_commit_sha)
+                : phase.post_effect_authority !== null)) return false;
               const reconciled = ["reconciled", "restored"].includes(name);
               const closed = phase.closed_issues;
               const reopened = phase.reopened_unauthorized_issues;
@@ -424,9 +449,10 @@ jobs:
                   (name === "prepared" ? phase.merge_commit_sha !== null :
                     typeof phase.merge_commit_sha !== "string" || !/^[0-9a-f]{40}$/.test(phase.merge_commit_sha))) return false;
               return canonicalJson(phase) === canonicalJson({
+                ...(v2 ? {post_effect_authority: phase.post_effect_authority} : {}),
                 authority_sha256: canonicalSha256(authorityReceipt),
                 body_sha256: name === "restored" ? authorityReceipt.body_sha256 : authorityReceipt.neutralized_body_sha256,
-                closed_issues: closed, contract: "verified_issue_set_merge_phase.v1",
+                closed_issues: closed, contract: v2 ? "verified_issue_set_merge_phase.v2" : "verified_issue_set_merge_phase.v1",
                 final_projection_observation_sha256: name === "prepared"
                   ? canonicalSha256(convergence.final_projection_observation) : null,
                 head_sha: authorityReceipt.head_sha, merge_commit_sha: phase.merge_commit_sha,
@@ -523,6 +549,9 @@ jobs:
               for (const chain of phasesByChain.values()) {
                 const last = Math.max(...[...chain.keys()].map(name => PHASES.indexOf(name)));
                 if (PHASES.slice(0, last + 1).some(name => !chain.has(name))) return null;
+                if (new Set([...chain.values()].map(value => value.contract)).size !== 1) return null;
+                if (chain.has("restored") && canonicalJson(chain.get("restored").post_effect_authority ?? null) !==
+                    canonicalJson(chain.get("reconciled").post_effect_authority ?? null)) return null;
                 const merged = chain.get("merged");
                 if (merged !== undefined) {
                   deliveredChains += 1;
@@ -551,6 +580,9 @@ jobs:
                 if (phase.merge_commit_sha !== livePr.merge_commit_sha) return null;
                 if (highest === null || PHASES.indexOf(phase.phase) > PHASES.indexOf(highest.phase)) highest = phase;
               }
+              if (highest === null || highest.contract !== "verified_issue_set_merge_phase.v2" ||
+                  !["reconciled", "restored"].includes(highest.phase) ||
+                  !validPostEffectAuthority(highest.post_effect_authority, authorityReceipt, livePr.merge_commit_sha)) return null;
               return highest;
             };
 
@@ -587,23 +619,13 @@ jobs:
               if (keys.size !== 1) return null;
               const authorityReceipt = receipts[receipts.length - 1];
               if (resolveDurableConvergences(comments, authorityReceipt) === null) return null;
-              const hasConvergenceHistory = comments.some(comment =>
-                TRUSTED_ASSOCIATIONS.has(comment.author_association) && typeof comment.body === "string" &&
-                structuralMarkerOccurrences(comment.body, CONVERGENCE_MARKER) > 0
-              );
-              const allowLegacy = comments.some(comment =>
-                legacyAuthorityEligible(comment) &&
-                commentReceipts([comment], AUTHORITY_MARKER)
-                  .some(receipt => canonicalSha256(receipt) === canonicalSha256(authorityReceipt))
-              );
-              if (
-                (hasConvergenceHistory ||
-                ![authorityReceipt.body_sha256, authorityReceipt.neutralized_body_sha256]
-                  .some(storedDigest => matchesStoredBodyDigest(
-                    livePr.body || "", storedDigest, {allowLegacy}
-                  ))) &&
-                resolveContinuousMergePhase(comments, authorityReceipt, livePr) === null
-              ) return null;
+              const hasHistory = comments.some(comment => TRUSTED_ASSOCIATIONS.has(comment.author_association) &&
+                typeof comment.body === "string" && structuralMarkerOccurrences(comment.body, CONVERGENCE_MARKER) > 0);
+              const allowLegacy = comments.some(comment => legacyAuthorityEligible(comment) &&
+                commentReceipts([comment], AUTHORITY_MARKER).some(receipt => canonicalSha256(receipt) === canonicalSha256(authorityReceipt)));
+              if ((hasHistory || ![authorityReceipt.body_sha256, authorityReceipt.neutralized_body_sha256].some(
+                    digest => matchesStoredBodyDigest(livePr.body || "", digest, {allowLegacy}))) &&
+                  resolveContinuousMergePhase(comments, authorityReceipt, livePr) === null) return null;
               return authorityReceipt;
             };
 
@@ -614,6 +636,9 @@ jobs:
               const liveAuthority = resolveIssueAuthority(livePr.body || "");
               const canonicalLiveAuthority = liveAuthority?.mode === "canonical" ? liveAuthority : null;
               if (authorityReceipt !== null) {
+                if (resolveContinuousMergePhase(comments, authorityReceipt, livePr) === null) return {
+                  closing_issues: [], governing_issue: null, mode: "trusted_receipt_invalid",
+                };
                 return {
                   closing_issues: authorityReceipt.closing_issues,
                   governing_issue: authorityReceipt.governing_issue,

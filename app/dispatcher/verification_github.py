@@ -575,6 +575,7 @@ class GitHubProtectedRepositoryAuthority:
         if (
             phase is None
             or phase.get("phase") != "prepared"
+            or phase.get("contract") != "verified_issue_set_merge_phase.v2"
             or phase.get("closed_issues") != []
             or phase.get("reopened_unauthorized_issues") != []
             or phase.get("merge_commit_sha") is not None

@@ -390,11 +390,32 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
 
 **Verified issue-set merge and exact closure: SHIPPED IN REPO**
 
-- #4898 adds a dormant, nullable row-derived post-effect recovery substrate. Its pending and
-  reconciliation endpoints accept only an outbox locator and current fence, lock that existing row,
-  and derive all claim/LSN identity from it. It does not activate a consumer, v2 phase projection,
-  watchdog, deployment, or replacement for legacy `finish_effect` / current self-closure; any later
-  activation requires an independently deployed and proven substrate.
+- #4898 supplies the existing nullable row-derived post-effect substrate. The #4897 repair
+  exposes persisted phase, original pending claim/fence/LSN and receipt anchors, reconciled receipt
+  and exact closed GitHub merge evidence through authenticated outbox reads. Recovery renews only
+  the readback claim and retains the pending merge identity; no new migration or ledger is added.
+  `minimum_fencing_token` is an integer locator field at the request root, never evidence authority.
+- An attempted merge persists `pending` before every GitHub readback, including recovery from an
+  absent phase. A transient, incomplete or ordinary negative readback remains pending/retryable.
+  Policy, head or gate drift cannot prove terminal non-application. No terminal-negative predicate
+  is currently admitted for an attempted GitHub merge. Exact positive readback reconciles the same
+  operation once; restart performs bounded readback and never replays the attempted merge.
+- The new consumers remain fail-closed until a fresh authoritative deployment readback matches the
+  repaired source, attested image pair, selected pin, schema, epoch and authenticated API capability
+  `post_effect_merge_readback.v1`. The host supplies this readback through
+  `BUILDEROPS_POST_EFFECT_DEPLOYMENT_READBACK_FILE`; a missing, older-than-five-minute, unavailable or
+  drifted readback refuses activation. The API reports the selected source/image pins but those
+  diagnostics alone do not establish attestation or deployment. Repository delivery does not claim
+  live rollout; deployment remains owned by the independent BuilderOps deployment contract.
+- `verified_issue_set_merge_phase.v2` is one continuous prepared/merged/reconciled/restored chain.
+  Its terminal phases embed the identical authenticated row-derived post-effect authority, exact
+  task/run/repository/operation/PR/head/merge identity, original fences and deployment identity.
+  The reconciled receipt sequence must exceed the pending receipt sequence. Missing, mixed,
+  conflicting or inverted evidence cannot grant terminal authority. The phase builder reads the
+  exact outbox record through the authenticated client after capability preflight; it does not
+  accept a caller-authored terminal record. The watchdog's executor target selection requires this
+  deployed reconciled v2 authority. Historical v1 parsing remains available for audit, while native
+  single-closer delivery keeps its separate existing path.
 
 - Verification dispatch request v3 binds one non-empty, sorted set of at most 10 closing issues and
   one authenticated `final_review_rounds` value to
