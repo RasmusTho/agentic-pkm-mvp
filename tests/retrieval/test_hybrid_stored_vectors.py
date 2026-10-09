@@ -25,6 +25,8 @@ from app.eval import golden
 from app.fitness import metrics
 from app.stores import get_vector_index, reset_store_backends
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 _SEED_TEXTS = [
     ("Alpha note", "alpha retrieval content about mountains and glaciers"),
     ("Beta note", "beta retrieval content about oceans and currents"),

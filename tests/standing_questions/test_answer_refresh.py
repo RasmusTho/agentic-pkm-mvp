@@ -29,6 +29,8 @@ from app.write_guard import WriteGuard
 from scripts.yaml_roundtrip import load_frontmatter
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 def _guard() -> WriteGuard:
     return WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
 

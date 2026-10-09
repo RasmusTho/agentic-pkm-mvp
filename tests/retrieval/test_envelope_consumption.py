@@ -10,6 +10,8 @@ not imported).
 
 from __future__ import annotations
 
+import pytest
+
 from app.activation.ask_synthesis import build_retrieval_candidates_from_envelope
 from app.agents.ask import graph as ask_graph
 from app.agents.ask.graph import build_ask_envelope, run_ask_graph
@@ -19,6 +21,8 @@ from app.retrieval.envelope import (
     validate_envelope,
 )
 from app.retrieval.hybrid import ScopedRetrieval
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 # Any raw-access / storage-topology shaped field must never appear anywhere in the envelope payload.
 _RAW_ACCESS_KEYS = {"vault_id", "vault_root", "raw_index", "index", "vault", "store", "db"}

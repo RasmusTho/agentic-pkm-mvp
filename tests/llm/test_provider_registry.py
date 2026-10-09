@@ -576,6 +576,9 @@ def test_misconfigured_provider_cannot_silently_write_mock_vectors(
         raise AssertionError("vector index must not be opened")
 
     monkeypatch.setattr(legacy, "get_settings_bundle", lambda: None)
+    # Exercise legacy registry admission through the real indexer dependency;
+    # compiled Product routes must not replace this test's explicit input.
+    monkeypatch.setattr(indexer, "get_product_embedding_client", legacy.get_embedding_client)
     monkeypatch.setattr(indexer, "ObjectStore", _ObjectStore)
     monkeypatch.setattr(indexer, "embed_with_fallback", _unexpected_embed)
     monkeypatch.setattr(indexer, "get_vector_index", _unexpected_vector_index)

@@ -4,7 +4,7 @@ import pytest
 
 from app.fitness import qas003_hybrid_latency, qas010_outbox_to_index_latency
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 
 def test_qas003_latency_guard() -> None:

@@ -14,6 +14,8 @@ import tomllib
 import pytest
 from fastapi.testclient import TestClient
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 from app.api.app import app
 import app.api.routes.capture as capture_module
 from app.write_guard import WritesBlockedError

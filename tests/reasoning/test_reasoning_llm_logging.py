@@ -9,6 +9,7 @@ import pytest
 from app.agents.set_evaluator.agent import run_set_evaluator
 from app.reasoning.multi import run_multi_note_reasoning
 from app.reasoning.models import ReasoningMode
+from app.reasoning import provider as provider_module
 from app.reasoning.provider import get_deliberation_agent, run_reasoning
 from app.reasoning.schema import Inference, ReasoningInput, ReasoningOutput
 from app.stores import get_object_store, reset_store_backends
@@ -217,6 +218,16 @@ def test_provider_failure_trace_preserves_degraded_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_reasoning_env(monkeypatch)
+    synthetic_route = provider_module.LLMRoute(
+        provider="synthetic-provider",
+        model="synthetic-model",
+        mode="chat",
+        reason="test",
+    )
+    monkeypatch.setattr(
+        "app.reasoning.provider.resolve_effective_reasoning_route",
+        lambda: synthetic_route,
+    )
     reset_store_backends()
     store = get_object_store()
     object_id = UUID("66666666-6666-6666-6666-666666666666")
@@ -244,8 +255,8 @@ def test_provider_failure_trace_preserves_degraded_outcome(
     assert run.result["degraded_reason"] == "provider_failure"
     assert captured == [
         {
-            "provider": "ollama",
-            "model": "llama3.1:8b",
+            "provider": "synthetic-provider",
+            "model": "synthetic-model",
             "agent": "reasoning",
             "kind": "reasoning.claims",
             "messages": [],
