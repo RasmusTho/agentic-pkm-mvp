@@ -1068,12 +1068,15 @@ def test_optional_secret_failure_never_unlocks_the_run_anyway_handoff(
     )
 
 
-def test_absent_api_raw_key_degrades_only_the_ingress_layer(tmp_path: Path) -> None:
-    """The API may start with its media/screen ingress lanes unavailable."""
+def test_absent_api_raw_key_degrades_only_declared_optional_consumers(tmp_path: Path) -> None:
+    """The API and empty-table migration tolerate absence; capture-watch does not."""
     contract = host_secret_bootstrap.load_host_secret_contract()
     assert contract.is_optional("heimdal.raw-store-key") is False
     assert contract.is_optional_for_consumer(
         channel="dev", consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
+    ) is True
+    assert contract.is_optional_for_consumer(
+        channel="dev", consumer="heimdal-raw-migrate", secret="heimdal.raw-store-key"
     ) is True
     assert contract.is_optional_for_consumer(
         channel="dev", consumer="heimdal-capture-watch", secret="heimdal.raw-store-key"
@@ -1086,6 +1089,15 @@ def test_absent_api_raw_key_degrades_only_the_ingress_layer(tmp_path: Path) -> N
         directory=tmp_path,
     ) as env_file:
         assert env_file.read_text(encoding="utf-8") == f"GITHUB_TOKEN={_GITHUB_TOKEN}\n"
+
+def test_absent_raw_key_materializes_no_migration_secret(tmp_path: Path) -> None:
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="heimdal-raw-migrate",
+        keychain_lookup=_absent(":heimdal-raw-migrate:heimdal.raw-store-key"),
+        directory=tmp_path,
+    ) as env_file:
+        assert env_file.read_text(encoding="utf-8") == ""
 
 
 def test_absent_capture_watch_raw_key_still_fails_closed(tmp_path: Path) -> None:
@@ -1118,7 +1130,7 @@ def test_every_committed_secret_declares_its_optionality_explicitly() -> None:
     ) is True
     assert contract.is_optional_for_consumer(
         channel="prod", consumer="heimdal-raw-migrate", secret="heimdal.raw-store-key"
-    ) is False
+    ) is True
 
 
 @pytest.mark.parametrize(
@@ -1227,21 +1239,19 @@ def test_migration_consumer_bootstraps_shared_key_for_every_channel(
 
 
 @pytest.mark.parametrize("channel", ["dev", "test", "prod"])
-@pytest.mark.parametrize("failure", ["missing", "malformed", "divergent"])
+@pytest.mark.parametrize("failure", ["malformed", "divergent"])
 def test_migration_consumer_refuses_secret_failure_without_launch_or_disclosure(
     tmp_path: Path,
     channel: str,
     failure: str,
 ) -> None:
-    """Every governed lane fails before migration on unusable key authority."""
+    """Present malformed or domain-divergent key material fails closed."""
     launched = False
     unavailable_detail = "private-lookup-detail"
     malformed_value = "private-malformed-material"
 
     def lookup(_service: str, account: str) -> str:
         if account.endswith(":heimdal-raw-migrate:heimdal.raw-store-key"):
-            if failure == "missing":
-                raise OSError(unavailable_detail)
             if failure == "malformed":
                 return malformed_value
             return _RAW_KEY

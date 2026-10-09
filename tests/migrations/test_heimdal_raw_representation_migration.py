@@ -121,6 +121,72 @@ def _insert_legacy_record(
     return ingested_at
 
 
+def test_empty_legacy_table_migrates_without_raw_store_key(
+    scratch_db_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, PRE_REPRESENTATION_HEAD)
+    monkeypatch.delenv("HEIMDAL_RAW_STORE_KEY", raising=False)
+
+    _upgrade(dsn, monkeypatch, REPRESENTATION_HEAD)
+
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM heimdal_raw_record").fetchone() == (0,)
+        assert conn.execute("SELECT count(*) FROM heimdal_raw_representation").fetchone() == (0,)
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            REPRESENTATION_HEAD,
+        )
+
+
+@pytest.mark.parametrize(
+    "raw_key",
+    [None, "not-a-valid-raw-store-key"],
+    ids=["absent", "malformed"],
+)
+def test_nonempty_legacy_table_without_valid_raw_store_key_rolls_back(
+    scratch_db_factory,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_key: str | None,
+) -> None:
+    dsn = scratch_db_factory()
+    _upgrade(dsn, monkeypatch, PRE_REPRESENTATION_HEAD)
+    record_id = uuid.uuid4()
+    plaintext = b"legacy-encrypted-bytes"
+    _insert_legacy_record(dsn, record_id=record_id, plaintext=plaintext)
+    with psycopg.connect(dsn) as conn:
+        original_ciphertext, original_nonce = conn.execute(
+            "SELECT ciphertext, nonce FROM heimdal_raw_record WHERE id = %s",
+            (record_id,),
+        ).fetchone()
+    original_ciphertext = bytes(original_ciphertext)
+    original_nonce = bytes(original_nonce)
+    if raw_key is None:
+        monkeypatch.delenv("HEIMDAL_RAW_STORE_KEY", raising=False)
+    else:
+        monkeypatch.setenv("HEIMDAL_RAW_STORE_KEY", raw_key)
+
+    with pytest.raises(Exception, match="identity verification failed"):
+        _upgrade(dsn, monkeypatch, REPRESENTATION_HEAD)
+
+    _assert_legacy_shape_and_bytes(
+        dsn,
+        expected={record_id: (_content_identity(plaintext), plaintext)},
+    )
+    with psycopg.connect(dsn) as conn:
+        preserved_ciphertext, preserved_nonce = conn.execute(
+            "SELECT ciphertext, nonce FROM heimdal_raw_record WHERE id = %s",
+            (record_id,),
+        ).fetchone()
+        assert bytes(preserved_ciphertext) == original_ciphertext
+        assert bytes(preserved_nonce) == original_nonce
+        assert conn.execute("SELECT version_num FROM alembic_version").fetchone() == (
+            PRE_REPRESENTATION_HEAD,
+        )
+        assert conn.execute(
+            "SELECT to_regclass('public.heimdal_raw_representation')"
+        ).fetchone() == (None,)
+
+
 def _insert_runtime_raw(
     plaintext: bytes,
     *,

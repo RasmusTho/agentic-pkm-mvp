@@ -692,8 +692,12 @@ consumers start. `ExecStopPost` removes the source only after every consumer sto
 quiescent; returning from Compose does not clean it. No persistent PostgreSQL password/env file is
 created. Other declared consumer environment handoffs are private tmpfs files removed after activation.
 
-A pending Heimdal raw-store migration rechecks its declared credential through the inherited
-supervised BWS guard; it never enters the Mac-only child-launch wrapper.
+A pending Heimdal raw-store migration rechecks its selected credential through the inherited
+supervised BWS guard; it never enters the Mac-only child-launch wrapper. The migration consumer may
+proceed when the key is absent, because HAR-02 locks the source table and reads the key only when
+legacy rows exist. Missing-key refusal for non-empty data occurs inside the transactional migration,
+which preserves the legacy schema and encrypted bytes. Configured capture-watch remains a required
+key consumer.
 
 The runtime exporter validates BWS direct DSNs before loading them and supplies credential-free
 channel defaults. `DATABASE_PASSWORD_FILE` is the sole application password source, resolved in
