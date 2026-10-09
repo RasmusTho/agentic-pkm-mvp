@@ -290,7 +290,7 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "consumer": "heimdal-raw-migrate",
             "channels": ["dev", "test", "prod"],
             "secrets": ["heimdal.raw-store-key"],
-            "optional_secrets": [],
+            "optional_secrets": ["heimdal.raw-store-key"],
             "role_requirements": {},
         },
         {
