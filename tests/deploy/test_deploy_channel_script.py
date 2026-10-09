@@ -2798,7 +2798,8 @@ def test_missing_active_raw_key_stops_supervisor_before_activation(
     assert active_consumer in effects.active_consumers
     assert effects.password is None
     assert effects.consumer_values == {}
-    assert sum(identity.endswith('heimdal.raw-store-key') for identity in lookups) == 2
+    # The absent raw key is cached for the remaining consumers in this preflight.
+    assert sum(identity.endswith('heimdal.raw-store-key') for identity in lookups) == 1
     assert activation_events == []
 
 
