@@ -47,8 +47,9 @@ require a provider-specific environment variable or installation just to report 
   (including policy-referenced host environment values and authentication files) share an in-flight
   sample, and the aggregate is recomputed on every health read from the raw
   observation timestamp. The 30-second Model Access client timeout applies per transport operation,
-  not to total preflight wall-clock time; the process still caps active probes at two. A failed
-  refresh replaces a prior result. The sampler cannot select or authorize a completion: Product
+  not to total preflight wall-clock time; the process caps active probes at two and queues at most
+  64 pending probes, prioritizing cold routes over cached refreshes. A failed refresh replaces a
+  prior result. The sampler cannot select or authorize a completion: Product
   execution still performs its own preflight.
 - Network-path reachability is reported as a separate transport observation. A configured
   pre-completion path fallback may preserve capability availability and is reported as degraded

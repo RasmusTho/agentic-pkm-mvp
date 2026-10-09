@@ -499,3 +499,81 @@ def test_stale_or_failed_health_refresh_cannot_preserve_success() -> None:
     assert refreshed["status"] == "unavailable"
     assert refreshed["observed_at"] != original_observed_at
     assert capability_result(refreshed)["ok"] is False
+
+
+def test_health_observer_prioritizes_cold_routes_with_bounded_pending_work() -> None:
+    clock_value = [NOW]
+    observer = ProductHealthObserver(
+        max_workers=1,
+        max_in_flight=1,
+        max_observations=4,
+        max_pending=1,
+        refresh_after_seconds=15,
+        clock=lambda: clock_value[0],
+    )
+
+    def available_probe():
+        return {"status": "available", "reason_code": "adapter_ready"}
+
+    def wait_for_observation(key, sampler=available_probe):
+        deadline = time.monotonic() + 2
+        observation = None
+        while observation is None and time.monotonic() < deadline:
+            observation = observer.observe(key, sampler)
+            if observation is None:
+                Event().wait(0.01)
+        assert observation is not None
+
+    wait_for_observation("cached-route-a")
+    wait_for_observation("cached-route-b")
+    clock_value[0] += timedelta(seconds=16)
+
+    refresh_a_started = Event()
+    release_refresh_a = Event()
+    refresh_b_started = Event()
+    cold_route_started = Event()
+    release_cold_route = Event()
+    overflow_route_started = Event()
+
+    def slow_refresh_a():
+        refresh_a_started.set()
+        assert release_refresh_a.wait(2)
+        return {"status": "available", "reason_code": "adapter_ready"}
+
+    def refresh_b():
+        refresh_b_started.set()
+        return available_probe()
+
+    def cold_route():
+        cold_route_started.set()
+        assert release_cold_route.wait(2)
+        return available_probe()
+
+    try:
+        observer.observe("cached-route-a", slow_refresh_a)
+        assert refresh_a_started.wait(1)
+        observer.observe("cached-route-b", refresh_b)
+        observer.observe("cold-route", cold_route)
+        observer.observe(
+            "overflow-route",
+            lambda: (overflow_route_started.set() or available_probe()),
+        )
+
+        with observer._lock:
+            assert len(observer._pending_cold) + len(observer._pending_refresh) == 1
+            assert list(observer._pending_cold) == ["cold-route"]
+            assert not observer._pending_refresh
+
+        release_refresh_a.set()
+        assert cold_route_started.wait(1)
+        assert not refresh_b_started.is_set()
+        assert not overflow_route_started.is_set()
+    finally:
+        release_refresh_a.set()
+        release_cold_route.set()
+
+    wait_for_observation("cold-route", cold_route)
+    assert not overflow_route_started.is_set()
+
+    observer.observe("cached-route-b", refresh_b)
+    assert refresh_b_started.wait(1)

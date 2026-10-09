@@ -38,10 +38,16 @@ class ProductHealthObserver:
         max_workers: int = 2,
         max_in_flight: int = 2,
         max_observations: int = 64,
+        max_pending: int = 64,
         refresh_after_seconds: float = 15.0,
         clock: Callable[[], datetime] = _now_utc,
     ) -> None:
-        if max_workers < 1 or max_in_flight < 1 or max_observations < 1:
+        if (
+            max_workers < 1
+            or max_in_flight < 1
+            or max_observations < 1
+            or max_pending < 1
+        ):
             raise ValueError("health observer bounds must be positive")
         if max_in_flight < max_workers:
             raise ValueError("max_in_flight must be at least max_workers")
@@ -53,11 +59,18 @@ class ProductHealthObserver:
         )
         self._max_in_flight = max_in_flight
         self._max_observations = max_observations
+        self._max_pending = max_pending
         self._refresh_after_seconds = refresh_after_seconds
         self._clock = clock
         self._lock = Lock()
         self._observations: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._in_flight: set[str] = set()
+        self._pending_cold: OrderedDict[str, Callable[[], Mapping[str, Any]]] = (
+            OrderedDict()
+        )
+        self._pending_refresh: OrderedDict[str, Callable[[], Mapping[str, Any]]] = (
+            OrderedDict()
+        )
 
     def observe(
         self,
@@ -71,17 +84,47 @@ class ProductHealthObserver:
             if observation is not None:
                 self._observations.move_to_end(key)
             refresh_due = observation is None or self._refresh_due(observation, now)
-            if (
-                refresh_due
-                and key not in self._in_flight
-                and len(self._in_flight) < self._max_in_flight
-            ):
-                self._in_flight.add(key)
-                try:
-                    self._executor.submit(self._sample, key, sampler)
-                except RuntimeError:
-                    self._in_flight.discard(key)
+            if refresh_due and key not in self._in_flight:
+                if key not in self._pending_cold and key not in self._pending_refresh:
+                    if len(self._in_flight) < self._max_in_flight:
+                        self._submit_locked(key, sampler)
+                    else:
+                        self._queue_locked(key, sampler, cold=observation is None)
             return deepcopy(observation) if observation is not None else None
+
+    def _submit_locked(
+        self,
+        key: str,
+        sampler: Callable[[], Mapping[str, Any]],
+    ) -> None:
+        self._in_flight.add(key)
+        try:
+            self._executor.submit(self._sample, key, sampler)
+        except RuntimeError:
+            self._in_flight.discard(key)
+
+    def _queue_locked(
+        self,
+        key: str,
+        sampler: Callable[[], Mapping[str, Any]],
+        *,
+        cold: bool,
+    ) -> None:
+        pending_size = len(self._pending_cold) + len(self._pending_refresh)
+        if pending_size >= self._max_pending:
+            if not cold or not self._pending_refresh:
+                return
+            self._pending_refresh.popitem(last=False)
+        pending = self._pending_cold if cold else self._pending_refresh
+        pending[key] = sampler
+
+    def _start_pending_locked(self) -> None:
+        while len(self._in_flight) < self._max_in_flight:
+            pending = self._pending_cold or self._pending_refresh
+            if not pending:
+                return
+            key, sampler = pending.popitem(last=False)
+            self._submit_locked(key, sampler)
 
     def _refresh_due(self, observation: Mapping[str, Any], now: datetime) -> bool:
         observed_at = _parse_observed_at(observation.get("observed_at"))
@@ -128,11 +171,18 @@ class ProductHealthObserver:
             self._observations.move_to_end(key)
             self._in_flight.discard(key)
             self._trim_locked()
+            self._start_pending_locked()
 
     def _trim_locked(self) -> None:
         while len(self._observations) > self._max_observations:
             oldest = next(
-                (key for key in self._observations if key not in self._in_flight),
+                (
+                    key
+                    for key in self._observations
+                    if key not in self._in_flight
+                    and key not in self._pending_cold
+                    and key not in self._pending_refresh
+                ),
                 None,
             )
             if oldest is None:

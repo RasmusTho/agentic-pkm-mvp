@@ -155,8 +155,15 @@ def test_health_preflight_is_single_flight_per_exact_route_intent(
         assert sample is not None
         assert sample["status"] == "available"
 
-        assert observer.observe(distinct_key, distinct_sampler) is None
         assert distinct_started.wait(1)
+        deadline = time.monotonic() + 2
+        distinct_sample = None
+        while distinct_sample is None and time.monotonic() < deadline:
+            distinct_sample = observer.observe(distinct_key, distinct_sampler)
+            if distinct_sample is None:
+                Event().wait(0.01)
+        assert distinct_sample is not None
+        assert distinct_sample["status"] == "available"
     finally:
         release.set()
 

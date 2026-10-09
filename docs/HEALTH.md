@@ -56,9 +56,10 @@ The API does not wait for a selected-route preflight to finish. It starts or joi
 process-local background sample; identical route, capability-intent, and configuration generations
 share one in-flight probe. Cold routes and pending routes without a still-fresh prior observation
 remain `unknown`, so required health stays false.
-The API starts refresh after 15 seconds, allows at most two probes at once, and passes a 30-second
-timeout to the Model Access client. That is a per-operation transport timeout, not a wall-clock
-deadline for the full preflight; active probes remain capped at two until their operations return.
+The API starts refresh after 15 seconds, allows at most two active probes and 64 pending probes,
+and prioritizes cold-route probes over cached refreshes. It passes a 30-second timeout to the Model
+Access client. That is a per-operation transport timeout, not a wall-clock deadline for the full
+preflight; active probes remain capped at two until their operations return.
 Changes to the selected route, executor policy, policy-referenced host environment values, or
 referenced authentication files create a new configuration generation.
 The API aggregates raw observations on every request using their completion time and the existing
