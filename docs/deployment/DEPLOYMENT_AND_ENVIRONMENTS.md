@@ -547,6 +547,22 @@ Target contract (S4):
 
 The prod gateway keeps its safe default posture (`prod-ui` does not auto-start watchers/workers; write/automation-capable startup stays behind `PROD_UI_ENABLE_AUTOMATION=1`).
 
+The managed Compose gateway forwards `COMPANION_API_TIMEOUT_SECONDS` to the UI's
+general runtime client. The base default is `2.0` seconds; DEV and TEST overlays
+explicitly set `30.0` seconds for workspace reads and capture transport. ASK uses
+its separate `COMPANION_ASK_TIMEOUT_SECONDS` budget (default `120.0` seconds).
+Production keeps the base environment setting until an operator authorizes a
+configuration change through the deployment gate; its distinct production
+entrypoint retains its existing client default and does not consume this selector.
+
+Channel qualification must inspect the effective gateway environment and prove
+the intended running image/SHA, a real note body, and a capture's matching runtime
+acknowledgement and persisted material. `/healthz` alone establishes liveness.
+A transport timeout can occur after the runtime has written a capture: reconcile
+the material and receipt before deciding whether to retry. The gateway never
+replays the write or converts a timeout into success; a reported post-write
+acknowledgement failure remains `not_acknowledged`.
+
 ## Deploy procedure
 
 The deploy procedure is the same shape for every channel; only the pin target and the migration-ack posture differ (`prod` is the strictest). It assumes the build-once/promote model above.

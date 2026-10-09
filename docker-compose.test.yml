@@ -163,6 +163,7 @@ services:
       PKM_ENVIRONMENT: test
       PORT: 8112
       COMPANION_API_BASE_URL: http://api:8000
+      COMPANION_API_TIMEOUT_SECONDS: "30.0"
       COMPANION_UI_SERVE_MODULE: companion_ui.workspace.serve_dev_page
 
 volumes:
