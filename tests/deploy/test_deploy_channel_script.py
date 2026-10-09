@@ -3486,7 +3486,10 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
     monkeypatch.setattr(
         linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(original_retire)
     )
-    result = supervisor.request(request)
+    # A normal same-ID join must finish interrupted cleanup before exposing the
+    # already-written failed receipt to a host retry.
+    ordinary_retry = {**request, 'action': 'join'}
+    result = supervisor.request(ordinary_retry)
 
     assert result['receipt']['stage'] == 'failed'
     assert result['receipt']['terminal_result'] == 'failed'
@@ -3496,6 +3499,16 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
     assert pending_marker.read_bytes() == b'forward-only\n'
     assert data.read_bytes() == b'preserve\n'
     assert supervisor.request(request) == result
+
+    # After exact cleanup a new operation can acquire the channel lock.
+    from uuid import uuid4
+    next_effects = linux.LinuxEffects(config)
+    next_effects.operation_id = str(uuid4())
+    with next_effects.channel_lock():
+        assert lock_dir.is_dir()
+    assert lock_dir.is_dir()  # nonterminal new operation keeps its admission lock
+    (lock_dir / 'bws-owner').unlink()
+    lock_dir.rmdir()
 
 
 @pytest.mark.parametrize('blocker', [
@@ -3576,7 +3589,7 @@ def test_failed_bws_activation_reconciliation_preserves_ambiguous_state(tmp_path
 def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_path):
     from app.ops import postgres_deploy_host as host
     from app.ops.host_secret_controller import HostSecretController
-    from app.ops.postgres_deploy import DeployReceipt
+    from app.ops.postgres_deploy import DeployReceipt, PostgresDeployError
 
     controller = HostSecretController(tmp_path / 'controller')
     with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
@@ -3584,10 +3597,26 @@ def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_pat
         operation_id = operation.operation_id
         operation.prepare_mutation()
     captured = []
+    ordinary_retries = []
+
+    class Admin:
+        def __init__(self, _provider, *, controller):
+            self.controller = controller
+
+        def check_selected(self, *_args):
+            return []
 
     class Remote:
         def __init__(self, hostname):
             assert hostname == 'ygg-test'
+
+        def prepare(self, selected_id, plan, bootstrap):
+            assert selected_id == operation_id
+            assert plan.revision == 'a' * 40
+            assert bootstrap is False
+            ordinary_retries.append(selected_id)
+            # Models refusal while the remote failed receipt still owns its lock.
+            raise PostgresDeployError()
 
         def reconcile_failed(self, selected_id, plan):
             assert selected_id == operation_id
@@ -3597,11 +3626,17 @@ def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_pat
 
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
-    monkeypatch.setattr(host, 'configured_admin', lambda: pytest.fail('reconciliation must not read BWS credentials'))
-    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: pytest.fail('reconciliation must not create an admin'))
+    monkeypatch.setattr(host, 'configured_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', Admin)
 
     assert host.main(['dev', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 78
     assert captured == []
+    with controller._locked_journal() as descriptor:
+        still_pending = controller._pending(descriptor)
+    assert still_pending is not None and still_pending['operation_id'] == operation_id
+
+    assert host.main(['test', 'a' * 40, '--existing-secrets-only']) == 78
+    assert ordinary_retries == [operation_id]
     with controller._locked_journal() as descriptor:
         still_pending = controller._pending(descriptor)
     assert still_pending is not None and still_pending['operation_id'] == operation_id

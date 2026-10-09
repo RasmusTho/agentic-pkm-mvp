@@ -616,8 +616,11 @@ No CLI flag creates this approval. The admin token remains on the agent host.
 When such a deployment remains pending after its supervised worker has ended, reconcile only the
 same operation using its exact request revision and original `--ack-forward-only` choice. The
 `--reconcile-pending` command is limited to a pending `--existing-secrets-only` operation and asks
-the remote supervisor for authenticated terminal evidence under the same operation ID. A `failed`
-receipt means deployment was not verified and effects may need the normal deployment reconciliation;
+the remote supervisor for authenticated terminal evidence under the same operation ID. Ordinary
+same-ID `prepare`, `activate`, or `join` retries run the same lock-reconciliation proof before they
+return an existing `failed` receipt, so a receipt cannot clear host state while a retained lock still
+blocks the channel. A `failed` receipt means deployment was not verified and effects may need the
+normal deployment reconciliation;
 it does not mean the deployment was rolled back or that no effects occurred. The supervisor requires
 the worker to be inactive, the existing per-channel lock to be available, and Compose state to be
 quiescent before writing that receipt. Any unavailable or mismatched proof leaves the local operation

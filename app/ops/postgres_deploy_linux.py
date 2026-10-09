@@ -999,6 +999,10 @@ class DeploymentSupervisor:
             previous = self.config.journal.read()
             if previous and previous.operation_id == operation_id and previous.terminal_result:
                 self.config.journal.bind_request(operation_id, plan, data['bootstrap'])
+                if previous.terminal_result == 'failed':
+                    # Never expose failed terminal evidence until an interrupted
+                    # lock retirement has been completed through the same proof.
+                    return self._reconcile_failed(operation_id, plan, data['bootstrap'])
                 return {'receipt': asdict(previous)}
             if self.operation and self.operation.operation_id != operation_id:
                 if not self.operation.finished.is_set():
