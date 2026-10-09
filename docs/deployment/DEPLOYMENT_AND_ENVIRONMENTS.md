@@ -224,10 +224,14 @@ and identical fail-loud preflight for API, worker, watcher, and Heimdal capture 
 resolved registry path is `/app/instance-state/agentic-pkm/vault-registry.md`. It does not invent a
 missing registry or ledger during consumer preflight. The host bind source is resolved before
 Compose interpolation to the canonical absolute
-`${XDG_STATE_HOME:-$HOME/.local/state}/agentic-pkm/instance-ownership` path (or an explicit absolute
-override), so separate checkouts and all three channel projects mount the same ledger. Compose may
-not create a checkout-relative substitute. Every consumer rejects any active host-global deployment
-lease, including a lease owned by another channel, before reading or mutating channel state.
+`${XDG_STATE_HOME:-$HOME/.local/state}/agentic-pkm/instance-ownership` path for a non-root caller. The
+root BWS systemd supervisor uses an explicit `XDG_STATE_HOME` when configured and otherwise derives
+that same default from the validated runtime UID's passwd home, so it never selects a state directory
+below `/root`; an explicit absolute `INSTANCE_OWNERSHIP_HOST_STATE_DIR` remains authoritative.
+Separate checkouts and all three channel projects therefore mount the same ledger. Compose may not
+create a checkout-relative substitute.
+Every consumer rejects any active host-global deployment lease, including a lease owned by another
+channel, before reading or mutating channel state.
 
 Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
 `scripts/lib/instance_state_deployment.sh`. Before the first init or any lease/fence mutation, the
@@ -494,7 +498,9 @@ runs the digest.
 
 Every channel's `api`/`worker`/`watcher`/`heimdal-capture-watch` service runs as `user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"` (`docker-compose.yaml`), populated from the host user via `scripts/export_runtime_env.sh` — not as `root`, and not as a fixed container uid. The image itself is built as `root` (`Dockerfile` has no `USER` directive), so every path `COPY . .` creates, and every directory that exists in the repo tree at build time, is `root:root`-owned in the resulting image.
 
-For pinned channel deployments, `scripts/deploy_channel.sh` reads only the numeric `LOCAL_UID` and `LOCAL_GID` fields from the selected governed runtime env and exports them before its first Compose call. This gives Compose interpolation (including each service's `user:`) and `instance-state-init` the same process identity. The runtime env remains a service `env_file`, not Compose's CLI `--env-file`, so its DSNs and other runtime values are not interpolated into the deployment model. BWS deployments stop before pin or Docker mutation when the governed identity is missing, duplicated, or malformed; local use without a generated runtime env retains its host-identity fallback.
+For pinned channel deployments, `scripts/deploy_channel.sh` reads only the numeric `LOCAL_UID` and `LOCAL_GID` fields from the selected governed runtime env and exports them before its first Compose call. This gives Compose interpolation (including each service's `user:`) and `instance-state-init` the same process identity. The runtime env remains a service `env_file`, not Compose's CLI `--env-file`, so its DSNs and other runtime values are not interpolated into the deployment model. BWS deployments stop before pin or Docker mutation when the governed identity is missing, duplicated, malformed, or outside the supported UID/GID range; local use without a generated runtime env retains its host-identity fallback.
+
+The systemd BWS deployment service runs as root to use its encrypted credentials and control Docker. Root is the deployment supervisor; host-global instance-ownership state remains owned by the validated `LOCAL_UID`/`LOCAL_GID`. The ownership directory stays canonical and mode `0700`. Its ledger lock, any recovery of a journaled key rotation, and ledger reads that produce deployment evidence run under that runtime identity, so ledger files remain private and runtime-owned. Host-produced MVR-05 fence plans are atomically delivered with mode `0600` and runtime ownership before the runtime one-shot reads them. New settings-rebind floor receipts are written with mode `0600` and runtime ownership; the root rollback guard also accepts an older private receipt that the previous supervisor wrote as `root:root`. An existing ownership directory with an unexpected owner is rejected before permissions or ownership are changed.
 
 This is a structural mismatch: any code path that lazily creates a directory under `/app` at first use (`Path(...).mkdir(parents=True, exist_ok=True)`) fails with `PermissionError` under the non-root runtime uid unless that directory was pre-created **and** made writable by all uids at build time. Two runtime-writable surfaces have needed this treatment so far:
 

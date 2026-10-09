@@ -101,6 +101,213 @@ class InventoryError(RuntimeError):
     """Enumeration or proof construction was incomplete or unsafe."""
 
 
+def _effective_uid() -> int:
+    return os.geteuid()
+
+
+def _effective_gid() -> int:
+    return os.getegid()
+
+
+def _ownership_state_runtime_identity() -> tuple[int, int]:
+    raw_uid = os.getenv("INSTANCE_OWNERSHIP_HOST_STATE_UID", os.getenv("LOCAL_UID"))
+    raw_gid = os.getenv("INSTANCE_OWNERSHIP_HOST_STATE_GID", os.getenv("LOCAL_GID"))
+    if raw_uid is None and raw_gid is None:
+        return _effective_uid(), _effective_gid()
+    if (
+        raw_uid is None
+        or raw_gid is None
+        or not raw_uid.isascii()
+        or not raw_uid.isdecimal()
+        or not raw_gid.isascii()
+        or not raw_gid.isdecimal()
+    ):
+        raise InventoryError("ownership state runtime identity is invalid")
+    uid_text = raw_uid.lstrip("0") or "0"
+    gid_text = raw_gid.lstrip("0") or "0"
+    if (
+        len(uid_text) > 10
+        or len(gid_text) > 10
+    ):
+        raise InventoryError("ownership state runtime identity is out of range")
+    uid, gid = int(uid_text), int(gid_text)
+    if uid > 4_294_967_294 or gid > 4_294_967_294:
+        raise InventoryError("ownership state runtime identity is out of range")
+    if _effective_uid() != 0 and (uid != _effective_uid() or gid != _effective_gid()):
+        raise InventoryError("ownership state runtime identity differs from the caller")
+    return uid, gid
+
+
+def _ownership_ledger_runtime_request(request: dict[str, object]) -> dict[str, object]:
+    operation = request.get("operation")
+    ownership_root_text = request.get("ownership_root")
+    if (
+        not isinstance(operation, str)
+        or operation not in {"enrich", "retired"}
+        or not isinstance(ownership_root_text, str)
+    ):
+        raise InventoryError("ownership ledger request is invalid")
+
+    try:
+        ownership_root = Path(ownership_root_text).expanduser().resolve(strict=False)
+        ledger_path = ownership_root / "ownership-ledger.json"
+        key_path = ownership_root / "ownership-key.json"
+        from app.instance.ownership_ledger import LegacyOwner, LedgerError, OwnershipLedger
+
+        ledger = OwnershipLedger(ownership_root)
+        if operation == "retired":
+            if not ledger_path.exists() and not key_path.exists():
+                return {"retired_owner_roots": []}
+            if not ledger_path.is_file() or not key_path.is_file():
+                raise InventoryError("established ownership ledger artifacts are incomplete")
+            if not ledger.needs_fenced_registry_consistency():
+                return {"retired_owner_roots": []}
+            return {
+                "retired_owner_roots": [
+                    {
+                        "channel_id": channel_id,
+                        "vault_binding_id": binding_id,
+                        "root": str(root),
+                    }
+                    for channel_id, binding_id, root in ledger.retired_owner_roots(
+                        allow_legacy=True
+                    )
+                ]
+            }
+
+        owner_rows = request.get("owners")
+        owner_identities = request.get("owner_identities")
+        if not isinstance(owner_rows, list) or not isinstance(owner_identities, list):
+            raise InventoryError("established owner inventory request is invalid")
+        rows = [dict(row) for row in owner_rows if isinstance(row, dict)]
+        identities = [dict(item) for item in owner_identities if isinstance(item, dict)]
+        if len(rows) != len(owner_rows) or len(identities) != len(owner_identities):
+            raise InventoryError("established owner inventory request is invalid")
+        if not ledger_path.exists() and not key_path.exists():
+            return {"owners": rows, "owner_identities": identities}
+        if not ledger_path.is_file() or not key_path.is_file():
+            raise InventoryError("established ownership ledger artifacts are incomplete")
+
+        identity_by_owner = {
+            (str(item.get("channel_id") or ""), str(item.get("root") or "")): item
+            for item in identities
+        }
+        candidates: list[LegacyOwner] = []
+        for row in rows:
+            channel_id = str(row.get("channel_id") or "")
+            root = str(row.get("root") or "")
+            identity = identity_by_owner.get((channel_id, root))
+            if identity is None:
+                raise InventoryError("legacy owner identity enrichment is incomplete")
+            candidates.append(
+                LegacyOwner(
+                    channel_id,
+                    "",
+                    Path(root),
+                    str(identity.get("identity") or "") or None,
+                    tuple(str(value) for value in identity.get("ancestor_identities", [])),
+                    tuple(
+                        str(value)
+                        for value in identity.get("legacy_ancestor_identities", [])
+                    ),
+                )
+            )
+        resolved = ledger.resolve_live_owner_bindings(
+            candidates,
+            skip_unadopted=True,
+            # Fenced deployment convergence owns the v1 -> v2 transition; this
+            # producer only reads the ledger while it emits authenticated evidence.
+            allow_legacy=True,
+        )
+        binding_by_owner = {
+            (owner.channel_id, str(owner.root.expanduser().resolve(strict=False))): owner.vault_binding_id
+            for owner in resolved
+            if owner.vault_binding_id
+        }
+        enriched_rows = [
+            row
+            | (
+                {
+                    "vault_binding_id": binding_by_owner[
+                        (
+                            str(row["channel_id"]),
+                            str(Path(str(row["root"])).expanduser().resolve(strict=False)),
+                        )
+                    ]
+                }
+                if (
+                    str(row["channel_id"]),
+                    str(Path(str(row["root"])).expanduser().resolve(strict=False)),
+                )
+                in binding_by_owner
+                else {}
+            )
+            for row in rows
+        ]
+        enriched_identities = []
+        for identity in identities:
+            key = (
+                str(identity.get("channel_id") or ""),
+                str(Path(str(identity.get("root") or "")).expanduser().resolve(strict=False)),
+            )
+            binding_id = binding_by_owner.get(key)
+            enriched_identities.append(
+                identity | ({"vault_binding_id": binding_id} if binding_id else {})
+            )
+        return {"owners": enriched_rows, "owner_identities": enriched_identities}
+    except InventoryError:
+        raise
+    except (ImportError, OSError, ValueError, TypeError) as exc:
+        raise InventoryError("ownership ledger runtime-identity operation failed") from exc
+    except LedgerError as exc:
+        raise InventoryError("ownership ledger runtime-identity operation failed") from exc
+
+
+def _run_ownership_ledger_as_runtime(request: dict[str, object]) -> dict[str, object]:
+    uid, gid = _ownership_state_runtime_identity()
+    if _effective_uid() == uid and _effective_gid() == gid:
+        return _ownership_ledger_runtime_request(request)
+    if _effective_uid() != 0:
+        raise InventoryError("ownership ledger access requires the configured runtime identity")
+
+    environment = {
+        "HOME": os.environ.get("HOME", "/"),
+        "INSTANCE_OWNERSHIP_HOST_STATE_DIR": os.environ.get(
+            "INSTANCE_OWNERSHIP_HOST_STATE_DIR", ""
+        ),
+        "INSTANCE_OWNERSHIP_HOST_STATE_UID": str(uid),
+        "INSTANCE_OWNERSHIP_HOST_STATE_GID": str(gid),
+        "LOCAL_UID": str(uid),
+        "LOCAL_GID": str(gid),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PYTHONPATH": str(_REPO_ROOT),
+    }
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "_ownership-ledger-runtime"],
+            input=json.dumps(request, sort_keys=True, separators=(",", ":")),
+            text=True,
+            capture_output=True,
+            check=False,
+            cwd=_REPO_ROOT,
+            env=environment,
+            user=uid,
+            group=gid,
+            extra_groups=[],
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise InventoryError("ownership ledger runtime identity could not be entered") from exc
+    if completed.returncode != 0:
+        raise InventoryError("ownership ledger runtime-identity operation failed")
+    try:
+        response = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise InventoryError("ownership ledger runtime-identity response is invalid") from exc
+    if not isinstance(response, dict):
+        raise InventoryError("ownership ledger runtime-identity response is invalid")
+    return response
+
+
 def redact_compose_fence_config(source: Path, output: Path) -> None:
     """Write the minimal effective-Compose surface needed by the MVR-05 fence."""
 
@@ -1197,74 +1404,22 @@ def _enrich_established_owner_bindings(
     if not ledger_path.is_file() or not key_path.is_file():
         raise InventoryError("established ownership ledger artifacts are incomplete")
 
-    try:
-        from app.instance.ownership_ledger import LegacyOwner, LedgerError, OwnershipLedger
-
-        identity_by_owner = {
-            (str(item.get("channel_id") or ""), str(item.get("root") or "")): item
-            for item in owner_identities
-            if isinstance(item, dict)
+    response = _run_ownership_ledger_as_runtime(
+        {
+            "operation": "enrich",
+            "ownership_root": str(ownership_root),
+            "owners": owner_rows,
+            "owner_identities": owner_identities,
         }
-        candidates: list[LegacyOwner] = []
-        for record in owners:
-            identity = identity_by_owner.get((record.channel_id, record.root))
-            if identity is None:
-                raise InventoryError("legacy owner identity enrichment is incomplete")
-            candidates.append(
-                LegacyOwner(
-                    record.channel_id,
-                    "",
-                    Path(record.root),
-                    str(identity.get("identity") or "") or None,
-                    tuple(str(value) for value in identity.get("ancestor_identities", [])),
-                    tuple(
-                        str(value)
-                        for value in identity.get("legacy_ancestor_identities", [])
-                    ),
-                )
-            )
-        resolved = OwnershipLedger(ownership_root).resolve_live_owner_bindings(
-            candidates,
-            skip_unadopted=True,
-            # Fenced deployment convergence owns the v1 -> v2 transition;
-            # this producer must be able to read v1 long enough to emit the
-            # authenticated receipt that convergence consumes.
-            allow_legacy=True,
-        )
-    except InventoryError:
-        raise
-    except LedgerError as exc:
-        raise InventoryError(
-            "established ownership ledger could not authenticate owner bindings"
-        ) from exc
-
-    binding_by_owner = {
-        (owner.channel_id, str(owner.root.expanduser().resolve(strict=False))): owner.vault_binding_id
-        for owner in resolved
-        if owner.vault_binding_id
-    }
-    enriched_rows: list[dict[str, object]] = []
-    for row in owner_rows:
-        binding_id = binding_by_owner.get(
-            (
-                str(row["channel_id"]),
-                str(Path(str(row["root"])).expanduser().resolve(strict=False)),
-            )
-        )
-        if binding_id:
-            row = row | {"vault_binding_id": binding_id}
-        enriched_rows.append(row)
-
-    enriched_identities: list[dict[str, object]] = []
-    for identity in owner_identities:
-        key = (
-            str(identity.get("channel_id") or ""),
-            str(Path(str(identity.get("root") or "")).expanduser().resolve(strict=False)),
-        )
-        binding_id = binding_by_owner.get(key)
-        enriched_identities.append(
-            identity | ({"vault_binding_id": binding_id} if binding_id else {})
-        )
+    )
+    enriched_rows = response.get("owners")
+    enriched_identities = response.get("owner_identities")
+    if not isinstance(enriched_rows, list) or not isinstance(enriched_identities, list):
+        raise InventoryError("ownership ledger runtime-identity response is incomplete")
+    if any(not isinstance(row, dict) for row in enriched_rows) or any(
+        not isinstance(row, dict) for row in enriched_identities
+    ):
+        raise InventoryError("ownership ledger runtime-identity response is malformed")
     return enriched_rows, enriched_identities
 
 
@@ -1288,36 +1443,39 @@ def _retired_owner_identity_rows(
     if not ledger_path.is_file() or not key_path.is_file():
         raise InventoryError("established ownership ledger artifacts are incomplete")
 
-    try:
-        from app.instance.ownership_ledger import LedgerError, OwnershipLedger
-
-        ledger = OwnershipLedger(ownership_root)
-        if not ledger.needs_fenced_registry_consistency():
-            return []
-        retired_roots = ledger.retired_owner_roots(allow_legacy=True)
-        rows: list[dict[str, object]] = []
-        for channel_id, binding_id, root in retired_roots:
+    response = _run_ownership_ledger_as_runtime(
+        {"operation": "retired", "ownership_root": str(ownership_root)}
+    )
+    raw_roots = response.get("retired_owner_roots")
+    if not isinstance(raw_roots, list):
+        raise InventoryError("retired ownership runtime-identity response is incomplete")
+    rows: list[dict[str, object]] = []
+    for raw in raw_roots:
+        if not isinstance(raw, dict):
+            raise InventoryError("retired ownership runtime-identity response is malformed")
+        channel_id = raw.get("channel_id")
+        binding_id = raw.get("vault_binding_id")
+        root_text = raw.get("root")
+        if not all(isinstance(value, str) and value for value in (channel_id, binding_id, root_text)):
+            raise InventoryError("retired ownership runtime-identity response is malformed")
+        try:
             identity, ancestors, legacy_ancestors = _owner_identity_material(
-                root,
+                Path(root_text),
                 domain=channel_id,
                 source="retired_ownership_ledger",
             )
-            rows.append(
-                {
-                    "channel_id": channel_id,
-                    "vault_binding_id": binding_id,
-                    "root": str(root),
-                    "identity": identity,
-                    "ancestor_identities": sorted(ancestors),
-                    "legacy_ancestor_identities": list(legacy_ancestors),
-                }
-            )
-    except InventoryError:
-        raise
-    except (LedgerError, OSError) as exc:
-        raise InventoryError(
-            "retired ownership root identity is unavailable"
-        ) from exc
+        except (OSError, ValueError) as exc:
+            raise InventoryError("retired ownership root identity is unavailable") from exc
+        rows.append(
+            {
+                "channel_id": channel_id,
+                "vault_binding_id": binding_id,
+                "root": root_text,
+                "identity": identity,
+                "ancestor_identities": sorted(ancestors),
+                "legacy_ancestor_identities": list(legacy_ancestors),
+            }
+        )
     return sorted(rows, key=lambda item: (str(item["channel_id"]), str(item["vault_binding_id"])))
 
 
@@ -1784,8 +1942,21 @@ def main(argv: list[str] | None = None) -> int:
     redact_fence = subparsers.add_parser("redact-compose-fence-config")
     redact_fence.add_argument("--compose-path", type=Path, required=True)
     redact_fence.add_argument("--output", type=Path, required=True)
+    subparsers.add_parser("_ownership-ledger-runtime", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
+        if args.command == "_ownership-ledger-runtime":
+            request = json.load(sys.stdin)
+            if not isinstance(request, dict):
+                raise InventoryError("ownership ledger request is invalid")
+            json.dump(
+                _ownership_ledger_runtime_request(request),
+                sys.stdout,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            sys.stdout.write("\n")
+            return 0
         if args.command == "controller-token":
             print(controller_token(args.pid))
             return 0
