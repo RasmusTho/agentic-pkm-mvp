@@ -3741,6 +3741,9 @@ def _collect_relation_notes(vault_root: Path) -> list[dict[str, object]]:
         # including aliases, without admitting them as UUID-scoped targets.
         owns_identity = not is_companion_path(candidate, vault_root)
         artifact_uuid = metadata["uuid"] if owns_identity else None
+        source_note_path = _vault_relative(candidate.resolve(), vault_root.resolve())
+        if source_note_path is None:
+            continue
         frontmatter = _frontmatter_dict(body)
         tags = _coerce_relation_tags(frontmatter.get("tags") or frontmatter.get("tag"))
         title = _browser_title(body, fallback=candidate.stem)
@@ -3750,6 +3753,7 @@ def _collect_relation_notes(vault_root: Path) -> list[dict[str, object]]:
                 "title": title,
                 "artifact_uuid": artifact_uuid,
                 "owns_identity": owns_identity,
+                "source_note_path": source_note_path,
                 "kind": metadata["kind"],
                 "zone": metadata["zone"],
                 "source_ref": metadata["source_ref"],
@@ -3793,7 +3797,10 @@ def _resolve_human_uuid_scope(
                 "artifact_uuid": artifact_uuid,
             },
         )
-    if len(matches) > 1:
+    source_paths = {
+        str(note.get("source_note_path") or note.get("note_path")) for note in matches
+    }
+    if len(source_paths) > 1:
         raise HTTPException(
             status_code=409,
             detail={
@@ -3802,7 +3809,12 @@ def _resolve_human_uuid_scope(
                 "artifact_uuid": artifact_uuid,
             },
         )
-    return matches[0]
+    # A human symlink is another locator for the same source, not a second
+    # human artifact. Prefer the genuine source's row when it is enumerated.
+    return next(
+        (note for note in matches if note.get("note_path") == note.get("source_note_path")),
+        matches[0],
+    )
 
 
 def _resolve_related_scope(
@@ -3825,7 +3837,11 @@ def _resolve_related_scope(
             )
     if artifact_uuid:
         uuid_match = _resolve_human_uuid_scope(notes, artifact_uuid=artifact_uuid)
-        if target is not None and target.get("note_path") != uuid_match.get("note_path"):
+        if target is not None and (
+            target.get("owns_identity") is False
+            or target.get("source_note_path", target.get("note_path"))
+            != uuid_match.get("source_note_path", uuid_match.get("note_path"))
+        ):
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -3868,7 +3884,11 @@ def _resolve_vault_action_scope(
             )
     if artifact_uuid:
         uuid_match = _resolve_human_uuid_scope(notes, artifact_uuid=artifact_uuid)
-        if target is not None and target.get("note_path") != uuid_match.get("note_path"):
+        if target is not None and (
+            target.get("owns_identity") is False
+            or target.get("source_note_path", target.get("note_path"))
+            != uuid_match.get("source_note_path", uuid_match.get("note_path"))
+        ):
             raise HTTPException(
                 status_code=409,
                 detail={

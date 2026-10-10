@@ -304,3 +304,30 @@ def test_vault_related_preserves_uninitialized_deep_human_and_uuidless_path_read
     assert inspection.status_code == 200
     assert inspection.json()["scope"]["artifact_uuid"] is None
     assert uuidless.read_bytes() == before
+
+
+@pytest.mark.parametrize("note_path", [None, "notes/human.md", "a-alias.md"])
+def test_vault_related_human_symlink_alias_is_one_uuid_source(
+    tmp_path: Path, monkeypatch, note_path: str | None
+) -> None:
+    bind_selected_vault(monkeypatch, tmp_path)
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "00 Infrastructure/System")
+    _write_note(tmp_path / "notes/human.md", title="Human", uuid="human-alias-5933")
+    (tmp_path / "a-alias.md").symlink_to(tmp_path / "notes/human.md")
+    companion = tmp_path / "00 Infrastructure/System/companions/retained.md"
+    companion.parent.mkdir(parents=True)
+    companion.symlink_to(tmp_path / "notes/human.md")
+    params = {"artifact_uuid": "human-alias-5933"}
+    if note_path:
+        params["note_path"] = note_path
+
+    response = TestClient(app).get("/api/companion/vault-related", params=params)
+
+    assert response.status_code == 200
+    assert response.json()["scope"] == {"note_path": "notes/human.md", "artifact_uuid": "human-alias-5933"}
+    mismatch = TestClient(app).get(
+        "/api/companion/vault-related",
+        params={"note_path": companion.relative_to(tmp_path).as_posix(), "artifact_uuid": "human-alias-5933"},
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json()["detail"]["error"] == "artifact_scope_mismatch"

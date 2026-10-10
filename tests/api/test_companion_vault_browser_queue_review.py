@@ -422,3 +422,41 @@ def test_queue_review_refuses_invalid_human_uuid_scope_without_staging(
     assert _proposal_count() == 0
     assert {path: path.read_bytes() for path in before} == before
     assert _outbox_records(outbox) == []
+
+
+@pytest.mark.parametrize("note_path", [None, "notes/human.md", "a-alias.md"])
+def test_queue_review_human_symlink_alias_is_one_uuid_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, note_path: str | None
+) -> None:
+    vault = tmp_path / "vault"
+    human = _write_note(vault, "notes/human.md", uuid="human-alias-5933")
+    (vault / "a-alias.md").symlink_to(human)
+    companion = vault / "00 Infrastructure/System/companions/retained.md"
+    companion.parent.mkdir(parents=True)
+    companion.symlink_to(human)
+    bind_selected_vault(monkeypatch, vault)
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "00 Infrastructure/System")
+    before = {path: path.read_bytes() for path in vault.rglob("*.md")}
+    outbox = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    params = {"artifact_uuid": "human-alias-5933"}
+    if note_path:
+        params["note_path"] = note_path
+    client = TestClient(app)
+
+    response = client.post("/api/companion/vault-browser/actions/queue-review", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["note_path"] == "notes/human.md"
+    proposal = _staged_proposal(response.json()["proposal_id"])
+    assert proposal is not None
+    assert proposal.intent_event.payload.note.path == "notes/human.md"
+    mismatch = client.post(
+        "/api/companion/vault-browser/actions/queue-review",
+        json={"note_path": companion.relative_to(vault).as_posix(), "artifact_uuid": "human-alias-5933"},
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json()["detail"]["error"] == "artifact_scope_mismatch"
+    assert _proposal_count() == 1
+    assert {path: path.read_bytes() for path in vault.rglob("*.md")} == before
+    assert _outbox_records(outbox) == []
