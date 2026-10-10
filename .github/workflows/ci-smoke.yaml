@@ -918,7 +918,9 @@ jobs:
       - name: Run scoped not-pg unit tests
         if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'
         shell: bash
-        timeout-minutes: 22
+        # Several independently selected subsystems run serially in this step.
+        # The 120-second per-test timeout still catches individual hangs.
+        timeout-minutes: 35
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
         run: |
