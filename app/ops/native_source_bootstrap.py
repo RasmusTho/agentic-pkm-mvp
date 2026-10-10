@@ -163,7 +163,7 @@ def _instance_preflight(channel: str) -> None:
 def preflight(selector: str) -> Path | None:
     from app.config.environment import active_environment
     from app.config.paths import resolve_optional_vault_root
-    from app.stores import resolve_store_backend
+    from app.objects import resolve_object_store_port
     from app.version import get_runtime_version
 
     match = re.fullmatch(r'(dev|test|prod):([0-9a-f]{40})', selector)
@@ -180,7 +180,7 @@ def preflight(selector: str) -> Path | None:
         _instance_preflight(match[1])
     selected = resolve_optional_vault_root()
     root = selected.resolve(strict=True) if selected is not None else None
-    if (root is not None and not root.is_dir()) or resolve_store_backend() != 'pg':
+    if (root is not None and not root.is_dir()) or resolve_object_store_port().backend != 'pg':
         raise ValueError('source context invalid')
     return root
 
@@ -188,9 +188,9 @@ def preflight(selector: str) -> Path | None:
 def _product_ready(root: Path) -> bool:
     from app.rebuildability import evaluate_product_store_readiness
     from app.rebuildability.product_total_loss import _is_product_row
-    from app.stores import get_object_store
+    from app.objects import resolve_object_store_port
 
-    rows = list(get_object_store().list_objects(limit=None))
+    rows = list(resolve_object_store_port().store.list_objects(limit=None))
     readiness = evaluate_product_store_readiness(root, rows)
     # Empty retained sources do not prove that this binding is empty. Refuse
     # stale Product rows without deleting them or admitting ordinary writers.
