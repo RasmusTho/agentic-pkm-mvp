@@ -1988,6 +1988,43 @@ def _commit_har_raw_migration(root: Path, name: str) -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
 
 
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_automatic_deploy_refuses_forward_only_before_mutation(tmp_path: Path, channel: str) -> None:
+    root, env, _sha = _deploy_harness(tmp_path)
+    target = _commit_har_raw_migration(root, 'e7b4c9d2a6f1_heimdal_raw_representation.py')
+    env['FAKE_SHA'] = target
+    _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
+    pin = root / 'config/deploy' / (channel + '.env')
+    before = pin.read_bytes() if pin.exists() else None
+    result = _run_deploy(root, env, target, '--automatic', '--image-digest',
+                         'sha256:' + 'b' * 64, channel=channel)
+    assert result.returncode == 78, result.stdout + result.stderr
+    assert 'automatic migration gate refused' in result.stderr
+    assert (pin.read_bytes() if pin.exists() else None) == before
+    assert not (root / 'config/deploy' / (channel + '.migration-pending.env')).exists()
+    assert not any(event.startswith('docker ') for event in _deploy_events(env))
+
+
+def test_automatic_deploy_preserves_digest_in_pin_receipt_and_recovery(tmp_path: Path) -> None:
+    root, env, target = _deploy_harness(tmp_path)
+    _configure_successful_channel_preflights(root, env, tmp_path, channel='dev')
+    digest = 'sha256:' + 'b' * 64
+    result = _run_deploy(root, env, target, '--automatic', '--image-digest', digest)
+    assert result.returncode == 0, result.stdout + result.stderr
+    pin = root / 'config/deploy/dev.env'
+    assert 'APP_IMAGE_DIGEST_SUFFIX=@' + digest in pin.read_text()
+    receipt = json.loads((root / 'ops/deployments/dev-latest.json').read_text())
+    assert receipt['image'].endswith(':' + target + '@' + digest)
+    assert receipt['image_digest'] == digest and receipt['automatic'] is True
+    # Rebuilding the same SHA must retain the previous bytes for compensation.
+    env['FAKE_POSTDEPLOY_SMOKE'] = 'fail'
+    result = _run_deploy(root, env, target, '--automatic', '--image-digest', 'sha256:' + 'c' * 64)
+    assert result.returncode != 0
+    assert 'APP_IMAGE_DIGEST_SUFFIX=@' + digest in pin.read_text()
+    previous = root / 'config/deploy/dev.previous.env'
+    assert 'APP_IMAGE_DIGEST_SUFFIX=@' + digest in previous.read_text()
+
+
 @pytest.mark.parametrize("channel", ["dev", "test", "prod"])
 def test_full_deploy_preflights_raw_migration_key_before_any_docker(
     tmp_path: Path,

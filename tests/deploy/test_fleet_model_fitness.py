@@ -15,6 +15,34 @@ from app.release_channels.fleet_model_fitness import (
 PIN = "314632235404cae1c51dc92b5f37174aa02b5fb0"
 
 
+def test_digest_pin_checks_actual_container_image_id(tmp_path: Path) -> None:
+    root = _root_with_pin(tmp_path)
+    digest = 'sha256:' + 'b' * 64
+    image_id = 'sha256:' + 'c' * 64
+    reference = 'ghcr.io/rasmustho/pkm-app:' + PIN + '@' + digest
+    (root / 'config/deploy/prod.env').write_text(
+        f'APP_IMAGE_TAG={PIN}\nAPP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\nAPP_IMAGE_DIGEST_SUFFIX=@{digest}\n')
+    inspections = _all_services()
+    for inspection in inspections.values():
+        inspection['Config']['Image'] = reference
+        inspection['Image'] = image_id
+    base = _docker_runner(inspections)
+
+    def docker(args):
+        if args == ['image', 'inspect', reference]:
+            return json.dumps([{'Id': image_id}])
+        return base(args)
+
+    result = check_fleet_model_fitness('prod', root=root, require_pinned=True,
+                                      docker_runner=docker, http_get_json=_http_runner())
+    assert result.ok, result.violations
+    inspections['worker']['Image'] = 'sha256:' + 'd' * 64
+    result = check_fleet_model_fitness('prod', root=root, require_pinned=True,
+                                      docker_runner=docker, http_get_json=_http_runner())
+    assert not result.ok
+    assert "service 'worker' differs from immutable channel image" in result.violations
+
+
 def _root_with_pin(tmp_path: Path, channel: str = "prod", pin: str = PIN) -> Path:
     root = tmp_path
     deploy_dir = root / "config" / "deploy"

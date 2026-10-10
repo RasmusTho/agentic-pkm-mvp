@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import stat
@@ -37,14 +38,33 @@ class DeployPlan:
     services: tuple[str, ...]
     consumers: tuple[str, ...]
     ack_forward_only: bool = False
+    image_digest: str | None = None
+    automatic: bool = False
+
+    def payload(self) -> dict[str, Any]:
+        """Keep retained manual request bindings compatible with older workers."""
+        payload = asdict(self)
+        if self.image_digest is None and not self.automatic:
+            del payload['image_digest']
+            del payload['automatic']
+        return payload
 
     def validate(self) -> None:
         contract = load_host_secret_contract()
-        if (type(self.ack_forward_only) is not bool
+        if (type(self.ack_forward_only) is not bool or type(self.automatic) is not bool
             or self.channel not in CHANNEL_PROJECTS or len(self.revision) != 40
             or any(c not in '0123456789abcdef' for c in self.revision)
             or not self.services or len(set(self.services)) != len(self.services)
             or not self.consumers or len(set(self.consumers)) != len(self.consumers)):
+            raise PostgresDeployError()
+        if self.image_digest is not None and (
+            not isinstance(self.image_digest, str)
+            or re.fullmatch(r'sha256:[0-9a-f]{64}', self.image_digest) is None
+        ):
+            raise PostgresDeployError()
+        if self.automatic and (
+            self.channel not in {'dev', 'test'} or self.image_digest is None or self.ack_forward_only
+        ):
             raise PostgresDeployError()
         selected = {consumer for consumer, service in DATABASE_CONSUMERS.items() if service in self.services}
         if not selected or not selected <= set(self.consumers):
@@ -134,7 +154,7 @@ class DeployJournal:
         """
         plan.validate()
         DeployReceipt(operation_id, self.channel, 'deploy', 'prepared', None).validate()
-        expected = {'operation_id': operation_id, 'plan': asdict(plan), 'bootstrap': bootstrap}
+        expected = {'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': bootstrap}
         # Normalize tuples to the on-disk JSON representation before comparison.
         expected = json.loads(json.dumps(expected))
         with self._directory() as directory:
@@ -375,7 +395,7 @@ def bootstrap_password(admin: SecretAdmin, operation: HostSecretOperation, *, em
 def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
                      *, qualified: Callable[[], None], allow_bootstrap: bool = True) -> DeployReceipt:
     """Hold the shared controller lock through matching remote terminal evidence."""
-    if type(allow_bootstrap) is not bool:
+    if type(allow_bootstrap) is not bool or (plan.automatic and allow_bootstrap):
         raise PostgresDeployError()
     plan.validate()
     try:

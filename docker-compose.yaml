@@ -54,7 +54,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}${APP_IMAGE_DIGEST_SUFFIX:-}
     working_dir: /app
     env_file:
       - ./config/runtime.defaults.env
@@ -95,7 +95,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}${APP_IMAGE_DIGEST_SUFFIX:-}
     user: "0:0"
     # MVR-03 runs current_auth_posture() in this one-shot before it records the
     # floor and role. Mirror the API's non-host-secret config layers so API_KEY,
@@ -154,7 +154,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}${APP_IMAGE_DIGEST_SUFFIX:-}
     working_dir: /app
     env_file:
       - ./config/runtime.defaults.env
@@ -337,7 +337,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}${APP_IMAGE_DIGEST_SUFFIX:-}
     working_dir: /app
     env_file:
       - ./config/runtime.defaults.env
@@ -418,7 +418,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}${APP_IMAGE_DIGEST_SUFFIX:-}
     working_dir: /app
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     env_file:
@@ -507,7 +507,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}${APP_IMAGE_DIGEST_SUFFIX:-}
     working_dir: /app
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     env_file:
@@ -584,7 +584,7 @@ services:
       args:
         VCS_REF: ${VCS_REF:-unknown}
         BUILT_AT: ${BUILT_AT:-unknown}
-    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}
+    image: ${APP_IMAGE_REPOSITORY:-ghcr.io/rasmustho/pkm-app}:${APP_IMAGE_TAG:-dev-local}${APP_IMAGE_DIGEST_SUFFIX:-}
     working_dir: /app/companion-ui/companion-app
     user: "${LOCAL_UID:-0}:${LOCAL_GID:-0}"
     command:

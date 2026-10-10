@@ -8,7 +8,7 @@ Review cadence: as deployment topology, build pipeline, or channel ports change
 Last reviewed: 2026-10-09
 Last live runtime verification: 2026-10-03 UTC (read-only `dev`/`test` host, API, and route-configuration checks from Demerzel over VLAN; `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
-Verification update (2026-09-25): also checked `.github/workflows/app-image-build.yml`, `.github/workflows/integration-nightly.yaml`, `scripts/deploy_channel.sh`, and `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`; the repository workflow set has no caller of the deploy script. This remains repository inspection, not fresh host qualification or deployment evidence.
+Verification update (2026-10-10): repository support includes post-merge image admission and private-host dev/test orchestration under #5922. Deterministic verification establishes the orchestration, digest and migration boundaries; live activation and functional channel acceptance are recorded separately under #5675.
 Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). This establishes repository support only; live VM installation and qualification remain separate gates under #5667.
 
 ## Why this document exists
@@ -430,6 +430,60 @@ The target keeps the **ports, DB names, vault bindings, and the `dev/test → se
 ## Build-once / promote model
 
 The pipeline builds an image **once per commit** and promotes the *same* image artifact across channels by moving a tag pin. This replaces the "all channels run one bind-mounted checkout" model.
+
+### CI deployment automation posture
+
+The post-merge path consumes a successful `App Image Build` run for a `main` push.
+`.github/workflows/postmerge-dev-test.yml` validates its exact run, repository, SHA and existing
+TTS proof artifact, then publishes the SHA/digest identity. This Actions job has read-only
+permissions and no deployment credentials. Its green result proves admission, not deployment.
+The source run's SHA is authoritative; `workflow_run`'s own `github.sha` selects trusted
+orchestration code on the default branch and is not the candidate identity. See the
+[GitHub event contract](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run).
+
+The existing private macOS host controller runs `scripts/postmerge_dev_test.py --latest` every
+60 seconds. It independently revalidates the latest build and its artifact, then calls the native
+existing-secrets-only boundary for `dev` followed by `test`, with the same SHA and image-index
+digest. No new human approval, Actions environment or self-hosted PR runner is required. Deployment
+retains the existing host-controller and VM channel locks, supervised worker, request journal,
+health/readiness/version, fleet and browser UI gates. This is deployment smoke coverage; it does
+not replace the retained PostgreSQL or product functional tests.
+
+Automatic requests bind `image_digest` and `automatic=true` into the existing native journal.
+Compose uses `repository:SHA@sha256:...` through `APP_IMAGE_DIGEST_SUFFIX` in the channel pin.
+Fleet verification checks the actual container image IDs against that digest, including workers
+and gateways. A failed deployment restores the prior pin's digest where existing recovery allows
+image compensation; it adds no database rollback. Manual requests retain their original wire
+format when the new fields are absent. See [Compose image references](https://docs.docker.com/reference/compose-file/services/#image).
+
+Before credential materialization or channel mutation, automatic mode refuses forward-only
+migrations and inherited forward-only pending work. It cannot bootstrap secrets, acknowledge a
+migration or deploy production. The existing manual, candidate-specific migration path remains
+available for such a candidate; no BWS admin-writer qualification is added to existing-secret reads.
+
+The private mode-0600 checkpoint is a derived attempt cache, not deployment authority. It avoids
+redeploying an already processed build and resumes a dev-verified candidate at test after a host
+restart. An interrupted stage uses native same-request terminal reconciliation; unknown or
+mismatched evidence cannot start a fresh operation or advance the candidate. Failures emit bounded
+SHA/digest/run/channel/result JSON in the private controller log. A newer candidate can supersede
+an older one before deployment begins; a started chain completes with its original identity.
+
+Install from a clean retained tooling checkout contained in reviewed `main`, with its own working
+Python environment and the existing `gh` read client. Coordinate the current channel owner before
+loading the unit so that an ongoing functional acceptance run keeps its frozen candidate:
+
+```sh
+python3 scripts/install_postmerge_controller.py \
+  --checkout /absolute/path/to/reviewed-tooling \
+  --python /absolute/path/to/reviewed-tooling/.venv/bin/python --enable
+```
+
+The installer generates one host-local LaunchAgent with fixed arguments and no credential values.
+It uses launchd supervision and the controller's existing private state directory; no personal
+paths enter Git. See [Apple's launchd job contract](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html).
+Repository support alone does not prove the unit is loaded or the channels are qualified. Record
+activation, actual channel digests and functional acceptance on #5675. Current PR/PG and nightly
+checks remain until their coverage handoff is evidenced there.
 
 ### PR validation is not artifact publication (current policy)
 

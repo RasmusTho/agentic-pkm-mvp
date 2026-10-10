@@ -31,7 +31,7 @@ fi
 usage() {
   cat >&2 <<'EOF'
 usage:
-  scripts/deploy_channel.sh deploy <dev|test|prod> <sha> [--dry-run] [--ack-forward-only] [--ack-embedding-rebuild-required]
+  scripts/deploy_channel.sh deploy <dev|test|prod> <sha> [--dry-run] [--ack-forward-only] [--ack-embedding-rebuild-required] [--image-digest sha256:...] [--automatic]
   scripts/deploy_channel.sh rollback <dev|test|prod> [sha] [--dry-run]
 
 Environment:
@@ -80,15 +80,32 @@ esac
 dry_run="${DEPLOY_DRY_RUN:-0}"
 ack_forward_only="${DEPLOY_ACK_FORWARD_ONLY:-0}"
 ack_embedding_rebuild_required="${DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED:-0}"
+automatic=0
+image_digest=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) dry_run=1 ;;
     --ack-forward-only) ack_forward_only=1 ;;
     --ack-embedding-rebuild-required) ack_embedding_rebuild_required=1 ;;
+    --automatic) automatic=1 ;;
+    --image-digest)
+      [ "$#" -ge 2 ] || { usage; exit 2; }
+      image_digest="$2"
+      shift
+      ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
   shift
 done
+if [ -n "${image_digest}" ] && ! [[ "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+  echo "invalid immutable image digest" >&2
+  exit 2
+fi
+if [ "${automatic}" = "1" ] && { [ "${action}" != "deploy" ] ||
+    [ "${channel}" = "prod" ] || [ -z "${image_digest}" ] || [ "${ack_forward_only}" != "0" ]; }; then
+  echo "automatic deployment requires a non-production digest and forbids migration acknowledgements" >&2
+  exit 78
+fi
 
 case "${channel}" in
   dev)
@@ -251,13 +268,16 @@ read_pin() {
 }
 
 write_pin() {
-  local file="$1" sha="$2"
+  local file="$1" sha="$2" digest="${3:-}"
   local tmp_file
   tmp_file="$(mktemp "${file}.tmp.XXXXXX")"
   if [ -f "${file}" ]; then
-    awk -F= '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG" { print }' "${file}" >"${tmp_file}"
+    awk -F= '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG" && $1 != "APP_IMAGE_DIGEST_SUFFIX" { print }' "${file}" >"${tmp_file}"
   fi
   printf 'APP_IMAGE_REPOSITORY=%s\nAPP_IMAGE_TAG=%s\n' "${image_repository}" "${sha}" >>"${tmp_file}"
+  if [ -n "${digest}" ]; then
+    printf 'APP_IMAGE_DIGEST_SUFFIX=@%s\n' "${digest}" >>"${tmp_file}"
+  fi
   mv "${tmp_file}" "${file}"
 }
 
@@ -325,7 +345,14 @@ acquire_channel_mutation_lock() {
 mkdir -p "$(dirname "${pin_file}")"
 acquire_channel_mutation_lock
 current_sha="$(read_pin "${pin_file}" 2>/dev/null || true)"
+current_digest="$(awk -F= '/^APP_IMAGE_DIGEST_SUFFIX=/{sub(/^@/, "", $2); print $2; exit}' "${pin_file}" 2>/dev/null || true)"
 target_sha="$(resolve_target_sha "${target_sha}")"
+if [ "${action}" = "rollback" ] && [ "${target_sha}" = "$(read_pin "${previous_pin_file}" 2>/dev/null || true)" ]; then
+  image_digest="$(awk -F= '/^APP_IMAGE_DIGEST_SUFFIX=/{sub(/^@/, "", $2); print $2; exit}' "${previous_pin_file}" 2>/dev/null || true)"
+fi
+# Compose must never inherit an unrelated caller digest, including on rollback.
+APP_IMAGE_DIGEST_SUFFIX="${image_digest:+@${image_digest}}"
+export APP_IMAGE_DIGEST_SUFFIX
 scalar_rollback=0
 
 target_attests_settings_rebind_runtime() {
@@ -753,6 +780,10 @@ print("1" if pending else "0")
     return 1
   }
   forward_count="$("${PYTHON}" -c 'import json,sys; print(len(json.loads(sys.stdin.read())["forward_only"]))' <<<"${receipt_json}")"
+  if [ "${automatic}" = "1" ] && { [ "${forward_count}" -gt 0 ] || [ "${ack_forward_only}" != "0" ]; }; then
+    echo "automatic migration gate refused forward-only candidate before channel mutation" >&2
+    return 78
+  fi
   echo "migration gate ok: ${#migration_paths[@]} migration(s), forward_only=${forward_count}"
   MIGRATIONS_CHECKED="${#migration_paths[@]}"
   FORWARD_ONLY_COUNT="${forward_count}"
@@ -1280,10 +1311,12 @@ rollback_failed_startup() {
   fi
   if [ -n "${current_sha}" ]; then
     echo "${reason} (status ${original_status}); attempting rollback to previous pin" >&2
-    if ! write_pin "${pin_file}" "${current_sha}"; then
+    if ! write_pin "${pin_file}" "${current_sha}" "${current_digest}"; then
       echo "rollback pin restore failed for previous pin ${current_sha}" >&2
       return 0
     fi
+    APP_IMAGE_DIGEST_SUFFIX="${current_digest:+@${current_digest}}"
+    export APP_IMAGE_DIGEST_SUFFIX
     if [ "${action}" = "deploy" ] && \
         [ "${MIGRATION_PENDING_MARKER_CREATED}" = "1" ]; then
       # Only a deploy attempt that never started migration execution may clear
@@ -1579,7 +1612,9 @@ payload = {
     "action": "${action}",
     "sha": "${target_sha}",
     "previous_sha": "${current_sha}",
-    "image": "${image_repository}:${target_sha}",
+    "image": "${image_repository}:${target_sha}${image_digest:+@${image_digest}}",
+    "image_digest": "${image_digest}",
+    "automatic": "${automatic}" == "1",
     "recorded_at": "${timestamp}",
     "migration_receipt": json.loads(os.environ.get("MIGRATION_RECEIPT_JSON", "{}")),
     "fleet_model_fitness": json.loads(os.environ.get("FLEET_MODEL_FITNESS_JSON", "{}")),
@@ -1796,15 +1831,15 @@ if [ "${scalar_rollback}" = "1" ]; then
   # in the ordinary rollback anchor, so the same command can resume without an
   # explicit SHA after a crash or partial container establishment.
   write_pin "${previous_pin_file}" "${target_sha}"
-elif [ -n "${current_sha}" ] && [ "${current_sha}" != "${target_sha}" ]; then
+elif [ -n "${current_sha}" ] && { [ "${current_sha}" != "${target_sha}" ] || [ "${current_digest}" != "${image_digest}" ]; }; then
   # A same-target retry (or same-SHA redeploy) reads current_sha == target_sha
   # because a prior failed attempt already advanced the pin; overwriting the
   # rollback anchor with the failed target would make the true last-known-good
   # SHA unrecoverable through the rollback contract.
-  write_pin "${previous_pin_file}" "${current_sha}"
+  write_pin "${previous_pin_file}" "${current_sha}" "${current_digest}"
 fi
 if [ "${scalar_rollback}" != "1" ]; then
-  write_pin "${pin_file}" "${target_sha}"
+  write_pin "${pin_file}" "${target_sha}" "${image_digest}"
 fi
 rollback_target_recreated=0
 
