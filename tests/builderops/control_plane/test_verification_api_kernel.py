@@ -1096,7 +1096,7 @@ def test_post_effect_api_readback_preserves_exact_merge_identity(control_plane_s
     deployment["deployment_receipt"].update(control_plane_store.readiness())
     monkeypatch.setenv("BUILDEROPS_SOURCE_SHA", deployment["deployment_receipt"]["source_sha"])
     monkeypatch.setenv("BUILDEROPS_IMAGE_DIGEST", deployment["deployment_receipt"]["image_digest"])
-    restarted.post_effect_deployment = deployment
+    restarted = BuilderOpsVerificationLedger(client, repository=REPO, post_effect_deployment=deployment)
     projection = restarted.post_effect_authority(result.operation_key, run_id="post-effect-api")
     assert projection["operation_key"] == result.operation_key
     assert projection["merge_commit_sha"] == evidence["merge_commit_sha"]
@@ -1138,3 +1138,32 @@ def test_post_effect_api_readback_preserves_exact_merge_identity(control_plane_s
     projected_phase = json.loads(output.read_text())["phase_receipt"]
     assert projected_phase["contract"] == "verified_issue_set_merge_phase.v2"
     assert projected_phase["post_effect_authority"] == projection
+
+
+def test_authenticated_status_supplies_launcher_deployment_readback(control_plane_store, tmp_path, monkeypatch):
+    from tests.builderops.control_plane.test_deployment_readback import _files
+    receipt, _, pin = _files(tmp_path, monkeypatch)
+    ready = control_plane_store.readiness()
+    receipt.update(schema_version=ready['schema_version'], authority_epoch=ready['authority_epoch'])
+    (tmp_path / 'latest.json').write_text(json.dumps(receipt))
+    monkeypatch.setenv('BUILDEROPS_SOURCE_SHA', receipt['source_sha'])
+    monkeypatch.setenv('BUILDEROPS_IMAGE_DIGEST', receipt['image_digest'])
+    secret = tmp_path / 'status-token'
+    secret.write_text('status-read-token')
+    manifest = tmp_path / 'credentials.json'
+    manifest.write_text(json.dumps({'credentials': [{
+        'id': 'status-reader', 'principal': 'test-status-reader', 'secret_file': str(secret),
+        'secret_ref': 'host-secret:status-reader', 'rotation_generation': 1,
+        'scopes': ['status:read'], 'repositories': [REPO.lower()]}]}))
+    credentials = CredentialRegistry(manifest)
+    app = create_app(store=control_plane_store, credentials=credentials)
+    with TestClient(app) as http:
+        assert http.get('/v1/status').status_code == 401
+        client = BuilderOpsControlPlaneClient(ClientConfig(base_url='http://testserver', token='status-read-token'), http_client=http)
+        ledger = BuilderOpsVerificationLedger(client, repository=REPO)
+        ledger.require_post_effect_capability()
+        assert ledger.post_effect_deployment['deployment_receipt'] == receipt
+        pin.unlink()
+        from app.dispatcher.verification_merge import MergeAuthorityError
+        with pytest.raises(MergeAuthorityError, match='exact deployed substrate'):
+            ledger.require_post_effect_capability()

@@ -63,6 +63,8 @@ services:
       BUILDEROPS_DATABASE_URL_FILE: /run/secrets/builderops_database_url
       BUILDEROPS_SOURCE_SHA: ${BUILDEROPS_SOURCE_SHA:?BuilderOps source pin is required}
       BUILDEROPS_IMAGE_DIGEST: ${BUILDEROPS_IMAGE_DIGEST:?BuilderOps image pin is required}
+      BUILDEROPS_DEPLOYMENT_RECEIPT_FILE: /run/builderops-deployment/latest.json
+      BUILDEROPS_SELECTED_PIN_FILE: /run/builderops-pins/${BUILDEROPS_PIN_BASENAME:-builderops.env}
       BUILDEROPS_CREDENTIAL_MANIFEST_FILE: /run/secrets/builderops_api_credentials
       BUILDEROPS_LOCAL_DURABILITY_MODE: ${BUILDEROPS_LOCAL_DURABILITY_MODE:?Local BuilderOps durability mode is required}
       BUILDEROPS_PROBE_TOKEN_FILE: /run/secrets/builderops_probe_token
@@ -70,6 +72,9 @@ services:
       - builderops_database_url
       - builderops_api_credentials
       - builderops_probe_token
+    volumes:
+      - ${BUILDEROPS_RECEIPT_DIR:-./ops/deployments/builderops}:/run/builderops-deployment:ro
+      - ${BUILDEROPS_PIN_DIRECTORY:-./config/deploy}:/run/builderops-pins:ro
     ports:
       - "127.0.0.1:${BUILDEROPS_API_PORT:-18100}:8000"
     depends_on:

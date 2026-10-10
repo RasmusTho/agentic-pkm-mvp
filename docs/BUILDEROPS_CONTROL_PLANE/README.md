@@ -791,7 +791,10 @@ residency or activation is implied by the document name or the repository baseli
 ## Post-effect merge readback
 
 The #4897 API repair uses the existing nullable outbox columns and authenticated principal/fence
-boundary. Outbox GET returns persisted post-effect phase, original pending anchors, reconciled
+boundary. Authenticated status rereads the selected pin and successful deployment receipt from read-only
+Compose mounts on every request; installed verification and phase producers use that fresh
+projection automatically. Missing or changing files withdraw it. An explicit readback-file override
+still must satisfy freshness and exact API identity. Outbox GET returns persisted post-effect phase, original pending anchors, reconciled
 sequence/LSN, outcome and closed exact merge evidence. A recovery claim for `github.merge` retains
 the original pending identity. Ordinary negative reads remain retryable; they cannot finalize a
 merge effect. Exact governed positive readback may reconcile once, and replay rejects changed

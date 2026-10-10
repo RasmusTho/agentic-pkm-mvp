@@ -592,6 +592,15 @@ container address, so the wrapper restarts that fixed service again before authe
 polling. A missing or failed restart is fail-closed; the wrapper does not poll readiness or claim a
 restored release from an unrefreshed private loopback boundary.
 
+BuilderOps post-effect verification reads its successful deployment receipt and selected pin
+through authenticated status. Compose mounts the pin directory read-only so atomic pin replacement
+withdraws admission immediately. The deploy wrapper records the directory, basename and receipt
+location in the selected pin for later service-manager restarts. Metadata pins are published
+readable by the non-root API (0644), with directory traversal enabled; secret custody is unchanged.
+Missing, stale or mismatched
+readback refuses the consumer; this repository mechanism does not establish live activation.
+The owning contract is [verified issue-set merge and exact closure](AGENT_ISSUE_DISPATCHER.md#current-state-honesty).
+
 ### Builder Thread serialized writer
 
 Builder Thread is retired under #5128. There is no service, endpoint, client,

@@ -1585,8 +1585,8 @@ def test_merge_phase_cli_refuses_without_deployed_capability(tmp_path: Path) -> 
         check=False,
     )
 
-    assert completed.returncode == 2
-    assert "--post-effect-deployment-json" in completed.stderr
+    assert completed.returncode != 0
+    assert "ControlPlaneConfigError" in completed.stderr
     assert not output_path.exists()
 
 

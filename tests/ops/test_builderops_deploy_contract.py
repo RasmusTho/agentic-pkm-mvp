@@ -155,6 +155,10 @@ def test_effective_builderops_compose_has_no_recovery_egress_or_wal_secrets() ->
 
     assert effective["networks"]["builderops-internal"]["internal"] is True
     services = effective["services"]
+    assert "${BUILDEROPS_PIN_DIRECTORY:-./config/deploy}:/run/builderops-pins:ro" in services["api"]["volumes"]
+    assert services["api"]["environment"]["BUILDEROPS_SELECTED_PIN_FILE"] == (
+        "/run/builderops-pins/${BUILDEROPS_PIN_BASENAME:-builderops.env}"
+    )
     assert all(
         service["networks"] == ["builderops-internal"]
         for service in services.values()
@@ -486,6 +490,8 @@ fi
 
 def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) -> None:
     root, env, source_sha, digest, postgres_digest = _harness(tmp_path)
+    # Production root-owned pin directories may initially deny API traversal.
+    (root / "config/deploy").chmod(0o750)
     env["FAKE_BUILDER_PROJECTS"] = '[{"Name":"builderops-control-plane"}]'
     deploy = subprocess.run(
         [
@@ -504,6 +510,12 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
 
     receipt = json.loads((Path(env["BUILDEROPS_RECEIPT_DIR"]) / "latest.json").read_text())
     assert receipt["action"] == "deploy"
+    selected = (root / "config/deploy/builderops.env").read_text()
+    assert (root / "config/deploy/builderops.env").stat().st_mode & 0o777 == 0o644
+    assert (root / "config/deploy").stat().st_mode & 0o777 == 0o751
+    assert f"BUILDEROPS_PIN_DIRECTORY={root}/config/deploy" in selected
+    assert "BUILDEROPS_PIN_BASENAME=builderops.env" in selected
+    assert f"BUILDEROPS_RECEIPT_DIR={env['BUILDEROPS_RECEIPT_DIR']}" in selected
     assert receipt["project"] == "builderops-control-plane"
     assert receipt["engine_context"] == "builderops"
     assert receipt["engine_id"] == "799a3d86-54f6-4208-b71a-36ae3eee61b6"

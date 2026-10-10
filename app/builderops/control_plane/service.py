@@ -51,6 +51,7 @@ from app.builderops.control_plane.auth import (
     CredentialRegistry,
 )
 from app.builderops.control_plane.health import HealthService, LiveOperationalStatusProvider
+from app.builderops.control_plane.deployment_readback import deployment_readback
 from app.builderops.control_plane.models import (
     STALE_AUTHORITY_EPOCH_DETAIL,
     AuthorityEnvelope,
@@ -2246,6 +2247,7 @@ def create_app(
             "authority_epoch": readiness.get("authority_epoch"),
             "schema_version": readiness.get("schema_version"),
             "post_effect_capability": "post_effect_merge_readback.v1",
+            "post_effect_deployment": await run_in_threadpool(deployment_readback),
             "source_sha": os.environ.get("BUILDEROPS_SOURCE_SHA"),
             "image_digest": os.environ.get("BUILDEROPS_IMAGE_DIGEST"),
         }

@@ -402,9 +402,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   operation once; restart performs bounded readback and never replays the attempted merge.
 - The new consumers remain fail-closed until a fresh authoritative deployment readback matches the
   repaired source, attested image pair, selected pin, schema, epoch and authenticated API capability
-  `post_effect_merge_readback.v1`. The host supplies this readback through
-  `BUILDEROPS_POST_EFFECT_DEPLOYMENT_READBACK_FILE`; a missing, older-than-five-minute, unavailable or
-  drifted readback refuses activation. The API reports the selected source/image pins but those
+  `post_effect_merge_readback.v1`. The authenticated status producer rereads the read-only mounted
+  deployment receipt and selected pin on every request. The installed launcher and phase CLI consume
+  this fresh projection automatically; an explicit `BUILDEROPS_POST_EFFECT_DEPLOYMENT_READBACK_FILE`
+  or `--post-effect-deployment-json` remains a bounded override. Missing, older-than-five-minute,
+  unavailable or drifted readback refuses activation. The API reports source/image pins but those
   diagnostics alone do not establish attestation or deployment. Repository delivery does not claim
   live rollout; deployment remains owned by the independent BuilderOps deployment contract.
 - `verified_issue_set_merge_phase.v2` is one continuous prepared/merged/reconciled/restored chain.

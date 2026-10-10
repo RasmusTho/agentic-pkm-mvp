@@ -265,6 +265,7 @@ class BuilderOpsVerificationLedger:
         self.repository = repository.lower()
         self.effect_outbox = effect_outbox
         self.post_effect_deployment = post_effect_deployment
+        self._post_effect_deployment_override = post_effect_deployment is not None
         census_path = Path(__file__).resolve().parents[2] / "docs/settings/models/providers.yaml"
         self.capability_aliases: Mapping[str, str] = capability_aliases_for_channel(
             load_provider_census(census_path), channel="dev"
@@ -2092,7 +2093,11 @@ class BuilderOpsVerificationLedger:
 
     def require_post_effect_capability(self) -> None:
         from app.dispatcher.verification_merge import require_post_effect_deployment
-        require_post_effect_deployment(self.post_effect_deployment, self.client.status())
+        status = self.client.status()
+        if not self._post_effect_deployment_override:
+            observed = status.get("post_effect_deployment")
+            self.post_effect_deployment = observed if isinstance(observed, Mapping) else None
+        require_post_effect_deployment(self.post_effect_deployment, status)
 
     def prepare_merge_readback(self, operation_key: str) -> Mapping[str, object]:
         """Fence readback after an attempted effect without replaying its transport."""
