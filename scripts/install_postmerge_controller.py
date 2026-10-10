@@ -18,6 +18,12 @@ if __package__ in {None, ''}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 LABEL = 'se.yggdrasil.postmerge-dev-test'
+REPOSITORY = 'RasmusTho/agentic-pkm-mvp'
+CANONICAL_ORIGINS = {
+    prefix + REPOSITORY + suffix
+    for prefix in ('https://github.com/', 'git@github.com:', 'ssh://git@github.com/')
+    for suffix in ('', '.git')
+}
 
 
 def launch_agent(checkout: Path, python: Path, gh: Path, state: Path) -> dict:
@@ -46,8 +52,16 @@ def require_reviewed_checkout(checkout: Path, python: Path) -> None:
         or git('status', '--porcelain').stdout
         or not (checkout / 'scripts/postmerge_dev_test.py').is_file()):
         raise ValueError('reviewed checkout required')
-    git('fetch', 'origin', 'main')
-    git('merge-base', '--is-ancestor', 'HEAD', 'origin/main')
+    # get-url expands Git URL rewrites. Bind both effective authorities before
+    # fetching or importing any code from the supplied checkout.
+    for options in (('--all',), ('--push', '--all')):
+        urls = git('remote', 'get-url', *options, 'origin').stdout.splitlines()
+        if len(urls) != 1 or urls[0] not in CANONICAL_ORIGINS:
+            raise ValueError('canonical reviewed repository required')
+    git('fetch', '--no-tags', '--no-recurse-submodules', 'origin', 'refs/heads/main')
+    # FETCH_HEAD is the requested remote main, independently of a stale or
+    # locally forged origin/main and configured remote tracking refspecs.
+    git('merge-base', '--is-ancestor', 'HEAD', 'FETCH_HEAD')
     # Resolve required host dependencies before creating or loading anything.
     subprocess.run([str(python), '-c',
                     'import app.ops.postgres_deploy_host; import app.ops.postgres_deploy_linux'],

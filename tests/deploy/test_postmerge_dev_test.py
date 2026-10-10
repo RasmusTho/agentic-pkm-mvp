@@ -323,6 +323,90 @@ def test_controller_launch_agent_uses_fixed_reviewed_tooling_without_secrets():
     assert 'prod' not in json.dumps(config) and 'TOKEN' not in json.dumps(config)
 
 
+def _installer_repository(path):
+    path.mkdir()
+    def git(*args):
+        return subprocess.run(['git', '-C', str(path), *args], capture_output=True,
+                              text=True, check=True).stdout.strip()
+    git('init', '--quiet', '-b', 'main')
+    git('config', 'user.name', 'Fixture')
+    git('config', 'user.email', 'fixture@example.invalid')
+    for name in ('app/__init__.py', 'app/ops/__init__.py',
+                 'app/ops/postgres_deploy_host.py', 'app/ops/postgres_deploy_linux.py',
+                 'scripts/postmerge_dev_test.py'):
+        target = path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text('')
+    git('add', '.')
+    git('commit', '--quiet', '-m', 'Reviewed fixture')
+    return git
+
+
+@pytest.mark.parametrize('origin', [
+    'self', 'https://github.com/foreign/agentic-pkm-mvp.git',
+    'https://dummy-credential@github.com/RasmusTho/agentic-pkm-mvp.git',
+    'https://github.com/RasmusTho/agentic-pkm-mvp.git?source=foreign',
+])
+def test_installer_refuses_foreign_origin_before_fetch_or_import(tmp_path, monkeypatch, origin):
+    from scripts import install_postmerge_controller as installer
+    checkout = tmp_path / 'checkout'
+    git = _installer_repository(checkout)
+    git('remote', 'add', 'origin', str(checkout) if origin == 'self' else origin)
+    git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+    run = subprocess.run
+    def observed(command, **kwargs):
+        assert 'fetch' not in command and '-c' not in command
+        return run(command, **kwargs)
+    monkeypatch.setattr(installer.subprocess, 'run', observed)
+    with pytest.raises(ValueError, match='canonical reviewed repository'):
+        installer.require_reviewed_checkout(checkout, Path(sys.executable).resolve())
+
+
+@pytest.mark.parametrize('fault', ['push', 'multiple', 'rewrite', 'forged_tracking_head', None])
+def test_installer_binds_effective_repository_and_fetched_main(tmp_path, monkeypatch, fault):
+    from scripts import install_postmerge_controller as installer
+    reviewed = tmp_path / 'reviewed'
+    _installer_repository(reviewed)
+    checkout = tmp_path / 'checkout'
+    subprocess.run(['git', 'clone', '--quiet', str(reviewed), str(checkout)], check=True)
+    def git(*args):
+        subprocess.run(['git', '-C', str(checkout), *args], capture_output=True, check=True)
+    canonical = 'https://github.com/RasmusTho/agentic-pkm-mvp.git'
+    git('remote', 'set-url', 'origin', canonical)
+    if fault == 'push':
+        git('remote', 'set-url', '--push', 'origin', 'https://github.com/foreign/repo.git')
+    elif fault == 'multiple':
+        git('remote', 'set-url', '--add', 'origin', canonical)
+    elif fault == 'rewrite':
+        git('config', 'url.https://github.com/foreign/.insteadOf', 'https://github.com/RasmusTho/')
+    elif fault == 'forged_tracking_head':
+        git('config', 'user.name', 'Fixture')
+        git('config', 'user.email', 'fixture@example.invalid')
+        (checkout / 'foreign').write_text('not on canonical main')
+        git('add', 'foreign')
+        git('commit', '--quiet', '-m', 'Foreign head')
+        git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+    run = subprocess.run
+    effects = []
+    def observed(command, **kwargs):
+        if 'fetch' in command:
+            effects.append('fetch')
+            assert command[-4:] == ['--no-tags', '--no-recurse-submodules', 'origin', 'refs/heads/main']
+            command = list(command)
+            command[command.index('origin')] = str(reviewed)
+        elif '-c' in command:
+            effects.append('import')
+        return run(command, **kwargs)
+    monkeypatch.setattr(installer.subprocess, 'run', observed)
+    if fault is None:
+        installer.require_reviewed_checkout(checkout, Path(sys.executable).resolve())
+        assert effects == ['fetch', 'import']
+    else:
+        with pytest.raises((ValueError, subprocess.CalledProcessError)):
+            installer.require_reviewed_checkout(checkout, Path(sys.executable).resolve())
+        assert effects == (['fetch'] if fault == 'forged_tracking_head' else [])
+
+
 @pytest.mark.parametrize('crash', ['before_native_call', 'after_remote_commit', 'after_host_finish'])
 def test_controller_crash_reuses_exact_native_id_and_terminal_receipt(tmp_path, crash):
     from app.ops.host_secret_controller import HostSecretController
