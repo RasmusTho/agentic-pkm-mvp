@@ -16,6 +16,13 @@ from tests.helpers.pkm_alpha_helper import reset_memory_stores
 pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 
+@pytest.fixture(autouse=True)
+def _reset_memory_state_after_each_test():
+    """Do not leak the deterministic vector identity into neighboring shards."""
+    yield
+    reset_memory_stores()
+
+
 def _write_layout(vault_root: Path) -> None:
     layout = vault_root / "⚙️ System" / "vault.layout.md"
     layout.parent.mkdir(parents=True, exist_ok=True)
