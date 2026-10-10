@@ -78,6 +78,8 @@ def _parser() -> argparse.ArgumentParser:
         choices=("prepared", "merged", "reconciled", "restored"),
         required=True,
     )
+    parser.add_argument("--post-effect-deployment-json", type=Path)
+    parser.add_argument("--post-effect-operation-key")
     parser.add_argument("--pr-json", type=Path, required=True)
     parser.add_argument("--closed-issues-json", type=Path)
     parser.add_argument("--reopened-issues-json", type=Path)
@@ -111,6 +113,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if durable_convergence is None or durable_convergence != supplied_convergence:
         raise ValueError("phase requires one authenticated durable projection convergence")
+    post_effect = None
+    from app.builderops.control_plane.client import BuilderOpsControlPlaneClient, ClientConfig
+    from app.dispatcher.verification_api import BuilderOpsVerificationLedger
+    with BuilderOpsControlPlaneClient(ClientConfig.from_env()) as client:
+        ledger = BuilderOpsVerificationLedger(client, repository=str(authority_receipt["repository"]),
+            post_effect_deployment=(_mapping(args.post_effect_deployment_json)
+                if args.post_effect_deployment_json is not None else None))
+        ledger.require_post_effect_capability()
+        if args.phase in {"reconciled", "restored"}:
+            if not args.post_effect_operation_key:
+                raise ValueError("v2 terminal phase requires the exact outbox operation")
+            post_effect = ledger.post_effect_authority(args.post_effect_operation_key, run_id=str(authority_receipt["run_id"]))
     result = build_verified_merge_phase(
         authority_receipt=authority_receipt,
         authority_comment=(
@@ -119,6 +133,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             else None
         ),
         phase=args.phase,
+        phase_version=2,
+        post_effect_authority=post_effect,
         pr=_mapping(args.pr_json),
         projection_convergence_receipt=durable_convergence,
         final_projection_observation=(

@@ -158,7 +158,7 @@ def _phase_comment(
             else authority["neutralized_body_sha256"]
         ),
         "closed_issues": authority["closing_issues"] if reconciled else [],
-        "contract": "verified_issue_set_merge_phase.v1",
+        "contract": "verified_issue_set_merge_phase.v2",
         "final_projection_observation_sha256": (
             hashlib.sha256(
                 json.dumps(
@@ -177,6 +177,8 @@ def _phase_comment(
         "repository": authority["repository"],
         "run_id": authority["run_id"],
     }
+    from tests.dispatcher.verified_merge_projection_helpers import post_effect_authority
+    receipt["post_effect_authority"] = post_effect_authority(authority, merge_commit_sha) if reconciled else None
     return {
         "author_association": "OWNER",
         "body": (
@@ -185,6 +187,15 @@ def _phase_comment(
             + "\n```"
         ),
     }
+
+
+
+def _reconciled(merged_comment):
+    from tests.dispatcher.verified_merge_projection_helpers import post_effect_authority
+    receipt = _receipt_payload(merged_comment)
+    receipt.update(phase="reconciled", closed_issues=[3820, 3823],
+                   post_effect_authority=post_effect_authority(receipt, receipt["merge_commit_sha"]))
+    return {"author_association": "OWNER", "body": "verified issue-set merge phase:\n```json\n" + json.dumps(receipt) + "\n```"}
 
 
 def _merged_pr(body: str) -> dict[str, object]:
@@ -494,7 +505,7 @@ def test_watchdog_target_selection_recovers_raced_body_from_continuous_phase_cha
         authority,
         _convergence_comment(authority),
         _phase_comment(authority, phase="prepared", merge_commit_sha=None),
-        _phase_comment(authority, phase="merged", merge_commit_sha=merge_sha),
+        _phase_comment(authority, phase="merged", merge_commit_sha=merge_sha), _reconciled(_phase_comment(authority, phase="merged", merge_commit_sha=merge_sha)),
     ]
     raced_body = "Governing-Issue: #4999\n\nFixes #4999\n"
 
@@ -545,7 +556,7 @@ def test_watchdog_authenticates_current_chain_with_prior_head_history(body_mode:
     comments = [
         *history, authority, _convergence_comment(authority),
         _phase_comment(authority, phase="prepared", merge_commit_sha=None),
-        _phase_comment(authority, phase="merged", merge_commit_sha="c" * 40),
+        _phase_comment(authority, phase="merged", merge_commit_sha="c" * 40), _reconciled(_phase_comment(authority, phase="merged", merge_commit_sha="c" * 40)),
     ]
     preserved = copy.deepcopy(comments)
     request = {
@@ -622,7 +633,12 @@ def test_watchdog_parses_dynamic_convergence_fence_for_embedded_pr_body_fence() 
                     phase="merged",
                     merge_commit_sha=merge_sha,
                     phase_kwargs=phase_kwargs,
-                ),
+                ), _reconciled(_phase_comment(
+                    authority,
+                    phase="merged",
+                    merge_commit_sha=merge_sha,
+                    phase_kwargs=phase_kwargs,
+                )),
             ],
             "expectedRepository": REPOSITORY,
             "linkedIssues": [4999],
@@ -664,7 +680,12 @@ def test_watchdog_selects_the_only_delivered_replacement_receipt_chain() -> None
             phase="merged",
             merge_commit_sha=merge_sha,
             phase_kwargs=replacement_kwargs,
-        ),
+        ), _reconciled(_phase_comment(
+            authority,
+            phase="merged",
+            merge_commit_sha=merge_sha,
+            phase_kwargs=replacement_kwargs,
+        )),
     ]
 
     assert _node(
@@ -951,10 +972,10 @@ def test_watchdog_rejects_absent_forged_or_digest_mismatched_convergence() -> No
     )
 
     cases = (
-        [authority, prepared, merged],
-        [authority, forged_convergence, prepared, merged],
-        [authority, convergence, mismatched_prepared, merged],
-        [authority, duplicate_convergence_marker, prepared, merged],
+        [authority, prepared, merged, _reconciled(merged)],
+        [authority, forged_convergence, prepared, merged, _reconciled(merged)],
+        [authority, convergence, mismatched_prepared, merged, _reconciled(merged)],
+        [authority, duplicate_convergence_marker, prepared, merged, _reconciled(merged)],
         [authority, convergence, duplicate_phase_marker, merged],
     )
     for comments in cases:
@@ -992,8 +1013,8 @@ def test_watchdog_rejects_absent_forged_or_digest_mismatched_convergence() -> No
         + "\n```"
     )
     for comments in (
-        [authority, embedded_convergence_marker, prepared, merged],
-        [authority, convergence, embedded_phase_marker, merged],
+        [authority, embedded_convergence_marker, prepared, merged, _reconciled(merged)],
+        [authority, convergence, embedded_phase_marker, merged, _reconciled(merged)],
     ):
         assert _node(
             "selectWatchdogAuthority(inputs[0])",
@@ -1236,6 +1257,7 @@ def test_watchdog_history_preserves_provenance_bound_legacy_convergence(
                     _phase_comment(comment, phase="prepared", merge_commit_sha=None, phase_kwargs=kwargs)]
         if not prior:
             comments.append(_phase_comment(comment, phase="merged", merge_commit_sha="c" * 40, phase_kwargs=kwargs))
+            comments.append(_reconciled(comments[-1]))
         return comments, original, neutralized
 
     prior, _, _ = chain(legacy=legacy_position == "prior", prior=True)
@@ -1274,13 +1296,13 @@ def test_watchdog_current_only_history_uses_one_terminal_gate(body_mode: str, pr
                   {"merge_commit_sha": "not-a-sha"}, {"merge_commit_sha": "e" * 40},
                   {"merged": False}, {"state": "open"}):
         observed = {**live, **delta}
-        expected = ((proof == "no-history" and body_mode != "raced") or (proof == "merged" and not delta))
+        expected = False
         request = {"comments": comments, "expectedRepository": REPOSITORY,
                    "linkedIssues": [4999], "livePr": observed}
         assert (_node("selectWatchdogAuthority(inputs[0])", request)["mode"] == "durable_receipt") is expected
         if proof == "merged":
             assert (resolve_verified_merge_phase(comments, authority_receipt=_receipt_payload(authority),
-                    pr=observed, allow_merged_body_drift=True) is not None) is expected
+                    pr=observed, allow_merged_body_drift=True) is not None) is (not delta)
 
 
 @pytest.mark.parametrize("body_mode", ["canonical", "neutralized", "raced"])
@@ -1320,7 +1342,7 @@ def test_watchdog_and_shared_owner_authenticate_every_retained_phase_chain(
         request = {"comments": comments, "expectedRepository": REPOSITORY, "linkedIssues": [4999], "livePr": live}
         selected_authority = _node("selectWatchdogAuthority(inputs[0])", request)
         assert selected_authority == ({"mode": "durable_receipt", "closing_issues": [3820, 3823], "governing_issue": 3821}
-                                     if expected else {"mode": "trusted_receipt_invalid", "closing_issues": [], "governing_issue": None})
+                                     if (expected and chain_role == "current" and phase_kind in {"reconciled", "restored"}) else {"mode": "trusted_receipt_invalid", "closing_issues": [], "governing_issue": None})
 
     expected = phase_kind != "prepared" if chain_role == "current" else phase_kind == "prepared"
     assert_outcome(prefix + tested_phases + suffix, expected)
@@ -1355,6 +1377,8 @@ def test_watchdog_no_history_distinguishes_quoted_from_malformed_markers(body_mo
     for phase in ("prepared", "merged"):
         comment = _phase_comment(authority, phase=phase, merge_commit_sha=None if phase == "prepared" else "c" * 40)
         payload = _receipt_payload(comment)
+        payload["contract"] = "verified_issue_set_merge_phase.v1"
+        payload.pop("post_effect_authority", None)
         payload.pop("projection_convergence_sha256")
         payload.pop("final_projection_observation_sha256")
         comment["body"] = "verified issue-set merge phase:\n```json\n" + json.dumps(payload) + "\n```"
@@ -1365,4 +1389,18 @@ def test_watchdog_no_history_distinguishes_quoted_from_malformed_markers(body_mo
         evidence = comments + [{"author_association": "OWNER", "body": quote}]
         assert (resolve_verified_merge_phase(evidence, authority_receipt=_receipt_payload(authority), pr=live) is not None) is expected
         request = {"comments": evidence, "expectedRepository": REPOSITORY, "linkedIssues": [4999], "livePr": live}
-        assert (_node("selectWatchdogAuthority(inputs[0])", request)["mode"] == "durable_receipt") is expected
+        assert _node("selectWatchdogAuthority(inputs[0])", request)["mode"] == "trusted_receipt_invalid"
+
+
+def test_watchdog_requires_exact_deployed_reconciled_post_effect_authority():
+    from app.dispatcher.verified_merge import valid_post_effect_authority
+    from tests.dispatcher.verified_merge_projection_helpers import post_effect_authority
+    authority = _receipt_payload(_authority_comment())
+    proof = post_effect_authority(authority, "b" * 40)
+    assert _node("validPostEffectAuthority(inputs[0], inputs[1], inputs[2])", proof, authority, "b" * 40) is True
+    for key, value in (("phase", "pending"), ("task_id", "foreign"), ("run_id", "foreign"),
+                       ("pending_receipt_sequence", 3), ("reconciled_receipt_sequence", 2),
+                       ("deployment", {**proof["deployment"], "capability": None})):
+        bad = {**proof, key: value}
+        assert valid_post_effect_authority(bad, authority, "b" * 40) is False
+        assert _node("validPostEffectAuthority(inputs[0], inputs[1], inputs[2])", bad, authority, "b" * 40) is False
