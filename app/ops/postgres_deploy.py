@@ -327,7 +327,10 @@ class DeployWorker:
         deadline = self._monotonic() + _POST_ACTIVATION_QUIESCENCE_TIMEOUT_SECONDS
         while True:
             try:
-                if self.effects.quiescent():
+                proven = self.effects.quiescent()
+                if self._monotonic() >= deadline:
+                    return False
+                if proven:
                     return True
             except Exception:
                 # An unavailable census is still an unproven predicate. Keep

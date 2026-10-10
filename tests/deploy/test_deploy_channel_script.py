@@ -2526,6 +2526,40 @@ def test_deploy_postactivate_quiescence_timeout_preserves_pending(tmp_path):
     assert clock.now == 360.0
 
 
+def test_deploy_postactivate_quiescence_does_not_accept_late_true(tmp_path):
+    from app.ops.postgres_deploy import DeployWorker, PostgresDeployError
+
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = Clock()
+    effects = _BwsVmEffects()
+
+    def late_quiescent():
+        effects.events.append('quiescence')
+        clock.now = 360.0
+        return True
+
+    effects.quiescent = late_quiescent
+    _worker, journal, plan, operation_id = _bws_worker(tmp_path, effects)
+    worker = DeployWorker(journal, effects, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    with pytest.raises(PostgresDeployError):
+        worker.run(operation_id, plan)
+
+    receipt = journal.read()
+    assert receipt is not None and receipt.stage == 'activating'
+    assert receipt.terminal_result is None
+    assert effects.events.count('activate-clients') == 1
+
+
 def test_automatic_verification_waits_for_postactivate_quiescence(tmp_path):
     from app.ops import pg_acceptance
     from app.ops.postgres_deploy import DeployPlan, DeployWorker
