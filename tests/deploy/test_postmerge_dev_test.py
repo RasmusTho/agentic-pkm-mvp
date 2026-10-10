@@ -43,7 +43,7 @@ def _artifact(proof, name='app-image-tts-engine-proof.json'):
         archive.writestr(name, json.dumps(proof))
     raw = content.getvalue()
     metadata = {'id': 456, 'name': 'app-image-tts-engine-proof-' + SHA, 'expired': False,
-                'digest': 'sha256:' + hashlib.sha256(raw).hexdigest()}
+                'digest': 'sha256:' + hashlib.sha256(raw).hexdigest(), 'size_in_bytes': len(raw)}
     return metadata, raw
 
 
@@ -68,6 +68,49 @@ def test_source_build_admission_is_bound_to_main_push_and_exact_artifact():
     unsafe_metadata, unsafe_raw = _artifact(proof, '../injected.py')
     with pytest.raises(driver.CandidateRefused):
         driver.validate_artifact(run, unsafe_metadata, unsafe_raw)
+
+
+def test_rerun_artifact_is_bound_to_the_actual_successful_image_job(monkeypatch):
+    run, proof = _build()
+    run['run_attempt'] = 2
+    old, old_raw = _artifact(proof)
+    current, current_raw = _artifact({**proof, 'run_id': 123, 'run_attempt': 2})
+    current.update(id=789, name=f'app-image-tts-engine-proof-{SHA}-attempt-2')
+    jobs = [{'name': driver.BUILD_JOB, 'run_id': 123, 'run_attempt': attempt,
+             'status': 'completed', 'conclusion': 'success'} for attempt in (1, 2)]
+    responses = {
+        f'repos/{driver.REPOSITORY}/actions/runs/123': json.dumps(run).encode(),
+        f'repos/{driver.REPOSITORY}/actions/runs/123/jobs?filter=all&per_page=100':
+            json.dumps({'total_count': 2, 'jobs': jobs}).encode(),
+        f'repos/{driver.REPOSITORY}/actions/runs/123/artifacts?per_page=100':
+            json.dumps({'total_count': 2, 'artifacts': [old, current]}).encode(),
+        f'repos/{driver.REPOSITORY}/actions/artifacts/789/zip': current_raw,
+        f'repos/{driver.REPOSITORY}/actions/artifacts/456/zip': old_raw,
+    }
+    monkeypatch.setattr(driver, '_github', lambda path: responses[path])
+    assert driver.load_candidate(123) == driver.Candidate(SHA, DIGEST, 123, 2, 789)
+
+    # A missing current image proof cannot silently fall back to prior output.
+    responses[f'repos/{driver.REPOSITORY}/actions/runs/123/artifacts?per_page=100'] = json.dumps(
+        {'total_count': 1, 'artifacts': [old]}).encode()
+    with pytest.raises(driver.CandidateRefused, match='artifact_missing_or_ambiguous'):
+        driver.load_candidate(123)
+
+    # Rerunning only a different failed job reuses the authenticated successful
+    # image job's first-attempt proof, without requiring another image build.
+    responses[f'repos/{driver.REPOSITORY}/actions/runs/123/jobs?filter=all&per_page=100'] = json.dumps(
+        {'total_count': 1, 'jobs': jobs[:1]}).encode()
+    assert driver.load_candidate(123) == driver.Candidate(SHA, DIGEST, 123, 2, 456)
+
+
+@pytest.mark.parametrize('field,value', [('run_id', 999), ('run_attempt', 1), ('run_attempt', True)])
+def test_attempt_named_proof_rejects_mismatched_producer_identity(field, value):
+    run, proof = _build()
+    run['run_attempt'] = 2
+    metadata, raw = _artifact({**proof, 'run_id': 123, 'run_attempt': 2, field: value})
+    metadata['name'] = f'app-image-tts-engine-proof-{SHA}-attempt-2'
+    with pytest.raises(driver.CandidateRefused, match='image_proof_refused'):
+        driver.validate_artifact(run, metadata, raw)
 
 
 def test_dev_failure_blocks_test_and_success_preserves_same_candidate():

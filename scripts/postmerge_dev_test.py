@@ -29,6 +29,7 @@ from zipfile import ZipFile
 REPOSITORY = 'RasmusTho/agentic-pkm-mvp'
 IMAGE_REPOSITORY = 'ghcr.io/rasmustho/pkm-app'
 BUILD_WORKFLOW = '.github/workflows/app-image-build.yml'
+BUILD_JOB = 'Build SHA-tagged app image'
 
 
 class CandidateRefused(RuntimeError):
@@ -68,9 +69,15 @@ def validate_source_run(run: dict[str, Any], run_id: int) -> str:
     return str(run['head_sha'])
 
 
-def validate_artifact(run: dict[str, Any], artifact: dict[str, Any], archive: bytes) -> Candidate:
+def validate_artifact(run: dict[str, Any], artifact: dict[str, Any], archive: bytes,
+                      *, build_attempt: int | None = None) -> Candidate:
     sha = validate_source_run(run, run['id'])
-    if (artifact.get('name') != 'app-image-tts-engine-proof-' + sha
+    attempt = run['run_attempt'] if build_attempt is None else build_attempt
+    if type(attempt) is not int or not 1 <= attempt <= run['run_attempt']:
+        raise CandidateRefused('artifact_identity_refused')
+    prefix = 'app-image-tts-engine-proof-' + sha
+    legacy = artifact.get('name') == prefix and attempt == 1
+    if (not legacy and artifact.get('name') != f'{prefix}-attempt-{attempt}'
         or artifact.get('expired') is not False or type(artifact.get('id')) is not int
         or not _digest(artifact.get('digest'))
         or len(archive) > 1048576
@@ -83,6 +90,10 @@ def validate_artifact(run: dict[str, Any], artifact: dict[str, Any], archive: by
                 or members[0].file_size > 65536):
                 raise CandidateRefused('artifact_shape_refused')
             proof = json.loads(zipped.read(members[0]))
+        if (not legacy or 'run_id' in proof or 'run_attempt' in proof) and (
+            type(proof.get('run_id')) is not int or proof['run_id'] != run['id']
+            or type(proof.get('run_attempt')) is not int or proof['run_attempt'] != attempt):
+            raise CandidateRefused('image_proof_refused')
         digest = proof['image_index_digest']
         platforms = proof['platforms']
         if (proof['contract'] != 'app-image-tts-engine-proof.v1' or proof['candidate_sha'] != sha
@@ -110,15 +121,31 @@ def _github(path: str) -> bytes:
 def load_candidate(run_id: int) -> Candidate:
     run = json.loads(_github(f'repos/{REPOSITORY}/actions/runs/{run_id}'))
     sha = validate_source_run(run, run_id)
+    jobs = json.loads(_github(f'repos/{REPOSITORY}/actions/runs/{run_id}/jobs?filter=all&per_page=100'))
+    if jobs['total_count'] > 100:
+        raise CandidateRefused('build_job_listing_incomplete')
+    builds = [j for j in jobs['jobs'] if j.get('name') == BUILD_JOB]
+    if not builds or any(j.get('run_id') != run_id or type(j.get('run_attempt')) is not int
+                         or not 1 <= j['run_attempt'] <= run['run_attempt'] for j in builds):
+        raise CandidateRefused('build_job_identity_refused')
+    attempt = max(j['run_attempt'] for j in builds)
+    latest = [j for j in builds if j['run_attempt'] == attempt]
+    if len(latest) != 1 or latest[0].get('status') != 'completed' or latest[0].get('conclusion') != 'success':
+        raise CandidateRefused('build_job_identity_refused')
+    # A failed-jobs-only rerun may reuse the already-passed image job. Bind its
+    # actual attempt rather than requiring an unnecessary rebuild or new commit.
     artifacts = json.loads(_github(f'repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100'))
     if artifacts['total_count'] > 100:
         raise CandidateRefused('artifact_listing_incomplete')
-    matches = [a for a in artifacts['artifacts'] if a['name'] == 'app-image-tts-engine-proof-' + sha]
+    prefix = 'app-image-tts-engine-proof-' + sha
+    matches = [a for a in artifacts['artifacts'] if a['name'] == f'{prefix}-attempt-{attempt}']
+    if not matches and attempt == 1:
+        matches = [a for a in artifacts['artifacts'] if a['name'] == prefix]
     if len(matches) != 1 or matches[0].get('size_in_bytes', 1048577) > 1048576:
         raise CandidateRefused('artifact_missing_or_ambiguous')
     artifact = matches[0]
     archive = _github(f'repos/{REPOSITORY}/actions/artifacts/{artifact["id"]}/zip')
-    return validate_artifact(run, artifact, archive)
+    return validate_artifact(run, artifact, archive, build_attempt=attempt)
 
 
 def _current_main() -> str:

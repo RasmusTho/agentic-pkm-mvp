@@ -457,6 +457,14 @@ The source run's SHA is authoritative; `workflow_run`'s own `github.sha` selects
 orchestration code on the default branch and is not the candidate identity. See the
 [GitHub event contract](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run).
 
+Image proof uploads include the producing run and attempt, with an attempt-specific artifact
+name. Admission selects the most recent successful app-image job from the authoritative run's
+job history and validates that job's exact proof. Rerunning all jobs therefore selects the new
+image proof; rerunning only another failed job can reuse the already-passed image job without
+an unnecessary rebuild or commit. A missing newer image proof cannot fall back to an older one.
+Existing first-attempt proof artifacts remain compatible when the job history confirms that
+first attempt produced the image.
+
 The existing private macOS host controller runs `scripts/postmerge_dev_test.py --latest` every
 60 seconds. It independently revalidates the latest build and its artifact, then calls the native
 existing-secrets-only boundary for `dev` followed by `test`, with the same SHA and image-index
