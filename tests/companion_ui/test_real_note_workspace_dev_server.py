@@ -22,9 +22,11 @@ Verifies:
 from __future__ import annotations
 
 import ast
+import json
 import pathlib
 import threading
-from http.server import HTTPServer
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from typing import Any, Optional
 
 import httpx
@@ -190,6 +192,138 @@ def live_server_error():
 # ---------------------------------------------------------------------------
 # Import / module-level tests
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "timeout_seconds,delay_seconds,capture_status",
+    [("30.0", 2.2, 200), ("0.25", 0.5, 200), ("30.0", 0.0, 500)],
+)
+def test_managed_timeout_admits_bounded_slow_runtime(
+    monkeypatch,
+    timeout_seconds: str,
+    delay_seconds: float,
+    capture_status: int,
+) -> None:
+    """Real sockets admit slow reads/intake, retain finite deadlines and receipts."""
+    from companion_ui.workspace.capture_modal import (
+        CaptureAck,
+        CaptureSessionState,
+        SessionCapture,
+        WRITTEN_UNACKNOWLEDGED,
+        edit_draft,
+        submit_draft,
+    )
+    from companion_ui.workspace.serve_dev_page import (
+        CompanionThreadingHTTPServer,
+        load_config,
+        make_handler,
+    )
+    from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
+
+    receipt = {
+        "note_path": "Inbox/capture.md",
+        "operation": "append",
+        "adapter": "filesystem",
+        "captured_at": "2026-10-10T00:00:00Z",
+        "trace_id": "trace-slow-capture",
+    }
+    unacknowledged = {
+        "detail": {
+            "state": "not_acknowledged",
+            "error": "authority_receipt_persistence_failed",
+        },
+    }
+    capture_calls = []
+    workspace_calls = []
+
+    class DelayedRuntime(BaseHTTPRequestHandler):
+        def respond(self, status: int, payload: dict, delay: float = 0.0) -> None:
+            time.sleep(delay)
+            body = json.dumps(payload).encode()
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # The configured deadline has already closed this socket.
+
+        def do_GET(self) -> None:
+            if self.path.startswith("/api/companion/workspace?"):
+                workspace_calls.append(self.path)
+                self.respond(200, _note_payload(), delay_seconds)
+            else:
+                self.respond(200, {})
+
+        def do_POST(self) -> None:
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path == "/api/companion/capture":
+                capture_calls.append(payload)
+                self.respond(
+                    capture_status,
+                    receipt if capture_status == 200 else unacknowledged,
+                    delay_seconds,
+                )
+            else:
+                self.respond(200, {})
+
+        def log_message(self, *args) -> None:
+            pass
+
+    runtime = ThreadingHTTPServer(("127.0.0.1", 0), DelayedRuntime)
+    threading.Thread(target=runtime.serve_forever, daemon=True).start()
+    monkeypatch.setenv("COMPANION_API_BASE_URL", f"http://127.0.0.1:{runtime.server_port}")
+    monkeypatch.setenv("COMPANION_API_TIMEOUT_SECONDS", timeout_seconds)
+    monkeypatch.delenv("COMPANION_ASK_TIMEOUT_SECONDS", raising=False)
+    config = load_config()
+    client = WorkspaceHttpClient(config["api_base_url"], timeout=config["api_timeout_seconds"])
+    handler = make_handler(
+        client=client,
+        api_base_url=config["api_base_url"],
+        ask_timeout_seconds=config["ask_timeout_seconds"],
+        production_profile=True,
+    )
+    gateway = CompanionThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=gateway.serve_forever, daemon=True).start()
+    try:
+        origin = f"http://127.0.0.1:{gateway.server_port}"
+        workspace = httpx.get(origin, params={"note_path": "Some/Note.md"}, timeout=10.0)
+        capture = httpx.post(
+            origin + "/api/companion/capture",
+            json={"text": "one slow capture"},
+            timeout=10.0,
+        )
+        assert len(workspace_calls) == 1
+        assert capture_calls == [{"text": "one slow capture"}]
+        if float(timeout_seconds) < delay_seconds:
+            assert "Can't reach the vault right now" in workspace.text
+            assert capture.status_code == 502
+            assert capture.json()["error"] == "runtime_unavailable"
+            assert "timed out" in capture.json()["message"]
+            pending = submit_draft(edit_draft(CaptureSessionState(), "one slow capture"), ack=None)
+            assert pending.captures[0].ack is None
+            assert pending.captures[0].state == "not_yet_written"
+        else:
+            assert "This is the note body." in workspace.text
+            assert capture.status_code == capture_status
+            if capture_status == 200:
+                assert capture.json() == receipt
+                written = submit_draft(
+                    edit_draft(CaptureSessionState(), "one slow capture"),
+                    ack=CaptureAck(**capture.json()),
+                )
+                assert written.captures[0].state == "written"
+                assert written.captures[0].ack.trace_id == receipt["trace_id"]
+            else:
+                assert capture.json() == unacknowledged
+                pending = SessionCapture("one slow capture", WRITTEN_UNACKNOWLEDGED, ack=None)
+                assert pending.ack is None
+    finally:
+        gateway.shutdown()
+        gateway.server_close()
+        runtime.shutdown()
+        runtime.server_close()
 
 
 class TestModuleImport:

@@ -26,6 +26,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$runtime_root" != /* || "$runtime_root" == "/" || -L "$runtime_root" \
+  || -L "$runtime_root/browsers" \
   || "$launcher_path" != /* || "$launcher_path" == "/" || -L "$launcher_path" ]]; then
   echo "refusing invalid BWS deploy runtime path" >&2
   exit 78
@@ -54,8 +55,22 @@ fi
   --disable-pip-version-check \
   --requirement "$repo_root/requirements-bws-deploy.txt"
 if ! PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" "$runtime_python" -c \
-  'import bitwarden_sdk, psycopg, app.ops.postgres_deploy_linux' >/dev/null 2>&1; then
+  'import bitwarden_sdk, psycopg, yaml, app.ops.postgres_deploy_linux; import pytest, playwright.sync_api; from app.retrieval.tuning import reset_retrieval_tuning_cache; reset_retrieval_tuning_cache()' >/dev/null 2>&1; then
   echo "BWS deploy runtime dependency check failed" >&2
+  exit 78
+fi
+
+# The mandatory smoke calls chromium.launch() in headless mode. Provision its
+# matching payload only inside this runtime; OS libraries remain host prerequisites.
+export PLAYWRIGHT_BROWSERS_PATH="$runtime_root/browsers"
+if ! "$runtime_python" -m playwright install --only-shell chromium; then
+  echo "BWS deploy Chromium payload installation failed" >&2
+  exit 78
+fi
+if ! PYTHON="$runtime_python" PATH="$runtime_root/bin:$PATH" \
+  PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}" \
+  bash "$repo_root/scripts/companion_ui_postdeploy_smoke.sh" preflight; then
+  echo "BWS deploy browser/pytest preflight failed; verify Chromium payload and prerequisite OS libraries before rerunning setup" >&2
   exit 78
 fi
 
