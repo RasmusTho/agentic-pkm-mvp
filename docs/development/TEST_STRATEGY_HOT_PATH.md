@@ -33,6 +33,22 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 
 ## Current Protection Surface
 
+- The existing Companion UI browser-runtime gate also executes
+  `tests/companion_ui/test_vault_browser_state_runtime.py`: populated, empty,
+  partial and error lists crossed with available/unavailable identity at desktop
+  and narrow persistent-pane widths. The real renderer runs in offline Chromium;
+  the suite checks healthy rows in partial results, distinct degraded states,
+  exact read-only keyboard navigation, browser errors and unexpected egress or
+  mutating requests. Run locally with
+  `COMPANION_UI_BROWSER_TESTS=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_vault_browser_state_runtime.py`.
+  Set `COMPANION_UI_STATE_EVIDENCE_DIR` to retain fixture-only screenshots and
+  traces; CI archives these with JUnit at its exact checkout SHA. Combined
+  partial/error plus unresolved identity currently masks the identity warning
+  (registry `KD-87DEE784B97A`). Only that dedicated missing-notice exception is a
+  strict expected failure; other errors remain blocking and an unexpected pass
+  requires removing the marker with the UI repair. These results prove offline
+  browser behavior, not mobile-overlay or deployed dev/test acceptance. Live
+  core-flow coverage is separately tracked by Issue #5942.
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.

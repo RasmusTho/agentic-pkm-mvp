@@ -528,6 +528,23 @@ def test_browser_runtime_supports_exact_ref_dispatch_with_pull_request_qualifica
         assert f"pytest -q {existing_blocking_module}" in browser
 
 
+def test_browser_runtime_executes_vault_state_matrix_and_retains_diagnostics() -> None:
+    step = _browser_step("Run deterministic Companion UI browser-runtime tests")
+    assert step.get("continue-on-error", False) is False
+    assert "if" not in step
+    assert step["env"] == {
+        "COMPANION_UI_STATE_EVIDENCE_DIR": "${{ runner.temp }}/vault-browser-state-matrix"
+    }
+    assert "pytest -q tests/companion_ui/test_runtime_unavailable_browser.py" in step["run"]
+    assert "tests/companion_ui/test_vault_browser_state_runtime.py" in step["run"]
+    assert '--junitxml="$COMPANION_UI_STATE_EVIDENCE_DIR/junit.xml"' in step["run"]
+    evidence = _browser_step("Retain Vault Browser state-matrix diagnostics")
+    assert evidence["if"] == "always()"
+    assert evidence["uses"] == "actions/upload-artifact@v4"
+    assert evidence["with"]["path"] == "${{ runner.temp }}/vault-browser-state-matrix"
+    assert evidence["with"]["if-no-files-found"] == "error"
+
+
 def test_browser_runtime_dispatch_requires_non_skipped_overview_journeys(
     tmp_path: Path,
 ) -> None:

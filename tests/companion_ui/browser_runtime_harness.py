@@ -9,7 +9,7 @@ from threading import Thread
 from typing import Iterator
 from urllib.parse import urlparse
 
-from companion_ui.workspace.serve_dev_page import render_index_html
+from companion_ui.workspace.serve_dev_page import render_index_html, vendor_static_assets
 
 
 _VENDOR_DIR = Path(__file__).resolve().parent / "fixtures" / "browser_vendor"
@@ -59,14 +59,15 @@ def companion_workspace_fields(*, body: str) -> dict:
 
 
 @contextmanager
-def serve_rendered_workspace(body: str) -> Iterator[str]:
-    """Serve render_index_html output on localhost for a browser test."""
+def serve_rendered_workspace(body: str, *, fields: dict | None = None) -> Iterator[str]:
+    """Serve the real rendered page and local assets with optional fixture fields."""
 
     html = render_index_html(
         api_base_url="http://127.0.0.1:18001",
         note_path="Notes/mermaid-browser-runtime.md",
-        fields=companion_workspace_fields(body=body),
+        fields=companion_workspace_fields(body=body) | (fields or {}),
     ).encode("utf-8")
+    assets = vendor_static_assets()
 
     class _Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:
@@ -74,15 +75,19 @@ def serve_rendered_workspace(body: str) -> Iterator[str]:
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path != "/":
+            if parsed.path in assets:
+                content_type, payload = assets[parsed.path]
+            elif parsed.path == "/":
+                content_type, payload = "text/html; charset=utf-8", html
+            else:
                 self.send_response(404)
                 self.end_headers()
                 return
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(html)))
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(html)
+            self.wfile.write(payload)
 
     server = HTTPServer(("127.0.0.1", 0), _Handler)
     thread = Thread(target=server.serve_forever, daemon=True)
