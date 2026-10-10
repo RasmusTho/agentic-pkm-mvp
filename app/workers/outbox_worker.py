@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import UUID
 
-from app.agents.panel.filters import strip_ai_panels
-from app.agents.panel.writeback import strip_ai_status_block
 from app.agents.panel_agent.execution import refresh_panel_note_object, run_panel_note_execution
 from app.components.concurrency import EventDedupStore
 from app.events.sync import SyncChainCorrelationData, SyncLatencySummaryEvent
@@ -62,6 +60,7 @@ from app.services.indexer import (
     purge_object_vectors,
     resolve_event_object_id,
 )
+from app.rebuildability import canonical_product_body_text, parse_bounded_frontmatter
 from app.services.companion_note import CompanionNote, is_companion_path, scan_attachments, write_companion
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
@@ -1781,7 +1780,7 @@ def handle_ingest_vault_changed(
         logger.warning("ingest skipped (missing note) note_path=%s", note_path)
         return WorkerIngestSummary(ingested=0)
 
-    frontmatter, body = load_frontmatter(raw_text)
+    frontmatter, body, frontmatter_error = parse_bounded_frontmatter(raw_text)
     _assert_profile_ingestible(
         note_path,
         vault_root=resolved_root,
@@ -1801,7 +1800,7 @@ def handle_ingest_vault_changed(
     # panel artifacts here — once, before `content` fans out to the store_objects
     # payload, the vector-index content_hash stamp, and the companion hash — keeps
     # all three consumers looking at the same canonical source body.
-    content = strip_ai_status_block(strip_ai_panels(body or raw_text)).strip()
+    content = canonical_product_body_text(body)
 
     note_uuid = _normalize_uuid_value(frontmatter.get("uuid") or frontmatter.get("id"))
     if not note_uuid and healed_uuid:
@@ -1810,7 +1809,8 @@ def handle_ingest_vault_changed(
         note_uuid = _ensure_uuid_with_backoff(note_path, vault_root=resolved_root)
         if note_uuid:
             raw_text = _stabilized_note_text(note_path) or raw_text
-            frontmatter, body = load_frontmatter(raw_text)
+            frontmatter, body, frontmatter_error = parse_bounded_frontmatter(raw_text)
+            content = canonical_product_body_text(body)
 
     if not note_uuid:
         logger.debug("note missing uuid after heal attempt note_path=%s", note_path)
@@ -1859,7 +1859,11 @@ def handle_ingest_vault_changed(
         "kind": "note",
     }
 
-    handle_ingest_object_created(ingest_obj, vault_root=resolved_root)
+    handle_ingest_object_created(
+        ingest_obj,
+        vault_root=resolved_root,
+        source_snapshot=None if frontmatter_error else raw_text,
+    )
     return WorkerIngestSummary(ingested=1)
 
 
