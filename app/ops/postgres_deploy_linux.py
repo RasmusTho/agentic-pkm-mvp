@@ -1,7 +1,8 @@
 """Linux effects for BWS-04. The supervised server owns worker lifetime, not SSH.
 
-All command output is captured and discarded unless it is a validated identifier
-or status. The root-owned configuration and Unix socket are operator-installed;
+All command output is captured and discarded unless it is a validated identifier,
+status, or finite advisory deploy failure stage. The root-owned configuration and
+Unix socket are operator-installed;
 there is no credential-valued environment, command argument, or status response.
 """
 from __future__ import annotations
@@ -33,12 +34,33 @@ from app.ops.postgres_deploy import (
 )
 
 _ONE_SHOT_COMPOSE_SERVICES = frozenset({'instance-state-init', 'migrate'})
+_DEPLOY_FAILURE_STAGES = frozenset({
+    'preflight', 'runtime_identity', 'model_access', 'migration_inventory',
+    'migration_ack', 'runtime_prepare', 'pin_write', 'image_pull',
+    'scalar_retirement', 'instance_prepare', 'migration_apply', 'service_recreate',
+    'scalar_runtime', 'embedding_configuration', 'health', 'version',
+    'fleet_fitness', 'ui_smoke', 'capture_watch', 'receipt',
+})
+
+
+def _deploy_failure_stage(stderr: str) -> str:
+    prefix = 'YGGDRASIL_DEPLOY_FAILURE_STAGE='
+    markers = [line[len(prefix):] for line in stderr.splitlines() if line.startswith(prefix)]
+    # Ambiguous, malformed, or injected markers never produce free text.
+    if len(markers) == 1 and markers[0] in _DEPLOY_FAILURE_STAGES:
+        return markers[0]
+    return 'unknown'
 
 
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
-             pass_fds: tuple[int, ...] = ()) -> str:
+             pass_fds: tuple[int, ...] = (), deploy_diagnostics: bool = False) -> str:
     result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True, text=True, check=False)
     if result.returncode:
+        if deploy_diagnostics:
+            # systemd's existing supervisor journal receives only constants.
+            # This cannot change the operation journal or terminal authority.
+            stage = _deploy_failure_stage(result.stderr)
+            print(f'native deployment failure: stage={stage} class=command_failed', file=sys.stderr)
         raise PostgresDeployError()
     return result.stdout
 
@@ -761,7 +783,8 @@ class LinuxEffects:
                     'deploy', plan.channel, plan.revision]
             if plan.ack_forward_only:
                 argv.append('--ack-forward-only')
-            _command(argv, cwd=self.config.root, env=env, pass_fds=(self.lock_fd,))
+            _command(argv, cwd=self.config.root, env=env, pass_fds=(self.lock_fd,),
+                     deploy_diagnostics=True)
         finally:
             for path in paths:
                 path.unlink()

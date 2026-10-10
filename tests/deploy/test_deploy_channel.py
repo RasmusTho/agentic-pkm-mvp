@@ -22,6 +22,51 @@ _DEPLOY_READINESS_TIMEOUT_SECONDS = 30
 _DEPLOY_CLEANUP_TIMEOUT_SECONDS = 5
 
 
+def test_failed_reconciliation_remains_quiescent_and_non_replaying(tmp_path, monkeypatch) -> None:
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    root = tmp_path / "checkout"
+    lock_dir = root / "config/deploy/test.env.lock"
+    lock_dir.mkdir(parents=True, mode=0o700)
+    (lock_dir / "bws-owner").touch(mode=0o600)
+    journal = DeployJournal(tmp_path / "journal", "test")
+    plan = DeployPlan("test", "a" * 40, ("db", "api"), ("postgres-db", "postgres-api"))
+    operation_id = str(uuid4())
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ("prepared", "preflighted", "materialized", "activating"):
+        journal.write(operation_id, stage)
+    config = SimpleNamespace(channel="test", root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, "load", lambda _channel: config)
+    monkeypatch.setattr(linux.LinuxEffects, "activate", lambda *_args: pytest.fail("must not replay"))
+    state = {"value": "running"}
+
+    def compose(_self, *_args):
+        # Exercise native quiescence over an actual captured child result.
+        return linux._command([sys.executable, "-c", "import sys; print(sys.argv[1])",
+                               json.dumps([{"Service": "migrate", "State": state["value"], "Health": ""}])])
+
+    monkeypatch.setattr(linux.LinuxEffects, "compose", compose)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {"action": "reconcile-failed", "operation_id": operation_id,
+               "plan": asdict(plan), "bootstrap": False}
+    for refused in (request, {**request, "action": "prepare", "operation_id": str(uuid4())},
+                    {**request, "plan": {**asdict(plan), "revision": "b" * 40}}):
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(refused)
+        assert journal.read().stage == "activating"
+        assert lock_dir.is_dir()
+    state["value"] = "exited"
+    receipt = supervisor.request(request)
+    assert receipt["receipt"]["terminal_result"] == "failed"
+    assert not lock_dir.exists()
+    assert supervisor.request({**request, "action": "join"}) == receipt
+    assert journal.read().stage == "failed"
+
+
 def _without_macos_malloc_stack_logging(
     source: Mapping[str, str] | None = None,
 ) -> dict[str, str]:

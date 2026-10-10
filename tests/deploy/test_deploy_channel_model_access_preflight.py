@@ -21,11 +21,17 @@ def _run_preflight(
     runtime_env: Path,
     *,
     inherited: dict[str, str] | None = None,
+    channel_action: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     shell = """
 set -euo pipefail
 source "$1"
-deploy_channel_model_access_runtime_env_preflight "$2"
+if [ -n "$3" ]; then
+  action="$3"
+  deploy_channel_model_access_preflight "$2.product-runtime" "$2"
+else
+  deploy_channel_model_access_runtime_env_preflight "$2"
+fi
 for key in \
   MODEL_ACCESS_CODEX_VLAN_ENDPOINT \
   MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE \
@@ -47,6 +53,7 @@ done
             "model-access-preflight",
             str(DEPLOY_COMPOSE_LIB),
             str(runtime_env),
+            channel_action or "",
         ],
         cwd=REPO_ROOT,
         env=environment,
@@ -133,18 +140,105 @@ def test_model_access_preflight_exports_only_valid_path_references(
     assert "allowlist_validated" in result.stderr
 
 
+@pytest.mark.parametrize("channel_action", ["deploy", "rollback"])
 def test_missing_optional_model_access_file_clears_inherited_values(
     tmp_path: Path,
+    channel_action: str,
 ) -> None:
     runtime_env = tmp_path / "missing-runtime.env"
     result = _run_preflight(
         runtime_env,
         inherited={key: "stale-parent-value" for key in MODEL_ACCESS_ENV_KEYS},
+        channel_action=channel_action,
     )
 
     assert result.returncode == 0, result.stderr
     assert _reported_bindings(result) == {key: "" for key in MODEL_ACCESS_ENV_KEYS}
     assert "optional_missing" in result.stderr
+
+
+@pytest.mark.parametrize("recovery", ["automatic", "explicit"])
+def test_rollback_retains_valid_existing_model_access_bindings(
+    tmp_path: Path, recovery: str,
+) -> None:
+    from app.model_access.executor_network_policy import resolve_executor_paths
+    from tests.deploy.test_deploy_channel import _deploy_events, _run_deploy, _run_rollback
+    from tests.deploy.test_deploy_channel_script import (
+        _commit_prefloor_successor, _deploy_harness, _seed_previous_pin,
+    )
+
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    target_sha = _commit_prefloor_successor(root, "configured recovery")
+    _seed_previous_pin(root, previous_sha)
+    model_access_env = tmp_path / "model-access-runtime.env"
+    expected = {"MODEL_ACCESS_CODEX_VLAN_ENDPOINT": "https://192.0.2.25:8443"}
+    for key, filename in zip(MODEL_ACCESS_ENV_KEYS[1:], ("ca.pem", "client.pem", "client.key")):
+        reference = tmp_path / filename
+        reference.write_text("synthetic fixture\n")
+        expected[key] = str(reference)
+    model_access_env.write_text("".join(f"{key}={value}\n" for key, value in expected.items()))
+    for relative in ("scripts/deploy_channel.sh", "scripts/lib/deploy_channel_compose.sh"):
+        path = root / relative
+        path.write_text(path.read_text().replace(
+            "/etc/yggdrasil/model-access/runtime.env", str(model_access_env),
+        ))
+    docker = Path(env["PATH"].split(os.pathsep)[0]) / "docker"
+    injection = '''if [[ "$*" == *"up -d --force-recreate api worker watcher heimdal-capture-watch companion-ui"* ]]; then
+  printf 'model-access-bindings %s|%s|%s|%s\\n' \\
+    "${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}" "${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}" \\
+    "${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}" "${MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY:-}" \\
+    >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+fi
+'''
+    docker.write_text(docker.read_text().replace("set -eu\n", "set -eu\n" + injection, 1))
+    for key in MODEL_ACCESS_ENV_KEYS:
+        env[key] = "stale-parent-value"
+    if recovery == "automatic":
+        env.update(FAKE_SHA=target_sha, FAKE_POSTDEPLOY_SMOKE="fail", FAKE_POSTDEPLOY_SMOKE_RC="73")
+        result = _run_deploy(root, env, target_sha)
+        assert result.returncode == 73, result.stdout + result.stderr
+        expected_recreates = 2
+    else:
+        _seed_previous_pin(root, target_sha)
+        env["FAKE_SHA"] = previous_sha
+        result = _run_rollback(root, env, previous_sha)
+        assert result.returncode == 0, result.stdout + result.stderr
+        expected_recreates = 1
+    bindings = [line.removeprefix("model-access-bindings ").split("|")
+                for line in _deploy_events(env) if line.startswith("model-access-bindings ")]
+    assert len(bindings) == expected_recreates
+    for values in bindings:
+        actual = dict(zip(MODEL_ACCESS_ENV_KEYS, values, strict=True))
+        assert actual == expected
+        # The same real resolver used by required Product callers must accept
+        # the references handed to service recreation; no network call occurs.
+        resolved = resolve_executor_paths(
+            "profile.codex_remote_host", environment=actual,
+            policy_path=REPO_ROOT / "config/model_access/executor_network_paths.yaml",
+        )
+        assert resolved[0].endpoint == expected[MODEL_ACCESS_ENV_KEYS[0]]
+        assert resolved[0].client_certificate == (
+            expected[MODEL_ACCESS_ENV_KEYS[2]], expected[MODEL_ACCESS_ENV_KEYS[3]],
+        )
+    assert "stale-parent-value" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("contents", [
+    "UNSUPPORTED_KEY=untrusted-canary\n",
+    "MODEL_ACCESS_CODEX_VLAN_ENDPOINT=https://user:untrusted-canary@example.test\n",
+    "MODEL_ACCESS_CODEX_VLAN_ENDPOINT=https://example.test\n"
+    "MODEL_ACCESS_CODEX_VLAN_ENDPOINT=https://other.test\n",
+])
+def test_rollback_clears_invalid_optional_bindings_without_promoting_them(
+    tmp_path: Path, contents: str,
+) -> None:
+    runtime_env = tmp_path / "model-access-runtime.env"
+    runtime_env.write_text(contents)
+    result = _run_preflight(runtime_env, channel_action="rollback",
+                            inherited={key: "stale-parent-value" for key in MODEL_ACCESS_ENV_KEYS})
+    assert result.returncode == 0, result.stderr
+    assert _reported_bindings(result) == {key: "" for key in MODEL_ACCESS_ENV_KEYS}
+    assert "untrusted-canary" not in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize(

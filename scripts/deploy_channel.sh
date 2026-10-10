@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Advisory only: the supervised adapter accepts one exact allowlisted marker,
+# never the child command's raw output. Keep the primary stage through recovery.
+DEPLOY_FAILURE_STAGE=preflight
+deploy_channel_failure_diagnostic() {
+  if [ "${1}" -ne 0 ] && [ "${BASH_SUBSHELL}" -eq 0 ]; then
+    printf 'YGGDRASIL_DEPLOY_FAILURE_STAGE=%s\n' "${DEPLOY_FAILURE_STAGE}" >&2
+  fi
+}
+trap 'deploy_channel_failure_diagnostic "$?"' EXIT
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 source "${ROOT}/scripts/lib/deploy_channel_compose.sh"
 source "${ROOT}/scripts/lib/instance_state_deployment.sh"
@@ -192,17 +202,19 @@ PY
 }
 
 # Gate Product-channel MARR bindings before creating the channel lock, materializing
-# migration files, or preparing host deployment state. Rollback keeps recovery
-# available by pinning the optional MARR references empty; the Compose helper
-# repeats that action or deploy validation before it snapshots the runtime env.
+# migration files, or preparing host deployment state. Recovery preserves valid
+# references and clears invalid optional input through the same Compose helper.
 if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
   _deploy_channel_resolve_runtime_env_file "${ROOT}" "${channel}" "${pin_file}"
+  DEPLOY_FAILURE_STAGE=runtime_identity
   deploy_channel_runtime_identity_preflight \
     "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" || exit $?
+  DEPLOY_FAILURE_STAGE=model_access
   deploy_channel_model_access_preflight \
     "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" \
     "/etc/yggdrasil/model-access/runtime.env" || exit $?
 fi
+DEPLOY_FAILURE_STAGE=preflight
 
 # Resolve the effective instance-state-init legacy setting before creating the
 # channel lock, pin markers, volumes, pulling an image, or touching Compose.
@@ -288,7 +300,7 @@ MIGRATION_PENDING_MARKER_CREATED=0
 MIGRATION_PENDING_ACK=0
 migration_materialize_dir="$(mktemp -d "${TMPDIR:-/tmp}/pkm-deploy-migrations.XXXXXX")"
 deploy_lock_dir=""
-trap 'rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
+trap 'deploy_channel_failure_diagnostic "$?"; rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
 
 acquire_channel_mutation_lock() {
   # Serialize the mutation phase (pending-marker + pin writes + compose) per
@@ -1276,9 +1288,8 @@ rollback_failed_startup() {
       # durable record of an ambiguous migration state.
       rm -f "${migration_pending_file}"
     fi
-    # Treat automatic previous-good recovery as rollback for optional route
-    # configuration too. The failed deploy may have observed a path file that
-    # later became invalid; recovery must clear MARR bindings and stay usable.
+    # Use the same recovery rule as explicit rollback: keep valid references,
+    # with legacy empty bindings only for missing/invalid optional input.
     if ! (
       action=rollback
       MVR01C_SCALAR_ROLLBACK=0 INSTANCE_STATE_LEGACY_ROLLBACK=1 \
@@ -1657,6 +1668,7 @@ if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then
   fi
   echo "migration retry: revalidating ${migration_from_sha:-<no-baseline>}..${target_sha} from durable pending marker"
 fi
+DEPLOY_FAILURE_STAGE=migration_inventory
 migration_gate "${migration_from_sha}" "${target_sha}"
 if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ] && \
     [ "${MIGRATION_PENDING_ACK}" = "1" ] && [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
@@ -1676,6 +1688,7 @@ fi
 # This gate must stay after dry-run (which performs no mutation) but before
 # every pin, marker, volume, Docker, or writer-stop operation. Archive readiness
 # must be established before the Keychain-backed migration secret is read.
+DEPLOY_FAILURE_STAGE=preflight
 heimdal_raw_migration_secret_preflight || exit $?
 
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
@@ -1706,8 +1719,10 @@ fi
 # blocked host or channel preflight remains Docker-free. This joins the deploy
 # acknowledgment to the target-bound token before any host-state, pin, volume,
 # runtime, writer-stop, or database mutation.
+DEPLOY_FAILURE_STAGE=migration_ack
 prepare_prod_forward_only_ack || exit $?
 
+DEPLOY_FAILURE_STAGE=runtime_prepare
 prepare_instance_ownership_host_state_dir
 classify_rollback_runtime || exit $?
 
@@ -1727,6 +1742,7 @@ ensure_prod_instance_state_volume
 DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 
+DEPLOY_FAILURE_STAGE=pin_write
 if [ "${action}" = "deploy" ] && \
     { [ "${MIGRATIONS_CHECKED}" -gt 0 ] || \
       [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; } && \
@@ -1758,6 +1774,7 @@ postdeploy_smoke_gate() {
     scripts/companion_ui_postdeploy_smoke.sh "${channel}"
 }
 
+DEPLOY_FAILURE_STAGE=image_pull
 if [ "${scalar_rollback}" = "1" ]; then
   run_postmutation_gate "image pull failed" \
     compose pull scalar-rollback-guard api scalar-rollback-gateway || exit $?
@@ -1766,30 +1783,42 @@ else
     pull_channel_images || exit $?
 fi
 if [ "${scalar_rollback}" != "1" ] && [ "${action}" = "deploy" ]; then
+  DEPLOY_FAILURE_STAGE=scalar_retirement
   run_postmutation_gate "scalar rollback service retirement failed" \
     retire_scalar_rollback_services || exit $?
 fi
 if [ "${action}" = "deploy" ]; then
+  DEPLOY_FAILURE_STAGE=instance_prepare
   run_postmutation_gate "instance-state deployment preparation failed" \
     prepare_instance_state_deployment compose "${channel}" "${pin_file}" || exit $?
 fi
+DEPLOY_FAILURE_STAGE=migration_apply
 run_postmutation_gate "migration execution failed" apply_changed_migrations || exit $?
+DEPLOY_FAILURE_STAGE=service_recreate
 run_postmutation_gate "service recreate/liveness gate failed" \
   recreate_channel_services || exit $?
 rollback_target_recreated=1
 if [ "${scalar_rollback}" = "1" ]; then
+  DEPLOY_FAILURE_STAGE=scalar_runtime
   run_postmutation_gate "scalar rollback runtime gate failed" \
     scalar_rollback_runtime_gate || exit $?
 else
+  DEPLOY_FAILURE_STAGE=embedding_configuration
   run_postmutation_gate "embedding provider configuration preflight failed" \
     embedding_provider_preflight_gate || exit $?
+  DEPLOY_FAILURE_STAGE=health
   run_postmutation_gate "health gate failed" health_gate || exit $?
+  DEPLOY_FAILURE_STAGE=version
   run_postmutation_gate "version gate failed" version_gate || exit $?
+  DEPLOY_FAILURE_STAGE=fleet_fitness
   run_postmutation_gate "fleet-model fitness gate failed" \
     fleet_model_fitness_gate || exit $?
+  DEPLOY_FAILURE_STAGE=ui_smoke
   run_postmutation_gate "companion UI post-deploy smoke failed" \
     postdeploy_smoke_gate || exit $?
+  DEPLOY_FAILURE_STAGE=capture_watch
   run_postmutation_gate "required capture-watch gate failed" \
     capture_watch_gate || exit $?
 fi
+DEPLOY_FAILURE_STAGE=receipt
 run_postmutation_gate "deploy receipt creation failed" record_receipt || exit $?
