@@ -16,16 +16,19 @@ from app.events.types import INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_
 from app.index.artifact_metadata import build_indexed_unit_payload
 from app.objects import ObjectStore
 from app.services import indexer
+from app.services.outbox import write_outbox_event
 from app.services.companion_note import companion_path
 from app.stores.memory import MemoryVectorIndex
 from app.workers import outbox_worker
 from app.write_guard import DEFAULT_WRITE_GUARD
+from tests.workers.test_outbox_worker_consumes_ingest import FakeOutboxConn, fake_conn as _fake_conn_fixture
 
 SOURCE_UUID = "11111111-1111-4111-8111-111111111111"
 SOURCE_BODY = "The retained source fact is companion-boundary-regression-5912."
 SYSTEM_DIR = "Runtime/Identity"
 
 pytestmark = pytest.mark.not_pg
+fake_conn = _fake_conn_fixture
 
 
 @pytest.fixture
@@ -133,7 +136,7 @@ def test_queued_companion_events_do_not_publish_source_metadata(
     assert ObjectStore().get_object(SOURCE_UUID).payload["raw_text"] == source.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("previous_locator", ["canonical", "legacy", "relative", "ordinary", "foreign"])
+@pytest.mark.parametrize("previous_locator", ["canonical", "legacy", "relative", "aliased", "ordinary", "foreign"])
 def test_source_reingest_recovers_only_companion_contaminated_locator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary_index: MemoryVectorIndex,
     previous_locator: str,
@@ -144,15 +147,18 @@ def test_source_reingest_recovers_only_companion_contaminated_locator(
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault))
     dispatch(INGEST_VAULT_CHANGED, source_payload(vault, source))
     canonical = companion_path(SOURCE_UUID, vault)
+    alias = tmp_path / "vault-alias"
+    alias.symlink_to(vault, target_is_directory=True)
     locators = {
         "canonical": str(vault / canonical),
         "legacy": str(vault / f"_system/companions/{SOURCE_UUID}.md"),
         "relative": canonical.as_posix(),
+        "aliased": str(alias / canonical),
         "ordinary": str(vault / "Notes/original-source.md"),
         "foreign": str(tmp_path / "other-vault" / canonical),
     }
     old_ref = locators[previous_locator]
-    expected_ref = str(source) if previous_locator in {"canonical", "legacy", "relative"} else old_ref
+    expected_ref = str(source) if previous_locator in {"canonical", "legacy", "relative", "aliased"} else old_ref
     store = ObjectStore()
     contaminated = store.get_object(SOURCE_UUID)
     assert contaminated is not None
@@ -179,10 +185,10 @@ def test_source_reingest_recovers_only_companion_contaminated_locator(
 
 
 @pytest.mark.parametrize("location", ["canonical", "legacy"])
-@pytest.mark.parametrize("locator", ["absolute", "relative"])
+@pytest.mark.parametrize("locator", ["absolute", "relative", "aliased-absolute", "explicit-root"])
 def test_companion_delete_does_not_purge_source_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary_index: MemoryVectorIndex,
-    location: str, locator: str,
+    fake_conn: FakeOutboxConn, location: str, locator: str,
 ) -> None:
     vault = tmp_path / "vault"
     source = write_source(vault)
@@ -194,10 +200,23 @@ def test_companion_delete_does_not_purge_source_identity(
     companion.write_bytes(canonical.read_bytes())
     retained_bytes = companion.read_bytes()
     original_object = deepcopy(ObjectStore().get_object(SOURCE_UUID))
-    deleted_path = companion if locator == "absolute" else companion.relative_to(vault)
+    deleted_path = companion if locator in {"absolute", "explicit-root"} else companion.relative_to(vault)
+    if locator == "aliased-absolute":
+        alias = tmp_path / "vault-alias"
+        alias.symlink_to(vault, target_is_directory=True)
+        deleted_path = alias / companion.relative_to(vault)
     payload = {"uuid": SOURCE_UUID, "path": str(deleted_path), "deleted": True}
-    for _ in range(2):
-        dispatch(INGEST_OBJECT_DELETED, payload)
+    if locator == "explicit-root":
+        monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+        monkeypatch.delenv("VAULT_ROOT", raising=False)
+        monkeypatch.setenv("STORE_BACKEND", "pg")
+        event = new_event(event_type=INGEST_OBJECT_DELETED, payload=payload)
+        write_outbox_event(event, idempotency_key=f"explicit-companion-delete:{location}")
+        while fake_conn.undelivered_count():
+            assert outbox_worker.run_once(vault_root=vault).state == "processed"
+    else:
+        for _ in range(2):
+            dispatch(INGEST_OBJECT_DELETED, payload)
     assert_source_publication(boundary_index)
     assert ObjectStore().get_object(SOURCE_UUID) == original_object
     assert companion.read_bytes() == retained_bytes

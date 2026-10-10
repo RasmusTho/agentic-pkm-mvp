@@ -10,6 +10,7 @@ import pytest
 
 from app.events.types import INGEST_VAULT_CHANGED
 from app.services.companion_note import companion_path, read_companion, write_companion
+from app.services import companion_note
 from app.stores.memory import MemoryVectorIndex
 from app.watcher import registry
 from app.watcher.settings_delta import SettingsSourceDeltaResult
@@ -105,6 +106,23 @@ def test_registry_scan_excludes_companions_and_keeps_sources(
     settings = vault / "settings/watchers.md"
     settings.parent.mkdir(parents=True, exist_ok=True)
     settings.write_text("watcher settings\n", encoding="utf-8")
+    # Resolve the nested system folder through a real supported layout input,
+    # rather than the cheap environment override, and count predicate I/O.
+    layout = vault / SYSTEM_DIR / "vault.layout.md"
+    layout.write_text(
+        f"---\nsystem_folder: {SYSTEM_DIR}\ninbox_folder: Inbox\ndesk_folder: Workbench\n---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("VAULT_SYSTEM_DIR_REL")
+    monkeypatch.setenv("VAULT_LAYOUT_NOTE_REL", f"{SYSTEM_DIR}/vault.layout.md")
+    predicate_resolutions: list[Path] = []
+    original_resolver = companion_note.resolve_vault_system_dir_rel_or_default
+
+    def resolve_system_dir(root: Path) -> str:
+        predicate_resolutions.append(root)
+        return original_resolver(root)
+
+    monkeypatch.setattr(companion_note, "resolve_vault_system_dir_rel_or_default", resolve_system_dir)
     reloaded: list[Path] = []
 
     def reload_settings(*, rel_path: Path, vault_root: Path) -> SettingsSourceDeltaResult:
@@ -113,14 +131,16 @@ def test_registry_scan_excludes_companions_and_keeps_sources(
 
     monkeypatch.setattr(registry, "handle_settings_source_delta", reload_settings)
     state = _tick(cfg, spec, 1_700_000_000.0)
-    expected = {"Inbox/source.md", f"{SYSTEM_DIR}/ordinary.md", "settings/watchers.md"}
+    expected = {"Inbox/source.md", f"{SYSTEM_DIR}/ordinary.md", "settings/watchers.md", f"{SYSTEM_DIR}/vault.layout.md"}
     assert state.file_paths() == expected
     assert reloaded == [Path("settings/watchers.md")]
+    assert predicate_resolutions == []
     observed = {rel.as_posix() for rel, _mtime, _path in registry._scan_markdown_many(vault, [vault], spec.scope_glob)}
     assert observed == expected
+    assert predicate_resolutions == []
 
 
-@pytest.mark.parametrize("checkpoint", ["sqlite", "legacy", "resumed"])
+@pytest.mark.parametrize("checkpoint", ["sqlite", "legacy", "resumed", "static-canonical", "static-legacy"])
 def test_checkpoint_cleanup_preserves_source_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary_index: MemoryVectorIndex,
     fake_conn: FakeOutboxConn, checkpoint: str,
@@ -143,6 +163,10 @@ def test_checkpoint_cleanup_preserves_source_identity(
         state = WatcherState(files={"Inbox/source.md": state.file_entry("Inbox/source.md")})
     for rel_path in historical_paths:
         state.update_file_state(rel_path, mtime=1.0, content_hash="historical-companion")
+    if checkpoint.startswith("static-"):
+        companion_root = canonical.parent if checkpoint == "static-canonical" else legacy.parent
+        spec = replace(spec, scope_glob=f"{companion_root.relative_to(vault).as_posix()}/**/*.md")
+        cfg.max_elapsed_ms_per_tick = 50
     if checkpoint == "resumed":
         state.scan_in_progress = True
         state.scan_root_index = 0
@@ -160,7 +184,7 @@ def test_checkpoint_cleanup_preserves_source_identity(
         # Finish one fresh generation after draining the retained cursor.
         cleaned = _tick(cfg, spec, 1_700_000_002.0)
         _consume(fake_conn)
-    assert cleaned.file_paths() == {"Inbox/source.md"}
+    assert cleaned.file_paths() == (set() if checkpoint.startswith("static-") else {"Inbox/source.md"})
     assert_source_publication(boundary_index)
     assert all(path.read_bytes() == data for path, data in retained.items())
     assert read_companion(vault, SOURCE_UUID).source_ref == "Inbox/source.md"

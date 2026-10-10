@@ -148,6 +148,7 @@ def _scan_markdown_many(
     if summary is None:
         summary = {}
     seen: set[Path] = set()
+    system_dir = resolve_vault_system_dir_rel_or_default(vault_root)
 
     def _iter_paths() -> Iterable[Path]:
         for scan_root in scan_roots:
@@ -166,7 +167,7 @@ def _scan_markdown_many(
             continue
         if any(part.startswith(".") for part in rel.parts):
             continue
-        if is_companion_path(path, vault_root):
+        if is_companion_path(path, vault_root, configured_system_dir=system_dir):
             continue
         # Settings sources are a runtime control surface, not ordinary
         # watcher content.  Always include them even when a user narrows
@@ -1416,6 +1417,7 @@ def _next_incremental_markdown(
     summary: dict[str, object],
     deadline: float,
     directory_cache: dict[str, tuple[list[str], list[Path]]],
+    configured_system_dir: Path | str | None = None,
 ) -> tuple[tuple[Path, float, Path] | None, bool]:
     """Advance the durable DFS cursor and return one eligible markdown file.
 
@@ -1431,6 +1433,11 @@ def _next_incremental_markdown(
         state.scan_in_progress = False
         state.scan_stack = []
         return None, True
+    system_dir = (
+        configured_system_dir
+        if configured_system_dir is not None
+        else resolve_vault_system_dir_rel_or_default(selected_real)
+    )
     while state.scan_root_index < len(scan_roots):
         if time.monotonic() >= deadline:
             return None, False
@@ -1447,8 +1454,10 @@ def _next_incremental_markdown(
         directory = selected_real / frame["dir"]
         # A retained pre-fix DFS checkpoint may resume inside companions.
         # Advance that cursor without publishing its shared source UUID.
-        if is_companion_path(directory, selected_real):
+        if is_companion_path(directory, selected_real, configured_system_dir=system_dir):
             state.scan_stack.pop()
+            if not state.scan_stack:
+                state.scan_root_index += 1
             continue
         try:
             resolved_directory = directory.resolve()
@@ -1512,7 +1521,9 @@ def _next_incremental_markdown(
         if candidate_is_dir:
             if candidate_is_symlink:
                 continue
-            if candidate.name == "companions" and is_companion_path(candidate, selected_real):
+            if candidate.name == "companions" and is_companion_path(
+                candidate, selected_real, configured_system_dir=system_dir
+            ):
                 continue
             marker = candidate.joinpath("settings", "vault.md")
             try:
@@ -1534,7 +1545,7 @@ def _next_incremental_markdown(
             continue
         if is_conflict_artifact(candidate.name):
             continue
-        if is_companion_path(candidate, selected_real):
+        if is_companion_path(candidate, selected_real, configured_system_dir=system_dir):
             continue
         try:
             rel = candidate.relative_to(selected_real)
@@ -1627,6 +1638,9 @@ def _collect_changed_entries(
     )
     deadline = time.monotonic() + (cfg.max_elapsed_ms_per_tick / 1000.0)
     directory_cache: dict[str, tuple[list[str], list[Path]]] = {}
+    # Bound configuration to this vault/tick, including resumed generations.
+    # Refresh after a successful source reload; never cache it process-wide.
+    system_dir = resolve_vault_system_dir_rel_or_default(cfg.vault_path)
     while int(summary["scanned_files"]) < cfg.max_scanned_files_per_tick:
         if int(summary["bytes_read"]) >= cfg.max_bytes_read_per_tick:
             state.continuation_reason = "byte_budget"
@@ -1642,6 +1656,7 @@ def _collect_changed_entries(
             summary=summary,
             deadline=deadline,
             directory_cache=directory_cache,
+            configured_system_dir=system_dir,
         )
         if next_file is None:
             if not exhausted:
@@ -1754,6 +1769,7 @@ def _collect_changed_entries(
             source_reload_succeeded = source_delta.reloaded and not source_delta.errors
             settings_source_reload_results["full_bundle"] = source_reload_succeeded
             if source_reload_succeeded:
+                system_dir = resolve_vault_system_dir_rel_or_default(cfg.vault_path)
                 summary["settings_source_reloads_in_tick"] = (
                     int(summary.get("settings_source_reloads_in_tick", 0)) + 1
                 )
@@ -1773,9 +1789,7 @@ def _collect_changed_entries(
             continue
         if is_settings_control_path(
             rel,
-            configured_system_dir=resolve_vault_system_dir_rel_or_default(
-                cfg.vault_path
-            ),
+            configured_system_dir=system_dir,
         ):
             state.update_file_state(rel_str, mtime=mtime, content_hash=digest)
             if settings_delta.values is not None:

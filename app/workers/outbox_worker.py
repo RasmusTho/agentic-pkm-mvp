@@ -381,7 +381,10 @@ def run_once(
     event_id = _event_id_from_message(message)
     with worker_effect_window(message, runtime=binding_runtime):
         try:
-            _dispatch_topic(topic, payload, trace_id=trace_id, message=message, event_id=event_id)
+            _dispatch_topic(
+                topic, payload, trace_id=trace_id, message=message,
+                event_id=event_id, vault_root=resolved_root,
+            )
         except InvalidPanelNoteUUIDDispatchError as uuid_exc:
             logger.warning(
                 "worker dead-lettered malformed panel note uuid topic=%s id=%s",
@@ -482,6 +485,7 @@ def _dispatch_topic(
     trace_id: str,
     message: Mapping[str, Any],
     event_id: str = "",
+    vault_root: Path | None = None,
 ) -> None:
     """Dispatch one outbox message to its real topic handler.
 
@@ -503,16 +507,18 @@ def _dispatch_topic(
     elif topic == INGEST_VAULT_CHANGED:
         handle_ingest_vault_changed(
             payload,
+            vault_root=vault_root,
             trace_id=trace_id,
             source_vault_binding_id=source_vault_binding_id,
             payload_schema=payload_schema,
         )
     elif topic == INGEST_OBJECT_DELETED:
-        handle_ingest_object_deleted(payload)
+        handle_ingest_object_deleted(payload, vault_root=vault_root)
     elif topic == PANEL_SCAN_REQUESTED:
         event_timestamp = message.get("timestamp") or payload.get("timestamp")
         handle_panel_scan_requested(
             payload,
+            vault_root=vault_root,
             trace_id=trace_id,
             scan_requested_ts=event_timestamp,
             source_vault_binding_id=source_vault_binding_id,
@@ -2089,6 +2095,7 @@ def run(
                             trace_id=trace_id,
                             message=message,
                             event_id=event_id,
+                            vault_root=tick_vault_root,
                         )
                     except InvalidPanelNoteUUIDDispatchError as uuid_exc:
                         errors_total += 1

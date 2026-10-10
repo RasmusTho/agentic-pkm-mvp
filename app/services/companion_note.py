@@ -119,7 +119,9 @@ def companion_path(uuid: str, vault_root: Path | None = None) -> Path:
     return _companions_dir(vault_root) / f"{uuid}.md"
 
 
-def is_companion_path(path: Path, vault_root: Path | None = None) -> bool:
+def is_companion_path(
+    path: Path, vault_root: Path | None = None, *, configured_system_dir: Path | str | None = None
+) -> bool:
     """Whether a locator belongs to the retained companion continuity set.
 
     Accept vault-relative paths and absolute paths inside the bound vault,
@@ -130,14 +132,20 @@ def is_companion_path(path: Path, vault_root: Path | None = None) -> bool:
     if vault_root is not None:
         root = vault_root.expanduser().resolve()
         candidate = path if path.is_absolute() else root / path
-        directories.append(Path(resolve_vault_system_dir_rel_or_default(root)) / "companions")
+        system_dir = (
+            configured_system_dir
+            if configured_system_dir is not None
+            else resolve_vault_system_dir_rel_or_default(root)
+        )
+        directories.append(Path(system_dir) / "companions")
         # Preserve the lexical system-owned boundary even for a missing file
         # or a symlink. An ordinary symlink to a companion is excluded too.
+        relative: Path | None
         try:
             relative = candidate.relative_to(root)
         except ValueError:
-            return False
-        if any(relative.is_relative_to(directory) for directory in directories):
+            relative = None
+        if relative is not None and any(relative.is_relative_to(directory) for directory in directories):
             return True
         try:
             path = candidate.resolve().relative_to(root)
