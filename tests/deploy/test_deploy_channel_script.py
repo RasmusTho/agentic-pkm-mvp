@@ -2318,11 +2318,12 @@ def test_deploy_waits_for_in_progress_shared_import_and_rechecks_parity(tmp_path
 
 
 class _BwsVmEffects:
-    def __init__(self, *, running=False, auth=True, quiet=True):
+    def __init__(self, *, running=False, auth=True, quiet=True, quiescence=None):
         self.events = []
         self.running = running
         self.auth = auth
         self.quiet = quiet
+        self.quiescence = list(quiescence or [])
 
     def select_active_plan(self, plan):
         return plan
@@ -2362,6 +2363,11 @@ class _BwsVmEffects:
 
     def quiescent(self):
         self.events.append('quiescence')
+        if self.quiescence:
+            result = self.quiescence.pop(0)
+            if isinstance(result, BaseException):
+                raise result
+            return result
         return self.quiet
 
 
@@ -2443,13 +2449,122 @@ def test_deploy_nonterminal_remote_receipt_blocks_next_operation(tmp_path):
 
 
 def test_deploy_nonquiescent_compose_operation_remains_pending(tmp_path):
-    from app.ops.postgres_deploy import PostgresDeployError
-    effects = _BwsVmEffects(quiet=False)
-    worker, journal, plan, operation_id = _bws_worker(tmp_path, effects)
+    from app.ops.postgres_deploy import DeployWorker, PostgresDeployError
+
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    effects = _BwsVmEffects(quiet=False, quiescence=[RuntimeError('unavailable')])
+    _worker, journal, plan, operation_id = _bws_worker(tmp_path, effects)
+    clock = Clock()
+    worker = DeployWorker(journal, effects, monotonic=clock.monotonic, sleep=clock.sleep)
     with pytest.raises(PostgresDeployError):
         worker.run(operation_id, plan)
     assert journal.read().stage == 'activating'
     assert 'activate-clients' in effects.events
+
+
+def test_deploy_waits_for_postactivate_quiescence_before_commit(tmp_path):
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+            self.sleeps = []
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.sleeps.append(seconds)
+            self.now += seconds
+
+    from app.ops.postgres_deploy import DeployWorker
+    clock = Clock()
+    effects = _BwsVmEffects(quiescence=[False, True])
+    _worker, journal, plan, operation_id = _bws_worker(tmp_path, effects)
+    worker = DeployWorker(journal, effects, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    receipt = worker.run(operation_id, plan)
+
+    assert receipt.stage == 'committed'
+    assert effects.events.count('activate-clients') == 1
+    assert effects.events.count('quiescence') == 2
+    assert clock.sleeps == [5.0]
+    assert journal.read().operation_id == operation_id
+
+
+def test_deploy_postactivate_quiescence_timeout_preserves_pending(tmp_path):
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    from app.ops.postgres_deploy import DeployWorker, PostgresDeployError
+    clock = Clock()
+    effects = _BwsVmEffects(quiet=False)
+    _worker, journal, plan, operation_id = _bws_worker(tmp_path, effects)
+    worker = DeployWorker(journal, effects, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    with pytest.raises(PostgresDeployError):
+        worker.run(operation_id, plan)
+
+    receipt = journal.read()
+    assert receipt is not None and receipt.stage == 'activating'
+    assert receipt.terminal_result is None
+    assert effects.events.count('activate-clients') == 1
+    assert clock.now == 360.0
+
+
+def test_automatic_verification_waits_for_postactivate_quiescence(tmp_path):
+    from app.ops import pg_acceptance
+    from app.ops.postgres_deploy import DeployPlan, DeployWorker
+
+    class Clock:
+        def __init__(self):
+            self.now = 0.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = Clock()
+    effects = _BwsVmEffects(quiescence=[False, True])
+    _worker, journal, _plan, operation_id = _bws_worker(tmp_path, effects)
+    digest = 'sha256:' + 'b' * 64
+    plan = DeployPlan('test', 'a' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                      image_digest=digest, automatic=True)
+    result = {
+        **pg_acceptance.identity(plan.revision, digest, plan.channel, operation_id),
+        'result': 'passed',
+        'selected': pg_acceptance.MINIMUM_SELECTED,
+        'passed': pg_acceptance.MINIMUM_SELECTED,
+        'resource_tree': 'c' * 40,
+        'app_image_id': 'sha256:' + 'd' * 64,
+        'report_hash': 'e' * 64,
+    }
+    effects.verify = lambda _operation_id, _selected: (effects.events.append('verify'), result)[1]
+    effects.cleanup_verification = lambda *_args: effects.events.append('cleanup')
+    worker = DeployWorker(journal, effects, monotonic=clock.monotonic, sleep=clock.sleep)
+
+    receipt = worker.run(operation_id, plan)
+
+    assert receipt.stage == 'committed'
+    assert effects.events.count('activate-clients') == 1
+    assert effects.events.count('quiescence') == 2
+    assert effects.events.index('verify') > effects.events.index('quiescence', effects.events.index('quiescence') + 1)
 
 
 def _bws_host(tmp_path, *, missing=False):

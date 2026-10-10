@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 import secrets
 import stat
+import time
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -307,12 +308,36 @@ class VmEffects(Protocol):
     def quiescent(self) -> bool: ...
 
 
+_POST_ACTIVATION_QUIESCENCE_POLL_SECONDS = 5.0
+_POST_ACTIVATION_QUIESCENCE_TIMEOUT_SECONDS = 360.0
+
+
 class DeployWorker:
     """Called only by the supervised same-ID worker while its VM lock is held."""
-    def __init__(self, journal: DeployJournal, effects: VmEffects) -> None:
+    def __init__(self, journal: DeployJournal, effects: VmEffects, *,
+                 monotonic: Callable[[], float] | None = None,
+                 sleep: Callable[[float], None] | None = None) -> None:
         self.journal = journal
         self.effects = effects
         self._prepared_id: str | None = None
+        self._monotonic = monotonic or time.monotonic
+        self._sleep = sleep or time.sleep
+
+    def _wait_for_post_activation_quiescence(self) -> bool:
+        deadline = self._monotonic() + _POST_ACTIVATION_QUIESCENCE_TIMEOUT_SECONDS
+        while True:
+            try:
+                if self.effects.quiescent():
+                    return True
+            except Exception:
+                # An unavailable census is still an unproven predicate. Keep
+                # the operation pending until the bounded observation period
+                # expires rather than guessing a terminal outcome.
+                pass
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                return False
+            self._sleep(min(_POST_ACTIVATION_QUIESCENCE_POLL_SECONDS, remaining))
 
     def prepare(self, operation_id: str) -> None:
         self.journal.write(operation_id, "prepared")
@@ -358,7 +383,7 @@ class DeployWorker:
             self.journal.write(operation_id, 'activating')
             activation_started = True
             self.effects.activate(plan)
-            if not self.effects.quiescent():
+            if not self._wait_for_post_activation_quiescence():
                 raise PostgresDeployError()
             result = None
             if plan.automatic:
