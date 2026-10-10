@@ -13,6 +13,58 @@ from scripts.select_pr_tests import select_tests
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_companion_note_helper_selects_source_boundary_coverage() -> None:
+    selection = select_tests(["app/services/companion_note.py"])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("watcher_sync", "store_ingest", "outbox_worker")
+    assert {
+        "tests/watcher",
+        "tests/workers",
+        "tests/ingest",
+        "tests/services/test_companion_note.py",
+        "tests/services/test_companion_note_write_guard.py",
+    } <= set(selection.targets)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "app/services/companion_note.py",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "subsystems=watcher_sync,store_ingest,outbox_worker" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "app/services/companion_note.py.backup",
+        "app/services/companion_note_extra.py",
+    ),
+)
+def test_companion_note_mapping_keeps_unrelated_paths_refused(path: str) -> None:
+    selection = select_tests([path])
+    assert selection.unowned_paths == (path,)
+
+    result = subprocess.run(
+        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", path],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert f"unowned_paths={path}" in result.stdout
+
+
 def test_stage_a_aro03_contract_selects_route_tests() -> None:
     for path in selector.ARO03_ROUTE_CONTRACT_PATHS:
         selection = select_tests([path])
