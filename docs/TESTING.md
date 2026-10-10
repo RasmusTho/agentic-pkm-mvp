@@ -75,7 +75,7 @@ python3 scripts/run_with_host_lease.py --resource pytest-not-pg \
 
 The mode-0600 manifest supplies `channel` (`dev`/`test`), `ui_url`, `api_url`, `expected_sha`,
 `run_id`, and a fresh absolute `output_dir`. UI/backend origins use the same explicit host and
-channel ports (8111/18001 or 8112/18002), using loopback on the selected guest so the native
+channel ports (8111/18001 or 8112/18002), using exactly `127.0.0.1` on the selected guest so the native
 diagnostic and HTTP requests reach the same host. A writing journey additionally supplies `vault_id`,
 `vault_path`, `known_note_path`, `known_note_uuid`, `known_excerpt`, `capture_note_path`,
 `capture_note_uuid`, `vault_binding_id`, and `embedding_identity`, with explicit boolean

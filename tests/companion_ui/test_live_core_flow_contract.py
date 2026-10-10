@@ -337,6 +337,10 @@ def test_missing_manifest_is_not_a_live_pass(tmp_path: Path) -> None:
         {"embedding_identity": {"dim": 768}},
         {"capture_note_path": "Inbox/./inbox.md"},
         {"output_dir": "/tmp/../approved/dev-fixture/evidence"},
+        {"ui_url": "http://[::1]:8111/", "api_url": "http://[::1]:18001/"},
+        {"ui_url": "http://127.0.0.2:8111/", "api_url": "http://127.0.0.2:18001/"},
+        {"vault_id": " "},
+        {"vault_id": " vault-fixture "},
     ],
 )
 def test_invalid_manifest_refuses_before_browser(tmp_path: Path, change: dict[str, Any]) -> None:
@@ -602,13 +606,18 @@ def test_native_probe_refuses_wrong_capture_producer_target(
         exec(_PROBE, {})
 
 
-@pytest.mark.parametrize("fault", ["local_identity", "last_active"])
+@pytest.mark.parametrize("fault", ["local_identity", "last_active", "vault_identity"])
 def test_native_restore_admission_refuses_before_identity_healing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
 ) -> None:
     data = _probe_input(tmp_path, monkeypatch)
     if fault == "local_identity":
         (tmp_path / "settings/local.md").write_text("---\nschema: design-handoff.local.v1\n---\n")
+    elif fault == "vault_identity":
+        data["vault_id"] = " "
+        (tmp_path / "settings/vault.md").write_text(
+            '---\nschema: design-handoff.vault.v1\nvaultId: " "\n---\n'
+        )
     else:
         data["vault_path"] = str(tmp_path)
         p = tmp_path / "app-local.md"

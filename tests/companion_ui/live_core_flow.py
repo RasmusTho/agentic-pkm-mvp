@@ -7,7 +7,6 @@ bounded read of the approved note and its existing object/vector rows.
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -100,12 +99,8 @@ def load_manifest(path: Path) -> dict[str, Any]:
             or p.path not in {"", "/"}
         ):
             raise ValueError("channel_origin_invalid")
-        try:
-            loopback = ipaddress.ip_address(p.hostname).is_loopback
-        except ValueError:
-            loopback = False
-        if not loopback:
-            raise ValueError("native_probe_requires_guest_loopback_origins")
+        if p.hostname != "127.0.0.1":
+            raise ValueError("native_probe_requires_exact_guest_loopback_origin")
     if urlparse(d["ui_url"]).hostname != urlparse(d["api_url"]).hostname:
         raise ValueError("gateway_backend_host_mismatch")
     out = Path(d["output_dir"])
@@ -122,6 +117,12 @@ def load_manifest(path: Path) -> dict[str, Any]:
             raise ValueError("approved_vault_path_invalid")
         if out.is_relative_to(vault.resolve()):
             raise ValueError("evidence_must_be_outside_the_vault")
+    if "vault_id" in d and (
+        not isinstance(d["vault_id"], str)
+        or not d["vault_id"].strip()
+        or d["vault_id"] != d["vault_id"].strip()
+    ):
+        raise ValueError("approved_vault_identity_invalid")
     for key in ("allow_capture", "allow_ask"):
         if type(d.get(key, False)) is not bool:
             raise ValueError("effect_permission_invalid")
@@ -213,7 +214,7 @@ for name in REQUIRED_SETTINGS_FILES:
  assert target.is_file() and not target.is_symlink() and target.resolve(strict=True).is_relative_to(root),'fixture_restore_settings_missing'
 vault_doc=MarkdownSettingsStore().read(root/SETTINGS_DIR_NAME/'vault.md').frontmatter
 local_doc=MarkdownSettingsStore().read(root/SETTINGS_DIR_NAME/'local.md').frontmatter
-assert vault_doc.get('schema')=='design-handoff.vault.v1' and vault_doc.get('vaultId')==p['vault_id'],'fixture_restore_identity_missing'
+assert vault_doc.get('schema')=='design-handoff.vault.v1' and isinstance(vault_doc.get('vaultId'),str) and vault_doc['vaultId'].strip() and vault_doc['vaultId'].strip()==p['vault_id'],'fixture_restore_identity_missing'
 assert local_doc.get('schema')=='design-handoff.local.v1' and str(local_doc.get('localInstanceId') or '').strip(),'fixture_restore_identity_missing'
 from app.vault.paths import get_vault_capture_note_rel
 assert get_vault_capture_note_rel(root)==p['capture_note_path'],'capture_producer_target_mismatch'
@@ -285,7 +286,7 @@ def validate_native_gateway(
     for row, inner, outer in ((ui, ui_port, ui_port), (api, "8000", api_port)):
         bindings = row["NetworkSettings"]["Ports"].get(inner + "/tcp") or []
         if not any(
-            x.get("HostPort") == outer and x.get("HostIp") in {"127.0.0.1", "0.0.0.0", "::"}
+            x.get("HostPort") == outer and x.get("HostIp") in {"127.0.0.1", "0.0.0.0"}
             for x in bindings
         ):
             raise Blocked("native_gateway_published_port_mismatch")
@@ -304,7 +305,9 @@ def native_probe(d: dict[str, Any], marker: str) -> dict[str, Any]:
     def command(argv: list[str], **kwargs: Any) -> str:
         p = subprocess.run(argv, capture_output=True, text=True, timeout=20, **kwargs)
         if p.returncode:
-            refusal = re.search(r"^AssertionError: (fixture_restore_[a-z_]+)$", p.stderr, re.MULTILINE)
+            refusal = re.search(
+                r"^AssertionError: (fixture_restore_[a-z_]+)$", p.stderr, re.MULTILINE
+            )
             if refusal:
                 raise Blocked("native_read_probe_unavailable:" + refusal.group(1))
             raise Blocked("native_read_probe_unavailable")
