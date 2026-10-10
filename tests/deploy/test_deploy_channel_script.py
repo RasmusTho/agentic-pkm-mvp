@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import errno
+import socket
 import subprocess
 import sys
+import tempfile
 from contextlib import contextmanager
 from collections.abc import Iterator
 from pathlib import Path
@@ -3623,22 +3626,25 @@ def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
     assert journal.read().terminal_result is None
 
 
-@pytest.mark.parametrize("hostile_marker,expected_stage", [
-    ("", "service_recreate"),
-    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=service_recreate secret-canary", "unknown"),
-    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=https://private.invalid/secret-canary", "unknown"),
-    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=committed", "unknown"),
-    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=health", "unknown"),
+@pytest.mark.parametrize("hostile_marker,expected_stage,sink", [
+    ("", "service_recreate", "ready"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=service_recreate secret-canary", "unknown", "ready"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=https://private.invalid/secret-canary", "unknown", "ready"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=committed", "unknown", "ready"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=health", "unknown", "ready"),
+    ("INVALID_UTF8", "unknown", "ready"),
+    ("", "service_recreate", "missing"),
+    ("", "service_recreate", "refused"),
+    ("", "service_recreate", "full"),
 ])
 def test_supervised_failure_diagnostics_expose_only_allowlisted_stage(
-    tmp_path: Path, capsys, hostile_marker: str, expected_stage: str,
+    tmp_path: Path, hostile_marker: str, expected_stage: str, sink: str,
 ) -> None:
-    from types import SimpleNamespace
-    from uuid import uuid4
-    from app.ops import postgres_deploy_linux as linux
-    from app.ops.host_secret_contract import DATABASE_CONSUMERS
-    from app.ops.postgres_deploy import DeployJournal, DeployPlan, DeployWorker, PostgresDeployError
+    from app.ops.postgres_deploy import DeployJournal
 
+    unit = (REPO_ROOT / "config/systemd/yggdrasil-bws-deploy@.service").read_text().splitlines()
+    assert "StandardOutput=null" in unit
+    assert "StandardError=null" in unit
     root, env, previous_sha = _deploy_harness(tmp_path)
     target_sha = _commit_prefloor_successor(root, "native failed-child diagnostic")
     _seed_previous_pin(root, previous_sha)
@@ -3649,38 +3655,98 @@ def test_supervised_failure_diagnostics_expose_only_allowlisted_stage(
     script = root / "scripts/deploy_channel.sh"
     injection = '''printf '%s\\n' 'raw-stdout-canary'
 printf '%s\\n' 'postgresql://fixture:secret-canary@private.invalid/db /private/fixture' >&2
-if [ -n "${FAKE_DEPLOY_HOSTILE_MARKER:-}" ]; then
+if [ "${FAKE_DEPLOY_HOSTILE_MARKER:-}" = "INVALID_UTF8" ]; then
+  printf 'YGGDRASIL_DEPLOY_FAILURE_STAGE=\\377\\n' >&2
+elif [ -n "${FAKE_DEPLOY_HOSTILE_MARKER:-}" ]; then
   printf '%s\\n' "$FAKE_DEPLOY_HOSTILE_MARKER" >&2
 fi
 '''
     script.write_text(script.read_text().replace("set -euo pipefail\n", "set -euo pipefail\n" + injection, 1))
     source = tmp_path / "private-handles"
     source.mkdir()
-    journal = DeployJournal(tmp_path / "journal", "dev")
-    config = SimpleNamespace(channel="dev", root=root, source_directory=source, journal=journal)
-    effects = linux.LinuxEffects(config)
-    effects.source = SimpleNamespace(verify=lambda: None)
-    effects.environment = lambda: env.copy()
-    effects.active_consumers = (*DATABASE_CONSUMERS, "heimdal-api-ingress")
-    effects.consumer_values = {"heimdal-api-ingress": {}, "heimdal-capture-watch": {},
-                              "heimdal-raw-migrate": {}}
-    effects.preflight = lambda _plan: "synthetic-postgres-canary"
-    effects.initialized = lambda: False
-    effects.materialize = lambda _password: None
-    effects.quiescent = lambda: True
-    plan = DeployPlan("dev", target_sha, tuple(DATABASE_CONSUMERS.values()),
-                      (*DATABASE_CONSUMERS, "heimdal-api-ingress"))
-    operation_id = str(uuid4())
-    journal.bind_request(operation_id, plan, False, create=True)
-    worker = DeployWorker(journal, effects)
-    with (tmp_path / "lock-handle").open("w") as lock:
-        effects.lock_fd = lock.fileno()
-        worker.prepare(operation_id)
-        with pytest.raises(PostgresDeployError):
-            worker.run(operation_id, plan)
-    observed = capsys.readouterr()
-    assert observed.out == ""
-    assert observed.err == f"native deployment failure: stage={expected_stage} class=command_failed\n"
+    journal_dir = tmp_path / "journal"
+    journal = DeployJournal(journal_dir, "dev")
+    child = '''import os
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+from uuid import uuid4
+from app.ops import postgres_deploy_linux as linux
+from app.ops.host_secret_contract import DATABASE_CONSUMERS
+from app.ops.postgres_deploy import DeployJournal, DeployPlan, DeployWorker, PostgresDeployError
+root, journal_socket, revision, source, journal_dir = sys.argv[1:6]
+linux._DEPLOY_JOURNAL_SOCKET = journal_socket  # private test seam, no runtime selector
+journal = DeployJournal(Path(journal_dir), "dev")
+effects = linux.LinuxEffects(SimpleNamespace(channel="dev", root=Path(root),
+                                            source_directory=Path(source), journal=journal))
+effects.source = SimpleNamespace(verify=lambda: None)
+effects.environment = lambda: os.environ.copy()
+effects.active_consumers = (*DATABASE_CONSUMERS, "heimdal-api-ingress")
+effects.consumer_values = {"heimdal-api-ingress": {}, "heimdal-capture-watch": {}, "heimdal-raw-migrate": {}}
+effects.preflight = lambda _plan: "synthetic-postgres-canary"
+effects.initialized = lambda: False
+effects.materialize = lambda _password: None
+effects.quiescent = lambda: True
+plan = DeployPlan("dev", revision, tuple(DATABASE_CONSUMERS.values()),
+                  (*DATABASE_CONSUMERS, "heimdal-api-ingress"))
+operation_id = str(uuid4())
+journal.bind_request(operation_id, plan, False, create=True)
+worker = DeployWorker(journal, effects)
+with (Path(source).parent / "lock-handle").open("w") as lock:
+    effects.lock_fd = lock.fileno()
+    worker.prepare(operation_id)
+    try:
+        worker.run(operation_id, plan)
+    except PostgresDeployError:
+        raise SystemExit(73)
+raise SystemExit(99)
+'''
+    # Short private paths satisfy the platform Unix-socket address limit.
+    with tempfile.TemporaryDirectory(prefix="j5915-", dir="/tmp") as socket_dir:
+        journal_socket = Path(socket_dir) / "journal.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver, \
+             socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as filler:
+            if sink in {"ready", "full"}:
+                receiver.bind(str(journal_socket))
+            elif sink == "refused":
+                journal_socket.touch()
+            prefill = b"queue-prefill"
+            if sink == "full":
+                receiver.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+                filler.setblocking(False)
+                for _ in range(4096):
+                    try:
+                        filler.sendto(prefill, str(journal_socket))
+                    except OSError as error:
+                        assert error.errno in {errno.EAGAIN, errno.EWOULDBLOCK, errno.ENOBUFS}
+                        break
+                else:
+                    pytest.fail("private datagram queue did not saturate")
+            result = subprocess.run(
+                [sys.executable, "-c", child, str(root), str(journal_socket), target_sha,
+                 str(source), str(journal_dir), "argv-secret-canary"],
+                cwd=REPO_ROOT, env={**env, "ENV_SECRET_CANARY": "env-secret-canary"},
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False, timeout=20,
+            )
+            assert result.returncode == 73
+            if sink == "ready":
+                receiver.settimeout(2)
+                payload = receiver.recv(4096)
+                assert payload == (
+                    "PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n"
+                    f"MESSAGE=native deployment failure: stage={expected_stage} class=command_failed\n"
+                ).encode("ascii")
+                receiver.settimeout(0.05)
+                with pytest.raises(socket.timeout):
+                    receiver.recv(4096)  # exactly one event, no retry
+            elif sink == "full":
+                receiver.setblocking(False)
+                while True:
+                    try:
+                        assert receiver.recv(4096) == prefill
+                    except BlockingIOError:
+                        break
     assert journal.read().stage == "activating"
     assert journal.read().terminal_result is None
     assert list(source.iterdir()) == []

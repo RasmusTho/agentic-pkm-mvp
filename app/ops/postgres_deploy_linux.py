@@ -34,6 +34,7 @@ from app.ops.postgres_deploy import (
 )
 
 _ONE_SHOT_COMPOSE_SERVICES = frozenset({'instance-state-init', 'migrate'})
+_DEPLOY_JOURNAL_SOCKET = '/run/systemd/journal/socket'
 _DEPLOY_FAILURE_STAGES = frozenset({
     'preflight', 'runtime_identity', 'model_access', 'migration_inventory',
     'migration_ack', 'runtime_prepare', 'pin_write', 'image_pull',
@@ -52,15 +53,32 @@ def _deploy_failure_stage(stderr: str) -> str:
     return 'unknown'
 
 
+def _emit_deploy_failure(stage: str) -> None:
+    # The service deliberately nulls both raw streams. Only these fixed fields
+    # reach the existing native journal; no captured text or caller metadata does.
+    if stage not in _DEPLOY_FAILURE_STAGES:
+        stage = 'unknown'
+    payload = (
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        f'MESSAGE=native deployment failure: stage={stage} class=command_failed\n'
+    ).encode('ascii')
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as journal:
+            journal.setblocking(False)
+            journal.sendto(payload, _DEPLOY_JOURNAL_SOCKET)
+    except OSError:
+        # Diagnostics are advisory; absence, refusal or queue pressure must not
+        # delay recovery or replace the original deployment failure/authority.
+        pass
+
+
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
              pass_fds: tuple[int, ...] = (), deploy_diagnostics: bool = False) -> str:
-    result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True, text=True, check=False)
+    result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True,
+                            text=True, errors='replace' if deploy_diagnostics else 'strict', check=False)
     if result.returncode:
         if deploy_diagnostics:
-            # systemd's existing supervisor journal receives only constants.
-            # This cannot change the operation journal or terminal authority.
-            stage = _deploy_failure_stage(result.stderr)
-            print(f'native deployment failure: stage={stage} class=command_failed', file=sys.stderr)
+            _emit_deploy_failure(_deploy_failure_stage(result.stderr))
         raise PostgresDeployError()
     return result.stdout
 
