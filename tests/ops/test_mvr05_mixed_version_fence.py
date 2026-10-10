@@ -1457,6 +1457,7 @@ def test_finish_path_materializes_authenticated_owner_on_fresh_instance_state(
 
     state_root = tmp_path / "instance-state"
     ownership_root = tmp_path / "host-global"
+    state_root.mkdir(mode=0o700)
     ownership_root.mkdir(mode=0o700)
     existing_root = tmp_path / "existing-vault"
     existing_root.mkdir()
@@ -1566,6 +1567,389 @@ def test_finish_path_materializes_authenticated_owner_on_fresh_instance_state(
     assert migrated.registrations["binding-existing"].path == str(
         existing_root.resolve()
     )
+
+
+def test_finish_path_bootstraps_fresh_owner_before_authenticated_materialization(
+    tmp_path,
+) -> None:
+    """A fresh ledger must be established before registry authentication runs."""
+
+    state_root = tmp_path / "instance-state"
+    state_root.mkdir(mode=0o700)
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    existing_root = tmp_path / "existing-vault"
+    existing_root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    layout = InstanceStateLayout.for_channel(state_root, "test")
+    assert VaultRegistryStore(layout.registry_path).load().revision == 0
+
+    legacy_path = tmp_path / "missing-app-local.md"
+    controller_start_token = "linux:" + "0" * 64
+    runtime_module._begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    inventory_digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quiescence_inventory = ownership_root / "deployment-quiescence-inventory.json"
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": controller_start_token,
+                },
+                "domains": domains,
+                "snapshot_digests": [inventory_digest, inventory_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quiescence_inventory.chmod(0o600)
+    proof = runtime_module._prove_instance_state_quiescence(
+        channel="test",
+        host_global_root=ownership_root,
+        inventory_path=quiescence_inventory,
+    )
+    owner_inventory = ownership_root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory(
+                [{"channel_id": "test", "root": str(existing_root)}]
+            )
+        ),
+        encoding="utf-8",
+    )
+    owner_inventory.chmod(0o600)
+    proof = runtime_module._bind_legacy_owner_inventory_to_proof(
+        inventory_path=owner_inventory,
+        quiescence_proof=proof,
+        channel="test",
+        host_global_root=ownership_root,
+    )
+
+    result = runtime_module._finish_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "backup",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+
+    migrated = VaultRegistryStore(layout.registry_path).load()
+    assert result["restart_fence_cleared"] is True
+    assert Path(str(result["backup_manifest"])).is_file()
+    assert migrated.revision == 1
+    assert len(migrated.registrations) == 1
+    binding_id = next(iter(migrated.registrations))
+    snapshot = ledger.require_existing()
+    assert snapshot.legacy_bootstrap_complete is True
+    assert snapshot.leases[binding_id].state == "active"
+
+    # A second fenced finish against the now-established state is an exact
+    # retry: it must reuse the authenticated owner and produce another backup.
+    runtime_module._begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    retry_inventory = ownership_root / "deployment-quiescence-inventory.json"
+    retry_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": controller_start_token,
+                },
+                "domains": domains,
+                "snapshot_digests": [inventory_digest, inventory_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    retry_inventory.chmod(0o600)
+    retry_proof = runtime_module._prove_instance_state_quiescence(
+        channel="test",
+        host_global_root=ownership_root,
+        inventory_path=retry_inventory,
+    )
+    owner_inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory(
+                [
+                    {
+                        "channel_id": "test",
+                        "vault_binding_id": binding_id,
+                        "root": str(existing_root),
+                    }
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
+    owner_inventory.chmod(0o600)
+    retry_proof = runtime_module._bind_legacy_owner_inventory_to_proof(
+        inventory_path=owner_inventory,
+        quiescence_proof=retry_proof,
+        channel="test",
+        host_global_root=ownership_root,
+    )
+    retry = runtime_module._finish_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "backup-retry",
+        restore_root=None,
+        quiescence_proof=retry_proof,
+    )
+    assert retry["restart_fence_cleared"] is True
+    assert Path(str(retry["backup_manifest"])).is_file()
+    assert ledger.require_existing().leases[binding_id].state == "active"
+
+
+def test_finish_path_retries_after_partial_fresh_materialization(
+    tmp_path, monkeypatch
+) -> None:
+    """A stopped-window retry completes registrations after a partial write."""
+
+    state_root = tmp_path / "instance-state"
+    state_root.mkdir(mode=0o700)
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    first_root = tmp_path / "first-vault"
+    second_root = tmp_path / "second-vault"
+    first_root.mkdir()
+    second_root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    layout = InstanceStateLayout.for_channel(state_root, "test")
+    legacy_path = tmp_path / "missing-app-local.md"
+    controller_start_token = "linux:" + "0" * 64
+    runtime_module._begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    inventory_digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quiescence_inventory = ownership_root / "deployment-quiescence-inventory.json"
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": controller_start_token,
+                },
+                "domains": domains,
+                "snapshot_digests": [inventory_digest, inventory_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quiescence_inventory.chmod(0o600)
+    proof = runtime_module._prove_instance_state_quiescence(
+        channel="test",
+        host_global_root=ownership_root,
+        inventory_path=quiescence_inventory,
+    )
+    owner_inventory = ownership_root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory(
+                [
+                    {"channel_id": "test", "root": str(first_root)},
+                    {"channel_id": "test", "root": str(second_root)},
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
+    owner_inventory.chmod(0o600)
+    proof = runtime_module._bind_legacy_owner_inventory_to_proof(
+        inventory_path=owner_inventory,
+        quiescence_proof=proof,
+        channel="test",
+        host_global_root=ownership_root,
+    )
+    original_register = VaultRegistryStore.register
+    interrupted = False
+
+    def interrupt_after_first(registry, registration, **kwargs):
+        nonlocal interrupted
+        result = original_register(registry, registration, **kwargs)
+        if not interrupted:
+            interrupted = True
+            raise OSError("injected partial materialization interruption")
+        return result
+
+    monkeypatch.setattr(VaultRegistryStore, "register", interrupt_after_first)
+    with pytest.raises(OSError, match="partial materialization"):
+        runtime_module._finish_instance_state_deployment(
+            channel="test",
+            instance_state_root=state_root,
+            host_global_root=ownership_root,
+            legacy_path=legacy_path,
+            inventory_path=owner_inventory,
+            backup_root=tmp_path / "backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+    assert VaultRegistryStore(layout.registry_path).load().revision == 1
+    monkeypatch.setattr(VaultRegistryStore, "register", original_register)
+
+    retry = runtime_module._finish_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "backup-retry",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+    migrated = VaultRegistryStore(layout.registry_path).load()
+    assert retry["restart_fence_cleared"] is True
+    assert Path(str(retry["backup_manifest"])).is_file()
+    assert migrated.revision == 2
+    assert len(migrated.registrations) == 2
+    assert all(lease.state == "active" for lease in ledger.require_existing().leases.values())
+
+
+@pytest.mark.parametrize("case", ("foreign", "conflicting"))
+def test_finish_path_fresh_bootstrap_refuses_foreign_or_conflicting_owner_before_effects(
+    tmp_path, case: str
+) -> None:
+    """Fresh finalization rejects foreign or colliding ownership before materialization."""
+
+    state_root = tmp_path / "instance-state"
+    state_root.mkdir(mode=0o700)
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    current_root = tmp_path / "current-vault"
+    foreign_root = tmp_path / "foreign-vault"
+    current_root.mkdir()
+    foreign_root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    layout = InstanceStateLayout.for_channel(state_root, "test")
+    legacy_path = tmp_path / "missing-app-local.md"
+    controller_start_token = "linux:" + "0" * 64
+    runtime_module._begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    inventory_digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quiescence_inventory = ownership_root / "deployment-quiescence-inventory.json"
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": controller_start_token,
+                },
+                "domains": domains,
+                "snapshot_digests": [inventory_digest, inventory_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quiescence_inventory.chmod(0o600)
+    proof = runtime_module._prove_instance_state_quiescence(
+        channel="test",
+        host_global_root=ownership_root,
+        inventory_path=quiescence_inventory,
+    )
+    foreign_owner = {
+        "channel_id": "prod",
+        "root": str(current_root if case == "conflicting" else foreign_root),
+    }
+    if case == "conflicting":
+        foreign_owner["vault_binding_id"] = "binding-foreign"
+    owner_inventory = ownership_root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory(
+                [
+                    {"channel_id": "test", "root": str(current_root)},
+                    foreign_owner,
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
+    owner_inventory.chmod(0o600)
+    proof = runtime_module._bind_legacy_owner_inventory_to_proof(
+        inventory_path=owner_inventory,
+        quiescence_proof=proof,
+        channel="test",
+        host_global_root=ownership_root,
+    )
+
+    expected_error = (
+        "unbound foreign owner"
+        if case == "foreign"
+        else "authenticated owner does not match its ownership binding"
+    )
+    with pytest.raises(runtime_module.InstanceStatePreflightError, match=expected_error):
+        runtime_module._finish_instance_state_deployment(
+            channel="test",
+            instance_state_root=state_root,
+            host_global_root=ownership_root,
+            legacy_path=legacy_path,
+            inventory_path=owner_inventory,
+            backup_root=tmp_path / "backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+
+    assert VaultRegistryStore(layout.registry_path).load().registrations == {}
+    if case == "foreign":
+        assert not ledger.path.exists()
+        assert not ledger.key_path.exists()
+    else:
+        assert ledger.load().leases == {}
+        assert ledger.load().legacy_bootstrap_complete is False
 
 
 def test_mvr05_floor_cli_converges_established_legacy_ledger(
