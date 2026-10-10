@@ -137,6 +137,47 @@ class GovernedWriteAdapter:
         )
         return GovernedWriteGrant(policy_decision=decision, decision_token=token)
 
+    def issue_human_decision_token(
+        self,
+        *,
+        action: str,
+        write_class: str,
+        actor: str,
+        resource: str,
+    ) -> GovernedWriteGrant:
+        """Issue a GOV token for an explicit human authority decision.
+
+        A human disposition is authorized by the named reviewer through GOV;
+        WriteGuard remains a separate state-owner write precondition. Keeping
+        those concerns separate prevents health or write availability from
+        becoming the accountability record for the reviewer decision.
+        """
+        if not actor or not actor.strip():
+            raise InvalidDecisionTokenError("human decision actor is required")
+        issued_at = _utc_now()
+        resource_ref = normalize_resource_ref(resource)
+        decision = PolicyDecision(
+            decision_id=_id("policy_decision"),
+            status="approved",
+            action=action,
+            write_class=write_class,
+            actor=actor,
+            resource=resource_ref,
+            reason="Explicit human reviewer decision authorized by GOV.",
+            issued_at=issued_at,
+            source="human_review",
+        )
+        token = DecisionToken(
+            token_id=_id("decision_token"),
+            decision_id=decision.decision_id,
+            action=action,
+            write_class=write_class,
+            actor=actor,
+            resource=resource_ref,
+            issued_at=issued_at,
+        )
+        return GovernedWriteGrant(policy_decision=decision, decision_token=token)
+
     def validate_decision_token(
         self,
         *,
