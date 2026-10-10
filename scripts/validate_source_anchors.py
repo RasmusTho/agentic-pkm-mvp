@@ -32,9 +32,11 @@ def parse_anchors(section: str) -> List[Tuple[str, str | None]]:
     - `docs/ROADMAP.md :: ORCHV2-TDD`
     - `docs/STATUS.md :: SETTINGS-PROVENANCE`
     - `docs/PANEL_AGENT.md` :: accepted decision
+    - `app/worker.py :: main`
+    - `Makefile :: PYTHON/test/lint`
     - #1234 / PR #1235
 
-    Returns list of (doc_path, anchor_id) tuples for markdown references.
+    Returns list of (repo_path, locator) tuples for repository file references.
     GitHub issue/PR references are represented as ("#1234", None).
     """
     anchors: List[Tuple[str, str | None]] = []
@@ -45,18 +47,17 @@ def parse_anchors(section: str) -> List[Tuple[str, str | None]]:
         if not line or line.startswith('#'):
             continue
 
-        if re.search(r'(?:^|\s)(?:#\d+|PR\s+#\d+|pull request\s+#\d+)(?:\b|$)', line, re.IGNORECASE):
-            anchors.append((line, None))
-            continue
-
-        # Extract from formats:
-        # - `docs/PATH.md :: ANCHOR-ID`
-        # - `docs/PATH.md` :: descriptive locator
-        # - docs/PATH.md
-        match = re.search(r'`?([^`\s]+\.md)`?(?:\s*::\s*([^`\n]+?)\s*)?`?$', line)
+        # Accept quoted/unquoted repo paths, with a locator inside or after
+        # the code span. Match the complete entry so locator prose cannot be
+        # mistaken for a path. Markdown stable IDs are checked below; other
+        # files are factual path references, not normative document authority.
+        entry = re.sub(r'^[-*+]\s+', '', line)
+        match = re.fullmatch(r'`?([^`\s]+?)`?(?:\s*::\s*([^`\n]+?)\s*)?`?', entry)
         if match:
             doc_path, anchor_id = match.groups()
             anchors.append((doc_path.strip(), anchor_id.strip() if anchor_id else None))
+        elif _is_github_ref(line):
+            anchors.append((line, None))
 
     return anchors
 
@@ -147,7 +148,7 @@ def validate_issue_body(
     # Parse anchors
     anchors = parse_anchors(section)
     if not anchors:
-        errors.append("Source Anchors section is empty or malformed. Expected format: `docs/PATH.md :: ANCHOR-ID`")
+        errors.append("Source Anchors section is empty or malformed. Expected format: `<repo path> :: <locator>`")
         return False, errors
 
     root = (repo_root or Path.cwd()).resolve()
@@ -156,10 +157,6 @@ def validate_issue_body(
     for doc_path, anchor_id in anchors:
         if _is_github_ref(doc_path):
             continue
-        if not doc_path.endswith('.md'):
-            errors.append(f"Invalid anchor path: '{doc_path}' must be a markdown file (.md)")
-            continue
-
         relative_path = Path(doc_path)
         if relative_path.is_absolute() or ".." in relative_path.parts:
             errors.append(f"Anchor path must be repository-relative: {doc_path}")
@@ -174,8 +171,11 @@ def validate_issue_body(
         if not file_path.exists():
             errors.append(f"Anchor file not found: {doc_path}")
             continue
+        if not file_path.is_file():
+            errors.append(f"Anchor path is not a file: {doc_path}")
+            continue
 
-        if _looks_like_stable_anchor(anchor_id) and not find_anchor_in_doc(
+        if doc_path.endswith('.md') and _looks_like_stable_anchor(anchor_id) and not find_anchor_in_doc(
             doc_path,
             anchor_id or "",
             root,

@@ -55,6 +55,7 @@ class HostSecretOperation:
         target: str,
         *,
         prior_generation: str | None = None,
+        allow_bootstrap: bool | None = None,
         prepared: bool = False,
         mutation_started: bool = False,
     ) -> None:
@@ -63,6 +64,7 @@ class HostSecretOperation:
         self.kind = kind
         self.target = target
         self.prior_generation = prior_generation
+        self.allow_bootstrap = allow_bootstrap
         self._finished = False
         self._active = True
         self._deferred_prepared = False
@@ -72,7 +74,7 @@ class HostSecretOperation:
     def _record(self, stage: str, source: str | None = None) -> None:
         if not self._active or self._finished:
             raise HostSecretAdmissionError()
-        record = {
+        record: dict[str, str | bool | None] = {
             "operation_id": self.operation_id,
             "kind": self.kind,
             "target": self.target,
@@ -83,6 +85,8 @@ class HostSecretOperation:
             if not self._prepared:
                 raise HostSecretAdmissionError()
             record["prior_generation"] = self.prior_generation
+        elif self.kind == "deploy" and self.allow_bootstrap is not None:
+            record["allow_bootstrap"] = self.allow_bootstrap
         raw = (json.dumps(record, sort_keys=True) + "\n").encode()
         # A partial write or failed fsync leaves a poison/pending journal, never admission.
         if os.write(self._journal_fd, raw) != len(raw):
@@ -131,7 +135,11 @@ class HostSecretOperation:
             evidence.operation_id != self.operation_id
             or evidence.kind != self.kind
             or evidence.target != self.target
-            or evidence.result not in {"committed", "aborted"}
+            or evidence.result not in {"committed", "aborted", "failed"}
+            or (
+                evidence.result == "failed"
+                and (self.kind != "deploy" or self.allow_bootstrap is not False)
+            )
             or not valid_source
         ):
             raise HostSecretAdmissionError()
@@ -231,7 +239,7 @@ class HostSecretController:
         return descriptor
 
     @staticmethod
-    def _pending(descriptor: int) -> dict[str, str | None] | None:
+    def _pending(descriptor: int) -> dict[str, str | bool | None] | None:
         os.lseek(descriptor, 0, os.SEEK_SET)
         with os.fdopen(os.dup(descriptor), "r", encoding="utf-8") as source:
             pending = None
@@ -259,6 +267,14 @@ class HostSecretController:
                         )
                     ):
                         raise HostSecretAdmissionError()
+                elif record["kind"] == "deploy":
+                    base_fields = {"operation_id", "kind", "target", "stage", "source"}
+                    if frozenset(record) not in {
+                        frozenset(base_fields), frozenset(base_fields | {"allow_bootstrap"})
+                    }:
+                        raise HostSecretAdmissionError()
+                    if "allow_bootstrap" in record and type(record["allow_bootstrap"]) is not bool:
+                        raise HostSecretAdmissionError()
                 elif set(record) != {"operation_id", "kind", "target", "stage", "source"}:
                     raise HostSecretAdmissionError()
                 if record["stage"] == "prepared":
@@ -277,6 +293,12 @@ class HostSecretController:
                         raise HostSecretAdmissionError()
                     if record["kind"] == "token-push" and record["prior_generation"] != pending["prior_generation"]:
                         raise HostSecretAdmissionError()
+                    if record["kind"] == "deploy" and record.get("allow_bootstrap") != pending.get("allow_bootstrap"):
+                        raise HostSecretAdmissionError()
+                    if record["stage"] == "failed" and (
+                        record["kind"] != "deploy" or pending.get("allow_bootstrap") is not False
+                    ):
+                        raise HostSecretAdmissionError()
                     if (
                         record["stage"] == "sent"
                         and record["source"] is None
@@ -284,8 +306,11 @@ class HostSecretController:
                     ):
                         pending = record
                         continue
+                    terminal_stages = {"committed", "aborted"}
+                    if record["kind"] == "deploy":
+                        terminal_stages.add("failed")
                     if (
-                        record["stage"] not in {"committed", "aborted"}
+                        record["stage"] not in terminal_stages
                         or not (
                             record["source"] == _TERMINAL_SOURCES[record["kind"]]
                             or (
@@ -320,7 +345,12 @@ class HostSecretController:
                 # Never clear a pending operation merely because the process unwound.
                 operation._active = False
 
-    def reconcile(self, readback: Callable[[str, str, str], TerminalEvidence]) -> None:
+    def reconcile(
+        self,
+        readback: Callable[[str, str, str], TerminalEvidence],
+        *,
+        expected: tuple[str, str, bool] | None = None,
+    ) -> None:
         """Read authoritative operation-specific terminal evidence under the host lock.
 
         Downstream adapters own authentication, durable receipt and provider terminality
@@ -330,12 +360,23 @@ class HostSecretController:
             pending = self._pending(descriptor)
             if pending is None:
                 raise HostSecretAdmissionError()
+            if expected is not None and (
+                pending["kind"], pending["target"], pending.get("allow_bootstrap")
+            ) != expected:
+                raise HostSecretAdmissionError()
+            prior_generation = pending.get("prior_generation")
+            allow_bootstrap = pending.get("allow_bootstrap")
+            if prior_generation is not None and not isinstance(prior_generation, str):
+                raise HostSecretAdmissionError()
+            if allow_bootstrap is not None and not isinstance(allow_bootstrap, bool):
+                raise HostSecretAdmissionError()
             operation = HostSecretOperation(
                 descriptor,
                 str(pending["operation_id"]),
                 str(pending["kind"]),
                 str(pending["target"]),
-                prior_generation=pending.get("prior_generation"),
+                prior_generation=prior_generation,
+                allow_bootstrap=allow_bootstrap,
                 prepared=pending["kind"] == "token-push",
                 mutation_started=pending["stage"] == "sent",
             )
@@ -348,7 +389,7 @@ class HostSecretController:
     @contextmanager
     def token_push_operation(
         self, target: str
-    ) -> Iterator[tuple[HostSecretOperation, dict[str, str | None] | None]]:
+    ) -> Iterator[tuple[HostSecretOperation, dict[str, str | bool | None] | None]]:
         """Start or resume one same-ID VM token push under the shared host lock."""
         if target not in _TARGETS - {"shared"}:
             raise HostSecretAdmissionError()
@@ -356,12 +397,15 @@ class HostSecretController:
             pending = self._pending(descriptor)
             if pending and (pending["kind"] != "token-push" or pending["target"] != target):
                 raise HostSecretAdmissionError()
+            prior_generation = pending.get("prior_generation") if pending else None
+            if prior_generation is not None and not isinstance(prior_generation, str):
+                raise HostSecretAdmissionError()
             operation = HostSecretOperation(
                 descriptor,
                 str(pending["operation_id"]) if pending else str(uuid4()),
                 "token-push",
                 target,
-                prior_generation=pending["prior_generation"] if pending else None,
+                prior_generation=prior_generation,
                 prepared=bool(pending),
                 mutation_started=bool(pending and pending["stage"] == "sent"),
             )
@@ -397,16 +441,25 @@ class HostSecretController:
 
 
     @contextmanager
-    def deploy_operation(self, target: str) -> Iterator[tuple[HostSecretOperation, bool]]:
+    def deploy_operation(
+        self, target: str, *, allow_bootstrap: bool | None = None
+    ) -> Iterator[tuple[HostSecretOperation, bool]]:
         """Resume only the same channel/ID; the remote receipt remains authority."""
-        if target not in _TARGETS - {"shared"}:
+        if target not in _TARGETS - {"shared"} or (
+            allow_bootstrap is not None and type(allow_bootstrap) is not bool
+        ):
             raise HostSecretAdmissionError()
         with self._locked_journal(wait=True) as descriptor:
             pending = self._pending(descriptor)
             if pending and (pending["kind"] != "deploy" or pending["target"] != target):
                 raise HostSecretAdmissionError()
+            if pending and pending.get("allow_bootstrap") != allow_bootstrap:
+                # Legacy pending deployment records have no mode. Reconcile their
+                # matching remote receipt before a new request can adopt the ID.
+                raise HostSecretAdmissionError()
             operation = HostSecretOperation(descriptor,
-                str(pending["operation_id"]) if pending else str(uuid4()), "deploy", target)
+                str(pending["operation_id"]) if pending else str(uuid4()), "deploy", target,
+                allow_bootstrap=allow_bootstrap)
             # Read-only host preflight holds the same lock but does not leave a
             # pending mutation that would prevent importing a missing value.
             # prepare_mutation persists prepared + sent before the first RPC.

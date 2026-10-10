@@ -9,7 +9,10 @@ RECEIPT_DIR="${BUILDEROPS_RECEIPT_DIR:-${ROOT}/ops/deployments/builderops}"
 # different lock files and run concurrent deployments under separate locks.
 LOCK_PATH="/tmp/agentic-pkm-mvp-builderops-lock/deployment.lock"
 BUILDEROPS_PIN_FILE="${PIN_FILE}"
-export BUILDEROPS_PIN_FILE
+BUILDEROPS_RECEIPT_DIR="${RECEIPT_DIR}"
+BUILDEROPS_PIN_DIRECTORY="$(dirname "${PIN_FILE}")"
+BUILDEROPS_PIN_BASENAME="${PIN_FILE##*/}"
+export BUILDEROPS_PIN_FILE BUILDEROPS_RECEIPT_DIR BUILDEROPS_PIN_DIRECTORY BUILDEROPS_PIN_BASENAME
 
 # shellcheck source=lib/builderops_compose.sh
 source "${ROOT}/scripts/lib/builderops_compose.sh"
@@ -54,6 +57,9 @@ write_pin() {
     printf 'BUILDEROPS_IMAGE_REPOSITORY=%s\n' "${repository}"
     printf 'BUILDEROPS_IMAGE_DIGEST=%s\n' "${digest}"
     printf 'BUILDEROPS_SOURCE_SHA=%s\n' "${source_sha}"
+    printf 'BUILDEROPS_PIN_DIRECTORY=%s\n' "${BUILDEROPS_PIN_DIRECTORY}"
+    printf 'BUILDEROPS_PIN_BASENAME=%s\n' "${BUILDEROPS_PIN_BASENAME}"
+    printf 'BUILDEROPS_RECEIPT_DIR=%s\n' "${RECEIPT_DIR}"
     printf 'BUILDEROPS_POSTGRES_IMAGE_REPOSITORY=%s\n' "${postgres_repository}"
     printf 'BUILDEROPS_POSTGRES_IMAGE_DIGEST=%s\n' "${postgres_digest}"
     printf 'BUILDEROPS_CANDIDATE_RECEIPT_SHA=%s\n' "${candidate_receipt_sha}"
@@ -61,6 +67,14 @@ write_pin() {
     printf 'PRODUCT_DOCKER_CONTEXT=%s\n' "${PRODUCT_DOCKER_CONTEXT}"
     printf 'BUILDEROPS_LOCAL_DURABILITY_MODE=%s\n' "${local_durability_mode}"
   } >"${tmp}"
+  # Pins contain deployment metadata only. The non-root API must observe
+  # directory-based atomic replacement; secret custody paths are untouched.
+  if [[ "${file}" = "${PIN_FILE}" ]]; then
+    chmod 0644 "${tmp}" || return
+  else
+    chmod 0600 "${tmp}" || return
+  fi
+  chmod o+x "${BUILDEROPS_PIN_DIRECTORY}" || return
   mv "${tmp}" "${file}"
 }
 

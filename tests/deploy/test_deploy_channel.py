@@ -22,6 +22,52 @@ _DEPLOY_READINESS_TIMEOUT_SECONDS = 30
 _DEPLOY_CLEANUP_TIMEOUT_SECONDS = 5
 
 
+def test_failed_reconciliation_remains_quiescent_and_non_replaying(tmp_path, monkeypatch) -> None:
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    root = tmp_path / "checkout"
+    lock_dir = root / "config/deploy/test.env.lock"
+    lock_dir.mkdir(parents=True, mode=0o700)
+    (lock_dir / "bws-owner").touch(mode=0o600)
+    journal = DeployJournal(tmp_path / "journal", "test")
+    plan = DeployPlan("test", "a" * 40, ("db", "api"), ("postgres-db", "postgres-api"))
+    operation_id = str(uuid4())
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ("prepared", "preflighted", "materialized", "activating"):
+        journal.write(operation_id, stage)
+    config = SimpleNamespace(channel="test", root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, "load", lambda _channel: config)
+    monkeypatch.setattr(linux.LinuxEffects, "activate", lambda *_args: pytest.fail("must not replay"))
+    state = {"value": "running"}
+
+    def compose(_self, *_args):
+        # Exercise native quiescence over an actual captured child result.
+        return linux._command([sys.executable, "-c", "import sys; print(sys.argv[1])",
+                               json.dumps([{"Service": "migrate", "State": state["value"], "Health": ""}])])
+
+    monkeypatch.setattr(linux.LinuxEffects, "compose", compose)
+    monkeypatch.setattr(linux.LinuxEffects, "_running_one_shots", lambda _self: False)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {"action": "reconcile-failed", "operation_id": operation_id,
+               "plan": asdict(plan), "bootstrap": False}
+    for refused in (request, {**request, "action": "prepare", "operation_id": str(uuid4())},
+                    {**request, "plan": {**asdict(plan), "revision": "b" * 40}}):
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(refused)
+        assert journal.read().stage == "activating"
+        assert lock_dir.is_dir()
+    state["value"] = "exited"
+    receipt = supervisor.request(request)
+    assert receipt["receipt"]["terminal_result"] == "failed"
+    assert not lock_dir.exists()
+    assert supervisor.request({**request, "action": "join"}) == receipt
+    assert journal.read().stage == "failed"
+
+
 def _without_macos_malloc_stack_logging(
     source: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
@@ -139,6 +185,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     (root / "ops/deployments").mkdir(parents=True)
     (root / "tmp").mkdir(parents=True)
     (root / "tmp/runtime.env").write_text(
+        f"LOCAL_UID={os.getuid()}\nLOCAL_GID={os.getgid()}\n"
         "TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=/fixture/capture-inbox\n",
         encoding="utf-8",
     )
@@ -162,8 +209,10 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "app/ops/bws_secret_reader.py",
         "app/ops/host_secret_controller.py",
         "app/ops/host_secret_bootstrap.py",
+        "app/ops/native_source_bootstrap.py",
         "config/secrets/host_secret_contract.json",
         "scripts/deploy_channel.sh",
+        "scripts/compose_env.py",
         "scripts/companion_ui_postdeploy_smoke.sh",
         "scripts/dev_test_environment_clobber_preflight.py",
         "scripts/prod_devui_gateway_preflight.py",
@@ -299,18 +348,24 @@ esac
 set -eu
 touch {docker_marker!s}
 printf 'docker %s\\n' "$*" >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
+if [ "${{FAKE_CAPTURE_RUNTIME_IDENTITY:-0}}" = "1" ] && [[ "$*" == compose* ]]; then
+  printf 'compose identity uid=%s gid=%s cmd=%s\\n' \
+    "${{LOCAL_UID:-unset}}" "${{LOCAL_GID:-unset}}" "$*" \
+    >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
+fi
 if [ -n "${{FAKE_DOCKER_FAIL_MATCH:-}}" ] && [[ "$*" == *"${{FAKE_DOCKER_FAIL_MATCH}}"* ]]; then
   exit 24
 fi
 case "$*" in
   *"run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate"*)
     probe_selector=1
+    printf 'migration-token-image=%s:%s\\n' "${{APP_IMAGE_REPOSITORY:-unset}}" "${{APP_IMAGE_TAG:-unset}}" >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
     printf 'migration-token-probe selector=%s ack=%s\\n' \
       "${{probe_selector}}" \
       "${{PROD_MIGRATION_FORWARD_ONLY_ACK:-}}" \
       >> "${{FAKE_DEPLOY_EVENT_LOG:?}}"
     if [ "${{probe_selector}}" = "1" ]; then
-      printf '%s\\n' "${{FAKE_MIGRATION_GATE_TOKEN:-prod-migration-ack.v1:0000000000000000000000000000000000000000000000000000000000000000}}"
+      printf '%s\\n' "${{FAKE_MIGRATION_GATE_RESULT:-${{FAKE_MIGRATION_GATE_TOKEN:-prod-migration-no-forward-only-pending.v1}}}}"
       if [ -n "${{FAKE_MIGRATION_GATE_EXTRA_OUTPUT:-}}" ]; then
         printf '%s\\n' "${{FAKE_MIGRATION_GATE_EXTRA_OUTPUT}}"
       fi
@@ -1745,6 +1800,22 @@ def test_acknowledged_embedding_cutover_allows_transitional_health(tmp_path: Pat
     assert any("/api/health" in event for event in events)
 
 
+def test_acknowledged_embedding_cutover_keeps_required_health_strict_when_readyz_is_green(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    env["FAKE_READINESS"] = "pass"
+    env["FAKE_REQUIRED_HEALTH"] = "fail"
+
+    result = _run_deploy(root, env, sha, "--ack-embedding-rebuild-required")
+
+    assert result.returncode == 1
+    assert "health gate failed" in result.stderr
+    events = _deploy_events(env)
+    assert any("/readyz" in event for event in events)
+    assert any("/api/health" in event for event in events)
+
+
 def test_acknowledged_embedding_cutover_keeps_independent_readiness_failure_blocking(
     tmp_path: Path,
 ) -> None:
@@ -1992,6 +2063,68 @@ def test_forward_only_migration_failure_retains_compatible_target_image(tmp_path
     assert len(strict_recreates) == 1
 
 
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_nonprod_forward_only_migration_does_not_require_operator_ack(
+    tmp_path: Path, channel: str
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    if channel == "test":
+        _configure_dev_test_environment_clobber_preflight(
+            root, env, tmp_path, channel="test", overlay_content=_HEIMDAL_FIXED_OVERLAY
+        )
+        test_runtime_env = root / "tmp-test/runtime.env"
+        test_runtime_env.write_text(
+            test_runtime_env.read_text(encoding="utf-8") + "TTS_ENABLED=false\n",
+            encoding="utf-8",
+        )
+    pin_path = root / f"config/deploy/{channel}.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_nonprod.py"
+    migration.write_text(
+        'revision = "forward_only_nonprod"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", f"add {channel} forward-only migration"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env["FAKE_SHA"] = target_sha
+
+    result = _run_deploy(root, env, target_sha, channel=channel)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "migration gate ok: 1 migration(s), forward_only=1" in result.stdout
+    events = _deploy_events(env)
+    assert any(event.startswith("migration-full ack=") for event in events)
+    assert not any(event.startswith("migration-token-probe ") for event in events)
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    receipt = json.loads(
+        (root / "ops/deployments" / f"{channel}-latest.json").read_text(
+            encoding="utf-8"
+        )
+    )["migration_receipt"]
+    assert receipt["forward_only"] == ["forward_only_nonprod.py"]
+    assert receipt["ack_forward_only"] is False
+    assert receipt["classification_decisions"] == [
+        {
+            "migration": "forward_only_nonprod.py",
+            "classification": "forward-only",
+            "is_forward_only": True,
+        }
+    ]
+
+
 def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
     tmp_path: Path,
 ) -> None:
@@ -2016,6 +2149,7 @@ def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
     env.update(
         {
             "FAKE_SHA": target_sha,
+            "APP_IMAGE_REPOSITORY": "example.invalid/pkm-app",
             "FAKE_MIGRATION_GATE_TOKEN": token,
             "DEPLOY_ACK_FORWARD_ONLY": "1",
         }
@@ -2033,6 +2167,7 @@ def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
     full_index = next(index for index, event in enumerate(events) if event.startswith("migration-full "))
     assert probe_index < stop_index < full_index
     assert "selector=1 ack=" in events[probe_index]
+    assert events[probe_index - 1] == f"migration-token-image=example.invalid/pkm-app:{target_sha}"
     assert events[full_index] == f"migration-full ack={token}"
 
 
@@ -2121,10 +2256,11 @@ def test_prod_forward_only_ambiguous_token_probe_prevents_writer_stop(
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
 
 
-def test_prod_forward_only_requires_existing_ack_before_token_probe(
+def test_prod_forward_only_requires_ack_before_writer_stop_when_pending(
     tmp_path: Path,
 ) -> None:
     root, env, previous_sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     pin_path = root / "config/deploy/prod.env"
     pin_path.write_text(
         "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
@@ -2141,17 +2277,214 @@ def test_prod_forward_only_requires_existing_ack_before_token_probe(
     subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
     subprocess.run(["git", "commit", "-qm", "add ack-required migration"], cwd=root, check=True)
     target_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
-    env["FAKE_SHA"] = target_sha
+    env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_TOKEN": "prod-migration-ack.v1:" + "3" * 64,
+        }
+    )
 
     result = _run_deploy(root, env, target_sha, channel="prod")
 
     assert result.returncode == 42
-    assert "forward-only migrations require" in result.stderr
+    assert "--ack-forward-only is required before writer stop" in result.stderr
     events = _deploy_events(env)
-    assert not any(event.startswith("migration-token-probe ") for event in events)
+    assert any(event.startswith("migration-token-probe ") for event in events)
+    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{target_sha}" in events
     assert not any(" stop api worker watcher" in event for event in events)
     assert not (root / "config/deploy/prod.migration-pending.env").exists()
     assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+
+
+def test_prod_pending_forward_only_requires_ack_even_when_changed_migrations_are_reversible(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/reversible_source_delta.py"
+    migration.write_text(
+        'revision = "reversible_source_delta"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "reversible"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "add reversible migration delta"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_TOKEN": "prod-migration-ack.v1:" + "4" * 64,
+        }
+    )
+
+    result = _run_deploy(root, env, target_sha, channel="prod")
+
+    assert result.returncode == 42
+    assert "--ack-forward-only is required before writer stop" in result.stderr
+    events = _deploy_events(env)
+    assert any(event.startswith("migration-token-probe ") for event in events)
+    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{target_sha}" in events
+    assert not any(" stop api worker watcher" in event for event in events)
+    assert not (root / "config/deploy/prod.migration-pending.env").exists()
+    assert f"APP_IMAGE_TAG={previous_sha}" in pin_path.read_text(encoding="utf-8")
+
+
+def test_prod_empty_migration_delta_still_requires_ack_for_live_pending_forward_only(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha = _deploy_harness(tmp_path)
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={current_sha}\n",
+        encoding="utf-8",
+    )
+    env.update(
+        {
+            "FAKE_SHA": current_sha,
+            "FAKE_MIGRATION_GATE_TOKEN": "prod-migration-ack.v1:" + "5" * 64,
+        }
+    )
+
+    result = _run_deploy(root, env, current_sha, channel="prod")
+
+    assert result.returncode == 42
+    assert "--ack-forward-only is required before writer stop" in result.stderr
+    events = _deploy_events(env)
+    assert "migration gate ok: 0 migration(s), forward_only=0" in result.stdout
+    assert f"migration-token-image=ghcr.io/rasmustho/pkm-app:{current_sha}" in events
+    assert any(event.startswith("migration-token-probe ") for event in events)
+    assert not any(" stop api worker watcher" in event for event in events)
+    assert not (root / "config/deploy/prod.migration-pending.env").exists()
+    assert f"APP_IMAGE_TAG={current_sha}" in pin_path.read_text(encoding="utf-8")
+
+
+def test_prod_empty_delta_forward_only_failure_retries_through_durable_marker(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha = _deploy_harness(tmp_path)
+    (root / "code_only_change.py").write_text(
+        '"""A deployment commit with no migration-tree changes."""\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "code_only_change.py"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "add code-only deployment change"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={current_sha}\n",
+        encoding="utf-8",
+    )
+    token = "prod-migration-ack.v1:" + "6" * 64
+    env.update(
+        {
+            "APP_IMAGE_REPOSITORY": "example.invalid/pkm-app",
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_TOKEN": token,
+            "DEPLOY_ACK_FORWARD_ONLY": "1",
+            "FAKE_DOCKER_FAIL_MATCH": "exit-code-from migrate",
+        }
+    )
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+
+    first = _run_deploy(root, env, target_sha, channel="prod")
+
+    pending = root / "config/deploy/prod.migration-pending.env"
+    assert first.returncode == 24
+    assert "forward-only migration execution started and its commit state is ambiguous" in first.stderr
+    marker = pending.read_text(encoding="utf-8")
+    assert f"FROM_SHA={current_sha}" in marker
+    assert f"TARGET_SHA={target_sha}" in marker
+    assert "ACK_FORWARD_ONLY=1" in marker
+    assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
+    assert f"migration-token-image=example.invalid/pkm-app:{target_sha}" in _deploy_events(env)
+
+    env.pop("FAKE_DOCKER_FAIL_MATCH")
+    env["FAKE_MIGRATION_GATE_RESULT"] = "prod-migration-no-forward-only-pending.v1"
+
+    second = _run_deploy(root, env, target_sha, channel="prod")
+
+    assert second.returncode == 0, second.stdout + second.stderr
+    assert "migration retry: revalidating" in second.stdout
+    assert not pending.exists()
+    migrate_events = [
+        event for event in _deploy_events(env) if "exit-code-from migrate" in event
+    ]
+    assert len(migrate_events) == 2
+
+
+def test_prod_metadata_only_forward_marker_delta_needs_no_ack_when_none_pending(
+    tmp_path: Path,
+) -> None:
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    pin_path = root / "config/deploy/prod.env"
+    pin_path.write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/pkm-app\n"
+        f"APP_IMAGE_TAG={previous_sha}\n",
+        encoding="utf-8",
+    )
+    migration = root / "app/alembic/versions/forward_only_marker_update.py"
+    migration.write_text(
+        'revision = "forward_only_marker_update"\n'
+        f'down_revision = "{previous_sha[:12]}"\n'
+        'reversibility = "forward-only"\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", str(migration.relative_to(root))], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "add forward-only classification marker"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    env.update(
+        {
+            "FAKE_SHA": target_sha,
+            "FAKE_MIGRATION_GATE_RESULT": "prod-migration-no-forward-only-pending.v1",
+        }
+    )
+    _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
+
+    result = _run_deploy(root, env, target_sha, channel="prod")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "no forward-only migration is pending; acknowledgement not required" in result.stdout
+    events = _deploy_events(env)
+    probe_index = next(
+        index for index, event in enumerate(events) if event.startswith("migration-token-probe ")
+    )
+    stop_index = next(index for index, event in enumerate(events) if " stop api worker watcher" in event)
+    full_index = next(index for index, event in enumerate(events) if event.startswith("migration-full "))
+    assert probe_index < stop_index < full_index
+    assert events[full_index] == "migration-full ack="
+    receipt = json.loads(
+        (root / "ops/deployments/prod-latest.json").read_text(encoding="utf-8")
+    )["migration_receipt"]
+    assert receipt["forward_only"] == ["forward_only_marker_update.py"]
+    assert receipt["ack_forward_only"] is False
 
 
 def test_forward_only_pull_failure_restores_previous_pin_before_migration(tmp_path: Path) -> None:
@@ -2201,10 +2534,13 @@ def test_target_commit_migration_is_classified_when_target_is_not_checked_out(
 
     result = _run_deploy(root, env, target_sha)
 
-    assert result.returncode == 42
-    assert "forward-only migrations require" in result.stderr
-    assert "migration gate blocked before recreate" in result.stderr
-    assert not (tmp_path / "docker-called").exists()
+    # DEV accepts a classified forward-only migration without PROD's
+    # acknowledgement. The fixture's version probe reports the old pin, so
+    # reaching that later gate proves classification read the target commit
+    # even though it is not checked out.
+    assert result.returncode == 1
+    assert "migration gate ok: 1 migration(s), forward_only=1" in result.stdout
+    assert "version gate failed" in result.stderr
 
 
 def test_migration_materialization_failure_blocks_before_pin_or_compose(
@@ -2866,6 +3202,7 @@ def _configure_dev_test_environment_clobber_preflight(
     runtime_dir = root / ("tmp-test" if channel == "test" else "tmp")
     runtime_dir.mkdir(exist_ok=True)
     (runtime_dir / "runtime.env").write_text(
+        f"LOCAL_UID={os.getuid()}\nLOCAL_GID={os.getgid()}\n"
         "HEIMDAL_CAPTURE_WATCH_DIR=/real/capture/dir\n"
         "VAULT_LAYOUT_NOTE_REL=custom/vault.layout.md\n",
         encoding="utf-8",
@@ -3098,7 +3435,7 @@ def test_bws_effective_target_controls_generated_compose_dependency_graph(tmp_pa
                  'docker-compose.bws.yml', 'docker-compose.bws-external.yml'):
         shutil.copyfile(REPO_ROOT / name, root / name)
     runtime = tmp_path / 'runtime.env'
-    runtime.write_text('LLM_PROVIDER=mock\n')
+    runtime.write_text('LLM_PROVIDER=mock\nLOCAL_UID=1000\nLOCAL_GID=1000\n')
     pin = root / 'config/deploy' / (channel + '.env')
     pin.write_text('WATCHER_RUNTIME_ENV_FILE=' + str(runtime) + '\nAPP_IMAGE_REPOSITORY=ghcr.io/rasmustho/pkm-app\nAPP_IMAGE_TAG=' + 'a' * 40 + '\n')
     password = tmp_path / 'password'
@@ -3167,6 +3504,105 @@ deploy_channel_compose "$2" "$3" "docker-compose.$3.yml" "pkm-$3" "$4" up -d --f
         assert ('docker-compose.bws-external.yml' in ' '.join(record['argv'])) == (host != 'db')
 
 
+@pytest.mark.parametrize(
+    ('overrides', 'expected'),
+    [
+        ({}, '/home/runtime/.local/state/agentic-pkm/instance-ownership'),
+        ({'XDG_STATE_HOME': '/srv/state'}, '/srv/state/agentic-pkm/instance-ownership'),
+        ({'INSTANCE_OWNERSHIP_HOST_STATE_DIR': '/custom/state'}, '/custom/state'),
+    ],
+)
+def test_root_bws_supervisor_uses_runtime_state_path(tmp_path, monkeypatch, overrides, expected):
+    """The root supervisor avoids /root defaults and preserves explicit state roots."""
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    password = tmp_path / 'password'
+    password.write_text('fixture-password')
+    monkeypatch.setattr(os, 'environ', {'HOME': '/root', **overrides})
+    monkeypatch.setattr(os, 'geteuid', lambda: 0)
+    monkeypatch.setattr(linux.pwd, 'getpwuid', lambda uid: SimpleNamespace(pw_dir='/home/runtime'))
+
+    cfg = SimpleNamespace(
+        root=root,
+        channel='dev',
+        uid=1000,
+        gid=1000,
+        password_file=password,
+        runtime_env_file=runtime,
+    )
+
+    produced = linux.LinuxEffects(cfg).environment()
+
+    assert produced['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == expected
+    assert produced['LOCAL_UID'] == '1000'
+
+
+def test_non_root_bws_caller_uses_own_home_without_runtime_passwd_lookup(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    password = tmp_path / 'password'
+    password.write_text('fixture-password')
+    monkeypatch.setattr(os, 'environ', {'HOME': '/home/caller'})
+    monkeypatch.setattr(os, 'geteuid', lambda: 501)
+    monkeypatch.setattr(linux.pwd, 'getpwuid', lambda uid: pytest.fail('runtime passwd lookup is root-only'))
+
+    cfg = SimpleNamespace(
+        root=root,
+        channel='dev',
+        uid=1000,
+        gid=1000,
+        password_file=password,
+        runtime_env_file=runtime,
+    )
+
+    produced = linux.LinuxEffects(cfg).environment()
+
+    assert produced['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] == (
+        '/home/caller/.local/state/agentic-pkm/instance-ownership'
+    )
+
+
+def test_root_bws_supervisor_fails_closed_when_runtime_uid_has_no_passwd_entry(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n')
+    password = tmp_path / 'password'
+    password.write_text('fixture-password')
+    monkeypatch.setattr(os, 'environ', {'HOME': '/root'})
+    monkeypatch.setattr(os, 'geteuid', lambda: 0)
+
+    def missing_runtime_user(uid):
+        raise KeyError(uid)
+
+    monkeypatch.setattr(linux.pwd, 'getpwuid', missing_runtime_user)
+
+    cfg = SimpleNamespace(
+        root=root,
+        channel='dev',
+        uid=1000,
+        gid=1000,
+        password_file=password,
+        runtime_env_file=runtime,
+    )
+
+    with pytest.raises(linux.PostgresDeployError):
+        linux.LinuxEffects(cfg).environment()
+
+
 @pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
 def test_rendered_compose_uses_postgres_secret_file_without_value(tmp_path, channel):
     rendered = _render_bws_compose(tmp_path, channel)
@@ -3179,6 +3615,15 @@ def test_rendered_compose_uses_postgres_secret_file_without_value(tmp_path, chan
                 from app.config.database import credential_free_database_fields
                 credential_free_database_fields(environment[name])
     assert rendered['services']['db']['environment']['POSTGRES_PASSWORD_FILE'] == '/run/secrets/postgres_password'
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test', 'prod'])
+def test_bws_postgres_compose_entrypoint_retains_postgres_command(tmp_path, channel):
+    rendered = _render_bws_compose(tmp_path, channel)
+    database = rendered['services']['db']
+
+    assert database['entrypoint'] == ['/bin/bash', '/usr/local/bin/yggdrasil-postgres-entrypoint.sh']
+    assert database['command'] == ['postgres']
 
 
 def test_postgres_secret_mount_is_limited_to_database_clients(tmp_path):
@@ -3317,6 +3762,356 @@ def test_compose_secret_source_lifecycle_covers_restart_recreate_and_boot(tmp_pa
     assert 'KillMode=control-group' in unit
     assert 'ExecStopPost=/usr/local/libexec/yggdrasil-bws-deploy cleanup %i' in unit
     assert 'LoadCredentialEncrypted=' in unit and 'BWS_ACCESS_TOKEN_FILE=%d/' in unit
+
+
+def test_bws_supervisor_launcher_uses_declared_runtime_dependencies():
+    runtime_python = '/opt/yggdrasil/bws-deploy-runtime/bin/python3'
+    manifest = (REPO_ROOT / 'requirements-bws-deploy.txt').read_text(encoding='utf-8')
+    launcher = (REPO_ROOT / 'scripts/postgres_deploy_service.py').read_text(encoding='utf-8')
+    unit = (REPO_ROOT / 'config/systemd/yggdrasil-bws-deploy@.service').read_text(encoding='utf-8')
+
+    assert manifest.splitlines() == [
+        'bitwarden-sdk==2.1.0',
+        'psycopg[binary]==3.2.10',
+        'PyYAML==6.0.3',
+        'python-dateutil==2.9.0.post0',
+        'six==1.17.0',
+        'typing-extensions==4.15.0',
+        'pytest==9.0.3',
+        'iniconfig==2.1.0',
+        'packaging==25.0',
+        'pluggy==1.6.0',
+        'Pygments==2.20.0',
+        'playwright==1.63.0',
+        'pyee==13.0.1',
+        'greenlet==3.5.6',
+        'pydantic==2.12.0',
+        'pydantic_core==2.41.1',
+        'pydantic-settings==2.6.1',
+        'annotated-types==0.7.0',
+        'typing-inspection==0.4.2',
+        'python-dotenv==1.2.2',
+    ]
+    assert launcher.splitlines()[0] == f'#!{runtime_python}'
+    assert 'ExecStart=/usr/local/libexec/yggdrasil-bws-deploy serve %i' in unit
+    assert 'ExecStopPost=/usr/local/libexec/yggdrasil-bws-deploy cleanup %i' in unit
+
+
+def _write_fake_bws_runtime_python(fake_bin):
+    fake_bin.mkdir()
+    bootstrap_python = fake_bin / 'python3.12'
+    bootstrap_python.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [[ \"$1\" == \"-c\" ]]; then
+  printf 'bootstrap:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
+  [[ \"${BWS_FAIL_BOOTSTRAP_CHECK:-0}\" != \"1\" ]]
+  exit
+fi
+if [[ \"$1\" == \"-m\" && \"$2\" == \"venv\" ]]; then
+  if [[ \"$3\" == \"--upgrade\" ]]; then runtime_root=\"$4\"; else runtime_root=\"$3\"; fi
+  mkdir -p \"$runtime_root/bin\"
+  cat > \"$runtime_root/bin/python3\" <<'RUNTIME_PYTHON'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'runtime:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
+if [[ \"$1\" == \"-m\" && \"$2\" == \"pip\" && \"${BWS_FAIL_RUNTIME_PIP:-0}\" == \"1\" ]]; then exit 1; fi
+if [[ \"$1\" == \"-m\" && \"$2\" == \"playwright\" && \"${BWS_FAIL_RUNTIME_BROWSER_INSTALL:-0}\" == \"1\" ]]; then exit 1; fi
+if [[ \"$1\" == \"-c\" && \"${BWS_FAIL_RUNTIME_VERSION:-0}\" == \"1\" ]]; then exit 1; fi
+if [[ \"$1\" == \"-c\" && \"$*\" == *bitwarden_sdk* && \"${BWS_FAIL_RUNTIME_CHECK:-0}\" == \"1\" ]]; then exit 1; fi
+if [[ \"$1\" == \"-c\" && -n \"${BWS_REAL_RUNTIME_PYTHON:-}\" ]]; then exec \"$BWS_REAL_RUNTIME_PYTHON\" \"$@\"; fi
+if [[ \"$1\" == \"-m\" && \"$2\" == \"pytest\" && -n \"${BWS_REAL_RUNTIME_PYTHON:-}\" ]]; then exec \"$BWS_REAL_RUNTIME_PYTHON\" \"$@\"; fi
+RUNTIME_PYTHON
+  chmod 755 \"$runtime_root/bin/python3\"
+  printf 'bootstrap:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
+  exit 0
+fi
+echo 'unexpected bootstrap invocation' >&2
+exit 1
+""",
+        encoding='utf-8',
+    )
+    bootstrap_python.chmod(0o755)
+
+
+def _bws_setup_environment(fake_bin, trace, **overrides):
+    return {
+        **_without_macos_malloc_stack_logging(),
+        'PATH': f'{fake_bin}{os.pathsep}{os.environ.get("PATH", "")}',
+        'BWS_SETUP_TRACE': str(trace),
+        **overrides,
+    }
+
+
+def test_bws_supervisor_runtime_setup_is_idempotent_and_preserves_credentials(tmp_path):
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    trace = tmp_path / 'setup.trace'
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    env = _bws_setup_environment(fake_bin, trace)
+    setup = REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'
+    unit_path = REPO_ROOT / 'config/systemd/yggdrasil-bws-deploy@.service'
+    original_unit = unit_path.read_bytes()
+    source_launcher = REPO_ROOT / 'scripts/postgres_deploy_service.py'
+    installed_launcher = install_root / 'yggdrasil-bws-deploy'
+
+    for _ in range(2):
+        result = subprocess.run(
+            [
+                'bash',
+                str(setup),
+                '--runtime-root',
+                str(runtime_root),
+                '--install-root',
+                str(install_root),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    calls = [line for line in trace.read_text(encoding='utf-8').splitlines()
+             if line.startswith(('bootstrap:', 'runtime:'))]
+    requirements = REPO_ROOT / 'requirements-bws-deploy.txt'
+    bootstrap_check = 'bootstrap:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
+    runtime_version_check = 'runtime:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
+    runtime_import_check = 'runtime:-c import bitwarden_sdk, psycopg, yaml, app.ops.postgres_deploy_linux'
+    assert len(calls) == 16
+    assert calls[0] == bootstrap_check
+    assert calls[1] == f'bootstrap:-m venv {runtime_root}'
+    assert calls[2] == runtime_version_check
+    assert calls[3] == (
+        f'runtime:-m pip install --disable-pip-version-check --requirement {requirements}'
+    )
+    assert calls[4].startswith(runtime_import_check)
+    assert calls[5] == 'runtime:-m playwright install --only-shell chromium'
+    assert calls[6] == 'runtime:-c '
+    assert calls[7] == (
+        f'runtime:-m pytest {REPO_ROOT}/tests/companion_ui/test_companion_ui_live_smoke.py --collect-only -q -ra'
+    )
+    assert calls[8] == bootstrap_check
+    assert calls[9] == f'bootstrap:-m venv --upgrade {runtime_root}'
+    assert calls[10] == runtime_version_check
+    assert calls[11] == (
+        f'runtime:-m pip install --disable-pip-version-check --requirement {requirements}'
+    )
+    assert calls[12].startswith(runtime_import_check)
+    assert calls[13:] == calls[5:8]
+    source_body = source_launcher.read_bytes().partition(b'\n')[2]
+    assert installed_launcher.read_bytes() == f'#!{runtime_root}/bin/python3\n'.encode() + source_body
+    assert installed_launcher.stat().st_mode & 0o777 == 0o755
+    assert unit_path.read_bytes() == original_unit
+    assert 'LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current' in original_unit.decode()
+
+
+@pytest.mark.parametrize('missing_import', [None, 'yaml', 'bitwarden_sdk', 'psycopg'])
+def test_bws_runtime_declares_and_probes_yaml_for_child_guard(tmp_path, missing_import):
+    application_manifest = (REPO_ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()
+    runtime_manifest = (REPO_ROOT / 'requirements-bws-deploy.txt').read_text(encoding='utf-8').splitlines()
+    yaml_pin = next(line for line in application_manifest if line.startswith('PyYAML=='))
+    assert yaml_pin in runtime_manifest
+
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    installed_launcher = install_root / 'yggdrasil-bws-deploy'
+    installed_launcher.parent.mkdir()
+    installed_launcher.write_bytes(b'previous-launcher\n')
+    instrumentation = _bws_browser_probe_instrumentation(tmp_path)
+    # Execute the installer's actual import command through Python. Inject an
+    # unavailable dependency at the import boundary without running pip.
+    (instrumentation / 'sitecustomize.py').write_text(
+        'import importlib.abc, os, sys\n'
+        'class MissingDependency(importlib.abc.MetaPathFinder):\n'
+        '    def find_spec(self, fullname, path=None, target=None):\n'
+        '        if fullname == os.environ.get("BWS_MISSING_IMPORT"):\n'
+        '            raise ModuleNotFoundError(fullname)\n'
+        'sys.meta_path.insert(0, MissingDependency())\n',
+        encoding='utf-8',
+    )
+    trace = tmp_path / 'setup.trace'
+    result = subprocess.run(
+        ['bash', str(REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'),
+         '--runtime-root', str(runtime_root), '--install-root', str(install_root)],
+        cwd=REPO_ROOT,
+        env=_bws_setup_environment(
+            fake_bin, trace, BWS_REAL_RUNTIME_PYTHON=sys.executable,
+            BWS_MISSING_IMPORT=missing_import or '', PYTHONPATH=str(instrumentation),
+        ),
+        capture_output=True, text=True, check=False,
+    )
+
+    if missing_import is None:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert installed_launcher.read_bytes().startswith(f'#!{runtime_root}/bin/python3\n'.encode())
+    else:
+        assert result.returncode == 78, result.stdout + result.stderr
+        assert 'BWS deploy runtime dependency check failed' in result.stderr
+        assert installed_launcher.read_bytes() == b'previous-launcher\n'
+    assert any('import bitwarden_sdk, psycopg, yaml, app.ops.postgres_deploy_linux' in call
+               for call in trace.read_text(encoding='utf-8').splitlines())
+
+
+def _bws_browser_probe_instrumentation(tmp_path):
+    instrumentation = tmp_path / 'instrumentation'
+    instrumentation.mkdir()
+    # Keep default unit CI offline: only the external browser process is simulated.
+    # The installer, existing preflight script, Python import probe and exact pytest
+    # collection execute normally. A clean manifest-only installation separately
+    # proves the real pinned Chromium launch at the delivery convergence boundary.
+    package = instrumentation / 'playwright'
+    package.mkdir()
+    (package / '__init__.py').write_text('', encoding='utf-8')
+    (package / 'sync_api.py').write_text(
+        'from contextlib import contextmanager\n'
+        'from pathlib import Path\n'
+        'import os\n'
+        'def trace(event):\n'
+        '    with Path(os.environ["BWS_SETUP_TRACE"]).open("a") as target:\n'
+        '        target.write("browser:" + event + ":" + os.environ["PLAYWRIGHT_BROWSERS_PATH"] + "\\n")\n'
+        'class Chromium:\n'
+        '    def launch(self):\n'
+        '        trace("launch")\n'
+        '        if os.environ.get("BWS_BROWSER_UNAVAILABLE") == "1":\n'
+        '            raise RuntimeError("unavailable browser")\n'
+        '        return self\n'
+        '    def close(self):\n'
+        '        trace("close")\n'
+        '@contextmanager\n'
+        'def sync_playwright():\n'
+        '    yield type("Playwright", (), {"chromium": Chromium()})()\n',
+        encoding='utf-8',
+    )
+    return instrumentation
+
+
+@pytest.mark.parametrize('failure', [None, 'self-skip', 'pytest', 'playwright',
+                                    'pydantic_settings', 'app.retrieval.tuning',
+                                    'browser', 'collection'])
+def test_bws_runtime_setup_covers_mandatory_browser_smoke(tmp_path, failure):
+    manifest = (REPO_ROOT / 'requirements-bws-deploy.txt').read_text().splitlines()
+    application_manifest = (REPO_ROOT / 'requirements.txt').read_text().splitlines()
+    for package in ('pytest', 'pydantic', 'pydantic_core', 'pydantic-settings'):
+        assert next(line for line in application_manifest if line.startswith(package + '==')) in manifest
+    assert 'playwright==1.63.0' in manifest
+
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    trace = tmp_path / 'setup.trace'
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    install_root.mkdir()
+    launcher = install_root / 'yggdrasil-bws-deploy'
+    launcher.write_bytes(b'previous-launcher\n')
+    instrumentation = _bws_browser_probe_instrumentation(tmp_path)
+    (instrumentation / 'sitecustomize.py').write_text(
+        'import importlib.abc, os, sys\n'
+        'class MissingDependency(importlib.abc.MetaPathFinder):\n'
+        '    def find_spec(self, fullname, path=None, target=None):\n'
+        '        if fullname == os.environ.get("BWS_MISSING_IMPORT"):\n'
+        '            raise ModuleNotFoundError(fullname)\n'
+        'sys.meta_path.insert(0, MissingDependency())\n', encoding='utf-8',
+    )
+    env = _bws_setup_environment(
+        fake_bin, trace, BWS_REAL_RUNTIME_PYTHON=sys.executable,
+        PYTHONPATH=str(instrumentation), PLAYWRIGHT_BROWSERS_PATH=str(tmp_path / 'ambient-browsers'),
+        BWS_MISSING_IMPORT=failure or '', BWS_BROWSER_UNAVAILABLE=str(int(failure == 'browser')),
+        # Import the actual live smoke during collection without contacting this URL.
+        COMPANION_UI_SMOKE_URL='http://127.0.0.1:1/', PYTEST_ADDOPTS='',
+    )
+    if failure == 'self-skip':
+        env.pop('COMPANION_UI_SMOKE_URL')
+    if failure == 'collection':
+        env['PYTEST_ADDOPTS'] = '-k bws_manifest_deselected_smoke'
+    result = subprocess.run(
+        ['bash', str(REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'),
+         '--runtime-root', str(runtime_root), '--install-root', str(install_root)],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False,
+    )
+    calls = trace.read_text().splitlines()
+    if failure in {None, 'self-skip'}:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert launcher.read_bytes().startswith(f'#!{runtime_root}/bin/python3\n'.encode())
+    else:
+        assert result.returncode == 78, result.stdout + result.stderr
+        assert launcher.read_bytes() == b'previous-launcher\n'
+    if failure in {None, 'self-skip', 'browser', 'collection'}:
+        assert 'runtime:-m playwright install --only-shell chromium' in calls
+        assert f'browser:launch:{runtime_root}/browsers' in calls
+        if failure == 'browser':
+            assert 'Playwright Chromium runtime is unavailable' in result.stderr
+            assert 'prerequisite OS libraries' in result.stderr
+            assert not any('--collect-only' in call for call in calls)
+        else:
+            assert f'browser:close:{runtime_root}/browsers' in calls
+            assert f'runtime:-m pytest {REPO_ROOT}/tests/companion_ui/test_companion_ui_live_smoke.py --collect-only -q -ra' in calls
+        if failure == 'collection':
+            assert 'collected nothing without its intentional' in result.stderr
+    else:
+        assert 'BWS deploy runtime dependency check failed' in result.stderr
+        assert not any('playwright install' in call for call in calls)
+
+
+def test_bws_supervisor_runtime_rejects_old_bootstrap_python_before_mutation(tmp_path):
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    trace = tmp_path / 'setup.trace'
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    installed_launcher = install_root / 'yggdrasil-bws-deploy'
+    installed_launcher.parent.mkdir()
+    installed_launcher.write_bytes(b'previous-launcher\n')
+
+    result = subprocess.run(
+        ['bash', str(REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'),
+         '--runtime-root', str(runtime_root), '--install-root', str(install_root)],
+        cwd=REPO_ROOT,
+        env=_bws_setup_environment(fake_bin, trace, BWS_FAIL_BOOTSTRAP_CHECK='1'),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 78
+    assert trace.read_text(encoding='utf-8').splitlines() == [
+        'bootstrap:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
+    ]
+    assert not runtime_root.exists()
+    assert installed_launcher.read_bytes() == b'previous-launcher\n'
+
+
+@pytest.mark.parametrize(
+    'failure',
+    ['BWS_FAIL_RUNTIME_VERSION', 'BWS_FAIL_RUNTIME_PIP', 'BWS_FAIL_RUNTIME_CHECK',
+     'BWS_FAIL_RUNTIME_BROWSER_INSTALL'],
+)
+def test_bws_supervisor_runtime_failure_keeps_installed_launcher(tmp_path, failure):
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    trace = tmp_path / 'setup.trace'
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    installed_launcher = install_root / 'yggdrasil-bws-deploy'
+    installed_launcher.parent.mkdir()
+    installed_launcher.write_bytes(b'previous-launcher\n')
+
+    result = subprocess.run(
+        ['bash', str(REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'),
+         '--runtime-root', str(runtime_root), '--install-root', str(install_root)],
+        cwd=REPO_ROOT,
+        env=_bws_setup_environment(fake_bin, trace, **{failure: '1'}),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert installed_launcher.read_bytes() == b'previous-launcher\n'
 
 
 def _bws_runtime_export_fixture(tmp_path):

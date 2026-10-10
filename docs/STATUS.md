@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-06 (owner decision, TypeSafe System One repository support merged by PR #5803, and GitHub contract readback; no host credentials, route settings, database, or deployment changed)
+Last reviewed: 2026-10-09 (Issue #5868 existing-value TARS deployment candidate checked alongside the PR #5835, #5822, #5838, and #5847 evidence; no host credentials, route settings, database, or deployment changed)
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -47,6 +47,12 @@ Codex CLI completion through the sole configured `ygg_vlan_primary` path, authen
 and pre-inference refusal of unsupported native tools. This is designated-host acceptance only;
 persistent Product routing and dev/test/prod rollout remain separate. Tailscale and Ollama were not
 used or required.
+Last verified against (MARR-13 Product client repository candidate): Issue #5820 and PR #5838
+candidate `e74d9d7ee4b9323df96a478d6207d23291a61b4e`; the Product gateway/fabric/provider/eval and
+Builder Model Inquiry boundary suite passed 234 tests on 2026-10-08. This is repository evidence
+only: no live provider call, Mac host setting/service change, embedding-index mutation, or deployment
+was performed. The designated Luna/Codex CLI receipt above remains the only live route acceptance;
+integrated Product chat/embedding host acceptance is still separate.
 
 ### TypeSafe System One repository support (2026-10-06)
 
@@ -74,9 +80,15 @@ Last verified against: docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/DOCS_INDEX.md
 
 The owner decision recorded in [Issue #5618](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5989039472) puts production in scope: Product chat/planning (`decide` and `plan`) should use the VLAN-only Model Access Router path to the Luna Codex CLI executor, with Ollama reserved for embeddings. This supersedes the 2026-10-04 note that production was excluded. It is the product outcome, not a finding that Luna is technically unsuitable. It does not qualify a production caller identity or replace the existing credential and release gates; live Product `llm_routing` settings remain the route authority.
 
+The additional owner decision in [Issue #5819](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5819) (2026-10-07) sets a broader target: the Mac mini is the portal for all registry-declared Product inference, including embeddings, while each clone or satellite selects its own model/profile through settings. MARR-12 (#5821) delivered provider egress/catalog support in PR #5822 (merge commit `3330ca0d01d7fffdddc931569de3ac67eb387067`). MARR-13 (#5820; PR #5838) owns the Product caller and embedding migration. Repository implementation and merge are not live acceptance: the designated Luna/Codex CLI receipt above remains the only proven live route, and Product embedding use of the portal still requires integrated host verification.
+
+The PR #5847 candidate for Issue #5846 seeds Luna chat/reasoning and Ollama Nomic embeddings when vault initialization finds neither canonical nor supported legacy routing settings. Configured defaults take precedence over the channel's non-enforced `LLM_PROVIDER=mock`; an enforced provider still applies. Initialization preserves existing canonical and legacy owner policies, so this code does not activate routing in an already initialized production vault. Live production route settings, deployment, and acceptance remain under #5819/#5618; no live route or deployment change is claimed here.
+
+The current single-operator VLAN boundary uses mTLS at ingress and a loopback-only executor. No Tailscale path, per-release-channel credentials, or separate per-channel/action capability header is required. Ollama remains optional and is not a readiness prerequisite for routes that do not select it. Product and Builder policy resolvers and credential profiles remain separate. The accepted single-operator ingress risk and its multi-operator revisit condition are recorded in ADR-0067; no universal portal, Product caller migration, or production activation is inferred here.
+
 The same 2026-10-05 readback found that `ygg-prod` still reports `required_ok=false` and `mock` for `decide`, `plan`, and `embed`; its embedding index has 10 objects without vectors, and the production Ollama container has no model installed. No production MARR caller identity or binding was present. PR #5798 adds repository support for production caller binding, but does not activate a live route. `ygg-test` has only API and DB containers, with no worker or watcher, so candidate-bound test verification is not available. The latest dev readback reported container health only, not functional application health, and no MARR caller bindings.
 
-Production remains on the current `main`-tracking deployment baseline; the `stable` ref is dormant. Before promotion, qualify the production caller identity and BWS deployment boundary, obtain candidate-bound test verification (or follow the governed bypass procedure), and prepare the exact release plan. Forward-only migrations require acknowledgment for that exact plan. Ollama model installation and embedding-index rebuild are separate operational steps. The live readback and decision do not claim that any of these actions occurred.
+Production remains on the current `main`-tracking deployment baseline; the `stable` ref is dormant. The Issue #5868 repository candidate adds an explicit existing-value TARS deployment mode: it validates the selected values, refuses a missing PostgreSQL password before RPC, binds the mode to the host operation journal, and performs no BWS write. Once merged, that path will not require bootstrap-only writer qualification; BWS bootstrap writes remain under #5667. This is repository-candidate evidence only and does not qualify the production caller or change live routing/deployment. Before promotion, verify the production caller binding and selected existing values, obtain candidate-bound TEST verification (or follow the governed bypass procedure), and prepare the exact release plan. Forward-only migrations require acknowledgment for that exact plan. Ollama model installation and embedding-index rebuild are separate operational steps. The live readback and decision do not claim that any of these actions occurred.
 
 ### Live environment baseline (2026-08-22)
 
@@ -97,6 +109,21 @@ credential-restriction or shared-fencing gate, and live channel qualification re
 Neither the implementation nor its fake-adapter/static-render proof changes the live runtime
 posture. The detailed contract remains in `docs/CLOUD_SECRET_PROVISIONING/README.md` and
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Linux channel secret provisioning`.
+
+Last verified against (Issue #5828 deploy-consumer selection): PR #5835, candidate
+`27cae8f3735e50f98784e0495fed5f6ac67e8aed`, merged as
+`24900014c491327617b83e26a93732fc20e5833c`; exact-candidate validation reported 889 passed,
+7 skipped, Ruff, `mypy` (1,049 files), docs and language guards, shell syntax, and diff checks.
+GitHub CI Smoke run #37742806960 passed on the exact candidate; later PR-description-only run
+#37744619163 skipped code-surface jobs. No live BWS value write, token rotation, channel
+qualification, or runtime change occurred.
+
+PR #5835 merged the Issue #5828 deploy-selection fix at the candidate and merge SHAs recorded
+above. A missing raw-store key may degrade API ingress visibly; capture-watch is selected only
+when configured, and raw migration only when its target migration is pending. Missing keys for
+active capture or migration still block, and malformed present values fail closed. The independent
+mechanism-convergence review found no remaining findings. This is repository evidence only; no
+live BWS value write, token rotation, channel qualification, or runtime-state change is claimed.
 
 At the 2026-09-23 MARR-08 repository checkpoint, Issue #5635 had added a bounded Product client and
 one host-side completion operation that dispatches an exact Product-selected route to Codex CLI or

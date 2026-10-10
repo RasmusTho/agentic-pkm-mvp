@@ -46,7 +46,7 @@ from app.heimdal.entity_register import EntityRegister, KIND_PERSON
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
 
 
 # ---------------------------------------------------------------------------

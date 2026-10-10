@@ -3,10 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 import os
+import weakref
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from app.components.embeddings import EmbeddingClientProtocol, get_embedding_client
+from app.components.embeddings import (
+    EmbeddingClientProtocol,
+    EmbeddingIdentity,
+    get_embedding_client,
+    resolve_embedding_identity,
+)
 from app.components.llm.router import LLMRouteError, LLMRouter, LLMRoute, LLMTaskIntent
 from app.components.settings.models_loader import load_models
 from app.model_access.adapter_factory import ModelAccessAdapterFactory
@@ -16,28 +22,40 @@ from app.model_access.catalog import (
     CatalogSelectionPolicy,
     select_latest_compatible,
 )
-from app.llm.preflight_fallback import select_preflight_route
-from app.model_access.codex_remote_transport import CodexRemoteTransport
+from app.llm.preflight_fallback import (
+    select_product_preflight_route,
+)
+from app.model_access.codex_remote_transport import (
+    CodexRemoteTransport,
+    RemoteCompletionError,
+    RemoteEmbeddingError,
+)
 from app.model_access.executor_network_policy import (
     EXECUTOR_NETWORK_PROFILE,
     ExecutorNetworkPathRouter,
     ResolvedExecutorPath,
 )
 from app.model_access.remote_contract import (
-    CatalogRequest,
     CompletionCapabilityIntent,
-    CompletionRequest,
     CompletionRouteIdentity,
-    PreflightRequest,
+    ProductCatalogRequest,
+    ProductCompletionRequest,
+    ProductEmbeddingRequest,
+    ProductPreflightRequest,
 )
 from app.model_access.router import ModelAccessRouter
+from app.embedding_config import assert_embed_dim, l2_normalize
+from app.llm.embeddings import _chunk_for_embedding, _embedding_max_input_chars, _mean_pool
+from app.llm.trace import log_llm_call
 from app.services.llm import LLMBackendTimeout, call_llm
+from app.settings.runtime import get_settings_bundle
 from llm_contract import (
     CapabilityProvenance,
     FallbackProvenance,
     FallbackRequirement,
     ModelAccessIntent,
     ModelAccessProfile,
+    ModelAccessAdapterDescriptor,
     ModelAccessRoute,
     ModelCapabilities,
     ModelCapabilityRequirements,
@@ -138,6 +156,61 @@ def _new_executor_path_router(
     )
 
 
+class _ProductPortalAdapterRegistry:
+    """Keep provider capability facts while moving Product execution to the Mac host."""
+
+    def __init__(self, factory: ModelAccessAdapterFactory) -> None:
+        self._factory = factory
+
+    def describe(
+        self, adapter_id: str, *, provider: str, model: str
+    ) -> ModelAccessAdapterDescriptor:
+        descriptor = self._factory.describe(
+            adapter_id, provider=provider, model=model
+        )
+        if provider == "mock":
+            return descriptor
+        return ModelAccessAdapterDescriptor(
+            **{
+                **descriptor.model_dump(),
+                "execution_host_profile": EXECUTOR_NETWORK_PROFILE,
+                "execution_boundary": "private_network_https",
+                "authentication_scheme": "executor_path_authentication",
+            }
+        )
+
+
+def _product_adapter_id(
+    provider: str,
+    model: str,
+    *,
+    factory: ModelAccessAdapterFactory,
+    model_kind: str = "chat",
+) -> str:
+    """Resolve only a declared model adapter, preferring its Mac-path binding."""
+    model_descriptor = next(
+        (
+            descriptor
+            for descriptor in load_models().values()
+            if descriptor.provider == provider
+            and descriptor.model == model
+            and descriptor.kind == model_kind
+        ),
+        None,
+    )
+    if model_descriptor is not None:
+        remote_allowed = tuple(
+            adapter_id
+            for adapter_id in model_descriptor.allowed_transports
+            if adapter_id in _REMOTE_EXECUTOR_ADAPTERS
+        )
+        if len(remote_allowed) > 1:
+            raise LLMRouteError("Product model has ambiguous Mac portal adapters")
+        if remote_allowed:
+            return remote_allowed[0]
+    return factory.default_adapter_id(provider)
+
+
 def _capability_intersection(
     declared: ModelCapabilities, discovered: ModelCapabilities
 ) -> ModelCapabilities:
@@ -197,9 +270,17 @@ def _latest_product_catalog_target(
 
     def load_snapshot(_now):
         try:
-            snapshot = remote_transport.catalog(
-                CatalogRequest(transport_id="codex_cli")
-            ).snapshot
+            request = ProductCatalogRequest(
+                provider=selected.provider,
+                model=selected.model,
+            )
+            product_catalog = getattr(remote_transport, "product_catalog", None)
+            catalog_response = (
+                product_catalog(request)
+                if callable(product_catalog)
+                else remote_transport.catalog(request)
+            )
+            snapshot = catalog_response.snapshot
         except Exception as exc:
             code = getattr(exc, "code", None)
             if code == "catalog_unavailable":
@@ -281,12 +362,25 @@ def _exact_product_model_route(
         factory.describe(adapter_id, provider=descriptor.provider, model=model_id)
     except ValueError as exc:
         raise LLMRouteError("explicit Product model transport is not declared") from exc
+    eval_reasoning_effort = None
+    if intent.task_kind == "eval" and adapter_id == "openai_api":
+        try:
+            declared_efforts = factory.model_reasoning_efforts(
+                descriptor.provider, model_id
+            )
+        except ValueError as exc:
+            raise LLMRouteError(
+                "explicit Product model has no declared reasoning capability"
+            ) from exc
+        if declared_efforts is not None and "none" in declared_efforts:
+            eval_reasoning_effort = "none"
     return LLMRoute(
         provider=descriptor.provider,
         model=model_id,
         mode="chat",
         reason=f"explicit-model:{intent.task_kind}",
         transport_id=adapter_id,
+        reasoning_effort=eval_reasoning_effort,
     )
 
 
@@ -329,7 +423,11 @@ def _resolve_product_access_route(
     allow_explicit_eval_transport: bool = False,
 ) -> ModelAccessRoute:
     factory = adapter_factory or _adapter_factory()
-    adapter_id = selected.transport_id or factory.default_adapter_id(selected.provider)
+    adapter_id = selected.transport_id or _product_adapter_id(
+        selected.provider,
+        selected.model,
+        factory=factory,
+    )
     if adapter_id == "codex_cli":
         raise LLMRouteError(
             "Product chat facade cannot execute the local codex_cli transport"
@@ -383,7 +481,32 @@ def _resolve_product_access_route(
         if selected_model == selected.model
         else factory.describe(adapter_id, provider=selected.provider, model=selected_model)
     )
-    reasoning_effort = selected.reasoning_effort or "low"
+    declared_reasoning_efforts = None
+    if selected.provider != "mock":
+        try:
+            declared_reasoning_efforts = factory.model_reasoning_efforts(
+                selected.provider, selected_model
+            )
+        except ValueError as exc:
+            raise LLMRouteError(
+                "selected Product model has no declared reasoning capability"
+            ) from exc
+    if selected.reasoning_effort is not None:
+        if (
+            declared_reasoning_efforts is None
+            or selected.reasoning_effort not in declared_reasoning_efforts
+        ):
+            raise LLMRouteError(
+                "selected Product model does not declare the requested reasoning effort"
+            )
+        # The provider-neutral ModelAccessIntent intentionally has no `none`
+        # value. Keep an explicit Product `none` choice on LLMRoute and use a
+        # valid neutral intent while forwarding `none` only at the API boundary.
+        reasoning_effort = (
+            "low" if selected.reasoning_effort == "none" else selected.reasoning_effort
+        )
+    else:
+        reasoning_effort = "low"
     access_intent = ModelAccessIntent(
         capability_tier=(
             "frontier"
@@ -421,8 +544,10 @@ def _resolve_product_access_route(
             if discovered_capabilities is not None
             else descriptor.supported_capabilities
         ),
-        credential_identity_ref=_credential_ref(
-            descriptor.authentication_scheme, selected.provider
+        credential_identity_ref=(
+            "executor.credential-ref"
+            if selected.provider != "mock"
+            else _credential_ref(descriptor.authentication_scheme, selected.provider)
         ),
         degraded=selected.degraded,
         degradation_reason=(
@@ -452,20 +577,23 @@ def _resolve_product_access_route(
         ),
         capability_provenance=capability_provenance,
     )
-    return ModelAccessRouter(adapter_registry=factory).resolve(
+    return ModelAccessRouter(
+        adapter_registry=_ProductPortalAdapterRegistry(factory)
+    ).resolve(
         request,
         resolver=_SelectedProductTarget(selected_target),
         profile=profile,
     )
 
 
-def _codex_remote_request(
+def _product_completion_request(
     route: ModelAccessRoute,
     pack: dict[str, Any],
     *,
     response_format: dict[str, Any] | str | None,
     max_output_tokens: int | None = None,
-) -> CompletionRequest:
+    reasoning_effort_override: str | None = None,
+) -> ProductCompletionRequest:
     output_schema: dict[str, Any] | None
     if isinstance(response_format, dict):
         output_schema = response_format
@@ -473,23 +601,42 @@ def _codex_remote_request(
         output_schema = {"type": "object"}
     else:
         output_schema = None
-    if route.execution_host_profile != EXECUTOR_NETWORK_PROFILE:
-        raise ValueError("selected route is not bound to the remote executor")
+    if not _is_remote_executor_route(route):
+        raise ValueError("selected route is not bound to the Product portal")
+    reasoning_effort = None
     if route.provider == "openai":
-        provider = "openai"
-        transport_id = "codex_cli"
-        reasoning_effort = route.request.intent.reasoning_effort
-    elif route.provider == "ollama":
-        provider = "ollama"
-        transport_id = "ollama_http"
-        reasoning_effort = None
-    else:
-        raise ValueError("selected route is not an authenticated remote transport")
-    return CompletionRequest(
-        route=CompletionRouteIdentity(
-            provider=provider, model=route.model, transport_id=transport_id
-        ),
+        try:
+            declared_efforts = _adapter_factory().model_reasoning_efforts(
+                route.provider, route.model
+            )
+        except ValueError as exc:
+            raise LLMRouteError(
+                "selected Product model has no declared reasoning capability"
+            ) from exc
+        if declared_efforts != frozenset():
+            requested_effort = (
+                reasoning_effort_override
+                if reasoning_effort_override is not None
+                else route.request.intent.reasoning_effort
+            )
+            if (
+                declared_efforts is not None
+                and requested_effort not in declared_efforts
+            ):
+                raise LLMRouteError(
+                    "selected Product model does not declare the requested reasoning effort"
+                )
+            reasoning_effort = requested_effort
+    service_tier = (
+        "default"
+        if route.request.role_profile == "eval" and route.transport_id == "openai_api"
+        else None
+    )
+    return ProductCompletionRequest(
+        provider=route.provider,
+        model=route.model,
         reasoning_effort=reasoning_effort,
+        service_tier=service_tier,
         capability_intent=CompletionCapabilityIntent(
             structured_output=output_schema is not None,
             native_tools=route.request.requirements.native_tools,
@@ -502,6 +649,52 @@ def _codex_remote_request(
         user_input=str(pack.get("user", "")),
         output_schema=output_schema,
         max_output_tokens=max_output_tokens,
+    )
+
+
+def _product_preflight_request(
+    route: ModelAccessRoute,
+    *,
+    response_format: dict[str, Any] | str | None,
+    max_output_tokens: int | None = None,
+    reasoning_effort_override: str | None = None,
+) -> ProductPreflightRequest:
+    completion = _product_completion_request(
+        route,
+        {"system": "", "user": "preflight"},
+        response_format=response_format,
+        max_output_tokens=max_output_tokens,
+        reasoning_effort_override=reasoning_effort_override,
+    )
+    return ProductPreflightRequest(
+        provider=completion.provider,
+        model=completion.model,
+        reasoning_effort=completion.reasoning_effort,
+        service_tier=completion.service_tier,
+        capability_intent=completion.capability_intent,
+    )
+
+
+def _bind_product_host_route(
+    route: ModelAccessRoute, host_route: CompletionRouteIdentity
+) -> ModelAccessRoute:
+    if (route.provider, route.model) != (host_route.provider, host_route.model):
+        raise LLMRouteError("Mac portal preflight returned a different Product model")
+    if host_route.catalog_snapshot_ref is None or host_route.catalog_snapshot_hash is None:
+        raise LLMRouteError("Mac portal preflight did not bind a fresh catalog snapshot")
+    return ModelAccessRoute(
+        **{
+            **route.model_dump(),
+            "transport_id": host_route.transport_id,
+            "catalog_snapshot_ref": host_route.catalog_snapshot_ref,
+            "catalog_snapshot_hash": host_route.catalog_snapshot_hash,
+            "capability_provenance": {
+                "source": "catalog_snapshot",
+                "source_ref": host_route.catalog_snapshot_ref,
+            },
+            "preflight_status": "passed",
+            "preflight_failure_code": None,
+        }
     )
 
 
@@ -525,10 +718,14 @@ def _explicit_remote_ollama_fallback(
     """Return only a registry-approved, explicitly remote Ollama alternative."""
     models = load_models()
     for candidate in candidates[1:]:
-        adapter_id = candidate.transport_id or factory.default_adapter_id(
-            candidate.provider
+        if candidate.provider != "ollama":
+            continue
+        adapter_id = candidate.transport_id or _product_adapter_id(
+            candidate.provider,
+            candidate.model,
+            factory=factory,
         )
-        if candidate.provider != "ollama" or adapter_id != "ollama_http_tailscale":
+        if adapter_id != "ollama_http_tailscale":
             continue
         descriptor = next(
             (
@@ -556,17 +753,6 @@ def _explicit_remote_ollama_fallback(
     return None
 
 
-def _with_preflight_passed(route: ModelAccessRoute) -> ModelAccessRoute:
-    """Revalidate the bound route after its no-inference probe succeeds."""
-    return ModelAccessRoute(
-        **{
-            **route.model_dump(),
-            "preflight_status": "passed",
-            "preflight_failure_code": None,
-        }
-    )
-
-
 def _preflight_transport_observation(receipt: Any) -> dict[str, str]:
     """Reduce a private path receipt to provider- and path-neutral status."""
     if receipt is None:
@@ -579,21 +765,72 @@ def _preflight_transport_observation(receipt: Any) -> dict[str, str]:
     return {"status": "available", "reason_code": "transport_reachable"}
 
 
-def _product_fallback_provenance(
-    selection_provenance: FallbackProvenance,
-    *,
+def _select_and_bind_product_preflight(
     primary: ModelAccessRoute,
-    fallback: ModelAccessRoute,
-) -> FallbackProvenance:
-    return FallbackProvenance(
-        used=True,
-        phase="preflight",
-        reason_code=selection_provenance.reason_code,
-        source_transport_id=primary.transport_id,
-        selected_transport_id=fallback.transport_id,
+    *,
+    fallback: ModelAccessRoute | None,
+    remote_transport: ExecutorNetworkPathRouter,
+    response_format: dict[str, Any] | str | None,
+    max_output_tokens: int | None,
+    reasoning_effort_override: str | None = None,
+) -> tuple[ModelAccessRoute, Any]:
+    primary_request = _product_preflight_request(
+        primary,
+        response_format=response_format,
+        max_output_tokens=max_output_tokens,
+        reasoning_effort_override=reasoning_effort_override,
+    )
+    fallback_request = None
+    if fallback is not None:
+        fallback_request = ProductPreflightRequest(
+            provider=fallback.provider,
+            model=fallback.model,
+            capability_intent=primary_request.capability_intent,
+        )
+    allow_fallback = bool(
+        fallback is not None
+        and not primary.fallback_provenance.used
+        and primary.adapter_id == "codex_cli_tailscale"
+        and fallback.adapter_id == "ollama_http_tailscale"
+    )
+    selection = select_product_preflight_route(
+        primary_request,
+        fallback_request=fallback_request,
+        fallback_requirement=primary.request.intent.fallback_requirement,
         policy_authority="profile.product_runtime",
-        source_effective_identity=primary.effective_identity,
-        selected_effective_identity=fallback.effective_identity,
+        transport=remote_transport,
+        allow_codex_to_ollama_fallback=allow_fallback,
+    )
+    selected = primary
+    if selection.fallback_provenance.used:
+        assert fallback is not None
+        selected = _bind_product_host_route(
+            fallback, selection.response.route
+        )
+        selected = ModelAccessRoute(
+            **{
+                **selected.model_dump(),
+                "fallback_provenance": selection.fallback_provenance,
+            }
+        )
+        return selected, selection
+    return _bind_product_host_route(selected, selection.response.route), selection
+
+
+def _require_explicit_eval_transport(
+    route: ModelAccessRoute,
+    *,
+    expected_transport_id: str | None,
+    selection: Any,
+    transport: Any,
+) -> None:
+    if expected_transport_id is None or route.transport_id == expected_transport_id:
+        return
+    discard_receipt = getattr(transport, "discard_product_path_receipt", None)
+    if callable(discard_receipt):
+        discard_receipt(getattr(selection, "executor_path_receipt", None))
+    raise LLMRouteError(
+        "Mac portal preflight selected a different transport than the explicit evaluation request"
     )
 
 
@@ -601,6 +838,7 @@ def _product_fallback_provenance(
 class ChatClient:
     route: LLMRoute
     model_access_route: ModelAccessRoute | None = None
+    last_execution_route: CompletionRouteIdentity | None = None
     remote_transport: ExecutorNetworkPathRouter | CodexRemoteTransport | None = None
     _preflight_transport_observation: dict[str, str] | None = field(
         default=None, repr=False, compare=False
@@ -614,6 +852,9 @@ class ChatClient:
         default=None, repr=False, compare=False
     )
     _fallback_route: LLMRoute | None = field(default=None, repr=False, compare=False)
+    _explicit_eval_transport_id: str | None = field(
+        default=None, repr=False, compare=False
+    )
 
     @property
     def preflight_transport_observation(self) -> dict[str, str] | None:
@@ -634,76 +875,50 @@ class ChatClient:
                 executor_profile=route.execution_host_profile,
                 timeout_seconds=self.route.timeout_seconds or 1_260.0,
             )
-        request = _codex_remote_request(
-            route,
-            {"system": "", "user": "preflight"},
-            response_format=(
-                {"type": "object"} if self._intent.json_schema_required else None
-            ),
-            max_output_tokens=max_tokens,
-        )
-        fallback_wire_route = None
-        if (
-            route.transport_id == "codex_cli_tailscale"
-            and self._fallback_access_route is not None
-            and not route.fallback_provenance.used
-        ):
-            fallback_wire_route = _codex_remote_request(
-                self._fallback_access_route,
-                {"system": "", "user": "preflight"},
+        try:
+            bound_route, selection = _select_and_bind_product_preflight(
+                route,
+                fallback=(
+                    self._fallback_access_route
+                    if not route.fallback_provenance.used
+                    else None
+                ),
+                remote_transport=transport,
                 response_format=(
                     {"type": "object"} if self._intent.json_schema_required else None
                 ),
                 max_output_tokens=max_tokens,
-            ).route
-        try:
-            selection = select_preflight_route(
-                request,
-                fallback_route=fallback_wire_route,
-                fallback_requirement=(
-                    "fallback_policy_selected"
-                    if fallback_wire_route is not None
-                    else "fallback_forbidden"
-                ),
-                policy_authority="profile.product_runtime",
+                reasoning_effort_override=self.route.reasoning_effort,
+            )
+            _require_explicit_eval_transport(
+                bound_route,
+                expected_transport_id=self._explicit_eval_transport_id,
+                selection=selection,
                 transport=transport,
             )
-            discard_receipt = getattr(transport, "discard_path_receipt", None)
+            discard_receipt = getattr(transport, "discard_product_path_receipt", None)
             if callable(discard_receipt):
                 discard_receipt(selection.executor_path_receipt)
+            self.model_access_route = bound_route
             if selection.fallback_provenance.used:
-                assert self._fallback_access_route is not None
                 assert self._fallback_route is not None
-                provenance = _product_fallback_provenance(
-                    selection.fallback_provenance,
-                    primary=route,
-                    fallback=self._fallback_access_route,
-                )
-                selected_access_route = ModelAccessRoute(
-                    **{
-                        **self._fallback_access_route.model_dump(),
-                        "fallback_provenance": provenance,
-                    }
-                )
-                self.model_access_route = _with_preflight_passed(
-                    selected_access_route
-                )
                 self.route = LLMRoute.from_model_access_route(
-                    self.model_access_route,
+                    bound_route,
                     mode=self._fallback_route.mode,
                     reason=self._fallback_route.reason,
                     timeout_seconds=self._fallback_route.timeout_seconds,
                     temperature=self._fallback_route.temperature,
+                    reasoning_effort=self._fallback_route.reasoning_effort,
                 )
             else:
-                self.model_access_route = _with_preflight_passed(route)
                 self.route = LLMRoute.from_model_access_route(
-                    self.model_access_route,
+                    bound_route,
                     mode=self.route.mode,
                     reason=self.route.reason,
                     embedding_identity=self.route.embedding_identity,
                     timeout_seconds=self.route.timeout_seconds,
                     temperature=self.route.temperature,
+                    reasoning_effort=self.route.reasoning_effort,
                 )
             self._output_limit_route_resolved = True
         finally:
@@ -743,42 +958,122 @@ class ChatClient:
                     timeout_seconds=self.route.timeout_seconds or 1_260.0,
                 )
             try:
-                request = _codex_remote_request(
-                    route,
-                    pack,
-                    response_format=response_format,
-                    max_output_tokens=max_tokens,
-                )
-                if (
-                    route.request.requirements.structured_output
-                    and request.output_schema is None
+                if route.request.requirements.structured_output and not (
+                    isinstance(response_format, dict) or response_format == "json"
                 ):
                     raise ValueError(
                         "the selected route requires a structured-output schema"
                     )
                 if (
-                    request.output_schema is not None
+                    (isinstance(response_format, dict) or response_format == "json")
                     and not route.capabilities.structured_output
                 ):
                     raise ValueError(
                         "the selected route does not attest structured output"
                     )
-                # Preflight the exact request intent immediately before dispatch.
-                # The resulting one-use receipt belongs to this transport instance.
-                preflight_result = transport.preflight(
-                    PreflightRequest(
-                        route=request.route,
-                        reasoning_effort=request.reasoning_effort,
-                        capability_intent=request.capability_intent,
-                    )
+                bound_route, selection = _select_and_bind_product_preflight(
+                    route,
+                    fallback=(
+                        self._fallback_access_route
+                        if not route.fallback_provenance.used
+                        else None
+                    ),
+                    remote_transport=transport,
+                    response_format=response_format,
+                    max_output_tokens=max_tokens,
+                    reasoning_effort_override=self.route.reasoning_effort,
                 )
-                complete_selected = getattr(transport, "complete_selected_path", None)
+                _require_explicit_eval_transport(
+                    bound_route,
+                    expected_transport_id=self._explicit_eval_transport_id,
+                    selection=selection,
+                    transport=transport,
+                )
+                if selection.fallback_provenance.used:
+                    assert self._fallback_route is not None
+                    self.route = LLMRoute.from_model_access_route(
+                        bound_route,
+                        mode=self._fallback_route.mode,
+                        reason=self._fallback_route.reason,
+                        timeout_seconds=self._fallback_route.timeout_seconds,
+                        temperature=self._fallback_route.temperature,
+                        reasoning_effort=self._fallback_route.reasoning_effort,
+                    )
+                else:
+                    self.route = LLMRoute.from_model_access_route(
+                        bound_route,
+                        mode=self.route.mode,
+                        reason=self.route.reason,
+                        embedding_identity=self.route.embedding_identity,
+                        timeout_seconds=self.route.timeout_seconds,
+                        temperature=self.route.temperature,
+                        reasoning_effort=self.route.reasoning_effort,
+                    )
+                self.model_access_route = bound_route
+                request = _product_completion_request(
+                    bound_route,
+                    pack,
+                    response_format=response_format,
+                    max_output_tokens=max_tokens,
+                    reasoning_effort_override=self.route.reasoning_effort,
+                )
+                complete_selected = getattr(
+                    transport, "complete_product_selected_path", None
+                )
+                self.last_execution_route = None
                 if callable(complete_selected):
-                    return complete_selected(
+                    response = complete_selected(
                         request,
-                        receipt=getattr(preflight_result, "receipt", None),
-                    ).content
-                return transport.complete(request).content
+                        receipt=selection.executor_path_receipt,
+                    )
+                else:
+                    response = transport.complete(request)
+                if not response.route.same_execution_target(selection.response.route):
+                    raise RemoteCompletionError(
+                        "executor_route_mismatch", indeterminate=True
+                    )
+                if (
+                    request.service_tier is not None
+                    and response.dispatched_reasoning_effort
+                    != request.reasoning_effort
+                ):
+                    raise RemoteCompletionError(
+                        "executor_reasoning_effort_mismatch", indeterminate=True
+                    )
+                self.last_execution_route = response.route
+                if usage_observer is not None:
+                    usage = response.usage
+                    usage_observer(
+                        {
+                            "model": usage.model if usage is not None else None,
+                            "usage": (
+                                usage.usage.model_dump(mode="json", exclude_none=True)
+                                if usage is not None and usage.usage is not None
+                                else None
+                            ),
+                            "service_tier": (
+                                usage.service_tier if usage is not None else None
+                            ),
+                            "dispatched_reasoning_effort": (
+                                response.dispatched_reasoning_effort
+                            ),
+                        }
+                    )
+                if record_content:
+                    log_llm_call(
+                        provider=response.route.provider,
+                        model=response.route.model,
+                        agent=agent or name or "unknown",
+                        kind=kind or name or "unknown",
+                        messages=[
+                            {"role": "system", "content": request.trusted_instructions},
+                            {"role": "user", "content": request.user_input},
+                        ],
+                        response={"content": response.content},
+                        response_text=response.content,
+                        trace_id=trace_id,
+                    )
+                return response.content
             finally:
                 if owns_transport:
                     transport.close()
@@ -851,6 +1146,11 @@ def get_chat_client_for_route(
     """Bind one already-resolved Product policy route to the shared access facade."""
     if allow_explicit_eval_transport and (intent.task_kind != "eval" or selected_route is None):
         raise LLMRouteError("evaluation-only admission requires an explicit eval route")
+    explicit_eval_transport = (
+        selected_route.transport_id if allow_explicit_eval_transport else None
+    )
+    if allow_explicit_eval_transport and not explicit_eval_transport:
+        raise LLMRouteError("explicit evaluation route has no transport binding")
     router = LLMRouter()
     route_candidates = getattr(router, "candidate_routes", None)
     candidates = route_candidates(intent) if route_candidates is not None else []
@@ -869,20 +1169,30 @@ def get_chat_client_for_route(
         candidates = [selected]
 
     factory = _adapter_factory()
+    if selected.transport_id == "codex_cli":
+        raise LLMRouteError(
+            "Product chat facade cannot execute the local codex_cli transport"
+        )
+    selected_adapter_id = selected.transport_id or _product_adapter_id(
+        selected.provider,
+        selected.model,
+        factory=factory,
+    )
     fallback = (
         _explicit_remote_ollama_fallback(candidates, factory=factory)
-        if allow_fallback and selected.transport_id == "codex_cli_tailscale"
+        if allow_fallback and selected_adapter_id == "codex_cli_tailscale"
         else None
     )
     remote_transport = None
     owns_remote_transport = False
-    if selected.transport_id in _REMOTE_EXECUTOR_ADAPTERS:
+    if selected.provider != "mock":
         remote_transport = _new_executor_path_router(
             executor_profile=EXECUTOR_NETWORK_PROFILE,
             timeout_seconds=selected.timeout_seconds or 1_260.0,
         )
         owns_remote_transport = True
     fallback_access_route = None
+    transport_observation = None
     try:
         model_access_route = _resolve_product_access_route(
             intent,
@@ -896,15 +1206,6 @@ def get_chat_client_for_route(
             allow_explicit_eval_transport=allow_explicit_eval_transport,
         )
         if remote_transport is not None:
-            request = _codex_remote_request(
-                model_access_route,
-                {"system": "", "user": "preflight"},
-                response_format=(
-                    {"type": "object"} if intent.json_schema_required else None
-                ),
-                max_output_tokens=max_output_tokens,
-            )
-            fallback_wire_route = None
             if fallback is not None:
                 fallback_access_route = _resolve_product_access_route(
                     intent,
@@ -913,45 +1214,30 @@ def get_chat_client_for_route(
                     fallback_requirement="fallback_policy_selected",
                     allow_catalog_promotion=allow_catalog_promotion,
                 )
-                fallback_wire_route = _codex_remote_request(
-                    fallback_access_route,
-                    {"system": "", "user": "preflight"},
-                    response_format=(
-                        {"type": "object"} if intent.json_schema_required else None
-                    ),
-                    max_output_tokens=max_output_tokens,
-                ).route
-            selection = select_preflight_route(
-                request,
-                fallback_route=fallback_wire_route,
-                fallback_requirement=(
-                    "fallback_policy_selected"
-                    if fallback_wire_route is not None
-                    else "fallback_forbidden"
+            model_access_route, selection = _select_and_bind_product_preflight(
+                model_access_route,
+                fallback=fallback_access_route,
+                remote_transport=remote_transport,
+                response_format=(
+                    {"type": "object"} if intent.json_schema_required else None
                 ),
-                policy_authority="profile.product_runtime",
+                max_output_tokens=max_output_tokens,
+                reasoning_effort_override=selected.reasoning_effort,
+            )
+            _require_explicit_eval_transport(
+                model_access_route,
+                expected_transport_id=explicit_eval_transport,
+                selection=selection,
                 transport=remote_transport,
             )
             transport_observation = _preflight_transport_observation(
                 selection.executor_path_receipt
             )
-            discard_receipt = getattr(remote_transport, "discard_path_receipt", None)
+            discard_receipt = getattr(
+                remote_transport, "discard_product_path_receipt", None
+            )
             if callable(discard_receipt):
                 discard_receipt(selection.executor_path_receipt)
-            if selection.fallback_provenance.used:
-                assert fallback is not None and fallback_access_route is not None
-                provenance = _product_fallback_provenance(
-                    selection.fallback_provenance,
-                    primary=model_access_route,
-                    fallback=fallback_access_route,
-                )
-                model_access_route = ModelAccessRoute(
-                    **{
-                        **fallback_access_route.model_dump(),
-                        "fallback_provenance": provenance,
-                    }
-                )
-            model_access_route = _with_preflight_passed(model_access_route)
         route = LLMRoute.from_model_access_route(
             model_access_route,
             mode=(
@@ -975,6 +1261,11 @@ def get_chat_client_for_route(
                 if model_access_route.fallback_provenance.used and fallback
                 else selected.temperature
             ),
+            reasoning_effort=(
+                fallback.reasoning_effort
+                if model_access_route.fallback_provenance.used and fallback
+                else selected.reasoning_effort
+            ),
         )
         return ChatClient(
             route=route,
@@ -987,6 +1278,7 @@ def get_chat_client_for_route(
             _adapter_runtime_config=adapter_runtime_config,
             _fallback_access_route=fallback_access_route,
             _fallback_route=fallback,
+            _explicit_eval_transport_id=explicit_eval_transport,
         )
     finally:
         if (
@@ -999,13 +1291,212 @@ def get_chat_client_for_route(
 def get_embeddings_client(intent: LLMTaskIntent) -> EmbeddingClientProtocol:
     router = LLMRouter()
     route = router.route(intent)
-    if route.embedding_identity is not None:
-        return get_embedding_client(resolved_identity=route.embedding_identity)
-    return get_embedding_client(override_model=route.model, override_provider=route.provider)
+    identity = route.embedding_identity
+    if identity is None:
+        raise LLMRouteError("Product embedding route has no resolved identity")
+    return _product_embedding_client_for_identity(identity, router=router)
+
+
+def get_product_embedding_client(
+    *,
+    profile: str = "default",
+    override_model: str | None = None,
+    override_provider: str | None = None,
+) -> EmbeddingClientProtocol:
+    """Resolve a Product embedding client without exposing local provider execution.
+
+    The ordinary default follows the clone-local Product routing profile. Explicit
+    legacy profile/model overrides are first resolved to one identity, then validated
+    against the shared registry before the Mac portal is used.
+    """
+    if (
+        (profile or "default").strip().lower() == "default"
+        and override_model is None
+        and override_provider is None
+    ):
+        return get_embeddings_client(
+            LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+        )
+    normalized_profile = (profile or "default").strip().lower()
+    if normalized_profile not in {"default", "deterministic", "test", "offline"}:
+        bundle = get_settings_bundle()
+        embedding_profiles = getattr(bundle, "embedding_profiles", None)
+        declared_profiles = {
+            str(name).strip().lower()
+            for name in getattr(embedding_profiles, "profiles", {})
+        }
+        if normalized_profile not in declared_profiles:
+            raise LLMRouteError("Product embedding profile is not declared")
+    identity = resolve_embedding_identity(
+        profile=profile,
+        override_model=override_model,
+        override_provider=override_provider,
+    )
+    return get_product_embedding_client_for_identity(identity)
+
+
+def get_product_embedding_client_for_identity(
+    identity: EmbeddingIdentity,
+) -> EmbeddingClientProtocol:
+    """Use the Mac portal for one already-selected Product embedding identity."""
+    return _product_embedding_client_for_identity(identity, router=LLMRouter())
+
+
+def _product_embedding_client_for_identity(
+    identity: EmbeddingIdentity,
+    *,
+    router: LLMRouter,
+) -> EmbeddingClientProtocol:
+    if identity.provider in {"mock", "deterministic"}:
+        return get_embedding_client(resolved_identity=identity)
+
+    descriptor = next(
+        (
+            model
+            for model in load_models().values()
+            if model.kind == "embedding"
+            and model.provider == identity.provider
+            and model.model == identity.model
+        ),
+        None,
+    )
+    if descriptor is None:
+        raise LLMRouteError(
+            "Product embedding route must resolve to a declared registry model"
+        )
+    if descriptor.dims is not None and descriptor.dims != identity.dim:
+        raise LLMRouteError(
+            "Product embedding identity dimension conflicts with its registry model"
+        )
+    adapter_factory = _adapter_factory()
+    try:
+        expected_transport = adapter_factory.adapter_id_for(
+            identity.provider,
+            descriptor.model,
+            model_kind="embedding",
+        )
+        adapter_factory.describe(
+            expected_transport,
+            provider=identity.provider,
+            model=descriptor.model,
+            model_kind="embedding",
+        )
+    except (KeyError, ValueError) as exc:
+        raise LLMRouteError(
+            "Product embedding route is not declared by the Mac portal adapter registry"
+        ) from exc
+
+    if descriptor.allowed_transports and expected_transport not in descriptor.allowed_transports:
+        raise LLMRouteError(
+            "Product embedding adapter is not allowed by the model registry"
+        )
+
+    remote_transport = _new_executor_path_router(
+        executor_profile=EXECUTOR_NETWORK_PROFILE,
+        timeout_seconds=(
+            getattr(
+                getattr(getattr(router, "_settings", None), "llm_routing", None),
+                "timeout_seconds",
+                None,
+            )
+            or 1_260.0
+        ),
+    )
+    return _RemoteProductEmbeddingClient(
+        identity=identity,
+        request_model=descriptor.model,
+        expected_transport=expected_transport,
+        remote_transport=remote_transport,
+    )
+
+
+class _RemoteProductEmbeddingClient:
+    """Embedding client whose provider calls terminate only at the Mac Product API."""
+
+    def __init__(
+        self,
+        *,
+        identity: EmbeddingIdentity,
+        request_model: str,
+        expected_transport: str,
+        remote_transport: ExecutorNetworkPathRouter,
+    ) -> None:
+        self.identity = identity
+        self._request_model = request_model
+        self._expected_transport = expected_transport
+        self._remote_transport = remote_transport
+        self._finalizer = weakref.finalize(self, remote_transport.close)
+        self._route_provenance: dict[str, str] | None = None
+
+    @property
+    def route_provenance(self) -> dict[str, str] | None:
+        """Latest safe route evidence returned by the Mac host; contains no secrets."""
+        return dict(self._route_provenance) if self._route_provenance else None
+
+    def close(self) -> None:
+        if self._finalizer.alive:
+            self._finalizer()
+
+    def _embed_one(self, text: str) -> tuple[float, ...]:
+        request = ProductEmbeddingRequest(
+            provider=self.identity.provider,
+            model=self._request_model,
+            dimensions=self.identity.dim,
+            input_text=text,
+        )
+        path_result = self._remote_transport.embed_product(request)
+        response = getattr(path_result, "response", path_result)
+        route = response.route
+        if (
+            route.provider != self.identity.provider
+            or route.model != self._request_model
+            or route.transport_id != self._expected_transport
+            or response.dimensions != self.identity.dim
+            or len(response.vector) != self.identity.dim
+        ):
+            raise RemoteEmbeddingError(
+                "embedding_route_or_dimension_mismatch", indeterminate=True
+            )
+        self._route_provenance = {
+            "provider": route.provider,
+            "model": route.model,
+            "transport_id": route.transport_id,
+            "execution_host": EXECUTOR_NETWORK_PROFILE,
+            "selected_path_profile": str(
+                getattr(path_result, "selected_path_profile", "unknown")
+            ),
+            "catalog_snapshot_ref": str(route.catalog_snapshot_ref or ""),
+            "catalog_snapshot_hash": str(route.catalog_snapshot_hash or ""),
+            "fallback_phase": "none",
+        }
+        assert_embed_dim(response.vector, expected=self.identity.dim)
+        return tuple(response.vector)
+
+    def embed_text(self, text: str) -> list[float]:
+        if not text:
+            return [0.0 for _ in range(self.identity.dim)]
+        chunks = _chunk_for_embedding(text, _embedding_max_input_chars())
+        vectors = [self._embed_one(chunk) for chunk in chunks]
+        pooled = list(_mean_pool(vectors, self.identity.dim))
+        return l2_normalize(pooled) if self.identity.normalize else pooled
+
+    def embed_texts(self, texts) -> list[list[float]]:
+        return [self.embed_text(text) for text in texts]
+
+    def embed_batches(self, texts, batch_size: int = 32):
+        batch: list[str] = []
+        for text in texts:
+            batch.append(text)
+            if len(batch) >= batch_size:
+                yield self.embed_texts(batch)
+                batch = []
+        if batch:
+            yield self.embed_texts(batch)
 
 
 def describe_default_routes() -> dict[str, dict[str, str]]:
     router = LLMRouter()
+    factory = _adapter_factory()
     intents = [intent for intent in router.verification_intents() if intent.task_kind in {"embed", "decide", "plan"}]
     routes = router.default_routes(intents)
     return {
@@ -1014,10 +1505,11 @@ def describe_default_routes() -> dict[str, dict[str, str]]:
             "model": route.model,
             "transport_id": (
                 route.transport_id
-                or (
-                    _adapter_factory().default_adapter_id(route.provider)
-                    if route.mode != "embeddings"
-                    else ""
+                or _product_adapter_id(
+                    route.provider,
+                    route.model,
+                    factory=factory,
+                    model_kind="embedding" if route.mode == "embeddings" else "chat",
                 )
             ),
             "reasoning_effort": route.reasoning_effort or "",
@@ -1042,7 +1534,11 @@ def describe_default_route_policies() -> dict[str, dict[str, object]]:
                 continue
             provider = str(route.get("provider") or "")
             if provider:
-                route["transport_id"] = route.get("transport_id") or factory.default_adapter_id(provider)
+                route["transport_id"] = route.get("transport_id") or _product_adapter_id(
+                    provider,
+                    str(route.get("model") or ""),
+                    factory=factory,
+                )
                 route["reasoning_effort"] = route.get("reasoning_effort") or "low"
     return policies
 

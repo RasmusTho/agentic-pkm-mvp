@@ -130,3 +130,15 @@ def projection_convergence_comment(
             + f"{fence}json\n{payload}\n{fence}"
         ),
     }
+
+
+def post_effect_authority(authority, merge_sha):
+    return {"repository": authority["repository"].lower(), "operation_key": "f" * 64,
+            "task_id": authority["run_id"], "run_id": authority["run_id"],
+            "pr_number": authority["pr_number"], "head_sha": authority["head_sha"],
+            "merge_commit_sha": merge_sha, "fencing_token": 1, "intent_lsn": "0/10", "claim_lsn": "0/20",
+            "pending_receipt_sequence": 2, "reconciled_receipt_sequence": 3, "phase": "reconciled",
+            "deployment": {"source_sha": "e" * 40, "image_digest": "sha256:" + "a" * 64,
+                           "postgres_image_digest": "sha256:" + "b" * 64, "schema_version": 8,
+                           "authority_epoch": 1, "candidate_receipt_sha": "c" * 64,
+                           "capability": "post_effect_merge_readback.v1"}}

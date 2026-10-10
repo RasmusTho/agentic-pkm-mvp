@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CI_SMOKE = REPO_ROOT / ".github" / "workflows" / "ci-smoke.yaml"
@@ -16,6 +18,55 @@ def test_ci_smoke_installs_media_system_dependencies() -> None:
 
     assert "Install system deps (ffmpeg, ripgrep)" in workflow
     assert "sudo apt-get install -y ffmpeg ripgrep" in workflow
+
+
+def test_declared_ci_image_sources_are_verified_digest_pins() -> None:
+    """Check actual service, action inputs and Dockerfile pull entrypoints."""
+    smoke_jobs = yaml.safe_load(_workflow_text())["jobs"]
+    assert smoke_jobs["pr-index-pg-contracts"]["services"]["postgres"]["image"] == (
+        "mirror.gcr.io/pgvector/pgvector:pg16@sha256:"
+        "7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a"
+    )
+
+    image_workflow = REPO_ROOT / ".github/workflows/app-image-build.yml"
+    image_jobs = yaml.safe_load(image_workflow.read_text(encoding="utf-8"))["jobs"]
+    for job_id in ("build-app-image", "build-builderops-images"):
+        steps = image_jobs[job_id]["steps"]
+        buildx = [step for step in steps if step.get("uses") == "docker/setup-buildx-action@v3"]
+        qemu = [step for step in steps if step.get("uses") == "docker/setup-qemu-action@v3"]
+        assert len(buildx) == len(qemu) == 1
+        assert buildx[0]["with"] == {
+            "driver-opts": (
+                "image=mirror.gcr.io/moby/buildkit@sha256:"
+                "cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea"
+            )
+        }
+        assert qemu[0]["with"] == {
+            "image": (
+                "mirror.gcr.io/tonistiigi/binfmt@sha256:"
+                "400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0"
+            ),
+            "platforms": "linux/amd64,linux/arm64",
+        }
+
+    expected_bases = {
+        "Dockerfile.builderops": [
+            "FROM scratch AS devui-source-inputs",
+            "FROM mirror.gcr.io/library/python:3.12-slim@sha256:"
+            "a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1",
+        ],
+        "Dockerfile.builderops-postgres": [
+            "FROM mirror.gcr.io/library/postgres:16-bookworm@sha256:"
+            "0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4"
+        ],
+    }
+    for dockerfile, expected in expected_bases.items():
+        actual = [
+            line.strip()
+            for line in (REPO_ROOT / dockerfile).read_text(encoding="utf-8").splitlines()
+            if line.startswith("FROM ")
+        ]
+        assert actual == expected
 
 
 def test_ci_smoke_splits_baseline_and_quality_wave_pytest() -> None:

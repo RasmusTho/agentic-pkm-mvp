@@ -6,7 +6,7 @@ from typing import Iterable
 
 import click
 
-from app.components.embeddings import get_embedding_client
+from app.components.llm.fabric import get_product_embedding_client
 
 _DEFAULT_TEXTS = [
     "Hello world",
@@ -20,7 +20,11 @@ def _vector_norm(vector: Iterable[float]) -> float:
 
 
 def _probe(texts: Iterable[str], profile: str, override_model: str | None, override_provider: str | None = None) -> None:
-    client = get_embedding_client(profile=profile, override_model=override_model, override_provider=override_provider)
+    client = get_product_embedding_client(
+        profile=profile,
+        override_model=override_model,
+        override_provider=override_provider,
+    )
     dims: set[int] = set()
     identity = client.identity
     for text in texts:
@@ -66,4 +70,3 @@ def embed_probe(profile: str, override_model: str | None, override_provider: str
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry
     embed_probe()
-

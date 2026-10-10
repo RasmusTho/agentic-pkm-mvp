@@ -22,6 +22,7 @@ from app.model_access.codex_remote_transport import (
     CodexRemoteTransport,
     RemoteCatalogError,
     RemoteCompletionError,
+    RemoteEmbeddingError,
     RemotePreflightError,
 )
 from app.model_access.remote_contract import (
@@ -31,6 +32,11 @@ from app.model_access.remote_contract import (
     CompletionRequest,
     CompletionRouteIdentity,
     CompletionResponse,
+    ProductCatalogRequest,
+    ProductCompletionRequest,
+    ProductEmbeddingRequest,
+    ProductEmbeddingResponse,
+    ProductPreflightRequest,
     PreflightRequest,
     PreflightResponse,
 )
@@ -96,7 +102,7 @@ class _PathProfile(_StrictConfig):
     adapter: Literal["private_https_ingress", "tailscale_serve_https"]
     endpoint_ref: str
     authentication_profile_ref: str
-    caller_policy_ref: Literal["policy.product_channel_actions"]
+    caller_policy_ref: Literal["policy.vlan_mtls_authenticated_caller"]
 
     @model_validator(mode="after")
     def _valid_references(self) -> "_PathProfile":
@@ -210,12 +216,63 @@ class ExecutorPathPreflight:
     receipt: ExecutorPathReceipt
 
 
+@dataclass(frozen=True)
+class ProductExecutorPathReceipt:
+    """One-use receipt binding a logical Product request to the host-resolved route."""
+
+    executor_profile: str
+    selected_path_profile: str
+    route: CompletionRouteIdentity
+    reasoning_effort: str | None
+    capability_intent: CompletionCapabilityIntent
+    failure_before_selection: str | None = None
+    receipt_id: str = field(default_factory=lambda: uuid4().hex, repr=False)
+
+    def matches(self, request: ProductCompletionRequest) -> bool:
+        return (
+            self.route.provider == request.provider
+            and self.route.model == request.model
+            and self.reasoning_effort == request.reasoning_effort
+            and self.capability_intent == request.capability_intent
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "executor_profile": self.executor_profile,
+            "failure_before_selection": self.failure_before_selection,
+            "selected_path_profile": self.selected_path_profile,
+            "route": self.route.model_dump(mode="json"),
+            "reasoning_effort": self.reasoning_effort,
+            "capability_intent": self.capability_intent.model_dump(mode="json"),
+        }
+
+
+@dataclass(frozen=True)
+class ProductExecutorPathPreflight:
+    response: PreflightResponse
+    receipt: ProductExecutorPathReceipt
+
+
+@dataclass(frozen=True)
+class ProductEmbeddingPathResult:
+    response: ProductEmbeddingResponse
+    selected_path_profile: str
+
+
 class _RemotePathTransport(Protocol):
-    def preflight(self, request: PreflightRequest) -> PreflightResponse: ...
+    def preflight(
+        self, request: PreflightRequest | ProductPreflightRequest
+    ) -> PreflightResponse: ...
 
-    def catalog(self, request: CatalogRequest) -> CatalogResponse: ...
+    def catalog(
+        self, request: CatalogRequest | ProductCatalogRequest
+    ) -> CatalogResponse: ...
 
-    def complete(self, request: CompletionRequest) -> CompletionResponse: ...
+    def complete(
+        self, request: CompletionRequest | ProductCompletionRequest
+    ) -> CompletionResponse: ...
+
+    def embed_product(self, request: ProductEmbeddingRequest) -> ProductEmbeddingResponse: ...
 
     def close(self) -> None: ...
 
@@ -229,6 +286,42 @@ def _load_policy(path: Path) -> _ExecutorNetworkPolicy:
         return _ExecutorNetworkPolicy.model_validate(raw)
     except (OSError, yaml.YAMLError, ValidationError, ValueError, TypeError):
         raise ExecutorNetworkConfigurationError("path_policy_invalid") from None
+
+
+def executor_network_policy_environment_references(
+    executor_profile: str = EXECUTOR_NETWORK_PROFILE,
+    *,
+    policy_path: Path = DEFAULT_EXECUTOR_NETWORK_POLICY_PATH,
+) -> dict[str, tuple[str, ...]]:
+    """Return host environment references used by an executor and their roles."""
+
+    policy = _load_policy(policy_path)
+    executor_policy = policy.executor_path_policies.get(executor_profile)
+    if executor_policy is None:
+        raise ExecutorNetworkConfigurationError("path_policy_missing")
+
+    references: dict[str, list[str]] = {}
+
+    def add(variable: str, role: str) -> None:
+        roles = references.setdefault(variable, [])
+        if role not in roles:
+            roles.append(role)
+
+    for path_id in executor_policy.order:
+        profile = policy.path_profiles[path_id]
+        endpoint_ref = profile.endpoint_ref.removeprefix("host_config.")
+        auth_ref = profile.authentication_profile_ref.removeprefix("host_config.")
+        add(policy.endpoint_references[endpoint_ref].endpoint_env, "endpoint")
+        authentication = policy.authentication_profiles[auth_ref]
+        if authentication.mode == "mutual_tls":
+            assert authentication.ca_bundle_env is not None
+            assert authentication.client_certificate_env is not None
+            assert authentication.client_key_env is not None
+            add(authentication.ca_bundle_env, "ca_bundle")
+            add(authentication.client_certificate_env, "client_certificate")
+            add(authentication.client_key_env, "client_key")
+
+    return {variable: tuple(roles) for variable, roles in references.items()}
 
 
 def _required_host_value(
@@ -337,6 +430,7 @@ class ExecutorNetworkPathRouter:
         self._transports: dict[str, _RemotePathTransport] = {}
         self._receipt_lock = Lock()
         self._pending_receipts: dict[str, ExecutorPathReceipt] = {}
+        self._pending_product_receipts: dict[str, ProductExecutorPathReceipt] = {}
         try:
             for path in paths:
                 self._transports[path.path_profile] = factory(path)
@@ -378,6 +472,43 @@ class ExecutorNetworkPathRouter:
             )
         raise RemotePreflightError(failure_before_selection or "PATH_UNAVAILABLE")
 
+    def preflight_product(
+        self, request: ProductPreflightRequest
+    ) -> ProductExecutorPathPreflight:
+        """Resolve one Product logical target before inference, with path-only failover."""
+        failure_before_selection: str | None = None
+        for path_id in self._ordered_path_ids:
+            try:
+                response = self._transports[path_id].preflight(request)
+            except RemotePreflightError as exc:
+                if exc.code not in _PATH_LOCAL_FAILURES:
+                    if exc.code == "preflight_unavailable":
+                        raise RemotePreflightError(
+                            "path_preflight_unclassified"
+                        ) from None
+                    raise
+                failure_before_selection = exc.code
+                continue
+            if (
+                response.route.provider != request.provider
+                or response.route.model != request.model
+                or response.route.catalog_snapshot_ref is None
+                or response.route.catalog_snapshot_hash is None
+            ):
+                raise RemotePreflightError("preflight_route_mismatch")
+            receipt = ProductExecutorPathReceipt(
+                executor_profile=self.executor_profile,
+                selected_path_profile=path_id,
+                route=response.route,
+                reasoning_effort=request.reasoning_effort,
+                capability_intent=request.capability_intent,
+                failure_before_selection=failure_before_selection,
+            )
+            with self._receipt_lock:
+                self._pending_product_receipts[receipt.receipt_id] = receipt
+            return ProductExecutorPathPreflight(response=response, receipt=receipt)
+        raise RemotePreflightError(failure_before_selection or "PATH_UNAVAILABLE")
+
     def discard_path_receipt(self, receipt: ExecutorPathReceipt | None) -> None:
         """Revoke a preflight receipt when it was used only for route selection."""
         if receipt is None:
@@ -385,6 +516,16 @@ class ExecutorNetworkPathRouter:
         with self._receipt_lock:
             if self._pending_receipts.get(receipt.receipt_id) == receipt:
                 self._pending_receipts.pop(receipt.receipt_id, None)
+
+    def discard_product_path_receipt(
+        self, receipt: ProductExecutorPathReceipt | None
+    ) -> None:
+        """Revoke a Product preflight receipt used only for route selection."""
+        if receipt is None:
+            return
+        with self._receipt_lock:
+            if self._pending_product_receipts.get(receipt.receipt_id) == receipt:
+                self._pending_product_receipts.pop(receipt.receipt_id, None)
 
     def catalog(self, request: CatalogRequest) -> CatalogResponse:
         failure_before_selection: str | None = None
@@ -398,6 +539,22 @@ class ExecutorNetworkPathRouter:
                 continue
             if response.snapshot.transport_id != request.transport_id:
                 raise RemoteCatalogError("catalog_transport_mismatch")
+            return response
+        raise RemoteCatalogError(failure_before_selection or "PATH_UNAVAILABLE")
+
+    def product_catalog(self, request: ProductCatalogRequest) -> CatalogResponse:
+        """Fetch a provider catalog through the host's logical Product API."""
+        failure_before_selection: str | None = None
+        for path_id in self._ordered_path_ids:
+            try:
+                response = self._transports[path_id].catalog(request)
+            except RemoteCatalogError as exc:
+                if exc.code not in _PATH_LOCAL_FAILURES:
+                    raise
+                failure_before_selection = exc.code
+                continue
+            if response.snapshot.provider != request.provider:
+                raise RemoteCatalogError("catalog_provider_mismatch")
             return response
         raise RemoteCatalogError(failure_before_selection or "PATH_UNAVAILABLE")
 
@@ -426,9 +583,49 @@ class ExecutorNetworkPathRouter:
             raise RemoteCompletionError("executor_route_mismatch", indeterminate=True)
         return response
 
+    def complete_product_selected_path(
+        self,
+        request: ProductCompletionRequest,
+        *,
+        receipt: ProductExecutorPathReceipt | None,
+    ) -> CompletionResponse:
+        """Dispatch one Product completion on its preflighted path and exact host route."""
+        if (
+            receipt is None
+            or receipt.executor_profile != self.executor_profile
+            or receipt.selected_path_profile not in self._transports
+        ):
+            raise RemoteCompletionError("executor_path_preflight_required")
+        with self._receipt_lock:
+            pending_receipt = self._pending_product_receipts.pop(
+                receipt.receipt_id, None
+            )
+        if pending_receipt is None:
+            raise RemoteCompletionError("executor_path_preflight_required")
+        if pending_receipt != receipt or not receipt.matches(request):
+            raise RemoteCompletionError("executor_path_preflight_mismatch")
+        response = self._transports[receipt.selected_path_profile].complete(request)
+        if not response.route.same_execution_target(receipt.route):
+            raise RemoteCompletionError("executor_route_mismatch", indeterminate=True)
+        return response
+
+    def embed_product(
+        self, request: ProductEmbeddingRequest
+    ) -> ProductEmbeddingPathResult:
+        """Send one embedding to the first configured path; inference is never path-retried."""
+        if not self._ordered_path_ids:
+            raise RemoteEmbeddingError("PATH_UNAVAILABLE")
+        path_id = self._ordered_path_ids[0]
+        response = self._transports[path_id].embed_product(request)
+        return ProductEmbeddingPathResult(
+            response=response,
+            selected_path_profile=path_id,
+        )
+
     def close(self) -> None:
         with self._receipt_lock:
             self._pending_receipts.clear()
+            self._pending_product_receipts.clear()
         closed: set[int] = set()
         for transport in self._transports.values():
             if id(transport) in closed:
@@ -447,6 +644,10 @@ __all__ = [
     "ExecutorNetworkPathRouter",
     "ExecutorPathPreflight",
     "ExecutorPathReceipt",
+    "ProductEmbeddingPathResult",
+    "ProductExecutorPathPreflight",
+    "ProductExecutorPathReceipt",
     "ResolvedExecutorPath",
+    "executor_network_policy_environment_references",
     "resolve_executor_paths",
 ]

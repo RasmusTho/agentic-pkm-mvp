@@ -270,8 +270,16 @@ services:
         if [ -n "$${DEVUI_VM102_RECEIPT_DIR:-}" ]; then
           test -d "$${DEVUI_VM102_RECEIPT_DIR}" && test -r "$${DEVUI_VM102_RECEIPT_DIR}" && test -x "$${DEVUI_VM102_RECEIPT_DIR}" || { echo 'VM-102 receipt source mount unavailable' >&2; exit 75; };
         fi &&
-        exec bash /app/scripts/start_api.sh
+        if [ -n "$${NATIVE_SOURCE_BOOTSTRAP:-}" ]; then
+          python -m app.ops.native_source_bootstrap --preflight "$${NATIVE_SOURCE_BOOTSTRAP}" &&
+          exec bash /app/scripts/start_api.sh --source-bootstrap-only "$${NATIVE_SOURCE_BOOTSTRAP}";
+        else
+          exec bash /app/scripts/start_api.sh;
+        fi
     environment:
+      # Only the supervised native `compose run -e` selects the one-shot. Clear
+      # ambient/generated env-file values for every ordinary API container.
+      NATIVE_SOURCE_BOOTSTRAP: ""
       INSTANCE_STATE_LEGACY_ROLLBACK: ${INSTANCE_STATE_LEGACY_ROLLBACK:-0}
       INSTANCE_VAULT_REGISTRY_PATH: /app/instance-state/agentic-pkm/vault-registry.md
       INSTANCE_OWNERSHIP_ROOT: /app/instance-ownership
@@ -587,6 +595,7 @@ services:
       HOST: 0.0.0.0
       PORT: ${COMPANION_UI_PORT:-8111}
       COMPANION_API_BASE_URL: ${COMPANION_UI_API_BASE_URL:-http://api:8000}
+      COMPANION_API_TIMEOUT_SECONDS: ${COMPANION_API_TIMEOUT_SECONDS:-2.0}
       COMPANION_UI_SERVE_MODULE: ${COMPANION_UI_SERVE_MODULE:-companion_ui.workspace.serve_dev_page}
       PKM_ENVIRONMENT: ${PKM_ENVIRONMENT:-dev}
     ports:

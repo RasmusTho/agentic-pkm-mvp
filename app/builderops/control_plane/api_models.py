@@ -328,6 +328,18 @@ class RowDerivedReadbackEvidence(BaseModel):
     relaunch_performed: bool | None = None
 
 
+class GitHubMergeReadbackEvidence(BaseModel):
+    """Closed exact positive merge observation; negative reads stay pending."""
+
+    model_config = ConfigDict(extra="forbid")
+    readback: Literal["found"]
+    merged: Literal[True]
+    head_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    merge_commit_sha: str = Field(pattern=r"^[0-9a-f]{40}$")
+    merge_commit_title: str = Field(min_length=1, max_length=256)
+    merge_commit_message: str = Field(max_length=16384)
+
+
 class TerminalUnknownModelEvidence(BaseModel):
     """Exact pre-session model-effect evidence for a terminal unknown result."""
 
@@ -339,7 +351,7 @@ class TerminalUnknownModelEvidence(BaseModel):
 
 
 RowDerivedPostEffectEvidence = (
-    RowDerivedReadbackEvidence | TerminalUnknownModelEvidence
+    RowDerivedReadbackEvidence | GitHubMergeReadbackEvidence | TerminalUnknownModelEvidence
 )
 
 

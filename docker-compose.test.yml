@@ -23,6 +23,8 @@ services:
   db:
     environment:
       POSTGRES_DB: app_test
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     ports: !override
       - "15434:5432"
 
@@ -55,6 +57,7 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER_ENFORCE: "0"
       MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
       MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
       MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
@@ -89,6 +92,7 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER_ENFORCE: "0"
       MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
       MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
       MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
@@ -120,6 +124,7 @@ services:
       DATABASE_URL: postgresql+psycopg://app:app@db:5432/app_test
       DB_DSN: postgresql+psycopg://app:app@db:5432/app_test
       LLM_PROVIDER: ${LLM_PROVIDER:-mock}
+      LLM_PROVIDER_ENFORCE: "0"
       MODEL_ACCESS_CODEX_VLAN_ENDPOINT: ${MODEL_ACCESS_CODEX_VLAN_ENDPOINT:-}
       MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE: ${MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE:-}
       MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT: ${MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT:-}
@@ -158,4 +163,8 @@ services:
       PKM_ENVIRONMENT: test
       PORT: 8112
       COMPANION_API_BASE_URL: http://api:8000
+      COMPANION_API_TIMEOUT_SECONDS: "30.0"
       COMPANION_UI_SERVE_MODULE: companion_ui.workspace.serve_dev_page
+
+volumes:
+  pgdata:

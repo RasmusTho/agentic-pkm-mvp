@@ -498,12 +498,14 @@ def _resolve_consumer_environment(
             try:
                 value = keychain_lookup(contract.keychain_service, account)
             except Exception as exc:
-                # An optional declaration tolerates *absence* only, and the
+                # An optional declaration for this consumer tolerates absence only, and the
                 # lookup cannot distinguish "no such item" from any other
                 # failure, so an unresolvable optional secret simply does not
                 # bind. Its consumer runs without it; a required one still
                 # fails the whole bootstrap (#4489).
-                if contract.is_optional(secret):
+                if contract.is_optional_for_consumer(
+                    channel=channel, consumer=consumer, secret=secret
+                ):
                     continue
                 raise _secret_failure(secret=secret, kind=kind) from exc
             # Validation is deliberately outside that tolerance: a value that
@@ -597,7 +599,14 @@ def resolve_host_secret_values(
         raise HostSecretBootstrapError("host secret lookup failed for declared consumer") from None
 
 
-def _resolve_bws_consumer_values(channel: str, consumer: str, contract: HostSecretContract, reader: BwsSecretReader) -> dict[str, str]:
+def _resolve_bws_consumer_values(
+    channel: str,
+    consumer: str,
+    contract: HostSecretContract,
+    reader: BwsSecretReader,
+    *,
+    lookup_cache: dict[tuple[str, str], str | BwsItemAbsent] | None = None,
+) -> dict[str, str]:
     if consumer.startswith("postgres-"):
         contract.file_binding(channel=channel, consumer=consumer, secret="postgres.password")
         secrets = ["postgres.password"]
@@ -606,10 +615,23 @@ def _resolve_bws_consumer_values(channel: str, consumer: str, contract: HostSecr
     resolved = {}
     for secret in secrets:
         project, identity = contract.bws_identity(channel=channel, consumer=consumer, secret=secret)
+        cache_key = (project, identity)
         try:
-            value = reader.lookup(project, identity)
+            if lookup_cache is not None and cache_key in lookup_cache:
+                cached_value = lookup_cache[cache_key]
+                if isinstance(cached_value, BwsItemAbsent):
+                    raise BwsItemAbsent()
+                value = cached_value
+            else:
+                value = reader.lookup(project, identity)
+                if lookup_cache is not None:
+                    lookup_cache[cache_key] = value
         except BwsItemAbsent:
-            if secret != "postgres.password" and contract.is_optional(secret):
+            if lookup_cache is not None:
+                lookup_cache[cache_key] = BwsItemAbsent()
+            if secret != "postgres.password" and contract.is_optional_for_consumer(
+                channel=channel, consumer=consumer, secret=secret
+            ):
                 continue
             raise
         kind = "password" if secret == "postgres.password" else contract.kind_for(secret)

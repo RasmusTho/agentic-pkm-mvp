@@ -31,7 +31,9 @@ _CONTRACT_FIELDS = frozenset(
 # the secret, and it must be stated explicitly rather than inferred from how
 # many consumers happen to declare it.
 _SECRET_FIELDS = frozenset({"logical_id", "child_binding", "kind", "optional", "shared_key_domain"})
-_CONSUMER_FIELDS = frozenset({"consumer", "channels", "secrets", "role_requirements"})
+_CONSUMER_FIELDS = frozenset(
+    {"consumer", "channels", "secrets", "optional_secrets", "role_requirements"}
+)
 _KEYCHAIN_ACCOUNT_TEMPLATE = "{channel}:{consumer}:{secret}"
 _KEYCHAIN_SERVICE = "yggdrasil.host-secrets"
 _CHANNEL_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,15}$")
@@ -103,6 +105,9 @@ class HostSecretContract:
     # unpack that tuple positionally, and optionality is a property of the
     # declaration, not of the identifier/binding/kind triple.
     optional_secrets: frozenset[str] = frozenset()
+    # A consumer can tolerate absence even when the secret remains globally
+    # required for other consumers. Present malformed values still fail closed.
+    optional_consumer_secrets: frozenset[tuple[str, str]] = frozenset()
     # Secrets every declared consumer must resolve to identical material for
     # (#4512). Kept beside `secret_definitions` for the same reason as
     # `optional_secrets`.
@@ -157,16 +162,20 @@ class HostSecretContract:
         raise UndeclaredSecretConsumerError("undeclared host secret request")
 
     def is_optional(self, secret: str) -> bool:
-        """Whether an *absent* declaration may be skipped rather than fail closed.
+        """Whether absence is tolerated globally for this logical secret.
 
-        Optionality covers absence only. A declared secret that resolves to a
-        malformed value fails closed whether or not it is optional — see
-        ``host_secret_bootstrap._resolve_consumer_environment``.
+        Consumer exceptions are checked by ``is_optional_for_consumer``.
+        Optionality covers absence only; a present malformed value fails closed.
         """
         for logical_id, _child_binding, _kind in self.secret_definitions:
             if logical_id == secret:
                 return secret in self.optional_secrets
         raise UndeclaredSecretConsumerError("undeclared host secret request")
+
+    def is_optional_for_consumer(self, *, channel: str, consumer: str, secret: str) -> bool:
+        """Whether this declared consumer may proceed when *secret* is absent."""
+        self.require_declared(channel=channel, consumer=consumer, secret=secret)
+        return self.is_optional(secret) or (consumer, secret) in self.optional_consumer_secrets
 
     def is_shared_key_domain(self, secret: str) -> bool:
         """Whether every declared consumer of *secret* must hold identical material.
@@ -291,6 +300,7 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
     declared_channels = frozenset(channels)
     declared_secrets = frozenset(logical_ids)
     allowed: set[tuple[str, str, str]] = set()
+    optional_consumer_secrets: set[tuple[str, str]] = set()
     role_requirements: list[tuple[str, str, tuple[str, ...]]] = []
     declared_consumers: set[str] = set()
     for item in payload["consumers"]:
@@ -314,10 +324,17 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
             pattern=_LOGICAL_SECRET_PATTERN,
             error="invalid host secret identifier",
         )
-        if not set(consumer_channels).issubset(declared_channels) or not set(secrets).issubset(
-            declared_secrets
+        optional = item["optional_secrets"]
+        if (
+            not isinstance(optional, list)
+            or any(not _is_identifier(secret, _LOGICAL_SECRET_PATTERN) for secret in optional)
+            or len(set(optional)) != len(optional)
+            or not set(optional).issubset(secrets)
+            or not set(consumer_channels).issubset(declared_channels)
+            or not set(secrets).issubset(declared_secrets)
         ):
             raise ValueError("invalid host secret consumer declaration")
+        optional_consumer_secrets.update((consumer, secret) for secret in optional)
         for channel in consumer_channels:
             for secret in secrets:
                 allowed.add((channel, consumer, secret))
@@ -345,6 +362,7 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
         secret_definitions=tuple(secret_definitions),
         role_requirements=tuple(role_requirements),
         optional_secrets=frozenset(optional_secrets),
+        optional_consumer_secrets=frozenset(optional_consumer_secrets),
         shared_key_domain_secrets=frozenset(shared_key_domain_secrets),
         keychain_only_secrets=_KEYCHAIN_ONLY_SECRETS,
     )

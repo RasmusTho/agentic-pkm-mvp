@@ -18,13 +18,15 @@ Three tiers. When in doubt, classify up. A PR that mixes tiers takes the highest
 
 **Classification:** docs-only changes; skill/governance text under `.codex/skills/**`, `AGENTS.md`, and `.github` governance surfaces; comment-level fixes. No product/runtime behavior, contracts, or shipped reality change.
 
-**Deterministic CI classifier:** the PR body carries `- [x] Docs authoring lane` or `- [x] Governance lane`. The existing lane checkboxes double as the tier declaration — no new labels, tokens, or attestation mechanisms.
+**Deterministic CI classifier:** the PR body carries `- [x] Docs authoring lane` or `- [x] Governance lane` and the diff satisfies that lane. Existing lane checkboxes declare the tier; issue-backed code cannot self-declare Tier 1 to bypass traceability.
 
 **Required machinery:**
 
 - lane classifier in the PR body (the checkbox above)
 - truthful authoritative lifecycle state (labels, Issue/PR state, CI) — mandatory at every tier
-- `## BuilderOps Routing` may be omitted entirely when nothing was routed: **absence means "none"**. A present-but-unfilled section (template placeholders) still fails CI — claiming the section means filling it.
+- An **issue-free** Tier 1 PR may omit `## BuilderOps Routing` when nothing was routed: absence
+  means `none`. Issue authority requires concrete routing even with a Tier 1 checkbox. A present
+  but unfilled section still fails CI.
 - output format: a short human summary (2–4 sentences) plus a receipt line; no multi-section report
 - validation: lightweight docs/governance checks appropriate to the touched surfaces; no full code/test smoke by default
 - delivery depth: light path — declare `Final-Review-Rounds: 0` and merge plainly on green required checks; no independent review round, no verified-merge ceremony; approved bounded multi-Issue work uses the same native merge
@@ -90,6 +92,27 @@ separates review depth from merge mechanics, reuses validation and owner-doc ass
 unrelated product gates from text-only CI. The existing selector remains the single source for
 check selection; contract coverage stays conservative for unclassified docs. No new queue, evidence
 registry, or runtime executor authority is added.
+
+For the routine-route evaluation, count the actual mandatory sections from startup through normal
+delivery and the mandatory `klart` closeout; do not make the total fit by excluding closeout. On the
+current candidate, the section-scoped inventory is approximately 6,974 whitespace-delimited words:
+
+| Mandatory route | Sections counted | Words |
+| --- | --- | ---: |
+| Shared startup | README `BuilderOps workflow checkpoints` and `Workflow continuation` | 936 |
+| Coordinator | `deliver-issue-set` `First Context To Load`, `Coordinator Buffer Contract`, `Delivery Procedure`, `Workflow continuation` | 869 |
+| Issue worker | `issue-to-code` `Read scope`, `Pre-implementation classification`, `Canonical workflow`, `BuilderOps routing`, `Implementation workflow`, `PR handoff`, `Workflow continuation` | 2,715 |
+| Publication | `publish-pr` entry, supported path, publication workflow, handoff, continuation | 1,033 |
+| Verification | `verification-and-closure` routing, inputs, validation, review, native merge, continuation | 1,058 |
+| Closeout | `klart` assessment and continuation | 363 |
+
+The counts use the repository's section-scoped read rule and a deterministic word-count script; they
+exclude conditional recovery, retrospective, `pr-integration`, full-path executor, and parent-closure
+sections when their triggers are absent. The route is about 1,974 words above the 5,000-word planning
+goal even after removing duplicated coordinator handoff text. That excess is reported rather than
+hidden; a later reduction must delete genuine duplicate contract text while preserving lifecycle,
+current-head CI, executor/in-flight, and owner-gate protections. No new ledger or scheduler is added
+for this measurement.
 
 Use the next 20 accepted deliveries as a bounded evaluation, from existing CI and session records:
 compare tokens per accepted change, validation reruns, control calls, and post-merge defects with a
@@ -177,7 +200,12 @@ Product-side scale posture is owned by `docs/DESIGN_PRINCIPLES.md`.
 
 ## CI enforcement
 
-`.github/workflows/issue-pr-governance.yml` (`pr-contract` job) implements the Tier 1 relaxation deterministically: when the PR body carries a docs-authoring or governance lane checkbox, a missing `## BuilderOps Routing` section is treated as "none"; for all other PRs the section remains required with concrete values. The same job accepts `Final-Review-Rounds: 0` (light path), `1` (one independent review), or `2` (backward-compatible authenticated declaration for already-started deliveries); the value's delivery-depth meaning is defined by this contract, not by CI. New deliveries never select `2` from risk or convergence classification.
+`.github/workflows/issue-pr-governance.yml` (`pr-contract` job) treats absent `## BuilderOps Routing`
+as `none` only for a docs-authoring/governance lane with no Issue authority. Issue-backed PRs require
+concrete routing and traceability; their checkbox cannot bypass those guards. The same job accepts
+`Final-Review-Rounds: 0` (light path), `1` (one independent review), or `2` (backward-compatible
+authenticated declaration for already-started deliveries). This contract owns delivery-depth
+meaning; new deliveries never select `2` from risk or convergence classification.
 
 ## Output formats
 

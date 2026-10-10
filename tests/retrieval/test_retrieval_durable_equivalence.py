@@ -24,6 +24,8 @@ from app.components.embeddings import EmbeddingIdentity
 from app.retrieval import hybrid
 from app.stores import get_vector_index, reset_store_backends
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 APP_ROOT = REPO_ROOT / "app"
 
@@ -37,6 +39,14 @@ def _isolate_stores(monkeypatch: pytest.MonkeyPatch):
     # match the dim the live query embedder resolves to (previously masked
     # by the read-path re-embed this ADR removes).
     monkeypatch.setenv("EMBED_DIM", "8")
+    query_identity = EmbeddingIdentity(
+        provider="mock", model="embed-test", dim=8, normalize=False
+    )
+    monkeypatch.setattr(
+        hybrid,
+        "embed_query",
+        lambda _text: ([0.1] * query_identity.dim, query_identity),
+    )
     reset_store_backends()
     hybrid.get_store().set_documents([])
     hybrid.reset_durable_rebuild_state()

@@ -24,7 +24,37 @@ _deploy_channel_resolve_runtime_env_file() {
   local channel_env_file="${3:?channel env file required}"
   local runtime_env_ref
 
-  runtime_env_ref="$(_deploy_channel_env_value "${channel_env_file}" WATCHER_RUNTIME_ENV_FILE)"
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+    runtime_env_ref="${BWS_DEPLOY_RUNTIME_ENV_FILE:-}"
+    case "${runtime_env_ref}" in
+      /*) ;;
+      *)
+        echo "BWS runtime env preflight: blocked reason=missing_or_relative_path" >&2
+        return 78
+        ;;
+    esac
+  else
+    runtime_env_ref="$(
+      ROOT="${root}" CHANNEL_ENV_FILE="${channel_env_file}" "${PYTHON:-python3}" - 2>/dev/null <<'PY'
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.environ["ROOT"])
+from scripts.compose_env import compose_env_value
+
+channel_env_file = Path(os.environ["CHANNEL_ENV_FILE"])
+try:
+    channel_lines = channel_env_file.read_text(encoding="utf-8").splitlines()
+except FileNotFoundError:
+    channel_lines = []
+for line in channel_lines:
+    if line.startswith("WATCHER_RUNTIME_ENV_FILE="):
+        print(compose_env_value(line.split("=", 1)[1]))
+        break
+PY
+    )"
+  fi
   if [ -z "${runtime_env_ref}" ]; then
     case "${channel}" in
       test) runtime_env_ref="./tmp-test/runtime.env" ;;
@@ -38,6 +68,124 @@ _deploy_channel_resolve_runtime_env_file() {
     ./*) DEPLOY_CHANNEL_RUNTIME_ENV_FILE="${root}/${runtime_env_ref#./}" ;;
     *) DEPLOY_CHANNEL_RUNTIME_ENV_FILE="${root}/${runtime_env_ref}" ;;
   esac
+}
+
+# Compose interpolation reads the caller environment and its CLI --env-file;
+# a service-level env_file does not supply values for fields such as `user:`.
+# Read only the two numeric process-identity fields from the governed runtime
+# env. Never source the file or use it as Compose's CLI --env-file, because it
+# also contains database and other runtime bindings.
+deploy_channel_runtime_identity_preflight() {
+  local runtime_env_file="${1:?runtime env file required}"
+  local identity_bindings runtime_uid runtime_gid
+
+  identity_bindings=""
+  if [ -e "${runtime_env_file}" ] || [ -L "${runtime_env_file}" ]; then
+    if [ ! -f "${runtime_env_file}" ]; then
+      echo "runtime identity preflight: blocked reason=invalid_runtime_env" >&2
+      return 78
+    fi
+    if ! identity_bindings="$(
+      RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON:-python3}" - 2>/dev/null <<'PY'
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import re
+import sys
+
+
+try:
+    raw = Path(os.environ["RUNTIME_ENV_FILE"]).read_bytes()
+except (KeyError, OSError):
+    raise SystemExit(2) from None
+if len(raw) > 1_048_576:
+    raise SystemExit(2)
+
+values: dict[str, list[bytes]] = {"LOCAL_UID": [], "LOCAL_GID": []}
+for line in raw.splitlines():
+    for key in values:
+        prefix = key.encode("ascii") + b"="
+        if line.startswith(prefix):
+            values[key].append(line[len(prefix):])
+
+if not values["LOCAL_UID"] and not values["LOCAL_GID"]:
+    raise SystemExit(0)
+if any(len(entries) != 1 for entries in values.values()):
+    raise SystemExit(2)
+uid, gid = values["LOCAL_UID"][0], values["LOCAL_GID"][0]
+if not re.fullmatch(rb"[0-9]+", uid) or not re.fullmatch(rb"[0-9]+", gid):
+    raise SystemExit(2)
+uid_text = uid.lstrip(b"0") or b"0"
+gid_text = gid.lstrip(b"0") or b"0"
+if len(uid_text) > 10 or len(gid_text) > 10:
+    raise SystemExit(2)
+uid_value = int(uid_text)
+gid_value = int(gid_text)
+if (
+    uid_value == 0
+    or gid_value == 0
+    or uid_value > 4_294_967_294
+    or gid_value > 4_294_967_294
+):
+    raise SystemExit(2)
+print(str(uid_value) + "\t" + str(gid_value))
+PY
+    )"; then
+      echo "runtime identity preflight: blocked reason=invalid_runtime_env" >&2
+      return 78
+    fi
+  fi
+
+  if [ -n "${identity_bindings}" ]; then
+    IFS=$'\t' read -r runtime_uid runtime_gid <<<"${identity_bindings}"
+    if [[ ! "${runtime_uid}" =~ ^[0-9]+$ ]] || [[ ! "${runtime_gid}" =~ ^[0-9]+$ ]]; then
+      echo "runtime identity preflight: blocked reason=invalid_runtime_env" >&2
+      return 78
+    fi
+    LOCAL_UID="${runtime_uid}"
+    LOCAL_GID="${runtime_gid}"
+    export LOCAL_UID LOCAL_GID
+    return 0
+  fi
+
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+    echo "runtime identity preflight: blocked reason=missing_runtime_identity" >&2
+    return 78
+  fi
+
+  # Local development without a generated runtime env keeps the host identity
+  # behavior. A present but malformed/partial governed identity never falls
+  # through to this compatibility path.
+  LOCAL_UID="${LOCAL_UID:-$(id -u)}"
+  LOCAL_GID="${LOCAL_GID:-$(id -g)}"
+  export LOCAL_UID LOCAL_GID
+}
+
+deploy_channel_runtime_identity_matches_snapshot() {
+  local runtime_env_snapshot="${1:?runtime env snapshot required}"
+  local expected_uid="${LOCAL_UID:-$(id -u)}"
+  local expected_gid="${LOCAL_GID:-$(id -g)}"
+  local actual_uid actual_gid preflight_rc
+
+  if deploy_channel_runtime_identity_preflight "${runtime_env_snapshot}"; then
+    actual_uid="${LOCAL_UID}"
+    actual_gid="${LOCAL_GID}"
+  else
+    preflight_rc=$?
+    LOCAL_UID="${expected_uid}"
+    LOCAL_GID="${expected_gid}"
+    export LOCAL_UID LOCAL_GID
+    return "${preflight_rc}"
+  fi
+
+  LOCAL_UID="${expected_uid}"
+  LOCAL_GID="${expected_gid}"
+  export LOCAL_UID LOCAL_GID
+  if [ "${actual_uid}" != "${expected_uid}" ] || [ "${actual_gid}" != "${expected_gid}" ]; then
+    echo "runtime identity preflight: blocked reason=runtime_identity_changed" >&2
+    return 78
+  fi
 }
 
 _deploy_channel_model_access_config_blocked() {
@@ -181,14 +329,17 @@ deploy_channel_model_access_preflight() {
     return $?
   fi
 
-  # Rollback must remain available when optional new-route configuration is
-  # absent or malformed. Do not consume those references during recovery, and
-  # clear ambient values so a previous-good mock image receives no MARR path.
+  # Modern previous-good callers still require their validated references.
+  # Reuse the same allowlist on recovery; an invalid optional file retains the
+  # legacy empty-binding path rather than admitting any of its contents.
   if [ "${action:-deploy}" = "rollback" ]; then
+    if deploy_channel_model_access_runtime_env_preflight "${model_access_env_file}"; then
+      return 0
+    fi
     for key in "${model_access_keys[@]}"; do
       export "${key}="
     done
-    echo "model-access runtime env preflight: skipped reason=rollback" >&2
+    echo "model-access runtime env preflight: skipped reason=rollback_optional_invalid" >&2
     return 0
   fi
 
@@ -583,9 +734,10 @@ _deploy_channel_needs_capture_secret() {
 # HAR-02's migration cryptographic preflight is itself a declared raw-store
 # consumer. Restrict this bootstrap to the explicit one-shot migration command
 # used by apply_changed_migrations: implicit dependency starts and unrelated
-# service ups must not receive or borrow its handle. Unlike the API ingress
-# layer, this required migration authority never degrades open — a missing,
-# malformed, or shared-domain-divergent key prevents Docker from starting.
+# service ups must not receive or borrow its handle. An absent key is allowed
+# for this consumer; HAR-02's locked transaction decides whether rows require
+# it. A present malformed or shared-domain-divergent key still prevents Docker
+# from starting.
 _deploy_channel_needs_migration_secret() {
   local channel="${1:?channel required}"
   shift
@@ -901,6 +1053,7 @@ deploy_channel_compose() {
     if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
       _deploy_channel_snapshot_runtime_env_file \
         "${runtime_env_file}" "${model_access_env_file}" "${runtime_env_snapshot_file}" || return $?
+      deploy_channel_runtime_identity_matches_snapshot "${runtime_env_snapshot_file}" || return $?
       runtime_env_ref="${runtime_env_snapshot_file}"
     fi
     export WATCHER_RUNTIME_ENV_FILE="${runtime_env_ref}"
@@ -1042,7 +1195,19 @@ deploy_channel_compose() {
         return 92
       fi
       set +e
-      "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      if [ "${HOST_SECRET_PROVIDER:-}" = bws ] && [ "${1:-}" = run ] && \
+          [[ " $* " == *" NATIVE_SOURCE_BOOTSTRAP="* ]]; then
+        # A bounded native API one-shot can outlive its Docker CLI. Reap this
+        # owned CLI group here; the caller separately proves/stops the exact
+        # daemon-owned container before any runtime writer may restart.
+        PYTHONPATH="${root}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON:-python3}" -c '
+import sys
+from app.ops.native_source_bootstrap import COMPOSE_TIMEOUT_SECONDS, wait_for_owned_child
+raise SystemExit(wait_for_owned_child(sys.argv[1:], timeout=COMPOSE_TIMEOUT_SECONDS))
+' "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      else
+        "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      fi
       compose_rc=$?
       set -e
       if [ "${compose_rc}" -ne 0 ]; then

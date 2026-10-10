@@ -342,7 +342,10 @@ class TokenPushAdmin:
                     prior_generation = remote.inspect(target.channel)
                     operation.prepare_token_push(prior_generation)
                 else:
-                    prior_generation = pending["prior_generation"]
+                    pending_generation = pending["prior_generation"]
+                    if pending_generation is not None and not isinstance(pending_generation, str):
+                        raise TokenPushError()
+                    prior_generation = pending_generation
                     if pending["stage"] == "sent":
                         receipt = remote.reconcile(
                             target, operation.operation_id, prior_generation

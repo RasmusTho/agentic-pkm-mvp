@@ -67,6 +67,10 @@ class CatalogModelDescriptor(BaseModel):
     model: str = Field(min_length=1, max_length=256)
     transports: tuple[TransportId, ...] = Field(min_length=1)
     capabilities: ModelCapabilities
+    # Some provider catalogs do not publish capability metadata. Keep that
+    # distinct from an explicit provider attestation that a capability is false.
+    structured_output_attested: bool = False
+    reasoning_effort_attested: bool = False
     literal_system_role_supported: bool = False
     reasoning_efforts: tuple[str, ...] = ()
     release_at: datetime | None = None

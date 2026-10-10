@@ -43,6 +43,7 @@ from app.release_channels.reversibility import (
 )
 
 ACK_PREFIX = "prod-migration-ack.v1:"
+NO_FORWARD_ONLY_PENDING = "prod-migration-no-forward-only-pending.v1"
 TARGET_IDENTITY = "pkm-prod/app"
 
 
@@ -108,7 +109,8 @@ if delta.unreachable_detail is not None:
     fail(delta.unreachable_detail)
 if not delta.pending:
     if token_only:
-        fail("token-only migration probe found no pending migration")
+        print(NO_FORWARD_ONLY_PENDING)
+        raise SystemExit(0)
     print("Production migration gate passed: database is at Alembic head.")
     raise SystemExit(0)
 
@@ -149,7 +151,8 @@ if delta.forward_only:
     print("Production migration gate passed: target-bound forward-only acknowledgement accepted.")
 else:
     if token_only:
-        fail("token-only migration probe found no forward-only pending migration")
+        print(NO_FORWARD_ONLY_PENDING)
+        raise SystemExit(0)
     print("Production migration gate passed: pending migrations are reversible.")
 PY
 }

@@ -12,6 +12,7 @@ from app.model_access.remote_contract import (
     CompletionRequest,
     CompletionRouteIdentity,
     PreflightRequest,
+    ProductPreflightRequest,
 )
 
 
@@ -47,9 +48,22 @@ class _PreflightCompletionTransport(Protocol):
     def preflight(self, request: PreflightRequest) -> object: ...
 
 
+class _ProductPreflightTransport(Protocol):
+    def preflight_product(self, request: ProductPreflightRequest) -> object: ...
+
+
 @dataclass(frozen=True)
 class PreflightRouteSelection:
     request: CompletionRequest
+    fallback_provenance: FallbackProvenance
+    executor_path_receipt: object | None = None
+
+
+@dataclass(frozen=True)
+class ProductPreflightRouteSelection:
+    """One exact host-resolved route selected by logical Product preflight."""
+
+    response: object
     fallback_provenance: FallbackProvenance
     executor_path_receipt: object | None = None
 
@@ -144,7 +158,80 @@ def select_preflight_route(
     )
 
 
+def select_product_preflight_route(
+    request: ProductPreflightRequest,
+    *,
+    fallback_request: ProductPreflightRequest | None,
+    fallback_requirement: FallbackRequirement,
+    policy_authority: str,
+    transport: _ProductPreflightTransport,
+    allow_codex_to_ollama_fallback: bool,
+) -> ProductPreflightRouteSelection:
+    """Preflight one Product target and, if explicitly authorized, one Ollama fallback."""
+    fallback_allowed = fallback_request is not None
+    if fallback_request is not None:
+        if fallback_requirement not in _FALLBACK_REQUIREMENTS:
+            raise ValueError("the caller's fallback requirement forbids this fallback")
+        if (
+            not allow_codex_to_ollama_fallback
+            or request.provider != "openai"
+            or fallback_request.provider != "ollama"
+            or fallback_request.capability_intent != request.capability_intent
+        ):
+            raise ValueError("fallback target is outside the compatible Product profile")
+        fallback_allowed = (
+            request.reasoning_effort in _FALLBACK_REASONING_EFFORTS
+            and not request.capability_intent.literal_system_role_required
+        )
+
+    try:
+        path_result = transport.preflight_product(request)
+        response = getattr(path_result, "response", path_result)
+    except RemotePreflightError as primary_failure:
+        reason_code = _FALLBACKABLE_PREFLIGHT_FAILURES.get(primary_failure.code)
+        if not fallback_allowed or fallback_request is None or reason_code is None:
+            raise
+        path_result = transport.preflight_product(fallback_request)
+        response = getattr(path_result, "response", path_result)
+        if (
+            response.route.provider != fallback_request.provider
+            or response.route.model != fallback_request.model
+            or response.route.transport_id != "ollama_http"
+        ):
+            raise RemotePreflightError("preflight_route_mismatch")
+        provenance = FallbackProvenance(
+            used=True,
+            phase="preflight",
+            reason_code=reason_code,
+            source_transport_id="codex_cli",
+            selected_transport_id="ollama_http",
+            policy_authority=policy_authority,
+            source_effective_identity=f"{request.provider}/{request.model}",
+            selected_effective_identity=(
+                f"{fallback_request.provider}/{fallback_request.model}"
+            ),
+        )
+        return ProductPreflightRouteSelection(
+            response=response,
+            fallback_provenance=provenance,
+            executor_path_receipt=getattr(path_result, "receipt", None),
+        )
+
+    if (
+        response.route.provider != request.provider
+        or response.route.model != request.model
+    ):
+        raise RemotePreflightError("preflight_route_mismatch")
+    return ProductPreflightRouteSelection(
+        response=response,
+        fallback_provenance=FallbackProvenance(),
+        executor_path_receipt=getattr(path_result, "receipt", None),
+    )
+
+
 __all__ = [
     "PreflightRouteSelection",
+    "ProductPreflightRouteSelection",
     "select_preflight_route",
+    "select_product_preflight_route",
 ]

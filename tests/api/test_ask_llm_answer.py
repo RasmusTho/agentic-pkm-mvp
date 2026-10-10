@@ -21,7 +21,7 @@ def _stub_embeddings(monkeypatch) -> None:
     monkeypatch.setattr("app.retrieval.hybrid.embed_batches", _fake_embed_batches)
 
 
-def test_ask_uses_llm_when_enabled(monkeypatch) -> None:
+def test_ask_uses_llm_when_enabled(monkeypatch, mock_product_api_routes) -> None:
     _stub_embeddings(monkeypatch)
     monkeypatch.setenv("REASONING_ENABLE", "1")
     monkeypatch.setenv("LLM_PROVIDER", "mock")
@@ -96,7 +96,7 @@ def _block_synthesis_gate(monkeypatch) -> None:
     monkeypatch.setattr("app.agents.ask.graph.evaluate_ask_synthesis", _blocked)
 
 
-def test_ask_falls_back_when_synthesis_gate_blocks(monkeypatch) -> None:
+def test_ask_falls_back_when_synthesis_gate_blocks(monkeypatch, mock_product_api_routes) -> None:
     _stub_embeddings(monkeypatch)
     os.environ.pop("REASONING_ENABLE", None)
     _block_synthesis_gate(monkeypatch)

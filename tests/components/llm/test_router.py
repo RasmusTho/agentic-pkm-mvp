@@ -23,6 +23,34 @@ from llm_contract import (
 @pytest.fixture(autouse=True)
 def _isolate_router_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: SettingsBundle())
+    monkeypatch.setattr(
+        "app.components.llm.fabric._new_executor_path_router",
+        lambda **_kwargs: _NoopProductPathRouter(),
+    )
+
+
+class _NoopProductPathRouter:
+    """Keep router identity tests offline; gateway behavior has dedicated ASGI tests."""
+
+    def close(self) -> None:
+        return None
+
+
+def _assert_unregistered_embedding_fails_closed(intent: LLMTaskIntent) -> None:
+    with pytest.raises(LLMRouteError, match="declared registry model"):
+        get_embeddings_client(intent)
+
+
+def _assert_bge_embedding_resolves_through_product_portal(
+    intent: LLMTaskIntent,
+) -> None:
+    client = get_embeddings_client(intent)
+    try:
+        assert client.identity.provider == "ollama"
+        assert client.identity.model == "bge-m3:latest"
+        assert client.identity.dim == 1024
+    finally:
+        client.close()
 
 
 @pytest.mark.parametrize(
@@ -159,14 +187,15 @@ def test_router_honors_activated_embedding_profile_over_generic_env_model_defaul
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    client = get_embeddings_client(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"
-    assert client.identity.provider == "ollama"
-    assert client.identity.model == "bge-m3:latest"
-    assert client.identity.dim == 1024
-    assert client.identity.normalize is True
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == "ollama"
+    assert route.embedding_identity.model == "bge-m3:latest"
+    assert route.embedding_identity.dim == 1024
+    assert route.embedding_identity.normalize is True
 
 
 @pytest.mark.parametrize("target_kind", ["blank", "shipped-placeholder"])
@@ -197,14 +226,15 @@ def test_activated_profile_beats_generic_settings_model_default(
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    client = get_embeddings_client(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"
-    assert client.identity.provider == "ollama"
-    assert client.identity.model == "bge-m3:latest"
-    assert client.identity.dim == 1024
-    assert client.identity.normalize is True
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == "ollama"
+    assert route.embedding_identity.model == "bge-m3:latest"
+    assert route.embedding_identity.dim == 1024
+    assert route.embedding_identity.normalize is True
 
 
 def test_generic_settings_model_default_applies_without_selected_profile(
@@ -222,12 +252,13 @@ def test_generic_settings_model_default_applies_without_selected_profile(
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    client = get_embeddings_client(intent)
+    _assert_unregistered_embedding_fails_closed(intent)
 
     assert route.provider == "ollama"
     assert route.model == "embed-test:latest"
-    assert client.identity.provider == "ollama"
-    assert client.identity.model == "embed-test:latest"
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == "ollama"
+    assert route.embedding_identity.model == "embed-test:latest"
 
 
 def test_router_honors_activated_profile_over_shipped_default_target(
@@ -255,14 +286,15 @@ def test_router_honors_activated_profile_over_shipped_default_target(
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    client = get_embeddings_client(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"
-    assert client.identity.provider == "ollama"
-    assert client.identity.model == "bge-m3:latest"
-    assert client.identity.dim == 1024
-    assert client.identity.normalize is True
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == "ollama"
+    assert route.embedding_identity.model == "bge-m3:latest"
+    assert route.embedding_identity.dim == 1024
+    assert route.embedding_identity.normalize is True
 
 
 def test_shipped_default_embedding_target_stays_nomic_without_profile(
@@ -323,14 +355,15 @@ def test_router_honors_settings_default_profile_over_shipped_default_target(
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    client = get_embeddings_client(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"
-    assert client.identity.provider == "ollama"
-    assert client.identity.model == "bge-m3:latest"
-    assert client.identity.dim == 1024
-    assert client.identity.normalize is True
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == "ollama"
+    assert route.embedding_identity.model == "bge-m3:latest"
+    assert route.embedding_identity.dim == 1024
+    assert route.embedding_identity.normalize is True
 
 
 def test_model_id_less_nomic_target_remains_explicit_under_profile_activation(
@@ -446,13 +479,14 @@ def test_explicit_embedding_task_profile_remains_active(
 
     intent = LLMTaskIntent(task_kind="embed", strict_identity_required=True)
     route = LLMRouter().route(intent)
-    client = get_embeddings_client(intent)
+    _assert_bge_embedding_resolves_through_product_portal(intent)
 
     assert route.provider == "ollama"
     assert route.model == "bge-m3:latest"
-    assert client.identity.provider == "ollama"
-    assert client.identity.model == "bge-m3:latest"
-    assert client.identity.dim == 1024
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == "ollama"
+    assert route.embedding_identity.model == "bge-m3:latest"
+    assert route.embedding_identity.dim == 1024
 
 
 def test_router_forces_mock_for_chat_determinism(clean_llm_env) -> None:
@@ -702,6 +736,43 @@ def test_router_uses_compiled_instance_profile(clean_llm_env) -> None:
 
     assert (route.provider, route.model) == ("openai", "gpt-6-luna")
     assert route.reason == "settings-profile:work"
+
+
+def test_instance_profile_selects_registry_embedding_model(clean_llm_env) -> None:
+    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
+    bundle = SettingsBundle(
+        instance=InstanceSettings(llm_routing_profile="work"),
+        llm_routing=LLMRoutingSettings(
+            profiles={
+                "work": LLMRoutingSettings.RoutingProfile(
+                    default_embedding=LLMRoutingSettings.RouteTarget(
+                        model_id="gemini.embed.gemini_embedding_001"
+                    )
+                )
+            }
+        ),
+    )
+
+    route = LLMRouter(settings=bundle).route(
+        LLMTaskIntent(task_kind="embed", strict_identity_required=True)
+    )
+
+    assert (route.provider, route.model) == ("gemini", "gemini-embedding-001")
+    assert route.embedding_identity is not None
+    assert route.embedding_identity.provider == "gemini"
+    assert route.embedding_identity.model == "gemini-embedding-001"
+    assert route.embedding_identity.dim == 768
+    assert route.reason == "settings-profile:work"
+
+
+def test_unknown_instance_routing_profile_fails_closed_for_embeddings(clean_llm_env) -> None:
+    clean_llm_env.delenv("LLM_PROVIDER", raising=False)
+    router = LLMRouter(
+        settings=SettingsBundle(instance=InstanceSettings(llm_routing_profile="typo-work"))
+    )
+
+    with pytest.raises(LLMRouteError, match="Unknown Product routing profile"):
+        router.route(LLMTaskIntent(task_kind="embed", strict_identity_required=True))
 
 
 def test_instance_profile_does_not_override_embedding_identity(clean_llm_env) -> None:

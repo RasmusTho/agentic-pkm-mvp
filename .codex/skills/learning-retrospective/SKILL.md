@@ -31,10 +31,15 @@ proposals. Do not require a second acceptance step for already-authorized safe r
 
 ## Trigger
 
-Run when the human requests a retrospective, or after approximately 10 delivery-learning
-`LearningSignal` records have accumulated since the last retrospective receipt.
+Run on a weekly cold-path review or when the human requests a retrospective. Select an incremental,
+bounded batch of routine delivery-learning signals since the last retrospective receipt; approximately
+10 signals or an epic boundary is a useful batching hint, not an app scheduler or a hot-path gate.
 
 This is a cold-path repair step, not a hot-path delivery routine.
+
+If optional record infrastructure is unavailable, do not fabricate a record or add a parallel store:
+review the existing Issue, PR, or reviewed artifact, report the limitation once, and keep any
+substantial unresolved item attached to an executable successor before closure.
 
 ## Workflow
 
@@ -62,8 +67,11 @@ includes all LearningSignals, including previously processed records, plus all d
 compatibility entries. Prior receipts describe treatment; they do not exclude a signal from pattern
 analysis. Recheck repairs against the current target branch, not a stale working checkout.
 
-For an automatic cadence pass, fewer than 3 unprocessed signals may justify waiting. An explicit
-human request proceeds regardless of count; do not add a confirmation gate.
+For a weekly cold-path pass, an empty or very small unprocessed set may justify waiting. An explicit
+human request proceeds regardless of count; do not add a confirmation gate. Keep material,
+actionable-now divergences on the immediate `capture-learning` path. Every unresolved material item
+selected for the retrospective must retain an executable successor such as an Issue, PR, or
+PromotionIntent before closure.
 
 Do not use raw `AgentWorklog` records as authoritative learning material. A raw worklog may support
 a signal through `source_refs`; if it contains a durable learning, create or request a

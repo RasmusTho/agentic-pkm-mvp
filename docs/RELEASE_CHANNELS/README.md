@@ -280,8 +280,14 @@ production Compose overlay supplies the production-only gate marker and target i
 `scripts/run_migrations.sh` resolves and classifies the pending migrations before the first
 `alembic upgrade head`. Unclassified migrations fail closed, and forward-only migrations require a
 decision token bound to `pkm-prod/app`, the current database revision, and the exact pending
-migration contents. The production deploy path in `scripts/deploy_channel.sh` obtains that token
-through a read-only probe before writer stop.
+migration contents. The production deploy path in `scripts/deploy_channel.sh` checks the live
+pending migrations through a read-only probe before writer stop on every PROD deploy,
+including when the Git migration delta is empty. The probe runs the resolved candidate
+image's migration graph against pkm-prod/app, not the still-pinned prior image. A result with no pending
+forward-only migration needs no acknowledgment, even when the deploy also adds or changes
+classification metadata for an already-applied migration. When the probe finds pending
+forward-only migrations, the operator acknowledgment and the matching target-bound token are both
+required before writer stop.
 
 The current baseline does not yet create a durable target promotion-plan acknowledgement receipt.
 That receipt and the surrounding gated-`stable` promotion workflow remain deferred promotion
@@ -357,6 +363,26 @@ If this check fails, promotion aborts fail-closed with a reconciliation-PR instr
 - The previous stable ref is always resolvable (recorded as `stable-prev` pointer file in `ops/promotions/` before any stable movement).
 - Rollback proceeds via a **governed revert PR targeting `stable`**, not a direct ref write. The revert PR must pass the same required status checks as a promotion PR. After merge, prod is updated to the merged `origin/stable` rollback commit before reversible migrations are reversed; `stable-prev` remains the rollback target/anchor.
 - Migrations are classified at promotion time as **reversible** or **forward-only**. Forward-only migrations are allowed but require the operator to acknowledge that rollback cannot restore DB shape.
+
+Physical previous-good recreation in `scripts/deploy_channel.sh` uses the same Model Access
+configuration rule for explicit rollback and automatic startup-failure recovery. An existing valid
+protected path-reference file is revalidated through the exact four-key allowlist and retained, so
+modern required Product callers keep their configured route. Missing or invalid optional input
+clears inherited references for legacy recovery; it never admits malformed keys, selects a new
+model/capability, changes embedding identity, or provisions access. A runtime env alias to the
+protected Model Access file remains a refusal.
+
+Failed supervised native deploy children report only a finite allowlisted gate stage and
+`command_failed` class directly to the existing native journal socket using one nonblocking
+datagram, independently of the service's nulled stdout/stderr. Missing, malformed, or
+ambiguous stage markers yield `unknown`; raw child output, arguments, environment, endpoints,
+paths, and secret values are discarded. An absent, refused, or full journal socket is best-effort
+diagnostic loss; it does not retry, delay, or replace the original deployment refusal. The stage
+identifies the primary script gate even when
+automatic recreation also fails. This diagnostic is advisory: exact same-operation reconciliation,
+quiescence proof, lock retirement, and terminal receipts retain their authority. Repository merge
+does not establish live DEV, TEST, or PROD acceptance, or diagnose an earlier failure whose stage
+was not captured.
 
 ### Runtime floors constrain which images are valid rollback targets
 

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import os
+import json
+import errno
+import socket
 import subprocess
 import sys
-from contextlib import contextmanager
+import tempfile
+from contextlib import ExitStack, contextmanager
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -16,14 +20,23 @@ from tests.deploy.test_deploy_channel import (
     _configure_prod_retry_preflight,
     _configure_bws_retry_driver,
     _deploy_events,
-    _deploy_harness,
+    _deploy_harness as _base_deploy_harness,
     _run_deploy,
 )
+from tests.helpers.runtime_identity import runtime_reachable_test_root
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts/deploy_channel.sh"
 MAKEFILE = REPO_ROOT / "Makefile"
+
+
+def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
+    root, env, sha = _base_deploy_harness(tmp_path)
+    # BWS deployment callers supply the runtime env path from private host
+    # config. Keep the shell harness explicit so it tests the same boundary.
+    env["BWS_DEPLOY_RUNTIME_ENV_FILE"] = str(root / "tmp/runtime.env")
+    return root, env, sha
 
 
 class _ComposeLoader(yaml.SafeLoader):
@@ -111,7 +124,10 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert "migration_gate" in text
     assert "DEPLOY_ACK_FORWARD_ONLY" in text
     assert "--ack-forward-only" in text
-    assert "forward-only migrations require" in text
+    assert (
+        "production forward-only migration is pending; --ack-forward-only is required"
+        in text
+    )
     assert "migration gate blocked before recreate" in text
     runtime_env_resolve = text.index(
         "_deploy_channel_resolve_runtime_env_file", text.index("pin_file=")
@@ -132,6 +148,17 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert run_block.index("heimdal_raw_migration_secret_preflight") < run_block.index(
         "write_pin"
     )
+    forward_only_probe = run_block.index("prepare_prod_forward_only_ack || exit")
+    for preflight in (
+        "heimdal_raw_migration_secret_preflight || exit $?",
+        "scripts/companion_ui_postdeploy_smoke.sh preflight",
+        "prod_devui_gateway_preflight",
+        "prod_pending_retry_preflight || exit 87",
+        "dev_test_environment_env_file_clobber_preflight || exit 90",
+    ):
+        assert run_block.index(preflight) < forward_only_probe
+    assert forward_only_probe < run_block.index("prepare_instance_ownership_host_state_dir")
+    assert forward_only_probe < run_block.index("ensure_prod_instance_state_volume")
     assert run_block.index("write_pin") < run_block.index("pull_channel_images")
     assert run_block.index("pull_channel_images") < run_block.index(
         "prepare_instance_state_deployment"
@@ -800,14 +827,23 @@ def test_every_postmutation_gate_has_fail_closed_terminal_handling(
     assert not (root / "ops/deployments/dev-latest.json").exists()
 
 
+@pytest.mark.parametrize(
+    "runtime_env_text",
+    [
+        "TTS_ENABLED=false\n",
+        'TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=""\n',
+        "TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=''\n",
+        'TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR="" # disabled\n',
+    ],
+)
 def test_unconfigured_capture_watch_does_not_block_or_start_with_deploy(
-    tmp_path: Path,
+    tmp_path: Path, runtime_env_text: str
 ) -> None:
     root, env, base_sha = _deploy_harness(tmp_path)
     sha = _commit_prefloor_successor(root, "capture watch disabled target")
     previous_sha = base_sha
     pin_path = _seed_previous_pin(root, previous_sha)
-    (root / "tmp/runtime.env").write_text("TTS_ENABLED=false\n", encoding="utf-8")
+    (root / "tmp/runtime.env").write_text(runtime_env_text, encoding="utf-8")
     env["FAKE_SHA"] = sha
     env["FAKE_DOCKER_FAIL_MATCH"] = " ps -q "
     fitness_args = tmp_path / "fleet-model-fitness-args.txt"
@@ -1818,14 +1854,14 @@ def test_raw_migration_production_wrapper_bootstraps_before_compose(
     assert "HEIMDAL_RAW_STORE_KEY" not in result.stdout + result.stderr
 
 
-@pytest.mark.parametrize("failure", ["missing", "malformed", "divergent"])
+@pytest.mark.parametrize("failure", ["malformed", "divergent"])
 @pytest.mark.parametrize("channel", ["dev", "test", "prod"])
 def test_raw_migration_production_wrapper_fails_before_compose_and_redacts(
     tmp_path: Path,
     failure: str,
     channel: str,
 ) -> None:
-    """Unusable migration authority cannot reach Docker or disclose details."""
+    """Present malformed or domain-divergent migration authority fails closed."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     docker_marker = tmp_path / "docker-called"
@@ -1836,9 +1872,7 @@ def test_raw_migration_production_wrapper_fails_before_compose_and_redacts(
     )
     docker.chmod(0o755)
     security = bin_dir / "security"
-    if failure == "missing":
-        security_body = "echo private-lookup-detail >&2\nexit 44"
-    elif failure == "malformed":
+    if failure == "malformed":
         security_body = "printf '%s\\n' private-malformed-material"
     else:
         security_body = (
@@ -1921,6 +1955,25 @@ def _configure_successful_channel_preflights(
     )
 
 
+def _set_bws_consumer_selection(env: dict[str, str], *, raw_migration: bool) -> None:
+    env.update(
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED='1',
+        BWS_EXPECTED_RAW_MIGRATION_PENDING='1' if raw_migration else '0',
+        BWS_DEPLOY_TARGET_REVISION=env['FAKE_SHA'],
+    )
+
+
+def _set_native_bws_operation_context(root: Path, env: dict[str, str]) -> None:
+    api_handle = root / "tmp/api-consumer.env"
+    api_handle.write_text("", encoding="utf-8")
+    api_handle.chmod(0o600)
+    env.update(
+        HOST_SECRET_RUNTIME_ENV_FILE_API=str(api_handle),
+        BWS_DEPLOY_OPERATION_ID="03b3bb2f-6d85-499a-8b45-e397f56812e1",
+        BWS_DEPLOY_TARGET_REVISION=env["FAKE_SHA"],
+    )
+
+
 def _commit_har_raw_migration(root: Path, name: str) -> str:
     migration = root / "app" / "alembic" / "versions" / name
     migration.write_text(
@@ -1972,7 +2025,7 @@ def test_full_deploy_preflights_raw_migration_key_before_any_docker(
 
 
 @pytest.mark.parametrize("channel", ["dev", "test", "prod"])
-@pytest.mark.parametrize("failure", ["missing", "malformed", "divergent"])
+@pytest.mark.parametrize("failure", ["malformed", "divergent"])
 def test_full_deploy_raw_migration_key_failure_is_redacted_and_nonmutating(
     tmp_path: Path,
     channel: str,
@@ -2047,10 +2100,10 @@ def test_full_deploy_unrelated_migration_skips_raw_key_lookup(
     assert any(" stop api worker watcher" in event for event in events[:migrate_index])
 
 
-def test_full_deploy_mixed_migration_inventory_still_gates_raw_key(
+def test_full_deploy_mixed_migration_inventory_allows_absent_key_to_reach_har02(
     tmp_path: Path,
 ) -> None:
-    """Presence of HAR-02 among unrelated migrations keeps the gate active."""
+    """An absent key does not preflight-block the governed HAR-02 invocation."""
     root, env, _initial_sha = _deploy_harness(tmp_path)
     _commit_migration(root, "unrelated_before_har.py")
     target = _commit_har_raw_migration(
@@ -2058,23 +2111,47 @@ def test_full_deploy_mixed_migration_inventory_still_gates_raw_key(
         "e7b4c9d2a6f1_heimdal_raw_representation.py",
     )
     env["FAKE_SHA"] = target
-    env["DEPLOY_ACK_FORWARD_ONLY"] = "1"
     env["FAKE_SECURITY_MODE"] = "missing"
     env["FAKE_SECURITY_EVENT_LOG"] = env["FAKE_DEPLOY_EVENT_LOG"]
+    _configure_successful_channel_preflights(
+        root,
+        env,
+        tmp_path,
+        channel="dev",
+    )
+    runtime_env = root / "tmp" / "runtime.env"
+    runtime_env.write_text(
+        runtime_env.read_text(encoding="utf-8").replace(
+            "HEIMDAL_CAPTURE_WATCH_DIR=/fixture/capture-inbox",
+            "HEIMDAL_CAPTURE_WATCH_DIR=",
+        ),
+        encoding="utf-8",
+    )
+    # Stop at a deliberate post-migration sentinel so this boundary test does
+    # not depend on later runtime health/API fixture completeness.
+    env["FAKE_DOCKER_FAIL_MATCH"] = "up -d --force-recreate api worker watcher companion-ui"
 
     result = _run_deploy(root, env, target, channel="dev")
 
     combined = result.stdout + result.stderr
-    assert result.returncode != 0
-    assert combined.count("migration raw-key preflight failed: output=redacted") == 1
+    assert "service recreate/liveness gate failed" in combined, combined
+    assert "migration raw-key preflight failed" not in combined
     events = _deploy_events(env)
+    assert "security migrate-primary" in events
+    assert any("exit-code-from migrate" in event for event in events)
+    assert any(event.startswith("migration-full ack=") for event in events)
     assert events[0] == "archive-preflight dev"
-    assert any(
-        event == "security migrate-primary"
-        for event in events[1:]
+    assert events.index("security migrate-primary") < next(
+        index for index, event in enumerate(events) if event.startswith("docker ")
     )
-    assert all(event.startswith("security ") for event in events[1:])
-    assert not (tmp_path / "docker-called").exists()
+    stop_index = next(
+        index for index, event in enumerate(events) if " stop api worker watcher" in event
+    )
+    migration_index = next(
+        index for index, event in enumerate(events) if "exit-code-from migrate" in event
+    )
+    assert stop_index < migration_index
+    assert (tmp_path / "docker-called").exists()
 
 
 @pytest.mark.parametrize(
@@ -2209,6 +2286,9 @@ class _BwsVmEffects:
         self.running = running
         self.auth = auth
         self.quiet = quiet
+
+    def select_active_plan(self, plan):
+        return plan
 
     def preflight(self, plan):
         self.events.append('preflight:' + plan.channel)
@@ -2405,6 +2485,127 @@ def test_postgres_password_preflight_precedes_remote_and_vm_mutation(tmp_path):
     assert effects.events == [] and journal.read() is None
 
 
+def test_existing_secret_deploy_skips_bootstrap_qualification(tmp_path):
+    from app.ops.postgres_deploy import deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path)
+    provider.seed('test/postgres.password', 'fake-role-password', ('non-prod',))
+    receipt = deploy_from_host(
+        admin,
+        remote,
+        plan,
+        qualified=lambda: pytest.fail('existing-value deployment must not require BWS-write qualification'),
+        allow_bootstrap=False,
+    )
+
+    assert receipt.stage == 'committed'
+    assert remote.activation_count == 1
+    assert not any(call[0] == 'put' for call in provider.calls)
+
+
+def test_existing_secret_deploy_refuses_missing_password_before_remote_mutation(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(
+            admin, remote, plan, qualified=lambda: pytest.fail('bootstrap is forbidden'),
+            allow_bootstrap=False,
+        )
+
+    assert remote.events == []
+    assert not any(call[0] == 'put' for call in provider.calls)
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor) is None
+
+
+def test_deploy_controller_binds_bootstrap_mode_before_rpc(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path)
+    provider.seed('test/postgres.password', 'fake-role-password', ('non-prod',))
+
+    def lose_prepare_ack(operation_id, selected, *, bootstrap):
+        remote.events.append(('prepare', operation_id, bootstrap))
+        raise RuntimeError('simulated lost prepare acknowledgment')
+
+    remote.prepare = lose_prepare_ack
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(
+            admin, remote, plan, qualified=lambda: None, allow_bootstrap=False,
+        )
+    with admin.controller._locked_journal() as descriptor:
+        pending = admin.controller._pending(descriptor)
+    assert pending is not None and pending['allow_bootstrap'] is False
+    prior_provider_calls = len(provider.calls)
+    prior_remote_events = list(remote.events)
+
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(
+            admin, remote, plan, qualified=lambda: pytest.fail('changed mode reached qualification'),
+            allow_bootstrap=True,
+        )
+
+    assert len(provider.calls) == prior_provider_calls
+    assert remote.events == prior_remote_events
+
+
+def test_legacy_pending_deploy_must_reconcile_before_bootstrap_mode_is_bound(tmp_path):
+    from app.ops.host_secret_controller import (
+        HostSecretAdmissionError,
+        HostSecretController,
+        TerminalEvidence,
+    )
+
+    controller = HostSecretController(tmp_path)
+    with controller.deploy_operation('test') as (operation, resumed):
+        assert not resumed
+        legacy_operation_id = operation.operation_id
+        operation.prepare_mutation()
+
+    with controller._locked_journal() as descriptor:
+        pending = controller._pending(descriptor)
+    assert pending is not None
+    assert pending['operation_id'] == legacy_operation_id
+    assert 'allow_bootstrap' not in pending
+
+    with pytest.raises(HostSecretAdmissionError):
+        with controller.deploy_operation('test', allow_bootstrap=False):
+            pytest.fail('a new mode must not adopt an unbound legacy operation')
+
+    with controller._locked_journal() as descriptor:
+        still_pending = controller._pending(descriptor)
+    assert still_pending is not None and still_pending['operation_id'] == legacy_operation_id
+
+    controller.reconcile(
+        lambda operation_id, kind, target: TerminalEvidence(
+            operation_id, kind, target, 'committed', 'remote-terminal'
+        )
+    )
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        assert operation.operation_id != legacy_operation_id
+        assert operation.allow_bootstrap is False
+
+
+def test_postgres_bootstrap_requires_qualification_before_remote_mutation(tmp_path):
+    from app.ops.postgres_deploy import PostgresDeployError, deploy_from_host
+
+    admin, provider, plan, remote = _bws_host(tmp_path, missing=True)
+
+    def reject_qualification():
+        assert remote.events == []
+        raise PostgresDeployError()
+
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=reject_qualification, allow_bootstrap=True)
+
+    assert remote.events == []
+    assert not any(call[0] == 'put' for call in provider.calls)
+    with admin.controller._locked_journal() as descriptor:
+        assert admin.controller._pending(descriptor) is None
+
+
 def test_vm_reader_recheck_is_project_scoped_and_precedes_compose(tmp_path):
     from app.ops.postgres_deploy import vm_selected_values
     _, _, plan, _ = _bws_host(tmp_path)
@@ -2422,11 +2623,736 @@ def test_vm_reader_recheck_is_project_scoped_and_precedes_compose(tmp_path):
     assert effects.events[activation - 1] == 'preflight:test'
 
 
+def test_vm_selected_values_deduplicates_bws_identity_per_preflight():
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan, vm_selected_values
+
+    consumers = tuple(DATABASE_CONSUMERS)
+    plan = DeployPlan(
+        'dev',
+        'a' * 40,
+        tuple(DATABASE_CONSUMERS.values()),
+        consumers,
+    )
+
+    class Reader:
+        def __init__(self):
+            self.calls = []
+
+        def lookup(self, project, identity):
+            self.calls.append((project, identity))
+            return f'fake-role-password-{len(self.calls)}'
+
+    reader = Reader()
+    first = vm_selected_values(plan, reader)
+    second = vm_selected_values(plan, reader)
+
+    assert first == {
+        consumer: {'postgres.password': 'fake-role-password-1'}
+        for consumer in consumers
+    }
+    assert second == {
+        consumer: {'postgres.password': 'fake-role-password-2'}
+        for consumer in consumers
+    }
+    assert reader.calls == [
+        ('non-prod', 'dev/postgres.password'),
+        ('non-prod', 'dev/postgres.password'),
+    ]
+
+
 def test_inactive_optional_model_credentials_do_not_block_deploy(tmp_path):
     from app.ops.postgres_deploy import deploy_from_host
     admin, provider, plan, remote = _bws_host(tmp_path)
     assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
     assert all('openai' not in identity and 'anthropic' not in identity for _, _, identity in provider.calls)
+
+
+def test_bws_deploy_selects_only_active_secret_consumers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan
+
+    root = tmp_path
+    cfg = SimpleNamespace(channel='test', root=root)
+    base = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+    monkeypatch.setattr(linux, 'database_input_files', lambda _cfg: [root / 'pin', root / 'runtime'])
+    monkeypatch.setattr(linux, 'validate_database_inputs', lambda *_args: None)
+    monkeypatch.setattr(linux, 'require_file_protocol', lambda *_args: None)
+    selected_state = {'capture': False, 'migration': False}
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _cfg: selected_state['capture'])
+    monkeypatch.setattr(linux, '_raw_representation_migration_pending',
+                        lambda _cfg, _revision: selected_state['migration'])
+
+    def selected(capture, migration):
+        selected_state.update(capture=capture, migration=migration)
+        return linux.LinuxEffects(cfg).select_active_plan(base).consumers
+
+    assert selected(False, False) == (*DATABASE_CONSUMERS, 'heimdal-api-ingress')
+    assert selected(True, False) == (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch')
+    assert selected(False, True) == (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-raw-migrate')
+    assert selected(True, True) == (
+        *DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate'
+    )
+
+
+def test_vm_raw_key_selection_matches_target_migration_delta_and_pending_marker(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    (root / 'app/alembic/versions').mkdir(parents=True)
+    subprocess.run(['git', 'init', '-q', str(root)], check=True)
+    subprocess.run(['git', 'config', 'user.email', 'test@example.invalid'], cwd=root, check=True)
+    subprocess.run(['git', 'config', 'user.name', 'Test'], cwd=root, check=True)
+    baseline_migration = root / 'app/alembic/versions/000000000000_baseline.py'
+    baseline_migration.write_text('reversibility = "reversible"\n', encoding='utf-8')
+    subprocess.run(['git', 'add', 'app'], cwd=root, check=True)
+    subprocess.run(['git', 'commit', '-qm', 'baseline'], cwd=root, check=True)
+    baseline = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+
+    target_migration = root / 'app/alembic/versions/e7b4c9d2a6f1_heimdal_raw_representation.py'
+    target_migration.write_text('reversibility = "forward-only"\n', encoding='utf-8')
+    subprocess.run(['git', 'add', 'app'], cwd=root, check=True)
+    subprocess.run(['git', 'commit', '-qm', 'add raw migration'], cwd=root, check=True)
+    target = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
+    cfg = linux.LinuxConfig('test', root, root / 'data', 1000, 1000, '', '')
+    pin = root / 'config/deploy/test.env'
+
+    pin.write_text(f'APP_IMAGE_TAG={baseline}\n', encoding='utf-8')
+    assert linux._raw_representation_migration_pending(cfg, target) is True
+    pin.write_text(f'APP_IMAGE_TAG={target}\n', encoding='utf-8')
+    assert linux._raw_representation_migration_pending(cfg, target) is False
+
+    pending = root / 'config/deploy/test.migration-pending.env'
+    pending.write_text(
+        f'FROM_SHA={baseline}\nTARGET_SHA={target}\nACK_FORWARD_ONLY=1\n', encoding='utf-8'
+    )
+    assert linux._raw_representation_migration_pending(cfg, target) is True
+    with pytest.raises(PostgresDeployError):
+        linux._raw_representation_migration_pending(cfg, 'f' * 40)
+
+
+def test_bws_deploy_requires_raw_key_for_active_capture():
+    from app.ops.bws_secret_reader import BwsItemAbsent
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan, PostgresDeployError, vm_selected_values
+
+    plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch'))
+    calls = []
+
+    class Reader:
+        def lookup(self, project, identity):
+            calls.append((project, identity))
+            if identity.endswith('heimdal.raw-store-key'):
+                raise BwsItemAbsent()
+            if identity.endswith('github.token'):
+                return 'ghp_' + 'x' * 36
+            return 'fake-role-password'
+
+    with pytest.raises(PostgresDeployError):
+        vm_selected_values(plan, Reader())
+    assert calls.count(('non-prod', 'test/heimdal.raw-store-key')) == 1
+
+
+@pytest.mark.parametrize('quiescent', [True, False])
+def test_missing_active_raw_key_stops_supervisor_before_activation(
+    tmp_path, monkeypatch, quiescent
+):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.bws_secret_reader import BwsItemAbsent
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    root = tmp_path / 'repo'
+    (root / 'config/deploy').mkdir(parents=True)
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    lookups = []
+
+    class Reader:
+        def lookup(self, _project, identity):
+            lookups.append(identity)
+            if identity.endswith('heimdal.raw-store-key'):
+                raise BwsItemAbsent()
+            if identity.endswith('postgres.password'):
+                return 'fake-role-password'
+            if identity.endswith('github.token'):
+                return 'ghp_' + 'x' * 36
+            raise AssertionError(identity)
+
+    config = SimpleNamespace(
+        channel='test', root=root, journal=journal, reader=lambda: Reader()
+    )
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'),
+    )
+    monkeypatch.setattr(
+        linux, 'database_input_files', lambda _config: [root / 'pin', root / 'runtime']
+    )
+    monkeypatch.setattr(linux, 'validate_database_inputs', lambda *_args: None)
+    monkeypatch.setattr(linux, 'require_file_protocol', lambda *_args: None)
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _config: True)
+    monkeypatch.setattr(
+        linux, '_raw_representation_migration_pending', lambda _config, _revision: False
+    )
+
+    effects = linux.LinuxEffects(config)
+    effects.quiescent = lambda: quiescent
+    activation_events = []
+
+    def unexpected_activation(event, *_args):
+        activation_events.append(event)
+
+    for method in (
+        'initialized', 'materialize', 'local_database', 'database_running',
+        'start_database_only', 'authenticate', 'stop_database', 'activate',
+    ):
+        setattr(effects, method, lambda *args, _event=method: unexpected_activation(_event, *args))
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
+    supervisor = linux.DeploymentSupervisor(config)
+    operation_id = str(uuid4())
+    request = {
+        'action': 'prepare', 'operation_id': operation_id,
+        'plan': plan.__dict__, 'bootstrap': False,
+    }
+
+    if quiescent:
+        result = supervisor.request(request)
+        assert result['receipt']['terminal_result'] == 'aborted'
+        assert journal.read().stage == 'aborted'
+        assert not (root / 'config/deploy/test.env.lock').exists()
+    else:
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(request)
+        receipt = journal.read()
+        assert receipt is not None and receipt.stage == 'prepared'
+        assert receipt.terminal_result is None
+        assert (root / 'config/deploy/test.env.lock').is_dir()
+        retry = {**request, 'operation_id': str(uuid4())}
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(retry)
+
+    assert 'heimdal-capture-watch' in effects.active_consumers
+    assert effects.password is None
+    assert effects.consumer_values == {}
+    # The absent raw key is cached for the remaining consumers in this preflight.
+    assert sum(identity.endswith('heimdal.raw-store-key') for identity in lookups) == 1
+    assert activation_events == []
+
+
+def test_bws_host_and_vm_preflight_use_active_secret_consumers(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.bws_secret_reader import BwsItemAbsent
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployPlan, deploy_from_host, vm_selected_values
+
+    admin, _provider, _old_plan, remote = _bws_host(tmp_path)
+    plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+    assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
+
+    cfg = SimpleNamespace(channel='test', root=tmp_path)
+    monkeypatch.setattr(linux, 'database_input_files', lambda _cfg: [tmp_path / 'pin', tmp_path / 'runtime'])
+    monkeypatch.setattr(linux, 'validate_database_inputs', lambda *_args: None)
+    monkeypatch.setattr(linux, 'require_file_protocol', lambda *_args: None)
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _cfg: False)
+    migration_pending = {'value': False}
+    monkeypatch.setattr(linux, '_raw_representation_migration_pending',
+                        lambda _cfg, _revision: migration_pending['value'])
+    selected = linux.LinuxEffects(cfg).select_active_plan(plan)
+
+    class Reader:
+        def lookup(self, _project, identity):
+            if identity.endswith('heimdal.raw-store-key') or identity.endswith('github.token'):
+                raise BwsItemAbsent()
+            return 'fake-role-password'
+
+    values = vm_selected_values(selected, Reader())
+    assert values['heimdal-api-ingress'] == {}
+    migration_pending['value'] = True
+    active = linux.LinuxEffects(cfg).select_active_plan(plan)
+    values = vm_selected_values(active, Reader())
+    assert values['heimdal-raw-migrate'] == {}
+
+
+def test_vm_capture_watch_selection_uses_runtime_input_and_fails_on_ambiguity(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    pin_dir = tmp_path / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    pin.write_text('WATCHER_RUNTIME_ENV_FILE=./runtime.env\n', encoding='utf-8')
+    cfg = linux.LinuxConfig('test', tmp_path, tmp_path / 'data', 1000, 1000, '', '')
+    assert linux._capture_watch_configured(cfg) is False
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=""\n', encoding='utf-8')
+    assert linux._capture_watch_configured(cfg) is False
+    runtime.write_text("HEIMDAL_CAPTURE_WATCH_DIR=''\n", encoding='utf-8')
+    assert linux._capture_watch_configured(cfg) is False
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR="" # disabled\n', encoding='utf-8')
+    assert linux._capture_watch_configured(cfg) is False
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/capture\n', encoding='utf-8')
+    assert linux._capture_watch_configured(cfg) is True
+    alternate = tmp_path / 'alternate.env'
+    alternate.write_text('', encoding='utf-8')
+    pin.write_text(
+        'WATCHER_RUNTIME_ENV_FILE=./runtime.env\n'
+        'WATCHER_RUNTIME_ENV_FILE=./alternate.env\n',
+        encoding='utf-8',
+    )
+    assert linux._capture_watch_configured(cfg) is True
+    pin.write_text('WATCHER_RUNTIME_ENV_FILE=./runtime.env\n', encoding='utf-8')
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/first\nHEIMDAL_CAPTURE_WATCH_DIR=/second\n', encoding='utf-8')
+    with pytest.raises(PostgresDeployError):
+        linux._capture_watch_configured(cfg)
+
+
+def test_vm_and_deploy_shell_resolve_quoted_runtime_env_path_consistently(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'checkout'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    pin.write_text('WATCHER_RUNTIME_ENV_FILE="./runtime.env"\n', encoding='utf-8')
+    runtime = root / 'runtime.env'
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/capture\n', encoding='utf-8')
+    cfg = linux.LinuxConfig('test', root, tmp_path / 'data', 1000, 1000, '', '')
+
+    assert linux.database_input_files(cfg)[1] == runtime
+    assert linux._capture_watch_configured(cfg) is True
+
+    helper = REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'
+    result = subprocess.run(
+        [
+            'bash', '-c',
+            'source "$1"; _deploy_channel_resolve_runtime_env_file "$2" test "$3"; '
+            'printf "%s\\n" "$DEPLOY_CHANNEL_RUNTIME_ENV_FILE"',
+            'test', str(helper), str(root), str(pin),
+        ],
+        cwd=REPO_ROOT,
+        env={**os.environ, 'HOST_SECRET_PROVIDER': '', 'BWS_DEPLOY_RUNTIME_ENV_FILE': ''},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(runtime)
+
+
+@pytest.mark.parametrize('entrypoint', ['deploy', 'compose', 'signboard', 'inventory'])
+@pytest.mark.parametrize('ambient_python', ['unset', 'conflicting'])
+def test_managed_deploy_child_uses_declared_supervisor_interpreter(
+    tmp_path, monkeypatch, entrypoint, ambient_python,
+):
+    import json
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+
+    runtime = tmp_path / 'runtime.env'
+    runtime.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+    trace = tmp_path / 'child.json'
+    conflicting_python = tmp_path / 'host-python'
+    wrong_interpreter_used = tmp_path / 'wrong-interpreter-used'
+    conflicting_python.write_text(
+        '#!/bin/sh\n: > "$WRONG_INTERPRETER_USED"\nexit 19\n', encoding='utf-8',
+    )
+    conflicting_python.chmod(0o755)
+    conflicting_bin = tmp_path / 'host-bin'
+    conflicting_bin.mkdir()
+    (conflicting_bin / 'python3').symlink_to(conflicting_python)
+    instrumentation = tmp_path / 'instrumentation'
+    instrumentation.mkdir()
+    # Observe the real shell-selected interpreter, then refuse the real guard's
+    # host-config read before it can reach credentials or other host state.
+    (instrumentation / 'sitecustomize.py').write_text(
+        'import json, os, sys\n'
+        'from pathlib import Path\n'
+        'Path(os.environ["CHILD_TRACE"]).write_text(json.dumps({\n'
+        '    "executable": sys.executable, "argv": sys.orig_argv,\n'
+        '    "prefix": sys.prefix,\n'
+        '}))\n'
+        'def refuse_host_config(event, args):\n'
+        '    if event == "open" and args[0] == "/etc/yggdrasil/bws-deploy/test.json":\n'
+        '        raise PermissionError("test refuses host config")\n'
+        'sys.addaudithook(refuse_host_config)\n',
+        encoding='utf-8',
+    )
+    ambient = {
+        'PATH': os.pathsep.join((str(conflicting_bin), os.environ['PATH'])),
+        'HOME': str(tmp_path),
+        'PYTHONPATH': os.pathsep.join((str(instrumentation), str(REPO_ROOT))),
+        'INSTANCE_OWNERSHIP_HOST_STATE_DIR': str(tmp_path / 'ownership'),
+        'CHILD_TRACE': str(trace),
+        'WRONG_INTERPRETER_USED': str(wrong_interpreter_used),
+        'PLAYWRIGHT_BROWSERS_PATH': str(tmp_path / 'ambient-browsers'),
+        'SIGNBOARD_ROOT': str(tmp_path / 'signboard'),
+    }
+    if ambient_python == 'conflicting':
+        ambient['PYTHON'] = str(conflicting_python)
+    monkeypatch.setattr(os, 'environ', ambient)
+    cfg = SimpleNamespace(
+        root=tmp_path, channel='test', uid=os.getuid(), gid=os.getgid(),
+        password_file=tmp_path / 'password', runtime_env_file=runtime,
+    )
+    child_environment = linux.LinuxEffects(cfg).environment()
+    assert child_environment['PYTHON'] == sys.executable
+    runtime_bin = Path(sys.executable).parent
+    assert child_environment['PATH'].split(os.pathsep)[0] == str(runtime_bin)
+    assert child_environment['PLAYWRIGHT_BROWSERS_PATH'] == str(runtime_bin.parent / 'browsers')
+
+    if entrypoint == 'deploy':
+        argv = ['bash', str(SCRIPT), 'deploy', 'test', 'a' * 40, '--dry-run']
+    elif entrypoint == 'compose':
+        argv = [
+            'bash', '-c',
+            'source "$1/scripts/lib/deploy_channel_compose.sh"; '
+            'deploy_channel_compose "$1" test docker-compose.test.yml pkm-test "$2" config',
+            'test', str(REPO_ROOT), str(tmp_path / 'test.env'),
+        ]
+    elif entrypoint == 'signboard':
+        argv = ['bash', '-c',
+                'source "$1/scripts/lib/signboard_root.sh"; '
+                'resolve_signboard_root_env; printf "%s" "$SIGNBOARD_ROOT"',
+                'test', str(REPO_ROOT)]
+    else:
+        (tmp_path / 'ownership').mkdir(mode=0o700)
+        argv = ['bash', '-c',
+                'source "$1/scripts/lib/instance_state_deployment.sh"; '
+                '_write_settings_rebind_floor_receipt test pending',
+                'test', str(REPO_ROOT)]
+    result = subprocess.run(
+        argv, cwd=REPO_ROOT, env=child_environment,
+        capture_output=True, text=True, check=False,
+    )
+
+    if entrypoint in {'deploy', 'compose'}:
+        assert result.returncode == 78, result.stdout + result.stderr
+        assert 'database deployment refused; operation remains pending' in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        if entrypoint == 'signboard':
+            assert result.stdout == str(tmp_path / 'signboard')
+        else:
+            receipt = json.loads((tmp_path / 'ownership/settings-rebind-runtime-floor-test.json').read_text())
+            assert receipt['channel'] == 'test' and receipt['phase'] == 'pending'
+    observed = json.loads(trace.read_text(encoding='utf-8'))
+    assert observed['prefix'] == sys.prefix
+    if entrypoint in {'deploy', 'compose'}:
+        assert observed['executable'] == sys.executable
+        assert observed['argv'][1:5] == ['-m', 'app.ops.postgres_deploy_linux', 'guard', 'test']
+    else:
+        # Bare python3 uses the trusted runtime's sibling alias even when the
+        # supervisor was launched as python; both must select the same prefix.
+        assert observed['executable'] == str(runtime_bin / 'python3')
+        assert observed['argv'][1] == ('-c' if entrypoint == 'signboard' else '-')
+    assert not wrong_interpreter_used.exists()
+
+
+def test_bws_runtime_env_config_path_is_used_consistently(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+
+    for key in ('DATABASE_URL', 'DB_DSN', 'POSTGRES_PASSWORD', 'PGPASSWORD', 'PGPASSFILE', 'PGSERVICE', 'PGSERVICEFILE'):
+        monkeypatch.delenv(key, raising=False)
+    root = tmp_path / 'controller'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    pin.write_text('WATCHER_RUNTIME_ENV_FILE=./wrong-runtime.env\n', encoding='utf-8')
+    runtime = tmp_path / 'channel-runtime' / 'runtime.env'
+    runtime.parent.mkdir()
+    runtime.write_text(
+        'DATABASE_URL=postgresql://app@db:5432/app_test\n'
+        'HEIMDAL_CAPTURE_WATCH_DIR=/capture\n',
+        encoding='utf-8',
+    )
+    cfg = linux.LinuxConfig('test', root, tmp_path / 'data', 1000, 1000, '', '', runtime)
+
+    assert linux.database_input_files(cfg) == [pin, runtime]
+    assert linux._capture_watch_configured(cfg) is True
+    selected_environment = linux.LinuxEffects(cfg).environment()
+    assert selected_environment['BWS_DEPLOY_RUNTIME_ENV_FILE'] == str(runtime)
+    assert selected_environment['WATCHER_RUNTIME_ENV_FILE'] == str(runtime)
+
+    helper = REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'
+    result = subprocess.run(
+        [
+            'bash', '-c',
+            'source "$1"; _deploy_channel_resolve_runtime_env_file "$2" test "$3"; '
+            'printf "%s\\n" "$DEPLOY_CHANNEL_RUNTIME_ENV_FILE"',
+            'test', str(helper), str(root), str(pin),
+        ],
+        cwd=REPO_ROOT,
+        env={
+            **os.environ,
+            'HOST_SECRET_PROVIDER': 'bws',
+            'BWS_DEPLOY_RUNTIME_ENV_FILE': str(runtime),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(runtime)
+
+
+@pytest.mark.parametrize(
+    'invalid_path_kind',
+    ['missing_config_key', 'missing', 'malformed', 'relative', 'unreadable', 'directory', 'symlink'],
+)
+def test_bws_runtime_env_config_preflight_fails_before_mutation(tmp_path, monkeypatch, invalid_path_kind):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root = tmp_path / 'controller'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    original_pin = b'APP_IMAGE_TAG=' + b'a' * 40 + b'\n'
+    pin.write_bytes(original_pin)
+    runtime = tmp_path / 'runtime.env'
+    runtime_value: object = str(runtime)
+    if invalid_path_kind in {'unreadable', 'symlink'}:
+        runtime.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+    elif invalid_path_kind == 'directory':
+        runtime.mkdir()
+    elif invalid_path_kind == 'relative':
+        runtime_value = 'relative/runtime.env'
+    elif invalid_path_kind == 'malformed':
+        runtime_value = 17
+    elif invalid_path_kind == 'missing':
+        runtime_value = str(tmp_path / 'missing.env')
+    if invalid_path_kind == 'symlink':
+        link = tmp_path / 'runtime-link.env'
+        link.symlink_to(runtime)
+        runtime_value = str(link)
+
+    config = {
+        'root': str(root),
+        'data_directory': str(tmp_path / 'data'),
+        'uid': 1000,
+        'gid': 1000,
+        'organization_id': '00000000-0000-4000-8000-000000000001',
+        'project_id': '00000000-0000-4000-8000-000000000002',
+    }
+    if invalid_path_kind != 'missing_config_key':
+        config['runtime_env_file'] = runtime_value
+    monkeypatch.setattr(linux, '_private_json', lambda _path: config)
+    mutations: list[object] = []
+    monkeypatch.setattr(linux, '_command', lambda *args, **kwargs: mutations.append((args, kwargs)) or '')
+    if invalid_path_kind == 'unreadable':
+        original_open = os.open
+
+        def deny_runtime_file(path, flags, *args, **kwargs):
+            if str(path) == str(runtime):
+                raise PermissionError('unreadable test runtime env')
+            return original_open(path, flags, *args, **kwargs)
+
+        monkeypatch.setattr(linux.os, 'open', deny_runtime_file)
+
+    with pytest.raises(PostgresDeployError):
+        linux.LinuxConfig.load('test')
+    assert mutations == []
+    assert pin.read_bytes() == original_pin
+
+
+@pytest.mark.parametrize('runtime_path_state', ['absent', 'malformed', 'missing_file', 'unreadable_file'])
+def test_bws_token_push_does_not_require_runtime_env_config(tmp_path, monkeypatch, runtime_path_state):
+    from app.ops import bws_token_push
+    from app.ops import postgres_deploy_linux as linux
+
+    config = {
+        'root': str(tmp_path / 'checkout'),
+        'data_directory': str(tmp_path / 'data'),
+        'uid': 1000,
+        'gid': 1000,
+        'organization_id': '00000000-0000-4000-8000-000000000001',
+        'project_id': '00000000-0000-4000-8000-000000000002',
+    }
+    if runtime_path_state == 'malformed':
+        config['runtime_env_file'] = 17
+    elif runtime_path_state in {'missing_file', 'unreadable_file'}:
+        runtime = tmp_path / 'runtime.env'
+        if runtime_path_state == 'unreadable_file':
+            runtime.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+            monkeypatch.setattr(
+                linux,
+                '_runtime_env_file_path',
+                lambda _path: pytest.fail('token-push must not inspect the runtime env file'),
+            )
+        config['runtime_env_file'] = str(runtime)
+    monkeypatch.setattr(linux, '_private_json', lambda _path: config)
+    calls = []
+
+    def remote_main(args, *, app_root):
+        calls.append((args, app_root))
+        return 0
+
+    monkeypatch.setattr(bws_token_push, 'remote_main', remote_main)
+
+    assert linux.main(['token-push-inspect', 'test']) == 0
+    assert calls == [(['token-push-inspect', 'test'], tmp_path / 'checkout')]
+
+
+def test_bws_worker_guard_rejects_runtime_env_path_override_before_provider_access(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    configured = tmp_path / 'configured-runtime.env'
+    configured.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+    ambient = tmp_path / 'ambient-runtime.env'
+    ambient.write_text('LLM_PROVIDER=other\n', encoding='utf-8')
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: SimpleNamespace(runtime_env_file=configured))
+    monkeypatch.setattr(os, 'environ', {'BWS_DEPLOY_RUNTIME_ENV_FILE': str(ambient)})
+    provider_reads: list[str] = []
+    monkeypatch.setattr(linux.PasswordSource, 'verify', lambda _self: provider_reads.append('read'))
+
+    with pytest.raises(PostgresDeployError):
+        linux.inherited_worker_guard('test')
+    assert provider_reads == []
+
+
+def test_empty_vm_and_deploy_shell_runtime_selector_use_channel_default(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+
+    root = tmp_path / 'checkout'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    runtime = root / 'tmp-test/runtime.env'
+    runtime.parent.mkdir(parents=True)
+    runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/capture\n', encoding='utf-8')
+    cfg = linux.LinuxConfig('test', root, tmp_path / 'data', 1000, 1000, '', '')
+    helper = REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'
+
+    for selector in ('', '""'):
+        pin.write_text(f'WATCHER_RUNTIME_ENV_FILE={selector}\n', encoding='utf-8')
+        assert linux.database_input_files(cfg)[1] == runtime
+        assert linux._capture_watch_configured(cfg) is True
+        result = subprocess.run(
+            [
+                'bash', '-c',
+                'source "$1"; _deploy_channel_resolve_runtime_env_file "$2" test "$3"; '
+                'printf "%s\\n" "$DEPLOY_CHANNEL_RUNTIME_ENV_FILE"',
+                'test', str(helper), str(root), str(pin),
+            ],
+            cwd=REPO_ROOT,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == str(runtime)
+
+
+def test_vm_and_deploy_shell_reject_directory_runtime_selector_source(tmp_path):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root = tmp_path / 'checkout'
+    pin_dir = root / 'config/deploy'
+    pin_dir.mkdir(parents=True)
+    pin = pin_dir / 'test.env'
+    pin.mkdir()
+    cfg = linux.LinuxConfig('test', root, tmp_path / 'data', 1000, 1000, '', '')
+    with pytest.raises(PostgresDeployError):
+        linux.database_input_files(cfg)
+
+    helper = REPO_ROOT / 'scripts/lib/deploy_channel_compose.sh'
+    result = subprocess.run(
+        [
+            'bash', '-c',
+            'source "$1"; _deploy_channel_resolve_runtime_env_file "$2" test "$3"',
+            'test', str(helper), str(root), str(pin),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+
+
+def test_vm_selector_failure_records_abort_and_releases_channel_lock(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    _, journal, plan, identifier = _bws_worker(tmp_path, _BwsVmEffects())
+    root = tmp_path / 'checkout'
+    (root / 'config/deploy').mkdir(parents=True)
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    effects = linux.LinuxEffects(config)
+    effects.validate_plan = lambda selected: selected.validate()
+
+    def reject_selection(_selected):
+        raise PostgresDeployError()
+
+    effects.select_active_plan = reject_selection
+    effects.quiescent = lambda: pytest.fail('read-only selection refusal needs no Compose probe')
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: effects)
+    supervisor = linux.DeploymentSupervisor(config)
+
+    result = supervisor.request({
+        'action': 'prepare', 'operation_id': identifier, 'plan': plan.__dict__, 'bootstrap': False,
+    })
+    assert supervisor.operation is not None
+    assert supervisor.operation.finished.wait(5)
+    assert result['receipt']['terminal_result'] == 'aborted'
+    receipt = journal.read()
+    assert receipt is not None and receipt.stage == 'aborted'
+    assert not (root / 'config/deploy/test.env.lock').exists()
+
+
+def test_supervisor_rejects_changed_root_config_before_admission(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+    from uuid import uuid4
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    startup_config = linux.LinuxConfig(
+        'test', tmp_path / 'checkout', tmp_path / 'data', 1000, 1000,
+        '00000000-0000-4000-8000-000000000001',
+        '00000000-0000-4000-8000-000000000002',
+        tmp_path / 'runtime-a.env',
+    )
+    current_config = replace(startup_config, runtime_env_file=tmp_path / 'runtime-b.env')
+    monkeypatch.setattr(linux.LinuxConfig, 'journal', property(lambda _self: journal))
+    monkeypatch.setattr(
+        linux.LinuxConfig, 'load',
+        classmethod(lambda _cls, _channel: current_config),
+    )
+    created_effects = []
+    monkeypatch.setattr(
+        linux, 'LinuxEffects',
+        lambda _config: created_effects.append('created') or pytest.fail('stale config reached effects'),
+    )
+    supervisor = linux.DeploymentSupervisor(startup_config)
+    plan = DeployPlan('test', 'a' * 40, ('db', 'api'), ('postgres-db', 'postgres-api'))
+
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({
+            'action': 'prepare', 'operation_id': str(uuid4()),
+            'plan': plan.__dict__, 'bootstrap': False,
+        })
+
+    assert supervisor.operation is None
+    assert created_effects == []
+    assert journal.read() is None
 
 
 def test_deploy_lost_ack_reconciles_matching_remote_terminal_receipt(tmp_path):
@@ -2489,6 +3415,15 @@ def test_postgres_bootstrap_retry_reuses_stored_secret_after_interruption(tmp_pa
     with pytest.raises(PostgresDeployError):
         deploy_from_host(admin, remote, plan, qualified=lambda: None)
     provider.put = original
+    prior_remote_events = list(remote.events)
+
+    def reject_recovery_without_qualification():
+        assert remote.events == prior_remote_events
+        raise PostgresDeployError()
+
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, remote, plan, qualified=reject_recovery_without_qualification)
+    assert remote.events == prior_remote_events
     assert deploy_from_host(admin, remote, plan, qualified=lambda: None).stage == 'committed'
     assert sum(call[0] == 'put' for call in provider.calls) == 1
 
@@ -2532,6 +3467,7 @@ def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(tmp_pat
         assert release.wait(5)
 
     effects.channel_lock, effects.activate = channel_lock, activate
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: effects.config)
     monkeypatch.setattr(linux, 'LinuxEffects', lambda cfg: effects)
     supervisor = linux.DeploymentSupervisor(effects.config)
     request = {'action': 'prepare', 'operation_id': identifier, 'plan': asdict(plan), 'bootstrap': False}
@@ -2557,6 +3493,135 @@ def test_deploy_ssh_loss_joins_same_supervised_operation_until_quiescent(tmp_pat
     assert 'fake-postgres-canary' not in (journal.directory / 'test.request.json').read_text()
 
 
+def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.postgres_deploy import DeployReceipt
+
+    controller = SimpleNamespace(directory=tmp_path)
+    captured = []
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'SshDeployRemote', lambda _host: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+
+    def deploy(_admin, _remote, plan, *, qualified, allow_bootstrap):
+        captured.append((plan, allow_bootstrap))
+        return DeployReceipt(str(uuid4()), 'test', 'deploy', 'committed', 'committed')
+
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+
+    assert host.main(['test', 'a' * 40]) == 0
+    assert captured[-1][0].ack_forward_only is False
+    assert captured[-1][1] is True
+    assert host.main(['test', 'b' * 40, '--ack-forward-only']) == 0
+    assert captured[-1][0].ack_forward_only is True
+    assert captured[-1][1] is True
+    assert host.main(['test', 'c' * 40, '--existing-secrets-only']) == 0
+    assert captured[-1][1] is False
+
+
+def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_path, monkeypatch):
+    from dataclasses import asdict, replace
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+    from app.ops.postgres_deploy_linux import DeploymentSupervisor, SshDeployRemote
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), False)
+    journal.bind_request(operation_id, plan, False, create=True)
+    journal.write(operation_id, 'prepared')
+    journal.write(operation_id, 'preflighted')
+    journal.write(operation_id, 'materialized')
+    journal.write(operation_id, 'activating')
+    receipt = journal.write(operation_id, 'committed')
+    supervisor = DeploymentSupervisor(SimpleNamespace(channel='test', journal=journal))
+    transmitted = []
+
+    def ssh(_argv, **kwargs):
+        transmitted.append(json.loads(kwargs['input']))
+        return SimpleNamespace(returncode=0, stdout='{"pending": true}')
+
+    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    remote = SshDeployRemote('ygg-test')
+    remote._request('join', operation_id, plan)
+    request = transmitted[-1]
+
+    assert type(request['plan']['ack_forward_only']) is bool
+    assert request['plan']['ack_forward_only'] is False
+    assert json.loads((journal.directory / 'test.request.json').read_text())['plan']['ack_forward_only'] is False
+    assert supervisor.request(request)['receipt'] == asdict(receipt)
+    remote._request('join', operation_id, replace(plan, ack_forward_only=True))
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(transmitted[-1])
+
+    malformed = asdict(plan)
+    malformed['ack_forward_only'] = 1
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({**request, 'plan': malformed})
+    unknown = {**asdict(plan), 'unbound_authority': True}
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({**request, 'plan': unknown})
+
+
+@pytest.mark.parametrize('ack_forward_only', [False, True])
+def test_bws_activation_uses_only_request_bound_forward_only_ack(tmp_path, monkeypatch, ack_forward_only):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan
+
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    journal.write(operation_id, 'prepared')
+    journal.write(operation_id, 'preflighted')
+    journal.write(operation_id, 'materialized')
+    journal.write(operation_id, 'activating')
+    source = tmp_path / 'tmpfs'
+    source.mkdir()
+    cfg = SimpleNamespace(channel='test', journal=journal, source_directory=source, root=tmp_path)
+    effects = linux.LinuxEffects(cfg)
+    effects.lock_fd = 123
+    effects.source = SimpleNamespace(verify=lambda: None)
+    effects.environment = lambda: {
+        'HOST_SECRET_PROVIDER': 'bws', 'DEPLOY_ACK_FORWARD_ONLY': '1',
+    }
+    effects.consumer_values = {
+        'heimdal-api-ingress': {}, 'heimdal-capture-watch': {}, 'heimdal-raw-migrate': {},
+    }
+    effects.active_consumers = (*DATABASE_CONSUMERS, 'heimdal-api-ingress')
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), ack_forward_only,
+    )
+    calls = []
+
+    def command(argv, **kwargs):
+        calls.append((argv, kwargs))
+        assert kwargs['pass_fds'] == (123,)
+        assert all(path.stat().st_mode & 0o777 == 0o600 for path in source.iterdir())
+        return ''
+
+    monkeypatch.setattr(linux, '_command', command)
+    effects.activate(plan)
+
+    assert len(calls) == 1
+    argv, kwargs = calls[0]
+    assert ('--ack-forward-only' in argv) is ack_forward_only
+    assert 'DEPLOY_ACK_FORWARD_ONLY' not in kwargs['env']
+    assert list(source.iterdir()) == []
+
+
 def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
     from dataclasses import asdict
     from types import SimpleNamespace
@@ -2571,6 +3636,428 @@ def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
             supervisor.request({'action': action, 'operation_id': identifier, 'plan': asdict(plan), 'bootstrap': False})
     assert supervisor.operation is None
     assert journal.read().terminal_result is None
+
+
+@pytest.mark.parametrize("hostile_marker,expected_stage,sink", [
+    ("", "service_recreate", "ready"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=service_recreate secret-canary", "unknown", "ready"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=https://private.invalid/secret-canary", "unknown", "ready"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=committed", "unknown", "ready"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=health", "unknown", "ready"),
+    ("INVALID_UTF8", "unknown", "ready"),
+    ("", "service_recreate", "missing"),
+    ("", "service_recreate", "refused"),
+    ("", "service_recreate", "full"),
+])
+def test_supervised_failure_diagnostics_expose_only_allowlisted_stage(
+    tmp_path: Path, hostile_marker: str, expected_stage: str, sink: str,
+) -> None:
+    from app.ops.postgres_deploy import DeployJournal
+
+    unit = (REPO_ROOT / "config/systemd/yggdrasil-bws-deploy@.service").read_text().splitlines()
+    assert "StandardOutput=null" in unit
+    assert "StandardError=null" in unit
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    target_sha = _commit_prefloor_successor(root, "native failed-child diagnostic")
+    _seed_previous_pin(root, previous_sha)
+    env.update(FAKE_SHA=target_sha, FAKE_DOCKER_FAIL_MATCH="up -d --force-recreate api worker watcher",
+               FAKE_DEPLOY_HOSTILE_MARKER=hostile_marker)
+    # Compose already captures its own command diagnostics. Inject hostile
+    # captured child streams at the script boundary that the adapter reads.
+    script = root / "scripts/deploy_channel.sh"
+    injection = '''printf '%s\\n' 'raw-stdout-canary'
+printf '%s\\n' 'postgresql://fixture:secret-canary@private.invalid/db /private/fixture' >&2
+if [ "${FAKE_DEPLOY_HOSTILE_MARKER:-}" = "INVALID_UTF8" ]; then
+  printf 'YGGDRASIL_DEPLOY_FAILURE_STAGE=\\377\\n' >&2
+elif [ -n "${FAKE_DEPLOY_HOSTILE_MARKER:-}" ]; then
+  printf '%s\\n' "$FAKE_DEPLOY_HOSTILE_MARKER" >&2
+fi
+'''
+    script.write_text(script.read_text().replace("set -euo pipefail\n", "set -euo pipefail\n" + injection, 1))
+    source = tmp_path / "private-handles"
+    source.mkdir()
+    journal_dir = tmp_path / "journal"
+    journal = DeployJournal(journal_dir, "dev")
+    child = '''import os
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+from uuid import uuid4
+from app.ops import postgres_deploy_linux as linux
+from app.ops.host_secret_contract import DATABASE_CONSUMERS
+from app.ops.postgres_deploy import DeployJournal, DeployPlan, DeployWorker, PostgresDeployError
+root, journal_socket, revision, source, journal_dir = sys.argv[1:6]
+linux._DEPLOY_JOURNAL_SOCKET = journal_socket  # private test seam, no runtime selector
+journal = DeployJournal(Path(journal_dir), "dev")
+effects = linux.LinuxEffects(SimpleNamespace(channel="dev", root=Path(root),
+                                            source_directory=Path(source), journal=journal))
+effects.source = SimpleNamespace(verify=lambda: None)
+effects.environment = lambda: os.environ.copy()
+effects.active_consumers = (*DATABASE_CONSUMERS, "heimdal-api-ingress")
+effects.consumer_values = {"heimdal-api-ingress": {}, "heimdal-capture-watch": {}, "heimdal-raw-migrate": {}}
+effects.preflight = lambda _plan: "synthetic-postgres-canary"
+effects.initialized = lambda: False
+effects.materialize = lambda _password: None
+effects.quiescent = lambda: True
+plan = DeployPlan("dev", revision, tuple(DATABASE_CONSUMERS.values()),
+                  (*DATABASE_CONSUMERS, "heimdal-api-ingress"))
+operation_id = str(uuid4())
+journal.bind_request(operation_id, plan, False, create=True)
+worker = DeployWorker(journal, effects)
+with (Path(source).parent / "lock-handle").open("w") as lock:
+    effects.lock_fd = lock.fileno()
+    worker.prepare(operation_id)
+    try:
+        worker.run(operation_id, plan)
+    except PostgresDeployError:
+        raise SystemExit(73)
+raise SystemExit(99)
+'''
+    # Short private paths satisfy the platform Unix-socket address limit.
+    with tempfile.TemporaryDirectory(prefix="j5915-", dir="/tmp") as socket_dir:
+        journal_socket = Path(socket_dir) / "journal.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver, ExitStack() as fillers:
+            if sink in {"ready", "full"}:
+                receiver.bind(str(journal_socket))
+            elif sink == "refused":
+                journal_socket.touch()
+            prefill = b"queue-prefill"
+            if sink == "full":
+                receiver.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
+                # A sender can exhaust its own buffer before the receiver is
+                # full. Retain each sender and require a fresh empty sender to
+                # fail its first send, as the native emitter must do below.
+                for _ in range(64):
+                    filler = fillers.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM))
+                    filler.setblocking(False)
+                    for sent in range(4096):
+                        try:
+                            filler.sendto(prefill, str(journal_socket))
+                        except OSError as error:
+                            assert error.errno in {errno.EAGAIN, errno.EWOULDBLOCK, errno.ENOBUFS}
+                            break
+                    else:
+                        pytest.fail("private datagram sender did not saturate")
+                    if sent == 0:
+                        break
+                else:
+                    pytest.fail("private datagram receiver did not saturate for a fresh sender")
+            result = subprocess.run(
+                [sys.executable, "-c", child, str(root), str(journal_socket), target_sha,
+                 str(source), str(journal_dir), "argv-secret-canary"],
+                cwd=REPO_ROOT, env={**env, "ENV_SECRET_CANARY": "env-secret-canary"},
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False, timeout=20,
+            )
+            assert result.returncode == 73
+            if sink == "ready":
+                receiver.settimeout(2)
+                payload = receiver.recv(4096)
+                assert payload == (
+                    "PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n"
+                    f"MESSAGE=native deployment failure: stage={expected_stage} class=command_failed\n"
+                ).encode("ascii")
+                receiver.settimeout(0.05)
+                with pytest.raises(socket.timeout):
+                    receiver.recv(4096)  # exactly one event, no retry
+            elif sink == "full":
+                receiver.setblocking(False)
+                while True:
+                    try:
+                        assert receiver.recv(4096) == prefill
+                    except BlockingIOError:
+                        break
+    assert journal.read().stage == "activating"
+    assert journal.read().terminal_result is None
+    assert list(source.iterdir()) == []
+
+
+@pytest.mark.parametrize(('service', 'state', 'expected'), [
+    ('api', 'running', True),
+    ('migrate', 'running', False),
+    ('instance-state-init', 'running', False),
+    ('migrate', 'exited', True),
+])
+def test_linux_quiescence_waits_for_one_shot_compose_services(monkeypatch, service, state, expected):
+    import json
+    from app.ops import postgres_deploy_linux as linux
+
+    effects = object.__new__(linux.LinuxEffects)
+    monkeypatch.setattr(effects, '_running_one_shots', lambda: False)
+    monkeypatch.setattr(
+        effects, 'compose',
+        lambda *args: json.dumps([{'Service': service, 'State': state, 'Health': ''}]),
+    )
+
+    assert effects.quiescent() is expected
+
+
+def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    import json
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    _, journal, plan, operation_id = _bws_worker(tmp_path, _BwsVmEffects())
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    root = tmp_path / 'checkout'
+    deploy_dir = root / 'config/deploy'
+    deploy_dir.mkdir(parents=True)
+    lock_dir = deploy_dir / 'test.env.lock'
+    lock_dir.mkdir(mode=0o700)
+    (lock_dir / 'bws-owner').touch(mode=0o600)
+    pin = deploy_dir / 'test.pin'
+    pending_marker = deploy_dir / 'test.migration-pending'
+    data = tmp_path / 'data/state'
+    for path, content in ((pin, b'prior-pin\n'), (pending_marker, b'forward-only\n'), (data, b'preserve\n')):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    compose_state = {'rows': [{'Service': 'migrate', 'State': 'exited', 'Health': ''}]}
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'compose',
+        lambda _self, *_args: json.dumps(compose_state['rows']),
+    )
+    monkeypatch.setattr(linux.LinuxEffects, '_running_one_shots', lambda _self: False)
+    supervisor = linux.DeploymentSupervisor(config)
+
+    request = {
+        'action': 'reconcile-failed', 'operation_id': operation_id,
+        'plan': asdict(plan), 'bootstrap': False,
+    }
+    original_retire = linux.LinuxEffects.retire_reconciled_channel_lock
+
+    def interrupt_cleanup(_handle):
+        raise PostgresDeployError()
+
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(interrupt_cleanup)
+    )
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(request)
+    assert journal.read().terminal_result == 'failed'
+    assert lock_dir.is_dir()
+
+    monkeypatch.setattr(
+        linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(original_retire)
+    )
+    # A terminal receipt can outlive lock retirement. Do not finish cleanup
+    # while Docker still owns the one-shot migration container.
+    compose_state['rows'] = [{'Service': 'migrate', 'State': 'running', 'Health': ''}]
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({**request, 'action': 'join'})
+    assert lock_dir.is_dir()
+
+    compose_state['rows'] = [{'Service': 'migrate', 'State': 'exited', 'Health': ''}]
+    # A normal same-ID join must finish interrupted cleanup before exposing the
+    # already-written failed receipt to a host retry.
+    ordinary_retry = {**request, 'action': 'join'}
+    result = supervisor.request(ordinary_retry)
+
+    assert result['receipt']['stage'] == 'failed'
+    assert result['receipt']['terminal_result'] == 'failed'
+    assert journal.read().evidence().result == 'failed'
+    assert not lock_dir.exists()
+    assert pin.read_bytes() == b'prior-pin\n'
+    assert pending_marker.read_bytes() == b'forward-only\n'
+    assert data.read_bytes() == b'preserve\n'
+    assert supervisor.request(request) == result
+
+    # After exact cleanup a new operation can acquire the channel lock.
+    from uuid import uuid4
+    next_effects = linux.LinuxEffects(config)
+    next_effects.operation_id = str(uuid4())
+    with next_effects.channel_lock():
+        assert lock_dir.is_dir()
+    assert lock_dir.is_dir()  # nonterminal new operation keeps its admission lock
+    (lock_dir / 'bws-owner').unlink()
+    lock_dir.rmdir()
+
+
+@pytest.mark.parametrize('blocker', [
+    'live-worker', 'held-lock', 'non-quiescent', 'running-migrate',
+    'running-instance-state-init', 'changed-request', 'different-operation', 'malformed-journal',
+])
+def test_failed_bws_activation_reconciliation_preserves_ambiguous_state(tmp_path, monkeypatch, blocker):
+    from dataclasses import asdict, replace
+    import fcntl
+    import json
+    import os
+    import threading
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    _, journal, plan, operation_id = _bws_worker(tmp_path, _BwsVmEffects())
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    root = tmp_path / 'checkout'
+    deploy_dir = root / 'config/deploy'
+    deploy_dir.mkdir(parents=True)
+    lock_dir = deploy_dir / 'test.env.lock'
+    lock_dir.mkdir(mode=0o700)
+    marker = lock_dir / 'bws-owner'
+    marker.touch(mode=0o600)
+    pin = deploy_dir / 'test.pin'
+    migration_marker = deploy_dir / 'test.migration-pending'
+    data = tmp_path / 'data/state'
+    for path, content in ((pin, b'prior-pin\n'), (migration_marker, b'pending\n'), (data, b'preserve\n')):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    before = {
+        'journal': (journal.directory / 'test.json').read_bytes(),
+        'request': (journal.directory / 'test.request.json').read_bytes(),
+        'marker': marker.read_bytes(), 'pin': pin.read_bytes(),
+        'migration': migration_marker.read_bytes(), 'data': data.read_bytes(),
+    }
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    compose_row = {'Service': 'api', 'State': 'running', 'Health': ''}
+    if blocker == 'non-quiescent':
+        compose_row = {'Service': 'api', 'State': 'restarting', 'Health': ''}
+    elif blocker in {'running-migrate', 'running-instance-state-init'}:
+        service = 'migrate' if blocker == 'running-migrate' else 'instance-state-init'
+        compose_row = {'Service': service, 'State': 'running', 'Health': ''}
+    monkeypatch.setattr(linux.LinuxEffects, 'compose', lambda _self, *_args: json.dumps([compose_row]))
+    monkeypatch.setattr(linux.LinuxEffects, '_running_one_shots', lambda _self: False)
+    supervisor = linux.DeploymentSupervisor(config)
+    if blocker == 'live-worker':
+        supervisor.operation = SimpleNamespace(
+            operation_id=operation_id, plan=plan, bootstrap=False, failed=True,
+            finished=threading.Event(), thread=SimpleNamespace(is_alive=lambda: True),
+        )
+        supervisor.operation.finished.set()
+    if blocker == 'malformed-journal':
+        (journal.directory / 'test.json').write_text('{"invalid":true}\n')
+        before['journal'] = (journal.directory / 'test.json').read_bytes()
+    request_plan = replace(plan, revision='b' * 40) if blocker == 'changed-request' else plan
+    request = {
+        'action': 'reconcile-failed',
+        'operation_id': str(uuid4()) if blocker == 'different-operation' else operation_id,
+        'plan': asdict(request_plan), 'bootstrap': False,
+    }
+    held_fd = None
+    if blocker == 'held-lock':
+        held_fd = os.open(marker, os.O_RDWR)
+        fcntl.flock(held_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        with pytest.raises(PostgresDeployError):
+            supervisor.request(request)
+    finally:
+        if held_fd is not None:
+            os.close(held_fd)
+
+    assert (journal.directory / 'test.json').read_bytes() == before['journal']
+    assert (journal.directory / 'test.request.json').read_bytes() == before['request']
+    assert marker.read_bytes() == before['marker']
+    assert pin.read_bytes() == before['pin']
+    assert migration_marker.read_bytes() == before['migration']
+    assert data.read_bytes() == before['data']
+    assert lock_dir.is_dir()
+
+
+def test_host_reconciles_matching_failed_bws_deploy_receipt(monkeypatch, tmp_path):
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import DeployReceipt, PostgresDeployError
+
+    controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert not resumed
+        operation_id = operation.operation_id
+        operation.prepare_mutation()
+    captured = []
+    ordinary_retries = []
+
+    class Admin:
+        def __init__(self, _provider, *, controller):
+            self.controller = controller
+
+        def check_selected(self, *_args):
+            return []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def prepare(self, selected_id, plan, bootstrap):
+            assert selected_id == operation_id
+            assert plan.revision == 'a' * 40
+            assert bootstrap is False
+            ordinary_retries.append(selected_id)
+            # Models refusal while the remote failed receipt still owns its lock.
+            raise PostgresDeployError()
+
+        def reconcile_failed(self, selected_id, plan):
+            assert selected_id == operation_id
+            assert plan.revision == 'a' * 40
+            captured.append(selected_id)
+            return DeployReceipt(selected_id, 'test', 'deploy', 'failed', 'failed')
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', Admin)
+
+    assert host.main(['dev', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 78
+    assert captured == []
+    with controller._locked_journal() as descriptor:
+        still_pending = controller._pending(descriptor)
+    assert still_pending is not None and still_pending['operation_id'] == operation_id
+
+    assert host.main(['test', 'a' * 40, '--existing-secrets-only']) == 78
+    assert ordinary_retries == [operation_id]
+    with controller._locked_journal() as descriptor:
+        still_pending = controller._pending(descriptor)
+    assert still_pending is not None and still_pending['operation_id'] == operation_id
+
+    assert host.main(['test', 'a' * 40, '--existing-secrets-only', '--reconcile-pending']) == 0
+    assert captured == [operation_id]
+    with controller._locked_journal() as descriptor:
+        assert controller._pending(descriptor) is None
+
+
+def test_ssh_reconcile_failed_sends_exact_same_id_and_existing_secrets_mode(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployPlan
+
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), True)
+    response = {
+        'receipt': {
+            'operation_id': operation_id, 'channel': 'test', 'kind': 'deploy',
+            'stage': 'failed', 'terminal_result': 'failed',
+        }
+    }
+    calls = []
+
+    def ssh(argv, **kwargs):
+        calls.append((argv, json.loads(kwargs['input'])))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(response))
+
+    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    receipt = linux.SshDeployRemote('ygg-test').reconcile_failed(operation_id, plan)
+
+    assert receipt.operation_id == operation_id
+    assert receipt.terminal_result == 'failed'
+    assert calls[0][1] == {
+        'action': 'reconcile-failed', 'operation_id': operation_id,
+        'plan': {
+            'channel': 'test', 'revision': 'a' * 40,
+            'services': ['db'], 'consumers': ['postgres-db'],
+            'ack_forward_only': True,
+        },
+        'bootstrap': False,
+    }
 
 
 def test_vm_channel_lock_is_retained_until_matching_terminal_receipt(tmp_path):
@@ -2615,6 +4102,8 @@ def test_deploy_does_not_create_plaintext_postgres_env_file(tmp_path, monkeypatc
     effects.source = SimpleNamespace(verify=lambda: None)
     effects.environment = lambda: {'HOST_SECRET_PROVIDER': 'bws'}
     effects.consumer_values = {'heimdal-api-ingress': {}, 'heimdal-capture-watch': {}, 'heimdal-raw-migrate': {}}
+    effects.active_consumers = (*DATABASE_CONSUMERS, 'heimdal-api-ingress',
+                                'heimdal-capture-watch', 'heimdal-raw-migrate')
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()), tuple(DATABASE_CONSUMERS))
     calls = []
     def command(argv, **kwargs):
@@ -2705,6 +4194,8 @@ def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, chann
     target = _commit_har_raw_migration(root, 'e7b4c9d2a6f1_heimdal_raw_representation.py')
     env.update(FAKE_SHA=target, DEPLOY_ACK_FORWARD_ONLY='1', HOST_SECRET_PROVIDER='bws', BWS_DATABASE_TARGET='local',
                FAKE_SECURITY_EVENT_LOG=env['FAKE_DEPLOY_EVENT_LOG'])
+    _set_bws_consumer_selection(env, raw_migration=True)
+    _set_native_bws_operation_context(root, env)
     _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
     if channel == 'prod':
         _configure_bws_retry_driver(tmp_path, env)
@@ -2734,7 +4225,7 @@ if os.environ.get('FAKE_BWS_REJECT_RECHECK') == '1' and prior == 1:
     if reject_recheck:
         assert result.returncode == 78
         assert not any(event.startswith('docker ') for event in events)
-        assert 'migration raw-key preflight failed' in result.stderr
+        assert 'active secret consumer preflight failed: output=redacted' in result.stderr
     else:
         assert result.returncode == 0, result.stdout + result.stderr
         second_guard = [i for i, event in enumerate(events) if event == 'bws-guard'][1]
@@ -2783,10 +4274,12 @@ def test_linux_effects_wrong_overridden_role_cannot_borrow_default_role_proof(tm
                           password_file=source / 'password', source_directory=source, journal=journal,
                           reader=lambda: None)
     plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate'))
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
     monkeypatch.setattr(linux, 'vm_selected_values', lambda selected, reader:
                         {name: {'postgres.password': 'fake-role-canary'} if name in DATABASE_CONSUMERS else {}
                          for name in selected.consumers})
+    monkeypatch.setattr(linux, '_capture_watch_configured', lambda _cfg: False)
+    monkeypatch.setattr(linux, '_raw_representation_migration_pending', lambda *_args: False)
     commands, connections = [], []
     def command(argv, **kwargs):
         commands.append(argv)
@@ -2858,6 +4351,8 @@ def test_linux_effects_wrong_overridden_role_cannot_borrow_default_role_proof(tm
 def test_bws_prod_retry_preflight_uses_file_connection_and_preserves_availability_policy(tmp_path, host, failure):
     root, env, target = _deploy_harness(tmp_path)
     env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _set_bws_consumer_selection(env, raw_migration=False)
+    _set_native_bws_operation_context(root, env)
     _configure_prod_retry_preflight(root, env, tmp_path,
         rows=[('panel.scan.requested', {'_worker_retry_count': 3}, 0)],
         unreachable=failure == 'unreachable')
@@ -2928,7 +4423,10 @@ def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, 
     lock.mkdir()
     password = tmp_path / 'password'
     password.write_text('fake-target-binding-password')
+    runtime_env_file = tmp_path / 'runtime.env'
+    runtime_env_file.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
     cfg = SimpleNamespace(root=tmp_path, channel='test', password_file=password,
+                          runtime_env_file=runtime_env_file,
                           reader=lambda: object(), journal=SimpleNamespace(read=lambda:
                           SimpleNamespace(stage='activating', operation_id='operation')))
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda channel: cfg)
@@ -2940,7 +4438,12 @@ def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, 
     with (lock / 'bws-owner').open('w+') as owner:
         monkeypatch.setattr(os, 'environ', {'DATABASE_URL': 'postgresql://app@' + host + ':5432/app_test',
             'BWS_DEPLOY_LOCK_FD': str(owner.fileno()), 'BWS_DEPLOY_OPERATION_ID': 'operation',
-            'BWS_DATABASE_TARGET': target, 'COMPOSE_PROFILES': profiles})
+            'BWS_DEPLOY_RUNTIME_ENV_FILE': str(runtime_env_file),
+            'BWS_DATABASE_TARGET': target, 'COMPOSE_PROFILES': profiles,
+            'BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED': '0',
+            'BWS_EXPECTED_RAW_MIGRATION_PENDING': '0',
+            'BWS_DEPLOY_TARGET_REVISION': 'a' * 40,
+            'DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING': '0'})
         if accepted:
             linux.inherited_worker_guard('test', 'up')
             assert reads == ['source']
@@ -2956,6 +4459,7 @@ def test_bws_prod_preflight_rejects_container_loopback_before_driver(tmp_path, k
     from urllib.parse import urlencode
     root, env, target = _deploy_harness(tmp_path)
     env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _set_bws_consumer_selection(env, raw_migration=False)
     _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     _configure_bws_retry_driver(tmp_path, env)
     fields = {'host': 'database.example.invalid', 'port': '5432', 'user': 'reporter', 'dbname': 'custom', key: address}
@@ -2977,6 +4481,7 @@ def test_bws_prod_preflight_rejects_container_loopback_before_driver(tmp_path, k
 def test_bws_prod_preflight_rejects_libpq_socket_and_default_targets_before_driver(tmp_path, dsn):
     root, env, target = _deploy_harness(tmp_path)
     env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
+    _set_bws_consumer_selection(env, raw_migration=False)
     _configure_prod_retry_preflight(root, env, tmp_path, rows=[])
     _configure_bws_retry_driver(tmp_path, env)
     env['DATABASE_URL'] = env['DB_DSN'] = dsn
@@ -2988,3 +4493,988 @@ def test_bws_prod_preflight_rejects_libpq_socket_and_default_targets_before_driv
     assert not (root / 'config/deploy/prod.env').exists()
     assert not any(event.startswith('docker ') for event in _deploy_events(env))
     assert 'fake-preflight-canary' not in result.stdout + result.stderr
+
+
+def _install_bws_identity_guard_fixture(root: Path) -> None:
+    (root / "app/ops/postgres_deploy_linux.py").write_text(
+        "import os, sys\n"
+        "assert sys.argv[1] == 'guard'\n"
+        "with open(os.environ['FAKE_DEPLOY_EVENT_LOG'], 'a') as stream:\n"
+        "    stream.write('bws-guard\\n')\n",
+        encoding="utf-8",
+    )
+
+
+def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    runtime_uid = os.getuid()
+    runtime_gid = os.getgid()
+    inherited_uid = "0" if runtime_uid != 0 else "1"
+    inherited_gid = "0" if runtime_gid != 0 else "1"
+    (root / "tmp/runtime.env").write_text(
+        f"LOCAL_UID={runtime_uid}\nLOCAL_GID={runtime_gid}\nTTS_ENABLED=false\n",
+        encoding="utf-8",
+    )
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(f"APP_IMAGE_TAG={sha}\n", encoding="utf-8")
+    _install_bws_identity_guard_fixture(root)
+    env.update(
+        FAKE_SHA=sha,
+        FAKE_CAPTURE_RUNTIME_IDENTITY="1",
+        HOST_SECRET_PROVIDER="bws",
+        BWS_DATABASE_TARGET="local",
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="0",
+        BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        LOCAL_UID=inherited_uid,
+        LOCAL_GID=inherited_gid,
+    )
+    _set_native_bws_operation_context(root, env)
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    identity_events = [event for event in events if event.startswith("compose identity ")]
+    assert identity_events
+    assert all(f"uid={runtime_uid} gid={runtime_gid}" in event for event in identity_events)
+    assert any("instance-state-init" in event for event in identity_events)
+    assert not any(
+        f"uid={inherited_uid} gid={inherited_gid}" in event for event in identity_events
+    )
+
+
+def test_root_bws_deploy_accepts_runtime_owned_host_state_before_mutation(
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    test_root = runtime_reachable_test_root(tmp_path, request)
+    root, env, sha = _deploy_harness(test_root)
+    actual_root = os.geteuid() == 0
+    runtime_uid = 65534 if actual_root else os.getuid()
+    runtime_gid = 65534 if actual_root else os.getgid()
+    (root / "tmp/runtime.env").write_text(
+        f"LOCAL_UID={runtime_uid}\nLOCAL_GID={runtime_gid}\nTTS_ENABLED=false\n",
+        encoding="utf-8",
+    )
+    pin_path = root / "config/deploy/dev.env"
+    pin_path.write_text(f"APP_IMAGE_TAG={sha}\n", encoding="utf-8")
+    ownership = Path(env["INSTANCE_OWNERSHIP_HOST_STATE_DIR"])
+    ownership.mkdir(mode=0o700)
+    if actual_root:
+        os.chown(ownership, runtime_uid, runtime_gid)
+    ledger = ownership / "ownership-ledger.json"
+    ledger.write_text("existing-runtime-ledger\n", encoding="utf-8")
+    ledger.chmod(0o600)
+    if actual_root:
+        os.chown(ledger, runtime_uid, runtime_gid)
+
+    # The production helper reads its shell caller identity through `id`.
+    # Reporting the BWS root supervisor here exercises that branch while its
+    # embedded Python still runs as this fixture's runtime UID/GID.
+    fake_id = Path(env["PATH"].split(os.pathsep)[0]) / "id"
+    fake_id.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "${1:-}" in\n'
+        '  -u) printf "host-state-identity\\n" >> "${FAKE_DEPLOY_EVENT_LOG:?}"; printf "0\\n" ;;\n'
+        f'  -g) printf "{runtime_gid}\\n" ;;\n'
+        "  *) exit 2 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_id.chmod(0o755)
+    _install_bws_identity_guard_fixture(root)
+    env.update(
+        FAKE_SHA=sha,
+        FAKE_CAPTURE_RUNTIME_IDENTITY="1",
+        HOST_SECRET_PROVIDER="bws",
+        BWS_DATABASE_TARGET="local",
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="0",
+        BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        LOCAL_UID=str(runtime_uid),
+        LOCAL_GID=str(runtime_gid),
+    )
+    _set_native_bws_operation_context(root, env)
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    assert "host-state-identity" in events
+    assert "bws-guard" in events
+    assert any("instance-state-init" in event for event in events)
+    assert pin_path.is_file()
+    assert ledger.read_text(encoding="utf-8") == "existing-runtime-ledger\n"
+    ledger_metadata = ledger.stat()
+    assert ledger_metadata.st_uid == runtime_uid
+    assert ledger_metadata.st_gid == runtime_gid
+    assert ledger_metadata.st_mode & 0o777 == 0o600
+    ownership_metadata = ownership.stat()
+    assert ownership_metadata.st_uid == runtime_uid
+    assert ownership_metadata.st_gid == runtime_gid
+    assert ownership_metadata.st_mode & 0o777 == 0o700
+
+    # A later rollback reader must accept a private receipt owned by the
+    # configured runtime even though the deployment shell represents root.
+    floor_receipt = ownership / "settings-rebind-runtime-floor-dev.json"
+    floor_receipt.write_text(
+        '{"channel":"dev","minimum_settings_rebind_runtime":"1",'
+        '"phase":"pending","schema":"agentic-pkm.settings-rebind-runtime-floor.v1"}\n',
+        encoding="utf-8",
+    )
+    floor_receipt.chmod(0o600)
+    if actual_root:
+        os.chown(floor_receipt, runtime_uid, runtime_gid)
+    original_pin = pin_path.read_text(encoding="utf-8")
+    Path(env["FAKE_DEPLOY_EVENT_LOG"]).write_text("", encoding="utf-8")
+
+    rollback = _run_rollback(root, env, sha)
+
+    assert rollback.returncode == 78
+    assert "settings rebind floor installation is pending" in rollback.stderr
+    assert pin_path.read_text(encoding="utf-8") == original_pin
+    assert not any(event.startswith("docker ") for event in _deploy_events(env))
+    receipt_metadata = floor_receipt.stat()
+    assert receipt_metadata.st_uid == runtime_uid
+    assert receipt_metadata.st_gid == runtime_gid
+    assert receipt_metadata.st_mode & 0o777 == 0o600
+    if actual_root:
+        runtime_read = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "from pathlib import Path; import sys; print(Path(sys.argv[1]).read_text())",
+                str(floor_receipt),
+            ],
+            user=runtime_uid,
+            group=runtime_gid,
+            extra_groups=[],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert runtime_read.returncode == 0, runtime_read.stderr
+        assert '"phase":"pending"' in runtime_read.stdout
+
+        # Preserve rollback from a durable receipt written by the old root
+        # supervisor; new receipts above are still runtime-owned.
+        floor_receipt.unlink()
+        floor_receipt.write_text(
+            '{"channel":"dev","minimum_settings_rebind_runtime":"1",'
+            '"phase":"pending","schema":"agentic-pkm.settings-rebind-runtime-floor.v1"}\n',
+            encoding="utf-8",
+        )
+        floor_receipt.chmod(0o600)
+        assert floor_receipt.stat().st_uid == 0
+        assert floor_receipt.stat().st_gid == 0
+        Path(env["FAKE_DEPLOY_EVENT_LOG"]).write_text("", encoding="utf-8")
+
+        legacy_receipt_rollback = _run_rollback(root, env, sha)
+
+        assert legacy_receipt_rollback.returncode == 78
+        assert "settings rebind floor installation is pending" in legacy_receipt_rollback.stderr
+        assert pin_path.read_text(encoding="utf-8") == original_pin
+        assert not any(
+            event.startswith("docker ") for event in _deploy_events(env)
+        )
+
+
+@pytest.mark.parametrize(
+    ("runtime_env", "provider", "expected_returncode"),
+    [
+        ("TTS_ENABLED=false\n", "bws", 78),
+        ("LOCAL_UID=1000\n", "bws", 78),
+        ("LOCAL_UID=1000\nLOCAL_GID=1001\nLOCAL_UID=1002\n", "bws", 78),
+        ("LOCAL_UID=bad\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=0\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=1000\nLOCAL_GID=0\n", "bws", 78),
+        ("LOCAL_UID=0000\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=4294967295\nLOCAL_GID=1001\n", "bws", 78),
+        ("LOCAL_UID=1000\nLOCAL_GID=4294967296\n", "bws", 78),
+        ("TTS_ENABLED=false\n", "keychain", 0),
+    ],
+)
+def test_bws_runtime_identity_preflight_fails_before_mutation(
+    tmp_path: Path,
+    runtime_env: str,
+    provider: str,
+    expected_returncode: int,
+) -> None:
+    root, env, sha = _deploy_harness(tmp_path)
+    (root / "tmp/runtime.env").write_text(runtime_env, encoding="utf-8")
+    pin_path = root / "config/deploy/dev.env"
+    original_pin = f"APP_IMAGE_TAG={sha}\n"
+    pin_path.write_text(original_pin, encoding="utf-8")
+    env.update(
+        FAKE_SHA=sha,
+        FAKE_CAPTURE_RUNTIME_IDENTITY="1",
+        HOST_SECRET_PROVIDER=provider,
+        LOCAL_UID="0",
+        LOCAL_GID="0",
+    )
+    if provider == "bws":
+        _install_bws_identity_guard_fixture(root)
+        env.update(
+            BWS_DATABASE_TARGET="local",
+            BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="0",
+            BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        )
+    else:
+        env.pop("LOCAL_UID", None)
+        env.pop("LOCAL_GID", None)
+
+    result = _run_deploy(root, env, sha)
+
+    assert result.returncode == expected_returncode, result.stdout + result.stderr
+    if provider == "bws":
+        assert "runtime identity preflight: blocked reason=" in result.stderr
+        assert pin_path.read_text(encoding="utf-8") == original_pin
+        assert not any(event.startswith("docker ") for event in _deploy_events(env))
+    else:
+        assert "runtime identity preflight: blocked" not in result.stderr
+        identity_events = [
+            event for event in _deploy_events(env) if event.startswith("compose identity ")
+        ]
+        assert identity_events
+        assert all(
+            f"uid={os.getuid()} gid={os.getgid()}" in event
+            for event in identity_events
+        )
+
+
+def test_runtime_identity_snapshot_change_is_rejected(tmp_path: Path) -> None:
+    snapshot = tmp_path / "runtime.env"
+    snapshot.write_text("LOCAL_UID=1001\nLOCAL_GID=1002\n", encoding="utf-8")
+    script = REPO_ROOT / "scripts/lib/deploy_channel_compose.sh"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; LOCAL_UID=1000; LOCAL_GID=1002; export LOCAL_UID LOCAL_GID; '
+            'HOST_SECRET_PROVIDER=bws; '
+            'if deploy_channel_runtime_identity_matches_snapshot "$2"; then exit 0; '
+            'else rc=$?; test "$rc" -eq 78; fi; '
+            'test "$LOCAL_UID" = 1000; test "$LOCAL_GID" = 1002',
+            "runtime-identity-snapshot-test",
+            str(script),
+            str(snapshot),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "runtime identity preflight: blocked reason=runtime_identity_changed" in result.stderr
+
+
+def _native_source_harness(
+    tmp_path: Path, *, channel: str, ready: bool = False
+) -> tuple[Path, dict[str, str], str]:
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
+    _install_bws_identity_guard_fixture(root)
+    api_handle = tmp_path / "api-consumer.env"
+    api_handle.write_text("", encoding="utf-8")
+    api_handle.chmod(0o600)
+    env.update(
+        HOST_SECRET_PROVIDER="bws",
+        HOST_SECRET_RUNTIME_ENV_FILE_API=str(api_handle),
+        BWS_DATABASE_TARGET="local",
+        BWS_DEPLOY_TARGET_REVISION=sha,
+        BWS_DEPLOY_OPERATION_ID="03b3bb2f-6d85-499a-8b45-e397f56812e1",
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="1",
+        BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        APP_IMAGE_TAG=sha,
+        PKM_ENVIRONMENT=channel,
+        FAKE_SOURCE_PROJECTION_READY="1" if ready else "0",
+    )
+    if channel == "prod":
+        _configure_bws_retry_driver(tmp_path, env)
+    (root / "scripts/start_api.sh").write_text(
+        (REPO_ROOT / "scripts/start_api.sh").read_text(encoding="utf-8"), encoding="utf-8",
+    )
+    (root / "scripts/run_migrations.sh").write_text(
+        'printf "api-migrations\\n" >> "${FAKE_DEPLOY_EVENT_LOG:?}"\n', encoding="utf-8",
+    )
+    python = tmp_path / "bin/python"
+    python.write_text(python.read_text(encoding="utf-8").replace(
+        "set -eu\n",
+        '''set -eu
+if [ "${1:-}" = -m ] && [ "${2:-}" = app.instance.runtime ]; then
+  printf 'api-instance-preflight %s\\n' "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  exit "${FAKE_API_INSTANCE_RC:-0}"
+fi
+''', 1,
+    ), encoding="utf-8")
+    site = tmp_path / "api-python-fixture"
+    site.mkdir()
+    (site / "sitecustomize.py").write_text(
+        '''import os
+from pathlib import Path
+from types import SimpleNamespace
+from app.config import paths
+from app import stores, rebuildability
+from app.instance import runtime
+def instance_preflight(**kwargs):
+    if os.environ.get("FAKE_API_CONTEXT_RC", "0") != "0":
+        raise ValueError("hostile context diagnostic")
+runtime._preflight_runtime = instance_preflight
+paths.resolve_optional_vault_root = lambda: (None if os.environ.get("FAKE_API_UNBOUND") == "1"
+                                           else Path(os.environ["FAKE_API_VAULT"]))
+stores.resolve_store_backend = lambda: os.environ.get("FAKE_API_BACKEND", "pg")
+stores.get_object_store = lambda: SimpleNamespace(list_objects=lambda **kwargs: [])
+rebuildability.evaluate_product_store_readiness = lambda root, rows: SimpleNamespace(
+    ready=Path(os.environ["FAKE_API_READY_FILE"]).exists(),
+    state="ready" if Path(os.environ["FAKE_API_READY_FILE"]).exists() else "refused")
+''', encoding="utf-8",
+    )
+    (root / "app/cli.py").write_text(
+        '''import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ["FAKE_DEPLOY_EVENT_LOG"], "a") as stream:
+    stream.write("api-cli " + " ".join(args) + "\\n")
+if args[:1] == ["vault-alpha-ingest"]:
+    with open(os.environ["FAKE_DEPLOY_EVENT_LOG"], "a") as stream:
+        stream.write("source-rebuild\\n")
+    if os.environ.get("FAKE_SOURCE_PREADINESS", "1") == "1":
+        Path(os.environ["FAKE_API_READY_FILE"]).touch()
+    print(os.environ.get("FAKE_SOURCE_SUMMARY", '{"scanned":2,"ingested":2,"errors":0,"malformed":0,"skipped_locked":0,"skipped_invalid":0}'))
+    print("hostile-child-canary /private/vault password=do-not-leak", file=sys.stderr)
+    raise SystemExit(int(os.environ.get("FAKE_SOURCE_RC", "0")))
+elif args[:2] == ["index", "doctor"]:
+    print(os.environ.get("FAKE_SOURCE_INDEX_SUMMARY", '{"backend":"PgVectorIndex","issues":[],"rebuild_required":false,"pg_state":{"rows":2}}'))
+    raise SystemExit(int(os.environ.get("FAKE_SOURCE_INDEX_RC", "0")))
+elif args[:2] == ["settings", "validate"]:
+    print('{}')
+    raise SystemExit(int(os.environ.get("FAKE_SOURCE_SETTINGS_RC", "0")))
+else:
+    raise SystemExit(78)
+''', encoding="utf-8",
+    )
+    ready_file = tmp_path / "projection-ready"
+    if ready:
+        ready_file.touch()
+    env.update(
+        FAKE_API_VAULT=str(root / "tmp"), FAKE_API_READY_FILE=str(ready_file),
+        FAKE_API_PYTHONPATH=f"{site}:{root}:{REPO_ROOT}", VCS_REF=sha,
+    )
+    command = _compose("docker-compose.yaml")["services"]["api"]["command"][2]
+    (root / "api-command.sh").write_text(
+        command.replace("$$", "$").replace("/app", str(root)), encoding="utf-8",
+    )
+    docker = tmp_path / "bin/docker"
+    text = docker.read_text(encoding="utf-8")
+    text = text.replace(
+        'case "$*" in\n',
+        '''if [[ "$*" == *"NATIVE_SOURCE_BOOTSTRAP="* ]]; then
+  printf 'source-probe channel=%s image=%s api-context=%s\\n' \
+    "${PKM_ENVIRONMENT:-unset}" "${APP_IMAGE_TAG:-unset}" \
+    "${HOST_SECRET_RUNTIME_ENV_FILE_API:-unset}" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  for argument in "$@"; do
+    case "${argument}" in NATIVE_SOURCE_BOOTSTRAP=*) export "${argument}";; esac
+  done
+  export PYTHONPATH="${FAKE_API_PYTHONPATH:?}"
+  bash "${PWD}/api-command.sh"
+  exit $?
+fi
+case "$*" in
+''',
+        1,
+    )
+    docker.write_text(text, encoding="utf-8")
+    return root, env, sha
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+@pytest.mark.parametrize("ready", [False, True])
+def test_native_deploy_rebuilds_source_projection_before_health_gate(
+    tmp_path: Path, channel: str, ready: bool
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel=channel, ready=ready)
+
+    result = _run_deploy(root, env, sha, channel=channel)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    source_calls = [
+        (i, event) for i, event in enumerate(events)
+        if event.startswith("docker ") and "NATIVE_SOURCE_BOOTSTRAP=" in event
+    ]
+    assert len(source_calls) == 1, events
+    source_pos, command = source_calls[0]
+    assert "run --rm --no-deps -T" in command
+    assert f"NATIVE_SOURCE_BOOTSTRAP={channel}:{sha}" in command
+    assert command.endswith(" api")
+    assert "--entrypoint" not in command
+    assert f"-p pkm-{channel}" in command
+    assert "docker-compose.bws.yml" in command
+    runtime_start = next(
+        i for i, event in enumerate(events)
+        if "up -d --force-recreate api worker watcher" in event
+    )
+    final_readiness = next(i for i, event in enumerate(events) if "/readyz" in event)
+    assert source_pos < runtime_start < final_readiness
+    assert events.count("source-rebuild") == (0 if ready else 1)
+    assert any("api-instance-preflight -m app.instance.runtime preflight" in event for event in events)
+    assert events.count("api-migrations") == 1
+    assert any(event == "api-cli index doctor --json --strict" for event in events)
+    if not ready:
+        assert f"api-cli vault-alpha-ingest --vault-root {(root / 'tmp').resolve()} --max-notes 0 --force --source-backed-rebuild --json" in events
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("rows,refused", [
+    ([], False),
+    ([{"kind": "note", "payload": {}}], True),
+    ([{"payload": {}}], True),
+    ([{"kind": "builder_learning", "payload": {}}], False),
+])
+def test_native_empty_vault_requires_empty_product_projection(
+    tmp_path: Path, rows: list[dict], refused: bool,
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    layout = root / "tmp/⚙️ System/vault.layout.md"
+    layout.parent.mkdir(parents=True)
+    layout.write_text(
+        "---\nsystem_folder: ⚙️ System\ninbox_folder: Inbox\ndesk_folder: Desk\n"
+        "include_folders:\n  - Notes\n---\n\nEmpty-source fixture layout.\n",
+        encoding="utf-8",
+    )
+    (root / "tmp/Notes").mkdir()
+    site = tmp_path / "api-python-fixture/sitecustomize.py"
+    text = site.read_text(encoding="utf-8")
+    override = (
+        'rebuildability.evaluate_product_store_readiness = lambda root, rows: SimpleNamespace(\n'
+        '    ready=Path(os.environ["FAKE_API_READY_FILE"]).exists(),\n'
+        '    state="ready" if Path(os.environ["FAKE_API_READY_FILE"]).exists() else "refused")\n'
+    )
+    assert text.count(override) == 1
+    text = text.replace(override, "")
+    store = 'stores.get_object_store = lambda: SimpleNamespace(list_objects=lambda **kwargs: [])'
+    assert text.count(store) == 1
+    site.write_text(text.replace(store, (
+        'stores.get_object_store = lambda: SimpleNamespace(\n'
+        f'    list_objects=lambda **kwargs: iter({rows!r}))'
+    )), encoding="utf-8")
+    env["FAKE_SOURCE_SUMMARY"] = json.dumps({
+        "scanned": 0, "ingested": 0, "errors": 0, "malformed": 0,
+        "skipped_locked": 0, "skipped_invalid": 0,
+    })
+
+    result = _run_deploy(root, env, sha)
+
+    events = _deploy_events(env)
+    if refused:
+        assert result.returncode != 0
+        assert events.count("source-rebuild") == 1
+        assert not any("up -d --force-recreate api" in event for event in events)
+        assert not any("/readyz" in event for event in events)
+        assert "api-cli index doctor --json --strict" not in events
+        assert not list((root / "ops/deployments").glob("*.json"))
+        assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "source-rebuild" not in events
+        assert "api-cli index doctor --json --strict" in events
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("database_target", ["local", "external"])
+def test_native_source_rebuild_retains_bws_api_context_and_writer_fence(
+    tmp_path: Path, database_target: str
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="test")
+    env["BWS_DATABASE_TARGET"] = database_target
+    if database_target == "external":
+        env["DATABASE_URL"] = env["DB_DSN"] = "postgresql://writer@db.example.invalid:5432/app_test"
+    result = _run_deploy(root, env, sha, channel="test")
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    source_position = next(i for i, event in enumerate(events) if "NATIVE_SOURCE_BOOTSTRAP=" in event)
+    assert any("stop api worker watcher heimdal-capture-watch companion-ui" in event
+               for event in events[:source_position])
+    assert not any("up -d --force-recreate api" in event for event in events[:source_position])
+    assert f"source-probe channel=test image={sha} api-context={env['HOST_SECRET_RUNTIME_ENV_FILE_API']}" in events
+    assert any(event == "bws-guard" for event in events[:source_position])
+    assert ("docker-compose.bws-external.yml" in events[source_position]) is (database_target == "external")
+    api = _compose("docker-compose.yaml")["services"]["api"]
+    assert any(isinstance(item, dict) and "HOST_SECRET_RUNTIME_ENV_FILE_API" in item["path"] for item in api["env_file"])
+    assert api["environment"]["NATIVE_SOURCE_BOOTSTRAP"] == ""
+    assert "--entrypoint" not in events[source_position]
+    assert events[source_position].endswith(" api")
+    assert "POSTGRES_PASSWORD=" not in events[source_position]
+
+
+@pytest.mark.parametrize("fault", [
+    "missing", "malformed", "bad_json", "errors", "locked", "invalid", "count_mismatch",
+    "wrong_type", "exit", "product_unready", "index_unready", "index_unknown",
+])
+def test_native_source_rebuild_fails_closed_on_incomplete_projection(tmp_path: Path, fault: str) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    summary = {"scanned": 2, "ingested": 2, "errors": 0, "malformed": 0,
+               "skipped_locked": 0, "skipped_invalid": 0}
+    if fault == "missing":
+        del summary["errors"]
+    elif fault == "malformed":
+        summary["malformed"] = 1
+    elif fault in {"errors", "locked", "invalid"}:
+        summary[{"locked": "skipped_locked", "invalid": "skipped_invalid"}.get(fault, fault)] = 1
+    elif fault == "count_mismatch":
+        summary["ingested"] = 1
+    elif fault == "wrong_type":
+        summary["scanned"] = True
+    elif fault == "exit":
+        env["FAKE_SOURCE_RC"] = "42"
+    elif fault == "product_unready":
+        env["FAKE_SOURCE_PREADINESS"] = "0"
+    elif fault == "index_unready":
+        env["FAKE_SOURCE_INDEX_RC"] = "2"
+    elif fault == "index_unknown":
+        env["FAKE_SOURCE_INDEX_SUMMARY"] = '{}'
+    env["FAKE_SOURCE_SUMMARY"] = json.dumps(summary)
+    if fault == "bad_json":
+        env["FAKE_SOURCE_SUMMARY"] = "hostile-child-canary malformed summary"
+    result = _run_deploy(root, env, sha)
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert events.count("source-rebuild") == 1
+    assert not any("up -d --force-recreate api" in event for event in events)
+    assert not list((root / "ops/deployments").glob("*.json"))
+    assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("fault", ["syntax", "foreign_channel", "foreign_image", "instance", "vault_context", "memory"])
+def test_native_api_source_selector_refuses_before_source_write(tmp_path: Path, fault: str) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    env.update(PYTHONPATH=env["FAKE_API_PYTHONPATH"], NATIVE_SOURCE_BOOTSTRAP=f"dev:{sha}")
+    if fault == "syntax":
+        env["NATIVE_SOURCE_BOOTSTRAP"] = f"dev:{sha};echo hostile"
+    elif fault == "foreign_channel":
+        env["NATIVE_SOURCE_BOOTSTRAP"] = f"test:{sha}"
+    elif fault == "foreign_image":
+        env["NATIVE_SOURCE_BOOTSTRAP"] = "dev:" + "a" * 40
+    elif fault == "instance":
+        env["FAKE_API_INSTANCE_RC"] = "75"
+    elif fault == "vault_context":
+        env["FAKE_API_CONTEXT_RC"] = "75"
+    else:
+        env["FAKE_API_BACKEND"] = "memory"
+    result = subprocess.run(["bash", str(root / "api-command.sh")], cwd=root, env=env,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert "source-rebuild" not in events
+    assert "api-migrations" not in events
+    assert not any(event.startswith("api-cli ") for event in events)
+    assert "hostile" not in result.stdout + result.stderr
+
+
+def test_native_source_selector_absent_preserves_ordinary_api_start(tmp_path: Path) -> None:
+    root, env, _sha = _native_source_harness(tmp_path, channel="dev")
+    uvicorn = tmp_path / "bin/uvicorn"
+    uvicorn.write_text('#!/bin/bash\nprintf "ordinary-api %s\\n" "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"\n', encoding="utf-8")
+    uvicorn.chmod(0o755)
+    env.update(PYTHONPATH=env["FAKE_API_PYTHONPATH"], NATIVE_SOURCE_BOOTSTRAP="")
+    result = subprocess.run(["bash", str(root / "api-command.sh")], cwd=root, env=env,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    events = _deploy_events(env)
+    assert events.count("api-migrations") == 1
+    assert "ordinary-api app.main:app --host 0.0.0.0 --port 8000" in events
+    assert not any(event.startswith("api-cli ") for event in events)
+
+
+@pytest.mark.parametrize("unquiesced", [False, True])
+def test_native_source_rebuild_failure_preserves_recovery_fences(tmp_path: Path, unquiesced: bool) -> None:
+    root, env, prior_sha = _native_source_harness(tmp_path, channel="dev")
+    (root / "config/deploy/dev.env").write_text(f"APP_IMAGE_TAG={prior_sha}\n", encoding="utf-8")
+    (root / "target.txt").write_text("target", encoding="utf-8")
+    subprocess.run(["git", "add", "target.txt"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "target"], cwd=root, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env.update(FAKE_SHA=sha, VCS_REF=sha, APP_IMAGE_TAG=sha, BWS_DEPLOY_TARGET_REVISION=sha, FAKE_SOURCE_RC="42")
+    if unquiesced:
+        docker = tmp_path / "bin/docker"
+        docker.write_text(docker.read_text(encoding="utf-8").replace(
+            'case "$*" in\n',
+            '''if [ "${1:-}" = ps ]; then
+  printf '%s\\n' 0123456789ab
+  exit 0
+fi
+if [ "${1:-}" = inspect ] && [[ "$*" == *"State.Running"* ]]; then
+  printf '/pkm-dev-source-bootstrap-%s pkm-dev api True %s %s true\\n' \
+    "${BWS_DEPLOY_OPERATION_ID}" "${BWS_DEPLOY_OPERATION_ID}" "${BWS_DEPLOY_TARGET_REVISION}"
+  exit 0
+fi
+if [ "${1:-}" = stop ]; then exit 77; fi
+case "$*" in
+''', 1,
+        ), encoding="utf-8")
+    result = _run_deploy(root, env, sha)
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert events.count("source-rebuild") == 1
+    assert not list((root / "ops/deployments").glob("*.json"))
+    assert f"APP_IMAGE_TAG={prior_sha}\n" in (root / "config/deploy/dev.previous.env").read_text()
+    if unquiesced:
+        assert f"APP_IMAGE_TAG={sha}\n" in (root / "config/deploy/dev.env").read_text()
+        assert not any("up -d --force-recreate api" in event for event in events)
+        assert "native source producer quiescence is unproven" in result.stderr
+    else:
+        assert f"APP_IMAGE_TAG={prior_sha}\n" in (root / "config/deploy/dev.env").read_text()
+        assert any("up -d --force-recreate api" in event for event in events)
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+def test_native_source_timeout_terminates_descendants_even_when_parent_exits(tmp_path: Path) -> None:
+    import time
+    from app.ops.native_source_bootstrap import wait_for_owned_child
+    child = tmp_path / "child.py"
+    stopped = tmp_path / "stopped"
+    child.write_text('''import signal, subprocess, sys, time
+def stop(*args):
+    open(sys.argv[2], "w").write("parent stopped")
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, stop)
+subprocess.Popen([sys.executable, "-c", "import signal,sys,time,os; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(30)", sys.argv[1]])
+time.sleep(30)
+''', encoding="utf-8")
+    pid_file = tmp_path / "descendant.pid"
+    assert wait_for_owned_child([sys.executable, str(child), str(pid_file), str(stopped)], timeout=3) == 124
+    assert stopped.is_file()
+    pid = int(pid_file.read_text())
+    # A killed orphan may remain a zombie until init reaps it. It cannot execute
+    # a producer; absence or zombie is the finite process-state proof here.
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        if not state or state.startswith("Z"):
+            break
+        time.sleep(0.05)
+    assert not state or state.startswith("Z"), state
+
+
+@pytest.mark.parametrize("signum", [15, 2])
+def test_native_source_signal_terminates_owned_child_group(tmp_path: Path, signum: int) -> None:
+    import time
+    child = tmp_path / "child.py"
+    pid_file = tmp_path / "child.pid"
+    child.write_text('''import os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+open(sys.argv[1], "w").write(str(os.getpid()))
+time.sleep(30)
+''', encoding="utf-8")
+    runner = subprocess.Popen([
+        sys.executable, "-c",
+        "import sys; from app.ops.native_source_bootstrap import wait_for_owned_child; "
+        "raise SystemExit(wait_for_owned_child(sys.argv[1:], timeout=60))",
+        sys.executable, str(child), str(pid_file),
+    ], cwd=REPO_ROOT)
+    try:
+        deadline = time.monotonic() + 10
+        while not pid_file.is_file() and time.monotonic() < deadline:
+            assert runner.poll() is None
+            time.sleep(0.05)
+        assert pid_file.is_file()
+        pid = int(pid_file.read_text())
+        runner.send_signal(signum)
+        assert runner.wait(timeout=10) == 128 + signum
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        assert not state or state.startswith("Z"), state
+    finally:
+        if runner.poll() is None:
+            runner.terminate()
+        runner.wait(timeout=10)
+
+
+@pytest.mark.parametrize("fault", ["none", "operation", "revision", "name", "project", "service", "oneoff", "unavailable", "stop_lost_ack", "still_running"])
+def test_native_source_container_termination_requires_exact_ownership(tmp_path: Path, monkeypatch, fault: str) -> None:
+    from app.ops.native_source_bootstrap import quiesce_owned_container
+    operation = "03b3bb2f-6d85-499a-8b45-e397f56812e1"
+    revision = "a" * 40
+    name = "pkm-test-source-bootstrap-" + operation
+    producer = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    docker = tmp_path / "docker"
+    event_log = tmp_path / "events"
+    state = tmp_path / "stopped"
+    docker.write_text('''#!/usr/bin/env python3
+import os, signal, sys
+from pathlib import Path
+args=sys.argv[1:]
+with open(os.environ["FAKE_CONTAINER_EVENTS"], "a") as stream:
+    stream.write(args[0] + "\\n")
+if os.environ["FAKE_CONTAINER_FAULT"] == "unavailable": raise SystemExit(42)
+if args[0] == "ps":
+    print("0123456789ab")
+elif args[0] == "inspect":
+    operation = os.environ["FAKE_CONTAINER_OPERATION"]
+    revision = os.environ["FAKE_CONTAINER_REVISION"]
+    name = os.environ["FAKE_CONTAINER_NAME"]
+    project = "pkm-test"
+    service = "api"
+    oneoff = "True"
+    fault = os.environ["FAKE_CONTAINER_FAULT"]
+    if fault == "operation": operation = "00000000-0000-4000-8000-000000000002"
+    if fault == "revision": revision = "b" * 40
+    if fault == "name": name = "foreign"
+    if fault == "project": project = "pkm-dev"
+    if fault == "service": service = "worker"
+    if fault == "oneoff": oneoff = "False"
+    running = "false" if Path(os.environ["FAKE_CONTAINER_STOPPED"]).exists() else "true"
+    print(f"/{name} {project} {service} {oneoff} {operation} {revision} {running}")
+elif args[0] == "stop":
+    if os.environ["FAKE_CONTAINER_FAULT"] == "still_running": raise SystemExit(42)
+    os.kill(int(os.environ["FAKE_CONTAINER_PID"]), signal.SIGTERM)
+    Path(os.environ["FAKE_CONTAINER_STOPPED"]).touch()
+    if os.environ["FAKE_CONTAINER_FAULT"] == "stop_lost_ack": raise SystemExit(42)
+elif args[0] != "rm": raise SystemExit(43)
+''', encoding="utf-8")
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    for key, value in {
+        "FAULT": fault, "PID": str(producer.pid), "OPERATION": operation,
+        "REVISION": revision, "NAME": name, "STOPPED": str(state), "EVENTS": str(event_log),
+    }.items():
+        monkeypatch.setenv("FAKE_CONTAINER_" + key, value)
+    try:
+        assert quiesce_owned_container("test", name, operation, revision) is (fault in {"none", "stop_lost_ack"})
+        events = event_log.read_text().splitlines()
+        if fault in {"operation", "revision", "name", "project", "service", "oneoff", "unavailable"}:
+            assert "stop" not in events and "rm" not in events
+            assert producer.poll() is None
+        if fault in {"none", "stop_lost_ack"}:
+            producer.wait(timeout=2)
+            assert events.index("inspect") < events.index("stop") < events.index("rm")
+        if fault == "still_running":
+            assert "rm" not in events
+    finally:
+        if producer.poll() is None:
+            producer.terminate()
+        producer.wait(timeout=2)
+
+
+def test_native_source_cleanup_requires_current_parent_guard(tmp_path: Path) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    guard = root / "app/ops/postgres_deploy_linux.py"
+    guard.write_text(guard.read_text() +
+        'from pathlib import Path\n'
+        'if Path(os.environ["FAKE_API_READY_FILE"]).exists(): raise SystemExit(78)\n', encoding="utf-8")
+    env["FAKE_SOURCE_RC"] = "42"
+    result = _run_deploy(root, env, sha)
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert events.count("source-rebuild") == 1
+    assert not any(event.startswith("docker ps --all") or event.startswith("docker stop") or
+                   event.startswith("docker rm") or "up -d --force-recreate api" in event for event in events)
+    assert "native source producer quiescence is unproven" in result.stderr
+
+
+@pytest.mark.parametrize("fault", [
+    "created", "running", "paused", "restarting", "removing", "unknown",
+    "transition", "malformed", "unavailable", "timeout", "membership_changed",
+    "identity_changed", "inconsistent_state", "duplicate_id",
+])
+def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, monkeypatch, capsys, fault: str) -> None:
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+    root = tmp_path / "checkout"
+    lock = root / "config/deploy/test.env.lock"
+    lock.mkdir(parents=True, mode=0o700)
+    (lock / "bws-owner").touch(mode=0o600)
+    journal = DeployJournal(tmp_path / "journal", "test")
+    plan = DeployPlan("test", "a" * 40, ("db", "api"), ("postgres-db", "postgres-api"))
+    operation = str(uuid4())
+    journal.bind_request(operation, plan, False, create=True)
+    for stage in ("prepared", "preflighted", "materialized", "activating"):
+        journal.write(operation, stage)
+    config = SimpleNamespace(channel="test", root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, "load", lambda _channel: config)
+    monkeypatch.setattr(linux.LinuxEffects, "activate", lambda *_args: pytest.fail("must not replay"))
+    monkeypatch.setattr(linux.LinuxEffects, "compose", lambda *_args: '[{"Service":"api","State":"running","Health":""}]')
+    active = {"value": True}
+    container_id = "0123456789abcdef" * 4
+    commands = []
+    inspections = []
+    inventories = []
+    def command(argv, **kwargs):
+        assert kwargs["timeout"] == 15
+        commands.append(argv)
+        if argv[:2] == ["docker", "ps"]:
+            inventories.append(argv)
+            # A created/unknown one-off is absent from Docker's running-only
+            # inventory. Exercise that omission through actual reconciliation.
+            if not active["value"] or ("--all" not in argv and fault != "running"):
+                return ""
+            if fault == "membership_changed" and len(inventories) > 1:
+                return container_id + "\n" + "f" * 64
+            if fault == "duplicate_id":
+                return container_id + "\n" + container_id
+            return container_id
+        assert argv[:2] == ["docker", "inspect"]
+        inspections.append(argv)
+        if fault == "unavailable":
+            raise linux.PostgresDeployError()
+        if fault == "timeout":
+            raise subprocess.TimeoutExpired(argv, 15, output="hostile-child-canary", stderr="private-endpoint")
+        if fault == "malformed":
+            return "hostile-child-canary private-endpoint"
+        identity = "f" * 64 if fault == "identity_changed" else container_id
+        state = "exited" if fault in {"membership_changed", "identity_changed", "inconsistent_state"} else fault
+        if fault == "transition":
+            state = "exited" if len(inspections) == 1 else "created"
+        running = "true" if state in {"running", "paused", "restarting"} or fault == "inconsistent_state" else "false"
+        paused = "true" if state == "paused" else "false"
+        restarting = "true" if state == "restarting" else "false"
+        pid = "23" if running == "true" else "0"
+        return f"{identity} {state} {running} {paused} {restarting} {pid}"
+    monkeypatch.setattr(linux, "_command", command)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {"action":"reconcile-failed", "operation_id":operation, "plan":asdict(plan), "bootstrap":False}
+    prior = (journal.directory / "test.json").read_bytes()
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(request)
+    assert (journal.directory / "test.json").read_bytes() == prior
+    assert lock.is_dir()
+    assert inventories
+    assert all("--all" in argv and "--no-trunc" in argv for argv in inventories)
+    assert all("label=com.docker.compose.oneoff=True" in argv for argv in inventories)
+    assert not any(argv[1] in {"stop", "rm", "start", "restart", "kill"} for argv in commands)
+    captured = capsys.readouterr()
+    assert captured.out + captured.err == ""
+    active["value"] = False
+    receipt = supervisor.request(request)
+    assert receipt["receipt"]["terminal_result"] == "failed"
+    assert not lock.exists()
+    assert supervisor.request({**request, "action":"join"}) == receipt
+
+
+@pytest.mark.parametrize("state", ["exited", "dead"])
+def test_native_source_completed_oneoff_allows_same_id_reconciliation(tmp_path: Path, monkeypatch, state: str) -> None:
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan
+    root = tmp_path / "checkout"
+    lock = root / "config/deploy/test.env.lock"
+    lock.mkdir(parents=True, mode=0o700)
+    (lock / "bws-owner").touch(mode=0o600)
+    journal = DeployJournal(tmp_path / "journal", "test")
+    plan = DeployPlan("test", "a" * 40, ("db", "api"), ("postgres-db", "postgres-api"))
+    operation = str(uuid4())
+    journal.bind_request(operation, plan, False, create=True)
+    for stage in ("prepared", "preflighted", "materialized", "activating"):
+        journal.write(operation, stage)
+    config = SimpleNamespace(channel="test", root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, "load", lambda _channel: config)
+    monkeypatch.setattr(linux.LinuxEffects, "activate", lambda *_args: pytest.fail("must not replay"))
+    monkeypatch.setattr(linux.LinuxEffects, "compose", lambda *_args: '[{"Service":"api","State":"running","Health":""}]')
+    container_id = "0123456789abcdef" * 4
+    commands = []
+    def command(argv, **kwargs):
+        assert kwargs["timeout"] == 15
+        commands.append(argv)
+        if argv[:2] == ["docker", "ps"]:
+            assert "--all" in argv and "--no-trunc" in argv
+            return container_id
+        assert argv[:2] == ["docker", "inspect"]
+        assert argv[-1] == container_id
+        return f"{container_id} {state} false false false 0"
+    monkeypatch.setattr(linux, "_command", command)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {"action":"reconcile-failed", "operation_id":operation, "plan":asdict(plan), "bootstrap":False}
+    receipt = supervisor.request(request)
+    assert receipt["receipt"]["terminal_result"] == "failed"
+    assert not lock.exists()
+    assert sum(argv[:2] == ["docker", "inspect"] for argv in commands) == 2
+    assert not any(argv[1] in {"stop", "rm", "start", "restart", "kill"} for argv in commands)
+    assert supervisor.request({**request, "action":"join"}) == receipt
+
+
+@pytest.mark.parametrize("fault", ["timeout", "unavailable", "malformed"])
+def test_native_source_oneoff_census_unknown_stays_pending(tmp_path: Path, monkeypatch, capsys, fault: str) -> None:
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    effects = linux.LinuxEffects(SimpleNamespace(channel="test", root=tmp_path))
+    def probe(argv, **kwargs):
+        assert argv[:2] == ["docker", "ps"]
+        assert kwargs["timeout"] == 15
+        if fault == "timeout":
+            raise subprocess.TimeoutExpired(argv, 15, output="hostile-child-canary", stderr="private-endpoint")
+        return SimpleNamespace(returncode=42 if fault == "unavailable" else 0,
+                               stdout="hostile-child-canary", stderr="private-endpoint")
+    monkeypatch.setattr(linux.subprocess, "run", probe)
+    monkeypatch.setattr(effects, "compose", lambda *args: pytest.fail("unknown census is not quiescence"))
+    assert effects.quiescent() is False
+    captured = capsys.readouterr()
+    assert captured.out + captured.err == ""
+
+
+def test_native_source_unbound_api_preserves_idle_without_source_write(tmp_path: Path) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    env["FAKE_API_UNBOUND"] = "1"
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    assert any("NATIVE_SOURCE_BOOTSTRAP=" in event for event in events)
+    assert not any(event.startswith("api-cli ") for event in events)
+    assert any("up -d --force-recreate api" in event for event in events)
+
+
+@pytest.mark.parametrize("fault", ["missing", "not_directory", "symlink_loop", "inaccessible"])
+def test_native_source_configured_invalid_root_never_becomes_unbound(tmp_path: Path, monkeypatch, fault: str) -> None:
+    from app.ops import native_source_bootstrap as source
+    from app import stores, version
+    revision = "a" * 40
+    selector = "test:" + revision
+    selected = tmp_path / "selected"
+    if fault == "not_directory":
+        selected.write_text("not a vault")
+    elif fault == "symlink_loop":
+        selected.symlink_to(selected)
+    elif fault == "inaccessible":
+        selected.mkdir()
+        original_exists = Path.exists
+        def exists(path):
+            if path == selected:
+                raise PermissionError("configured vault inaccessible")
+            return original_exists(path)
+        monkeypatch.setattr(Path, "exists", exists)
+    monkeypatch.setenv("NATIVE_SOURCE_BOOTSTRAP", selector)
+    monkeypatch.setenv("PKM_ENVIRONMENT", "test")
+    monkeypatch.setenv("VAULT_ROOT", str(selected))
+    # A usable foreign root cannot rescue the selected canonical API root.
+    monkeypatch.setenv("VAULT_ROOT_DEV", str(tmp_path))
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(tmp_path))
+    monkeypatch.setattr(version, "get_runtime_version", lambda: {"git_sha": revision})
+    monkeypatch.setattr(stores, "resolve_store_backend", lambda: "pg")
+    monkeypatch.setattr(source, "_instance_preflight", lambda channel: None)
+    monkeypatch.setattr(source, "_run_json", lambda *args: pytest.fail("must refuse before SourceWrite"))
+    with pytest.raises((RuntimeError, OSError, ValueError)):
+        source.rebuild_if_needed(selector)
+
+
+@pytest.mark.parametrize("value", [None, {}, [], {"scanned": 0},
+    {"scanned": "0", "ingested": 0, "errors": 0, "malformed": 0, "skipped_locked": 0, "skipped_invalid": 0},
+    {"scanned": 0, "ingested": 0, "errors": -1, "malformed": 0, "skipped_locked": 0, "skipped_invalid": 0},
+    {"scanned": 0, "ingested": 0, "errors": False, "malformed": 0, "skipped_locked": 0, "skipped_invalid": 0},
+])
+def test_native_source_summary_unknown_is_not_empty_success(value) -> None:
+    from app.ops.native_source_bootstrap import source_rebuild_counts
+    with pytest.raises(ValueError):
+        source_rebuild_counts(value)
+
+
+def test_full_startup_uses_same_strict_source_summary_parser() -> None:
+    script = (REPO_ROOT / "scripts/start_full_system.sh").read_text()
+    assert "from app.ops.native_source_bootstrap import source_rebuild_counts" in script
+    assert "values = [*source_rebuild_counts(payload), 0]" in script

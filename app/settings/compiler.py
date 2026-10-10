@@ -388,6 +388,7 @@ def _resolve_llm_routing_model_ids(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "default_chat",
                 "default_reasoning",
                 "default_eval",
+                "default_embedding",
                 "tasks",
             }
             if unknown_profile_keys:
@@ -407,6 +408,18 @@ def _resolve_llm_routing_model_ids(payload: Dict[str, Any]) -> Dict[str, Any]:
                         models_by_id=models_by_id,
                         expected_kind="chat",
                     )
+            target = profile.get("default_embedding")
+            if target is not None:
+                if not isinstance(target, dict) or not target.get("model_id"):
+                    raise ValueError(
+                        f"llm_routing profile {profile_id!r}.default_embedding "
+                        "must select a registry model_id"
+                    )
+                profile["default_embedding"] = _resolve_route_target_model_ids(
+                    target,
+                    models_by_id=models_by_id,
+                    expected_kind="embedding",
+                )
             profile_tasks = profile.get("tasks")
             if profile_tasks is not None:
                 if not isinstance(profile_tasks, dict):
@@ -421,7 +434,11 @@ def _resolve_llm_routing_model_ids(payload: Dict[str, Any]) -> Dict[str, Any]:
                     resolved_tasks[task_kind] = _resolve_route_target_model_ids(
                         target,
                         models_by_id=models_by_id,
-                        expected_kind="chat",
+                        expected_kind=(
+                            "embedding"
+                            if str(task_kind).strip().lower() == "embed"
+                            else "chat"
+                        ),
                     )
                 profile["tasks"] = resolved_tasks
             resolved_profiles[str(profile_id)] = profile

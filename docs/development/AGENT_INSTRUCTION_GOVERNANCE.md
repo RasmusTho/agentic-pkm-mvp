@@ -28,6 +28,11 @@ It governs development-time instruction surfaces only. It does not define runtim
   skill-facing distinction. Preserve required outcomes, sourced boundaries, proof strength, and
   existing write ownership; agent authorship alone never makes a constraint disposable.
 - Keep repo-local skills narrowly scoped, reversible, and aligned with the existing GitHub issue-first delivery model.
+- Routine reversible agent-owned work uses `decision-quality :: Routine agent-owned work`; full
+  Decision Quality applies to material human decisions, irreversible commitments, and operator gates.
+  A technical problem alone requires neither a seven-dimension ledger nor an owner-decision brief.
+- Carry the existing mandate through retries and transitions. Apply later explicit owner revisions
+  once in the canonical contract through its owning workflow; never infer new effect authority.
 - Temporal-doc maintenance skills should prefer audit-first behavior, refresh owner/current-state docs before roadmap wording, and use explicit verification anchors rather than implied freshness.
 
 ## Separation rules
@@ -46,6 +51,8 @@ It governs development-time instruction surfaces only. It does not define runtim
 - Update `CLAUDE.md` only to keep the non-operational compatibility/provenance pointer
   aligned or to retire it through a governed change.
 - If a longer explanation is needed, extend a development reference doc instead of expanding the root instruction files.
+- Give each procedure one normative owner and reference it from entrypoints; remove repeated
+  explanations and ledgers rather than creating another policy or recordkeeping surface.
 - When canonical entrypoints, reading order, or doc roles change, update `docs/DOCS_INDEX.md` in the same change.
 - When compatibility pointers remain, label them explicitly as non-canonical.
 - Keep backlog-discipline rules in `AGENTS.md` when agents must follow them during normal execution; do not leave required task-contract behavior only in reference docs.

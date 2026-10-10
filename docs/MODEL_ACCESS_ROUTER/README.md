@@ -1,12 +1,12 @@
-State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-10-03 for the VLAN-only Ygg host profile, provider-neutral capability health, and distinct one-shot acceptance attempts. MARR-01–05, the MARR-08 completion API, generic MARR-09 path selection, MARR-10 provider-neutral capability health, and MARR-11 clone-local Product model profiles are delivered. VLAN-only MARR-06 designated-host acceptance has a validator-accepted v3 receipt in Issue #5624; staged MARR-07 rollout remains pending. Parent validation Issue #5618 is open and blocked for the remaining integrated capability and rollout gates.
+State: Target-state capability specification, created 2026-09-22 from accepted ADR-0066 and amended 2026-10-03 for the VLAN-only Ygg host profile, provider-neutral capability health, and distinct one-shot acceptance attempts. MARR-01–05, the MARR-08 completion API, generic MARR-09 path selection, MARR-10 provider-neutral capability health, and MARR-11 clone-local Product chat profiles are delivered. VLAN-only MARR-06 designated-host acceptance has a validator-accepted v3 receipt in Issue #5624; staged MARR-07 rollout remains pending. The owner-approved universal Product portal target is recorded in ADR-0067 and parent Issue #5819; its provider-egress and Product embedding/profile tasks remain undelivered. Parent validation Issue #5618 remains separate and open for its original Luna rollout gates.
 Doc role: Capability specification
-Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, and ADR-0066 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
+Authority: Defines the bounded delivery contract for the Model Access Router. ADR-0063, ADR-0064, ADR-0066, and ADR-0067 govern architecture decisions; current shipped behavior remains in the owner docs linked below.
 Owner: Product LLM Routing / Architecture spine; Builder Model Inquiry for its isolated compatibility path
 Temporal class: strategic
 Review cadence: event-driven
-Source of truth: ADR-0066, child Issues, implementation, and acceptance receipts
-Last reviewed: 2026-10-06
-Last verified against: Issue #5794 clone-local routing-profile tests, Issue #5772 dev/test Compose integration tests, the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066, and the checked-in MARR task specifications.
+Source of truth: ADR-0066/ADR-0067, implementation task Issues, implementation, and acceptance receipts
+Last reviewed: 2026-10-07
+Last verified against: Issue #5794 clone-local routing-profile tests, Issue #5772 dev/test Compose integration tests, the validator-accepted MARR-06 v3 receipt in Issue #5624, PR #5759, ADR-0066/ADR-0067, and the checked-in MARR task specifications.
 Parent issue: #5618 (open, agent:blocked); validation hub, never a pickup task.
 
 # Model Access Router
@@ -39,12 +39,34 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 - Embeddings remain in the embedding identity subsystem and are outside the chat/completion migration.
 - Product runtime remains on Linux. The delivered Product client supports the executor API, and MARR-09 delivers generic configured path selection. The checked-in Ygg profile selects only `ygg_vlan_primary`; Tailscale is neither configured nor required for acceptance or rollout. The designated Mac profile, VLAN path, Luna route, and interactive Codex subscription session passed the MARR-06 dev-host acceptance in Issue #5624. This receipt does not activate a persistent Product route or release channel.
 - The accepted target keeps the model route and network path independent. Deployment configuration supplies ordered logical path-profile references; the current Ygg profile resolves only the host-local VLAN endpoint. The generic path interface may support additional explicit profiles, but no Tailscale endpoint or Serve setup is a Ygg dependency.
-- Each configured path must authenticate and authorize the same Product channel and operation-specific action. VLAN membership alone is not authorization. The executor backend remains loopback-bound behind configured ingress; public listeners are forbidden. Concrete endpoints and identity material remain outside Git.
+- The configured Ygg path authenticates callers with VLAN mTLS; the executor backend remains loopback-bound and public listeners are forbidden. This single-operator deployment does not require a second per-channel/action capability claim at the executor. Product and Builder continue to use separate policy resolvers and credentials. Concrete endpoints and identity material remain outside Git.
 - Product health reports required logical capability status through the provider-neutral MARR-10 contract and separately reports configured network-path reachability. The public `/api/health` projection omits model-access provider, model, transport, endpoint, and selected-path identity; local CLI diagnostics may retain selected-route detail. This code does not activate a host route or change the Product model default.
-- The dev/test/prod Compose overlays support an optional host-local MARR path-reference env file and a read-only Codex client-identity mount for Product `api`, `worker`, and `watcher` only. The governed deploy wrapper validates the exact endpoint/file-path allowlist before lock/migration/state preparation, then exports those values explicitly; Compose never consumes the raw MARR file as a service `env_file`. Immediately before each Product-channel Compose invocation, the ordinary governed runtime env is copied into a private mode-0600 temporary snapshot and that stable snapshot is used as the service `env_file`, closing the path-swap window; cleanup occurs when Compose exits. Production pins the import-time `LLM_PROVIDER` default to `mock` and disables cross-task provider enforcement for those Product callers, so explicit task policy can select a different provider. The model-access file supplies network path references only; Product model selection remains in its owner-managed `llm_routing` settings. This binding support does not provision host identity or activate a persistent route. Base Compose and release-channel activation remain separate gates.
-- The owner-approved Product routing target is Luna through the Codex CLI for chat/planning and Ollama for embeddings. These are separate capabilities: Luna does not serve embeddings, and Ollama does not replace the chat/planning route. Code support or the dev-host Luna acceptance receipt does not prove that the production identity, live task policy, embedding model, or release is active.
+- The dev/test/prod Compose overlays support an optional host-local MARR path-reference env file and a read-only Codex client-identity mount for Product `api`, `worker`, and `watcher` only. The governed deploy wrapper validates the exact endpoint/file-path allowlist before lock/migration/state preparation, then exports those values explicitly; Compose never consumes the raw MARR file as a service `env_file`. Immediately before each Product-channel Compose invocation, the ordinary governed runtime env is copied into a private mode-0600 temporary snapshot and that stable snapshot is used as the service `env_file`, closing the path-swap window; cleanup occurs when Compose exits. All three channels pin the import-time `LLM_PROVIDER` default to `mock` and set `LLM_PROVIDER_ENFORCE=0` for those Product callers, so explicit task policy can select a different provider. The model-access file supplies network path references only; Product model selection remains in its owner-managed `llm_routing` settings. This binding support does not provision host identity or activate a persistent route. Base Compose and release-channel activation remain separate gates.
+- The currently verified Product route is Luna through the Codex CLI for the designated dev-host chat/planning acceptance; embeddings still use the separate embedding identity subsystem. The owner-approved target is broader: the Mac mini mediates every registry-declared Product model capability, including embeddings, while Product settings select the model/profile per clone (ADR-0067). The current gateway does not yet serve every provider or embeddings; Issues #5819 and its MARR-12/MARR-13 tasks track that gap. This target does not prove that a production identity, task policy, embedding model, or release is active.
 - MARR-06 separates offline validation of an already-sanitized receipt (#5694) from live host acceptance (#5624); only the latter can clear the host/network acceptance gate.
 - No API credentials, host credentials, model downloads, or release-channel changes are part of the repository implementation slices. Live host/network activation requires its explicit operational gate.
+
+## Accepted Universal Product Portal Target
+
+ADR-0067 records the owner's 2026-10-07 decision: the Mac mini is the single model-access portal for
+Product chat/completion and embeddings; shared settings declare compatible models/profiles, and
+each Product clone or satellite selects its own profile locally. The Product router retains route
+selection authority; the Mac API hides provider harnesses and resolves host-local provider
+credentials. Product and Builder policies remain separate. The VLAN path is the active Ygg path;
+Tailscale is not required, and Ollama is optional rather than a universal health prerequisite.
+
+This is accepted target state, not shipped truth. MARR-12 adds provider adapters/catalog egress at
+the Mac API. MARR-13 routes Product model kinds, including embeddings, through that API and extends
+clone-local selection. The planned delivery order is server/API first, then Product integration, to
+keep one stable request contract. Neither task alone can claim the portal complete: Product clients
+send one exact selected route, the gateway performs one dispatch, and embedding identity/dimension
+changes fail explicitly before index writes. Parent #5819 owns integrated acceptance and current-state
+doc promotion; original Luna rollout gates remain under #5618.
+
+Implementation task specifications:
+
+- [MARR-12: Centralize Product provider egress on the Mac mini](CENTRALIZE_PROVIDER_EGRESS_ON_MAC_MINI.md)
+- [MARR-13: Route Product chat and embeddings through the Mac portal](ROUTE_PRODUCT_CHAT_AND_EMBEDDINGS_THROUGH_MAC_PORTAL.md)
 
 ## Existing Backlog Reconciliation
 
@@ -57,32 +79,42 @@ Deliver a thin Product API that hides the selected model harness behind one boun
 
 The accepted target request flow is:
 
-Product reads or refreshes a bounded catalog snapshot → Product policy selects the exact logical model route and required capabilities → Product client resolves the current Ygg VLAN-only profile (`ygg_vlan_primary`) → the VLAN ingress authenticates the caller and authorizes the Product channel/action → a no-inference `POST /v1/preflight` verifies that same route → each distinct completion request is preceded by a fresh preflight and sends exactly one `POST /v1/complete` → one selected model adapter executes the completion → the result and internal receipt retain route and path provenance.
+Product reads or refreshes a bounded catalog snapshot → Product policy selects the exact logical model route and required capabilities → Product client resolves the current Ygg VLAN-only profile (`ygg_vlan_primary`) → the VLAN ingress authenticates the caller with mutual TLS → a no-inference `POST /v1/preflight` verifies that same route → each distinct completion request is preceded by a fresh preflight and sends exactly one `POST /v1/complete` → one selected model adapter executes the completion → the result and internal receipt retain route and path provenance.
 
 Builder continues through its own resolver/profile and adapters. The shared facade does not make
 Product and Builder share policy or credentials.
 
-The shared facade remains policy-agnostic: Product resolves the route, and the executor API neither picks a model nor joins Product and Builder authority. Completion requests and responses carry exact provider, model, and transport identity. Preflight carries only that route and capability intent; it returns readiness or a sanitized typed failure and performs no inference. Catalog discovery likewise performs no inference; latest-compatible selection is a pure Product-side operation over a snapshot and caller-supplied policy allowlist.
+The shared facade remains policy-agnostic: Product resolves the logical route, and the executor API neither picks a model nor joins Product and Builder authority. A Product wire request carries the selected provider/model and task payload, but not a caller-selected transport or catalog proof; the Mac resolves those from its checked-in adapter/census and host catalog. Successful responses and internal receipts bind the resolved provider, model, transport, host, and catalog snapshot. The legacy exact-route `/v1/complete` and `/v1/preflight` compatibility operations still carry transport/provenance explicitly and are not the Product logical-route contract. Preflight returns readiness or a sanitized typed failure and performs no inference. Catalog discovery likewise performs no inference; latest-compatible selection is a pure Product-side operation over a snapshot and caller-supplied policy allowlist.
 
 The completion/catalog service exposes `POST /v1/complete`, `POST /v1/preflight`, and
-`POST /v1/catalog`. Its additional bounded System One operations are Product `POST /v1/judgment`
-and Builder `POST /v1/ckm-judgment`, each with a separate fixed payload, caller authorization and
-server-owned profile. They add no completion fallback or model-selection authority to callers.
+`POST /v1/catalog`. The logical Product surface exposes `POST /v1/product/catalog`,
+`POST /v1/product/preflight`, `POST /v1/product/complete`, and `POST /v1/product/embed`; each
+resolves its host transport from a Product provider/model request and returns the actual route
+identity. Embedding requests additionally bind one declared input and required vector dimension;
+responses return one dimension-checked vector without echoing input. Their host adapter performs one
+provider inference request, with no post-dispatch retry or provider switch. Its additional bounded System One operations are Product `POST /v1/judgment`
+and Builder `POST /v1/ckm-judgment`, each with a separate fixed payload and server-owned profile.
+VLAN ingress authentication applies to the API; no Tailscale claim or per-action capability header
+is required. They add no completion fallback or model-selection authority to callers.
 Completion supplies one declared provider/model/transport, optional reasoning
 effort, output schema, and output-token limit, a capability intent, trusted instructions, and user
 content as distinct fields. Preflight supplies only one declared provider/model/transport and
-capability intent. Catalog
-supplies only a declared `codex_cli` or `ollama_http` transport and returns a sanitized snapshot.
-None accepts commands, argv, paths, arbitrary environment, tools, MCP servers, provider endpoints,
-or credentials. Completion returns the exact route and result; preflight returns the exact route and
-sanitized readiness; catalog returns the snapshot's provider, descriptors, source/fetch metadata,
-freshness, and content hash.
+capability intent. The legacy exact-route catalog request supplies only one declared transport
+(`codex_cli`, `ollama_http`, `openai_api`, `anthropic_api`, or `deepseek_api`). Logical Product
+catalog requests supply only a provider; the Mac resolves its default declared adapter, including
+the pinned Gemini/mock embedding catalogs and the installed Ollama catalog. None accepts commands,
+argv, paths, arbitrary environment, tools, MCP servers, provider endpoints, or credentials.
+Completion and embedding return the exact host-resolved route and result; preflight returns the exact
+route and sanitized readiness; catalog returns the snapshot's provider, descriptors, source/fetch
+metadata, freshness, and content hash. Product embedding is a single-item request at the API
+boundary; any existing chunking/batching stays explicit in the Product caller and therefore each
+item has its own exact route receipt.
 
-The current executor API is exposed behind its configured authenticated ingress and remains
-loopback-bound. The current Ygg profile contains only the authenticated VLAN path. The generic path
-adapter can support explicitly configured additional transports, including Tailscale, but no such
-profile or Serve setup is required for Ygg acceptance or rollout. Each configured path enforces the
-same caller-owned channel and operation-specific authorization contract. Endpoint and identity material
+The current executor API is exposed behind its configured VLAN mTLS ingress and remains
+loopback-bound. The current Ygg profile contains only this VLAN path; Tailscale and Serve are not
+configured or required. This single-operator deployment uses network-level mTLS caller
+authentication without a second per-channel/action claim at the executor. Product and Builder policy
+remain separate at their resolvers and server-owned executor profiles. Endpoint and identity material
 remain host-local configuration.
 The Codex CLI profile path, `CODEX_HOME`, and subscription session also remain host-local.
 
@@ -111,7 +143,7 @@ transport before the pure latest-compatible selector can use it.
 
 1. Policy ownership: the facade accepts Product or Builder policy explicitly. If the neutral contract lands before either profile mapper, existing route behavior stays unchanged; no default policy is guessed.
 2. Model Inquiry isolation: the Codex alias continues to resolve exactly one target with fallback_forbidden. Product's Ollama fallback cannot enter Model Inquiry, including when shared adapter code is reused.
-3. Cross-host identity: every configured path authenticates a caller and authorizes the same Product channel/action contract. The current Ygg profile contains only VLAN. VLAN membership, source IP, user identity headers, or request-body claims alone are not authorization. An optional Tailscale adapter, if explicitly configured later, must forward only its scoped app-capability grant. The executor backend remains loopback-only; no public listener or unscoped shared bearer token is allowed.
+3. Cross-host identity: the current Ygg profile is VLAN mTLS only. The executor backend remains loopback-only; it does not trust request-body identity or Tailscale-injected claims. Tailscale is not required. Public listeners and unencrypted fallback are not allowed.
 4. Codex host isolation: Product Codex execution uses a dedicated empty cwd, read-only sandbox, ignored ambient user/project config, and an exact version-reviewed no-tools profile. It disables shell/execution and every other model-callable file, browser/computer, app, MCP, plugin, and agent capability. A new or unknown CLI tool/profile fails closed. Host authentication uses the existing interactive login session, never fresh non-interactive SSH.
 5. Prompt-channel preservation: trusted Product system-instruction content and untrusted user content remain separate end-to-end; the CLI maps them only to its distinct developer-instructions and user-prompt channels. No flattening or concatenation. The route does not assert literal system-role equivalence.
 6. Retry boundary: each completion sends one HTTP request. Any ambiguous completion result is terminal and does not retry the path or trigger a second provider call. Preflight is a distinct no-inference operation and may precede the single completion. Path failover preserves the exact logical executor, model, and capability intent.

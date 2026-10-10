@@ -499,7 +499,9 @@ def test_gemini_provider_identity_honors_profile_gemini_model() -> None:
     assert _resolve_embedding_model("gemini", "gemini-embedding-001", "gemini-embedding-2") == "gemini-embedding-001"
 
 
-def test_embed_probe_provider_override_reaches_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_embed_probe_provider_override_reaches_gemini(
+    monkeypatch: pytest.MonkeyPatch, product_model_access_gateway
+) -> None:
     """`embed-probe --provider gemini` selects the Gemini adapter (not the forced mock
     default) — with no key it reports unavailable and exits non-zero rather than silently
     validating mock or crashing with a traceback (Codex P2, #2302)."""
@@ -509,13 +511,18 @@ def test_embed_probe_provider_override_reaches_gemini(monkeypatch: pytest.Monkey
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     _unset_keys(monkeypatch)
     monkeypatch.setenv("EMBED_DIM", "768")
+    product_model_access_gateway.embedding_error = GeminiUnavailableError(
+        "GEMINI_API_KEY is not configured on the Mac model host"
+    )
     result = cli_runner(mix_stderr=True).invoke(embed_probe, ["--provider", "gemini"])
     assert result.exit_code != 0, result.output
     assert "provider=gemini" in result.output  # reached the gemini adapter, not mock
     assert "unavailable" in result.output.lower()
 
 
-def test_cli_group_embed_probe_forwards_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_group_embed_probe_forwards_provider(
+    monkeypatch: pytest.MonkeyPatch, product_model_access_gateway
+) -> None:
     """The canonical `python -m app.cli embed-probe --provider gemini` wrapper forwards
     --provider to the probe (Codex P2, #2302) — without it the documented path 500s on
     an unknown option."""
@@ -525,6 +532,9 @@ def test_cli_group_embed_probe_forwards_provider(monkeypatch: pytest.MonkeyPatch
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
     _unset_keys(monkeypatch)
     monkeypatch.setenv("EMBED_DIM", "768")
+    product_model_access_gateway.embedding_error = GeminiUnavailableError(
+        "GEMINI_API_KEY is not configured on the Mac model host"
+    )
     result = cli_runner(mix_stderr=True).invoke(cli, ["embed-probe", "--provider", "gemini"])
     # The option is accepted (not a usage error) and reaches the gemini adapter:
     assert "no such option" not in result.output.lower()

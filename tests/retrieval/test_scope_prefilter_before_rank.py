@@ -27,7 +27,10 @@ from app.retrieval.hybrid import (
 )
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 @pytest.fixture(autouse=True)
+
 def _mock_provider(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     yield

@@ -5,6 +5,8 @@ import pytest
 from app.retrieval.hybrid import get_store, hybrid_search
 
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 def test_hybrid_search_ranks_expected_doc(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "mock")
     store = get_store()

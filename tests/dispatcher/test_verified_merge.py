@@ -1510,7 +1510,7 @@ def test_merged_body_race_rejects_forged_stale_and_conflicting_evidence() -> Non
     )
 
 
-def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
+def test_merge_phase_cli_refuses_without_deployed_capability(tmp_path: Path) -> None:
     plan = prepare_verified_merge(
         context=_context(),
         pr=_pr(),
@@ -1585,10 +1585,9 @@ def test_merge_phase_cli_uses_production_phase_builder(tmp_path: Path) -> None:
         check=False,
     )
 
-    assert completed.returncode == 0, completed.stderr
-    result = json.loads(output_path.read_text(encoding="utf-8"))
-    assert result["phase_receipt"]["phase"] == "restored"
-    assert result["phase_receipt"]["closed_issues"] == [3820, 3823]
+    assert completed.returncode != 0
+    assert "ControlPlaneConfigError" in completed.stderr
+    assert not output_path.exists()
 
 
 def test_post_merge_race_reopens_only_closures_attributed_to_current_pr() -> None:
@@ -2724,3 +2723,30 @@ def test_restored_body_proof_cli_uses_production_verifier(tmp_path: Path) -> Non
 
     assert refused.returncode == 1
     assert json.loads(refused.stdout)["restored_body_matches_authority"] is False
+
+
+def test_v2_phase_chain_requires_identical_deployed_post_effect_authority():
+    from tests.dispatcher.verified_merge_projection_helpers import post_effect_authority
+    plan = prepare_verified_merge(context=_context(), pr=_pr(), live_closing_issues=[3820, 3823],
+                                  merge_readiness=_readiness())
+    authority = plan["authority_receipt"]
+    neutral = _pr(str(plan["neutralized_body"]))
+    merged = {**neutral, "state": "closed", "merged": True, "merged_at": "2026-10-09T10:00:00Z", "merge_commit_sha": "b" * 40}
+    restored = {**merged, "body": plan["original_body"]}
+    proof = post_effect_authority(authority, merged["merge_commit_sha"])
+    kwargs = projection_phase_kwargs(authority, neutral)
+    phases = [build_verified_merge_phase(authority_receipt=authority, phase=name,
+        pr=neutral if name == "prepared" else restored if name == "restored" else merged,
+        closed_issues=[3820, 3823] if name in {"reconciled", "restored"} else [], phase_version=2,
+        post_effect_authority=proof if name in {"reconciled", "restored"} else None, **kwargs)
+        for name in ("prepared", "merged", "reconciled", "restored")]
+    comments = [projection_convergence_comment(kwargs)] + [_trusted_comment(p["phase_receipt_comment"]) for p in phases]
+    assert resolve_verified_merge_phase(comments, authority_receipt=authority, pr=restored) == phases[-1]["phase_receipt"]
+    for key, value in (("task_id", "foreign"), ("run_id", "foreign"), ("operation_key", "a" * 64),
+                       ("fencing_token", 2), ("pending_receipt_sequence", 3), ("reconciled_receipt_sequence", 2),
+                       ("deployment", {**proof["deployment"], "source_sha": "a" * 40})):
+        changed = copy.deepcopy(phases[-1]["phase_receipt"])
+        changed["post_effect_authority"][key] = value
+        mutated = comments[:-1] + [_trusted_comment("verified issue-set merge phase:\n```json\n" + json.dumps(changed) + "\n```")]
+        assert resolve_verified_merge_phase(mutated, authority_receipt=authority, pr=restored) is None
+    assert resolve_verified_merge_phase(comments[:2] + comments[3:], authority_receipt=authority, pr=restored) is None

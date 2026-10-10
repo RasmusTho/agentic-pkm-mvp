@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Advisory only: the supervised adapter accepts one exact allowlisted marker,
+# never the child command's raw output. Keep the primary stage through recovery.
+DEPLOY_FAILURE_STAGE=preflight
+deploy_channel_failure_diagnostic() {
+  if [ "${1}" -ne 0 ] && [ "${BASH_SUBSHELL}" -eq 0 ]; then
+    printf 'YGGDRASIL_DEPLOY_FAILURE_STAGE=%s\n' "${DEPLOY_FAILURE_STAGE}" >&2
+  fi
+}
+trap 'deploy_channel_failure_diagnostic "$?"' EXIT
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 source "${ROOT}/scripts/lib/deploy_channel_compose.sh"
 source "${ROOT}/scripts/lib/instance_state_deployment.sh"
@@ -26,7 +36,8 @@ usage:
 
 Environment:
   DEPLOY_DRY_RUN=1                  print the plan and stop before writes/docker
-  DEPLOY_ACK_FORWARD_ONLY=1         acknowledge forward-only migrations
+  DEPLOY_ACK_FORWARD_ONLY=1         PROD-only acknowledgment for forward-only migrations
+                                    DEV/TEST classify and record without requiring acknowledgment
   DEPLOY_ACK_EMBEDDING_REBUILD_REQUIRED=1
                                     acknowledge only the embedding-index rebuild transition
   DEPLOY_HEALTH_TIMEOUT_SECONDS=90  health gate timeout
@@ -132,10 +143,13 @@ preflight_capture_watch_config() {
   local runtime_env_file="${1:?runtime env file required}"
   local capture_status
   capture_status="$(
-    RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON}" - 2>/dev/null <<'PY'
+    DEPLOY_REPO_ROOT="${ROOT}" RUNTIME_ENV_FILE="${runtime_env_file}" "${PYTHON}" - 2>/dev/null <<'PY'
 from pathlib import Path
 import os
 import sys
+
+sys.path.insert(0, os.environ["DEPLOY_REPO_ROOT"])
+from scripts.compose_env import compose_env_value
 
 path = Path(os.environ["RUNTIME_ENV_FILE"])
 try:
@@ -157,11 +171,11 @@ except (OSError, UnicodeError):
     print("blocked")
     raise SystemExit(0)
 
-values = [line[len("HEIMDAL_CAPTURE_WATCH_DIR="):] for line in lines
+values = [compose_env_value(line[len("HEIMDAL_CAPTURE_WATCH_DIR="):]) for line in lines
           if line.startswith("HEIMDAL_CAPTURE_WATCH_DIR=")]
 if len(values) > 1:
     print("blocked")
-elif values and values[0] != "":
+elif values and values[0]:
     print("configured")
 else:
     print("disabled")
@@ -178,18 +192,29 @@ PY
       return 78
       ;;
   esac
+  DEPLOY_CAPTURE_WATCH_CONFIGURED="${CAPTURE_WATCH_CONFIGURED}"
+  export DEPLOY_CAPTURE_WATCH_CONFIGURED
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ] && \
+      [ "${BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED:-invalid}" != "${DEPLOY_CAPTURE_WATCH_CONFIGURED}" ]; then
+    echo "capture-watch config preflight: blocked reason=supervisor_selection_mismatch" >&2
+    return 78
+  fi
 }
 
 # Gate Product-channel MARR bindings before creating the channel lock, materializing
-# migration files, or preparing host deployment state. Rollback keeps recovery
-# available by pinning the optional MARR references empty; the Compose helper
-# repeats that action or deploy validation before it snapshots the runtime env.
+# migration files, or preparing host deployment state. Recovery preserves valid
+# references and clears invalid optional input through the same Compose helper.
 if [ "${channel}" = "dev" ] || [ "${channel}" = "test" ] || [ "${channel}" = "prod" ]; then
   _deploy_channel_resolve_runtime_env_file "${ROOT}" "${channel}" "${pin_file}"
+  DEPLOY_FAILURE_STAGE=runtime_identity
+  deploy_channel_runtime_identity_preflight \
+    "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" || exit $?
+  DEPLOY_FAILURE_STAGE=model_access
   deploy_channel_model_access_preflight \
     "${DEPLOY_CHANNEL_RUNTIME_ENV_FILE}" \
     "/etc/yggdrasil/model-access/runtime.env" || exit $?
 fi
+DEPLOY_FAILURE_STAGE=preflight
 
 # Resolve the effective instance-state-init legacy setting before creating the
 # channel lock, pin markers, volumes, pulling an image, or touching Compose.
@@ -261,6 +286,7 @@ resolve_target_sha() {
 
 MIGRATIONS_CHECKED=0
 FORWARD_ONLY_COUNT=0
+PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING=0
 DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING=0
 export DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
 FORWARD_ONLY_MIGRATION_STARTED=0
@@ -271,9 +297,10 @@ MIGRATION_EXECUTION_APPLIED=0
 # retry inherits a marker from an earlier migration attempt whose commit state
 # remains ambiguous until that retry reaches a successful migration execution.
 MIGRATION_PENDING_MARKER_CREATED=0
+MIGRATION_PENDING_ACK=0
 migration_materialize_dir="$(mktemp -d "${TMPDIR:-/tmp}/pkm-deploy-migrations.XXXXXX")"
 deploy_lock_dir=""
-trap 'rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
+trap 'deploy_channel_failure_diagnostic "$?"; rm -rf "${migration_materialize_dir}"; [ -n "${deploy_lock_dir}" ] && rmdir "${deploy_lock_dir}" 2>/dev/null' EXIT
 
 acquire_channel_mutation_lock() {
   # Serialize the mutation phase (pending-marker + pin writes + compose) per
@@ -389,9 +416,39 @@ import sys
 
 path, channel = sys.argv[1:]
 metadata = os.lstat(path)
+raw_uid = os.environ.get("INSTANCE_OWNERSHIP_HOST_STATE_UID", os.environ.get("LOCAL_UID"))
+raw_gid = os.environ.get("INSTANCE_OWNERSHIP_HOST_STATE_GID", os.environ.get("LOCAL_GID"))
+if raw_uid is None and raw_gid is None:
+    runtime_uid, runtime_gid = os.geteuid(), os.getegid()
+elif (
+    raw_uid is None
+    or raw_gid is None
+    or not raw_uid.isascii()
+    or not raw_uid.isdecimal()
+    or not raw_gid.isascii()
+    or not raw_gid.isdecimal()
+):
+    raise SystemExit("settings rebind runtime floor identity is invalid")
+else:
+    uid_text = raw_uid.lstrip("0") or "0"
+    gid_text = raw_gid.lstrip("0") or "0"
+    if (
+        len(uid_text) > 10
+        or len(gid_text) > 10
+    ):
+        raise SystemExit("settings rebind runtime floor identity is out of range")
+    runtime_uid, runtime_gid = int(uid_text), int(gid_text)
+    if runtime_uid > 4_294_967_294 or runtime_gid > 4_294_967_294:
+        raise SystemExit("settings rebind runtime floor identity is out of range")
+if os.geteuid() != 0 and (runtime_uid != os.geteuid() or runtime_gid != os.getegid()):
+    raise SystemExit("settings rebind runtime floor identity differs from the caller")
+runtime_owned = metadata.st_uid == runtime_uid and metadata.st_gid == runtime_gid
+legacy_supervisor_owned = (
+    os.geteuid() == 0 and metadata.st_uid == 0 and metadata.st_gid == 0
+)
 if (
     not stat.S_ISREG(metadata.st_mode)
-    or metadata.st_uid != os.geteuid()
+    or not (runtime_owned or legacy_supervisor_owned)
     or stat.S_IMODE(metadata.st_mode) != 0o600
 ):
     raise SystemExit("settings rebind runtime floor receipt is not private")
@@ -650,12 +707,6 @@ paths = [Path(p) for p in sys.argv[2:]]
 receipt = check_all_migrations(paths)
 receipt["ack_forward_only"] = ack
 print(json.dumps(receipt, sort_keys=True))
-if receipt["forward_only"] and not ack:
-    print(
-        "forward-only migrations require DEPLOY_ACK_FORWARD_ONLY=1 or --ack-forward-only",
-        file=sys.stderr,
-    )
-    sys.exit(42)
 PY
 )"
   else
@@ -708,26 +759,35 @@ print("1" if pending else "0")
   MIGRATION_RECEIPT_JSON="${receipt_json}"
   DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING="${har_raw_pending}"
   export MIGRATION_RECEIPT_JSON DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ] && \
+      [ "${BWS_EXPECTED_RAW_MIGRATION_PENDING:-invalid}" != "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING}" ]; then
+    echo "migration gate blocked: supervisor consumer selection mismatch" >&2
+    return 78
+  fi
 }
 
 prepare_prod_forward_only_ack() {
   local gate_output gate_rc token token_lines
-  if [ "${action}" != "deploy" ] || [ "${channel}" != "prod" ] || \
-      [ "${FORWARD_ONLY_COUNT}" -eq 0 ]; then
+  if [ "${action}" != "deploy" ] || [ "${channel}" != "prod" ]; then
     return 0
   fi
 
-  # DEPLOY_ACK_FORWARD_ONLY is operator intent, not migration authority. Ask
-  # the production migrate producer for the exact live, target-bound token
-  # before any pin, pending marker, runtime mutation, or writer stop. A failed
-  # probe therefore leaves the current runtime untouched.
-  if [ "${ack_forward_only}" != "1" ]; then
-    echo "production forward-only migration requires the existing deploy acknowledgement" >&2
-    return 42
-  fi
+  # Probe every production deploy: an empty changed-migration delta does not
+  # prove the database is at the candidate's head (for example, after restore).
+  # The candidate's graph must be used, not whichever image remains in the
+  # channel pin. Bind both Compose image selectors to this resolved target for
+  # this invocation without writing the pin. Compose may fetch the candidate
+  # if it is not cached; token-only mode does not mutate the database or
+  # long-lived services. Any pending forward-only migration still requires
+  # acknowledgement before a pin, pending marker, runtime mutation, or writer
+  # stop.
   set +e
   export DEPLOY_MIGRATION_GATE_TOKEN_ONLY=1
-  gate_output="$(compose run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate)"
+  gate_output="$(
+    APP_IMAGE_REPOSITORY="${image_repository}" \
+      APP_IMAGE_TAG="${target_sha}" \
+      compose run --rm --no-deps -T -e MIGRATION_GATE_TOKEN_ONLY=1 migrate
+  )"
   gate_rc=$?
   unset DEPLOY_MIGRATION_GATE_TOKEN_ONLY
   set -e
@@ -740,9 +800,20 @@ prepare_prod_forward_only_ack() {
     return 78
   }
   token="${token_lines}"
+  if [ "${token}" = "prod-migration-no-forward-only-pending.v1" ]; then
+    echo "production migration probe accepted: no forward-only migration is pending; acknowledgement not required"
+    return 0
+  fi
   if [[ ! "${token}" =~ ^prod-migration-ack\.v1:[0-9a-f]{64}$ ]]; then
     echo "production migration token probe returned an invalid decision token before writer stop" >&2
     return 78
+  fi
+  if [ "${ack_forward_only}" != "1" ]; then
+    echo "production forward-only migration is pending; --ack-forward-only is required before writer stop" >&2
+    return 42
+  fi
+  if [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
+    PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING=1
   fi
   PROD_MIGRATION_FORWARD_ONLY_ACK="${token}"
   export PROD_MIGRATION_FORWARD_ONLY_ACK
@@ -750,8 +821,24 @@ prepare_prod_forward_only_ack() {
 }
 
 heimdal_raw_migration_secret_preflight() {
-  if [ "${action}" != "deploy" ] \
-      || [ "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING:-0}" != "1" ]; then
+  local rc=0
+  if [ "${action}" != "deploy" ]; then
+    return 0
+  fi
+
+  if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
+    # Also recheck active capture-watch selection when no raw migration is
+    # pending. The inherited guard validates the selected scope before mutation.
+    (cd "${ROOT}" && "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}") \
+      >/dev/null 2>/dev/null || rc=$?
+    if [ "${rc}" -ne 0 ]; then
+      echo "active secret consumer preflight failed: output=redacted" >&2
+      return "${rc}"
+    fi
+    return 0
+  fi
+
+  if [ "${DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING:-0}" != "1" ]; then
     return 0
   fi
 
@@ -759,15 +846,9 @@ heimdal_raw_migration_secret_preflight() {
   # mutation (pin/marker/volume/Docker/writer stop). The later one-shot
   # Compose wrapper resolves it again immediately before Alembic, closing the
   # check/use window without retaining a secret value or temporary handle.
-  local rc=0
   (
     cd "${ROOT}" || exit 1
     export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
-    if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
-      # The same-ID supervisor already owns admission and its project reader.
-      # Recheck through that inherited guard; the Mac child-launch path refuses BWS.
-      exec "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}"
-    fi
     exec "${PYTHON}" -m app.ops.host_secret_bootstrap \
       --channel "${channel}" \
       --consumer heimdal-raw-migrate \
@@ -943,8 +1024,9 @@ health_gate() {
       || ! acknowledged_embedding_readiness_failure; then
       return 1
     fi
-  fi
-  if [ "${action}" != "deploy" ] || [ "${ack_embedding_rebuild_required}" != "1" ]; then
+  else
+    # The acknowledgement is limited to the exact red /readyz embedding
+    # transition above. A green /readyz never waives required health.
     wait_json_required_ok "http://127.0.0.1:${api_port}/api/health" || return 1
   fi
   wait_json_ok "http://127.0.0.1:${ui_port}/healthz" || return 1
@@ -1095,7 +1177,8 @@ apply_changed_migrations() {
   # Rollback migrations are governed separately by rollback-promotion. Running
   # an older target image's `alembic upgrade head` against a newer stamped
   # database would fail before the known-good runtime can be restored.
-  if [ "${action}" != "deploy" ] || [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
+  if [ "${action}" != "deploy" ] || { [ "${MIGRATIONS_CHECKED}" -eq 0 ] && \
+      [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" != "1" ]; }; then
     return 0
   fi
 
@@ -1105,7 +1188,8 @@ apply_changed_migrations() {
   # migration authority explicitly before any target runtime is recreated.
   compose stop api worker watcher heimdal-capture-watch companion-ui || return $?
   MIGRATION_EXECUTION_STARTED=1
-  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ]; then
+  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ] || \
+      [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; then
     # From this point a nonzero Docker result is ambiguous: Alembic may have
     # committed before the client lost the container result. Fail closed by
     # retaining the schema-compatible target unless unchanged DB revision is
@@ -1114,7 +1198,8 @@ apply_changed_migrations() {
   fi
   compose up --abort-on-container-exit --exit-code-from migrate --force-recreate migrate || return $?
   MIGRATION_EXECUTION_APPLIED=1
-  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ]; then
+  if [ "${FORWARD_ONLY_COUNT}" -gt 0 ] || \
+      [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; then
     FORWARD_ONLY_MIGRATION_APPLIED=1
   fi
   rm -f "${migration_pending_file}"
@@ -1123,6 +1208,10 @@ apply_changed_migrations() {
 rollback_failed_startup() {
   local reason="$1" original_status="$2" forward_only_count="0"
   local current_floor_state="" inspection_rc=0 target_floor_state=""
+  if [ "${NATIVE_SOURCE_QUIESCENT:-1}" != 1 ]; then
+    echo 'native source producer quiescence is unproven; retaining target pin and pending operation without restarting runtime writers' >&2
+    return 0
+  fi
   if [ "${scalar_rollback}" = "1" ]; then
     echo "${reason} (status ${original_status}); retaining the current guard pin and scalar rollback target for a fail-closed retry" >&2
     return 0
@@ -1131,7 +1220,8 @@ rollback_failed_startup() {
     forward_only_count="$("${PYTHON}" -c 'import json,os; print(len(json.loads(os.environ["MIGRATION_RECEIPT_JSON"]).get("forward_only", [])))' 2>/dev/null || printf 'unknown')"
   fi
   if [ "${MIGRATION_EXECUTION_STARTED}" = "1" ]; then
-    if [ "${forward_only_count}" = "0" ]; then
+    if [ "${forward_only_count}" = "0" ] && \
+        [ "${FORWARD_ONLY_MIGRATION_STARTED}" != "1" ]; then
       if [ "${MIGRATION_EXECUTION_APPLIED}" = "1" ]; then
         echo "${reason} (status ${original_status}); reversible migration(s) were applied but are not reversed by the deploy hot path; the target pin is retained until rollback-promotion proves and executes the governed reversal" >&2
       else
@@ -1144,6 +1234,10 @@ rollback_failed_startup() {
     else
       echo "${reason} (status ${original_status}); forward-only migration execution started and its commit state is ambiguous; the target pin is retained until unchanged database revision is proven or a compatible forward fix is applied" >&2
     fi
+    return 0
+  fi
+  if [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; then
+    echo "${reason} (status ${original_status}); retaining the target pin and same-target forward-only migration marker for explicit retry" >&2
     return 0
   fi
   if [ -n "${current_sha}" ] && \
@@ -1198,9 +1292,8 @@ rollback_failed_startup() {
       # durable record of an ambiguous migration state.
       rm -f "${migration_pending_file}"
     fi
-    # Treat automatic previous-good recovery as rollback for optional route
-    # configuration too. The failed deploy may have observed a path file that
-    # later became invalid; recovery must clear MARR bindings and stay usable.
+    # Use the same recovery rule as explicit rollback: keep valid references,
+    # with legacy empty bindings only for missing/invalid optional input.
     if ! (
       action=rollback
       MVR01C_SCALAR_ROLLBACK=0 INSTANCE_STATE_LEGACY_ROLLBACK=1 \
@@ -1211,6 +1304,42 @@ rollback_failed_startup() {
   else
     echo "${reason} (status ${original_status}); rollback unavailable because no previous pin was recorded; retaining the no-baseline migration marker for same-target retry" >&2
   fi
+}
+
+native_source_container_quiescence() {
+  # Revalidate the still-held lock/current journal/target/API context before
+  # terminating anything. Derived Docker names/labels do not grant authority.
+  "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}" || return $?
+  PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON}" -c '
+import sys
+from app.ops.native_source_bootstrap import quiesce_owned_container
+raise SystemExit(0 if quiesce_owned_container(*sys.argv[1:]) else 78)
+' "${channel}" "$1" "${BWS_DEPLOY_OPERATION_ID}" "${target_sha}" >/dev/null 2>&1
+}
+
+native_source_projection_gate() {
+  if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
+    return 0
+  fi
+  local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0
+  [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 78
+  [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || return 78
+  [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
+    [ -f "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] && \
+    [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || return 78
+  name="pkm-${channel}-source-bootstrap-${operation}"
+  compose stop api worker watcher heimdal-capture-watch companion-ui || return $?
+  NATIVE_SOURCE_QUIESCENT=0
+  compose run --rm --no-deps -T --name "${name}" \
+    --label "yggdrasil.native.operation=${operation}" \
+    --label "yggdrasil.native.revision=${target_sha}" \
+    -e "NATIVE_SOURCE_BOOTSTRAP=${channel}:${target_sha}" api || rc=$?
+  if native_source_container_quiescence "${name}"; then
+    NATIVE_SOURCE_QUIESCENT=1
+  else
+    return 78
+  fi
+  return "${rc}"
 }
 
 run_postmutation_gate() {
@@ -1575,10 +1704,21 @@ if [ "${action}" = "deploy" ] && [ -f "${migration_pending_file}" ]; then
   fi
   if [ "${pending_ack}" = "1" ]; then
     ack_forward_only=1
+    MIGRATION_PENDING_ACK=1
   fi
   echo "migration retry: revalidating ${migration_from_sha:-<no-baseline>}..${target_sha} from durable pending marker"
 fi
+DEPLOY_FAILURE_STAGE=migration_inventory
 migration_gate "${migration_from_sha}" "${target_sha}"
+if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ] && \
+    [ "${MIGRATION_PENDING_ACK}" = "1" ] && [ "${MIGRATIONS_CHECKED}" -eq 0 ]; then
+  # A prior acknowledged empty-delta attempt may have committed its live
+  # forward-only migration before losing the client result. The durable
+  # same-target marker plus a freshly recomputed empty Git migration delta
+  # keeps retry execution explicit even when the new probe says the DB is at
+  # the candidate head. FROM_SHA and TARGET_SHA may be different code commits.
+  PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING=1
+fi
 
 if [ "${dry_run}" = "1" ]; then
   echo "dry-run: stopping before pin write, docker recreate, health gate, and receipt write"
@@ -1588,13 +1728,8 @@ fi
 # This gate must stay after dry-run (which performs no mutation) but before
 # every pin, marker, volume, Docker, or writer-stop operation. Archive readiness
 # must be established before the Keychain-backed migration secret is read.
+DEPLOY_FAILURE_STAGE=preflight
 heimdal_raw_migration_secret_preflight || exit $?
-
-# Prime the same live production gate that the real migration container will
-# re-run after writer drain. This joins the existing deploy acknowledgement to
-# the target-bound token without permitting a missing/false acknowledgement to
-# create a stopped-writer recovery state.
-prepare_prod_forward_only_ack || exit $?
 
 if ! scripts/companion_ui_postdeploy_smoke.sh preflight; then
   echo "companion UI preflight failed before channel mutation" >&2
@@ -1605,20 +1740,6 @@ if [ "${action}" = "deploy" ] && [ "${channel}" = "prod" ]; then
   "${PYTHON}" "${ROOT}/scripts/prod_devui_gateway_preflight.py" \
     "${ROOT}/docker-compose.prod.yml" || exit $?
 fi
-
-prepare_instance_ownership_host_state_dir
-classify_rollback_runtime || exit $?
-
-if [ "${scalar_rollback}" = "1" ]; then
-  prepare_scalar_rollback_environment || exit $?
-fi
-
-if [ "${action}" = "rollback" ]; then
-  INSTANCE_STATE_LEGACY_ROLLBACK=1
-else
-  INSTANCE_STATE_LEGACY_ROLLBACK=0
-fi
-export INSTANCE_STATE_LEGACY_ROLLBACK
 
 # Deploy-only by contract (#3903 Constraints): rollback must stay ungated so
 # the prior stable ref is always recoverable (DEFINE_ROLLBACK_CONTRACT.md).
@@ -1633,12 +1754,38 @@ if { [ "${channel}" = "dev" ] || [ "${channel}" = "test" ]; } && [ "${action}" =
   dev_test_environment_env_file_clobber_preflight || exit 90
 fi
 
+# Prime the same live production gate that the real migration container will
+# re-run after writer drain. Run all no-Docker admission preflights first, so a
+# blocked host or channel preflight remains Docker-free. This joins the deploy
+# acknowledgment to the target-bound token before any host-state, pin, volume,
+# runtime, writer-stop, or database mutation.
+DEPLOY_FAILURE_STAGE=migration_ack
+prepare_prod_forward_only_ack || exit $?
+
+DEPLOY_FAILURE_STAGE=runtime_prepare
+prepare_instance_ownership_host_state_dir
+classify_rollback_runtime || exit $?
+
+if [ "${scalar_rollback}" = "1" ]; then
+  prepare_scalar_rollback_environment || exit $?
+fi
+
+if [ "${action}" = "rollback" ]; then
+  INSTANCE_STATE_LEGACY_ROLLBACK=1
+else
+  INSTANCE_STATE_LEGACY_ROLLBACK=0
+fi
+export INSTANCE_STATE_LEGACY_ROLLBACK
+
 ensure_prod_instance_state_volume
 
 DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK="${ack_embedding_rebuild_required}"
 export DEPLOY_EMBEDDING_REBUILD_REQUIRED_ACK
 
-if [ "${action}" = "deploy" ] && [ "${MIGRATIONS_CHECKED}" -gt 0 ] && \
+DEPLOY_FAILURE_STAGE=pin_write
+if [ "${action}" = "deploy" ] && \
+    { [ "${MIGRATIONS_CHECKED}" -gt 0 ] || \
+      [ "${PROD_EMPTY_DELTA_FORWARD_ONLY_PENDING}" = "1" ]; } && \
     [ ! -f "${migration_pending_file}" ]; then
   write_pending_migration "${migration_from_sha}" "${target_sha}"
   MIGRATION_PENDING_MARKER_CREATED=1
@@ -1667,6 +1814,7 @@ postdeploy_smoke_gate() {
     scripts/companion_ui_postdeploy_smoke.sh "${channel}"
 }
 
+DEPLOY_FAILURE_STAGE=image_pull
 if [ "${scalar_rollback}" = "1" ]; then
   run_postmutation_gate "image pull failed" \
     compose pull scalar-rollback-guard api scalar-rollback-gateway || exit $?
@@ -1675,30 +1823,45 @@ else
     pull_channel_images || exit $?
 fi
 if [ "${scalar_rollback}" != "1" ] && [ "${action}" = "deploy" ]; then
+  DEPLOY_FAILURE_STAGE=scalar_retirement
   run_postmutation_gate "scalar rollback service retirement failed" \
     retire_scalar_rollback_services || exit $?
 fi
 if [ "${action}" = "deploy" ]; then
+  DEPLOY_FAILURE_STAGE=instance_prepare
   run_postmutation_gate "instance-state deployment preparation failed" \
     prepare_instance_state_deployment compose "${channel}" "${pin_file}" || exit $?
 fi
+DEPLOY_FAILURE_STAGE=migration_apply
 run_postmutation_gate "migration execution failed" apply_changed_migrations || exit $?
+DEPLOY_FAILURE_STAGE=source_projection
+run_postmutation_gate "native source projection gate failed" \
+  native_source_projection_gate || exit $?
+DEPLOY_FAILURE_STAGE=service_recreate
 run_postmutation_gate "service recreate/liveness gate failed" \
   recreate_channel_services || exit $?
 rollback_target_recreated=1
 if [ "${scalar_rollback}" = "1" ]; then
+  DEPLOY_FAILURE_STAGE=scalar_runtime
   run_postmutation_gate "scalar rollback runtime gate failed" \
     scalar_rollback_runtime_gate || exit $?
 else
+  DEPLOY_FAILURE_STAGE=embedding_configuration
   run_postmutation_gate "embedding provider configuration preflight failed" \
     embedding_provider_preflight_gate || exit $?
+  DEPLOY_FAILURE_STAGE=health
   run_postmutation_gate "health gate failed" health_gate || exit $?
+  DEPLOY_FAILURE_STAGE=version
   run_postmutation_gate "version gate failed" version_gate || exit $?
+  DEPLOY_FAILURE_STAGE=fleet_fitness
   run_postmutation_gate "fleet-model fitness gate failed" \
     fleet_model_fitness_gate || exit $?
+  DEPLOY_FAILURE_STAGE=ui_smoke
   run_postmutation_gate "companion UI post-deploy smoke failed" \
     postdeploy_smoke_gate || exit $?
+  DEPLOY_FAILURE_STAGE=capture_watch
   run_postmutation_gate "required capture-watch gate failed" \
     capture_watch_gate || exit $?
 fi
+DEPLOY_FAILURE_STAGE=receipt
 run_postmutation_gate "deploy receipt creation failed" record_receipt || exit $?

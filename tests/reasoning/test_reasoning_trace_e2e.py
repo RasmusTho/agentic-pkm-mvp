@@ -50,14 +50,14 @@ def _setup_trace_env(monkeypatch: pytest.MonkeyPatch, trace_path) -> None:
     monkeypatch.delenv("CI", raising=False)
 
 
-def test_reasoning_single_note_trace_has_non_empty_response_preview(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_reasoning_single_note_trace_has_non_empty_response_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, product_model_access_gateway
+) -> None:
     trace_path = tmp_path / "llm-trace.jsonl"
     _setup_trace_env(monkeypatch, trace_path)
 
     fake_json = _fake_reasoning_json("OBJ-SINGLE")
-    # call_llm no longer masks real-provider errors with a canned stub (#2108);
-    # simulate a successful ollama call so the trace records a real response.
-    monkeypatch.setattr("app.services.llm._ollama_chat", lambda *a, **k: fake_json)
+    product_model_access_gateway.completion_content = fake_json
 
     deliberation_agent = get_deliberation_agent()
     ri = ReasoningInput(object_uuid="OBJ-SINGLE", text="Note A about testing.", metadata={"trace_id": "T-single"}, relations=[])
@@ -73,21 +73,23 @@ def test_reasoning_single_note_trace_has_non_empty_response_preview(monkeypatch:
     assert any(isinstance(p, dict) and p.get("chars", 0) > 0 for p in previews), previews
 
 
-def test_set_evaluator_trace_has_non_empty_response_preview(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_set_evaluator_trace_has_non_empty_response_preview(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, product_model_access_gateway
+) -> None:
     trace_path = tmp_path / "llm-trace.jsonl"
     _setup_trace_env(monkeypatch, trace_path)
 
-    def _fake_ranking_chat(system, user, *args, **kwargs):
+    def _fake_ranking_completion(request) -> str:
         import re
 
-        uuids = list(dict.fromkeys(re.findall(r"[0-9a-fA-F-]{36}", user)))
+        uuids = list(dict.fromkeys(re.findall(r"[0-9a-fA-F-]{36}", request.user_input)))
         ranking = [
             {"object_uuid": u, "score": max(0.1, 1.0 - 0.05 * i), "reason": f"ranked {u}"}
             for i, u in enumerate(uuids)
         ]
         return json.dumps({"ranking": ranking})
 
-    monkeypatch.setattr("app.services.llm._ollama_chat", _fake_ranking_chat)
+    product_model_access_gateway.completion_content = _fake_ranking_completion
 
     reset_store_backends()
     store = get_object_store()

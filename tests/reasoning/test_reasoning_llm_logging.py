@@ -9,6 +9,7 @@ import pytest
 from app.agents.set_evaluator.agent import run_set_evaluator
 from app.reasoning.multi import run_multi_note_reasoning
 from app.reasoning.models import ReasoningMode
+from app.reasoning import provider as provider_module
 from app.reasoning.provider import get_deliberation_agent, run_reasoning
 from app.reasoning.schema import Inference, ReasoningInput, ReasoningOutput
 from app.stores import get_object_store, reset_store_backends
@@ -55,7 +56,9 @@ def _patch_reasoning_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CI", raising=False)
 
 
-def test_reasoning_single_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reasoning_single_note_logs_real_json(
+    monkeypatch: pytest.MonkeyPatch, product_model_access_gateway
+) -> None:
     _patch_reasoning_env(monkeypatch)
     fake_json = _fake_reasoning_json("OBJ-SINGLE")
 
@@ -64,11 +67,8 @@ def test_reasoning_single_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) -
     def fake_log_llm_call(**kwargs):
         captured.append(kwargs)
 
-    monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
-    # call_llm no longer masks real-provider errors with a canned stub (#2108);
-    # simulate a successful ollama call so logging is exercised on a real
-    # response rather than the removed error->deterministic fallback.
-    monkeypatch.setattr("app.services.llm._ollama_chat", lambda *a, **k: fake_json)
+    monkeypatch.setattr("app.components.llm.fabric.log_llm_call", fake_log_llm_call)
+    product_model_access_gateway.completion_content = fake_json
 
     deliberation_agent = get_deliberation_agent()
     note_text = "Note about safety and alignment."
@@ -87,7 +87,9 @@ def test_reasoning_single_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) -
     assert any("safety and alignment" in m.get("content", "") for m in messages if m.get("role") == "user")
 
 
-def test_reasoning_multi_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_reasoning_multi_note_logs_real_json(
+    monkeypatch: pytest.MonkeyPatch, product_model_access_gateway
+) -> None:
     _patch_reasoning_env(monkeypatch)
     fake_json = _fake_reasoning_json("OBJ-MULTI")
 
@@ -96,8 +98,8 @@ def test_reasoning_multi_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) ->
     def fake_log_llm_call(**kwargs):
         captured.append(kwargs)
 
-    monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
-    monkeypatch.setattr("app.services.llm._ollama_chat", lambda *a, **k: fake_json)
+    monkeypatch.setattr("app.components.llm.fabric.log_llm_call", fake_log_llm_call)
+    product_model_access_gateway.completion_content = fake_json
 
     reset_store_backends()
     store = get_object_store()
@@ -114,7 +116,9 @@ def test_reasoning_multi_note_logs_real_json(monkeypatch: pytest.MonkeyPatch) ->
     assert all("claims" in entry.get("response_text", "") for entry in captured)
 
 
-def test_multi_note_trace_preserves_degraded_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_multi_note_trace_preserves_degraded_outcome(
+    monkeypatch: pytest.MonkeyPatch, product_model_access_gateway
+) -> None:
     _patch_reasoning_env(monkeypatch)
     empty_json = json.dumps({"claims": [], "evidence": [], "inferences": []})
 
@@ -123,8 +127,8 @@ def test_multi_note_trace_preserves_degraded_outcome(monkeypatch: pytest.MonkeyP
     def fake_log_llm_call(**kwargs):
         captured.append(kwargs)
 
-    monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
-    monkeypatch.setattr("app.services.llm._ollama_chat", lambda *a, **k: empty_json)
+    monkeypatch.setattr("app.components.llm.fabric.log_llm_call", fake_log_llm_call)
+    product_model_access_gateway.completion_content = empty_json
 
     reset_store_backends()
     store = get_object_store()
@@ -148,15 +152,15 @@ def test_multi_note_trace_preserves_degraded_outcome(monkeypatch: pytest.MonkeyP
     assert all(entry["trace_id"] == "T-multi-degraded" for entry in captured)
 
 
-def test_provider_payload_cannot_override_runtime_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_provider_payload_cannot_override_runtime_outcome(
+    monkeypatch: pytest.MonkeyPatch, product_model_access_gateway
+) -> None:
     _patch_reasoning_env(monkeypatch)
     provider_json = json.loads(_fake_reasoning_json("55555555-5555-5555-5555-555555555555"))
     provider_json.update(
         {"outcome": "provider_failure", "degraded_reason": "provider_says_failure"}
     )
-    monkeypatch.setattr(
-        "app.services.llm._ollama_chat", lambda *a, **k: json.dumps(provider_json)
-    )
+    product_model_access_gateway.completion_content = json.dumps(provider_json)
 
     reset_store_backends()
     store = get_object_store()
@@ -214,6 +218,16 @@ def test_provider_failure_trace_preserves_degraded_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _patch_reasoning_env(monkeypatch)
+    synthetic_route = provider_module.LLMRoute(
+        provider="synthetic-provider",
+        model="synthetic-model",
+        mode="chat",
+        reason="test",
+    )
+    monkeypatch.setattr(
+        "app.reasoning.provider.resolve_effective_reasoning_route",
+        lambda: synthetic_route,
+    )
     reset_store_backends()
     store = get_object_store()
     object_id = UUID("66666666-6666-6666-6666-666666666666")
@@ -241,8 +255,8 @@ def test_provider_failure_trace_preserves_degraded_outcome(
     assert run.result["degraded_reason"] == "provider_failure"
     assert captured == [
         {
-            "provider": "ollama",
-            "model": "llama3.1:8b",
+            "provider": "synthetic-provider",
+            "model": "synthetic-model",
             "agent": "reasoning",
             "kind": "reasoning.claims",
             "messages": [],
@@ -297,7 +311,9 @@ def test_inference_only_provider_output_is_not_empty(
     assert run.result["inferences"][0]["id"] == "inference-only"
 
 
-def test_set_evaluator_logs_real_json(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_set_evaluator_logs_real_json(
+    monkeypatch: pytest.MonkeyPatch, product_model_access_gateway
+) -> None:
     _patch_reasoning_env(monkeypatch)
 
     captured: list[dict] = []
@@ -307,17 +323,17 @@ def test_set_evaluator_logs_real_json(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("app.services.llm.log_llm_call", fake_log_llm_call)
 
-    def _fake_ranking_chat(system, user, *args, **kwargs):
+    def _fake_ranking_completion(request) -> str:
         import re
 
-        uuids = list(dict.fromkeys(re.findall(r"[0-9a-fA-F-]{36}", user)))
+        uuids = list(dict.fromkeys(re.findall(r"[0-9a-fA-F-]{36}", request.user_input)))
         ranking = [
             {"object_uuid": u, "score": max(0.1, 1.0 - 0.05 * i), "reason": f"ranked {u}"}
             for i, u in enumerate(uuids)
         ]
         return json.dumps({"ranking": ranking})
 
-    monkeypatch.setattr("app.services.llm._ollama_chat", _fake_ranking_chat)
+    product_model_access_gateway.completion_content = _fake_ranking_completion
 
     store = get_object_store()
     c1 = str(UUID(int=1))

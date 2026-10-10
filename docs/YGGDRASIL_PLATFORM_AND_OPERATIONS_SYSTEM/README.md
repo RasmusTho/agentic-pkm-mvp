@@ -121,6 +121,94 @@ current-state claims and procedures to the documents below.
 | `ops/host-setup/README.md` | Specific host-provisioning procedure | Is a platform runbook, not a Product/Runtime or Builder System specification. |
 | `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md` | Heimdal's external helper-system ownership, Builder Vault record shape, credential boundary, and shared Discord capability | Owns who manages external helpers; this document owns host and topology mechanics only. |
 
+### Proposed separate infrastructure repository and disposable pilot (Issue #5856; preparation only)
+
+The repository split remains a proposal. This issue creates no repository, provider token, backend,
+state object, imported binding, VM, network, or deployment. If the owner approves the split, the
+private repository candidate is `yggdrasil-infra` (the final name is an owner decision). Its boundary
+is the Platform and Operations System and its first slice should be deliberately small:
+
+| Candidate surface | Owns | Does not own |
+| --- | --- | --- |
+| `infra/` OpenTofu root and modules | Proxmox VM, storage, and network resource lifecycle, provider configuration, import, plan, and later explicitly approved apply | Application images, Compose topology, migrations, release selection, database/data or vault semantics |
+| `guest/` Ansible roles and cloud-init templates | Guest prerequisites needed before a selected deployment, with versioned inputs and checkable output | Application services, channel promotion, secret administration, or a second deployment controller |
+| `checks/` | Short pilot checks for formatting, provider validation/plan, Ansible syntax/check mode, cloud-init schema/rendering, redaction, and state recovery | A dashboard, registry, queue, permanent evidence store, or copied monorepo governance |
+
+The recommended tool pairing is OpenTofu with the `bpg/proxmox` provider. The provider's primary
+documentation describes Terraform/OpenTofu support, API-token authentication, VM, storage, and
+network resources, and an import form of `node_name/vm_id` for the VM resource. It also documents
+that API-backed VM disk import through `import_from` needs no SSH or sudo. The future repository
+must pin the exact provider release that its compatibility check passes in its lock file; this
+preparation does not guess or claim that release. The provider's current resource-name migration
+and compatibility notes should be read before choosing a new short resource alias. A Linux bridge
+is intentionally not the first pilot resource: the provider's current issue tracker records an
+import/read failure on PVE 9.2.5, so network-resource coverage remains a later, separately reviewed
+choice.
+
+The checked primary references are the [provider overview](https://registry.terraform.io/providers/bpg/proxmox/latest/docs),
+[VM resource and import contract](https://registry.terraform.io/providers/bpg/proxmox/latest/docs/resources/virtual_environment_vm),
+[provider upgrade guidance](https://registry.terraform.io/providers/bpg/proxmox/latest/docs/guides/upgrade),
+[provider API-token guidance](https://github.com/bpg/terraform-provider-proxmox/blob/main/docs/index.md),
+and the [documented Linux-bridge import issue](https://github.com/bpg/terraform-provider-proxmox/issues/3029),
+reviewed 2026-10-09. The provider's sample role is explicitly described as likely too permissive and
+some operations are documented as unsupported with API tokens; the pilot must derive its actual
+permission set from the selected resource's API calls and Proxmox permission responses rather than
+copying that sample role.
+
+The pilot's effect boundary is one existing disposable dev/test VM selected by an operator outside
+Git. Its token is referenced from an approved secret source, scoped to that VM and the minimum
+read/plan operations, and never committed to the repository. The first pass is import and plan only:
+no production target, cluster-wide ACL, storage mutation, network mutation, SSH sudo rule, or
+application effect is in scope. If a later approved apply needs VM power, config, disk, or network
+permissions, each permission is added only after the planned API operation and its Proxmox
+permission requirement have been read back. API-only resources should be preferred; any resource
+that needs SSH, snippets, or host-side file operations requires a separate narrow account and
+review, and must not receive broad `qm`, `pvesm`, or root access.
+
+State must be outside Git in a private, encrypted, access-controlled, audited, versioned backend.
+The OpenTofu [S3 backend contract](https://opentofu.org/docs/language/settings/backends/s3/)
+documents server-side encryption, native S3 locking with `use_lockfile = true` or DynamoDB locking,
+and bucket versioning for recovery; the [state-locking contract](https://opentofu.org/docs/language/state/locking/)
+requires writes to stop when locking fails. The implementation follow-up must select a compatible
+existing backend and prove encryption, locking, access scope, versioned recovery, and the
+non-secret recovery procedure before any apply. No backend, lock service, or recovery claim is
+created by this preparation.
+
+The finite pilot acceptance and teardown checks are:
+
+1. The operator records an out-of-band disposable-resource identifier and confirms that it carries
+   no production, database, vault, or irreplaceable data; the repository stores only a redacted
+   reference.
+2. The future repository runs the pinned-provider lock check, `tofu fmt -check`, `tofu init`, and
+   `tofu validate`; `tofu import` binds the selected VM and a reviewed `tofu plan` reports no
+   unintended create, destroy, or replacement. Any non-zero change is a stop condition until the
+   configuration and resource owner explain it.
+3. Guest preparation runs `ansible-playbook --syntax-check` and `ansible-playbook --check --diff`
+   with sensitive tasks protected from output, then validates cloud-init with
+   `cloud-init schema --config-file` (or the image-supported equivalent) and checks the resulting
+   guest prerequisites. Ansible's [check/diff contract](https://docs.ansible.com/projects/ansible-core/devel/playbook_guide/playbooks_checkmode.html)
+   and cloud-init's [schema and instance-data contracts](https://cloudinit.readthedocs.io/en/latest/topics/instancedata.html)
+   are the primary references; neither check deploys the application.
+4. The backend test uses only disposable pilot state: lock acquisition and failure behavior,
+   versioned object recovery, state readback, and a no-concurrent-writer check are demonstrated.
+   A redacted plan and permission/readback evidence are retained with the implementation PR, never
+   with secrets or private host identifiers.
+5. Teardown removes the pilot state binding and any pilot-only guest configuration without
+   destroying the imported existing VM. A future disposable VM created by a separately authorized
+   implementation must use an explicit reviewed destroy plan; this issue authorizes no apply or
+   destroy.
+
+The implementation follow-up must record the final repository name, OpenTofu-versus-Terraform
+choice, exact provider lock, backend compatibility, resource identifier, least-privilege token
+scope, and the owner-approved apply/teardown authority. Application source and image artifacts,
+Compose units, migrations, release bindings, database/data and vault semantics remain with their
+current owners. The host/VM and complete-system qualification remains [#5052](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5052);
+the independent BuilderOps control plane remains [#3788](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3788);
+the dev/test/prod startup chain remains [#4913](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4913);
+and secret/provider qualification remains [#5667](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667).
+This proposal supplies an infrastructure interface and finite pilot checks; it does not create a
+new platform-completeness gate for Builder or promote target-state documentation to shipped truth.
+
 When an operational change changes present-tense reality, update the most local current-state owner
 above in the same delivery. When a change alters this system's scope, exclusion, or cross-system
 ownership, update this specification as well. A conflict over current behavior is resolved by the
@@ -174,3 +262,27 @@ repository authority: a bounded issue where implementation is needed, the releva
 and Builder/release owners for crossed boundaries, and current-state documentation writeback after
 the behavior is proven. This specification neither authorizes a new runtime subsystem nor changes
 product behavior by itself.
+
+### Proposed single-operator recovery boundary (Issue #5855; pending owner decision)
+
+For the existing Linux secret and channel-recovery surfaces, the proposed normal operating model is
+one designated agent-host controller coordinating the checked-in CLI/API producers and supervised VM
+worker. The controller's lock is cooperative host-local serialization, not global fencing. Retained
+human organization administration remains valid, but it is a separate break-glass/maintenance path;
+an out-of-band write invalidates the qualification observation until selected-target parity and the
+matching operation-ID terminal receipt are re-established.
+
+Platform and Operations owns host, VM, systemd, Compose, channel, file-ownership, and recovery
+mechanics. Builder System owns the repository delivery and evidence workflow. Product/Runtime owners
+retain product data, database-role, vault/context, migration intent, provider-key, and product
+side-effect authority. A platform wrapper may execute only already-authorized inputs and may report
+execution evidence; it cannot approve a credential scope, choose a target, rotate a secret, grant
+access, or treat a local lock as a global writer fence.
+
+The proposed model remains preparation-only until #5667 records one concrete owner choice: approve
+the designated normal writer with retained human administration and credential-restriction evidence,
+or require shared/distributed fencing before BWS administration, first-init bootstrap, and parity
+qualification. `--existing-secrets-only` remains a read/validate path where its own preconditions
+pass. No preparation receipt in this document claims live access, token installation, deployment,
+first healthy release, rollback, host cleanup, or channel qualification; those effects require their
+existing deployment, security, release, and operator gates.

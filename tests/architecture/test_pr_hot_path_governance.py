@@ -7,7 +7,11 @@ skill-only changes.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import NoReturn, Sequence
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -326,10 +330,44 @@ def test_pr_template_includes_builderops_routing_receipt() -> None:
         assert fragment in text, fragment
 
 
-def test_publication_surfaces_require_governing_issue_identity() -> None:
+@pytest.mark.parametrize("lane", ["implementation", "docs-authoring", "governance"])
+def test_publication_surfaces_require_governing_issue_identity(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], lane: str
+) -> None:
+    from scripts.publication import main
+
+    class ObservationReached(RuntimeError):
+        pass
+
+    class ReadOnlyProbe:
+        def __init__(self) -> None:
+            self.commands: list[tuple[str, ...]] = []
+
+        def run(self, argv: Sequence[str], *, cwd: Path, input_text: str | None = None) -> NoReturn:
+            self.commands.append(tuple(argv))
+            # Stop at the first local observation. Existing publication tests
+            # exercise the complete accepted lanes through exact PR readback.
+            assert tuple(argv) == ("git", "rev-parse", "--show-toplevel")
+            raise ObservationReached
+
+    body_input = tmp_path / "body.json"
+    body_input.write_text(json.dumps({"lane": lane, "issue_number": None}), encoding="utf-8")
+    argv = ["plan", "--repository", "RasmusTho/agentic-pkm-mvp", "--worktree", str(tmp_path),
+            "--branch", "codex/issue-free-contract", "--path", "docs/example.md", "--lane", lane,
+            "--tier", "2", "--risk-assessment-complete", "--review-gate-complete",
+            "--commit-message", "Bounded native publication", "--pr-title", "Bounded native publication",
+            "--pr-body-input-json", str(body_input)]
+    probe = ReadOnlyProbe()
+    if lane == "implementation":
+        assert main(argv, executor=probe) == 3
+        assert "implementation requires a governing Issue" in capsys.readouterr().err
+        assert probe.commands == []
+    else:
+        with pytest.raises(ObservationReached):
+            main(argv, executor=probe)
+        assert len(probe.commands) == 1
     publication_adapter = _read("app/builderops/publication.py")
 
-    assert 'plan.add_argument("--governing-issue", type=int, required=True)' in publication_adapter
     assert 'values.get("issue_number") != request.governing_issue' in publication_adapter
     assert 'argv.extend(["--issue-number", str(values["issue_number"])])' in publication_adapter
 
@@ -777,3 +815,36 @@ def test_validation_policy_reuses_evidence_without_relaxing_required_checks() ->
     implementation = _read(".codex/skills/issue-to-code/SKILL.md")
     assert "currently fails against the unchanged code path" not in implementation
     assert "One meaningful test may cover several ACs" in implementation
+
+
+def test_routine_evidence_policy_preserves_material_and_executor_boundaries() -> None:
+    """Routine evidence can stay in existing artifacts without weakening delivery gates."""
+    readme = _read(".codex/skills/README.md")
+    issue_to_code = _read(".codex/skills/issue-to-code/SKILL.md")
+    capture = _read(".codex/skills/capture-learning/SKILL.md")
+    retrospective = _read(".codex/skills/learning-retrospective/SKILL.md")
+    coordinator = _read(".codex/skills/deliver-issue-set/SKILL.md")
+    closeout = _read(".codex/skills/klart/SKILL.md")
+    verification = _read(".codex/skills/verification-and-closure/SKILL.md")
+    feedback = _read("docs/development/DELIVERY_FEEDBACK_LOOP.md")
+    proportionality = _read("docs/development/GOVERNANCE_PROPORTIONALITY.md")
+    closeout_normalized = " ".join(closeout.split())
+    coordinator_normalized = " ".join(coordinator.split())
+    feedback_normalized = " ".join(feedback.split())
+
+    assert "Routine delivery already represented by its Issue, PR, or reviewed repo artifact is" in " ".join(
+        issue_to_code.split()
+    )
+    assert "material, actionable-now" in issue_to_code
+    assert "weekly cold-path" in capture
+    assert "weekly cold-path review" in retrospective
+    assert "existing durable authority" in readme
+    assert "optional BuilderOps record availability is not an additional gate" in closeout_normalized
+    assert "protected executor" in readme
+    assert "Executor/in-flight delivery" in verification
+    assert "current-head CI cannot be replaced by local evidence" in verification
+    assert "identified worker/operation against live Issue/PR/SHA/worktree authority" in coordinator_normalized
+    assert "event/cursor wait surface" in coordinator_normalized
+    assert "known required check is failed" in coordinator_normalized
+    assert "No new queue, evidence" in proportionality
+    assert "material upstream repair is actionable now" in feedback_normalized

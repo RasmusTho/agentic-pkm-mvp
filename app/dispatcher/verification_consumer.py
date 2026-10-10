@@ -3862,7 +3862,8 @@ def delivered_live_truth_rejection(
         authority_receipt=authority_receipt,
         pr=pr,
     )
-    if phase is None or phase.get("phase") != "restored":
+    if (phase is None or phase.get("phase") != "restored"
+            or phase.get("contract") != "verified_issue_set_merge_phase.v2"):
         return "merge_phase_incomplete"
     if delivery_evidence.get("closure_scan_complete") is not True:
         return "closure_evidence_incomplete"
@@ -4216,7 +4217,7 @@ def _context_pack_from_authority(
         "stage": run.stage,
         "verification_skill": ".codex/skills/verification-and-closure/SKILL.md",
         "agent_adapter": ".codex/agents/verification-closer.toml",
-        "verified_merge_phase_contract": "verified_issue_set_merge_phase.v1",
+        "verified_merge_phase_contract": "verified_issue_set_merge_phase.v2",
         "verified_merge_phase_writer": (
             "scripts/build_verified_issue_set_merge_phase.py"
         ),

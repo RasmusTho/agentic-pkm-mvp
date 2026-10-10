@@ -167,9 +167,10 @@ def record_mvr05_runtime_floor(
 ) -> RegistrySnapshot:
     """Record the irreversible floor only after the derived stopped fence is proved."""
 
-    if fence.schema != MVR05_FENCE_SCHEMA or fence.migration_runner in fence.stopped_services:
-        raise Mvr05CutoverError("the MVR-05 fence plan is invalid")
     snapshot = registry_store.load()
+    if validate_mvr05_runtime_floor(snapshot, fence):
+        return snapshot
+
     extensions = snapshot.extensions or {}
     floors = dict(extensions.get("runtimeFloors") or {})
     receipt = {
@@ -177,17 +178,6 @@ def record_mvr05_runtime_floor(
         "channel_id": channel_id,
         "all_old_scalar_clients_stopped": True,
     }
-    existing_floor = str(floors.get("minimumRuntimeSchema") or "").strip()
-    existing_receipt = floors.get("mvr05CutoverFence")
-    if existing_floor:
-        if (
-            existing_floor != MVR05_RUNTIME_FLOOR
-            or not isinstance(existing_receipt, Mapping)
-            or existing_receipt.get("schema") != MVR05_FENCE_SCHEMA
-            or existing_receipt.get("all_old_scalar_clients_stopped") is not True
-        ):
-            raise Mvr05CutoverError("the existing runtime floor has different fence evidence")
-        return snapshot
     floors["minimumRuntimeSchema"] = MVR05_RUNTIME_FLOOR
     floors["mvr05CutoverFence"] = json.loads(json.dumps(receipt))
     return registry_store.set_extension_state(
@@ -197,6 +187,29 @@ def record_mvr05_runtime_floor(
         expected_revision=snapshot.revision,
         _capability=_capability,
     )
+
+
+def validate_mvr05_runtime_floor(
+    snapshot: RegistrySnapshot,
+    fence: Mvr05FencePlan,
+) -> bool:
+    """Validate the floor evidence and return whether this floor is already recorded."""
+
+    Mvr05FencePlan.from_payload(fence.as_payload())
+    extensions = snapshot.extensions or {}
+    floors = dict(extensions.get("runtimeFloors") or {})
+    existing_floor = str(floors.get("minimumRuntimeSchema") or "").strip()
+    if not existing_floor:
+        return False
+    existing_receipt = floors.get("mvr05CutoverFence")
+    if (
+        existing_floor != MVR05_RUNTIME_FLOOR
+        or not isinstance(existing_receipt, Mapping)
+        or existing_receipt.get("schema") != MVR05_FENCE_SCHEMA
+        or existing_receipt.get("all_old_scalar_clients_stopped") is not True
+    ):
+        raise Mvr05CutoverError("the existing runtime floor has different fence evidence")
+    return True
 
 
 def load_mvr05_fence_plan(path: Path) -> Mvr05FencePlan:
@@ -213,4 +226,5 @@ __all__ = [
     "discover_db_producer_fence",
     "load_mvr05_fence_plan",
     "record_mvr05_runtime_floor",
+    "validate_mvr05_runtime_floor",
 ]

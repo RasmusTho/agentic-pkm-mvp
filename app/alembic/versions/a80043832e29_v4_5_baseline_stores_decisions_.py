@@ -4,6 +4,7 @@ import sqlalchemy as sa
 
 revision = 'a80043832e29'
 down_revision = '6841f6d42913'
+reversibility = "forward-only"
 branch_labels = None
 depends_on = None
 

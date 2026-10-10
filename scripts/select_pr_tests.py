@@ -875,6 +875,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/components/reasoning",
             "tests/index/test_identity_migration.py",
             "tests/llm",
+            "tests/cli/test_embed_probe.py",
             "tests/eval",
             "tests/evals",
             *E2E_TARGETS["llm_eval"],
@@ -962,6 +963,8 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/services/test_outbox_idempotency.py",
             "tests/services/test_outbox_conn_binding.py",
             "tests/events",
+            "tests/services/test_companion_note.py",
+            "tests/services/test_companion_note_write_guard.py",
         ),
     ),
     (
@@ -1160,7 +1163,24 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 
 
 EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
-    "llm_eval": frozenset({"app/components/reasoning/facade.py"}),
+    # The companion/source predicate is shared by watcher traversal, queued
+    # workers and Alpha ingestion. A helper-only edit must execute all three
+    # existing source-boundary owners without claiming sibling services.
+    "watcher_sync": frozenset({"app/services/companion_note.py"}),
+    "store_ingest": frozenset({"app/services/companion_note.py"}),
+    "outbox_worker": frozenset({"app/services/companion_note.py"}),
+    "llm_eval": frozenset(
+        {
+            "app/components/reasoning/facade.py",
+            # The Product embedding probe now resolves clients through the LLM
+            # fabric; keep the CLI entrypoint on the same focused coverage.
+            "app/cli/embed_probe.py",
+        }
+    ),
+    # Product retrieval's embedding adapter is an exact seam between the LLM
+    # fabric and the memory/indexing owners. Route it through the established
+    # retrieval/index suites without claiming other components/ modules.
+    "memory_retrieval": frozenset({"app/components/retrieval.py"}),
     # Separator-only note-path normalization is shared by the vault and
     # knowledge modules, both covered by the vault owner's target set. Keep
     # this exact so a similarly named, unowned runtime module still fails closed.

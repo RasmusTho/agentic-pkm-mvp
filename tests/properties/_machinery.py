@@ -46,11 +46,15 @@ APP_ROOT = REPO_ROOT / "app"
 # from the formal model's Σ by declaration (formal-model.md §2.3) and MUST
 # NEVER run against a real vault -- they are not part of this census.
 
+# #5912 shifted these existing source-publication sites; their classifications
+# and event/payload justifications remain unchanged.
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 176): (
+    ("app/services/indexer.py", 195): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
-        "would be a duplicate, not completeness (formal-model.md T-materialize)."
+        "would be a duplicate, not completeness (formal-model.md T-materialize). "
+        "Line drifted 176 -> 175 (site unchanged) when #5820 simplified llm_embed_text "
+        "above while routing Product embeddings through the Mac portal."
     ),
     ("app/promotion/consumer.py", 98): (
         "_apply_promotion_to_store: the caller (consume_promotion_intents) emits "
@@ -62,7 +66,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "run_panel_note_execution, which emits panel.action.logged/blocked via the "
         "runtime's own outbox path (app/agents/panel_agent/runtime.py) for the same turn."
     ),
-    ("app/watcher/vault_watcher.py", 400): (
+    ("app/watcher/vault_watcher.py", 405): (
         "_hydrate_store_with_markdown: best-effort raw_text hydration for panel-scan "
         "note refresh; the mutating vault-sync path (T-sync) already emitted "
         "ingest.object.* for this note earlier in the same tick."
@@ -106,7 +110,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
-    ("app/ingest/vault_alpha.py", 780): (
+    ("app/ingest/vault_alpha.py", 781): (
         "Legacy vault-alpha compatibility save; the alpha ingest pipeline emits the "
         "corresponding ingest event upstream in the same run, so this mirror suppresses "
         "a duplicate."
@@ -458,12 +462,14 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "census's own directly-related-repair convention when #3451 bound "
         "write_frontmatter to the exact NoteRead version."
     ),
-    ("app/vault/manager.py", 949): (
+    ("app/vault/manager.py", 959): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
         "reaching this line. Line drifted 716 -> 841 -> 843 -> 924 -> 928 -> 934 -> 940 -> 944 (site unchanged) when "
-        "#3452 added conflict-quarantine receipt policy above the manager."
+        "#3452 added conflict-quarantine receipt policy above the manager. "
+        "Current main has the same site at line 949; #5846 adds ten lines above "
+        "the method, moving it to 959."
     ),
     ("app/vault/settings_service.py", 629): (
         "guarded: SettingsService.update_setting asserts "
@@ -496,12 +502,13 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 # closed so moving a write from ``write_frontmatter`` cannot make it disappear
 # from the WriteGuard inventory.
 WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/vault/manager.py", 729): (
+    ("app/vault/manager.py", 739): (
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
         "pre-selection initialization transition; O_EXCL preserves existing owner files. "
         "Line drifted 496 -> 621 -> 623 -> 704 -> 714 -> 720 (site unchanged) when #3164 added the "
         "nested canonical prompt seed, #3452 added conflict-quarantine receipt policy, and "
-        "SETTINGS-05C added the activation seam above the manager."
+        "SETTINGS-05C added the activation seam above the manager. Current main has the same "
+        "site at line 729; #5846 adds ten lines above it, moving it to 739."
     ),
     ("app/vault/settings_service.py", 708): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
@@ -1568,16 +1575,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
         "-> store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 780): (
+    ("app/ingest/vault_alpha.py", 781): (
         "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
         "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
         "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
     ),
-    ("app/ingest/vault_alpha.py", 783): (
+    ("app/ingest/vault_alpha.py", 784): (
         "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
         "store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 802): (
+    ("app/ingest/vault_alpha.py", 803): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
     ("app/ingest/vault_root.py", 194): (
@@ -1636,34 +1643,40 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "derived-artifact payload; ingest_object -> store_vector_index."
     ),
     # -- carries_via_indexed_unit_builder: payload = build_indexed_unit_payload(...) (the choke) --
-    ("app/cli/index_rebuild.py", 320): (
+    ("app/cli/index_rebuild.py", 321): (
         "carries_via_indexed_unit_builder: cold rebuild re-embeds store_objects rows through "
-        "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index."
+        "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index. "
+        "Line shifted 320 -> 321 when #5820 routed Product embedding through the portal client."
     ),
-    ("app/cli/index_rebuild.py", 726): (
+    ("app/cli/index_rebuild.py", 727): (
         "carries_via_indexed_unit_builder: fallback rebuild upsert via build_indexed_unit_payload "
-        "-> store_vector_index."
+        "-> store_vector_index. Line shifted 726 -> 727 when #5820 routed Product embedding "
+        "through the portal client."
     ),
-    ("app/indexer/consumer.py", 88): (
+    ("app/indexer/consumer.py", 92): (
         "carries_via_indexed_unit_builder: legacy embedding-in-event path; payload = "
-        "build_indexed_unit_payload(...) -> idx.upsert -> store_vector_index."
+        "build_indexed_unit_payload(...) -> idx.upsert -> store_vector_index. Line shifted "
+        "88 -> 92 when #5820 routed Product embedding through the portal client."
     ),
-    ("app/indexer/consumer.py", 180): (
+    ("app/indexer/consumer.py", 199): (
         "carries_via_indexed_unit_builder: INDEX_EMBEDDING_REQUESTED path; upsert_kwargs['payload'] "
-        "= build_indexed_unit_payload(payload=dict(obj.payload)) -> store_vector_index."
+        "= build_indexed_unit_payload(payload=dict(obj.payload)) -> store_vector_index. Line shifted "
+        "180 -> 199 when #5820 routed Product embedding through the portal client."
     ),
     ("app/search/service.py", 280): (
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 176): (
+    ("app/services/indexer.py", 195): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
-        "into the input on the vault-changed path and preserves an existing binding via the merge."
+        "into the input on the vault-changed path and preserves an existing binding via the merge. "
+        "Line shifted 176 -> 175 when #5820 routed Product embedding through the portal client."
     ),
-    ("app/services/indexer.py", 256): (
+    ("app/services/indexer.py", 277): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
-        "'payload'] = build_indexed_unit_payload(...) -> store_vector_index."
+        "'payload'] = build_indexed_unit_payload(...) -> store_vector_index. Line shifted 256 -> 257 "
+        "when #5820 routed Product embedding through the portal client."
     ),
     # -- preserves_existing_payload: update starting from dict(existing.payload) ------------------
     ("app/agents/panel/writeback.py", 213): (
@@ -1688,7 +1701,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "store_objects; a new-note branch has no prior row and no binding (unbound correct via the "
         "build_indexed_unit_payload choke at index time)."
     ),
-    ("app/watcher/vault_watcher.py", 400): (
+    ("app/watcher/vault_watcher.py", 405): (
         "preserves_existing_payload: _hydrate_store_with_markdown updates raw_text on "
         "dict(obj.payload); save_object -> store_objects; episode_ref preserved."
     ),

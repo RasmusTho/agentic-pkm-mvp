@@ -130,6 +130,7 @@ def build_request(
     pr: dict[str, object],
     issue: dict[str, object] | None = None,
     canary_receipt: Mapping[str, object] | None = None,
+    automatic: bool = False,
 ) -> dict[str, object] | None:
     """Return a dispatch request only for successful CI on the current PR head."""
     run = _as_dict(event.get("workflow_run"))
@@ -170,7 +171,7 @@ def build_request(
     final_review_rounds = resolve_final_review_rounds(pr.get("body"))
     if issue_authority is None or final_review_rounds is None:
         return None
-    if final_review_rounds == 0:
+    if final_review_rounds == 0 or (automatic and final_review_rounds == 1):
         return None
     live_closing_issues = _resolve_live_closing_issues(
         pr.get("live_closing_issues"), repository=repository
@@ -283,6 +284,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--canary-receipt-json", type=Path)
     parser.add_argument("--artifact-workflow-run-id", type=int, required=True)
     parser.add_argument("--artifact-repository-id", type=int, required=True)
+    parser.add_argument("--executor-request", action="store_true",
+                        help="Explicit executor request construction, including round 1.")
     args = parser.parse_args(argv)
 
     event = _load_json(args.event_json)
@@ -305,12 +308,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         pr=_load_json(args.pr_json),
         issue=_load_json(args.issue_json),
         canary_receipt=canary_receipt,
+        automatic=not (args.executor_request or args.canary_receipt_json is not None),
     )
     if request is None:
         final_review_rounds = resolve_final_review_rounds(
             _load_json(args.pr_json).get("body")
         )
-        reason = "light-path" if final_review_rounds == 0 else "ineligible"
+        reason = ("light-path" if final_review_rounds == 0 else
+                  "native-review" if final_review_rounds == 1 and not args.executor_request else
+                  "ineligible")
         _write_github_output(args.github_output, emitted=False, reason=reason)
         return 0
 

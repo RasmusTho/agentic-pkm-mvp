@@ -50,8 +50,10 @@ human involvement is reserved for genuine exceptions, not transitions between sk
 
 1. Bind the requested outcome, scope, authority, and any explicit stopping point before starting.
    A planning, analysis-only, review-only, intake-only, or draft-only request does not authorize the
-   downstream implementation, merge, or deployment. A delivery request includes its required
-   verification and closure; do not ask for that authority again at each skill boundary.
+   downstream implementation, merge, or deployment. Carry delivery authority through retries and
+   skill transitions while its scope/effects/constraints hold; do not repeat answered asks. Resolve
+   later explicit owner revisions once in the canonical contract through its owning workflow.
+   A transition creates no new authority; delivery still includes verification and closure.
 2. On completing a step, load and execute the next applicable skill now. Naming, recommending,
    reporting, or queuing it is not execution. Conditional routes run only when triggered. A skill
    output is intermediate evidence until the requested outcome has been verified.
@@ -110,28 +112,33 @@ Do not rely on a human remembering where BuilderOps material belongs.
 1. **Start checkpoint:** before implementation, maintenance, or audit work becomes durable, classify
    any raw notes, recovery context, docs freshness state, roadmap movement, learning, or proposed
    authority crossing. Create the matching BuilderOps record when the material is not already fully
-   represented by a GitHub Issue, PR, or reviewed repo artifact.
-2. **Divergence checkpoint:** whenever a plan, issue, doc, or skill turns out to be wrong while work
-   is active, invoke `capture-learning` immediately and create a `LearningSignal` instead of saving
-   the observation for a later human memory pass.
+   represented by a GitHub Issue, PR, or reviewed repo artifact. If optional record infrastructure is
+   unavailable, preserve substantial material in an existing durable authority and report the
+   limitation once; never fake a write or block otherwise verified delivery.
+2. **Divergence checkpoint:** when a plan, issue, doc, or skill turns out to be wrong and a material,
+   actionable upstream repair is needed now, invoke `capture-learning` before continuing. Minor,
+   repetitive, or not-yet-actionable observations enter the bounded weekly cold-path retrospective;
+   do not interrupt routine delivery for them.
 3. **Publication checkpoint:** Tier 2+ PR bodies must state the BuilderOps routing outcome: records
    created, projections or receipts updated, or `none` with a short reason. Tier 1 PRs
    (docs-authoring or governance lane, per `docs/development/GOVERNANCE_PROPORTIONALITY.md`) may omit
    the section entirely when nothing was routed — absence means `none`; a present but unfilled
    section is still a contract violation.
-4. **Closure checkpoint:** before merge or delivery receipt, unresolved adoption, retro, freshness,
-   roadmap, or promotion observations must be represented by a BuilderOps record, a bounded GitHub
-   Issue with `Verify:` targets, or an explicit `none` reason.
+4. **Closure checkpoint:** before merge or delivery receipt, unresolved material adoption, retro,
+   freshness, roadmap, or promotion observations must be represented by a BuilderOps record, a
+   bounded GitHub Issue with `Verify:` targets, or an explicit `none` reason. Routine evidence already
+   represented by the Issue, PR, or reviewed artifact is sufficient for `none`; protected executor
+   and in-flight receipts remain mandatory.
 5. **Automation checkpoint:** recurring Codex automations for this repo must read the relevant
    workflow skill and route high-churn operational material to BuilderOps first. `docs/learning-log.md`
    is historical/fallback only; generated projections are readable views only.
 6. **Analysis checkpoint (no PR in flight):** the checkpoints above are anchored to work that is
    already implementation-, delivery-, or automation-bound. A standalone research pass, prior-art
    sweep, architecture analysis, or other chat-turn work product that answers a question but produces
-   no PR still needs a home — it does not get a pass just because none of checkpoints 1-5 fired. Before
-   treating that thread as closed, create the matching BuilderOps record (usually `AgentWorklog`) for
-   any findings, sources, or process narrative worth keeping, unless the material is trivial enough
-   that losing it costs nothing.
+   no PR still needs an existing durable authority — usually an Issue, reviewed working artifact, or
+   PR. If optional record infrastructure is unavailable, use that authority and report the limitation
+   once; use the compatibility fallback only when no better existing authority applies. Do not close
+   with substantial findings held only in ephemeral chat or scratch context.
 
 ## Structural-work design packet route
 
@@ -264,9 +271,9 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
 - `capture-learning`
   - micro-skill: create one BuilderOps `LearningSignal` when a builder-workflow plan divergence occurs; invoke on divergence, not on normal work; use `docs/learning-log.md` only as historical/compatibility fallback; never treat builder learning as runtime/user memory without Product System authority
 - `owner-decision-brief`
-  - thin Yggdrasil profile: invoke at the moment any workflow is about to ask the owner for a decision (`agent:needs-human`, an operator ask, an inline question); load the repo-local `decision-quality` skill as the single decision method, preserve contractual operator and local vault-binding gates, apply repo authority and no-parallel-store constraints, and render the resulting owner ask as one standalone plain-language brief
+  - thin Yggdrasil profile for material owner decisions and required operator acknowledgments; use full Decision Quality, preserve operator and local vault-binding gates, and render one plain-language brief
 - `decision-quality`
-  - universal decision method for human or authorized-agent choices; classifies agent action, access, acceptance observation, and genuine decisions before escalation, then uses context passes and weakest-link control
+  - compact mandate/risk/verification check for routine reversible agent work; full two-pass, seven-dimension method for material human decisions, irreversible commitments, and operator gates; decision-support design review
 - `learning-retrospective`
   - cadence-triggered: read BuilderOps `LearningSignal` records and the generated learning-summary projection, include historical `docs/learning-log.md` compatibility entries only when needed, cluster by upstream artifact, and propose concrete edits for human review; when explicitly requested, run autonomous maintenance by applying safe governance fixes, creating Issues for unresolved work, and recording a BuilderOps retrospective receipt
 - `learning-to-issue`

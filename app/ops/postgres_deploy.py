@@ -18,6 +18,7 @@ from uuid import UUID, uuid4
 
 from app.config.database import resolve_database_url, normalize_database_url
 from app.ops.bws_secret_admin import SecretCopy
+from app.ops.bws_secret_reader import BwsItemAbsent
 from app.ops.host_secret_bootstrap import _resolve_bws_consumer_values, validate_secret_value
 from app.ops.host_secret_contract import CHANNEL_PROJECTS, DATABASE_CONSUMERS, load_host_secret_contract
 from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
@@ -35,10 +36,12 @@ class DeployPlan:
     revision: str
     services: tuple[str, ...]
     consumers: tuple[str, ...]
+    ack_forward_only: bool = False
 
     def validate(self) -> None:
         contract = load_host_secret_contract()
-        if (self.channel not in CHANNEL_PROJECTS or len(self.revision) != 40
+        if (type(self.ack_forward_only) is not bool
+            or self.channel not in CHANNEL_PROJECTS or len(self.revision) != 40
             or any(c not in '0123456789abcdef' for c in self.revision)
             or not self.services or len(set(self.services)) != len(self.services)
             or not self.consumers or len(set(self.consumers)) != len(self.consumers)):
@@ -66,8 +69,8 @@ class DeployReceipt:
     def validate(self) -> None:
         if (str(UUID(self.operation_id)) != self.operation_id or self.channel not in CHANNEL_PROJECTS
             or self.kind != 'deploy'
-            or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'committed', 'aborted'}
-            or self.terminal_result != (self.stage if self.stage in {'committed', 'aborted'} else None)):
+            or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'committed', 'aborted', 'failed'}
+            or self.terminal_result != (self.stage if self.stage in {'committed', 'aborted', 'failed'} else None)):
             raise PostgresDeployError()
 
     def evidence(self) -> TerminalEvidence:
@@ -171,13 +174,13 @@ class DeployJournal:
 
     def write(self, operation_id: str, stage: str) -> DeployReceipt:
         receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
-                                stage if stage in {'committed', 'aborted'} else None)
+                                stage if stage in {'committed', 'aborted', 'failed'} else None)
         receipt.validate()
         previous = self.read()
         successors = {
             'prepared': {'preflighted', 'aborted'}, 'preflighted': {'materialized', 'aborted'},
             'materialized': {'authenticating', 'activating', 'aborted'},
-            'authenticating': {'activating', 'aborted'}, 'activating': {'committed', 'aborted'},
+            'authenticating': {'activating', 'aborted'}, 'activating': {'committed', 'aborted', 'failed'},
         }
         if previous and previous.terminal_result is None:
             if previous.operation_id != operation_id or stage not in successors.get(previous.stage, set()):
@@ -205,9 +208,16 @@ class DeployJournal:
 def vm_selected_values(plan: DeployPlan, reader: Any) -> dict[str, dict[str, str]]:
     plan.validate()
     contract = load_host_secret_contract()
+    # Reuse one successful or absent lookup only within this preflight. The
+    # worker calls this function again at each boundary to re-read BWS state.
+    lookup_cache: dict[tuple[str, str], str | BwsItemAbsent] = {}
     try:
-        return {consumer: _resolve_bws_consumer_values(plan.channel, consumer, contract, reader)
-                for consumer in plan.consumers}
+        values = {}
+        for consumer in plan.consumers:
+            values[consumer] = _resolve_bws_consumer_values(
+                plan.channel, consumer, contract, reader, lookup_cache=lookup_cache
+            )
+        return values
     except Exception:
         raise PostgresDeployError() from None
 
@@ -363,15 +373,23 @@ def bootstrap_password(admin: SecretAdmin, operation: HostSecretOperation, *, em
 
 
 def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
-                     *, qualified: Callable[[], None]) -> DeployReceipt:
+                     *, qualified: Callable[[], None], allow_bootstrap: bool = True) -> DeployReceipt:
     """Hold the shared controller lock through matching remote terminal evidence."""
+    if type(allow_bootstrap) is not bool:
+        raise PostgresDeployError()
     plan.validate()
-    qualified()  # The owner-controlled sole-writer/credential restriction gate.
     try:
-        with admin.controller.deploy_operation(plan.channel) as (operation, resumed):
+        with admin.controller.deploy_operation(
+            plan.channel, allow_bootstrap=allow_bootstrap
+        ) as (operation, resumed):
             with SecretHistory.open(admin.controller.directory) as history:
                 bootstrap_history = bool(history.records(operation.operation_id)) if resumed else False
             if bootstrap_history:
+                if not allow_bootstrap:
+                    raise PostgresDeployError()
+                # A resumed bootstrap may still send a BWS create; retain the
+                # owner qualification before its first remote recovery call.
+                qualified()
                 empty = remote.prepare(operation.operation_id, plan, bootstrap=True)
                 if empty:
                     bootstrap_password(admin, operation, empty=True)
@@ -384,6 +402,14 @@ def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
                 missing_password = any(row == {'secret': 'postgres.password', 'status': 'missing'} for row in statuses)
                 if any(row['status'] not in {'ok', 'skipped'} and row != {'secret': 'postgres.password', 'status': 'missing'} for row in statuses):
                     raise PostgresDeployError()
+                if missing_password and not allow_bootstrap:
+                    # Read-only Product rollouts must stop before persisting a
+                    # host mutation or asking the VM to inspect/bootstrap data.
+                    raise PostgresDeployError()
+                if missing_password:
+                    # A missing password can proceed only on the explicitly
+                    # allowed first-init path, qualified before any RPC.
+                    qualified()
                 operation.prepare_mutation()
                 empty = remote.prepare(operation.operation_id, plan, bootstrap=missing_password)
                 if missing_password:

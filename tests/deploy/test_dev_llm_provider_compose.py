@@ -85,3 +85,30 @@ def test_dev_runtime_services_use_configured_provider_with_mock_default(
         assert isinstance(configured_service, dict)
         assert _environment(default_service)["LLM_PROVIDER"] == "mock"
         assert _environment(configured_service)["LLM_PROVIDER"] == "mock"
+
+
+def test_dev_product_callers_allow_task_policy_with_mock_default(
+    tmp_path: Path,
+) -> None:
+    default_services = _merged_dev_compose(tmp_path)["services"]
+    configured_services = _merged_dev_compose(
+        tmp_path, llm_provider="governed-provider"
+    )["services"]
+    assert isinstance(default_services, dict)
+    assert isinstance(configured_services, dict)
+
+    for name in ("api", "worker", "watcher"):
+        default_service = default_services[name]
+        configured_service = configured_services[name]
+        assert isinstance(default_service, dict)
+        assert isinstance(configured_service, dict)
+        assert _environment(default_service)["LLM_PROVIDER"] == "mock"
+        assert _environment(default_service)["LLM_PROVIDER_ENFORCE"] == "0"
+        assert _environment(configured_service)["LLM_PROVIDER"] == "governed-provider"
+        assert _environment(configured_service)["LLM_PROVIDER_ENFORCE"] == "0"
+
+    for name, service in default_services.items():
+        if name in {"api", "worker", "watcher"}:
+            continue
+        assert isinstance(service, dict)
+        assert _environment(service).get("LLM_PROVIDER_ENFORCE") != "0"

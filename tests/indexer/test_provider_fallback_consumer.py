@@ -19,16 +19,22 @@ class _SpyVectorIndex:
     def __init__(self) -> None:
         self.upsert_calls: list[dict[str, object]] = []
         self.purge_calls: list[UUID] = []
+        self.identity: EmbeddingIdentity | None = None
+        self.vectors: dict[UUID, dict[str, object]] = {}
+
+    def get_identity(self) -> EmbeddingIdentity | None:
+        return self.identity
 
     def purge_vectors(self, object_id: UUID, *, view: str) -> int:
         del view
         self.purge_calls.append(object_id)
-        return 0
+        return int(self.vectors.pop(object_id, None) is not None)
 
     def upsert(self, object_id: UUID, **kwargs) -> None:
         call = dict(kwargs)
         call["object_id"] = object_id
         self.upsert_calls.append(call)
+        self.vectors[object_id] = call
 
 
 class _FakeEmbeddingClient:
@@ -76,7 +82,11 @@ def test_fallback_invoked_from_process_event(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(fallback_orchestrator, "embed_with_retry", fake_embed_with_retry)
     monkeypatch.setattr(fallback_orchestrator, "_resolve_fallback_identity", lambda provider: fallback_identity)
-    monkeypatch.setattr(fallback_orchestrator, "get_embedding_client", lambda **kwargs: fallback_client)
+    monkeypatch.setattr(
+        fallback_orchestrator,
+        "get_product_embedding_client_for_identity",
+        lambda _identity: fallback_client,
+    )
     monkeypatch.setattr("app.indexer.consumer.get_embeddings_client", lambda intent: primary_embedder)
     monkeypatch.setattr("app.indexer.consumer.get_vector_index", lambda: spy_index)
     monkeypatch.setattr(
@@ -164,6 +174,62 @@ def test_process_event_embeds_and_projects_exact_canonical_bytes(monkeypatch) ->
     assert payload["content"] == canonical
     assert payload["text"] == canonical
     assert payload["provenance"]["content_hash"] == compute_content_hash(canonical)
+
+
+def test_process_event_rejects_index_identity_drift_before_inference_or_vector_removal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.indexer.consumer import process_event
+
+    stored_identity = EmbeddingIdentity(
+        provider="ollama", model="nomic-embed-text", dim=768
+    )
+    selected_identity = EmbeddingIdentity(
+        provider="gemini", model="gemini-embedding-001", dim=768
+    )
+    embedder = _FakeEmbeddingClient(selected_identity, [0.5] * selected_identity.dim)
+    vector_index = _SpyVectorIndex()
+    vector_index.identity = stored_identity
+    object_id = UUID("45454545-4545-4545-4545-454545454545")
+    previous_vector = {
+        "identity": stored_identity,
+        "embedding": [0.25] * stored_identity.dim,
+        "payload": {"content": "previously indexed content"},
+    }
+    vector_index.vectors[object_id] = previous_vector
+    failures: list[dict[str, object]] = []
+    monkeypatch.setattr("app.indexer.consumer.get_embeddings_client", lambda _intent: embedder)
+    monkeypatch.setattr("app.indexer.consumer.get_vector_index", lambda: vector_index)
+    monkeypatch.setattr(
+        "app.indexer.consumer.outbox_events.emit_index_embedding_failed",
+        lambda **kwargs: failures.append(kwargs),
+    )
+
+    ObjectStore().save_object(
+        DomainObject(
+            uuid=str(object_id),
+            kind="note",
+            payload={"content": "new content"},
+            source_ref="vault/identity-drift.md",
+            created_at=datetime.now(timezone.utc),
+        ),
+        emit_outbox=False,
+    )
+
+    process_event(
+        {
+            "event": outbox_events.INDEX_EMBEDDING_REQUESTED,
+            "payload": {"object_id": str(object_id)},
+        }
+    )
+
+    assert embedder.calls == []
+    assert vector_index.purge_calls == []
+    assert vector_index.upsert_calls == []
+    assert vector_index.vectors[object_id] is previous_vector
+    assert len(failures) == 1
+    assert failures[0]["provider"] == selected_identity.provider
+    assert "index rebuild" in str(failures[0]["error"])
 
 
 def test_process_event_does_not_recreate_panel_only_vector(monkeypatch) -> None:

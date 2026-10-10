@@ -43,6 +43,22 @@ def test_census_loads_and_rejects_unknown_fields(tmp_path: Path) -> None:
         load_provider_census(bad)
 
 
+def test_model_reasoning_efforts_distinguish_unknown_from_explicitly_unsupported() -> None:
+    openai = _census().provider("openai")
+    models = {model.id: model for model in openai.models}
+
+    assert models["gpt-4.1"].reasoning_efforts == []
+    assert models["gpt-6-luna"].reasoning_efforts == [
+        "none",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+    ]
+    assert models["gpt-5.3-codex-spark"].reasoning_efforts is None
+
+
 @pytest.mark.parametrize(
     ("site", "actual"),
     [

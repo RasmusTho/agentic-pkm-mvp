@@ -4,6 +4,7 @@ import uuid
 
 revision = "fe9a3607841f"
 down_revision = None
+reversibility = "forward-only"
 branch_labels = None
 depends_on = None
 

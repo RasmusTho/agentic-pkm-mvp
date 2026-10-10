@@ -18,25 +18,7 @@ from app.model_access.codex_executor_service import (
     require_loopback_bind_host,
     serve_executor,
 )
-from app.model_access.ollama_http import OllamaHttpAdapter
-
-
-CAPABILITY_NAME = "model-access.example/cap/complete"
-CAPABILITY_HEADER = {
-    "Tailscale-App-Capabilities": json.dumps(
-        {CAPABILITY_NAME: [{"channel": "product", "actions": ["complete"]}]}
-    )
-}
-PREFLIGHT_CAPABILITY_HEADER = {
-    "Tailscale-App-Capabilities": json.dumps(
-        {CAPABILITY_NAME: [{"channel": "product", "actions": ["preflight"]}]}
-    )
-}
-CATALOG_CAPABILITY_HEADER = {
-    "Tailscale-App-Capabilities": json.dumps(
-        {CAPABILITY_NAME: [{"channel": "product", "actions": ["catalog"]}]}
-    )
-}
+from app.model_access.ollama_http import OllamaHttpAdapter, OllamaHttpCatalogModel
 
 
 class FakeCodexExecutor:
@@ -61,13 +43,21 @@ class FakeCodexExecutor:
         self.catalog_calls += 1
         return [
             {
+                "model": "gpt-6-luna",
+                "hidden": False,
+                "supportedReasoningEfforts": [
+                    {"reasoningEffort": "low"},
+                    {"reasoningEffort": "xhigh"},
+                ],
+            },
+            {
                 "model": "gpt-5.6-luna",
                 "hidden": False,
                 "supportedReasoningEfforts": [
                     {"reasoningEffort": "low"},
                     {"reasoningEffort": "xhigh"},
                 ],
-            }
+            },
         ]
 
 
@@ -83,6 +73,9 @@ class FakeOllamaAdapter:
     def complete(self, **kwargs: Any) -> str:
         self.calls.append(kwargs)
         return "ollama result"
+
+    def list_models(self) -> tuple[OllamaHttpCatalogModel, ...]:
+        return (OllamaHttpCatalogModel("llama3.1:8b", None),)
 
 
 def _factory() -> ModelAccessAdapterFactory:
@@ -106,7 +99,6 @@ def _app(
         codex_executor=codex,  # type: ignore[arg-type]
         ollama_adapter=ollama,  # type: ignore[arg-type]
         adapter_factory=_factory(),
-        serve_capability_name=CAPABILITY_NAME,
         max_request_bytes=max_request_bytes,
         max_output_bytes=max_output_bytes,
     )
@@ -135,13 +127,44 @@ def _payload(transport_id: str = "codex_cli") -> dict[str, Any]:
     }
 
 
-def test_main_requires_configured_ollama_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CODEX_CLI_SAFE_PROFILE_PATH", "/tmp/codex-safe-profile.json")
-    monkeypatch.setenv("MODEL_ACCESS_SERVE_CAPABILITY_NAME", CAPABILITY_NAME)
-    monkeypatch.delenv("MODEL_ACCESS_OLLAMA_BASE_URL", raising=False)
+def test_main_starts_without_ollama_or_tailscale_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
 
-    with pytest.raises(SystemExit, match="MODEL_ACCESS_OLLAMA_BASE_URL is required"):
-        main()
+    module = importlib.import_module("app.model_access.codex_executor_service")
+    factory = _factory()
+    captured: dict[str, Any] = {}
+    monkeypatch.setenv("CODEX_CLI_SAFE_PROFILE_PATH", "/tmp/codex-safe-profile.json")
+    monkeypatch.delenv("MODEL_ACCESS_OLLAMA_BASE_URL", raising=False)
+    monkeypatch.delenv("MODEL_ACCESS_SERVE_CAPABILITY_NAME", raising=False)
+    monkeypatch.setattr(
+        module.ModelAccessAdapterFactory,
+        "from_declared_sources",
+        lambda **_kwargs: factory,
+    )
+    monkeypatch.setattr(
+        factory,
+        "create_codex_cli_executor",
+        lambda **_kwargs: FakeCodexExecutor(),
+    )
+
+    def create_app(**kwargs: Any) -> object:
+        captured["ollama_adapter"] = kwargs["ollama_adapter"]
+        captured["provider_api_adapter"] = kwargs["provider_api_adapter"]
+        return object()
+
+    monkeypatch.setattr(module, "create_codex_executor_app", create_app)
+    monkeypatch.setattr(
+        module, "serve_executor", lambda app, *, host, port: captured.update(
+            app=app, host=host, port=port
+        )
+    )
+    main()
+
+    assert captured["ollama_adapter"] is None
+    assert captured["host"] == "127.0.0.1"
+    captured["provider_api_adapter"].close()
 
 
 def _preflight_payload(transport_id: str = "codex_cli") -> dict[str, Any]:
@@ -158,12 +181,16 @@ def test_complete_dispatches_one_declared_transport(transport_id: str) -> None:
     app, codex, ollama = _app()
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         response = client.post(
-            "/v1/complete", json=_payload(transport_id), headers=CAPABILITY_HEADER
+            "/v1/complete", json=_payload(transport_id)
         )
 
     assert response.status_code == 200
+    assert "dispatched_reasoning_effort" not in response.json()
     body = response.json()
-    assert body["route"] == _payload(transport_id)["route"]
+    assert body["route"]["provider"] == _payload(transport_id)["route"]["provider"]
+    assert body["route"]["model"] == _payload(transport_id)["route"]["model"]
+    assert body["route"]["transport_id"] == transport_id
+    assert body["route"]["catalog_snapshot_hash"].startswith("sha256:")
     assert body["content"] == ("codex result" if transport_id == "codex_cli" else "ollama result")
     assert len(codex.calls) == (1 if transport_id == "codex_cli" else 0)
     assert len(ollama.calls) == (1 if transport_id == "ollama_http" else 0)
@@ -179,14 +206,14 @@ def test_preflight_probes_exact_declared_route_without_completion(
         response = client.post(
             "/v1/preflight",
             json=payload,
-            headers=PREFLIGHT_CAPABILITY_HEADER,
         )
 
     assert response.status_code == 200
-    assert response.json() == {
-        "route": payload["route"],
-        "preflight_status": "passed",
-    }
+    assert response.json()["route"]["provider"] == payload["route"]["provider"]
+    assert response.json()["route"]["model"] == payload["route"]["model"]
+    assert response.json()["route"]["transport_id"] == transport_id
+    assert response.json()["route"]["catalog_snapshot_hash"].startswith("sha256:")
+    assert response.json()["preflight_status"] == "passed"
     assert codex.preflight_calls == (
         [{"model": "gpt-5.6-luna", "reasoning_effort": "low"}]
         if transport_id == "codex_cli"
@@ -199,50 +226,27 @@ def test_preflight_probes_exact_declared_route_without_completion(
     assert ollama.calls == []
 
 
-def test_executor_accepts_one_serve_grant_for_both_bounded_actions() -> None:
+def test_bounded_actions_do_not_require_tailscale_headers() -> None:
     app, codex, ollama = _app()
-    combined_header = {
-        "Tailscale-App-Capabilities": json.dumps(
-            {
-                CAPABILITY_NAME: [
-                    {"channel": "product", "actions": ["complete", "preflight"]}
-                ]
-            }
-        )
-    }
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
-        preflight = client.post(
-            "/v1/preflight",
-            json=_preflight_payload(),
-            headers=combined_header,
-        )
-        completion = client.post(
-            "/v1/complete",
-            json=_payload(),
-            headers=combined_header,
-        )
+        preflight = client.post("/v1/preflight", json=_preflight_payload())
+        completion = client.post("/v1/complete", json=_payload())
 
-    assert preflight.status_code == 200
-    assert completion.status_code == 200
+    assert preflight.status_code == completion.status_code == 200
     assert len(codex.preflight_calls) == 1
     assert len(codex.calls) == 1
     assert ollama.preflight_calls == []
     assert ollama.calls == []
 
 
-def test_preflight_requires_its_own_capability_and_rejects_completion_fields() -> None:
+def test_preflight_rejects_completion_fields() -> None:
     app, codex, ollama = _app()
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
-        wrong_action = client.post(
-            "/v1/preflight", json=_preflight_payload(), headers=CAPABILITY_HEADER
-        )
         with_extra_field = client.post(
             "/v1/preflight",
             json={**_preflight_payload(), "user_input": "must not be accepted"},
-            headers=PREFLIGHT_CAPABILITY_HEADER,
         )
 
-    assert wrong_action.status_code == 403
     assert with_extra_field.status_code == 422
     assert codex.preflight_calls == []
     assert ollama.preflight_calls == []
@@ -258,7 +262,6 @@ def test_preflight_rejects_native_tools_before_ollama_probe() -> None:
         response = client.post(
             "/v1/preflight",
             json=payload,
-            headers=PREFLIGHT_CAPABILITY_HEADER,
         )
 
     assert response.status_code == 422
@@ -269,20 +272,14 @@ def test_preflight_rejects_native_tools_before_ollama_probe() -> None:
     assert codex.calls == []
 
 
-def test_catalog_operation_is_authorized_and_never_calls_a_model() -> None:
+def test_catalog_operation_never_calls_a_model() -> None:
     app, codex, ollama = _app()
     payload = {"transport_id": "codex_cli"}
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
-        allowed = client.post(
-            "/v1/catalog", json=payload, headers=CATALOG_CAPABILITY_HEADER
-        )
-        wrong_action = client.post(
-            "/v1/catalog", json=payload, headers=CAPABILITY_HEADER
-        )
+        allowed = client.post("/v1/catalog", json=payload)
         extra_field = client.post(
             "/v1/catalog",
             json={**payload, "endpoint": "https://must-not-be-caller-selected"},
-            headers=CATALOG_CAPABILITY_HEADER,
         )
 
     assert allowed.status_code == 200
@@ -290,36 +287,112 @@ def test_catalog_operation_is_authorized_and_never_calls_a_model() -> None:
     assert snapshot["transport_id"] == "codex_cli"
     assert snapshot["models"][0]["model"] == "gpt-5.6-luna"
     assert snapshot["snapshot_hash"].startswith("sha256:")
-    assert wrong_action.status_code == 403
     assert extra_field.status_code == 422
     assert codex.catalog_calls == 1
     assert codex.calls == []
     assert ollama.calls == []
 
 
-def test_complete_requires_loopback_and_served_app_capability() -> None:
+@pytest.mark.parametrize("transport_id", ["codex_cli", "ollama_http"])
+def test_exact_route_rejects_fabricated_catalog_provenance_before_dispatch(
+    transport_id: str,
+) -> None:
+    app, codex, ollama = _app()
+    payload = _payload(transport_id)
+    payload["route"]["catalog_snapshot_ref"] = "catalog.unrelated"
+    payload["route"]["catalog_snapshot_hash"] = "sha256:" + "f" * 64
+    preflight_payload = _preflight_payload(transport_id)
+    preflight_payload["route"]["catalog_snapshot_ref"] = "catalog.unrelated"
+    preflight_payload["route"]["catalog_snapshot_hash"] = "sha256:" + "f" * 64
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        preflight = client.post(
+            "/v1/preflight", json=preflight_payload
+        )
+        completion = client.post("/v1/complete", json=payload)
+
+    assert preflight.status_code == 409
+    assert preflight.json() == {"error": {"code": "catalog_snapshot_mismatch"}}
+    assert completion.status_code == 409
+    assert completion.json() == {"error": {"code": "catalog_snapshot_mismatch"}}
+    assert codex.calls == []
+    assert ollama.calls == []
+
+
+def test_legacy_exact_route_cannot_select_a_provider_api_harness() -> None:
+    app, codex, ollama = _app()
+    payload = _payload("codex_cli")
+    payload["route"]["transport_id"] = "openai_api"
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        response = client.post("/v1/complete", json=payload)
+
+    assert response.status_code == 422
+    assert response.json() == {"error": {"code": "product_route_required"}}
+    assert codex.calls == []
+    assert ollama.calls == []
+
+
+def test_product_api_resolves_transport_and_snapshot_on_host() -> None:
+    factory = _factory()
+    codex = FakeCodexExecutor()
+    ollama = FakeOllamaAdapter()
+    app = create_codex_executor_app(
+        codex_executor=codex,  # type: ignore[arg-type]
+        ollama_adapter=ollama,  # type: ignore[arg-type]
+        adapter_factory=factory,
+    )
+    request = {
+        "provider": "openai",
+        "model": "gpt-6-luna",
+        "reasoning_effort": "low",
+        "capability_intent": {},
+        "trusted_instructions": "Keep it concise.",
+        "user_input": "Say hello.",
+    }
+    with TestClient(app, client=("127.0.0.1", 12345)) as client:
+        catalog = client.post(
+            "/v1/product/catalog",
+            json={"provider": "openai", "model": "gpt-6-luna"},
+        )
+        preflight = client.post(
+            "/v1/product/preflight",
+            json={key: value for key, value in request.items() if key not in {"trusted_instructions", "user_input"}},
+        )
+        completion = client.post("/v1/product/complete", json=request)
+        caller_selects_transport = client.post(
+            "/v1/product/complete",
+            json={**request, "transport_id": "openai_api"},
+        )
+
+    assert catalog.status_code == 200
+    assert catalog.json()["snapshot"]["transport_id"] == "codex_cli"
+    assert preflight.status_code == 200
+    assert completion.status_code == 200
+    route = completion.json()["route"]
+    assert route["provider"] == "openai"
+    assert route["model"] == "gpt-6-luna"
+    assert route["transport_id"] == "codex_cli"
+    assert route["catalog_snapshot_ref"] == "catalog.openai_codex_cli"
+    assert route["catalog_snapshot_hash"] == catalog.json()["snapshot"]["snapshot_hash"]
+    assert caller_selects_transport.status_code == 422
+    assert caller_selects_transport.json() == {"error": {"code": "invalid_request"}}
+    assert len(codex.preflight_calls) == 1
+    assert len(codex.calls) == 1
+    assert ollama.calls == []
+
+
+def test_complete_requires_loopback_not_tailscale_capability() -> None:
     app, codex, _ollama = _app()
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
-        absent = client.post("/v1/complete", json=_payload())
-        wrong_channel = client.post(
-            "/v1/complete",
-            json=_payload(),
-            headers={
-                "Tailscale-App-Capabilities": json.dumps(
-                    {CAPABILITY_NAME: [{"channel": "builder", "actions": ["complete"]}]}
-                )
-            },
-        )
-    assert absent.status_code == 403
-    assert wrong_channel.status_code == 403
-    assert len(codex.calls) == 0
+        accepted = client.post("/v1/complete", json=_payload())
+    assert accepted.status_code == 200
+    assert len(codex.calls) == 1
 
     with TestClient(app, client=("192.0.2.12", 12345)) as non_loopback:
         remote_peer = non_loopback.post(
-            "/v1/complete", json=_payload(), headers=CAPABILITY_HEADER
+            "/v1/complete", json=_payload()
         )
     assert remote_peer.status_code == 403
-    assert len(codex.calls) == 0
+    assert len(codex.calls) == 1
     assert require_loopback_bind_host("127.0.0.1") == "127.0.0.1"
     with pytest.raises(ValueError, match="loopback"):
         require_loopback_bind_host("0.0.0.0")
@@ -348,10 +421,7 @@ def test_serve_executor_ignores_forwarded_client_ip_for_loopback_guard(
                 return await client.post(
                     "/v1/complete",
                     json=_payload(),
-                    headers={
-                        **CAPABILITY_HEADER,
-                        "X-Forwarded-For": "100.64.0.42",
-                    },
+                    headers={"X-Forwarded-For": "100.64.0.42"},
                 )
 
         observed["response"] = asyncio.run(send_request())
@@ -375,12 +445,12 @@ def test_codex_complete_preserves_channels_and_rejects_tools() -> None:
 
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         accepted = client.post(
-            "/v1/complete", json=payload, headers=CAPABILITY_HEADER
+            "/v1/complete", json=payload
         )
         tool_payload = _payload()
         tool_payload["capability_intent"]["native_tools"] = True
         rejected = client.post(
-            "/v1/complete", json=tool_payload, headers=CAPABILITY_HEADER
+            "/v1/complete", json=tool_payload
         )
 
     assert accepted.status_code == 200
@@ -412,12 +482,10 @@ def test_codex_refuses_per_call_output_limit_before_preflight_or_completion() ->
         preflight = client.post(
             "/v1/preflight",
             json=preflight_payload,
-            headers=PREFLIGHT_CAPABILITY_HEADER,
         )
         completion = client.post(
             "/v1/complete",
             json=complete_payload,
-            headers=CAPABILITY_HEADER,
         )
 
     expected = {"error": {"code": "output_token_limit_unavailable"}}
@@ -450,13 +518,12 @@ def test_complete_rejects_missing_instruction_mapping_before_dispatch(
         codex_executor=codex,  # type: ignore[arg-type]
         ollama_adapter=ollama,  # type: ignore[arg-type]
         adapter_factory=factory,
-        serve_capability_name=CAPABILITY_NAME,
     )
     payload = _payload()
 
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         response = client.post(
-            "/v1/complete", json=payload, headers=CAPABILITY_HEADER
+            "/v1/complete", json=payload
         )
 
     assert response.status_code == 422
@@ -475,7 +542,7 @@ def test_codex_structured_output_accepts_an_empty_json_schema() -> None:
 
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         response = client.post(
-            "/v1/complete", json=payload, headers=CAPABILITY_HEADER
+            "/v1/complete", json=payload
         )
 
     assert response.status_code == 200
@@ -489,12 +556,11 @@ def test_complete_rejects_request_control_fields_and_oversized_body() -> None:
     payload["argv"] = ["codex", "--dangerous"]
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         unknown = client.post(
-            "/v1/complete", json=payload, headers=CAPABILITY_HEADER
+            "/v1/complete", json=payload
         )
         oversized = client.post(
             "/v1/complete",
             json={**_payload(), "user_input": "x" * 4_096},
-            headers=CAPABILITY_HEADER,
         )
     assert unknown.status_code == 422
     assert unknown.json() == {"error": {"code": "invalid_request"}}
@@ -508,7 +574,7 @@ def test_complete_rejects_oversized_adapter_output_after_one_dispatch() -> None:
     )
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         response = client.post(
-            "/v1/complete", json=_payload(), headers=CAPABILITY_HEADER
+            "/v1/complete", json=_payload()
         )
 
     assert response.status_code == 502
@@ -528,19 +594,22 @@ def test_executor_exposes_only_bounded_model_operations() -> None:
         ("/v1/complete", ("POST",)),
         ("/v1/preflight", ("POST",)),
         ("/v1/catalog", ("POST",)),
+        ("/v1/product/complete", ("POST",)),
+        ("/v1/product/preflight", ("POST",)),
+        ("/v1/product/catalog", ("POST",)),
+        ("/v1/product/embed", ("POST",)),
         ("/v1/judgment", ("POST",)),
         ("/v1/ckm-judgment", ("POST",)),
     }
 
 
-def test_executor_rejects_reserved_tailscale_capability_names() -> None:
-    with pytest.raises(ValueError, match="Serve capability name"):
-        create_codex_executor_app(
-            codex_executor=FakeCodexExecutor(),  # type: ignore[arg-type]
-            ollama_adapter=FakeOllamaAdapter(),  # type: ignore[arg-type]
-            adapter_factory=_factory(),
-            serve_capability_name="tailscale.com/cap/complete",
-        )
+def test_executor_uses_loopback_backend_without_tailscale_configuration() -> None:
+    app = create_codex_executor_app(
+        codex_executor=FakeCodexExecutor(),  # type: ignore[arg-type]
+        ollama_adapter=None,
+        adapter_factory=_factory(),
+    )
+    assert app is not None
 
 
 def test_executor_enforces_the_configured_concurrency_bound() -> None:
@@ -556,11 +625,13 @@ def test_executor_enforces_the_configured_concurrency_bound() -> None:
                 raise TimeoutError("test release timed out")
             return SimpleNamespace(response_text="codex result")
 
+        def list_catalog_models(self) -> list[dict[str, Any]]:
+            return FakeCodexExecutor().list_catalog_models()
+
     app = create_codex_executor_app(
         codex_executor=BlockingCodexExecutor(),  # type: ignore[arg-type]
         ollama_adapter=FakeOllamaAdapter(),  # type: ignore[arg-type]
         adapter_factory=_factory(),
-        serve_capability_name=CAPABILITY_NAME,
         max_concurrency=1,
     )
 
@@ -569,12 +640,12 @@ def test_executor_enforces_the_configured_concurrency_bound() -> None:
             transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
         ) as client:
             first_request = asyncio.create_task(
-                client.post("/v1/complete", json=_payload(), headers=CAPABILITY_HEADER)
+                client.post("/v1/complete", json=_payload())
             )
             try:
                 assert await asyncio.to_thread(started.wait, 2)
                 second_response = await client.post(
-                    "/v1/complete", json=_payload(), headers=CAPABILITY_HEADER
+                    "/v1/complete", json=_payload()
                 )
             finally:
                 release.set()
@@ -592,6 +663,10 @@ def test_ollama_adapter_preserves_instruction_channels_with_one_http_call() -> N
 
     def respond(request: httpx.Request) -> httpx.Response:
         calls.append(request)
+        if request.method == "GET" and request.url.path == "/api/tags":
+            return httpx.Response(200, json={"models": [{"name": "llama3.1:8b"}]})
+        if request.method == "POST" and request.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": ["completion"]})
         assert request.method == "POST"
         assert request.url.path == "/api/chat"
         return httpx.Response(
@@ -607,7 +682,6 @@ def test_ollama_adapter_preserves_instruction_channels_with_one_http_call() -> N
         codex_executor=FakeCodexExecutor(),  # type: ignore[arg-type]
         ollama_adapter=adapter,  # type: ignore[arg-type]
         adapter_factory=_factory(),
-        serve_capability_name=CAPABILITY_NAME,
     )
     payload = _payload("ollama_http")
     payload["capability_intent"]["max_output_tokens_required"] = True
@@ -616,12 +690,13 @@ def test_ollama_adapter_preserves_instruction_channels_with_one_http_call() -> N
     payload["user_input"] = "UNTRUSTED request"
     with TestClient(app, client=("127.0.0.1", 12345)) as client:
         response = client.post(
-            "/v1/complete", json=payload, headers=CAPABILITY_HEADER
+            "/v1/complete", json=payload
         )
 
     assert response.status_code == 200
-    assert len(calls) == 1
-    sent = json.loads(calls[0].content)
+    inference_calls = [call for call in calls if call.url.path == "/api/chat"]
+    assert len(inference_calls) == 1
+    sent = json.loads(inference_calls[0].content)
     assert sent["model"] == "llama3.1:8b"
     assert sent["messages"] == [
         {"role": "system", "content": "TRUSTED instructions"},

@@ -12,25 +12,25 @@ Choose a model per task. The compiler resolves the provider from the model regis
 Used for normal ask, drafting, and short synthesis.
 
 Selected model:
-- `openai.chat.gpt_4_1_mini` for the primary route
+- `openai.chat.gpt_6_luna` for the primary route
 
 Available options:
-- `openai.chat.gpt_4_1_mini`: balanced cloud chat model for day-to-day work
-- `openai.chat.gpt_4_1`: stronger cloud reasoning model when cost/latency are acceptable
-- `ollama.chat.llama3_1_8b`: local fallback model for offline or low-cost work
+- `openai.chat.gpt_6_luna`: Luna through the Product Mac portal
 - `mock.chat`: deterministic test-only route
+
+Text routing does not fall back to another provider when the selected Luna route is unavailable.
 
 ## Reasoning
 Used for planning and heavier multi-step synthesis.
 
 Selected model:
-- `openai.chat.gpt_4_1` for the primary route
+- `openai.chat.gpt_6_luna` for the primary route
 
 Available options:
-- `openai.chat.gpt_4_1`: strongest current default for reasoning-heavy tasks
-- `openai.chat.gpt_4_1_mini`: cheaper cloud fallback if reasoning can be lighter
-- `ollama.chat.llama3_1_8b`: local fallback model
+- `openai.chat.gpt_6_luna`: Luna through the Product Mac portal
 - `mock.chat`: deterministic test-only route
+
+Planning does not fall back to another provider when the selected Luna route is unavailable.
 
 ## Embeddings
 Used for indexing and retrieval. Switching this model may require an index rebuild, so the selected model is stricter than chat.
@@ -48,17 +48,15 @@ Follows the same model-first contract but still defaults to skip mode unless exp
 ```yaml settings
 default_chat:
   primary:
-    model_id: openai.chat.gpt_4_1_mini
+    model_id: openai.chat.gpt_6_luna
   fallback:
-    mode: local
-    model_id: ollama.chat.llama3_1_8b
+    mode: never
 
 default_reasoning:
   primary:
-    model_id: openai.chat.gpt_4_1
+    model_id: openai.chat.gpt_6_luna
   fallback:
-    mode: local
-    model_id: ollama.chat.llama3_1_8b
+    mode: never
 
 default_embedding:
   primary:
@@ -68,36 +66,10 @@ default_embedding:
     mode: never
   require_compatible_identity: true
 
-tasks:
-  qa:
-    primary:
-      model_id: openai.chat.gpt_4_1_mini
-    fallback:
-      mode: local
-      model_id: ollama.chat.llama3_1_8b
-  classify:
-    primary:
-      model_id: openai.chat.gpt_4_1_mini
-    fallback:
-      mode: local
-      model_id: ollama.chat.llama3_1_8b
-  plan:
-    primary:
-      model_id: openai.chat.gpt_4_1
-    fallback:
-      mode: local
-      model_id: ollama.chat.llama3_1_8b
-  embed:
-    primary:
-      model_id: ollama.embed.nomic_embed_text
-      profile: default
-    fallback:
-      mode: never
-    require_compatible_identity: true
 ```
 
 ## Notes
-- Chat/reasoning tasks may choose a local fallback.
+- Chat and planning use Luna through the Product Mac portal; no Ollama chat fallback is configured.
 - Embeddings must keep a compatible identity. Endpoint repair is allowed; incompatible model fallback is not.
 - Optional named Product chat profiles can be declared under profiles in the settings block. A clone selects one through llmRoutingProfile in its gitignored settings/local.md; profile targets use model-registry IDs and inherit the shared fallback policy.
 

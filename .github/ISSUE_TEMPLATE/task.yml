@@ -30,10 +30,11 @@ body:
     id: source_anchors
     attributes:
       label: Source Anchors
-      description: Stable doc item identifiers that justify this issue.
+      description: Governing doc anchors or existing repo file paths with factual locators. Source Docs carries normative authority.
       placeholder: |
         - docs/PANEL_AGENT.md :: PA2-FREEFORM
         - docs/ROADMAP.md :: PA2-ROLLUP
+        - Makefile :: PYTHON/test/lint
     validations:
       required: true
   - type: textarea

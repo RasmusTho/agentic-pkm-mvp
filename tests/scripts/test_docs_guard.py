@@ -332,12 +332,16 @@ def test_product_vault_markdown_is_not_repository_documentation(tmp_path: Path) 
             "docs/development/TEST_STRATEGY_HOT_PATH.md",
             id="select_pr_tests-paired-doc",
         ),
+        pytest.param("app/builderops/publication.py", "docs/development/PR_HOT_PATH.md", id="publication-paired-doc"),
+        pytest.param("scripts/build_verification_dispatch_request.py", "docs/development/PR_HOT_PATH.md", id="dispatch-request-paired-doc"),
+        pytest.param("scripts/pr_body_generator.py", "docs/development/PR_HOT_PATH.md", id="body-generator-paired-doc"),
     ],
 )
 def test_governance_enforcement_with_development_writeback_passes(
     tmp_path: Path, script_path: str, doc_path: str
 ) -> None:
     repo = _guard_repo(tmp_path)
+    (repo / script_path).parent.mkdir(parents=True, exist_ok=True)
     (repo / script_path).write_text("# governance\n", encoding="utf-8")
     (repo / doc_path).parent.mkdir(parents=True, exist_ok=True)
     (repo / doc_path).write_text("governance writeback\n", encoding="utf-8")
@@ -431,10 +435,52 @@ def test_select_pr_tests_requires_its_specific_paired_doc(tmp_path: Path) -> Non
     assert "temporal code/config changed" in result.stdout
 
 
+@pytest.mark.parametrize(
+    "owner_doc, runtime_path, temporal_writeback, expected_status",
+    [
+        ("DEV_WORKFLOW.md", None, False, 0),
+        (None, None, False, 1),
+        ("UNRELATED.md", None, False, 1),
+        ("DEV_WORKFLOW.md", "app/runtime.py", False, 1),
+        ("DEV_WORKFLOW.md", "config/runtime.toml", False, 1),
+        ("DEV_WORKFLOW.md", "app/runtime.py", True, 0),
+        (None, "app/runtime.py", True, 1),
+    ],
+)
+def test_source_anchor_enforcement_requires_its_exact_owner_and_mixed_writeback(
+    tmp_path: Path,
+    owner_doc: str | None,
+    runtime_path: str | None,
+    temporal_writeback: bool,
+    expected_status: int,
+) -> None:
+    repo = _guard_repo(tmp_path)
+    (repo / "scripts/validate_source_anchors.py").write_text("# source-anchor enforcement\n", encoding="utf-8")
+    if owner_doc:
+        (repo / "docs/development" / owner_doc).write_text("source-anchor contract\n", encoding="utf-8")
+    if runtime_path:
+        runtime = repo / runtime_path
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        runtime.write_text("changed = true\n", encoding="utf-8")
+    if temporal_writeback:
+        (repo / "docs/STATUS.md").write_text("temporal writeback\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "source-anchor-owner-pairing"], repo)
+
+    result = _guard_result(repo)
+
+    assert result.returncode == expected_status, result.stdout + result.stderr
+    if expected_status:
+        assert "temporal code/config changed" in result.stdout
+    else:
+        assert "Docs guard: OK" in result.stdout
+
+
 def _assert_governance_script_rejects_unrelated_doc(tmp_path: Path, script: str) -> None:
     repo = _guard_repo(tmp_path)
-    script_path = repo / "scripts" / script
-    if script in {"docs_guard.py", "docs_guard_logic.py"}:
+    script_path = repo / script if "/" in script else repo / "scripts" / script
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    if script_path.name in {"docs_guard.py", "docs_guard_logic.py"}:
         script_path.write_text(
             script_path.read_text(encoding="utf-8") + "\n# governance\n",
             encoding="utf-8",
@@ -496,3 +542,43 @@ def test_git_archive_retirement_requires_its_specific_paired_doc(tmp_path: Path)
 
 def test_agent_worktree_requires_its_specific_paired_doc(tmp_path: Path) -> None:
     _assert_governance_script_rejects_unrelated_doc(tmp_path, "agent_worktree.py")
+
+
+@pytest.mark.parametrize("source_path", ["app/builderops/publication.py", "scripts/build_verification_dispatch_request.py", "scripts/pr_body_generator.py"])
+def test_publication_modules_require_their_specific_paired_doc(tmp_path: Path, source_path: str) -> None:
+    _assert_governance_script_rejects_unrelated_doc(tmp_path, source_path)
+
+
+@pytest.mark.parametrize("extra_path", ["app/runtime.py", "config/runtime.toml"])
+@pytest.mark.parametrize("temporal_writeback", [False, True])
+def test_publication_pairing_preserves_mixed_temporal_requirement(tmp_path: Path, extra_path: str, temporal_writeback: bool) -> None:
+    repo = _guard_repo(tmp_path)
+    source = repo / "app/builderops/publication.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("# governed publication\n", encoding="utf-8")
+    (repo / "docs/development/PR_HOT_PATH.md").write_text("publication writeback\n", encoding="utf-8")
+    extra = repo / extra_path
+    extra.parent.mkdir(parents=True, exist_ok=True)
+    extra.write_text("changed = true\n", encoding="utf-8")
+    if temporal_writeback:
+        (repo / "docs/STATUS.md").write_text("temporal writeback\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "mixed-publication-runtime"], repo)
+    result = _guard_result(repo)
+    assert result.returncode == (0 if temporal_writeback else 1), result.stdout + result.stderr
+    if not temporal_writeback:
+        assert "temporal code/config changed" in result.stdout
+
+
+@pytest.mark.parametrize("source_path", ["app/builderops/other.py", "scripts/other_publication.py"])
+def test_unlisted_sources_cannot_borrow_publication_owner_pair(tmp_path: Path, source_path: str) -> None:
+    repo = _guard_repo(tmp_path)
+    source = repo / source_path
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("# another module\n", encoding="utf-8")
+    (repo / "docs/development/PR_HOT_PATH.md").write_text("publication writeback\n", encoding="utf-8")
+    _run(["git", "add", "."], repo)
+    _run(["git", "commit", "-m", "unlisted-module"], repo)
+    result = _guard_result(repo)
+    assert result.returncode == 1
+    assert "temporal code/config changed" in result.stdout

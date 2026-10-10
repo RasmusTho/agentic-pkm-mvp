@@ -14,13 +14,20 @@ pytestmark = pytest.mark.not_pg
 
 
 class Client:
-    route = SimpleNamespace(provider="openai", model="gpt-5.6-luna", transport_id="openai_api")
+    route = SimpleNamespace(
+        provider="openai",
+        model="gpt-5.6-luna",
+        transport_id="openai_api",
+        reasoning_effort="none",
+    )
 
     def __init__(self):
         self.fail = False
+        self.calls = 0
         self.metadata = {
             "model": "gpt-5.6-luna",
             "service_tier": "default",
+            "dispatched_reasoning_effort": "none",
             "usage": {
                 "prompt_tokens": 100,
                 "completion_tokens": 20,
@@ -30,6 +37,7 @@ class Client:
         }
 
     def chat(self, name, pack, **kw):
+        self.calls += 1
         if self.fail:
             raise RuntimeError("secret-api-key private-completion https://secret.example")
         kw["usage_observer"](self.metadata)
@@ -41,8 +49,6 @@ def config(client):
         model=client.route.model,
         mode="run",
         chat_client=client,
-        api_key="secret-api-key",
-        base_url="https://secret.example",
     )
 
 
@@ -76,7 +82,18 @@ def test_receipt_binds_exact_route_dataset_coverage_and_cost_evidence() -> None:
 
 @pytest.mark.parametrize(
     "failure",
-    ["provider", "usage", "pricing", "model", "tier", "negative", "long", "cached", "total"],
+    [
+        "provider",
+        "usage",
+        "pricing",
+        "model",
+        "tier",
+        "effort",
+        "negative",
+        "long",
+        "cached",
+        "total",
+    ],
 )
 def test_incomplete_or_unpriced_run_cannot_claim_comparison_receipt(monkeypatch, failure) -> None:
     client = Client()
@@ -90,6 +107,8 @@ def test_incomplete_or_unpriced_run_cannot_claim_comparison_receipt(monkeypatch,
         client.metadata["model"] = "gpt-5.6-terra"
     elif failure == "tier":
         client.metadata["service_tier"] = "priority"
+    elif failure == "effort":
+        client.metadata["dispatched_reasoning_effort"] = "low"
     elif failure == "negative":
         client.metadata["usage"]["completion_tokens"] = -1
     elif failure == "long":
@@ -102,6 +121,18 @@ def test_incomplete_or_unpriced_run_cannot_claim_comparison_receipt(monkeypatch,
     assert receipt["complete"] is False
     assert receipt["cost"] is None
     assert receipt["failure"]
+    if failure in {
+        "provider",
+        "usage",
+        "model",
+        "tier",
+        "effort",
+        "negative",
+        "long",
+        "cached",
+        "total",
+    }:
+        assert client.calls == 1
 
 
 def test_receipt_and_failures_are_secret_free(monkeypatch, capsys, caplog) -> None:
@@ -124,53 +155,68 @@ def test_receipt_and_failures_are_secret_free(monkeypatch, capsys, caplog) -> No
 
 @pytest.mark.parametrize("cache_write_tokens", [0, 50])
 def test_real_api_seam_captures_usage_without_content_logging(
-    monkeypatch, cache_write_tokens
+    monkeypatch, cache_write_tokens, product_model_access_gateway
 ) -> None:
-    from app.components.llm import fabric
-    from app.components.llm.router import LLMTaskIntent
+    from app.model_access.remote_contract import (
+        CompletionPromptTokenDetails,
+        CompletionTokenUsage,
+        CompletionUsageMetadata,
+    )
     from app.services import llm
 
-    calls = []
-    client = Client()
-    client.metadata["usage"]["prompt_tokens_details"]["cache_write_tokens"] = cache_write_tokens
-
-    class Response:
-        status_code = 200
-
-        def raise_for_status(self):
-            pass
-
-        def json(self):
-            return {
-                **client.metadata,
-                "choices": [
-                    {"message": {"content": '{"intent_class":"exploratory","action_type":null}'}}
-                ],
-            }
-
-    def post(url, **kwargs):
-        calls.append(json.loads(kwargs["data"]))
-        return Response()
-
-    monkeypatch.setattr(llm.requests, "post", post)
-    monkeypatch.setattr(llm, "log_llm_call", lambda **kw: pytest.fail("content persisted"))
-    real = fabric.get_chat_client(
-        LLMTaskIntent(task_kind="eval"),
-        model_id="gpt-5.6-luna",
-        transport_id="openai_api",
-        adapter_runtime_config=fabric.AdapterRuntimeConfig(
-            api_key="test-key", base_url="https://api.openai.com/v1"
+    product_model_access_gateway.completion_content = (
+        '{"intent_class":"exploratory","action_type":null}'
+    )
+    product_model_access_gateway.completion_usage = CompletionUsageMetadata(
+        model="gpt-5.6-terra",
+        service_tier="default",
+        usage=CompletionTokenUsage(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+            prompt_tokens_details=CompletionPromptTokenDetails(
+                cached_tokens=10,
+                cache_write_tokens=cache_write_tokens,
+            ),
         ),
     )
+    monkeypatch.setattr(
+        llm.requests,
+        "post",
+        lambda *_args, **_kwargs: pytest.fail("Product called a local provider endpoint"),
+    )
+    monkeypatch.setattr(llm, "log_llm_call", lambda **kw: pytest.fail("content persisted"))
+    monkeypatch.setenv("EVAL_LLM_MODE", "run")
+    monkeypatch.setenv("EVAL_LLM_MODEL", "gpt-5.6-terra")
+    monkeypatch.setenv("EVAL_LLM_TRANSPORT", "openai_api")
+    monkeypatch.setenv("EVAL_LLM_API_KEY", "ignored-local-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "ignored-openai-key")
+    monkeypatch.setenv("EVAL_LLM_BASE_URL", "http://ignored-local.invalid/v1")
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://ignored-openai.invalid/v1")
+    cfg = live.configure_classification_eval()
+    assert cfg.chat_client is not None
+    assert cfg.chat_client.route.transport_id == "openai_api"
+    assert cfg.chat_client.route.reasoning_effort == "none"
     receipt = live.run_live_classification(
-        EvalLLMConfig(model="gpt-5.6-luna", mode="run", chat_client=real)
+        cfg
     )
     assert receipt["complete"] is (cache_write_tokens == 0)
     if cache_write_tokens:
         assert receipt["cost"] is None
-    assert len(calls) == len(load_classification_cases())
-    assert all(c["model"] == "gpt-5.6-luna" and c["service_tier"] == "default" for c in calls)
-    assert all(c["reasoning_effort"] == "none" and "temperature" not in c for c in calls)
+    expected_calls = len(load_classification_cases()) if cache_write_tokens == 0 else 1
+    assert len(product_model_access_gateway.completion_requests) == expected_calls
+    assert all(
+        request.model == "gpt-5.6-terra"
+        for request in product_model_access_gateway.completion_requests
+    )
+    assert all(
+        request.reasoning_effort == "none" and request.service_tier == "default"
+        for request in product_model_access_gateway.completion_requests
+    )
+    assert all(
+        request.reasoning_effort == "none" and request.service_tier == "default"
+        for request in product_model_access_gateway.preflight_requests
+    )
 
 
 @pytest.mark.parametrize(
@@ -179,8 +225,6 @@ def test_real_api_seam_captures_usage_without_content_logging(
         "EVAL_LLM_MODE",
         "EVAL_LLM_MODEL",
         "EVAL_LLM_TRANSPORT",
-        "EVAL_LLM_API_KEY",
-        "EVAL_LLM_BASE_URL",
     ],
 )
 def test_measured_run_refuses_incomplete_configuration_before_inference(
@@ -192,8 +236,6 @@ def test_measured_run_refuses_incomplete_configuration_before_inference(
         "EVAL_LLM_MODE": "run",
         "EVAL_LLM_MODEL": "gpt-5.6-luna",
         "EVAL_LLM_TRANSPORT": "openai_api",
-        "EVAL_LLM_API_KEY": "test-key",
-        "EVAL_LLM_BASE_URL": "https://api.openai.com/v1",
     }.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setenv(missing, "")

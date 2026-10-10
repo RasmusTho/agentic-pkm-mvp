@@ -16,6 +16,11 @@ from app.components.llm.fabric import (
 )
 from app.components.llm.router import LLMRouter
 from app.components.reasoning.facade import ReasoningFacade, TelemetryRecord, ToolResult
+from app.model_access.remote_contract import (
+    CompletionResponse,
+    CompletionRouteIdentity,
+    PreflightResponse,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -46,13 +51,33 @@ SIMPLE_MESSAGES: list[dict[str, str]] = [
 def _bound_remote_client(intent: LLMTaskIntent, content: str):
     class _Remote:
         completion_request = None
+        route = None
 
         def preflight(self, _request):
             pass
 
+        def preflight_product(self, request):
+            self.route = CompletionRouteIdentity(
+                provider=request.provider,
+                model=request.model,
+                transport_id="codex_cli",
+                catalog_snapshot_ref="catalog.openai_codex_cli",
+                catalog_snapshot_hash="sha256:" + "a" * 64,
+            )
+            return SimpleNamespace(
+                response=PreflightResponse(
+                    route=self.route, preflight_status="passed"
+                ),
+                receipt=SimpleNamespace(receipt_id="fixture", failure_before_selection=None),
+            )
+
+        def complete_product_selected_path(self, request, *, receipt):
+            self.completion_request = request
+            return CompletionResponse(route=self.route, content=content)
+
         def complete(self, request):
             self.completion_request = request
-            return SimpleNamespace(content=content)
+            return CompletionResponse(route=self.route, content=content)
 
     remote = _Remote()
     access_route = _resolve_product_access_route(

@@ -21,7 +21,7 @@ from app.builderops.control_plane.service import create_app
 from app.builderops.control_plane.store import _operation_key
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verification_merge import BuilderOpsOutboxExecutor
-from tests.dispatcher.verification_helpers import REPO, request
+from tests.dispatcher.verification_helpers import HEAD, REPO, request
 
 pytestmark = pytest.mark.pg
 
@@ -1050,3 +1050,120 @@ def test_api_binds_task_lease_to_principal_and_restricts_public_lifecycle(
             observed_applied=False,
             evidence={"outcome": "cross-principal mutation must fail"},
         )
+
+
+def test_post_effect_api_readback_preserves_exact_merge_identity(control_plane_store, tmp_path, monkeypatch):
+    from tests.builderops.control_plane.test_outbox_recovery import _commit_outbox_task
+    from app.builderops.control_plane import AuthorityEnvelope
+    ledger, client, outbox = _authenticated_api_ledger(control_plane_store, tmp_path)
+    envelope = AuthorityEnvelope(
+        repository=REPO, scope="verification-executor", stack="builderops-control-plane",
+        actor="executor:demerzel-verifier", source_refs=("github-issue:4897",), schema_version=1,
+    )
+    result = _commit_outbox_task(
+        control_plane_store, envelope, task_id="post-effect-api", key="post-effect-api",
+        effect_type="github.merge", payload={"repository": REPO.lower(), "pr_number": 4897, "head_sha": HEAD},
+    )
+    claim = outbox.claim(result.operation_key)
+    ledger.begin_post_effect_pending(result.operation_key, minimum_fencing_token=claim["fencing_token"])
+    pending = client.get_outbox_status(repository=REPO, operation_key=result.operation_key)
+    assert pending["post_effect_phase"] == "pending"
+    assert pending["post_effect_claim_receipt_sequence"] == claim["receipt_sequence"]
+    outbox.mark_unknown(claim, detail="exact merge readback")
+    from app.dispatcher.verified_merge import FIXED_VERIFIED_MERGE_COMMIT_MESSAGE, fixed_verified_merge_commit_title
+    evidence = {"readback": "found", "merged": True, "head_sha": HEAD,
+                "merge_commit_sha": "c" * 40, "merge_commit_title": fixed_verified_merge_commit_title(4897),
+                "merge_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE}
+    # Simulate the process dying after the ordinary reconciliation commit but before its phase marker.
+    outbox.reconcile(claim, observed_applied=True, evidence=evidence)
+    interrupted = client.get_outbox_status(repository=REPO, operation_key=result.operation_key)
+    assert interrupted["status"] == "succeeded"
+    assert interrupted["post_effect_phase"] == "pending"
+    ledger.post_effect_deployment = None
+    # The API substrate repair is callable independently of consumer activation.
+    ledger.reconcile_post_effect(result.operation_key, minimum_fencing_token=interrupted["readback_fencing_token"],
+                                 observed_applied=True, evidence=evidence)
+    first = client.get_outbox_status(repository=REPO, operation_key=result.operation_key)
+    restarted = BuilderOpsVerificationLedger(client, repository=REPO, effect_outbox=outbox)
+    restarted.reconcile_post_effect(result.operation_key, minimum_fencing_token=claim["fencing_token"],
+                                   observed_applied=True, evidence=evidence)
+    assert first == client.get_outbox_status(repository=REPO, operation_key=result.operation_key)
+    assert first["post_effect_evidence"] == evidence
+    assert first["post_effect_receipt_sequence"] > first["post_effect_claim_receipt_sequence"]
+
+    from tests.dispatcher.test_verification_merge import deployed_post_effect
+    deployment = deployed_post_effect()
+    deployment["deployment_receipt"].update(control_plane_store.readiness())
+    monkeypatch.setenv("BUILDEROPS_SOURCE_SHA", deployment["deployment_receipt"]["source_sha"])
+    monkeypatch.setenv("BUILDEROPS_IMAGE_DIGEST", deployment["deployment_receipt"]["image_digest"])
+    restarted = BuilderOpsVerificationLedger(client, repository=REPO, post_effect_deployment=deployment)
+    projection = restarted.post_effect_authority(result.operation_key, run_id="post-effect-api")
+    assert projection["operation_key"] == result.operation_key
+    assert projection["merge_commit_sha"] == evidence["merge_commit_sha"]
+    assert projection["pending_receipt_sequence"] == claim["receipt_sequence"]
+    assert projection["reconciled_receipt_sequence"] == first["post_effect_receipt_sequence"]
+    # Drive the real CLI producer through the authenticated production client/API seam.
+    from app.builderops.control_plane import client as client_module
+    from app.dispatcher.verified_merge import prepare_verified_merge
+    from scripts import build_verified_issue_set_merge_phase as phase_cli
+    from tests.dispatcher.verified_merge_projection_helpers import projection_phase_kwargs, projection_convergence_comment
+    body = "Governing-Issue: #4897\n\nFixes #4897\n"
+    pr = {"number": 4897, "body": body, "head": {"sha": HEAD}, "state": "open", "merged_at": None,
+          "draft": False, "title": "Exact post-effect phase projection"}
+    context = {"contract": "verification_closer_dispatch_context.v2", "repository": REPO,
+               "run_id": "post-effect-api", "pr_number": 4897, "governing_issue": 4897,
+               "closing_issues": [4897], "supporting_issues": [], "head_sha": HEAD,
+               "repair_budget": {"policy_version": "v2", "mechanisms": []}}
+    plan = prepare_verified_merge(context=context, pr=pr, live_closing_issues=[4897],
+        merge_readiness={"contract": "verified_issue_set_merge_readiness.v1", "head_sha": HEAD,
+                        "further_commits_anticipated": False, "required_checks_green": True, "review_gate_resolved": True})
+    authority = plan["authority_receipt"]
+    neutral = {**pr, "body": plan["neutralized_body"]}
+    convergence = projection_phase_kwargs(authority, neutral)
+    merged_pr = {**pr, "state": "closed", "merged": True, "merged_at": "2026-10-09T10:00:00Z", "merge_commit_sha": "c" * 40}
+    comments = [{"author_association": "OWNER", "body": plan["authority_receipt_comment"]},
+                projection_convergence_comment(convergence)]
+    paths = {}
+    for name, payload in {"authority": authority, "comments": comments, "convergence": convergence["projection_convergence_receipt"],
+                          "deployment": deployment, "pr": merged_pr, "closed": [4897]}.items():
+        paths[name] = tmp_path / (name + ".json")
+        paths[name].write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(client_module.ClientConfig, "from_env", lambda: None)
+    monkeypatch.setattr(client_module, "BuilderOpsControlPlaneClient", lambda _config: client)
+    output = tmp_path / "phase.json"
+    assert phase_cli.main(["--phase", "restored", "--authority-json", str(paths["authority"]),
+        "--comments-json", str(paths["comments"]), "--projection-convergence-json", str(paths["convergence"]),
+        "--post-effect-deployment-json", str(paths["deployment"]), "--post-effect-operation-key", result.operation_key,
+        "--pr-json", str(paths["pr"]), "--closed-issues-json", str(paths["closed"]), "--output-json", str(output)]) == 0
+    projected_phase = json.loads(output.read_text())["phase_receipt"]
+    assert projected_phase["contract"] == "verified_issue_set_merge_phase.v2"
+    assert projected_phase["post_effect_authority"] == projection
+
+
+def test_authenticated_status_supplies_launcher_deployment_readback(control_plane_store, tmp_path, monkeypatch):
+    from tests.builderops.control_plane.test_deployment_readback import _files
+    receipt, _, pin = _files(tmp_path, monkeypatch)
+    ready = control_plane_store.readiness()
+    receipt.update(schema_version=ready['schema_version'], authority_epoch=ready['authority_epoch'])
+    (tmp_path / 'latest.json').write_text(json.dumps(receipt))
+    monkeypatch.setenv('BUILDEROPS_SOURCE_SHA', receipt['source_sha'])
+    monkeypatch.setenv('BUILDEROPS_IMAGE_DIGEST', receipt['image_digest'])
+    secret = tmp_path / 'status-token'
+    secret.write_text('status-read-token')
+    manifest = tmp_path / 'credentials.json'
+    manifest.write_text(json.dumps({'credentials': [{
+        'id': 'status-reader', 'principal': 'test-status-reader', 'secret_file': str(secret),
+        'secret_ref': 'host-secret:status-reader', 'rotation_generation': 1,
+        'scopes': ['status:read'], 'repositories': [REPO.lower()]}]}))
+    credentials = CredentialRegistry(manifest)
+    app = create_app(store=control_plane_store, credentials=credentials)
+    with TestClient(app) as http:
+        assert http.get('/v1/status').status_code == 401
+        client = BuilderOpsControlPlaneClient(ClientConfig(base_url='http://testserver', token='status-read-token'), http_client=http)
+        ledger = BuilderOpsVerificationLedger(client, repository=REPO)
+        ledger.require_post_effect_capability()
+        assert ledger.post_effect_deployment['deployment_receipt'] == receipt
+        pin.unlink()
+        from app.dispatcher.verification_merge import MergeAuthorityError
+        with pytest.raises(MergeAuthorityError, match='exact deployed substrate'):
+            ledger.require_post_effect_capability()

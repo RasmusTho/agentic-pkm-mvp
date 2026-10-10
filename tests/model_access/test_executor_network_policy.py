@@ -28,6 +28,8 @@ from app.model_access.remote_contract import (
     CompletionCapabilityIntent,
     PreflightRequest,
     PreflightResponse,
+    ProductCompletionRequest,
+    ProductPreflightRequest,
 )
 from app.llm.preflight_fallback import select_preflight_route
 
@@ -89,11 +91,30 @@ class _FakePathTransport:
         self.catalog_requests: list[CatalogRequest] = []
         self.catalog_response = None
         self.completion_requests: list[CompletionRequest] = []
+        self.product_preflight_requests: list[ProductPreflightRequest] = []
+        self.product_completion_requests: list[ProductCompletionRequest] = []
+        self.product_preflight_route: CompletionRouteIdentity | None = None
+        self.product_completion_route: CompletionRouteIdentity | None = None
 
-    def preflight(self, request: PreflightRequest) -> PreflightResponse:
-        self.preflight_requests.append(request)
+    def preflight(
+        self, request: PreflightRequest | ProductPreflightRequest
+    ) -> PreflightResponse:
+        if isinstance(request, ProductPreflightRequest):
+            self.product_preflight_requests.append(request)
+        else:
+            self.preflight_requests.append(request)
         if self.preflight_error is not None:
             raise RemotePreflightError(self.preflight_error)
+        if isinstance(request, ProductPreflightRequest):
+            route = self.product_preflight_route or CompletionRouteIdentity(
+                provider=request.provider,
+                model=request.model,
+                transport_id="codex_cli" if request.provider == "openai" else "ollama_http",
+                catalog_snapshot_ref="catalog.openai_codex_cli",
+                catalog_snapshot_hash="sha256:" + "a" * 64,
+            )
+            self.product_preflight_route = route
+            return PreflightResponse(route=route, preflight_status="passed")
         return PreflightResponse(route=request.route, preflight_status="passed")
 
     def catalog(self, request: CatalogRequest) -> CatalogResponse:
@@ -104,7 +125,17 @@ class _FakePathTransport:
             return self.catalog_response
         raise AssertionError("catalog response is not needed in this test")
 
-    def complete(self, request: CompletionRequest) -> CompletionResponse:
+    def complete(
+        self, request: CompletionRequest | ProductCompletionRequest
+    ) -> CompletionResponse:
+        if isinstance(request, ProductCompletionRequest):
+            self.product_completion_requests.append(request)
+            if self.completion_error is not None:
+                raise RemoteCompletionError(self.completion_error, indeterminate=True)
+            route = self.product_completion_route or self.product_preflight_route
+            if route is None:
+                raise AssertionError("Product completion route is not set")
+            return CompletionResponse(route=route, content="done")
         self.completion_requests.append(request)
         if self.completion_error is not None:
             raise RemoteCompletionError(self.completion_error, indeterminate=True)
@@ -157,7 +188,7 @@ def _router(
         "adapter": "tailscale_serve_https",
         "endpoint_ref": "host_config.ygg_codex_tailnet",
         "authentication_profile_ref": "host_config.ygg_tailscale_serve",
-        "caller_policy_ref": "policy.product_channel_actions",
+        "caller_policy_ref": "policy.vlan_mtls_authenticated_caller",
     }
     policy["executor_path_policies"]["profile.codex_remote_host"]["order"] = [
         "ygg_vlan_primary",
@@ -185,6 +216,73 @@ def test_path_order_is_configuration_driven(tmp_path: Path) -> None:
     assert transports["tailscale_fallback"].preflight_requests == []
     assert result.receipt.selected_path_profile == "ygg_vlan_primary"
     assert result.receipt.failure_before_selection is None
+
+
+def test_product_completion_accepts_new_snapshot_for_the_same_execution_target(
+    tmp_path: Path,
+) -> None:
+    product_preflight = ProductPreflightRequest(provider="openai", model="gpt-6-luna")
+    product_completion = ProductCompletionRequest(
+        provider="openai",
+        model="gpt-6-luna",
+        trusted_instructions="Use the configured executor.",
+        user_input="Say hello.",
+    )
+    router, transports, _ = _router(tmp_path)
+    try:
+        preflight = router.preflight_product(product_preflight)
+        transport = transports["ygg_vlan_primary"]
+        fresh_route = CompletionRouteIdentity(
+            provider="openai",
+            model="gpt-6-luna",
+            transport_id="codex_cli",
+            catalog_snapshot_ref="catalog.openai_codex_cli",
+            catalog_snapshot_hash="sha256:" + "b" * 64,
+        )
+        transport.product_completion_route = fresh_route
+
+        response = router.complete_product_selected_path(
+            product_completion, receipt=preflight.receipt
+        )
+    finally:
+        router.close()
+
+    assert response.route.catalog_snapshot_hash == fresh_route.catalog_snapshot_hash
+    assert len(transport.product_completion_requests) == 1
+    assert transports["tailscale_fallback"].product_completion_requests == []
+
+
+def test_product_completion_rejects_transport_change_after_dispatch_without_path_retry(
+    tmp_path: Path,
+) -> None:
+    product_preflight = ProductPreflightRequest(provider="openai", model="gpt-6-luna")
+    product_completion = ProductCompletionRequest(
+        provider="openai",
+        model="gpt-6-luna",
+        trusted_instructions="Use the configured executor.",
+        user_input="Say hello.",
+    )
+    router, transports, _ = _router(tmp_path)
+    try:
+        preflight = router.preflight_product(product_preflight)
+        transport = transports["ygg_vlan_primary"]
+        transport.product_completion_route = CompletionRouteIdentity(
+            provider="openai",
+            model="gpt-6-luna",
+            transport_id="openai_api",
+            catalog_snapshot_ref="catalog.openai_openai_api",
+            catalog_snapshot_hash="sha256:" + "b" * 64,
+        )
+
+        with pytest.raises(RemoteCompletionError, match="executor_route_mismatch"):
+            router.complete_product_selected_path(
+                product_completion, receipt=preflight.receipt
+            )
+    finally:
+        router.close()
+
+    assert len(transport.product_completion_requests) == 1
+    assert transports["tailscale_fallback"].product_completion_requests == []
 
 
 @pytest.mark.parametrize(
@@ -220,8 +318,6 @@ def test_only_typed_path_local_failures_use_next_path(
 @pytest.mark.parametrize(
     "terminal_code",
     [
-        "serve_capability_required",
-        "serve_capability_invalid",
         "invalid_request",
         "route_not_declared",
         "structured_output_unavailable",
@@ -418,9 +514,7 @@ def test_path_receipts_are_logical_and_secret_free(tmp_path: Path) -> None:
     assert "claims" not in receipt_json.lower()
 
 
-@pytest.mark.parametrize(
-    "authorization_error", ["serve_capability_invalid", "preflight_http_403"]
-)
+@pytest.mark.parametrize("authorization_error", ["preflight_http_403"])
 def test_authorization_failure_does_not_trigger_provider_fallback(
     authorization_error: str,
 ) -> None:

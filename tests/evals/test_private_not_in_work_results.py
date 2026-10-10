@@ -10,9 +10,13 @@ test-only ``mimer_runtime`` reference.
 
 from __future__ import annotations
 
+import pytest
+
 from tests.evals import _app_adapter as rca
 from tests.evals._helpers import load_group
 
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 def test_private_fixtures_denied_by_default() -> None:
     # Static precondition (passes today): private fixtures are private-scoped and only background

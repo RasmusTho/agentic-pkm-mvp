@@ -35,6 +35,7 @@ def test_governed_runtime_env_supplies_tts_selectors_to_compose(tmp_path: Path) 
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_ownership_host_state.sh",
         "scripts/lib/signboard_root.sh",
+        "scripts/compose_env.py",
         "scripts/instance_state_writer_inventory.py",
     ):
         source = REPO_ROOT / relative
@@ -239,6 +240,7 @@ def test_disappearing_tts_root_fails_with_compose_output_redacted(
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_ownership_host_state.sh",
         "scripts/lib/signboard_root.sh",
+        "scripts/compose_env.py",
     ):
         destination = synthetic_root / relative
         destination.write_text((REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8")
@@ -399,7 +401,7 @@ def test_duplicate_tts_selector_is_rejected_before_mutation(
     assert not (tmp_path / "docker-called").exists()
 
 
-def test_runtime_env_open_error_is_redacted_and_stops_before_mutation(
+def test_runtime_env_directory_is_rejected_and_stops_before_mutation(
     tmp_path: Path,
 ) -> None:
     root, env, sha = _deploy_harness(tmp_path)
@@ -412,8 +414,8 @@ def test_runtime_env_open_error_is_redacted_and_stops_before_mutation(
     result = _run_deploy(root, env, sha, "--dry-run")
     output = result.stdout + result.stderr
 
-    assert result.returncode == 91
-    assert "reason=validation_failed" in result.stderr
+    assert result.returncode == 78
+    assert "runtime identity preflight: blocked reason=invalid_runtime_env" in result.stderr
     assert str(runtime_env) not in output
     assert unrelated_dsn not in output
     assert not (root / "config/deploy/dev.env").exists()
@@ -428,6 +430,7 @@ def test_atomic_export_never_exposes_partial_tts_snapshot(tmp_path: Path) -> Non
         "scripts/lib/deploy_channel_compose.sh",
         "scripts/lib/instance_ownership_host_state.sh",
         "scripts/lib/signboard_root.sh",
+        "scripts/compose_env.py",
     ):
         destination = synthetic_root / relative
         destination.write_text((REPO_ROOT / relative).read_text(encoding="utf-8"), encoding="utf-8")

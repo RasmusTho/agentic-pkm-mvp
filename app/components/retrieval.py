@@ -2,20 +2,43 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Sequence
 
-from app.components.embeddings import EmbeddingIdentity, get_embedding_client
+from app.components.embeddings import EmbeddingClientProtocol, EmbeddingIdentity
+from app.components.llm.fabric import get_product_embedding_client
+
+
+def _embedding_client_for_profile(profile: str) -> EmbeddingClientProtocol:
+    return get_product_embedding_client(profile=profile)
 
 
 def embed_query(text: str, *, profile: str = "default") -> tuple[list[float], EmbeddingIdentity]:
-    client = get_embedding_client(profile=profile)
-    return client.embed_text(text), client.identity
+    client = _embedding_client_for_profile(profile)
+    try:
+        # Query embeddings must share the persisted index's complete identity;
+        # equal vector dimensions alone do not imply compatible embedding spaces.
+        # The retrieval subsystem owns the durable-index read boundary.
+        from app.retrieval.hybrid import ensure_query_embedding_identity
+
+        ensure_query_embedding_identity(client.identity)
+        vector, identity = client.embed_text(text), client.identity
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+    return vector, identity
 
 
 def embed_docs(texts: Iterable[str], *, profile: str = "default") -> tuple[list[list[float]], EmbeddingIdentity]:
-    client = get_embedding_client(profile=profile)
-    vectors: list[list[float]] = []
-    for batch in client.embed_batches(list(texts)):
-        vectors.extend(batch)
-    return vectors, client.identity
+    client = _embedding_client_for_profile(profile)
+    try:
+        vectors: list[list[float]] = []
+        for batch in client.embed_batches(list(texts)):
+            vectors.extend(batch)
+        identity = client.identity
+    finally:
+        close = getattr(client, "close", None)
+        if callable(close):
+            close()
+    return vectors, identity
 
 
 def search(

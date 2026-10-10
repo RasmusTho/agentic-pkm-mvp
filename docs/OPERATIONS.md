@@ -5,9 +5,10 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-06 (TypeSafe MARR BWS binding for #5801/#5803; TypeSafe Builder CKM dormant support for #5768; YouTube discovery scheduling its 2026-09-24 review, BuilderOps Issue-delivery its 2026-09-17 review, and other sections their 2026-09-13 review)
+Last reviewed: 2026-10-10 (native source reconstruction in Runtime Compose Stack for #5918; companion source-boundary guidance in Runtime prerequisites for #5912; complete isolated BWS child-runtime setup prerequisites for #5905; prior runtime Compose/BWS ownership and recovery reviews for #5885/#5888 retained; no live host verification; other sections retain their prior review evidence)
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, Issue #5442 / PR #5450, Issue #5511 / PR #5513, merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-09-13
+BWS child-runtime repository evidence: requirements-bws-deploy.txt; scripts/install_bws_deploy_runtime.sh; tests/deploy/test_deploy_channel.py::test_bws_runtime_setup_covers_mandatory_browser_smoke and tests/deploy/test_deploy_channel_script.py::test_managed_deploy_child_uses_declared_supervisor_interpreter; Issue #5905 / PR #5906 (repository validation only; no live host installation or channel acceptance).
+Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-09
 TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json; tests/ops/test_host_secret_contract.py::test_typesafe_key_uses_non_prod_project_and_marr_only_consumer, tests/ops/test_secret_admin.py::test_typesafe_import_targets_non_prod_and_rejects_other_channels, and tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy; Issue #5808 follows Issue #5801 / PR #5803 on 2026-10-07. Repository-only fake/injected-source evidence; no live BWS permission or host/provider verification.
 TypeSafe Builder CKM repository evidence: app/builderops/ckm/judgment.py, app/model_access/ckm_judgment_executor.py, tests/builderops/ckm/test_semantic_typesafe.py, and Issue #5768 on 2026-10-05; fake-provider proofs only, with runtime disabled and no live host or provider verification.
 # Operations Playbook
@@ -183,6 +184,14 @@ operational lineage is missing, the supported target posture is a new fenced boo
 writers inactive until owner-native readback and convergence. Total-loss recovery is not claimed as
 shipped runtime capability here.
 
+Companion continuity files in the configured `<system_folder>/companions/` and legacy
+`_system/companions/` locations are excluded from source publication and deletion effects by the
+registry, retained snapshot/targeted ingest paths, and queued worker consumers. Restore a
+companion-contaminated citation locator by reingesting its genuine source in the same bound vault;
+retain the companion files. The [companion owner contract](CONCEPTS/COMPANION_NOTE_CONTRACT.md#location-convention)
+defines the boundary and recovery behavior. This is repository behavior, not a live-channel
+deployment or verification receipt.
+
 For a retained DEV v1 ownership record whose old container ancestor inode chain is unavailable,
 operators can use the explicit, stopped-window [DEV legacy-owner re-attestation](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#explicit-dev-legacy-owner-re-attestation)
 command. It requires a fresh authority decision and verified private recovery evidence; normal
@@ -275,6 +284,10 @@ does not enter the fence. The fence and the later runtime startup remain unchang
 precondition. Its bind-mounted quiescence and owner-inventory readers tolerate only a bounded
 visibility window for transiently truncated host projections, and a fresh registry may be
 materialized only from the authenticated owner receipt and matching ownership-ledger state.
+For an established schema-v1 ledger with retired bindings, MVR-05 admission also requires
+host-captured identity evidence for each retired root, correlated to the channel registry's
+tombstone or transfer lineage. A missing or replaced retired root blocks admission before ledger or
+registry changes; see the deployment procedure for the full proof and retry behavior.
 
 Use `docs/runbooks/UAT_PANEL_WATCHER.md` for the detailed walkthrough and `docs/runbooks/RUNBOOK_RESET_TO_ZERO.md` when you need the full reset semantics.
 
@@ -410,11 +423,46 @@ Companion docs:
   is wrapped with the declared `heimdal-raw-migrate` consumer from the existing shared raw-store-key
   domain. The trusted migration receipt selects this gate only for HAR-02's exact revision; unrelated
   inventories perform no raw-key lookup. A value-free resolution preflight runs after migration
-  inventory/dry-run but before any deploy mutation; the exact one-shot wrapper resolves again
-  immediately before Alembic and delivers only a temporary migrate-specific handle. Missing,
-  malformed, or domain-divergent material therefore cannot stop active writers or advance deployment
-  state, and diagnostics remain value-free. This wiring does not create, rotate, read back, or
-  otherwise mutate host secret material.
+  inventory/dry-run but before deploy mutation; the exact one-shot wrapper resolves again immediately
+  before Alembic and delivers only a temporary migrate-specific handle. An absent key is allowed for
+  this consumer so HAR-02 can decide under its source-table lock: an empty table needs no key, while
+  rows without a valid key roll back the migration before legacy schema or bytes change. Present
+  malformed or domain-divergent material still fails before migration, and configured capture-watch
+  continues to require the key. Diagnostics remain value-free. This wiring does not create, rotate,
+  read back, or otherwise mutate host secret material.
+- The repository's Linux BWS deploy path keeps its systemd supervisor root-owned for BWS and Docker
+  control while host-global instance-ownership state stays owned by the configured runtime UID/GID;
+  see [Deployment and environments](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#root-owned-image-bake-vs-host-uid-remapped-runtime-user-2991-3047)
+  for the canonical path, ownership, and receipt contract.
+- Native Linux BWS activation runs a fixed source-only API one-shot after migrations and before
+  normal service recreation, using the existing source-backed producer in the same target,
+  selected vault, PostgreSQL credentials delivered through files and transient API consumer
+  context. Normal producers stay
+  stopped; an already-ready Product avoids full replay. Strict source counters, fresh Product
+  readiness and strict vector/index diagnosis remain required. Only proven owned-producer
+  quiescence permits compensation or terminal same-ID reconciliation. See the [Deploy procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure)
+  for candidate-image support, bounded waiting and pending-state limits. Issue #5918's executable
+  repository tests establish this support; live channel qualification remains separate.
+- If an existing-secrets-only Linux BWS deployment remains pending after worker loss, follow the
+  same-ID recovery procedure in [Deployment and environments](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning)
+  before starting a new deployment. A `failed` receipt leaves deployment unverified and does not
+  claim rollback or absence of partial effects.
+- Physical automatic and explicit previous-good recreation retains existing valid Model Access
+  path references through the four-key allowlist. Missing or invalid optional input keeps legacy
+  empty bindings; see [Rollback posture](RELEASE_CHANNELS/README.md#rollback-posture) for the
+  configuration and modern-caller limits.
+- A failed supervised deploy child reports only an allowlisted advisory gate stage and
+  `command_failed` class directly to the existing native journal socket, with `unknown` for absent
+  or ambiguous markers. One nonblocking datagram carries only the finite message and fixed priority
+  and identifier; both raw service streams remain null. An unavailable or full socket loses only
+  the advisory diagnostic. This diagnostic does not establish a terminal result or live
+  channel acceptance; use the same-ID reconciliation procedure above.
+- Before a Linux BWS deployment, operator setup must qualify the complete isolated host runtime,
+  including Python helpers, Chromium headless payload, exact browser-smoke collection and tuning
+  imports. Follow [Linux channel secret provisioning](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning)
+  for the setup/runtime binding and infrastructure-owned OS prerequisites. Missing dependencies or
+  an unavailable browser refuse setup before launcher replacement; application-image selection,
+  credential/grant and migration authority remain with their existing operator gates.
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.
 - `scripts/start_full_system.sh` is the supported startup wrapper. It now auto-probes Ollama reachability from inside the containerized runtime and persists the selected Docker-reachable endpoint into `tmp/runtime.env` before declaring startup healthy.
 - When `LLM_PROVIDER=ollama`, startup tries the configured endpoint first, then Docker-safe candidates such as `host.docker.internal`, before failing the run.
@@ -570,6 +618,16 @@ restart `builderops-loopback-forwarder.service`. API/worker recreation invalidat
 container address, so the wrapper restarts that fixed service again before authenticated readiness
 polling. A missing or failed restart is fail-closed; the wrapper does not poll readiness or claim a
 restored release from an unrefreshed private loopback boundary.
+
+BuilderOps post-effect verification reads its successful deployment receipt and selected pin
+through authenticated status. Compose mounts the pin directory read-only so atomic pin replacement
+withdraws admission immediately. The deploy wrapper records the directory, basename and receipt
+location in the selected pin for later service-manager restarts. The active metadata pin is published
+readable by the non-root API (0644), with directory traversal enabled. The rollback pin stays
+private (0600) to satisfy the existing unattended rollback custody gate; secret custody is unchanged.
+Missing, stale or mismatched
+readback refuses the consumer; this repository mechanism does not establish live activation.
+The owning contract is [verified issue-set merge and exact closure](AGENT_ISSUE_DISPATCHER.md#current-state-honesty).
 
 ### Builder Thread serialized writer
 

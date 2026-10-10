@@ -4,32 +4,33 @@ import logging
 import re
 import uuid as _uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict
 
-from app.components.embeddings import get_embedding_client, get_embedding_identity
+from app.components.embeddings import EmbeddingClientProtocol
+from app.components.llm.fabric import get_product_embedding_client
 from app.index.artifact_metadata import (
     build_indexed_unit_payload,
     canonicalize_indexable_text,
     canonicalize_indexed_text,
 )
+from app.index.embedding_identity import ensure_index_primary_identity
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.llm.fallback_orchestrator import embed_with_fallback
 from app.observability.tracer import start_span
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
 from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
+from app.services.companion_note import is_companion_path
 from app.stores import get_vector_index
 
 logger = logging.getLogger(__name__)
 
 
-def llm_embed_text(*, text: str, provider: str, model: str, dim: int, normalize: bool) -> list[float]:
-    client = get_embedding_client(override_provider=provider, override_model=model)
+def llm_embed_text(*, text: str, client: EmbeddingClientProtocol) -> list[float]:
     vector = client.embed_text(text)
-    if len(vector) != dim:
-        raise ValueError(f"expected {dim} got {len(vector)}")
-    if normalize:
-        return list(vector)
+    if len(vector) != client.identity.dim:
+        raise ValueError(f"expected {client.identity.dim} got {len(vector)}")
     return list(vector)
 
 
@@ -100,7 +101,7 @@ def _infer_dim_from_error(exc: Exception) -> int | None:
     return None
 
 
-def handle_ingest_object_created(obj: Dict[str, object]) -> None:
+def handle_ingest_object_created(obj: Dict[str, object], *, vault_root: Path | None = None) -> None:
     incoming_uuid = resolve_event_object_id(obj)
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
@@ -146,23 +147,41 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     trace_id = obj.get("trace_id")
     store = ObjectStore()
     existing = store.get_object(object_uuid)
+    incoming_ref = str(obj.get("source_ref") or obj.get("path") or "")
 
     if existing is None:
         domain = DomainObject(
             uuid=object_uuid,
             kind=obj.get("kind") or "note",
             payload=payload,
-            source_ref=obj.get("source_ref"),
+            source_ref=incoming_ref or None,
             created_at=datetime.now(timezone.utc),
         )
     else:
         updated_payload = dict(existing.payload or {})
         updated_payload.update({k: v for k, v in payload.items() if v is not None})
+        source_ref = existing.source_ref
+        # Validated vault-source reingest can repair the locator left by a
+        # pre-fix companion publication. Retain every other existing locator;
+        # this does not establish a general rename/duplicate-identity policy.
+        if vault_root is not None and source_ref and incoming_ref:
+            root = vault_root.expanduser().resolve()
+            source_path = Path(incoming_ref).expanduser()
+            if not source_path.is_absolute():
+                source_path = root / source_path
+            source_path = source_path.resolve()
+            if (
+                source_path.is_relative_to(root)
+                and source_path.is_file()
+                and not is_companion_path(source_path, root)
+                and is_companion_path(Path(source_ref), root)
+            ):
+                source_ref = str(source_path)
         domain = DomainObject(
             uuid=existing.uuid,
             kind=existing.kind,
             payload=updated_payload,
-            source_ref=existing.source_ref,
+            source_ref=source_ref,
             created_at=existing.created_at,
         )
     domain.payload = build_indexed_unit_payload(
@@ -182,23 +201,23 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
         )
         return
 
-    identity = get_embedding_identity()
+    embedding_client = get_product_embedding_client()
+    identity = embedding_client.identity
+    vector_index = get_vector_index()
     actual_identity = identity
     embedding: list[float] | None = None
     actual_dim: int | None = None
     is_fallback = False
 
     try:
+        ensure_index_primary_identity(vector_index, identity)
         embedding, actual_identity, is_fallback = embed_with_fallback(
             canonical_content,
             primary_identity=identity,
             object_id=object_uuid,
             primary_embed_callable=lambda: llm_embed_text(
                 text=canonical_content,
-                provider=identity.provider,
-                model=identity.model,
-                dim=identity.dim,
-                normalize=identity.normalize,
+                client=embedding_client,
             ),
         )
         actual_dim = len(embedding)
@@ -228,14 +247,16 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
             error=str(exc),
         )
         return
+    finally:
+        close = getattr(embedding_client, "close", None)
+        if callable(close):
+            close()
 
-    vector_index = get_vector_index()
     model_name = actual_identity.model
 
     object_uuid_val = _uuid.UUID(object_uuid)
     with start_span("indexer.upsert", trace_id, {"kind": obj.get("kind") or "note"}):
         try:
-            vector_index.purge_vectors(object_uuid_val, view=DEFAULT_EMBEDDING_VIEW)
             upsert_kwargs = {
                 "kind": domain.kind,
                 "source_ref": domain.source_ref or "",

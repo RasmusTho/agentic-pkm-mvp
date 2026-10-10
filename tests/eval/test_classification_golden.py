@@ -41,7 +41,24 @@ from app.eval.classification import (
     load_replay_completions,
 )
 
-pytestmark = pytest.mark.not_pg
+pytestmark = [pytest.mark.not_pg, pytest.mark.usefixtures("product_model_access_gateway")]
+
+
+def _report_valid_eval_usage(observer, model: str) -> None:
+    observer(
+        {
+            "model": model,
+            "service_tier": "default",
+            "dispatched_reasoning_effort": "none",
+            "usage": {
+                "prompt_tokens": 100,
+                "completion_tokens": 20,
+                "total_tokens": 120,
+                "prompt_tokens_details": {"cached_tokens": 10},
+            },
+        }
+    )
+
 
 #: Adversarial family prefixes the dataset must keep covering (see the
 #: dataset header): governance phrased as casual chat, body edits phrased as
@@ -268,9 +285,15 @@ def test_live_classification_uses_exact_eval_client_for_every_case(monkeypatch) 
     monkeypatch.setenv("LLM_MODEL", "different-product-model")
     monkeypatch.setattr(constrained, "_default_complete", lambda **kw: pytest.fail("Product default resolved"))
     class Client:
-        route = SimpleNamespace(provider="openai", model="gpt-5.6-terra", transport_id="openai_api")
+        route = SimpleNamespace(
+            provider="openai",
+            model="gpt-5.6-terra",
+            transport_id="openai_api",
+            reasoning_effort="none",
+        )
         def chat(self, name, pack, **kw):
             calls.append((name, pack, kw))
+            _report_valid_eval_usage(kw["usage_observer"], self.route.model)
             return json.dumps({"intent_class": "exploratory", "action_type": None})
     completion = ClassificationCompletion(EvalLLMConfig(model="gpt-5.6-terra", mode="run", chat_client=Client()))
     result = evaluate_classification_golden_set(live=True, live_completion=completion)
@@ -284,9 +307,15 @@ def test_live_eval_preserves_schema_unknown_and_mutation_hard_gate() -> None:
     from app.eval.llm_client import EvalLLMConfig
     from app.eval.live_classification import ClassificationCompletion
     class Client:
-        route = SimpleNamespace(provider="openai", model="gpt-5.6-luna", transport_id="openai_api")
+        route = SimpleNamespace(
+            provider="openai",
+            model="gpt-5.6-luna",
+            transport_id="openai_api",
+            reasoning_effort="none",
+        )
         raw = '{"intent_class":"co_authoring","action_type":null}'
         def chat(self, *args, **kw):
+            _report_valid_eval_usage(kw["usage_observer"], self.route.model)
             return self.raw
     client = Client()
     cfg = EvalLLMConfig(model="gpt-5.6-luna", mode="run", chat_client=client)

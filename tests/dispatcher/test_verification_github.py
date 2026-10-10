@@ -73,6 +73,7 @@ def test_neutralized_body_transport_uses_shared_canonical_digest(monkeypatch) ->
     prepared_pr = {**original_pr, "body": live_body}
     phase_kwargs = projection_phase_kwargs(authority, prepared_pr)
     phase = build_verified_merge_phase(
+        phase_version=2,
         authority_receipt=authority,
         phase="prepared",
         pr=prepared_pr,
@@ -229,6 +230,7 @@ def test_prepared_gate_preserves_authenticated_legacy_terminal_lf_digest() -> No
         authority, prepared_pr, authority_comment=authority_comment
     )
     phase = build_verified_merge_phase(
+        phase_version=2,
         authority_receipt=authority,
         authority_comment=authority_comment,
         phase="prepared",
@@ -360,6 +362,7 @@ def test_prepared_gate_rejects_body_edit_race_during_final_projection(
     prepared_pr = {**original_pr, "body": str(plan["neutralized_body"]) + "\n"}
     phase_kwargs = projection_phase_kwargs(authority, prepared_pr)
     phase = build_verified_merge_phase(
+        phase_version=2,
         authority_receipt=authority,
         phase="prepared",
         pr=prepared_pr,

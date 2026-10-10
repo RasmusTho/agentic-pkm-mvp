@@ -23,7 +23,7 @@ import pytest
 from click.testing import CliRunner
 
 from app.cli import cli
-from app.components.llm.fabric import LLMTaskIntent, get_embeddings_client
+from app.components.llm.fabric import get_product_embedding_client
 from app.index import doctor as doctor_mod
 from app.retrieval import hybrid
 from app.stores import reset_store_backends
@@ -46,9 +46,11 @@ def mixed_identity_doctor_env(monkeypatch: pytest.MonkeyPatch):
     hybrid.get_store().set_documents([])
     doctor_mod.reset_diagnose_cache()
 
-    primary = get_embeddings_client(
-        LLMTaskIntent(task_kind="embed", determinism_required=False)
-    ).identity
+    # Keep the offline diagnostic fixture on the canonical deterministic client.
+    # The real diagnosis still compares every recorded identity tuple.
+    client = get_product_embedding_client(profile="deterministic")
+    monkeypatch.setattr(doctor_mod, "get_embeddings_client", lambda _intent: client)
+    primary = client.identity
 
     identity_tuples = [
         {

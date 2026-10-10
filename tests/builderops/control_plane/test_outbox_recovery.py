@@ -138,7 +138,9 @@ def test_unknown_external_effect_requires_readback_before_retry(
             evidence={"readback": "found"},
         )
     assert restarted_store.outbox_status(envelope.repository, result.operation_key) == "pending"
-    claim = restarted_store.claim_outbox(
+    with pytest.raises(UnknownEffectNeedsReconciliation, match="readback-only"):
+        restarted_store.claim_outbox(envelope=envelope, operation_key=result.operation_key, worker_id="executor-2")
+    claim = restarted_store.outbox_claim(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="executor-2",
@@ -937,11 +939,14 @@ def test_claim_crash_before_lsn_binding_is_recoverable(control_plane_store, enve
     assert persisted is not None
     assert persisted["claim_lsn"] == orphaned_claim.claim_lsn
     assert reconciliation.claim_receipt_sequence == orphaned_claim.receipt_sequence
-    retried = recovered.claim_outbox(
+    with pytest.raises(UnknownEffectNeedsReconciliation, match="readback-only"):
+        recovered.claim_outbox(envelope=envelope, operation_key=result.operation_key, worker_id="replacement-executor")
+    retried = recovered.outbox_claim(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="replacement-executor",
     )
+    assert recovered.effect_eligible(retried) is False
     assert retried.fencing_token > orphaned_claim.fencing_token
 
 
@@ -1013,11 +1018,14 @@ def test_claim_binding_recovery_locks_identity_before_lsn_sampling(
         observed_applied=False,
         evidence={"readback": "not-found"},
     )
-    replacement = contender.claim_outbox(
+    with pytest.raises(UnknownEffectNeedsReconciliation, match="readback-only"):
+        contender.claim_outbox(envelope=envelope, operation_key=result.operation_key, worker_id="replacement-executor")
+    replacement = contender.outbox_claim(
         envelope=envelope,
         operation_key=result.operation_key,
         worker_id="replacement-executor",
     )
+    assert contender.effect_eligible(replacement) is False
     assert replacement.fencing_token > first_claim.fencing_token
     with recovering._connect() as conn:
         historical = conn.execute(
@@ -1063,3 +1071,32 @@ def test_expired_claim_cannot_be_directly_reassigned(control_plane_store, envelo
     assert recovered.fencing_token > first.fencing_token
     assert recovered.receipt_sequence > first.receipt_sequence
     assert control_plane_store.outbox_status(envelope.repository, result.operation_key) == "unknown"
+
+
+def test_post_effect_readback_returns_exact_persisted_authority(control_plane_store, envelope):
+    result = _commit_outbox_task(
+        control_plane_store, envelope, task_id="post-effect-readback",
+        key="post-effect-readback", effect_type="github.merge",
+        payload={"repository": envelope.repository, "pr_number": 4897, "head_sha": "a" * 40},
+    )
+    claim = control_plane_store.claim_outbox(
+        envelope=envelope, operation_key=result.operation_key, worker_id="executor",
+    )
+    control_plane_store.begin_post_effect_pending(
+        repository=envelope.repository, operation_key=result.operation_key,
+        minimum_fencing_token=claim.fencing_token, expected_principal=envelope.actor,
+    )
+    before = control_plane_store.outbox_intent(envelope.repository, result.operation_key)
+    assert before["post_effect_claim_receipt_sequence"] == claim.receipt_sequence
+    assert before["post_effect_receipt_sequence"] is None
+    _expire_outbox_claim(control_plane_store, envelope.repository, result.operation_key)
+    restarted = type(control_plane_store)(control_plane_store.dsn)
+    recovered = restarted.outbox_claim(
+        envelope=envelope, operation_key=result.operation_key, worker_id="recovery",
+    )
+    after = restarted.outbox_intent(envelope.repository, result.operation_key)
+    assert after["post_effect_phase"] == "pending"
+    assert after["post_effect_fencing_token"] == claim.fencing_token
+    assert after["post_effect_claim_lsn"] == claim.claim_lsn
+    assert after["post_effect_claim_receipt_sequence"] == claim.receipt_sequence
+    assert recovered.fencing_token > claim.fencing_token

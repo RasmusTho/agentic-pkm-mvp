@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from uuid import UUID
 
+import pytest
+
 from app.search.service import ingest_object
 from app.components.embeddings import get_embedding_identity
 
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 def test_ingest_roundtrip(stub_index) -> None:
     text = "Alpha beta gamma"

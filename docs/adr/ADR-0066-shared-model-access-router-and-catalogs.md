@@ -55,18 +55,20 @@ endpoint and transport outside model policy and application code. Concrete addre
 identities, and credentials remain host-local and are not committed. Path selection must not
 silently change the model, provider, reasoning effort, or requested capability.
 
-Each configured path must authenticate the caller and authorize the same Product channel and
-operation-specific actions (`complete`, `preflight`, or `catalog`). The VLAN's presence on a private
-segment is not caller authorization. The VLAN ingress uses its configured authenticated identity
-mechanism and maps it to the common channel/action capability contract. If a deployment later
-explicitly configures the optional Tailscale adapter, it uses a narrowly scoped Serve-forwarded
-application-capability grant. Each configured ingress rejects missing, malformed, or wrong-channel/
-action authorization. Ingress proxies may expose their configured private listeners, but the
-executor backend remains bound exclusively to loopback. Public listeners are forbidden. Host-local
-processes remain inside the executor host's trust boundary. The active VLAN profile, identity
-mapping, service activation, and endpoint bindings are operator-owned host configuration and are
-not checked into Git. If the configured path cannot establish authorization, the route fails closed;
-no source-IP-only trust or unscoped shared bearer token is substituted.
+Each configured path must authenticate its caller using the configured path mechanism. The current
+Ygg path uses mutual TLS at the private VLAN ingress; VLAN membership alone is not authentication.
+For the owner's single-operator deployment, successful mTLS admission is the request-authorization
+boundary: the executor does not require a second Product/Builder channel or per-action capability
+claim, nor a shared bearer token. Consequently, an mTLS-admitted caller inside this trusted boundary
+may invoke the fixed API operations exposed by the ingress. This is an explicit single-operator risk
+acceptance, not a merge of Product and Builder policy, credential, profile, or receipt authorities;
+their resolvers and server-owned executors remain distinct. Revisit this decision before admitting
+multiple operators or untrusted tenants. Ingress proxies expose only their configured private
+listeners, while the executor backend remains bound exclusively to loopback. Public listeners are
+forbidden. Host-local processes remain inside the executor host's trust boundary. The active VLAN
+profile, service activation, and endpoint bindings are operator-owned host configuration and are not
+checked into Git. If the configured path cannot authenticate its caller, the route fails closed; no
+source-IP-only trust or unscoped shared bearer token is substituted.
 
 The executor exposes only bounded, versioned catalog, preflight, and model-execution operations. It
 does not accept arbitrary argv, shell commands, workspace paths, files, MCP servers, or caller-chosen
@@ -110,9 +112,8 @@ download, or fallback are not prerequisites for this route. Provider or model fa
 separate owner policy and remains disabled unless explicitly configured and authorized.
 
 Path unavailability, connect/preflight timeout, and failure of the path-specific authentication
-mechanism may advance to the next configured profile before completion. A caller denied by the
-common channel/action policy, a malformed request, or a missing route capability is not a path
-outage and must fail closed without trying another path.
+mechanism may advance to the next configured profile before completion. A malformed request or
+missing route capability is not a path outage and must fail closed without trying another path.
 
 Once a completion request may have reached the executor, any timeout or lost response is an
 indeterminate/started execution and terminal: no path retry, provider switch, or duplicate

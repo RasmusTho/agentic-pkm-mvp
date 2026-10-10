@@ -51,6 +51,7 @@ from app.builderops.control_plane.auth import (
     CredentialRegistry,
 )
 from app.builderops.control_plane.health import HealthService, LiveOperationalStatusProvider
+from app.builderops.control_plane.deployment_readback import deployment_readback
 from app.builderops.control_plane.models import (
     STALE_AUTHORITY_EPOCH_DETAIL,
     AuthorityEnvelope,
@@ -147,8 +148,9 @@ def _worker_supplies_issue_delivery_host_effect_field(value: Any) -> bool:
 # path were added here by mistake: no BuilderOps credential/secret in this
 # system is ever numeric (they are opaque strings from secret files), so a
 # raw credential can never satisfy the int check regardless of path.
-_STRUCTURAL_SAFE_KEYS = frozenset({"fencing_token"})
+_STRUCTURAL_SAFE_KEYS = frozenset({"fencing_token", "minimum_fencing_token"})
 _STRUCTURAL_SAFE_FIELD_PATHS: dict[str, frozenset[tuple[str, ...]]] = {
+    "minimum_fencing_token": frozenset({("minimum_fencing_token",)}),
     "fencing_token": frozenset(
         {("lease", "fencing_token"), ("claim", "fencing_token"), ("minimum_fencing_token",)}
     )
@@ -2244,6 +2246,10 @@ def create_app(
         return {
             "authority_epoch": readiness.get("authority_epoch"),
             "schema_version": readiness.get("schema_version"),
+            "post_effect_capability": "post_effect_merge_readback.v1",
+            "post_effect_deployment": await run_in_threadpool(deployment_readback),
+            "source_sha": os.environ.get("BUILDEROPS_SOURCE_SHA"),
+            "image_digest": os.environ.get("BUILDEROPS_IMAGE_DIGEST"),
         }
 
     @application.get("/v1/receipts/{object_kind}/{object_id}")
@@ -2490,9 +2496,6 @@ def create_app(
         _enforce_repo_scope(credential, repository)
         try:
             canonical = canonical_repository(repository)
-            outbox_status = await run_in_threadpool(
-                store.outbox_status, canonical, operation_key
-            )
             intent = await run_in_threadpool(
                 store.outbox_intent, canonical, operation_key
             )
@@ -2506,10 +2509,12 @@ def create_app(
         return {
             "repository": canonical,
             "operation_key": operation_key,
-            "status": outbox_status,
+            "status": intent["status"],
+            "readback_fencing_token": intent.get("claim_fencing_token"),
             "task_id": intent["task_id"],
             "effect_type": intent["effect_type"],
             "payload": intent["payload"],
+            **{key: value for key, value in intent.items() if key.startswith("post_effect_")},
             "reconciliation_evidence": intent.get("reconciliation_evidence"),
             "reconciliation_receipt_sequence": intent.get(
                 "reconciliation_receipt_sequence"

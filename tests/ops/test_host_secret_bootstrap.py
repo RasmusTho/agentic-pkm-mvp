@@ -1068,12 +1068,44 @@ def test_optional_secret_failure_never_unlocks_the_run_anyway_handoff(
     )
 
 
-def test_absent_required_secret_still_fails_closed(tmp_path: Path) -> None:
-    """#4489 must not weaken the guarantee protecting the ingress lanes."""
+def test_absent_api_raw_key_degrades_only_declared_optional_consumers(tmp_path: Path) -> None:
+    """The API and empty-table migration tolerate absence; capture-watch does not."""
+    contract = host_secret_bootstrap.load_host_secret_contract()
+    assert contract.is_optional("heimdal.raw-store-key") is False
+    assert contract.is_optional_for_consumer(
+        channel="dev", consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
+    ) is True
+    assert contract.is_optional_for_consumer(
+        channel="dev", consumer="heimdal-raw-migrate", secret="heimdal.raw-store-key"
+    ) is True
+    assert contract.is_optional_for_consumer(
+        channel="dev", consumer="heimdal-capture-watch", secret="heimdal.raw-store-key"
+    ) is False
+
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="heimdal-api-ingress",
+        keychain_lookup=_absent(":heimdal.raw-store-key"),
+        directory=tmp_path,
+    ) as env_file:
+        assert env_file.read_text(encoding="utf-8") == f"GITHUB_TOKEN={_GITHUB_TOKEN}\n"
+
+def test_absent_raw_key_materializes_no_migration_secret(tmp_path: Path) -> None:
+    with materialize_consumer_environment(
+        channel="dev",
+        consumer="heimdal-raw-migrate",
+        keychain_lookup=_absent(":heimdal-raw-migrate:heimdal.raw-store-key"),
+        directory=tmp_path,
+    ) as env_file:
+        assert env_file.read_text(encoding="utf-8") == ""
+
+
+def test_absent_capture_watch_raw_key_still_fails_closed(tmp_path: Path) -> None:
+    """A configured encryption consumer remains blocked without its key."""
     with pytest.raises(HostSecretBootstrapError):
         with materialize_consumer_environment(
             channel="dev",
-            consumer="heimdal-api-ingress",
+            consumer="heimdal-capture-watch",
             keychain_lookup=_absent(":heimdal.raw-store-key"),
             directory=tmp_path,
         ):
@@ -1093,6 +1125,12 @@ def test_every_committed_secret_declares_its_optionality_explicitly() -> None:
     for logical_id in ("heimdal.raw-store-key", "openai.api-key", "anthropic.api-key"):
         assert contract.is_optional(logical_id) is False
     assert contract.is_optional("github.token") is True
+    assert contract.is_optional_for_consumer(
+        channel="prod", consumer="heimdal-api-ingress", secret="heimdal.raw-store-key"
+    ) is True
+    assert contract.is_optional_for_consumer(
+        channel="prod", consumer="heimdal-raw-migrate", secret="heimdal.raw-store-key"
+    ) is True
 
 
 @pytest.mark.parametrize(
@@ -1201,21 +1239,19 @@ def test_migration_consumer_bootstraps_shared_key_for_every_channel(
 
 
 @pytest.mark.parametrize("channel", ["dev", "test", "prod"])
-@pytest.mark.parametrize("failure", ["missing", "malformed", "divergent"])
+@pytest.mark.parametrize("failure", ["malformed", "divergent"])
 def test_migration_consumer_refuses_secret_failure_without_launch_or_disclosure(
     tmp_path: Path,
     channel: str,
     failure: str,
 ) -> None:
-    """Every governed lane fails before migration on unusable key authority."""
+    """Present malformed or domain-divergent key material fails closed."""
     launched = False
     unavailable_detail = "private-lookup-detail"
     malformed_value = "private-malformed-material"
 
     def lookup(_service: str, account: str) -> str:
         if account.endswith(":heimdal-raw-migrate:heimdal.raw-store-key"):
-            if failure == "missing":
-                raise OSError(unavailable_detail)
             if failure == "malformed":
                 return malformed_value
             return _RAW_KEY
@@ -1472,9 +1508,16 @@ from app.ops.host_secret_controller import (
 )
 from app.ops.host_secret_bootstrap import resolve_host_secret_values
 
-_BWS_PROJECT = "00000000-0000-4000-8000-000000000001"
+_BWS_NON_PROD_PROJECT = "00000000-0000-4000-8000-000000000001"
 _BWS_ORG = "00000000-0000-4000-8000-000000000002"
 _BWS_ITEM = "00000000-0000-4000-8000-000000000003"
+_BWS_PROD_PROJECT = "00000000-0000-4000-8000-000000000004"
+_BWS_PEER_ITEM = "00000000-0000-4000-8000-000000000005"
+_BWS_NONCANONICAL_PROJECT_ID = "ABCDEFAB-CDEF-4ABC-8ABC-ABCDEFABCDEF"
+_BWS_PROJECT_IDS = {
+    "non-prod": _BWS_NON_PROD_PROJECT,
+    "prod": _BWS_PROD_PROJECT,
+}
 
 
 class _BwsClient:
@@ -1491,6 +1534,15 @@ class _BwsClient:
         self.failure = False
         self.wrong_project_organization = False
         self.wrong_project_id = False
+        self.wrong_peer_project_organization = False
+        self.missing_selected_project = False
+        self.missing_peer_project = False
+        self.unexpected_project = False
+        self.duplicate_project_name = False
+        self.duplicate_project_id = False
+        self.peer_project_id_fault: str | None = None
+        self.include_peer_project_item = False
+        self.peer_project_item_identity: str | None = None
         self.duplicate_item = False
         self.wrong_item_organization = False
         self.wrong_item_project_ids = False
@@ -1514,13 +1566,54 @@ class _BwsClient:
 
     def list_projects(self, organization_id):
         self.calls.append(("projects", organization_id))
-        project_id = "00000000-0000-4000-8000-000000000099" if self.wrong_project_id else _BWS_PROJECT
-        project_organization = "00000000-0000-4000-8000-000000000098" if self.wrong_project_organization else _BWS_ORG
+        peer_project = "prod" if self.project == "non-prod" else "non-prod"
+        selected_project_id = _BWS_PROJECT_IDS[self.project]
+        if self.wrong_project_id:
+            selected_project_id = "00000000-0000-4000-8000-000000000099"
+        selected_organization = (
+            "00000000-0000-4000-8000-000000000098"
+            if self.wrong_project_organization else _BWS_ORG
+        )
+        peer_organization = (
+            "00000000-0000-4000-8000-000000000098"
+            if self.wrong_peer_project_organization else _BWS_ORG
+        )
+        peer_project_id = _BWS_PROJECT_IDS[peer_project]
+        if self.peer_project_id_fault == "malformed":
+            peer_project_id = "not-a-uuid"
+        elif self.peer_project_id_fault == "noncanonical":
+            peer_project_id = _BWS_NONCANONICAL_PROJECT_ID
+        peer_name = self.project if self.duplicate_project_name else peer_project
+        if self.duplicate_project_id:
+            peer_project_id = selected_project_id
+        records = [
+            SimpleNamespace(
+                id=selected_project_id,
+                name=self.project,
+                organization_id=selected_organization,
+            ),
+            SimpleNamespace(
+                id=peer_project_id,
+                name=peer_name,
+                organization_id=peer_organization,
+            ),
+        ]
+        if self.missing_selected_project:
+            records = [records[1]]
+        elif self.missing_peer_project:
+            records = [records[0]]
+        if self.unexpected_project:
+            records.append(
+                SimpleNamespace(
+                    id="00000000-0000-4000-8000-000000000099",
+                    name="unexpected",
+                    organization_id=_BWS_ORG,
+                )
+            )
+        self.listed_project_count = len(records)
         return SimpleNamespace(
             success=True,
-            data=SimpleNamespace(
-                data=[SimpleNamespace(id=project_id, name=self.project, organization_id=project_organization)]
-            ),
+            data=SimpleNamespace(data=records),
         )
 
     def secrets(self):
@@ -1537,10 +1630,26 @@ class _BwsClient:
             ),
             project_ids=(
                 ["00000000-0000-4000-8000-000000000096"]
-                if self.wrong_item_project_ids else [_BWS_PROJECT]
+                if self.wrong_item_project_ids else [_BWS_PROJECT_IDS[self.project]]
             ),
         )
         items = [] if self.missing else [item]
+        if self.include_peer_project_item:
+            peer_project = "prod" if self.project == "non-prod" else "non-prod"
+            peer_identity = self.peer_project_item_identity
+            if peer_identity is None:
+                peer_identity = (
+                    "prod/heimdal.raw-store-key"
+                    if peer_project == "prod" else "dev/postgres.password"
+                )
+            items.append(
+                SimpleNamespace(
+                    id=_BWS_PEER_ITEM,
+                    key=peer_identity,
+                    organization_id=_BWS_ORG,
+                    project_ids=[_BWS_PROJECT_IDS[peer_project]],
+                )
+            )
         if self.duplicate_item:
             items.append(item)
         return SimpleNamespace(
@@ -1556,7 +1665,10 @@ class _BwsClient:
                 id=("00000000-0000-4000-8000-000000000095" if self.wrong_response_id else _BWS_ITEM),
                 key=("wrong/key" if self.wrong_response_key else self.identity),
                 organization_id=_BWS_ORG,
-                project_id="wrong" if self.wrong_response_project else _BWS_PROJECT,
+                project_id=(
+                    "wrong" if self.wrong_response_project
+                    else _BWS_PROJECT_IDS[self.project]
+                ),
                 value=self.value,
             ),
         )
@@ -1572,7 +1684,7 @@ def _bws_fixture(
     token.chmod(0o400)
     client = _BwsClient(project, identity, value)
     reader = BwsSecretReader(
-        BwsReaderConfig(project, _BWS_PROJECT, _BWS_ORG, credentials, token),
+        BwsReaderConfig(project, _BWS_PROJECT_IDS[project], _BWS_ORG, credentials, token),
         client_factory=lambda: client,
     )
     return reader, client, HostSecretController(tmp_path / "controller")
@@ -1608,6 +1720,131 @@ def test_bws_lookup_uses_scoped_active_identity(
     assert "fixture-machine-token" not in (controller.directory / "operations.jsonl").read_text()
 
 
+def test_bws_lookup_accepts_both_projects_and_fetches_only_selected_item(
+    tmp_path, capsys, caplog
+):
+    value = "fixture-selected-project-password"
+    reader, client, controller = _bws_fixture(
+        tmp_path,
+        project="non-prod",
+        identity="shared/openai.api-key",
+        value=value,
+    )
+    client.include_peer_project_item = True
+    client.peer_project_item_identity = "shared/openai.api-key"
+
+    resolved = resolve_host_secret_values(
+        channel="dev",
+        consumer="builderops-model-inquiry",
+        provider="bws",
+        bws_reader=reader,
+        controller=controller,
+    )
+
+    assert resolved == {"openai.api-key": value}
+    assert client.listed_project_count == 2
+    assert client.calls == [
+        ("login", None),
+        ("projects", _BWS_ORG),
+        ("list", _BWS_ORG),
+        ("get", _BWS_ITEM),
+    ]
+    assert not any(call == ("get", _BWS_PEER_ITEM) for call in client.calls)
+    diagnostics = capsys.readouterr().out + caplog.text
+    assert value not in diagnostics
+    journal = (controller.directory / "operations.jsonl").read_text()
+    assert value not in journal and "fixture-machine-token" not in journal
+
+
+def test_bws_lookup_accepts_single_selected_project_and_fetches_only_selected_item(
+    tmp_path, capsys, caplog
+):
+    value = "fixture-selected-project-password"
+    reader, client, controller = _bws_fixture(
+        tmp_path,
+        project="non-prod",
+        identity="shared/openai.api-key",
+        value=value,
+    )
+    client.missing_peer_project = True
+    client.include_peer_project_item = True
+    client.peer_project_item_identity = "shared/openai.api-key"
+
+    resolved = resolve_host_secret_values(
+        channel="dev",
+        consumer="builderops-model-inquiry",
+        provider="bws",
+        bws_reader=reader,
+        controller=controller,
+    )
+
+    assert resolved == {"openai.api-key": value}
+    assert client.listed_project_count == 1
+    assert client.calls == [
+        ("login", None),
+        ("projects", _BWS_ORG),
+        ("list", _BWS_ORG),
+        ("get", _BWS_ITEM),
+    ]
+    assert not any(call == ("get", _BWS_PEER_ITEM) for call in client.calls)
+    diagnostics = capsys.readouterr().out + caplog.text
+    assert value not in diagnostics
+    journal = (controller.directory / "operations.jsonl").read_text()
+    assert value not in journal and "fixture-machine-token" not in journal
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing-selected-project",
+        "wrong-selected-project-organization",
+        "wrong-peer-project-organization",
+        "wrong-selected-project-id",
+        "malformed-peer-project-id",
+        "noncanonical-peer-project-id",
+        "unexpected-project",
+        "duplicate-project-name",
+        "duplicate-project-id",
+    ],
+)
+def test_bws_lookup_rejects_invalid_multi_project_scope(
+    tmp_path, capsys, caplog, fault
+):
+    reader, client, controller = _bws_fixture(tmp_path)
+    client.missing_selected_project = fault == "missing-selected-project"
+    client.missing_peer_project = fault == "missing-peer-project"
+    client.wrong_project_organization = (
+        fault == "wrong-selected-project-organization"
+    )
+    client.wrong_peer_project_organization = (
+        fault == "wrong-peer-project-organization"
+    )
+    client.wrong_project_id = fault == "wrong-selected-project-id"
+    if fault == "malformed-peer-project-id":
+        client.peer_project_id_fault = "malformed"
+    elif fault == "noncanonical-peer-project-id":
+        client.peer_project_id_fault = "noncanonical"
+    client.unexpected_project = fault == "unexpected-project"
+    client.duplicate_project_name = fault == "duplicate-project-name"
+    client.duplicate_project_id = fault == "duplicate-project-id"
+
+    with pytest.raises(HostSecretBootstrapError):
+        resolve_host_secret_values(
+            channel="dev",
+            consumer="builderops-model-inquiry",
+            provider="bws",
+            bws_reader=reader,
+            controller=controller,
+        )
+
+    assert client.calls == [("login", None), ("projects", _BWS_ORG)]
+    diagnostics = capsys.readouterr().out + caplog.text
+    assert _OPENAI_KEY not in diagnostics
+    assert "fixture-machine-token" not in diagnostics
+    journal = (controller.directory / "operations.jsonl").read_text()
+    assert _OPENAI_KEY not in journal and "fixture-machine-token" not in journal
+
+
 def test_typesafe_bws_lookup_uses_non_prod_project_and_reader_token(
     tmp_path, monkeypatch, capsys, caplog
 ):
@@ -1623,7 +1860,7 @@ def test_typesafe_bws_lookup_uses_non_prod_project_and_reader_token(
     reader = host_secret_bootstrap.create_marr_typesafe_bws_reader(
         environment={
             "BWS_READER_PROJECT": "non-prod",
-            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_PROJECT_ID": _BWS_NON_PROD_PROJECT,
             "BWS_ORGANIZATION_ID": _BWS_ORG,
         },
         keychain_lookup=keychain_lookup,
@@ -1710,7 +1947,7 @@ def test_marr_typesafe_reader_rejects_exact_binding_adverse_cases_without_disclo
         reader = host_secret_bootstrap.create_marr_typesafe_bws_reader(
             environment={
                 "BWS_READER_PROJECT": "non-prod",
-                "BWS_PROJECT_ID": _BWS_PROJECT,
+                "BWS_PROJECT_ID": _BWS_NON_PROD_PROJECT,
                 "BWS_ORGANIZATION_ID": _BWS_ORG,
             },
             keychain_lookup=keychain_lookup,
@@ -1735,13 +1972,13 @@ def test_marr_typesafe_reader_rejects_exact_binding_adverse_cases_without_disclo
         {},
         {
             "BWS_READER_PROJECT": "non-prod",
-            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_PROJECT_ID": _BWS_NON_PROD_PROJECT,
             "BWS_ORGANIZATION_ID": _BWS_ORG,
             "BWS_ACCESS_TOKEN_FILE": "/forbidden/token-file",
         },
         {
             "BWS_READER_PROJECT": "prod",
-            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_PROJECT_ID": _BWS_PROD_PROJECT,
             "BWS_ORGANIZATION_ID": _BWS_ORG,
         },
     ],
@@ -1865,7 +2102,9 @@ def test_missing_bws_access_token_file_fails_before_provider_request(tmp_path, m
         elif fault == "directory":
             token.mkdir()
         elif fault == "wrong-path":
-            reader.config = BwsReaderConfig("non-prod", _BWS_PROJECT, _BWS_ORG, tmp_path, token)
+            reader.config = BwsReaderConfig(
+                "non-prod", _BWS_NON_PROD_PROJECT, _BWS_ORG, tmp_path, token
+            )
     monkeypatch.setenv("BWS_ACCESS_TOKEN", "fixture-token-env-is-never-read")
     with pytest.raises(HostSecretBootstrapError):
         resolve_host_secret_values(
@@ -2028,12 +2267,19 @@ def test_bws_real_sdk_schema_is_used_without_live_network(tmp_path):
                 data = {
                     "data": [
                         {
-                            "id": _BWS_PROJECT,
+                            "id": _BWS_NON_PROD_PROJECT,
                             "name": "non-prod",
                             "organizationId": _BWS_ORG,
                             "creationDate": date,
                             "revisionDate": date,
-                        }
+                        },
+                        {
+                            "id": _BWS_PROD_PROJECT,
+                            "name": "prod",
+                            "organizationId": _BWS_ORG,
+                            "creationDate": date,
+                            "revisionDate": date,
+                        },
                     ]
                 }
             elif request.get("secrets", {}).get("list"):
@@ -2043,7 +2289,7 @@ def test_bws_real_sdk_schema_is_used_without_live_network(tmp_path):
                             "id": _BWS_ITEM,
                             "key": "shared/openai.api-key",
                             "organizationId": _BWS_ORG,
-                            "projectIds": [_BWS_PROJECT],
+                            "projectIds": [_BWS_NON_PROD_PROJECT],
                         }
                     ]
                 }
@@ -2053,7 +2299,7 @@ def test_bws_real_sdk_schema_is_used_without_live_network(tmp_path):
                     "id": _BWS_ITEM,
                     "key": "shared/openai.api-key",
                     "organizationId": _BWS_ORG,
-                    "projectId": _BWS_PROJECT,
+                    "projectId": _BWS_NON_PROD_PROJECT,
                     "value": _OPENAI_KEY,
                     "note": "",
                     "creationDate": date,
@@ -2086,7 +2332,7 @@ def test_typesafe_server_bootstrap_attests_identity_without_materializing_provid
     monkeypatch.setenv("TYPESAFE_API_KEY", "fixture-ambient-key-must-not-be-inherited")
     environment = {
         "BWS_READER_PROJECT": "non-prod",
-        "BWS_PROJECT_ID": _BWS_PROJECT,
+        "BWS_PROJECT_ID": _BWS_NON_PROD_PROJECT,
         "BWS_ORGANIZATION_ID": _BWS_ORG,
     }
     observed = []
@@ -2140,12 +2386,12 @@ def test_typesafe_server_bootstrap_refuses_before_lookup_or_launch(
         {},
         {
             "BWS_READER_PROJECT": "prod",
-            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_PROJECT_ID": _BWS_PROD_PROJECT,
             "BWS_ORGANIZATION_ID": _BWS_ORG,
         },
         {
             "BWS_READER_PROJECT": "non-prod",
-            "BWS_PROJECT_ID": _BWS_PROJECT,
+            "BWS_PROJECT_ID": _BWS_NON_PROD_PROJECT,
             "BWS_ORGANIZATION_ID": _BWS_ORG,
             "BWS_ACCESS_TOKEN": "forbidden-token-source",
         },

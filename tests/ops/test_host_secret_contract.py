@@ -96,6 +96,16 @@ def test_contract_rejects_undeclared_consumer_field(tmp_path: Path) -> None:
         load_host_secret_contract(contract_path)
 
 
+def test_contract_rejects_consumer_optional_secret_without_grant(tmp_path: Path) -> None:
+    payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8"))
+    payload["consumers"][0]["optional_secrets"] = ["discord.webhook"]
+    contract_path = tmp_path / "host_secret_contract.json"
+    contract_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid host secret consumer declaration"):
+        load_host_secret_contract(contract_path)
+
+
 def test_contract_rejects_undeclared_top_level_field(tmp_path: Path) -> None:
     payload = json.loads(Path("config/secrets/host_secret_contract.json").read_text(encoding="utf-8"))
     payload["raw_key"] = "not-a-secret-value"
@@ -273,30 +283,35 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "consumer": "heimdal-api-ingress",
             "channels": ["dev", "test", "prod"],
             "secrets": ["heimdal.raw-store-key", "github.token"],
+            "optional_secrets": ["heimdal.raw-store-key"],
             "role_requirements": {},
         },
         {
             "consumer": "heimdal-raw-migrate",
             "channels": ["dev", "test", "prod"],
             "secrets": ["heimdal.raw-store-key"],
+            "optional_secrets": ["heimdal.raw-store-key"],
             "role_requirements": {},
         },
         {
             "consumer": "heimdal-capture-watch",
             "channels": ["dev", "test", "prod"],
             "secrets": ["heimdal.raw-store-key"],
+            "optional_secrets": [],
             "role_requirements": {},
         },
         {
             "consumer": "heimdal-cold-volume",
             "channels": ["dev", "test", "prod"],
             "secrets": ["heimdal.archive-pass"],
+            "optional_secrets": [],
             "role_requirements": {},
         },
         {
             "consumer": "builderops-model-inquiry",
             "channels": ["dev", "test", "prod"],
             "secrets": ["openai.api-key"],
+            "optional_secrets": [],
             "role_requirements": {
                 "model_inquiry": ["openai.api-key"],
             },
@@ -305,6 +320,7 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "consumer": "builderops-ckm-semantic",
             "channels": ["dev", "test", "prod"],
             "secrets": ["openai.api-key"],
+            "optional_secrets": [],
             "role_requirements": {
                 "ckm_semantic": ["openai.api-key"],
             },
@@ -313,12 +329,14 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "consumer": "heimdal-external-alerts",
             "channels": ["dev", "test", "prod"],
             "secrets": ["discord.webhook"],
+            "optional_secrets": [],
             "role_requirements": {},
         },
         {
             "consumer": "marr-server-dev",
             "channels": ["dev"],
             "secrets": ["typesafe.api-key"],
+            "optional_secrets": [],
             "role_requirements": {},
         },
     ]

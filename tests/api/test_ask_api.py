@@ -4,7 +4,7 @@ from app.api.app import app
 from app.retrieval.hybrid import get_store
 
 
-def test_ask_endpoint_returns_sources(monkeypatch):
+def test_ask_endpoint_returns_sources(monkeypatch, mock_product_api_routes):
     monkeypatch.setattr("app.index.embeddings.embed_texts", lambda texts, **_kwargs: [[0.1, 0.1, 0.1] for _ in texts])
     monkeypatch.setattr("app.index.embeddings.embed_text", lambda text, **_kwargs: [0.1, 0.1, 0.1])
     monkeypatch.setattr("app.retrieval.hybrid.embed_text", lambda text, language=None: [0.1, 0.1, 0.1])
@@ -32,7 +32,7 @@ def test_ask_endpoint_returns_sources(monkeypatch):
     assert "uuid" in first
 
 
-def test_ask_payload_without_zone_does_not_fail(monkeypatch):
+def test_ask_payload_without_zone_does_not_fail(monkeypatch, mock_product_api_routes):
     """Regression test: normal ingested artifacts without payload zone should not produce misleading behavior."""
     monkeypatch.setattr("app.index.embeddings.embed_texts", lambda texts, **_kwargs: [[0.1, 0.1, 0.1] for _ in texts])
     monkeypatch.setattr("app.index.embeddings.embed_text", lambda text, **_kwargs: [0.1, 0.1, 0.1])

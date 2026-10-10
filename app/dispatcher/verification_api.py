@@ -259,10 +259,13 @@ class BuilderOpsVerificationLedger:
         repository: str,
         source_ref: str = "github-issue:3603",
         effect_outbox: VerificationEffectOutbox | None = None,
+        post_effect_deployment: Mapping[str, object] | None = None,
     ) -> None:
         self.client = client
         self.repository = repository.lower()
         self.effect_outbox = effect_outbox
+        self.post_effect_deployment = post_effect_deployment
+        self._post_effect_deployment_override = post_effect_deployment is not None
         census_path = Path(__file__).resolve().parents[2] / "docs/settings/models/providers.yaml"
         self.capability_aliases: Mapping[str, str] = capability_aliases_for_channel(
             load_provider_census(census_path), channel="dev"
@@ -1656,6 +1659,7 @@ class BuilderOpsVerificationLedger:
                 )
             },
             "outbox_status": outbox.get("status"),
+            "readback_fencing_token": outbox.get("readback_fencing_token"),
             "reconciliation_evidence": outbox.get(
                 "reconciliation_evidence"
             ),
@@ -1840,6 +1844,10 @@ class BuilderOpsVerificationLedger:
                 raise ValueError(
                     "pending verification effect conflicts with durable outbox intent"
                 )
+            if pending_type == "github.merge":
+                fence = existing.get("readback_fencing_token")
+                if type(fence) is not int or fence != 0:
+                    raise ValueError("attempted merge requires readback-only recovery before retry")
             if existing.get("status") in {"claimed", "unknown"}:
                 raise ValueError(
                     "verification effect requires reconciliation before retry"
@@ -2055,6 +2063,13 @@ class BuilderOpsVerificationLedger:
     ) -> Mapping[str, object]:
         if self.effect_outbox is None:
             raise ValueError("verification effect outbox is unavailable")
+        retained = self._effect_claims.get(operation_key)
+        if retained is not None and effect_type == "github.merge":
+            expiry = datetime.fromisoformat(str(retained["expires_at"]).replace("Z", "+00:00"))
+            if expiry > datetime.now(timezone.utc):
+                self._validate_effect_claim(retained, operation_key=operation_key, run_id=run_id,
+                    effect_type=effect_type, require_eligible=False, expected_payload=expected_payload)
+                return retained
         claim = self.effect_outbox.recover(operation_key)
         self._validate_effect_claim(
             claim,
@@ -2075,6 +2090,80 @@ class BuilderOpsVerificationLedger:
             raise ValueError(
                 "verification effect claim is unavailable"
             ) from exc
+
+    def require_post_effect_capability(self) -> None:
+        from app.dispatcher.verification_merge import require_post_effect_deployment
+        status = self.client.status()
+        if not self._post_effect_deployment_override:
+            observed = status.get("post_effect_deployment")
+            self.post_effect_deployment = observed if isinstance(observed, Mapping) else None
+        require_post_effect_deployment(self.post_effect_deployment, status)
+
+    def prepare_merge_readback(self, operation_key: str) -> Mapping[str, object]:
+        """Fence readback after an attempted effect without replaying its transport."""
+        self.require_post_effect_capability()
+        claim = self.effect_claim(operation_key)
+        self.begin_post_effect_pending(operation_key, minimum_fencing_token=_required_int(claim["fencing_token"], "fencing_token"))
+        if operation_key not in self._unknown_effects:
+            if self.effect_outbox is None:
+                raise ValueError("verification effect outbox is unavailable")
+            self.effect_outbox.mark_unknown(claim, detail="post-effect readback pending")
+            self._unknown_effects.add(operation_key)
+        return claim
+
+    def finish_merge_readback(self, operation_key: str, evidence: Mapping[str, object]) -> None:
+        claim = self.effect_claim(operation_key)
+        closed = {key: evidence[key] for key in (
+            "merged", "head_sha", "merge_commit_sha", "merge_commit_title", "merge_commit_message"
+        )}
+        self.reconcile_post_effect(operation_key, minimum_fencing_token=_required_int(claim["fencing_token"], "fencing_token"),
+                                   observed_applied=True, evidence={"readback": "found", **closed})
+        self._effect_claims.pop(operation_key, None)
+        self._unknown_effects.discard(operation_key)
+
+    def finish_persisted_merge_readback(self, operation_key: str, evidence: Mapping[str, object]) -> None:
+        """Complete a marker interrupted after ordinary reconciliation committed."""
+        self.require_post_effect_capability()
+        row = self.client.get_outbox_status(repository=self.repository, operation_key=operation_key)
+        if row.get("post_effect_phase") not in {"pending", "reconciled"}:
+            raise ValueError("persisted merge readback lacks a pending post-effect identity")
+        closed = {key: evidence[key] for key in (
+            "merged", "head_sha", "merge_commit_sha", "merge_commit_title", "merge_commit_message"
+        )}
+        self.reconcile_post_effect(operation_key,
+            minimum_fencing_token=_required_int(row.get("readback_fencing_token"), "readback_fencing_token"),
+            observed_applied=True, evidence={"readback": "found", **closed})
+
+    def post_effect_authority(self, operation_key: str, *, run_id: str) -> Mapping[str, object]:
+        """Project only authenticated persisted authority after fresh deployment readback."""
+        from app.dispatcher.verified_merge import valid_post_effect_authority
+        self.require_post_effect_capability()
+        row = self.client.get_outbox_status(repository=self.repository, operation_key=operation_key)
+        payload = row.get("payload")
+        evidence = row.get("post_effect_evidence")
+        if (not isinstance(payload, Mapping) or not isinstance(evidence, Mapping)
+                or row.get("task_id") != run_id or row.get("effect_type") != "github.merge"
+                or row.get("post_effect_observed_applied") is not True or row.get("post_effect_terminal_unknown") is not False
+                or row.get("status") != "succeeded"):
+            raise ValueError("post-effect projection requires exact persisted applied merge authority")
+        assert self.post_effect_deployment is not None
+        deployed = self.post_effect_deployment["deployment_receipt"]
+        assert isinstance(deployed, Mapping)
+        value = {"repository": row["repository"], "operation_key": row["operation_key"],
+                 "task_id": row["task_id"], "run_id": run_id, "pr_number": payload.get("pr_number"),
+                 "head_sha": payload.get("head_sha"), "merge_commit_sha": evidence.get("merge_commit_sha"),
+                 "phase": row.get("post_effect_phase"), "fencing_token": row.get("post_effect_fencing_token"),
+                 "intent_lsn": row.get("post_effect_intent_lsn"), "claim_lsn": row.get("post_effect_claim_lsn"),
+                 "pending_receipt_sequence": row.get("post_effect_claim_receipt_sequence"),
+                 "reconciled_receipt_sequence": row.get("post_effect_receipt_sequence"),
+                 "deployment": {**{key: deployed.get(key) for key in ("source_sha", "image_digest",
+                     "postgres_image_digest", "schema_version", "authority_epoch", "candidate_receipt_sha")},
+                     "capability": "post_effect_merge_readback.v1"}}
+        authority = {"repository": self.repository, "run_id": run_id,
+                     "pr_number": payload.get("pr_number"), "head_sha": payload.get("head_sha")}
+        if not valid_post_effect_authority(value, authority, evidence.get("merge_commit_sha")):
+            raise ValueError("post-effect projection is incomplete or contradictory")
+        return value
 
     def begin_post_effect_pending(
         self, operation_key: str, *, minimum_fencing_token: int

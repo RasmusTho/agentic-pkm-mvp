@@ -16,6 +16,7 @@ providers:
     kinds: [chat]
     tier: paid
     capabilities: {}
+    api_endpoint: https://api.deepseek.com/chat/completions
     paid_eligible_task_kinds: []
     credential_identifiers: [deepseek.api-key]
     excluded_model_families: []
@@ -27,6 +28,7 @@ providers:
     kinds: [embedding]
     tier: paid
     capabilities: {embedding_dimensions: 768}
+    api_endpoint: https://generativelanguage.googleapis.com/v1beta/models
     paid_eligible_task_kinds: []
     credential_identifiers: [gemini.api-key]
     excluded_model_families: []
@@ -67,7 +69,10 @@ providers:
         capabilities: {}
       - id: nomic-embed-text:latest
         effective_identity: ollama/nomic-embed-text:latest
-        capabilities: {}
+        capabilities: {embedding_dimensions: 768}
+      - id: bge-m3:latest
+        effective_identity: ollama/bge-m3:latest
+        capabilities: {embedding_dimensions: 1024}
   - id: openai
     kinds: [chat]
     tier: paid
@@ -77,36 +82,47 @@ providers:
     credential_identifiers: [openai.api-key]
     excluded_model_families: []
     models:
+      # Effort support is model-specific: omitted/null means unknown; [] means none.
       - id: gpt-5.3-codex-spark
         effective_identity: openai/gpt-5.3-codex-spark
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: null
       - id: gpt-5.6-luna
         effective_identity: openai/gpt-5.6-luna
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: [none, low, medium, high, xhigh, max]
       - id: gpt-5.6-terra
         effective_identity: openai/gpt-5.6-terra
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: [none, low, medium, high, xhigh, max]
       - id: gpt-5.6-sol
         effective_identity: openai/gpt-5.6-sol
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: [none, low, medium, high, xhigh, max]
       - id: gpt-6-astra
         effective_identity: openai/gpt-6-astra
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: [low, medium, high, xhigh, max]
       - id: gpt-6-luna
         effective_identity: openai/gpt-6-luna
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: [none, low, medium, high, xhigh, max]
       - id: gpt-5.4
         effective_identity: openai/gpt-5.4
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: [none, low, medium, high, xhigh]
       - id: gpt-5.4-mini
         effective_identity: openai/gpt-5.4-mini
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: [none, low, medium, high, xhigh]
       - id: gpt-4.1
         effective_identity: openai/gpt-4.1
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: []
       - id: gpt-4.1-mini
         effective_identity: openai/gpt-4.1-mini
         capabilities: {structured_output: true, native_tools: true, system_prompt_channel: true}
+        reasoning_efforts: []
 projections:
   - site: app/components/llm/router.py::_KNOWN_PROVIDERS
     providers: [mock, ollama, openai, deepseek]
@@ -121,7 +137,7 @@ projections:
   - site: app/cli/health.py::_check_llm_providers
     providers: [mock, ollama, openai, deepseek]
   - site: docs/settings/models/registry.yaml::provider
-    providers: [mock, ollama, openai]
+    providers: [gemini, mock, ollama, openai]
   - site: docs/LLM.md::Providers (Current)
     providers: [mock, ollama, openai, deepseek]
 known_divergences: []

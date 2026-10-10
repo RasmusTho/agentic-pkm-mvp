@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 from app.ingest import vault_alpha as vault_alpha
 from app.ingest.vault_alpha import run_vault_alpha_ingest
 from app.retrieval.hybrid import get_store

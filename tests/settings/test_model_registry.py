@@ -7,7 +7,8 @@ from app.components.settings.models_loader import load_model_registry, load_mode
 pytestmark = pytest.mark.not_pg
 
 
-def test_model_registry_loads() -> None:
+def test_model_registry_loads(monkeypatch) -> None:
+    monkeypatch.delenv("MODEL_REGISTRY_PATH", raising=False)
     reg = load_model_registry()
     assert reg.version >= 1
     ids = {m.id for m in reg.models}
@@ -20,6 +21,25 @@ def test_model_registry_loads() -> None:
     assert "mock.chat" in ids
     assert "mock.embed" in ids
     assert "openai.chat.gpt_6_astra" in ids
+
+
+def test_default_registry_loads_from_non_repo_cwd(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("MODEL_REGISTRY_PATH", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    reg = load_model_registry()
+    models = load_models()
+
+    assert "openai.chat.gpt_5_4_mini" in {model.id for model in reg.models}
+    assert models["openai.chat.gpt_5_4_mini"].provider == "openai"
+
+
+def test_model_registry_override_fails_loud(tmp_path, monkeypatch) -> None:
+    missing_path = tmp_path / "missing-registry.yaml"
+    monkeypatch.setenv("MODEL_REGISTRY_PATH", str(missing_path))
+
+    with pytest.raises(FileNotFoundError, match="missing-registry.yaml"):
+        load_model_registry()
 
 
 def test_models_load_and_match_manifest() -> None:

@@ -138,8 +138,51 @@ ambiguous. Review remains responsible for those cases.
   - `ruff check app tests companion-ui/companion-app`
   - `mypy app`
   - run the governing Issue's `Verify:` targets and the affected subsystem's focused tests
+  - Functional tests that exercise Product model access through ingest, worker, retrieval, or
+    evaluation callers must enroll the module-level `product_model_access_gateway` fixture
+    explicitly. It supplies typed deterministic Product responses at the fabric router seam and
+    does not require a host endpoint or certificate configuration. Keep executor transport and
+    admission tests outside that enrollment so missing path configuration still fails before
+    transport creation; never make the fixture autouse or provide fake host credentials.
+- API tests that exercise model-backed request handlers should request the explicit
+  `tests/api/conftest.py::mock_product_api_routes` fixture only on those test functions. It forces
+  the deterministic mock provider because compiled model routing can override `LLM_PROVIDER=mock`;
+  keep selected-route health and admission tests outside this fixture. Do not make it autouse.
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
+
+### Validation-readiness diagnostic
+
+Before starting a costly validation lane, an operator may run the bounded, read-only diagnostic:
+
+```bash
+python3 scripts/validation_environment_readiness.py --target test
+python3 scripts/validation_environment_readiness.py --target lint
+```
+
+The command resolves the repository interpreter through `scripts/lib/resolve_repo_python.sh`,
+including an explicit `BUILDEROPS_PYTHON` override, and emits value-free JSON. `compatible` means
+the required modules imported in that interpreter; `unavailable` and `import_incompatible` require
+selecting an existing supported interpreter or fixing the invocation context. Helper status is
+`visible`, `missing`, `restricted`, or `unknown`; a failed or timed-out helper invocation remains
+`unknown` and does not imply a credential or ACL failure.
+
+The PG classification is `absent`, `forbidden`, `ambiguous`, or `disposable_candidate`. `absent`
+matches the existing no-DSN skip banner and is never a pass. A primary disposable DSN remains
+`ambiguous` when runtime or ambient writers are also configured, so one value cannot hide another
+target. Multiple primary DSNs are also unresolved unless they repeat the same value. URI or
+keyword conninfo without an explicit host is a forbidden local-socket target, and a host without an
+explicit port remains ambiguous. Only an explicit disposable candidate such as the documented
+`app_test` target may proceed to the existing PG guard and host-lease workflow; the diagnostic never
+connects, provisions, installs, or authorizes a lane. For
+`unavailable` or `import_incompatible`, select an existing supported interpreter or set a valid
+explicit override and rerun. For `missing` or `restricted`, use the existing helper path with the
+current checkout/sandbox visibility; for `unknown`, inspect the helper's bounded invocation result
+and rerun without changing credentials or ACLs. The terminal evidence for each recovery is the
+value-free JSON status plus the ordinary validation command's own receipt. A zero exit status means
+only that the diagnostic ran, so its statuses must be read before a validation command is started.
+This is an operator aid and does not add a mandatory gate or replace the existing Make/lease
+selection owned by #5805 or the temporary-isolation work tracked by #4009.
 
 ### Pointing the PG lane at a scratch database
 
@@ -438,6 +481,7 @@ Use this lane only when:
   - `tests/ops/test_review_before_ci_workflow_risk.py`
   - `tests/ops/test_host_global_lease.py`
   - `tests/scripts/test_validate_issue_readiness.py`
+  - `tests/scripts/test_validate_source_anchors.py`
   - `tests/scripts/test_docs_guard.py`
   - `tests/scripts/test_pr_body_generator.py`
   - `tests/fixtures/issue_readiness/**`
@@ -627,6 +671,16 @@ When converting a doc item into a GitHub Issue:
 2. Reference the most local actionable doc item, not only a broad document path.
 3. Prefer stable item IDs such as `PA2-FREEFORM` or `ORCHV2-TDD-PILOT` over prose fragments.
 4. Keep the anchor stable even if the surrounding paragraph is reworded.
+
+For an existing defect or implementation fact, an existing repository file with a descriptive
+locator is also a valid source anchor: code, tests, Makefile targets, and workflow paths can locate
+the evidence directly. `Source Docs` still names the normative owner authority; a factual file
+reference neither becomes policy authority nor requires inventing a documentation item.
+
+`scripts/validate_source_anchors.py` enforces existing file paths, rejects absolute paths,
+traversal, directories, and symlinks escaping the repository, and resolves explicit stable IDs in
+Markdown. Other locators are descriptive; path validation does not prove symbol semantics.
+Changes to that validator require this owner document in the same diff.
 
 Recommended anchor format:
 

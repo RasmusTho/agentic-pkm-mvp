@@ -98,7 +98,7 @@ include raw paths, vault names, environment values, DSNs, secrets, or raw startu
 - Verify roadmap or plan wording was cleaned up if the item is now delivered
 - Verify no duplicate `planned` and `shipped` statements remain active at once
 - Verify the BuilderOps routing outcome per tier (`docs/development/GOVERNANCE_PROPORTIONALITY.md`):
-  Tier 2+ PR bodies must carry the routing outcome; on Tier 1 (docs/governance lane) PRs a missing
+  Issue-backed and Tier 2+ PR bodies must carry routing; on issue-free Tier 1 (docs/governance lane) a missing
   `## BuilderOps Routing` section means `none` and does not block merge. At every tier, unresolved
   learning, docs freshness, roadmap execution, promotion, projection, or receipt material must be
   represented by a BuilderOps record, a bounded GitHub Issue, or an explicit `none` reason
@@ -172,6 +172,17 @@ or the normal issue-maintenance/owner-authority path, then re-run the affected c
 ## Merge Rules
 
 Verification owns the merge decision.
+
+For the recoverable post-effect consumer, require fresh exact deployed capability preflight under
+`docs/AGENT_ISSUE_DISPATCHER.md :: Current-State Honesty` before activation. Build all four phases
+as `verified_issue_set_merge_phase.v2` using `scripts/build_verified_issue_set_merge_phase.py`
+with fresh authenticated status deployment readback (or the explicit
+`--post-effect-deployment-json` override); reconciled/restored also require the exact
+`--post-effect-operation-key`. The builder reads the persisted record through the authenticated
+API. Reuse one identical terminal record across those phases. Pending or ordinary negative
+readback never grants closure authority; restart repeats bounded readback without merge replay.
+Missing, stale or drifted source/image/pin/schema/epoch/capability evidence stops the consumer.
+This gate does not authorize deployment or provision credentials.
 
 ### Delivery-path routing (light vs full)
 
@@ -681,9 +692,9 @@ receipt states none) for any divergence, docs-freshness finding, operational roa
 proposed authority crossing, or processed/promoted/superseded/discarded material noticed during
 delivery.
 
-If none apply, the delivery receipt may state `BuilderOps routing: none` with the reason. On Tier 1
+If none apply, the delivery receipt may state `BuilderOps routing: none` with the reason. On issue-free Tier 1
 PRs (`docs/development/GOVERNANCE_PROPORTIONALITY.md`), an absent `## BuilderOps Routing` section is
-read as `none` — do not block closure on its absence. Do not use `docs/learning-log.md` as the
+read as `none`; Issue authority still requires concrete routing. Do not use `docs/learning-log.md` as the
 primary closure surface.
 
 ## Parent Issue Closure

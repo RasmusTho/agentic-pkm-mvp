@@ -57,13 +57,16 @@ Load secondary skills only when the work needs them:
 The root delivery session is the coordinator. Its active buffer may retain only the issue-set scope,
 dependency/authority graph, readiness and priority, anticipated write/validation/owner-doc overlap,
 claims/worktrees, current Issue/PR/SHA/CI/review state, shared constraints, typed blockers/decisions,
-slot and TCD summaries, and compact handoff receipts.
+slot and TCD summaries, compact handoff receipts, and the current event cursor plus identified
+worker/operation while a wait is active.
 
 Do not retain full issue transcripts, sibling implementation reasoning, full diffs, raw test/CI logs,
 or complete worker-loaded docs in the coordinator. Keep them issue-local and return durable artifact
 refs when evidence may need inspection. Reopen raw worker context only when a compact receipt is
 missing, contradictory, or fails live authority readback. Run-state is a discardable index into this
-evidence, not a transcript store.
+evidence, not a transcript store. Suppress unchanged reads and narration; before waiting, re-read the
+identified worker/operation against live Issue/PR/SHA/worktree authority and use the existing native
+event/cursor wait surface. Do not add a polling helper or copy a worker contract into the coordinator.
 
 Every independent non-trivial Issue gets a fresh issue agent even when the queue is serial. Reuse or
 resume that agent only for the same Issue while its authority remains current. Deterministic scripts
@@ -264,6 +267,9 @@ Delivery rules:
   post-merge owner-doc routing, and optional terminal Project repair when that projection is in scope.
 - When coordinating autonomous delivery, do not treat an unprotected branch or absent required-status-check rule as permission to skip the process gate. `verification-and-closure` still owns the current CI/checks plus local-review-gate prerequisites before merge.
 - A coordinator waits on many PRs at once — the worst case for the shared API budget. Poll per `_shared/CI_WAIT_CONTRACT.md` (REST check-runs only, ≥60–120s backoff, `scripts/await_pr_checks.sh`); never run concurrent `gh pr checks` loops, which drain the shared GraphQL bucket to zero and stall every sub-agent.
+- A coordinator wakes diagnosis immediately when a known required check is failed, cancelled, or
+  timed out, even if unrelated checks remain pending. Do not wait for unrelated pending jobs before
+  classifying the failure; keep the existing capped CI backoff for checks whose state is still unknown.
 - After every delivered issue, re-read the parent feature issue and live Issue/PR state, then
   recompute the next pickup target. Inspect Project state only for an explicitly Project-scoped run.
   As part of that parent upkeep, refresh the parent's structured child ledger
@@ -531,19 +537,12 @@ If the work spans multiple sub-agents:
 - assign one bounded ready issue per issue agent; never reuse that agent for a sibling Issue
 - state the token/quality rationale for the parallel batch before claiming
 - claim only after the sub-agent handoff is ready
-- build sub-agent handoffs from the same carrier-neutral context-pack schema; Codex is the current
-  active carrier and any historical carrier differences are invocation provenance only, not duplicate
-  workflow contracts
-- include the relevant owner docs, `Verify:` ledger, validation commands, and required skills in each handoff
-- pass owner docs and Source Anchors as exact references for the worker to load, not copied full-doc
-  content or the full parent narrative
-- include a publication preflight in each handoff: verify the eventual PR can satisfy the `publish-pr` lane classifier and closing keyword, the exact `## BuilderOps Routing` shape (`Records/projections/receipts:` and `Reason:`) when that section is required, and the repo-standard validation that applies to the touched files
-- select the handoff's validation plan from `docs/development/DEV_WORKFLOW.md :: Validation baseline` for its actual changed paths
-- if the handoff adds or changes tests, require robust guard coverage up front: name the intended success path and the relevant negative or completeness path, and make enforcement tests exercise the production call site rather than a helper in isolation
-- require each sub-agent to report lifecycle actions, PR link, validation, doc writeback, and closure state
-- require each issue agent to report the canonical `context_cost` values when the runtime exposes
-  them; otherwise use a named proxy/unknown reason instead of inventing token counts
-- reference `.codex/skills/publish-pr/SKILL.md` as the canonical publication boundary instead of duplicating its full PR-body contract here
+- pass exact owner-doc references, the `Verify:` ledger, validation commands, required skills,
+  branch/worktree identity, and the compact receipt schema; workers load their own canonical contracts
+  from `issue-to-code`, `publish-pr`, and `verification-and-closure`.
+- Require lifecycle actions, validation, doc writeback, closure state, and a named context-cost
+  proxy when runtime token data is unavailable. The coordinator does not duplicate those worker
+  contracts or output blocks.
 - never let sub-agents work from parent feature issues unless the parent is explicitly one executable slice
 
 The coordinator never decomposes one Issue into several writing agents. The claiming issue agent

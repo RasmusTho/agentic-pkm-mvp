@@ -34,6 +34,13 @@ def _isolate_stores(monkeypatch: pytest.MonkeyPatch):
     # match the dim the live query embedder resolves to (previously masked
     # by the read-path re-embed this ADR removes).
     monkeypatch.setenv("EMBED_DIM", "4")
+
+    def _query_for_current_identity(_text: str):
+        identity = get_vector_index()._identity  # type: ignore[attr-defined]
+        assert identity is not None
+        return [0.1] * identity.dim, identity
+
+    monkeypatch.setattr(hybrid, "embed_query", _query_for_current_identity)
     reset_store_backends()
     hybrid.get_store().set_documents([])
     hybrid.reset_durable_rebuild_state()

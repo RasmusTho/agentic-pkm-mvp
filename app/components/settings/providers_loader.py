@@ -29,6 +29,15 @@ BuilderReasoningEffort: TypeAlias = Literal[
     "xhigh",
     "max",
 ]
+ProviderReasoningEffort: TypeAlias = Literal[
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+]
 BuilderSelectionIntent: TypeAlias = Literal[
     "coordination",
     "general_delivery",
@@ -47,7 +56,7 @@ class ProviderCapabilities(BaseModel):
     native_tools: bool = False
     system_prompt_channel: bool = False
     deterministic_execution: bool = False
-    embedding_dimensions: int | None = None
+    embedding_dimensions: int | None = Field(default=None, ge=1, le=4096)
 
 
 class DeclaredModel(BaseModel):
@@ -56,6 +65,17 @@ class DeclaredModel(BaseModel):
     id: str = Field(min_length=1)
     effective_identity: str = Field(min_length=1)
     capabilities: ProviderCapabilities
+    # None means unknown; an empty list explicitly declares no reasoning effort.
+    reasoning_efforts: list[ProviderReasoningEffort] | None = None
+
+    @model_validator(mode="after")
+    def _validate_reasoning_efforts(self) -> "DeclaredModel":
+        if (
+            self.reasoning_efforts is not None
+            and len(self.reasoning_efforts) != len(set(self.reasoning_efforts))
+        ):
+            raise ValueError("declared model reasoning efforts must be unique")
+        return self
 
 
 class ProviderEntry(BaseModel):

@@ -49,6 +49,7 @@ class LLMRoute:
         embedding_identity: EmbeddingIdentity | None = None,
         timeout_seconds: float | None = None,
         temperature: float | None = None,
+        reasoning_effort: str | None = None,
     ) -> "LLMRoute":
         """Project a neutral route into the legacy Product route shape.
 
@@ -66,7 +67,11 @@ class LLMRoute:
             timeout_seconds=timeout_seconds,
             temperature=temperature,
             transport_id=route.transport_id,
-            reasoning_effort=route.request.intent.reasoning_effort,
+            reasoning_effort=(
+                reasoning_effort
+                if reasoning_effort is not None
+                else route.request.intent.reasoning_effort
+            ),
         )
 
 
@@ -203,8 +208,6 @@ class LLMRouter:
         )
 
     def _profile_id_for(self, intent: LLMTaskIntent) -> str:
-        if intent.task_kind == "embed":
-            return "default"
         return self._routing_profile_id
 
     @staticmethod
@@ -213,7 +216,7 @@ class LLMRouter:
         intent: LLMTaskIntent,
         profile_id: str,
     ) -> LLMRoutingSettings.RouteTarget | None:
-        if intent.task_kind == "embed" or profile_id == "default":
+        if profile_id == "default":
             return None
         if routing is None:
             raise LLMRouteError(
@@ -225,6 +228,8 @@ class LLMRouter:
         task_target = profile.tasks.get(intent.task_kind)
         if task_target is not None:
             return task_target
+        if intent.task_kind == "embed":
+            return profile.default_embedding
         if intent.task_kind in {"eval", "deepeval", "ragas"}:
             return profile.default_eval
         if "reason" in intent.task_kind or intent.task_kind == "plan":
@@ -242,7 +247,11 @@ class LLMRouter:
             return None
         explicit = routing.tasks.get(intent.task_kind)
         if intent.task_kind == "embed":
-            return explicit or routing.default_embedding
+            policy = explicit or routing.default_embedding
+            profile_target = self._profile_target(routing, intent, profile_id)
+            if profile_target is not None:
+                return policy.model_copy(update={"primary": profile_target})
+            return policy
         if explicit is not None:
             policy = explicit
         elif intent.task_kind in {"eval", "deepeval", "ragas"}:
@@ -302,6 +311,12 @@ class LLMRouter:
         degraded: bool,
         reason: str,
     ) -> LLMRoute:
+        if target is not None and target.model_id:
+            descriptor = _model_registry().get(target.model_id)
+            if descriptor is None or descriptor.kind != "chat":
+                raise LLMRouteError(
+                    f"Product chat target {target.model_id!r} is not a registered chat model"
+                )
         target_provider, target_model = _resolve_target_model_id(target, expected_kind="chat")
         provider_source = None
         model_source = None
@@ -339,7 +354,21 @@ class LLMRouter:
         profile = None
         override_provider = None
         override_model = None
-        target_provider, target_model = _resolve_target_model_id(target, expected_kind="embedding")
+        target_descriptor = None
+        if target is not None and target.model_id:
+            target_descriptor = _model_registry().get(target.model_id)
+            if target_descriptor is None or target_descriptor.kind != "embedding":
+                raise LLMRouteError(
+                    f"Product embedding target {target.model_id!r} is not a registered embedding model"
+                )
+            target_provider, target_model = (
+                target_descriptor.provider,
+                target_descriptor.model,
+            )
+        else:
+            target_provider, target_model = _resolve_target_model_id(
+                target, expected_kind="embedding"
+            )
         env_profile = (os.getenv("EMBED_PROFILE") or "").strip() or None
         configured_default_profile = None
         embedding_profiles = (
@@ -390,6 +419,12 @@ class LLMRouter:
             override_provider=override_provider,
             use_implicit_profiles=not target_is_explicit,
         )
+        if target_descriptor is not None and target_descriptor.dims is not None:
+            if profile is not None and identity.dim != target_descriptor.dims:
+                raise LLMRouteError(
+                    "selected embedding model dimensions conflict with its identity profile"
+                )
+            identity = replace(identity, dim=target_descriptor.dims)
         return (
             LLMRoute(
                 provider=identity.provider,
@@ -442,7 +477,17 @@ class LLMRouter:
             primary_route, primary_identity = self._resolve_embedding_route(
                 getattr(policy, "primary", None),
                 degraded=self._default_degraded,
-                reason="settings" if policy is not None else self._default_reason,
+                reason=(
+                    f"settings-profile:{self._profile_id_for(intent)}"
+                    if self._profile_target(
+                        getattr(self._settings, "llm_routing", None)
+                        if self._settings is not None
+                        else None,
+                        intent,
+                        self._profile_id_for(intent),
+                    ) is not None
+                    else "settings" if policy is not None else self._default_reason
+                ),
             )
             candidates = [primary_route]
             fallback_target = self._default_fallback_target(intent, policy)
@@ -607,8 +652,16 @@ class LLMRouter:
                     )
         routing = getattr(self._settings, "llm_routing", None) if self._settings is not None else None
         profile_target = self._profile_target(routing, intent, self._profile_id_for(intent))
+        policy = self._task_policy(intent)
+        default_target = policy.primary if policy is not None else None
+        has_configured_default_target = bool(
+            default_target
+            and (default_target.model_id or default_target.provider or default_target.model)
+        )
         has_explicit_task_policy = bool(
-            (routing and intent.task_kind in routing.tasks) or profile_target is not None
+            (routing and intent.task_kind in routing.tasks)
+            or profile_target is not None
+            or has_configured_default_target
         )
         if self._llm_provider_env is not None and intent.task_kind != "embed":
             enforce = _provider_enforced()

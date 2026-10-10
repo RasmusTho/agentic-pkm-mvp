@@ -17,6 +17,9 @@ on:
       - 'app/**'
       - 'importlinter.ini'
       - '.github/workflows/import-linter.yaml'
+      # CI Smoke used to run this gate as well. Keep its workflow changes in
+      # the dedicated gate's trigger surface now that it is the sole PR owner.
+      - '.github/workflows/ci-smoke.yaml'
   workflow_dispatch:
 
 permissions: read-all

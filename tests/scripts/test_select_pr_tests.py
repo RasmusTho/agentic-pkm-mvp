@@ -13,6 +13,58 @@ from scripts.select_pr_tests import select_tests
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_companion_note_helper_selects_source_boundary_coverage() -> None:
+    selection = select_tests(["app/services/companion_note.py"])
+
+    assert selection.full_suite is False
+    assert selection.unowned_paths == ()
+    assert selection.subsystems == ("watcher_sync", "store_ingest", "outbox_worker")
+    assert {
+        "tests/watcher",
+        "tests/workers",
+        "tests/ingest",
+        "tests/services/test_companion_note.py",
+        "tests/services/test_companion_note_write_guard.py",
+    } <= set(selection.targets)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/select_pr_tests.py",
+            "--changed-file",
+            "app/services/companion_note.py",
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "subsystems=watcher_sync,store_ingest,outbox_worker" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "app/services/companion_note.py.backup",
+        "app/services/companion_note_extra.py",
+    ),
+)
+def test_companion_note_mapping_keeps_unrelated_paths_refused(path: str) -> None:
+    selection = select_tests([path])
+    assert selection.unowned_paths == (path,)
+
+    result = subprocess.run(
+        [sys.executable, "scripts/select_pr_tests.py", "--changed-file", path],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2
+    assert f"unowned_paths={path}" in result.stdout
+
+
 def test_stage_a_aro03_contract_selects_route_tests() -> None:
     for path in selector.ARO03_ROUTE_CONTRACT_PATHS:
         selection = select_tests([path])
@@ -250,6 +302,45 @@ def test_ci_smoke_workflow_change_selects_full_shared_suite() -> None:
     assert selection.full_suite is True
     assert selection.reason == "shared CI/test/runtime configuration changed"
     assert selection.unowned_paths == ()
+
+
+def test_contract_selection_remains_conservative_after_deduplication() -> None:
+    selection = select_tests([".github/workflows/import-linter.yaml"])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == ("governance",)
+    assert selection.unowned_paths == ()
+    # The hot-path module runs once as part of the selected architecture
+    # target; it is no longer a second explicit CI Smoke invocation.
+    assert "tests/architecture" in selection.targets
+    assert selection.targets.count("tests/architecture") == 1
+
+    unknown = select_tests(
+        [".github/workflows/import-linter.yaml", "tests/new_area/test_contract.py"]
+    )
+    assert unknown.subsystems == ("unowned",)
+    assert unknown.unowned_paths == (
+        ".github/workflows/import-linter.yaml",
+        "tests/new_area/test_contract.py",
+    )
+
+    mixed_runtime = select_tests(
+        [".github/workflows/import-linter.yaml", "app/new_unowned_surface.py"]
+    )
+    assert mixed_runtime.subsystems == ("unowned",)
+    assert mixed_runtime.unowned_paths == ("app/new_unowned_surface.py",)
+
+    selector_owner = select_tests(["scripts/select_pr_tests.py"])
+    assert "governance" in selector_owner.subsystems
+    assert selector_owner.unowned_paths == ()
+    assert "tests/scripts" in selector_owner.targets
+    assert "tests/architecture" in selector_owner.targets
+
+    builder_owner = select_tests(["app/builderops/publication.py"])
+    assert builder_owner.subsystems == ("builder_system",)
+    assert builder_owner.unowned_paths == ()
+    assert "tests/builderops" in builder_owner.targets
+    assert "tests/architecture/test_pr_hot_path_governance.py" in builder_owner.targets
 
 
 def test_shared_note_path_normalization_has_exact_vault_ownership() -> None:
@@ -1331,6 +1422,24 @@ def test_embedding_router_identity_change_selects_complete_llm_coverage() -> Non
     assert "tests/components/embeddings" in selection.targets
     assert "tests/components/llm" in selection.targets
     assert "tests/index/test_identity_migration.py" in selection.targets
+
+
+@pytest.mark.parametrize(
+    ("source_path", "subsystem", "target"),
+    (
+        ("app/cli/embed_probe.py", "llm_eval", "tests/cli/test_embed_probe.py"),
+        ("app/components/retrieval.py", "memory_retrieval", "tests/retrieval"),
+    ),
+)
+def test_product_embedding_adapters_select_their_regression_coverage(
+    source_path: str, subsystem: str, target: str
+) -> None:
+    selection = select_tests([source_path])
+
+    assert selection.full_suite is False
+    assert selection.subsystems == (subsystem,)
+    assert selection.unowned_paths == ()
+    assert target in selection.targets
 
 
 def test_voice_contract_and_runtime_change_selects_voice_coverage() -> None:

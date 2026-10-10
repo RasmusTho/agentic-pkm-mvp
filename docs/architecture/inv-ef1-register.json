@@ -2506,6 +2506,55 @@
       "why_load_bearing": "The Claude Design skill description names the public Bifrost constituent among the surfaces the design system serves, not personal vault data.",
       "disposition": "stay",
       "issue": "#5628"
+    },
+    {
+      "artifact": "docs/LLM_ROUTING.md",
+      "category": "iii",
+      "why_load_bearing": "Owner-directed Product routing target identifies the Mac mini as the central portal host; no endpoint, address, or credential is recorded.",
+      "disposition": "stay",
+      "issue": "#5819"
+    },
+    {
+      "artifact": "docs/MODEL_ACCESS_ROUTER/README.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted Product portal target names the Mac mini to make the owner-selected execution location explicit; host configuration remains local.",
+      "disposition": "stay",
+      "issue": "#5819"
+    },
+    {
+      "artifact": "docs/MODEL_ACCESS_ROUTER/CENTRALIZE_PROVIDER_EGRESS_ON_MAC_MINI.md",
+      "category": "iii",
+      "why_load_bearing": "The implementation task names the owner-selected Mac mini portal host; credentials and endpoint configuration remain host-local.",
+      "disposition": "stay",
+      "issue": "#5819"
+    },
+    {
+      "artifact": "docs/MODEL_ACCESS_ROUTER/CONFIGURE_EXECUTOR_NETWORK_PATHS.md",
+      "category": "iii",
+      "why_load_bearing": "The network-path guide names the owner-selected Mac mini executor; host endpoint and authentication configuration remain local.",
+      "disposition": "stay",
+      "issue": "#5819"
+    },
+    {
+      "artifact": "docs/MODEL_ACCESS_ROUTER/ROUTE_PRODUCT_CHAT_AND_EMBEDDINGS_THROUGH_MAC_PORTAL.md",
+      "category": "iii",
+      "why_load_bearing": "The Product integration task binds its shared portal target to the owner-selected Mac mini without disclosing host configuration.",
+      "disposition": "stay",
+      "issue": "#5819"
+    },
+    {
+      "artifact": "docs/adr/ADR-0067-mac-mini-product-model-access-portal.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted owner decision identifies the Mac mini as Product's model-access portal; no endpoint, address, or credential is recorded.",
+      "disposition": "stay",
+      "issue": "#5819"
+    },
+    {
+      "artifact": "docs/adr/INDEX.md",
+      "category": "iii",
+      "why_load_bearing": "The ADR index names the owner-approved Mac mini portal decision so readers can identify the governing architecture choice.",
+      "disposition": "stay",
+      "issue": "#5819"
     }
   ]
 }

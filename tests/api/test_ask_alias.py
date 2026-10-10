@@ -20,7 +20,7 @@ def _reset_hybrid_store() -> None:
     ask_module._HYBRID_WARMED = False
 
 
-def test_ask_accepts_question_field() -> None:
+def test_ask_accepts_question_field(mock_product_api_routes) -> None:
     _prime_hybrid_store()
     client = TestClient(app)
 
@@ -33,7 +33,7 @@ def test_ask_accepts_question_field() -> None:
     assert data["sources"], "Sources should not be empty"
 
 
-def test_ask_accepts_query_alias() -> None:
+def test_ask_accepts_query_alias(mock_product_api_routes) -> None:
     _prime_hybrid_store()
     client = TestClient(app)
 

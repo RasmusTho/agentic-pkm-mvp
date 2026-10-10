@@ -33,6 +33,45 @@ class MergeAuthorityError(RuntimeError):
     """The protected repository did not authorize the privileged effect."""
 
 
+POST_EFFECT_CAPABILITY = "post_effect_merge_readback.v1"
+
+
+def require_post_effect_deployment(
+    deployment: Mapping[str, object] | None, status: Mapping[str, object],
+) -> None:
+    """Require fresh selected-pin readback and the exact repaired deployed API."""
+    import re
+    if not isinstance(deployment, Mapping):
+        raise MergeAuthorityError("post-effect consumer requires exact deployed substrate")
+    receipt = deployment.get("deployment_receipt")
+    pin = deployment.get("selected_pin")
+    observed = deployment.get("observed_at")
+    try:
+        observed_at = datetime.fromisoformat(str(observed).replace("Z", "+00:00"))
+        age = (datetime.now(timezone.utc) - observed_at).total_seconds()
+    except (ValueError, TypeError):
+        raise MergeAuthorityError("post-effect deployment readback is malformed") from None
+    if (not isinstance(receipt, Mapping) or not isinstance(pin, Mapping)
+            or age < 0 or age > 300
+            or receipt.get("project") != "builderops-control-plane"
+            or receipt.get("migration_completed") is not True
+            or receipt.get("authority_fencing_required") is not True
+            or not isinstance(receipt.get("candidate_receipt_sha"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("candidate_receipt_sha"))) is None
+            or re.fullmatch(r"[0-9a-f]{40}", str(receipt.get("source_sha"))) is None
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt.get("image_digest"))) is None
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt.get("postgres_image_digest"))) is None
+            or status.get("post_effect_capability") != POST_EFFECT_CAPABILITY
+            or any(type(receipt.get(key)) is not int or receipt[key] < 1
+                   for key in ("schema_version", "authority_epoch"))
+            or any(type(status.get(key)) is not int for key in ("schema_version", "authority_epoch"))
+            or any(status.get(key) != receipt.get(key)
+                   for key in ("source_sha", "image_digest", "schema_version", "authority_epoch"))
+            or any(pin.get(key) != receipt.get(key)
+                   for key in ("source_sha", "image_digest", "postgres_image_digest", "candidate_receipt_sha"))):
+        raise MergeAuthorityError("post-effect consumer deployment identity is missing, stale, or drifted")
+
+
 def verification_authority_digest(value: Mapping[str, object]) -> str:
     return hashlib.sha256(
         json.dumps(
@@ -158,6 +197,14 @@ class HostCredentialResolver(Protocol):
 
 
 class EffectIntentLedger(Protocol):
+    def require_post_effect_capability(self) -> None: ...
+
+    def prepare_merge_readback(self, operation_key: str) -> Mapping[str, object]: ...
+
+    def finish_merge_readback(self, operation_key: str, evidence: Mapping[str, object]) -> None: ...
+
+    def finish_persisted_merge_readback(self, operation_key: str, evidence: Mapping[str, object]) -> None: ...
+
     def closure_ready(self, run_id: str) -> bool: ...
 
     def merge_ready_receipt(
@@ -466,15 +513,13 @@ class VerificationMergeExecutor:
         run: VerificationRun,
         detail: str,
     ) -> tuple[Mapping[str, object], bool]:
+        self.ledger.prepare_merge_readback(str(claim["operation_key"]))
         readback = self.repository.merge_readback(
             run.repository.lower(), run.pr_number
         )
         applied = self._merged_exactly(readback, run)
-        self.ledger.finish_effect(
-            str(claim["operation_key"]),
-            observed_applied=applied,
-            evidence={"detail": detail, **dict(readback)},
-        )
+        if applied:
+            self.ledger.finish_merge_readback(str(claim["operation_key"]), readback)
         return readback, applied
 
     def execute(
@@ -486,6 +531,8 @@ class VerificationMergeExecutor:
         requested_credential_id: str | None = None,
         dry_run: bool = False,
     ) -> MergeEffectReceipt:
+        if not dry_run:
+            self.ledger.require_post_effect_capability()
         canonical = RepoRef.parse(run.repository).canonical
         if canonical != run.repository.lower():
             raise MergeAuthorityError("verification RepoRef is not canonical")
@@ -506,6 +553,14 @@ class VerificationMergeExecutor:
                 "merge requires a current host-fenced merge-ready receipt"
             )
 
+        if not dry_run:
+            pending = self.ledger.pending_effect_binding(run.run_id)
+            if isinstance(pending, Mapping) and pending.get("effect_type") == "github.merge":
+                fence = pending.get("readback_fencing_token")
+                if type(fence) is not int or fence < 0:
+                    raise MergeAuthorityError("retained merge attempt fence is unavailable")
+                if fence > 0:
+                    return self.recover(run)
         base_sha = self.repository.protected_base_sha(canonical)
         manifest = self.repository.delivery_manifest(canonical, base_sha)
         effect_type = "github.merge.dry_run" if dry_run else "github.merge"
@@ -792,6 +847,8 @@ class VerificationMergeExecutor:
         dry_run: bool = False,
     ) -> MergeEffectReceipt:
         """Reconcile one task-bound merge intent without replaying the effect."""
+        if not dry_run:
+            self.ledger.require_post_effect_capability()
         canonical = RepoRef.parse(run.repository).canonical
         marker = self.ledger.merge_ready_receipt(run.run_id)
         pending = self.ledger.pending_effect_binding(run.run_id)
@@ -912,14 +969,15 @@ class VerificationMergeExecutor:
             if dry_run:
                 outcome = "dry_run_no_merge"
             elif self._merged_exactly(reconciliation_evidence, run):
+                self.ledger.finish_persisted_merge_readback(operation_key, reconciliation_evidence)
                 outcome = "merged"
             elif (
                 reconciliation_evidence.get("outcome")
-                in {"terminal_no_effect", "terminal_no_effect_after_recovery"}
+                == "terminal_no_effect"
             ):
                 outcome = "terminal_no_effect"
             else:
-                outcome = "retry_after_readback"
+                raise MergeAuthorityError("retained negative reconciliation is not authoritative terminal truth")
             return self._receipt(
                 outcome,
                 operation_key,
@@ -928,7 +986,7 @@ class VerificationMergeExecutor:
                 reconciliation_evidence,
             )
         if (
-            pending.get("outbox_status") == "pending"
+            dry_run and pending.get("outbox_status") == "pending"
             and durable_reconciliation
         ):
             self._resolve_recovery_credential(canonical, manifest)
@@ -971,15 +1029,12 @@ class VerificationMergeExecutor:
                 readback,
             )
 
+        self.ledger.prepare_merge_readback(operation_key)
         readback = self.repository.merge_readback(
             canonical, run.pr_number
         )
         if self._merged_exactly(readback, run):
-            self.ledger.finish_effect(
-                operation_key,
-                observed_applied=True,
-                evidence=dict(readback),
-            )
+            self.ledger.finish_merge_readback(operation_key, readback)
             return self._receipt(
                 "merged",
                 operation_key,
@@ -992,69 +1047,9 @@ class VerificationMergeExecutor:
                 "merged GitHub readback lacks exact governed commit text"
             )
 
-        current_base = self.repository.protected_base_sha(canonical)
-        current_manifest = self.repository.delivery_manifest(
-            canonical, current_base
-        )
-        current_head = self.repository.current_pr_head(
-            canonical, run.pr_number
-        )
-        current_gates = self.repository.required_gates(
-            canonical, run.pr_number, current_head
-        )
-        drifted = (
-            current_base != base_sha
-            or current_head != run.current_head_sha
-            or not self._same_manifest(manifest, current_manifest)
-            or not self._required_gates_pass(current_gates)
-        )
-        prepared_recovery_error: str | None = None
-        if not dry_run and not drifted:
-            try:
-                current_prepared_gate = self.repository.verified_merge_prepared(
-                    canonical,
-                    run.pr_number,
-                    run_id=run.run_id,
-                    head_sha=run.current_head_sha,
-                    expected_repair_budget=(
-                        self.ledger.repair_budget_projection(run.run_id)
-                    ),
-                )
-            except MergeAuthorityError as exc:
-                drifted = True
-                prepared_recovery_error = str(exc)
-            else:
-                if not self._same_prepared_gate(
-                    prepared_gate or {}, current_prepared_gate
-                ):
-                    drifted = True
-                    prepared_recovery_error = (
-                        "verified merge prepared authority changed during recovery"
-                    )
-        self.ledger.finish_effect(
-            operation_key,
-            observed_applied=drifted,
-            evidence={
-                "outcome": (
-                    "terminal_no_effect_after_recovery"
-                    if drifted
-                    else "retry_after_readback"
-                ),
-                **(
-                    {"verified_merge_prepared_error": prepared_recovery_error}
-                    if prepared_recovery_error is not None
-                    else {}
-                ),
-                **dict(readback),
-            },
-        )
-        return self._receipt(
-            "terminal_no_effect" if drifted else "retry_after_readback",
-            operation_key,
-            run,
-            manifest,
-            readback,
-        )
+        # No terminal-negative predicate is admitted for an attempted GitHub merge.
+        # Policy/head drift is not proof that the original effect was not applied.
+        return self._receipt("retry_after_readback", operation_key, run, manifest, readback)
 
     def _resolve_recovery_credential(
         self,

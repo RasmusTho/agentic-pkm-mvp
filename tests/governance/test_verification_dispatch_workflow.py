@@ -22,8 +22,8 @@ def test_workflow_triggers_from_completed_ci_smoke_workflow() -> None:
     assert "types: [completed]" in text
     assert "github.event.workflow_run.event == 'pull_request'" in text
     assert "github.event.workflow_run.conclusion == 'success'" in text
-    assert 'repos/${REPOSITORY}/pulls/${PR_NUMBER}' in text
-    assert 'repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls' in text
+    assert "repos/${REPOSITORY}/pulls/${PR_NUMBER}" in text
+    assert "repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls" in text
     assert "resolve_pr_number" in text
     assert "python3 -m scripts.build_verification_dispatch_request" in text
     assert '--artifact-workflow-run-id "${{ github.run_id }}"' in text
@@ -65,9 +65,7 @@ def test_resolve_step_creates_candidate_directory_before_fallback_write() -> Non
     )[0]
 
     mkdir_offset = resolve_step.index("mkdir -p verification-dispatch")
-    fallback_offset = resolve_step.index(
-        "test -f verification-dispatch/pr-candidates.json"
-    )
+    fallback_offset = resolve_step.index("test -f verification-dispatch/pr-candidates.json")
 
     assert mkdir_offset < fallback_offset
 
@@ -115,9 +113,9 @@ def test_workflow_permissions_match_used_read_apis() -> None:
     assert "pull-requests: read" in permissions
     assert "issues: read" in permissions
     assert "actions: read" not in permissions
-    assert 'repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls' in text
-    assert 'repos/${REPOSITORY}/pulls/${PR_NUMBER}' in text
-    assert 'repos/${REPOSITORY}/issues/${ISSUE_NUMBER}' in text
+    assert "repos/${REPOSITORY}/commits/${RUN_HEAD_SHA}/pulls" in text
+    assert "repos/${REPOSITORY}/pulls/${PR_NUMBER}" in text
+    assert "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}" in text
 
 
 def test_workflow_uses_explicit_governing_issue_contract() -> None:
@@ -127,3 +125,29 @@ def test_workflow_uses_explicit_governing_issue_contract() -> None:
     assert "governing_issue" in text
     assert "re.search" not in text
     assert "(?:Fixes|Closes|Resolves)" not in text
+
+
+def test_native_round_one_stops_before_closing_reference_lookup(tmp_path: Path) -> None:
+    text = _workflow_text()
+    block = text.split(
+        '          pr = json.loads(Path("verification-dispatch/pr.json").read_text())', 1
+    )[1].split("          PY", 1)[0]
+    code = (
+        'from pathlib import Path\nfrom scripts.build_verification_dispatch_request import resolve_final_review_rounds\nimport os\npr={"body": "Final-Review-Rounds: 1"}\n'
+        + "\n".join(line[10:] for line in block.splitlines())
+    )
+    output = tmp_path / "output"
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=tmp_path,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT), "GITHUB_OUTPUT": str(output)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == "full_path=false\n"
+    assert not (tmp_path / "verification-dispatch/full-path").exists()
+    assert text.index("if [ ! -f verification-dispatch/full-path ]; then") < text.index(
+        "gh api graphql"
+    )
+    assert "if: steps.snapshots.outputs.full_path == 'true'" in text

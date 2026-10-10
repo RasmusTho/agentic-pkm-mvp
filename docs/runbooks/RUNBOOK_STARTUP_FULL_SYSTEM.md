@@ -54,6 +54,14 @@ initialize local dispatcher/BuilderOps SQLite state and optionally pull the GitH
 `gh` is available, but GitHub sync degradation does not fail runtime startup and does not make
 dispatcher state authoritative over Issues, PRs, or CI.
 
+Source-backed startup reconstruction requires all six actual summary counters as nonnegative
+integers: scanned, ingested, errors, malformed, skipped_locked and skipped_invalid. Missing or
+coerced values cannot stand for successful empty work. The native BWS deployment path connects
+the same sanctioned producer before ordinary service recreation inside its existing API consumer
+and operation context; see [Deploy procedure](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure)
+for its strict gates and owned-producer quiescence. A passing repository test does not qualify a
+live channel or change the startup commands' authority.
+
 **Companion UI launchers and no-vault idle boot.** The `make dev-ui` / `make test-ui` / `make prod-ui` Companion UI launchers (shared `scripts/lib/companion_ui_startup.sh`) also honor no-vault idle boot (#2005): with no vault configured they start the channel and serve the in-app vault picker instead of refusing. When a vault *is* configured, a basename that does not match the channel's expected vault is **fatal on prod** — `make prod-ui` refuses to boot against a non-Midgård vault, because its write-capable worker would bind and write the operator's real vault — and **advisory (warn-only) on dev/test**, whose scratch vaults defer to the in-app selection (`VAULT_ROOT` is only the initial default). `make prod-ui-doctor` reports the same prod mismatch as a failure.
 
 ## Prod startup (canonical)

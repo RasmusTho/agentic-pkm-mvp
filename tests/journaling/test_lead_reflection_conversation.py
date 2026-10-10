@@ -157,14 +157,14 @@ def test_reflection_session_uses_existing_chat_surface(tmp_path: Path) -> None:
 
 
 def test_real_provider_receives_day_context_and_transcript_in_user_messages(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    product_model_access_gateway,
 ) -> None:
-    """Exercise the provider boundary, not the injected whole-pack test seam."""
-    from app.services import llm as llm_module
+    """Exercise the Product facade and Mac portal seam, not the whole-pack test seam."""
 
     root, context, note = _vault(tmp_path)
     bundle = assemble_day_context(vault_context=context, for_date=DAY)
-    provider_messages: list[list[dict[str, str]]] = []
     facade_intents = []
     shared_get_chat_client = reflection_module.get_chat_client
 
@@ -172,25 +172,19 @@ def test_real_provider_receives_day_context_and_transcript_in_user_messages(
         facade_intents.append(intent)
         return shared_get_chat_client(intent, **kwargs)
 
-    def fake_http_chat(**kwargs: object) -> tuple[str, dict[str, str]]:
-        messages = kwargs["messages"]
-        assert isinstance(messages, list)
-        provider_messages.append(messages)
-        response = (
+    def fake_portal_completion(_request) -> str:
+        return (
             "What felt most important about that capture?"
-            if len(provider_messages) == 1
+            if len(product_model_access_gateway.completion_requests) == 1
             else "What made those loose ends connect?"
         )
-        return response, {"content": response}
 
     monkeypatch.setenv("LLM_PROVIDER", "openai")
     monkeypatch.setenv("LLM_MODEL", "gpt-5.4")
     monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)
     monkeypatch.delenv("LLM_FORCE_MODEL", raising=False)
     monkeypatch.delenv("LLM_PROVIDER_ENFORCE", raising=False)
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("OPENAI_BASE", "http://provider.test/chat/completions")
-    monkeypatch.setattr(llm_module, "_http_chat", fake_http_chat)
+    product_model_access_gateway.completion_content = fake_portal_completion
     monkeypatch.setattr(
         reflection_module, "get_chat_client", _observe_shared_facade
     )
@@ -213,11 +207,13 @@ def test_real_provider_receives_day_context_and_transcript_in_user_messages(
     assert len(facade_intents) == 2
     assert all(intent.task_kind == "reflection" for intent in facade_intents)
 
-    opening_user = json.loads(provider_messages[0][1]["content"])
+    opening_request = product_model_access_gateway.completion_requests[0]
+    followup_request = product_model_access_gateway.completion_requests[1]
+    opening_user = json.loads(opening_request.user_input)
     assert opening_user["day_context"]["for_date"] == "2026-07-15"
     assert opening_user["concrete_anchor"] == "capture-1"
     assert "grounded" in opening_user["instruction"]
-    followup_user = json.loads(provider_messages[1][1]["content"])
+    followup_user = json.loads(followup_request.user_input)
     assert followup_user["transcript"][-1] == {
         "role": "owner",
         "content": "It connected several loose ends.",
