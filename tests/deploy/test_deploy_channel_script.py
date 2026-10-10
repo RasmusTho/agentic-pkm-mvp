@@ -3595,7 +3595,7 @@ def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_pat
     assert type(request['plan']['ack_forward_only']) is bool
     assert request['plan']['ack_forward_only'] is False
     assert json.loads((journal.directory / 'test.request.json').read_text())['plan']['ack_forward_only'] is False
-    assert supervisor.request(request)['receipt'] == asdict(receipt)
+    assert supervisor.request(request)['receipt'] == receipt.payload()
     remote._request('join', operation_id, replace(plan, ack_forward_only=True))
     with pytest.raises(PostgresDeployError):
         supervisor.request(transmitted[-1])

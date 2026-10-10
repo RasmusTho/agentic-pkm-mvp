@@ -238,7 +238,11 @@ def test_pg_contracts_have_bounded_diagnostics() -> None:
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
     assert step["env"]["PYTHONUNBUFFERED"] == "1"
     assert 120 < job["timeout-minutes"] * 60
-    assert 'pytest -vv --durations=20 -m "pg"' in step["run"]
+    from app.ops.pg_acceptance import pytest_arguments
+    assert 'python -m app.ops.pg_acceptance --ci' in step["run"]
+    arguments = pytest_arguments()
+    assert '-vv' in arguments and '--durations=20' in arguments
+    assert arguments[arguments.index('-m') + 1] == 'pg'
     install = next(s for s in job["steps"] if s.get("name") == "Install dependencies")
     assert "pip install -r dev-requirements.txt" in install["run"]
     assert "pytest-timeout==" in (REPO_ROOT / "dev-requirements.txt").read_text()
@@ -261,6 +265,7 @@ def test_ci_smoke_installs_acl_tools_for_linux_acl_fixture() -> None:
 
 
 def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
+    from app.ops.pg_acceptance import SELECTORS, pytest_arguments
     workflow = _smoke_text()
 
     assert "pr-index-pg-contracts:" in workflow
@@ -294,24 +299,25 @@ def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
     assert "tests/migrations/test_heimdal_raw_representation_migration.py" in (
         INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
     )
-    assert '-m "pg"' in job
+    assert 'python -m app.ops.pg_acceptance --ci' in job
+    assert pytest_arguments()[pytest_arguments().index('-m') + 1] == 'pg'
     # FCA-06 conformance must execute in PG CI, not merely collect/deselect
     # in the not-pg lane. Bind both change selectors and the actual invocation.
     assert "- 'app/builderops/second_consumer.py'" in job
     assert "- 'tests/builderops/test_standalone_consumer_conformance.py'" in job
-    assert "            tests/builderops/test_standalone_consumer_conformance.py \\\n" in job
+    assert 'tests/builderops/test_standalone_consumer_conformance.py' in SELECTORS
     # #5593: exact new PG-only nodes plus the existing full effect modules.
     for path in ("cli", "epic_dispatch", "issue_delivery_operation", "issue_delivery_effect_executor",
                  "issue_delivery_worker_isolation", "issue_delivery_readback", "devui_sources"):
         assert f"- 'app/builderops/{path}.py'" in job
     for module in ("test_issue_delivery_effect_executor", "test_issue_delivery_operation", "test_issue_delivery_readback"):
         assert f"- 'tests/builderops/{module}.py'" in job
-        assert f"            tests/builderops/{module}.py \\\n" in job
+        assert f'tests/builderops/{module}.py' in SELECTORS
     for module, node in (("test_control_plane_issue_delivery", "test_host_candidate_versions_preserve_v1_v2_history"),
                          ("test_control_plane_issue_delivery", "test_v3_live_start_refuses_unqualified_continuation"),
                          ("test_devui_runtime", "test_managed_source_preserves_v3_candidate_binding")):
         assert f"- 'tests/builderops/{module}.py'" in job
-        assert f"            tests/builderops/{module}.py::{node} \\\n" in job
+        assert f'tests/builderops/{module}.py::{node}' in SELECTORS
     assert "- 'tests/builderops/issue_delivery_production_harness.py'" in job
 
 

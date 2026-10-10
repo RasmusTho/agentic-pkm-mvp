@@ -256,7 +256,18 @@ Current implementation:
 
 Post-merge image admission is implemented by `.github/workflows/postmerge-dev-test.yml`; the existing
 private host controller performs native same-digest `dev` → `test` deployment and its health/version,
-fleet and UI smoke checks. Actions admission alone does not prove deployment or functional testing.
+fleet and UI smoke checks. Automatic native operations also execute `app.ops.pg_acceptance` before
+their committed receipt: GitHub and native execution share all retained PG selectors and the
+120-second thread watchdog. Every selector must execute and every selected test must pass; required
+skips, missing tests, xfails, failures, timeout or unavailable isolation refuse acceptance. Future
+tests within the retained selectors are included automatically; the observed count is not a gate.
+Each operation/channel uses its own disposable pgvector database and scratch vault. Exact-SHA
+readonly test/UAT/document resources accompany the admitted image; application imports use the
+image's checked baked code. Tests receive no channel credentials, persistent DSN/vault, host or
+Docker socket, or external network route. Profile/result identity persists in the existing native
+journal and controller checkpoint, so smoke-only recovery cannot advance a candidate.
+Actions admission alone does not prove deployment or functional testing, and deterministic runner
+tests do not establish live equivalent coverage.
 [FAST_PR_TO_DEV_TEST_AUTOMATION](plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) sequences live activation,
 functional/isolated-PG coverage handoff and pilot acceptance under #5675. Existing PR/PG and nightly
 gates remain; this support does not resolve the separate PG nightly policy decision.
