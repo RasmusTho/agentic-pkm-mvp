@@ -22,6 +22,14 @@ This is boundary work. Yggdrasil Platform and Operations owns Linux host and Com
 
 The repository implements the preserved Mac Keychain path, project-scoped Linux BWS reading (BWS-01), value-free administration (BWS-02), and the governed PostgreSQL file-secret deployment path (BWS-04). Encrypted reader-token installation (BWS-03 / #5679) and live VM qualification remain separate, unfinished gates. Existing host credential files remain until a separately authorized operator migration; code delivery alone does not remove or rotate live host material.
 
+Native source-backed Product recovery (#5918) runs inside BWS-04's existing activation and API
+consumer context, while the ordinary runtime writers are stopped. It uses the selected candidate
+image, API bootstrap and PostgreSQL password file; no retired secret alias, new consumer grant,
+credential copy or entrypoint override is added. Consumer handles remain owned by the synchronous
+activation, and operation-bound one-shot quiescence is required before recovery or retirement.
+The deployment owner document defines the finite timeout and strict source/readiness/index gates.
+This repository support does not establish live BWS or Product acceptance.
+
 A decision is still required for production Heimdal raw-store-key rotation. The current raw record format has one configured AES key and no key identifier or multi-key read path. Changing the current value would make earlier ciphertext unreadable. Until the owner records the policy on #5667, the implementation must refuse protected data-key rotation and must not infer approval from an environment or command flag. Heimdal archive-pass is also protected because it encrypts an existing archive volume.
 
 Live shared-copy parity and BWS administration retain an explicit owner gate: the local controller lock coordinates only cooperating commands on one host. The owner must approve one designated BWS admin writer and provide live evidence that its admin credential is unavailable outside that controller, or adopt a shared fencing mechanism. Keep BWS administration, bootstrap writes, and claims that parity is externally fenced blocked until that gate passes. A Product deployment explicitly run with `--existing-secrets-only` may read and validate existing selected values without this write-qualification gate; it must stop before RPC when the required PostgreSQL password is missing and must never call the BWS writer. This path does not claim global fencing or full live BWS qualification.

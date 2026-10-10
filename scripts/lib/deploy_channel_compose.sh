@@ -1195,7 +1195,19 @@ deploy_channel_compose() {
         return 92
       fi
       set +e
-      "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      if [ "${HOST_SECRET_PROVIDER:-}" = bws ] && [ "${1:-}" = run ] && \
+          [[ " $* " == *" NATIVE_SOURCE_BOOTSTRAP="* ]]; then
+        # A bounded native API one-shot can outlive its Docker CLI. Reap this
+        # owned CLI group here; the caller separately proves/stops the exact
+        # daemon-owned container before any runtime writer may restart.
+        PYTHONPATH="${root}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON:-python3}" -c '
+import sys
+from app.ops.native_source_bootstrap import COMPOSE_TIMEOUT_SECONDS, wait_for_owned_child
+raise SystemExit(wait_for_owned_child(sys.argv[1:], timeout=COMPOSE_TIMEOUT_SECONDS))
+' "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      else
+        "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      fi
       compose_rc=$?
       set -e
       if [ "${compose_rc}" -ne 0 ]; then

@@ -567,6 +567,39 @@ acknowledgement failure remains `not_acknowledged`.
 
 The deploy procedure is the same shape for every channel; only the pin target and the migration-ack posture differ (`prod` is the strictest). It assumes the build-once/promote model above.
 
+Repository support for native BWS source recovery (#5918) adds one fixed API-consumer one-shot
+after instance-state finalization and migrations, before ordinary API/worker/watcher/capture/UI
+recreation. The candidate image must contain `scripts/start_api.sh`'s source-only mode and
+`app/ops/native_source_bootstrap.py`; upgrading only the host tooling cannot add that image code.
+The run-only `channel:expected-SHA` selector grants no authority: the existing inherited worker
+guard, API instance/ownership preflight, selected vault, migration authority and file-backed
+PostgreSQL consumer remain required. The one-shot keeps the normal API command/bootstrap and
+uses `--no-deps`, so an unready old API or UI health dependency cannot prevent reconstruction.
+
+With the ordinary write-capable services stopped, the producer freshly checks Product readiness.
+An explicitly unbound API retains its no-vault picker posture without a SourceAction. For a
+configured missing, inaccessible or invalid root, the canonical resolver refuses before any
+SourceWrite; it cannot select a foreign root or turn the configured error into an unbound API.
+For a selected vault, an already usable projection skips source replay; otherwise the existing
+`vault-alpha-ingest --max-notes 0 --force --source-backed-rebuild --json` SourceAction reconstructs
+the complete selected inventory. All six counters must be present nonnegative integers,
+`scanned == ingested`, and errors/malformed/locked/invalid counts must be zero. A fresh Product
+readiness check and the existing strict index doctor must then pass. Missing summaries, partial
+work, refused context or an unready index fail the operation; child streams stay private.
+Ordinary service recreation and the existing final Data health, version, UI and receipt gates
+still follow this step. Ordinary API startup clears the selector and retains migration→uvicorn.
+
+The producer has a two-hour bound; its Docker CLI has sixty additional seconds. Timeout or a
+normal termination signal stops
+the owned process group. Before restarting any runtime writer, cleanup freshly revalidates the
+native operation guard and proves absence or stoppage of the exact API one-shot, checking its
+name, project, service, one-off flag, operation ID and target SHA before termination. Unknown
+ownership or quiescence retains the target pin and pending operation. Same-ID reconciliation
+also checks daemon-owned one-offs omitted by `compose ps`; it never replays activation.
+Existing migration markers, forward-only target retention and rollback floors still apply.
+This is repository support and deterministic proof; live DEV/TEST/PROD corpus qualification
+and functional acceptance remain separate operator work.
+
 Before the first mutable step—and during `--dry-run`—the deploy entrypoint performs a read-only TTS
 configuration preflight against the generated runtime-env file selected by the channel deploy
 configuration. The canonical generator builds the whole file in a same-directory temporary and

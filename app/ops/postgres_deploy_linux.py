@@ -38,7 +38,7 @@ _DEPLOY_JOURNAL_SOCKET = '/run/systemd/journal/socket'
 _DEPLOY_FAILURE_STAGES = frozenset({
     'preflight', 'runtime_identity', 'model_access', 'migration_inventory',
     'migration_ack', 'runtime_prepare', 'pin_write', 'image_pull',
-    'scalar_retirement', 'instance_prepare', 'migration_apply', 'service_recreate',
+    'scalar_retirement', 'instance_prepare', 'migration_apply', 'source_projection', 'service_recreate',
     'scalar_runtime', 'embedding_configuration', 'health', 'version',
     'fleet_fitness', 'ui_smoke', 'capture_watch', 'receipt',
 })
@@ -73,9 +73,14 @@ def _emit_deploy_failure(stage: str) -> None:
 
 
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
-             pass_fds: tuple[int, ...] = (), deploy_diagnostics: bool = False) -> str:
-    result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True,
-                            text=True, errors='replace' if deploy_diagnostics else 'strict', check=False)
+             pass_fds: tuple[int, ...] = (), deploy_diagnostics: bool = False,
+             timeout: int | None = None) -> str:
+    try:
+        result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True,
+                                text=True, errors='replace' if deploy_diagnostics else 'strict',
+                                check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise PostgresDeployError() from None
     if result.returncode:
         if deploy_diagnostics:
             _emit_deploy_failure(_deploy_failure_stage(result.stderr))
@@ -807,12 +812,57 @@ class LinuxEffects:
             for path in paths:
                 path.unlink()
 
+    def _running_one_shots(self) -> bool:
+        # Running-only inventory misses a created container that Docker may
+        # still start. This census grants no authority to stop any container.
+        def inventory() -> tuple[str, ...]:
+            output = _command([
+                'docker', 'ps', '--all', '--no-trunc', '--filter',
+                'label=com.docker.compose.project=pkm-' + self.config.channel,
+                '--filter', 'label=com.docker.compose.oneoff=True', '--format', '{{.ID}}',
+            ], cwd=self.config.root, timeout=15).strip()
+            ids = tuple(output.splitlines()) if output else ()
+            if len(set(ids)) != len(ids) or any(re.fullmatch(r'[0-9a-f]{64}', value) is None for value in ids):
+                raise PostgresDeployError()
+            return tuple(sorted(ids))
+
+        ids = inventory()
+        if not ids:
+            return bool(inventory())
+
+        def completed_snapshot() -> dict[str, tuple[str, ...]]:
+            output = _command([
+                'docker', 'inspect', '--type', 'container', '--format',
+                '{{.Id}} {{.State.Status}} {{.State.Running}} {{.State.Paused}} '
+                '{{.State.Restarting}} {{.State.Pid}}', *ids,
+            ], cwd=self.config.root, timeout=15)
+            records: dict[str, tuple[str, ...]] = {}
+            for line in output.splitlines():
+                fields = tuple(line.split())
+                if (len(fields) != 6 or fields[0] not in ids or fields[0] in records
+                    or fields[1] not in {'exited', 'dead'}
+                    or fields[2:] != ('false', 'false', 'false', '0')):
+                    raise PostgresDeployError()
+                records[fields[0]] = fields[1:]
+            if set(records) != set(ids):
+                raise PostgresDeployError()
+            return records
+
+        # A transition, disappearance during inspection, or unavailable daemon
+        # is unknown. Only stable completed state and membership are quiescent.
+        first = completed_snapshot()
+        return first != completed_snapshot() or inventory() != ids
+
     def quiescent(self) -> bool:
         # Called by the worker after each synchronous subprocess has been reaped.
         # Docker may still be starting after its CLI returns. Stable long-running
         # services are expected, but daemon-owned one-shot services can outlive
         # the Docker CLI and continue mutating state after their supervisor exits.
         try:
+            # `compose ps` can omit `compose run` containers. API service labels
+            # alone cannot distinguish a healthy server from the source writer.
+            if self._running_one_shots():
+                return False
             rows = self.compose('ps', '--all', '--format', 'json').strip()
             if not rows:
                 return True

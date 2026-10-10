@@ -2542,18 +2542,11 @@ if [ "$ingest_run" = "yes" ]; then
   fi
   ingest_rebuild_meta=$(INGEST_JSON="$ingest_summary_json" python - <<'PY'
 import json, os
+from app.ops.native_source_bootstrap import source_rebuild_counts
 
 try:
     payload = json.loads(os.environ.get("INGEST_JSON", ""))
-    values = [
-        int(payload.get("scanned") or 0),
-        int(payload.get("ingested") or 0),
-        int(payload.get("errors") or 0),
-        int(payload.get("malformed") or 0),
-        int(payload.get("skipped_locked") or 0),
-        int(payload.get("skipped_invalid") or 0),
-        0,
-    ]
+    values = [*source_rebuild_counts(payload), 0]
 except Exception:
     values = [0, 0, 0, 0, 0, 0, 1]
 print("|".join(str(value) for value in values))
