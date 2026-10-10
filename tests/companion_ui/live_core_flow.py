@@ -175,7 +175,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
 # Runs inside the already-running, exact-channel API container. Its input is
 # stdin; note content and credentials never become command arguments/output.
 _PROBE = r"""
-import hashlib,json,os,pathlib,sys
+import hashlib,json,os,pathlib,sys,stat
 from uuid import UUID
 p=json.load(sys.stdin)
 assert os.environ.get('PKM_ENVIRONMENT')==p['channel']
@@ -187,10 +187,16 @@ from app.instance.vault_registry import AppLocalSettingsStore,VaultRegistryStore
 registry=os.environ.get('INSTANCE_VAULT_REGISTRY_PATH','').strip()
 ownership=os.environ.get('INSTANCE_OWNERSHIP_ROOT','').strip()
 settings=None
-if registry and ownership and pathlib.Path(registry).is_file():
+if registry:
+ assert ownership and pathlib.Path(registry).is_file(),'fixture_restore_registry_missing'
  registry_store=VaultRegistryStore(pathlib.Path(registry))
+ assert stat.S_IMODE(registry_store.path.parent.stat().st_mode)==0o700,'fixture_restore_registry_permissions'
+ lock=registry_store.lock_path
+ assert lock.is_file() and not lock.is_symlink() and stat.S_IMODE(lock.stat().st_mode)==0o600 and lock.stat().st_uid==os.geteuid(),'fixture_restore_lock_missing'
  assert not registry_store.transaction_path.exists() and not registry_store.scalar_rollback_session_path.exists(),'fixture_restore_transaction_unsupported'
  snapshot=registry_store._read_current_locked(recover=False)
+ export=registry_store.rollback_export_path
+ assert export.is_file() and not export.is_symlink() and export.read_bytes()==registry_store._rollback_export_payload(snapshot),'fixture_restore_export_missing_or_stale'
  assert snapshot.settings_rebind is None,'fixture_restore_rebind_unsupported'
  if snapshot.authority==REGISTRY_AUTHORITY_ACTIVE:
   settings=_app_local_from_registry(snapshot)
@@ -298,6 +304,9 @@ def native_probe(d: dict[str, Any], marker: str) -> dict[str, Any]:
     def command(argv: list[str], **kwargs: Any) -> str:
         p = subprocess.run(argv, capture_output=True, text=True, timeout=20, **kwargs)
         if p.returncode:
+            refusal = re.search(r"^AssertionError: (fixture_restore_[a-z_]+)$", p.stderr, re.MULTILINE)
+            if refusal:
+                raise Blocked("native_read_probe_unavailable:" + refusal.group(1))
             raise Blocked("native_read_probe_unavailable")
         return p.stdout
 

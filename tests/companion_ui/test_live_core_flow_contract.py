@@ -621,6 +621,40 @@ def test_native_restore_admission_refuses_before_identity_healing(
     assert {p: p.read_bytes() for p in tmp_path.rglob("*.md")} == before
 
 
+@pytest.mark.parametrize(
+    "fault",
+    ["registry_missing", "ownership_missing", "export_missing", "export_stale", "lock_missing"],
+)
+def test_native_restore_admission_refuses_control_file_repairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    from app.instance.vault_registry import VaultRegistryStore
+
+    data = _probe_input(tmp_path, monkeypatch)
+    registry_path = tmp_path / "registry.md"
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(registry_path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(tmp_path / "ownership"))
+    store = VaultRegistryStore(registry_path)
+    if fault != "registry_missing":
+        store.load()  # Synthetic fixture preparation, never the probe under test.
+    if fault == "ownership_missing":
+        monkeypatch.delenv("INSTANCE_OWNERSHIP_ROOT")
+    if fault == "export_missing":
+        store.rollback_export_path.unlink()
+    if fault == "export_stale":
+        store.rollback_export_path.write_bytes(b"stale fixture")
+    if fault == "lock_missing":
+        store.lock_path.unlink()
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+    with pytest.raises(
+        AssertionError,
+        match="fixture_restore_(registry_missing|export_missing_or_stale|lock_missing)",
+    ):
+        exec(_PROBE, {})
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
 @pytest.mark.parametrize("enabled,present", [(True, False), (True, True), (False, False)])
 def test_native_probe_reads_before_any_provider_initialization(
     tmp_path: Path,

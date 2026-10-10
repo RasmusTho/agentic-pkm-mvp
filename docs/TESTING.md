@@ -83,8 +83,10 @@ diagnostic and HTTP requests reach the same host. A writing journey additionally
 channel. Before HTTP admission, native Docker reads bind the loopback gateway's running image,
 published port, exact startup configuration and resolved upstream address to the selected API
 container. The passive probe checks existing last-active restore inputs and complete vault/local
-identities before a context read can restore selection; it refuses recovery, missing identities
-and settings-rebind state. Then the API's active context is rechecked before navigation/effects.
+identities before a context read can restore selection; a configured registry must already have
+its private lock and canonical rollback export. It refuses initialization, recovery, projection
+repair, missing identities and settings-rebind state. Then the API's active context is rechecked
+before navigation/effects.
 Evidence paths must be canonical and outside the canonical approved vault path.
 This applies independently of capture permission.
 The existing compatibility capture endpoint
