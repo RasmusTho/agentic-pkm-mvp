@@ -37,6 +37,7 @@ from app.instance.instance_state import (
     validate_registry_disjoint_from_content,
 )
 from app.instance.ownership_ledger import (
+    LEGACY_LEDGER_SCHEMA,
     LegacyOwner,
     LedgerError,
     LedgerSnapshot,
@@ -3900,10 +3901,21 @@ def _finish_instance_state_deployment_locked(
         # authority. Established v1 ledgers still proceed below because both
         # protected artifacts exist and are routed through fenced migration.
         ledger.require_existing()
+    legacy_registry_migration = False
     try:
         established = ledger.require_existing()
     except LedgerError:
         established = None
+        if ledger.path.is_file() and ledger.key_path.is_file():
+            try:
+                legacy_registry_migration = (
+                    ledger.needs_fenced_registry_consistency()
+                )
+            except LedgerError:
+                # Existing protected artifacts remain authoritative even
+                # when their migration preflight is malformed; let the
+                # established materializer path fail closed.
+                legacy_registry_migration = True
     owners = _load_legacy_owner_inventory(
         inventory_path,
         registry=registry,
@@ -3911,6 +3923,17 @@ def _finish_instance_state_deployment_locked(
         quiescence_proof=quiescence_proof,
     )
     pending_legacy_owners: list[LegacyOwner] = []
+    bootstrap_incomplete = (
+        (established is None and not legacy_registry_migration)
+        or (
+            established is not None
+            and not established.legacy_bootstrap_complete
+            and established.schema != LEGACY_LEDGER_SCHEMA
+        )
+    )
+    explicitly_bound_owners = tuple(
+        owner for owner in owners if owner.vault_binding_id
+    )
     if established is not None and established.legacy_bootstrap_complete:
         recovery_failed = False
         try:
@@ -3992,6 +4015,39 @@ def _finish_instance_state_deployment_locked(
         ]
     if len({owner.vault_binding_id for owner in owners}) != len(owners):
         raise InstanceStatePreflightError("legacy-owner inventory repeats a binding identity")
+    if bootstrap_incomplete and explicitly_bound_owners:
+        for owner in explicitly_bound_owners:
+            try:
+                resolved = ledger.resolve_live_owner_bindings(
+                    (replace(owner, vault_binding_id=""),),
+                    allow_legacy=True,
+                )
+            except LedgerError as exc:
+                raise InstanceStatePreflightError(
+                    "authenticated owner does not match its ownership binding"
+                ) from exc
+            if (
+                len(resolved) != 1
+                or resolved[0].vault_binding_id != owner.vault_binding_id
+            ):
+                raise InstanceStatePreflightError(
+                    "authenticated owner does not match its ownership binding"
+                )
+    if bootstrap_incomplete:
+        try:
+            # A fresh or incomplete ledger is the authority that materialization
+            # will authenticate against. Establish it first so the registry
+            # path never has to infer ownership from an unbound receipt.
+            established = ledger.bootstrap_legacy_owners(
+                owners,
+                inventory_complete=True,
+                writers_drained=True,
+                _capability=_STORAGE_MUTATION_CAPABILITY,
+            )
+        except (LedgerError, InstanceStatePreflightError) as exc:
+            raise InstanceStatePreflightError(
+                "host-validated legacy-owner bootstrap failed"
+            ) from exc
     registry = _materialize_authenticated_channel_registrations(
         channel=channel,
         registry=store,
