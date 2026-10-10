@@ -38,7 +38,7 @@ _DEPLOY_JOURNAL_SOCKET = '/run/systemd/journal/socket'
 _DEPLOY_FAILURE_STAGES = frozenset({
     'preflight', 'runtime_identity', 'model_access', 'migration_inventory',
     'migration_ack', 'runtime_prepare', 'pin_write', 'image_pull',
-    'scalar_retirement', 'instance_prepare', 'migration_apply', 'service_recreate',
+    'scalar_retirement', 'instance_prepare', 'migration_apply', 'source_projection', 'service_recreate',
     'scalar_runtime', 'embedding_configuration', 'health', 'version',
     'fleet_fitness', 'ui_smoke', 'capture_watch', 'receipt',
 })
@@ -73,9 +73,14 @@ def _emit_deploy_failure(stage: str) -> None:
 
 
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
-             pass_fds: tuple[int, ...] = (), deploy_diagnostics: bool = False) -> str:
-    result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True,
-                            text=True, errors='replace' if deploy_diagnostics else 'strict', check=False)
+             pass_fds: tuple[int, ...] = (), deploy_diagnostics: bool = False,
+             timeout: int | None = None) -> str:
+    try:
+        result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True,
+                                text=True, errors='replace' if deploy_diagnostics else 'strict',
+                                check=False, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise PostgresDeployError() from None
     if result.returncode:
         if deploy_diagnostics:
             _emit_deploy_failure(_deploy_failure_stage(result.stderr))
@@ -807,12 +812,25 @@ class LinuxEffects:
             for path in paths:
                 path.unlink()
 
+    def _running_one_shots(self) -> bool:
+        ids = _command([
+            'docker', 'ps', '--filter', 'label=com.docker.compose.project=pkm-' + self.config.channel,
+            '--filter', 'label=com.docker.compose.oneoff=True', '--format', '{{.ID}}',
+        ], cwd=self.config.root, timeout=15).strip()
+        if ids and any(re.fullmatch(r'[0-9a-f]{12,64}', value) is None for value in ids.splitlines()):
+            raise PostgresDeployError()
+        return bool(ids)
+
     def quiescent(self) -> bool:
         # Called by the worker after each synchronous subprocess has been reaped.
         # Docker may still be starting after its CLI returns. Stable long-running
         # services are expected, but daemon-owned one-shot services can outlive
         # the Docker CLI and continue mutating state after their supervisor exits.
         try:
+            # `compose ps` can omit `compose run` containers. API service labels
+            # alone cannot distinguish a healthy server from the source writer.
+            if self._running_one_shots():
+                return False
             rows = self.compose('ps', '--all', '--format', 'json').strip()
             if not rows:
                 return True

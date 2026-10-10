@@ -1208,6 +1208,10 @@ apply_changed_migrations() {
 rollback_failed_startup() {
   local reason="$1" original_status="$2" forward_only_count="0"
   local current_floor_state="" inspection_rc=0 target_floor_state=""
+  if [ "${NATIVE_SOURCE_QUIESCENT:-1}" != 1 ]; then
+    echo 'native source producer quiescence is unproven; retaining target pin and pending operation without restarting runtime writers' >&2
+    return 0
+  fi
   if [ "${scalar_rollback}" = "1" ]; then
     echo "${reason} (status ${original_status}); retaining the current guard pin and scalar rollback target for a fail-closed retry" >&2
     return 0
@@ -1300,6 +1304,42 @@ rollback_failed_startup() {
   else
     echo "${reason} (status ${original_status}); rollback unavailable because no previous pin was recorded; retaining the no-baseline migration marker for same-target retry" >&2
   fi
+}
+
+native_source_container_quiescence() {
+  # Revalidate the still-held lock/current journal/target/API context before
+  # terminating anything. Derived Docker names/labels do not grant authority.
+  "${PYTHON}" -m app.ops.postgres_deploy_linux guard "${channel}" || return $?
+  PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON}" -c '
+import sys
+from app.ops.native_source_bootstrap import quiesce_owned_container
+raise SystemExit(0 if quiesce_owned_container(*sys.argv[1:]) else 78)
+' "${channel}" "$1" "${BWS_DEPLOY_OPERATION_ID}" "${target_sha}" >/dev/null 2>&1
+}
+
+native_source_projection_gate() {
+  if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
+    return 0
+  fi
+  local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0
+  [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 78
+  [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || return 78
+  [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
+    [ -f "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] && \
+    [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || return 78
+  name="pkm-${channel}-source-bootstrap-${operation}"
+  compose stop api worker watcher heimdal-capture-watch companion-ui || return $?
+  NATIVE_SOURCE_QUIESCENT=0
+  compose run --rm --no-deps -T --name "${name}" \
+    --label "yggdrasil.native.operation=${operation}" \
+    --label "yggdrasil.native.revision=${target_sha}" \
+    -e "NATIVE_SOURCE_BOOTSTRAP=${channel}:${target_sha}" api || rc=$?
+  if native_source_container_quiescence "${name}"; then
+    NATIVE_SOURCE_QUIESCENT=1
+  else
+    return 78
+  fi
+  return "${rc}"
 }
 
 run_postmutation_gate() {
@@ -1794,6 +1834,9 @@ if [ "${action}" = "deploy" ]; then
 fi
 DEPLOY_FAILURE_STAGE=migration_apply
 run_postmutation_gate "migration execution failed" apply_changed_migrations || exit $?
+DEPLOY_FAILURE_STAGE=source_projection
+run_postmutation_gate "native source projection gate failed" \
+  native_source_projection_gate || exit $?
 DEPLOY_FAILURE_STAGE=service_recreate
 run_postmutation_gate "service recreate/liveness gate failed" \
   recreate_channel_services || exit $?

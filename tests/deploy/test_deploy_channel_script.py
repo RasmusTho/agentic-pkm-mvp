@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import errno
 import socket
 import subprocess
@@ -3771,6 +3772,7 @@ def test_linux_quiescence_waits_for_one_shot_compose_services(monkeypatch, servi
     from app.ops import postgres_deploy_linux as linux
 
     effects = object.__new__(linux.LinuxEffects)
+    monkeypatch.setattr(effects, '_running_one_shots', lambda: False)
     monkeypatch.setattr(
         effects, 'compose',
         lambda *args: json.dumps([{'Service': service, 'State': state, 'Health': ''}]),
@@ -3809,6 +3811,7 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
         linux.LinuxEffects, 'compose',
         lambda _self, *_args: json.dumps(compose_state['rows']),
     )
+    monkeypatch.setattr(linux.LinuxEffects, '_running_one_shots', lambda _self: False)
     supervisor = linux.DeploymentSupervisor(config)
 
     request = {
@@ -3911,6 +3914,7 @@ def test_failed_bws_activation_reconciliation_preserves_ambiguous_state(tmp_path
         service = 'migrate' if blocker == 'running-migrate' else 'instance-state-init'
         compose_row = {'Service': service, 'State': 'running', 'Health': ''}
     monkeypatch.setattr(linux.LinuxEffects, 'compose', lambda _self, *_args: json.dumps([compose_row]))
+    monkeypatch.setattr(linux.LinuxEffects, '_running_one_shots', lambda _self: False)
     supervisor = linux.DeploymentSupervisor(config)
     if blocker == 'live-worker':
         supervisor.operation = SimpleNamespace(
@@ -4749,3 +4753,569 @@ def test_runtime_identity_snapshot_change_is_rejected(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "runtime identity preflight: blocked reason=runtime_identity_changed" in result.stderr
+
+
+def _native_source_harness(
+    tmp_path: Path, *, channel: str, ready: bool = False
+) -> tuple[Path, dict[str, str], str]:
+    root, env, sha = _deploy_harness(tmp_path)
+    _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
+    _install_bws_identity_guard_fixture(root)
+    api_handle = tmp_path / "api-consumer.env"
+    api_handle.write_text("", encoding="utf-8")
+    api_handle.chmod(0o600)
+    env.update(
+        HOST_SECRET_PROVIDER="bws",
+        HOST_SECRET_RUNTIME_ENV_FILE_API=str(api_handle),
+        BWS_DATABASE_TARGET="local",
+        BWS_DEPLOY_TARGET_REVISION=sha,
+        BWS_DEPLOY_OPERATION_ID="03b3bb2f-6d85-499a-8b45-e397f56812e1",
+        BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED="1",
+        BWS_EXPECTED_RAW_MIGRATION_PENDING="0",
+        APP_IMAGE_TAG=sha,
+        PKM_ENVIRONMENT=channel,
+        FAKE_SOURCE_PROJECTION_READY="1" if ready else "0",
+    )
+    if channel == "prod":
+        _configure_bws_retry_driver(tmp_path, env)
+    (root / "scripts/start_api.sh").write_text(
+        (REPO_ROOT / "scripts/start_api.sh").read_text(encoding="utf-8"), encoding="utf-8",
+    )
+    (root / "scripts/run_migrations.sh").write_text(
+        'printf "api-migrations\\n" >> "${FAKE_DEPLOY_EVENT_LOG:?}"\n', encoding="utf-8",
+    )
+    python = tmp_path / "bin/python"
+    python.write_text(python.read_text(encoding="utf-8").replace(
+        "set -eu\n",
+        '''set -eu
+if [ "${1:-}" = -m ] && [ "${2:-}" = app.instance.runtime ]; then
+  printf 'api-instance-preflight %s\\n' "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  exit "${FAKE_API_INSTANCE_RC:-0}"
+fi
+''', 1,
+    ), encoding="utf-8")
+    site = tmp_path / "api-python-fixture"
+    site.mkdir()
+    (site / "sitecustomize.py").write_text(
+        '''import os
+from pathlib import Path
+from types import SimpleNamespace
+from app.config import paths
+from app import stores, rebuildability
+from app.instance import runtime
+def instance_preflight(**kwargs):
+    if os.environ.get("FAKE_API_CONTEXT_RC", "0") != "0":
+        raise ValueError("hostile context diagnostic")
+runtime._preflight_runtime = instance_preflight
+paths.resolve_optional_vault_root = lambda: (None if os.environ.get("FAKE_API_UNBOUND") == "1"
+                                           else Path(os.environ["FAKE_API_VAULT"]))
+stores.resolve_store_backend = lambda: os.environ.get("FAKE_API_BACKEND", "pg")
+stores.get_object_store = lambda: SimpleNamespace(list_objects=lambda **kwargs: [])
+rebuildability.evaluate_product_store_readiness = lambda root, rows: SimpleNamespace(
+    ready=Path(os.environ["FAKE_API_READY_FILE"]).exists())
+''', encoding="utf-8",
+    )
+    (root / "app/cli.py").write_text(
+        '''import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ["FAKE_DEPLOY_EVENT_LOG"], "a") as stream:
+    stream.write("api-cli " + " ".join(args) + "\\n")
+if args[:1] == ["vault-alpha-ingest"]:
+    with open(os.environ["FAKE_DEPLOY_EVENT_LOG"], "a") as stream:
+        stream.write("source-rebuild\\n")
+    if os.environ.get("FAKE_SOURCE_PREADINESS", "1") == "1":
+        Path(os.environ["FAKE_API_READY_FILE"]).touch()
+    print(os.environ.get("FAKE_SOURCE_SUMMARY", '{"scanned":2,"ingested":2,"errors":0,"malformed":0,"skipped_locked":0,"skipped_invalid":0}'))
+    print("hostile-child-canary /private/vault password=do-not-leak", file=sys.stderr)
+    raise SystemExit(int(os.environ.get("FAKE_SOURCE_RC", "0")))
+elif args[:2] == ["index", "doctor"]:
+    print(os.environ.get("FAKE_SOURCE_INDEX_SUMMARY", '{"backend":"PgVectorIndex","issues":[],"rebuild_required":false,"pg_state":{"rows":2}}'))
+    raise SystemExit(int(os.environ.get("FAKE_SOURCE_INDEX_RC", "0")))
+elif args[:2] == ["settings", "validate"]:
+    print('{}')
+    raise SystemExit(int(os.environ.get("FAKE_SOURCE_SETTINGS_RC", "0")))
+else:
+    raise SystemExit(78)
+''', encoding="utf-8",
+    )
+    ready_file = tmp_path / "projection-ready"
+    if ready:
+        ready_file.touch()
+    env.update(
+        FAKE_API_VAULT=str(root / "tmp"), FAKE_API_READY_FILE=str(ready_file),
+        FAKE_API_PYTHONPATH=f"{site}:{root}:{REPO_ROOT}", VCS_REF=sha,
+    )
+    command = _compose("docker-compose.yaml")["services"]["api"]["command"][2]
+    (root / "api-command.sh").write_text(
+        command.replace("$$", "$").replace("/app", str(root)), encoding="utf-8",
+    )
+    docker = tmp_path / "bin/docker"
+    text = docker.read_text(encoding="utf-8")
+    text = text.replace(
+        'case "$*" in\n',
+        '''if [[ "$*" == *"NATIVE_SOURCE_BOOTSTRAP="* ]]; then
+  printf 'source-probe channel=%s image=%s api-context=%s\\n' \
+    "${PKM_ENVIRONMENT:-unset}" "${APP_IMAGE_TAG:-unset}" \
+    "${HOST_SECRET_RUNTIME_ENV_FILE_API:-unset}" >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  for argument in "$@"; do
+    case "${argument}" in NATIVE_SOURCE_BOOTSTRAP=*) export "${argument}";; esac
+  done
+  export PYTHONPATH="${FAKE_API_PYTHONPATH:?}"
+  bash "${PWD}/api-command.sh"
+  exit $?
+fi
+case "$*" in
+''',
+        1,
+    )
+    docker.write_text(text, encoding="utf-8")
+    return root, env, sha
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+@pytest.mark.parametrize("ready", [False, True])
+def test_native_deploy_rebuilds_source_projection_before_health_gate(
+    tmp_path: Path, channel: str, ready: bool
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel=channel, ready=ready)
+
+    result = _run_deploy(root, env, sha, channel=channel)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    source_calls = [
+        (i, event) for i, event in enumerate(events)
+        if event.startswith("docker ") and "NATIVE_SOURCE_BOOTSTRAP=" in event
+    ]
+    assert len(source_calls) == 1, events
+    source_pos, command = source_calls[0]
+    assert "run --rm --no-deps -T" in command
+    assert f"NATIVE_SOURCE_BOOTSTRAP={channel}:{sha}" in command
+    assert command.endswith(" api")
+    assert "--entrypoint" not in command
+    assert f"-p pkm-{channel}" in command
+    assert "docker-compose.bws.yml" in command
+    runtime_start = next(
+        i for i, event in enumerate(events)
+        if "up -d --force-recreate api worker watcher" in event
+    )
+    final_readiness = next(i for i, event in enumerate(events) if "/readyz" in event)
+    assert source_pos < runtime_start < final_readiness
+    assert events.count("source-rebuild") == (0 if ready else 1)
+    assert any("api-instance-preflight -m app.instance.runtime preflight" in event for event in events)
+    assert events.count("api-migrations") == 1
+    assert any(event == "api-cli index doctor --json --strict" for event in events)
+    if not ready:
+        assert f"api-cli vault-alpha-ingest --vault-root {(root / 'tmp').resolve()} --max-notes 0 --force --source-backed-rebuild --json" in events
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("database_target", ["local", "external"])
+def test_native_source_rebuild_retains_bws_api_context_and_writer_fence(
+    tmp_path: Path, database_target: str
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="test")
+    env["BWS_DATABASE_TARGET"] = database_target
+    if database_target == "external":
+        env["DATABASE_URL"] = env["DB_DSN"] = "postgresql://writer@db.example.invalid:5432/app_test"
+    result = _run_deploy(root, env, sha, channel="test")
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    source_position = next(i for i, event in enumerate(events) if "NATIVE_SOURCE_BOOTSTRAP=" in event)
+    assert any("stop api worker watcher heimdal-capture-watch companion-ui" in event
+               for event in events[:source_position])
+    assert not any("up -d --force-recreate api" in event for event in events[:source_position])
+    assert f"source-probe channel=test image={sha} api-context={env['HOST_SECRET_RUNTIME_ENV_FILE_API']}" in events
+    assert any(event == "bws-guard" for event in events[:source_position])
+    assert ("docker-compose.bws-external.yml" in events[source_position]) is (database_target == "external")
+    api = _compose("docker-compose.yaml")["services"]["api"]
+    assert any(isinstance(item, dict) and "HOST_SECRET_RUNTIME_ENV_FILE_API" in item["path"] for item in api["env_file"])
+    assert api["environment"]["NATIVE_SOURCE_BOOTSTRAP"] == ""
+    assert "--entrypoint" not in events[source_position]
+    assert events[source_position].endswith(" api")
+    assert "POSTGRES_PASSWORD=" not in events[source_position]
+
+
+@pytest.mark.parametrize("fault", [
+    "missing", "malformed", "bad_json", "errors", "locked", "invalid", "count_mismatch",
+    "wrong_type", "exit", "product_unready", "index_unready", "index_unknown",
+])
+def test_native_source_rebuild_fails_closed_on_incomplete_projection(tmp_path: Path, fault: str) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    summary = {"scanned": 2, "ingested": 2, "errors": 0, "malformed": 0,
+               "skipped_locked": 0, "skipped_invalid": 0}
+    if fault == "missing":
+        del summary["errors"]
+    elif fault == "malformed":
+        summary["malformed"] = 1
+    elif fault in {"errors", "locked", "invalid"}:
+        summary[{"locked": "skipped_locked", "invalid": "skipped_invalid"}.get(fault, fault)] = 1
+    elif fault == "count_mismatch":
+        summary["ingested"] = 1
+    elif fault == "wrong_type":
+        summary["scanned"] = True
+    elif fault == "exit":
+        env["FAKE_SOURCE_RC"] = "42"
+    elif fault == "product_unready":
+        env["FAKE_SOURCE_PREADINESS"] = "0"
+    elif fault == "index_unready":
+        env["FAKE_SOURCE_INDEX_RC"] = "2"
+    elif fault == "index_unknown":
+        env["FAKE_SOURCE_INDEX_SUMMARY"] = '{}'
+    env["FAKE_SOURCE_SUMMARY"] = json.dumps(summary)
+    if fault == "bad_json":
+        env["FAKE_SOURCE_SUMMARY"] = "hostile-child-canary malformed summary"
+    result = _run_deploy(root, env, sha)
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert events.count("source-rebuild") == 1
+    assert not any("up -d --force-recreate api" in event for event in events)
+    assert not list((root / "ops/deployments").glob("*.json"))
+    assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("fault", ["syntax", "foreign_channel", "foreign_image", "instance", "vault_context", "memory"])
+def test_native_api_source_selector_refuses_before_source_write(tmp_path: Path, fault: str) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    env.update(PYTHONPATH=env["FAKE_API_PYTHONPATH"], NATIVE_SOURCE_BOOTSTRAP=f"dev:{sha}")
+    if fault == "syntax":
+        env["NATIVE_SOURCE_BOOTSTRAP"] = f"dev:{sha};echo hostile"
+    elif fault == "foreign_channel":
+        env["NATIVE_SOURCE_BOOTSTRAP"] = f"test:{sha}"
+    elif fault == "foreign_image":
+        env["NATIVE_SOURCE_BOOTSTRAP"] = "dev:" + "a" * 40
+    elif fault == "instance":
+        env["FAKE_API_INSTANCE_RC"] = "75"
+    elif fault == "vault_context":
+        env["FAKE_API_CONTEXT_RC"] = "75"
+    else:
+        env["FAKE_API_BACKEND"] = "memory"
+    result = subprocess.run(["bash", str(root / "api-command.sh")], cwd=root, env=env,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert "source-rebuild" not in events
+    assert "api-migrations" not in events
+    assert not any(event.startswith("api-cli ") for event in events)
+    assert "hostile" not in result.stdout + result.stderr
+
+
+def test_native_source_selector_absent_preserves_ordinary_api_start(tmp_path: Path) -> None:
+    root, env, _sha = _native_source_harness(tmp_path, channel="dev")
+    uvicorn = tmp_path / "bin/uvicorn"
+    uvicorn.write_text('#!/bin/bash\nprintf "ordinary-api %s\\n" "$*" >> "${FAKE_DEPLOY_EVENT_LOG:?}"\n', encoding="utf-8")
+    uvicorn.chmod(0o755)
+    env.update(PYTHONPATH=env["FAKE_API_PYTHONPATH"], NATIVE_SOURCE_BOOTSTRAP="")
+    result = subprocess.run(["bash", str(root / "api-command.sh")], cwd=root, env=env,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    events = _deploy_events(env)
+    assert events.count("api-migrations") == 1
+    assert "ordinary-api app.main:app --host 0.0.0.0 --port 8000" in events
+    assert not any(event.startswith("api-cli ") for event in events)
+
+
+@pytest.mark.parametrize("unquiesced", [False, True])
+def test_native_source_rebuild_failure_preserves_recovery_fences(tmp_path: Path, unquiesced: bool) -> None:
+    root, env, prior_sha = _native_source_harness(tmp_path, channel="dev")
+    (root / "config/deploy/dev.env").write_text(f"APP_IMAGE_TAG={prior_sha}\n", encoding="utf-8")
+    (root / "target.txt").write_text("target", encoding="utf-8")
+    subprocess.run(["git", "add", "target.txt"], cwd=root, check=True)
+    subprocess.run(["git", "commit", "-qm", "target"], cwd=root, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    env.update(FAKE_SHA=sha, VCS_REF=sha, APP_IMAGE_TAG=sha, BWS_DEPLOY_TARGET_REVISION=sha, FAKE_SOURCE_RC="42")
+    if unquiesced:
+        docker = tmp_path / "bin/docker"
+        docker.write_text(docker.read_text(encoding="utf-8").replace(
+            'case "$*" in\n',
+            '''if [ "${1:-}" = ps ]; then
+  printf '%s\\n' 0123456789ab
+  exit 0
+fi
+if [ "${1:-}" = inspect ] && [[ "$*" == *"State.Running"* ]]; then
+  printf '/pkm-dev-source-bootstrap-%s pkm-dev api True %s %s true\\n' \
+    "${BWS_DEPLOY_OPERATION_ID}" "${BWS_DEPLOY_OPERATION_ID}" "${BWS_DEPLOY_TARGET_REVISION}"
+  exit 0
+fi
+if [ "${1:-}" = stop ]; then exit 77; fi
+case "$*" in
+''', 1,
+        ), encoding="utf-8")
+    result = _run_deploy(root, env, sha)
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert events.count("source-rebuild") == 1
+    assert not list((root / "ops/deployments").glob("*.json"))
+    assert f"APP_IMAGE_TAG={prior_sha}\n" in (root / "config/deploy/dev.previous.env").read_text()
+    if unquiesced:
+        assert f"APP_IMAGE_TAG={sha}\n" in (root / "config/deploy/dev.env").read_text()
+        assert not any("up -d --force-recreate api" in event for event in events)
+        assert "native source producer quiescence is unproven" in result.stderr
+    else:
+        assert f"APP_IMAGE_TAG={prior_sha}\n" in (root / "config/deploy/dev.env").read_text()
+        assert any("up -d --force-recreate api" in event for event in events)
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+def test_native_source_timeout_terminates_descendants_even_when_parent_exits(tmp_path: Path) -> None:
+    import time
+    from app.ops.native_source_bootstrap import wait_for_owned_child
+    child = tmp_path / "child.py"
+    stopped = tmp_path / "stopped"
+    child.write_text('''import signal, subprocess, sys, time
+def stop(*args):
+    open(sys.argv[2], "w").write("parent stopped")
+    raise SystemExit(0)
+signal.signal(signal.SIGTERM, stop)
+subprocess.Popen([sys.executable, "-c", "import signal,sys,time,os; signal.signal(signal.SIGTERM, signal.SIG_IGN); open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(30)", sys.argv[1]])
+time.sleep(30)
+''', encoding="utf-8")
+    pid_file = tmp_path / "descendant.pid"
+    assert wait_for_owned_child([sys.executable, str(child), str(pid_file), str(stopped)], timeout=3) == 124
+    assert stopped.is_file()
+    pid = int(pid_file.read_text())
+    # A killed orphan may remain a zombie until init reaps it. It cannot execute
+    # a producer; absence or zombie is the finite process-state proof here.
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        if not state or state.startswith("Z"):
+            break
+        time.sleep(0.05)
+    assert not state or state.startswith("Z"), state
+
+
+@pytest.mark.parametrize("signum", [15, 2])
+def test_native_source_signal_terminates_owned_child_group(tmp_path: Path, signum: int) -> None:
+    import time
+    child = tmp_path / "child.py"
+    pid_file = tmp_path / "child.pid"
+    child.write_text('''import os, signal, sys, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+open(sys.argv[1], "w").write(str(os.getpid()))
+time.sleep(30)
+''', encoding="utf-8")
+    runner = subprocess.Popen([
+        sys.executable, "-c",
+        "import sys; from app.ops.native_source_bootstrap import wait_for_owned_child; "
+        "raise SystemExit(wait_for_owned_child(sys.argv[1:], timeout=60))",
+        sys.executable, str(child), str(pid_file),
+    ], cwd=REPO_ROOT)
+    try:
+        deadline = time.monotonic() + 10
+        while not pid_file.is_file() and time.monotonic() < deadline:
+            assert runner.poll() is None
+            time.sleep(0.05)
+        assert pid_file.is_file()
+        pid = int(pid_file.read_text())
+        runner.send_signal(signum)
+        assert runner.wait(timeout=10) == 128 + signum
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
+        assert not state or state.startswith("Z"), state
+    finally:
+        if runner.poll() is None:
+            runner.terminate()
+        runner.wait(timeout=10)
+
+
+@pytest.mark.parametrize("fault", ["none", "operation", "revision", "name", "service", "unavailable", "stop_lost_ack", "still_running"])
+def test_native_source_container_termination_requires_exact_ownership(tmp_path: Path, monkeypatch, fault: str) -> None:
+    from app.ops.native_source_bootstrap import quiesce_owned_container
+    operation = "03b3bb2f-6d85-499a-8b45-e397f56812e1"
+    revision = "a" * 40
+    name = "pkm-test-source-bootstrap-" + operation
+    producer = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    docker = tmp_path / "docker"
+    event_log = tmp_path / "events"
+    state = tmp_path / "stopped"
+    docker.write_text('''#!/usr/bin/env python3
+import os, signal, sys
+from pathlib import Path
+args=sys.argv[1:]
+with open(os.environ["FAKE_CONTAINER_EVENTS"], "a") as stream:
+    stream.write(args[0] + "\\n")
+if os.environ["FAKE_CONTAINER_FAULT"] == "unavailable": raise SystemExit(42)
+if args[0] == "ps":
+    print("0123456789ab")
+elif args[0] == "inspect":
+    operation = os.environ["FAKE_CONTAINER_OPERATION"]
+    revision = os.environ["FAKE_CONTAINER_REVISION"]
+    name = os.environ["FAKE_CONTAINER_NAME"]
+    service = "api"
+    fault = os.environ["FAKE_CONTAINER_FAULT"]
+    if fault == "operation": operation = "00000000-0000-4000-8000-000000000002"
+    if fault == "revision": revision = "b" * 40
+    if fault == "name": name = "foreign"
+    if fault == "service": service = "worker"
+    running = "false" if Path(os.environ["FAKE_CONTAINER_STOPPED"]).exists() else "true"
+    print(f"/{name} pkm-test {service} True {operation} {revision} {running}")
+elif args[0] == "stop":
+    if os.environ["FAKE_CONTAINER_FAULT"] == "still_running": raise SystemExit(42)
+    os.kill(int(os.environ["FAKE_CONTAINER_PID"]), signal.SIGTERM)
+    Path(os.environ["FAKE_CONTAINER_STOPPED"]).touch()
+    if os.environ["FAKE_CONTAINER_FAULT"] == "stop_lost_ack": raise SystemExit(42)
+elif args[0] != "rm": raise SystemExit(43)
+''', encoding="utf-8")
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    for key, value in {
+        "FAULT": fault, "PID": str(producer.pid), "OPERATION": operation,
+        "REVISION": revision, "NAME": name, "STOPPED": str(state), "EVENTS": str(event_log),
+    }.items():
+        monkeypatch.setenv("FAKE_CONTAINER_" + key, value)
+    try:
+        assert quiesce_owned_container("test", name, operation, revision) is (fault in {"none", "stop_lost_ack"})
+        events = event_log.read_text().splitlines()
+        if fault in {"operation", "revision", "name", "service", "unavailable"}:
+            assert "stop" not in events and "rm" not in events
+            assert producer.poll() is None
+        if fault in {"none", "stop_lost_ack"}:
+            producer.wait(timeout=2)
+            assert events.index("inspect") < events.index("stop") < events.index("rm")
+        if fault == "still_running":
+            assert "rm" not in events
+    finally:
+        if producer.poll() is None:
+            producer.terminate()
+        producer.wait(timeout=2)
+
+
+def test_native_source_cleanup_requires_current_parent_guard(tmp_path: Path) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    guard = root / "app/ops/postgres_deploy_linux.py"
+    guard.write_text(guard.read_text() +
+        'from pathlib import Path\n'
+        'if Path(os.environ["FAKE_API_READY_FILE"]).exists(): raise SystemExit(78)\n', encoding="utf-8")
+    env["FAKE_SOURCE_RC"] = "42"
+    result = _run_deploy(root, env, sha)
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert events.count("source-rebuild") == 1
+    assert not any(event.startswith("docker ps --all") or event.startswith("docker stop") or
+                   event.startswith("docker rm") or "up -d --force-recreate api" in event for event in events)
+    assert "native source producer quiescence is unproven" in result.stderr
+
+
+def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, monkeypatch) -> None:
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+    root = tmp_path / "checkout"
+    lock = root / "config/deploy/test.env.lock"
+    lock.mkdir(parents=True, mode=0o700)
+    (lock / "bws-owner").touch(mode=0o600)
+    journal = DeployJournal(tmp_path / "journal", "test")
+    plan = DeployPlan("test", "a" * 40, ("db", "api"), ("postgres-db", "postgres-api"))
+    operation = str(uuid4())
+    journal.bind_request(operation, plan, False, create=True)
+    for stage in ("prepared", "preflighted", "materialized", "activating"):
+        journal.write(operation, stage)
+    config = SimpleNamespace(channel="test", root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, "load", lambda _channel: config)
+    monkeypatch.setattr(linux.LinuxEffects, "activate", lambda *_args: pytest.fail("must not replay"))
+    monkeypatch.setattr(linux.LinuxEffects, "compose", lambda *_args: '[{"Service":"api","State":"running","Health":""}]')
+    active = {"value": True}
+    commands = []
+    def command(argv, **kwargs):
+        commands.append(argv)
+        return "0123456789ab" if active["value"] else ""
+    monkeypatch.setattr(linux, "_command", command)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {"action":"reconcile-failed", "operation_id":operation, "plan":asdict(plan), "bootstrap":False}
+    prior = (journal.directory / "test.json").read_bytes()
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(request)
+    assert (journal.directory / "test.json").read_bytes() == prior
+    assert lock.is_dir()
+    assert commands[-1][:2] == ["docker", "ps"]
+    assert "label=com.docker.compose.oneoff=True" in commands[-1]
+    active["value"] = False
+    receipt = supervisor.request(request)
+    assert receipt["receipt"]["terminal_result"] == "failed"
+    assert not lock.exists()
+    assert supervisor.request({**request, "action":"join"}) == receipt
+
+
+@pytest.mark.parametrize("fault", ["timeout", "unavailable", "malformed"])
+def test_native_source_oneoff_census_unknown_stays_pending(tmp_path: Path, monkeypatch, capsys, fault: str) -> None:
+    from types import SimpleNamespace
+    from app.ops import postgres_deploy_linux as linux
+    effects = linux.LinuxEffects(SimpleNamespace(channel="test", root=tmp_path))
+    def probe(argv, **kwargs):
+        assert argv[:2] == ["docker", "ps"]
+        assert kwargs["timeout"] == 15
+        if fault == "timeout":
+            raise subprocess.TimeoutExpired(argv, 15, output="hostile-child-canary", stderr="private-endpoint")
+        return SimpleNamespace(returncode=42 if fault == "unavailable" else 0,
+                               stdout="hostile-child-canary", stderr="private-endpoint")
+    monkeypatch.setattr(linux.subprocess, "run", probe)
+    monkeypatch.setattr(effects, "compose", lambda *args: pytest.fail("unknown census is not quiescence"))
+    assert effects.quiescent() is False
+    captured = capsys.readouterr()
+    assert captured.out + captured.err == ""
+
+
+def test_native_source_unbound_api_preserves_idle_without_source_write(tmp_path: Path) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    env["FAKE_API_UNBOUND"] = "1"
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    assert any("NATIVE_SOURCE_BOOTSTRAP=" in event for event in events)
+    assert not any(event.startswith("api-cli ") for event in events)
+    assert any("up -d --force-recreate api" in event for event in events)
+
+
+@pytest.mark.parametrize("fault", ["missing", "not_directory", "symlink_loop", "inaccessible"])
+def test_native_source_configured_invalid_root_never_becomes_unbound(tmp_path: Path, monkeypatch, fault: str) -> None:
+    from app.ops import native_source_bootstrap as source
+    from app import stores, version
+    revision = "a" * 40
+    selector = "test:" + revision
+    selected = tmp_path / "selected"
+    if fault == "not_directory":
+        selected.write_text("not a vault")
+    elif fault == "symlink_loop":
+        selected.symlink_to(selected)
+    elif fault == "inaccessible":
+        selected.mkdir()
+        original_exists = Path.exists
+        def exists(path):
+            if path == selected:
+                raise PermissionError("configured vault inaccessible")
+            return original_exists(path)
+        monkeypatch.setattr(Path, "exists", exists)
+    monkeypatch.setenv("NATIVE_SOURCE_BOOTSTRAP", selector)
+    monkeypatch.setenv("PKM_ENVIRONMENT", "test")
+    monkeypatch.setenv("VAULT_ROOT", str(selected))
+    # A usable foreign root cannot rescue the selected canonical API root.
+    monkeypatch.setenv("VAULT_ROOT_DEV", str(tmp_path))
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(tmp_path))
+    monkeypatch.setattr(version, "get_runtime_version", lambda: {"git_sha": revision})
+    monkeypatch.setattr(stores, "resolve_store_backend", lambda: "pg")
+    monkeypatch.setattr(source, "_instance_preflight", lambda channel: None)
+    monkeypatch.setattr(source, "_run_json", lambda *args: pytest.fail("must refuse before SourceWrite"))
+    with pytest.raises((RuntimeError, OSError, ValueError)):
+        source.rebuild_if_needed(selector)
+
+
+@pytest.mark.parametrize("value", [None, {}, [], {"scanned": 0},
+    {"scanned": "0", "ingested": 0, "errors": 0, "malformed": 0, "skipped_locked": 0, "skipped_invalid": 0},
+    {"scanned": 0, "ingested": 0, "errors": -1, "malformed": 0, "skipped_locked": 0, "skipped_invalid": 0},
+    {"scanned": 0, "ingested": 0, "errors": False, "malformed": 0, "skipped_locked": 0, "skipped_invalid": 0},
+])
+def test_native_source_summary_unknown_is_not_empty_success(value) -> None:
+    from app.ops.native_source_bootstrap import source_rebuild_counts
+    with pytest.raises(ValueError):
+        source_rebuild_counts(value)
+
+
+def test_full_startup_uses_same_strict_source_summary_parser() -> None:
+    script = (REPO_ROOT / "scripts/start_full_system.sh").read_text()
+    assert "from app.ops.native_source_bootstrap import source_rebuild_counts" in script
+    assert "values = [*source_rebuild_counts(payload), 0]" in script

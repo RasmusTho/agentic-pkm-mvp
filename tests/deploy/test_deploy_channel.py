@@ -50,6 +50,7 @@ def test_failed_reconciliation_remains_quiescent_and_non_replaying(tmp_path, mon
                                json.dumps([{"Service": "migrate", "State": state["value"], "Health": ""}])])
 
     monkeypatch.setattr(linux.LinuxEffects, "compose", compose)
+    monkeypatch.setattr(linux.LinuxEffects, "_running_one_shots", lambda _self: False)
     supervisor = linux.DeploymentSupervisor(config)
     request = {"action": "reconcile-failed", "operation_id": operation_id,
                "plan": asdict(plan), "bootstrap": False}
@@ -208,6 +209,7 @@ def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
         "app/ops/bws_secret_reader.py",
         "app/ops/host_secret_controller.py",
         "app/ops/host_secret_bootstrap.py",
+        "app/ops/native_source_bootstrap.py",
         "config/secrets/host_secret_contract.json",
         "scripts/deploy_channel.sh",
         "scripts/compose_env.py",
