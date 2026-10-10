@@ -963,6 +963,8 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/services/test_outbox_idempotency.py",
             "tests/services/test_outbox_conn_binding.py",
             "tests/events",
+            "tests/services/test_companion_note.py",
+            "tests/services/test_companion_note_write_guard.py",
         ),
     ),
     (
@@ -1161,6 +1163,12 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 
 
 EXACT_SUBSYSTEM_FILES: dict[str, frozenset[str]] = {
+    # The companion/source predicate is shared by watcher traversal, queued
+    # workers and Alpha ingestion. A helper-only edit must execute all three
+    # existing source-boundary owners without claiming sibling services.
+    "watcher_sync": frozenset({"app/services/companion_note.py"}),
+    "store_ingest": frozenset({"app/services/companion_note.py"}),
+    "outbox_worker": frozenset({"app/services/companion_note.py"}),
     "llm_eval": frozenset(
         {
             "app/components/reasoning/facade.py",

@@ -4,6 +4,7 @@ import logging
 import re
 import uuid as _uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict
 
 from app.components.embeddings import EmbeddingClientProtocol
@@ -20,6 +21,7 @@ from app.llm.fallback_orchestrator import embed_with_fallback
 from app.observability.tracer import start_span
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW, emit_index_embedding_failed, emit_index_object_embedded
 from app.objects import DomainObject, ObjectStore, resolve_canonical_object_id
+from app.services.companion_note import is_companion_path
 from app.stores import get_vector_index
 
 logger = logging.getLogger(__name__)
@@ -99,7 +101,7 @@ def _infer_dim_from_error(exc: Exception) -> int | None:
     return None
 
 
-def handle_ingest_object_created(obj: Dict[str, object]) -> None:
+def handle_ingest_object_created(obj: Dict[str, object], *, vault_root: Path | None = None) -> None:
     incoming_uuid = resolve_event_object_id(obj)
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
@@ -145,23 +147,41 @@ def handle_ingest_object_created(obj: Dict[str, object]) -> None:
     trace_id = obj.get("trace_id")
     store = ObjectStore()
     existing = store.get_object(object_uuid)
+    incoming_ref = str(obj.get("source_ref") or obj.get("path") or "")
 
     if existing is None:
         domain = DomainObject(
             uuid=object_uuid,
             kind=obj.get("kind") or "note",
             payload=payload,
-            source_ref=obj.get("source_ref"),
+            source_ref=incoming_ref or None,
             created_at=datetime.now(timezone.utc),
         )
     else:
         updated_payload = dict(existing.payload or {})
         updated_payload.update({k: v for k, v in payload.items() if v is not None})
+        source_ref = existing.source_ref
+        # Validated vault-source reingest can repair the locator left by a
+        # pre-fix companion publication. Retain every other existing locator;
+        # this does not establish a general rename/duplicate-identity policy.
+        if vault_root is not None and source_ref and incoming_ref:
+            root = vault_root.expanduser().resolve()
+            source_path = Path(incoming_ref).expanduser()
+            if not source_path.is_absolute():
+                source_path = root / source_path
+            source_path = source_path.resolve()
+            if (
+                source_path.is_relative_to(root)
+                and source_path.is_file()
+                and not is_companion_path(source_path, root)
+                and is_companion_path(Path(source_ref), root)
+            ):
+                source_ref = str(source_path)
         domain = DomainObject(
             uuid=existing.uuid,
             kind=existing.kind,
             payload=updated_payload,
-            source_ref=existing.source_ref,
+            source_ref=source_ref,
             created_at=existing.created_at,
         )
     domain.payload = build_indexed_unit_payload(

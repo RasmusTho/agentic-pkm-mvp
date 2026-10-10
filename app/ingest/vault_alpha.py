@@ -29,6 +29,7 @@ from app.services.companion_eligibility import (
 from app.services.companion_note import (
     CompanionNote,
     companion_path,
+    is_companion_path,
     read_companion,
     scan_attachments,
     write_companion,
@@ -118,13 +119,13 @@ def _is_unindexed_system_path(rel_path: Path, *, system_root: Path) -> bool:
     configured system-dir name (``get_vault_system_dir_rel``), matching the
     two-shape check the pre-existing companions exclusion already used.
     """
-    parts = rel_path.parts[:2]
-    if len(parts) < 2:
-        return False
-    return parts in (
-        ("_system", subfolder) for subfolder in _UNINDEXED_SYSTEM_SUBFOLDERS
-    ) or parts in (
-        (system_root.parts[0], subfolder) for subfolder in _UNINDEXED_SYSTEM_SUBFOLDERS
+    if is_companion_path(rel_path, configured_system_dir=system_root):
+        return True
+    return any(
+        rel_path.is_relative_to(root / subfolder)
+        for root in (Path("_system"), system_root)
+        for subfolder in _UNINDEXED_SYSTEM_SUBFOLDERS
+        if subfolder != "companions"
     )
 
 

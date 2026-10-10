@@ -5,7 +5,7 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-10 (complete isolated BWS child-runtime setup prerequisites for #5905; prior runtime Compose/BWS ownership and recovery reviews for #5885/#5888 retained; no live host verification; other sections retain their prior review evidence)
+Last reviewed: 2026-10-10 (companion source-boundary guidance in Runtime prerequisites for #5912; complete isolated BWS child-runtime setup prerequisites for #5905; prior runtime Compose/BWS ownership and recovery reviews for #5885/#5888 retained; no live host verification; other sections retain their prior review evidence)
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
 BWS child-runtime repository evidence: requirements-bws-deploy.txt; scripts/install_bws_deploy_runtime.sh; tests/deploy/test_deploy_channel.py::test_bws_runtime_setup_covers_mandatory_browser_smoke and tests/deploy/test_deploy_channel_script.py::test_managed_deploy_child_uses_declared_supervisor_interpreter; Issue #5905 / PR #5906 (repository validation only; no live host installation or channel acceptance).
 Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, scripts/deploy_channel.sh, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-09
@@ -183,6 +183,14 @@ they are never the worker queue, readiness, semantic authority, or a mandatory r
 operational lineage is missing, the supported target posture is a new fenced bootstrap epoch with
 writers inactive until owner-native readback and convergence. Total-loss recovery is not claimed as
 shipped runtime capability here.
+
+Companion continuity files in the configured `<system_folder>/companions/` and legacy
+`_system/companions/` locations are excluded from source publication and deletion effects by the
+registry, retained snapshot/targeted ingest paths, and queued worker consumers. Restore a
+companion-contaminated citation locator by reingesting its genuine source in the same bound vault;
+retain the companion files. The [companion owner contract](CONCEPTS/COMPANION_NOTE_CONTRACT.md#location-convention)
+defines the boundary and recovery behavior. This is repository behavior, not a live-channel
+deployment or verification receipt.
 
 For a retained DEV v1 ownership record whose old container ancestor inode chain is unavailable,
 operators can use the explicit, stopped-window [DEV legacy-owner re-attestation](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#explicit-dev-legacy-owner-re-attestation)

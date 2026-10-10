@@ -85,7 +85,8 @@ def test_rebuild_completes_with_one_bad_note(monkeypatch, tmp_path):
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["index", "rebuild", "--backend", "memory", "--json", "--failures-path", str(failures_path)],
+            ["index", "rebuild", "--backend", "memory", "--profile", "deterministic",
+             "--json", "--failures-path", str(failures_path)],
         )
 
     assert result.exit_code == 0, f"CLI exited non-zero: {result.output}\n{result.exception}"
@@ -170,7 +171,8 @@ def test_rebuild_max_retries_wires_embed_attempt_budget(monkeypatch):
         runner = CliRunner()
         result = runner.invoke(
             cli,
-            ["index", "rebuild", "--backend", "memory", "--json", "--max-retries", "0"],
+            ["index", "rebuild", "--backend", "memory", "--profile", "deterministic",
+             "--json", "--max-retries", "0"],
         )
 
     assert result.exit_code == 0, f"CLI exited non-zero: {result.output}\n{result.exception}"
@@ -204,7 +206,9 @@ Transient panel text.
     from app.cli import cli
 
     with patch("app.cli.index_rebuild.embed_with_retry", side_effect=capture_embed):
-        result = CliRunner().invoke(cli, ["index", "rebuild", "--backend", "memory", "--json"])
+        result = CliRunner().invoke(
+            cli, ["index", "rebuild", "--backend", "memory", "--profile", "deterministic", "--json"]
+        )
 
     assert result.exit_code == 0, result.output
     assert embedded_texts == [strip_ai_panels(source_text)]
