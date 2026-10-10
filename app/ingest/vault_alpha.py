@@ -616,7 +616,7 @@ def _ingest_single(
     companion = identity.companion
 
     title = _frontmatter_title(frontmatter) or _derive_title(body, path)
-    review_state = str(frontmatter.get("review_state") or "provisional")
+    review_state = _canonical_review_state(frontmatter)
     trust = str(frontmatter.get("trust") or "unreviewed")
     language = str(frontmatter.get("language") or frontmatter.get("lang") or "und")
     maturity = str(frontmatter.get("maturity") or "note")
@@ -1179,3 +1179,11 @@ __all__ = [
     "run_vault_alpha_ingest_locked_only",
     "VaultAlphaSummary",
 ]
+
+
+def _canonical_review_state(frontmatter: dict) -> str:
+    from app.domain.state_axes import normalize_artifact_state_axes
+
+    return normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )["review_state"]
