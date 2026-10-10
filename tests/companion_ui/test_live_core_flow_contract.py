@@ -15,7 +15,15 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from tests.companion_ui.live_core_flow import Blocked, CoreFlow, _PROBE, load_manifest, validate_ask
+from tests.companion_ui.live_core_flow import (
+    Blocked,
+    CoreFlow,
+    _PROBE,
+    load_manifest,
+    native_probe,
+    validate_ask,
+    validate_native_gateway,
+)
 
 
 def _manifest(tmp_path: Path) -> dict[str, Any]:
@@ -135,6 +143,7 @@ def _runner(tmp_path: Path, *, wrong_sha: bool = False) -> CoreFlow:
             "binding_verified": True,
             "source_has_marker": False,
             "first_contact_navigation_safe": True,
+            "gateway_upstream_verified": True,
         },
     )
 
@@ -200,20 +209,96 @@ def test_wrong_gateway_upstream_refuses_before_navigation_or_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     runner = _runner(tmp_path)
-    get = runner.page.get
-
-    def request(url: str, **kwargs: Any) -> Any:
-        response = get(url, **kwargs)
-        if url.endswith("/api/companion/vault/settings"):
-            response.json = lambda: {"context": {"status": "selected", "active_vault_id": "other"}}
-        return response
-
-    monkeypatch.setattr(runner.page, "get", request)
+    runner.probe = lambda *_: {"gateway_upstream_verified": False}
+    monkeypatch.setattr(
+        runner.page, "get", lambda *a, **k: pytest.fail("HTTP before native admission")
+    )
     report = runner.run()
-    assert report["steps"][0]["reason"] == "active_fixture_binding_mismatch"
+    assert report["steps"][0]["reason"] == "native_gateway_upstream_not_verified"
     assert not runner.page.navigations and not runner.identity_ok
     assert report["capture_posts"] == report["real_ask_actions"] == 0
     assert all(step["status"] == "blocked" for step in report["steps"][1:])
+
+
+def _native_rows(d: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    def row(service: str, ip: str, inner: str, outer: str) -> dict[str, Any]:
+        return {
+            "State": {"Running": True},
+            "Config": {
+                "Labels": {
+                    "com.docker.compose.project": "pkm-dev",
+                    "com.docker.compose.service": service,
+                    "org.opencontainers.image.revision": d["expected_sha"],
+                },
+                "Env": ["COMPANION_API_BASE_URL=http://api:8000", "PORT=8111"],
+                "Entrypoint": None,
+                "Cmd": [
+                    "/bin/bash",
+                    "-c",
+                    'python -m "${COMPANION_UI_SERVE_MODULE:-companion_ui.workspace.serve_dev_page}"',
+                ],
+            },
+            "NetworkSettings": {
+                "Ports": {inner + "/tcp": [{"HostIp": "127.0.0.1", "HostPort": outer}]},
+                "Networks": {"pkm-dev_default": {"Aliases": [service], "IPAddress": ip}},
+            },
+        }
+
+    return row("api", "172.18.0.5", "8000", "18001"), row(
+        "companion-ui", "172.18.0.6", "8111", "8111"
+    )
+
+
+@pytest.mark.parametrize("fault", [None, "backend", "dns", "port", "revision", "module"])
+def test_native_gateway_binds_actual_origin_to_selected_api(
+    tmp_path: Path, fault: str | None
+) -> None:
+    d = _manifest(tmp_path)
+    api, ui = _native_rows(d)
+    resolved = ["172.18.0.5"]
+    if fault == "backend":
+        ui["Config"]["Env"][0] = "COMPANION_API_BASE_URL=http://other:8000"
+    if fault == "dns":
+        resolved = ["172.18.0.9"]
+    if fault == "port":
+        ui["NetworkSettings"]["Ports"]["8111/tcp"][0]["HostPort"] = "8112"
+    if fault == "revision":
+        ui["Config"]["Labels"]["org.opencontainers.image.revision"] = "b" * 40
+    if fault == "module":
+        ui["Config"]["Env"].append("COMPANION_UI_SERVE_MODULE=other")
+    if fault is None:
+        validate_native_gateway(d, api, ui, resolved)
+    else:
+        with pytest.raises(Blocked):
+            validate_native_gateway(d, api, ui, resolved)
+
+
+def test_actual_native_probe_refuses_wrong_upstream_before_http_or_source_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tests.companion_ui.live_core_flow as module
+
+    d = _manifest(tmp_path)
+    api, ui = _native_rows(d)
+
+    def command(argv: list[str], **kwargs: Any) -> Any:
+        if argv[1] == "ps":
+            text = ("b" if "label=com.docker.compose.service=companion-ui" in argv else "a") * 12
+        elif argv[1] == "inspect":
+            text = json.dumps([api if argv[2] == "a" * 12 else ui])
+        else:
+            assert argv[1:3] == ["exec", "b" * 12], "Source probe ran before gateway refusal"
+            text = json.dumps(["172.18.0.9"])
+        return SimpleNamespace(returncode=0, stdout=text)
+
+    monkeypatch.setattr(module.subprocess, "run", command)
+    runner = CoreFlow(d, _Browser(d), probe=native_probe)
+    monkeypatch.setattr(
+        runner.page, "get", lambda *a, **k: pytest.fail("HTTP before native refusal")
+    )
+    report = runner.run()
+    assert report["steps"][0]["reason"] == "native_gateway_resolves_another_backend"
+    assert not runner.page.navigations and report["capture_posts"] == 0
 
 
 def test_missing_briefing_refuses_before_initial_and_fresh_context_navigation(
@@ -223,6 +308,7 @@ def test_missing_briefing_refuses_before_initial_and_fresh_context_navigation(
     runner.probe = lambda *_: {
         "binding_verified": True,
         "first_contact_navigation_safe": False,
+        "gateway_upstream_verified": True,
     }
     for action in (
         runner.channel_gateway_and_health,
@@ -276,8 +362,12 @@ def test_public_or_symlinked_manifest_is_refused(tmp_path: Path) -> None:
         load_manifest(link)
 
 
-def test_evidence_containment_uses_canonical_vault_path(tmp_path: Path) -> None:
+@pytest.mark.parametrize("allow_capture", [True, False])
+def test_evidence_containment_uses_canonical_vault_path(
+    tmp_path: Path, allow_capture: bool
+) -> None:
     d = _manifest(tmp_path)
+    d["allow_capture"] = allow_capture
     vault = tmp_path / "vault"
     vault.mkdir()
     d["vault_path"] = str(tmp_path / "unused" / ".." / "vault")
@@ -464,8 +554,36 @@ def _probe_input(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, A
     monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
     monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", "Inbox/inbox.md")
     monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    monkeypatch.delenv("INSTANCE_VAULT_REGISTRY_PATH", raising=False)
+    monkeypatch.delenv("INSTANCE_OWNERSHIP_ROOT", raising=False)
+    app_path = tmp_path / "app-local.md"
+    monkeypatch.setenv("DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(app_path))
+    app_path.write_text(
+        "---\n"
+        + json.dumps(
+            {
+                "schema": "app-local.settings.v1",
+                "appInstallId": "app-fixture",
+                "lastActiveVaultRef": "fixture",
+                "knownVaults": {
+                    "fixture": {"path": str(tmp_path), "vaultId": "vault-fixture"},
+                },
+            }
+        )
+        + "\n---\n"
+    )
+    settings = tmp_path / "settings"
+    settings.mkdir()
+    for name in ("vault", "local", "paths", "workflow", "design-handoff", "companion-ui"):
+        fields = {"schema": f"design-handoff.{name}.v1"}
+        if name == "vault":
+            fields["vaultId"] = "vault-fixture"
+        if name == "local":
+            fields["localInstanceId"] = "local-fixture"
+        (settings / (name + ".md")).write_text("---\n" + json.dumps(fields) + "\n---\n")
     return {
         "channel": "dev",
+        "vault_id": "vault-fixture",
         "vault_path": str(tmp_path),
         "capture_note_path": "Inbox/inbox.md",
         "capture_note_uuid": "11111111-1111-4111-8111-111111111111",
@@ -482,6 +600,25 @@ def test_native_probe_refuses_wrong_capture_producer_target(
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
     with pytest.raises(AssertionError, match="capture_producer_target_mismatch"):
         exec(_PROBE, {})
+
+
+@pytest.mark.parametrize("fault", ["local_identity", "last_active"])
+def test_native_restore_admission_refuses_before_identity_healing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    data = _probe_input(tmp_path, monkeypatch)
+    if fault == "local_identity":
+        (tmp_path / "settings/local.md").write_text("---\nschema: design-handoff.local.v1\n---\n")
+    else:
+        data["vault_path"] = str(tmp_path)
+        p = tmp_path / "app-local.md"
+        p.write_text(p.read_text().replace(str(tmp_path), str(tmp_path / "unapproved")))
+        (tmp_path / "unapproved").mkdir()
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.md")}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+    with pytest.raises(AssertionError, match="fixture_restore_(identity_missing|target_mismatch)"):
+        exec(_PROBE, {})
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*.md")} == before
 
 
 @pytest.mark.parametrize("enabled,present", [(True, False), (True, True), (False, False)])

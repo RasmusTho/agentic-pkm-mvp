@@ -116,6 +116,12 @@ def load_manifest(path: Path) -> dict[str, Any]:
         or out.resolve() != out
     ):
         raise ValueError("output_directory_invalid")
+    if d.get("vault_path"):
+        vault = Path(d["vault_path"])
+        if not vault.is_absolute():
+            raise ValueError("approved_vault_path_invalid")
+        if out.is_relative_to(vault.resolve()):
+            raise ValueError("evidence_must_be_outside_the_vault")
     for key in ("allow_capture", "allow_ask"):
         if type(d.get(key, False)) is not bool:
             raise ValueError("effect_permission_invalid")
@@ -142,8 +148,6 @@ def load_manifest(path: Path) -> dict[str, Any]:
                 raise ValueError("approved_capture_fixture_missing")
         if not Path(d["vault_path"]).is_absolute():
             raise ValueError("approved_vault_path_invalid")
-        if out.is_relative_to(Path(d["vault_path"]).resolve()):
-            raise ValueError("evidence_must_be_outside_the_vault")
         identity = d["embedding_identity"]
         if (
             not isinstance(identity, dict)
@@ -177,6 +181,34 @@ p=json.load(sys.stdin)
 assert os.environ.get('PKM_ENVIRONMENT')==p['channel']
 root=pathlib.Path(os.environ['VAULT_ROOT']).resolve(strict=True)
 assert str(root)==p['vault_path']
+# API context/orientation reads can restore last-active and heal identities.
+# Inspect the actual restore inputs passively before any such HTTP request.
+from app.instance.vault_registry import AppLocalSettingsStore,VaultRegistryStore,default_app_local_settings_path,_app_local_from_registry,REGISTRY_AUTHORITY_ACTIVE
+registry=os.environ.get('INSTANCE_VAULT_REGISTRY_PATH','').strip()
+ownership=os.environ.get('INSTANCE_OWNERSHIP_ROOT','').strip()
+settings=None
+if registry and ownership and pathlib.Path(registry).is_file():
+ registry_store=VaultRegistryStore(pathlib.Path(registry))
+ assert not registry_store.transaction_path.exists() and not registry_store.scalar_rollback_session_path.exists(),'fixture_restore_transaction_unsupported'
+ snapshot=registry_store._read_current_locked(recover=False)
+ assert snapshot.settings_rebind is None,'fixture_restore_rebind_unsupported'
+ if snapshot.authority==REGISTRY_AUTHORITY_ACTIVE:
+  settings=_app_local_from_registry(snapshot)
+if settings is None:
+ app_path=default_app_local_settings_path()
+ assert app_path.is_file() and not app_path.is_symlink(),'fixture_restore_registry_missing'
+ settings=AppLocalSettingsStore(path=app_path).load()
+known=settings.known_vaults.get(settings.last_active_vault_ref)
+assert known is not None and pathlib.Path(known.path).resolve(strict=True)==root,'fixture_restore_target_mismatch'
+from app.vault.manager import REQUIRED_SETTINGS_FILES,SETTINGS_DIR_NAME
+from app.vault.markdown_settings import MarkdownSettingsStore
+for name in REQUIRED_SETTINGS_FILES:
+ target=root/SETTINGS_DIR_NAME/name
+ assert target.is_file() and not target.is_symlink() and target.resolve(strict=True).is_relative_to(root),'fixture_restore_settings_missing'
+vault_doc=MarkdownSettingsStore().read(root/SETTINGS_DIR_NAME/'vault.md').frontmatter
+local_doc=MarkdownSettingsStore().read(root/SETTINGS_DIR_NAME/'local.md').frontmatter
+assert vault_doc.get('schema')=='design-handoff.vault.v1' and vault_doc.get('vaultId')==p['vault_id'],'fixture_restore_identity_missing'
+assert local_doc.get('schema')=='design-handoff.local.v1' and str(local_doc.get('localInstanceId') or '').strip(),'fixture_restore_identity_missing'
 from app.vault.paths import get_vault_capture_note_rel
 assert get_vault_capture_note_rel(root)==p['capture_note_path'],'capture_producer_target_mismatch'
 # GET / and /workspace trigger first-contact on the server. Admit navigation
@@ -213,6 +245,55 @@ print(json.dumps({'source_uuid':p['capture_note_uuid'],'source_raw_sha256':hashl
 """
 
 
+def validate_native_gateway(
+    d: dict[str, Any], api: dict[str, Any], ui: dict[str, Any], resolved: list[str]
+) -> None:
+    """Bind the guest's loopback gateway to this exact Compose API without HTTP reads."""
+    for row, service in ((api, "api"), (ui, "companion-ui")):
+        labels = row["Config"]["Labels"]
+        if (
+            not row["State"]["Running"]
+            or labels.get("com.docker.compose.project") != "pkm-" + d["channel"]
+            or labels.get("com.docker.compose.service") != service
+            or labels.get("org.opencontainers.image.revision") != d["expected_sha"]
+        ):
+            raise Blocked("native_gateway_container_identity_mismatch")
+    env = dict(x.split("=", 1) for x in ui["Config"]["Env"] if "=" in x)
+    if (
+        env.get("COMPANION_API_BASE_URL") != "http://api:8000"
+        or env.get("COMPANION_UI_SERVE_MODULE", "companion_ui.workspace.serve_dev_page")
+        != "companion_ui.workspace.serve_dev_page"
+        or ui["Config"].get("Entrypoint") is not None
+        or ui["Config"]["Cmd"]
+        != [
+            "/bin/bash",
+            "-c",
+            'python -m "${COMPANION_UI_SERVE_MODULE:-companion_ui.workspace.serve_dev_page}"',
+        ]
+    ):
+        raise Blocked("native_gateway_startup_configuration_mismatch")
+    ui_port = str(urlparse(d["ui_url"]).port)
+    api_port = str(urlparse(d["api_url"]).port)
+    if env.get("PORT", "8111") != ui_port:
+        raise Blocked("native_gateway_port_mismatch")
+    for row, inner, outer in ((ui, ui_port, ui_port), (api, "8000", api_port)):
+        bindings = row["NetworkSettings"]["Ports"].get(inner + "/tcp") or []
+        if not any(
+            x.get("HostPort") == outer and x.get("HostIp") in {"127.0.0.1", "0.0.0.0", "::"}
+            for x in bindings
+        ):
+            raise Blocked("native_gateway_published_port_mismatch")
+    api_networks = api["NetworkSettings"]["Networks"]
+    ui_networks = ui["NetworkSettings"]["Networks"]
+    addresses = {
+        api_networks[name].get("IPAddress")
+        for name in api_networks.keys() & ui_networks.keys()
+        if "api" in (api_networks[name].get("Aliases") or [])
+    } - {None, ""}
+    if not resolved or set(resolved) != addresses:
+        raise Blocked("native_gateway_resolves_another_backend")
+
+
 def native_probe(d: dict[str, Any], marker: str) -> dict[str, Any]:
     def command(argv: list[str], **kwargs: Any) -> str:
         p = subprocess.run(argv, capture_output=True, text=True, timeout=20, **kwargs)
@@ -238,10 +319,49 @@ def native_probe(d: dict[str, Any], marker: str) -> dict[str, Any]:
     labels = row["Config"]["Labels"]
     if labels.get("org.opencontainers.image.revision") != d["expected_sha"]:
         raise Blocked("native_api_revision_mismatch")
+    ui_ids = command(
+        [
+            "docker",
+            "ps",
+            "-q",
+            "--filter",
+            "label=com.docker.compose.project=" + project,
+            "--filter",
+            "label=com.docker.compose.service=companion-ui",
+        ]
+    ).split()
+    if len(ui_ids) != 1 or not re.fullmatch(r"[0-9a-f]{12,64}", ui_ids[0]):
+        raise Blocked("selected_ui_container_unavailable")
+    ui = json.loads(command(["docker", "inspect", ui_ids[0]]))[0]
+    resolved = json.loads(
+        command(
+            [
+                "docker",
+                "exec",
+                ui_ids[0],
+                "python",
+                "-c",
+                "import json,socket;print(json.dumps(sorted({x[4][0] for x in socket.getaddrinfo('api',8000,type=socket.SOCK_STREAM)})))",
+            ]
+        )
+    )
+    validate_native_gateway(d, row, ui, resolved)
+    if any(
+        not d.get(key)
+        for key in (
+            "vault_path",
+            "vault_id",
+            "capture_note_path",
+            "capture_note_uuid",
+            "vault_binding_id",
+        )
+    ):
+        raise Blocked("approved_fixture_required_for_live_navigation")
     values = {
         k: d[k]
         for k in (
             "channel",
+            "vault_id",
             "vault_path",
             "capture_note_path",
             "capture_note_uuid",
@@ -249,9 +369,11 @@ def native_probe(d: dict[str, Any], marker: str) -> dict[str, Any]:
         )
     }
     values["marker"] = marker
-    return json.loads(
+    evidence = json.loads(
         command(["docker", "exec", "-i", ids[0], "python", "-c", _PROBE], input=json.dumps(values))
     )
+    evidence["gateway_upstream_verified"] = True
+    return evidence
 
 
 def validate_ask(payload: dict[str, Any], source_uuid: str, facts: list[str]) -> None:
@@ -372,14 +494,12 @@ class CoreFlow:
             raise AssertionError("read_origin_changed")
         return response.json()
 
-    def _binding(self) -> None:
+    def _binding(self) -> dict[str, Any]:
+        evidence = self.probe(self.d, self.marker)
+        if evidence.get("gateway_upstream_verified") is not True:
+            raise Blocked("native_gateway_upstream_not_verified")
         direct = self._get(urljoin(self.d["api_url"], "/api/companion/vault/context"))
-        # This existing same-origin proxy exposes the actual upstream context.
-        # Checking only the direct API could admit writes through a misbound UI.
-        upstream = self._get(urljoin(self.d["ui_url"], "/api/companion/vault/settings")).get(
-            "context", {}
-        )
-        for ctx in (direct, upstream):
+        for ctx in (direct,):
             if (
                 not isinstance(ctx, dict)
                 or ctx.get("status") != "selected"
@@ -387,6 +507,7 @@ class CoreFlow:
                 or ctx.get("active_vault_path") != self.d.get("vault_path")
             ):
                 raise AssertionError("active_fixture_binding_mismatch")
+        return evidence
 
     def _need_identity(self) -> None:
         if not self.identity_ok:
@@ -399,8 +520,7 @@ class CoreFlow:
         # The gateway's document GET performs an internal POST which browser
         # routing cannot intercept. Recheck its native read-only precondition
         # before every root/note navigation, including fresh contexts.
-        self._binding()
-        evidence = self.probe(self.d, self.marker)
+        evidence = self._binding()
         if evidence.get("binding_verified") is not True:
             raise AssertionError("fixture_not_verified")
         if evidence.get("first_contact_navigation_safe") is not True:
@@ -408,6 +528,9 @@ class CoreFlow:
         return evidence
 
     def channel_gateway_and_health(self) -> None:
+        baseline = self._admit_navigation()
+        if baseline.get("source_has_marker"):
+            raise AssertionError("run_id_reused")
         version = self._get(urljoin(self.d["api_url"], "/version"))
         if version.get("git_sha") != self.d["expected_sha"]:
             raise AssertionError("backend_revision_mismatch")
@@ -416,9 +539,6 @@ class CoreFlow:
             assert_operator_channel(health, expected_channel=self.d["channel"])
         except AssertionError as exc:
             raise AssertionError("backend_channel_mismatch") from exc
-        baseline = self._admit_navigation()
-        if baseline.get("source_has_marker"):
-            raise AssertionError("run_id_reused")
         response = self.page.goto(self.d["ui_url"], wait_until="domcontentloaded")
         if response is None or not response.ok:
             raise AssertionError("gateway_page_unavailable")

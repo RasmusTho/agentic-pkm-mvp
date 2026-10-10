@@ -80,9 +80,13 @@ diagnostic and HTTP requests reach the same host. A writing journey additionally
 `vault_path`, `known_note_path`, `known_note_uuid`, `known_excerpt`, `capture_note_path`,
 `capture_note_uuid`, `vault_binding_id`, and `embedding_identity`, with explicit boolean
 `allow_capture` and `allow_ask`. Operator-qualified non-production fixtures are distinct per
-channel. The direct API and gateway's actual upstream vault contexts are both rechecked before
-navigation/effects via their existing read endpoints; a misbound UI proxy refuses the journey.
+channel. Before HTTP admission, native Docker reads bind the loopback gateway's running image,
+published port, exact startup configuration and resolved upstream address to the selected API
+container. The passive probe checks existing last-active restore inputs and complete vault/local
+identities before a context read can restore selection; it refuses recovery, missing identities
+and settings-rebind state. Then the API's active context is rechecked before navigation/effects.
 Evidence paths must be canonical and outside the canonical approved vault path.
+This applies independently of capture permission.
 The existing compatibility capture endpoint
 retains its own authority semantics, so callers must keep the selected fixture stable during the
 bounded test window. This test preflight is not a new server-side atomic vault fence.
