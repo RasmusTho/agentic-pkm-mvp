@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 
+import pytest
 import yaml
 
 
@@ -203,11 +204,15 @@ def test_full_suite_shards_cover_test_files_once(tmp_path: Path) -> None:
                              "tests/invariants/test_vault_multiwriter.py"]
 
 
-def test_scoped_not_pg_step_has_room_for_multi_subsystem_selection() -> None:
+@pytest.mark.parametrize(
+    "step_name",
+    ["Run shared not-pg unit tests in process shards", "Run scoped not-pg unit tests"],
+)
+def test_not_pg_steps_have_room_for_selected_coverage(step_name: str) -> None:
     unit_job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
     step = next(
         step for step in unit_job["steps"]
-        if step.get("name") == "Run scoped not-pg unit tests"
+        if step.get("name") == step_name
     )
 
     assert step["timeout-minutes"] >= 30
