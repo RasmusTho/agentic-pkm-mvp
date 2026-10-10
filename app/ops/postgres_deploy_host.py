@@ -206,14 +206,14 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 controller.reconcile(readback, expected=('deploy', args.channel, False))
             receipt = receipts[-1]
-            print(json.dumps(receipt.__dict__, sort_keys=True))
+            print(json.dumps(receipt.payload(), sort_keys=True))
             return 0
         admin = SecretAdmin(_configured_host_admin(), controller=controller)
         options = {'operation_id': args.operation_id} if args.operation_id is not None else {}
         receipt = deploy_from_host(admin, SshDeployRemote('ygg-' + args.channel), plan,
                                    qualified=lambda: require_qualification(controller),
                                    allow_bootstrap=not args.existing_secrets_only, **options)
-        print(json.dumps(receipt.__dict__, sort_keys=True))
+        print(json.dumps(receipt.payload(), sort_keys=True))
         return 0 if receipt.terminal_result == 'committed' else 78
     except Exception:
         print('database deployment refused; inspect value-free operation status', file=sys.stderr)

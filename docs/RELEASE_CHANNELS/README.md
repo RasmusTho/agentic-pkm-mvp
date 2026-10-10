@@ -324,7 +324,23 @@ The four-phase gated model in [Promotion contract](#promotion-contract) — prep
 
 ## Promotion contract
 
-> **This section describes the _target_ gated model — deferred promotion hardening.** The current prod baseline tracks `main` directly; see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md).
+Automatic non-production delivery is implemented separately: an admitted merged-main SHA/digest
+runs through the existing native `dev` then `test` operations with existing secrets only. Each
+operation must pass health/version, fleet/UI smoke and the fixed isolated PG profile before its
+committed receipt. The two stages use the same immutable image, distinct disposable PG/vault
+resources, and profile results bound to SHA/digest/channel/operation. Missing, smoke-only, foreign
+or indeterminate verification cannot advance the candidate. Cleanup and interruption recovery stay
+under the native lock/journal and touch only that attempt's resources. A failed candidate does not
+veto later candidates. Manual request/receipt compatibility and automatic bootstrap, forward-only
+migration and production refusal remain intact.
+
+Repository delivery does not establish live dev/test parity or production eligibility. Parent
+#5675 owns actual both-channel equivalent-coverage receipts and the later GitHub PG coverage
+handoff; the PG CI job remains in place. The separate nightly PG policy is not an approval gate for
+ordinary automatic dev/test candidates. Physical mechanics are owned by
+[Deployment and Environments](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#build-once--promote-model).
+
+> **The production phases below describe the _target_ gated model — deferred promotion hardening.** The current prod baseline tracks `main` directly; see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md).
 
 Promotion is the operation that turns an accepted commit on `main` into the running `stable` build in prod. It has four explicit phases:
 
@@ -338,7 +354,8 @@ Promotion is the operation that turns an accepted commit on `main` into the runn
 3. **Verify.** Post-promotion health, status, and smoke checks against the running prod. Health must be green against [HEALTH.md](../HEALTH.md) contracts before the promotion is considered accepted.
 4. **Rollback (conditional).** If verification fails, return `stable` through a governed rollback PR, update prod to the merged `origin/stable` rollback commit, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
 
-Promotion trigger is **manual, single-user**. No PR-merge-triggered automation, no CI-driven promotion. The operator decides when to promote.
+Production promotion trigger is **manual, single-user**. The operator decides when to promote;
+automatic dev/test PG or smoke results do not create a production promotion-test receipt.
 
 ### Protected-branch promotion invariant
 

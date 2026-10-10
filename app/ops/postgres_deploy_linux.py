@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
@@ -899,6 +899,25 @@ class LinuxEffects:
             for path in paths:
                 path.unlink()
 
+    def _pg_runner(self, operation_id: str, plan: DeployPlan) -> Any:
+        from app.ops.pg_acceptance_runner import PgAcceptanceRunner
+        if (not plan.automatic or self.config.channel != plan.channel
+            or plan.image_digest is None or self.operation_id not in {None, operation_id}):
+            raise PostgresDeployError()
+        return PgAcceptanceRunner(self.config.root, self.config.journal.directory,
+                                  sha=plan.revision, digest=plan.image_digest,
+                                  channel=plan.channel, operation_id=operation_id)
+
+    def verify(self, operation_id: str, plan: DeployPlan) -> dict[str, Any]:
+        receipt = self.config.journal.read()
+        if (self.lock_fd is None or receipt is None or receipt.operation_id != operation_id
+            or receipt.stage != 'verifying'):
+            raise PostgresDeployError()
+        return self._pg_runner(operation_id, plan).verify()
+
+    def cleanup_verification(self, operation_id: str, plan: DeployPlan) -> None:
+        self._pg_runner(operation_id, plan).cleanup()
+
     def _running_one_shots(self) -> bool:
         # Running-only inventory misses a created container that Docker may
         # still start. This census grants no authority to stop any container.
@@ -1115,7 +1134,8 @@ class SupervisedOperation:
     def result(self) -> dict[str, Any]:
         receipt = self.effects.config.journal.read()
         if receipt and receipt.operation_id == self.operation_id and receipt.terminal_result:
-            return {'receipt': asdict(receipt)}
+            receipt.require_profile(self.plan)
+            return {'receipt': receipt.payload()}
         if self.failed:
             raise PostgresDeployError()
         return {'pending': True, 'empty': self.empty, 'ready': self.ready.is_set()}
@@ -1138,6 +1158,7 @@ class DeploymentSupervisor:
         if previous is None or previous.operation_id != operation_id:
             raise PostgresDeployError()
         self.config.journal.bind_request(operation_id, plan, bootstrap)
+        previous.require_profile(plan)
         operation = self.operation
         if operation is not None and operation.operation_id != operation_id:
             raise PostgresDeployError()
@@ -1147,14 +1168,16 @@ class DeploymentSupervisor:
                 try:
                     os.stat(lock_path, follow_symlinks=False)
                 except FileNotFoundError:
-                    return {'receipt': asdict(previous)}
+                    return {'receipt': previous.payload()}
                 effects = LinuxEffects(self.config)
                 with effects.failed_reconciliation_lock() as lock:
+                    if plan.automatic:
+                        effects.cleanup_verification(operation_id, plan)
                     if not effects.quiescent():
                         raise PostgresDeployError()
                     effects.retire_reconciled_channel_lock(lock)
-            return {'receipt': asdict(previous)}
-        if previous.stage != 'activating':
+            return {'receipt': previous.payload()}
+        if previous.stage not in {'activating', 'verifying'}:
             raise PostgresDeployError()
         if operation is not None and (
             operation.plan != plan or operation.bootstrap != bootstrap
@@ -1163,11 +1186,13 @@ class DeploymentSupervisor:
             raise PostgresDeployError()
         effects = LinuxEffects(self.config)
         with effects.failed_reconciliation_lock() as lock:
+            if plan.automatic:
+                effects.cleanup_verification(operation_id, plan)
             if not effects.quiescent():
                 raise PostgresDeployError()
             receipt = self.config.journal.write(operation_id, 'failed')
             effects.retire_reconciled_channel_lock(lock)
-        return {'receipt': asdict(receipt)}
+        return {'receipt': receipt.payload()}
 
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
@@ -1178,13 +1203,17 @@ class DeploymentSupervisor:
         raw = data['plan']
         legacy_keys = {'channel', 'revision', 'services', 'consumers', 'ack_forward_only'}
         if not isinstance(raw, dict) or set(raw) not in (
-            legacy_keys, legacy_keys | {'image_digest', 'automatic'}
+            legacy_keys, legacy_keys | {'image_digest', 'automatic'},
+            legacy_keys | {'image_digest', 'automatic', 'verification_profile'},
         ):
             raise PostgresDeployError()
         plan = DeployPlan(raw['channel'], raw['revision'], tuple(raw['services']),
                           tuple(raw['consumers']), raw['ack_forward_only'],
                           raw.get('image_digest'), raw.get('automatic', False))
         plan.validate()
+        if (plan.automatic and raw != json.loads(json.dumps(plan.payload()))
+            or not plan.automatic and 'verification_profile' in raw):
+            raise PostgresDeployError()
         if plan.automatic and data['bootstrap']:
             raise PostgresDeployError()
         if plan.channel != self.config.channel or data['action'] not in {
@@ -1197,11 +1226,12 @@ class DeploymentSupervisor:
             previous = self.config.journal.read()
             if previous and previous.operation_id == operation_id and previous.terminal_result:
                 self.config.journal.bind_request(operation_id, plan, data['bootstrap'])
+                previous.require_profile(plan)
                 if previous.terminal_result == 'failed':
                     # Never expose failed terminal evidence until an interrupted
                     # lock retirement has been completed through the same proof.
                     return self._reconcile_failed(operation_id, plan, data['bootstrap'])
-                return {'receipt': asdict(previous)}
+                return {'receipt': previous.payload()}
             if self.operation and self.operation.operation_id != operation_id:
                 if not self.operation.finished.is_set():
                     raise PostgresDeployError()
@@ -1322,6 +1352,7 @@ class SshDeployRemote:
             response = self._request('join', operation_id, plan)
         receipt = DeployReceipt(**response['receipt'])
         receipt.validate()
+        receipt.require_profile(plan)
         if receipt.operation_id != operation_id or receipt.channel != plan.channel:
             raise PostgresDeployError()
         return receipt
@@ -1337,6 +1368,7 @@ class SshDeployRemote:
         response = self._request('reconcile-failed', operation_id, plan)
         receipt = DeployReceipt(**response['receipt'])
         receipt.validate()
+        receipt.require_profile(plan)
         if (receipt.operation_id != operation_id or receipt.channel != plan.channel
             or receipt.terminal_result not in {'committed', 'aborted', 'failed'}):
             raise PostgresDeployError()

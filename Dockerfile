@@ -59,7 +59,7 @@ WORKDIR /app
 # plane refuses on its first call in every channel (#4484). It is a plain
 # trixie/main package — no third-party apt source is added for it.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg espeak-ng gh \
+  && apt-get install -y --no-install-recommends ffmpeg espeak-ng gh git \
   && rm -rf /var/lib/apt/lists/*
 
 # Installed third-party packages and their console scripts (uvicorn, alembic,

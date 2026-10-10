@@ -23,6 +23,7 @@ from app.ops.bws_secret_reader import BwsItemAbsent
 from app.ops.host_secret_bootstrap import _resolve_bws_consumer_values, validate_secret_value
 from app.ops.host_secret_contract import CHANNEL_PROJECTS, DATABASE_CONSUMERS, load_host_secret_contract
 from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
+from app.ops.pg_acceptance import PROFILE_VERSION, SELECTION_HASH, require_pass
 from app.ops.secret_admin import SecretAdmin, SecretHistory, _note
 
 
@@ -47,6 +48,8 @@ class DeployPlan:
         if self.image_digest is None and not self.automatic:
             del payload['image_digest']
             del payload['automatic']
+        if self.automatic:
+            payload['verification_profile'] = {'version': PROFILE_VERSION, 'selection_hash': SELECTION_HASH}
         return payload
 
     def validate(self) -> None:
@@ -85,13 +88,36 @@ class DeployReceipt:
     kind: str
     stage: str
     terminal_result: str | None
+    pg_acceptance: dict[str, Any] | None = None
+
+    def payload(self) -> dict[str, Any]:
+        payload = asdict(self)
+        if self.pg_acceptance is None:
+            del payload['pg_acceptance']
+        return payload
+
+    def require_profile(self, plan: DeployPlan) -> None:
+        if plan.automatic and self.terminal_result == 'committed':
+            try:
+                require_pass(self.pg_acceptance, plan.revision, plan.image_digest or '',
+                             plan.channel, self.operation_id)
+            except Exception:
+                raise PostgresDeployError() from None
 
     def validate(self) -> None:
         if (str(UUID(self.operation_id)) != self.operation_id or self.channel not in CHANNEL_PROJECTS
             or self.kind != 'deploy'
-            or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'committed', 'aborted', 'failed'}
+            or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'verifying', 'committed', 'aborted', 'failed'}
             or self.terminal_result != (self.stage if self.stage in {'committed', 'aborted', 'failed'} else None)):
             raise PostgresDeployError()
+        if self.pg_acceptance is not None:
+            try:
+                if self.stage != 'committed':
+                    raise PostgresDeployError()
+                require_pass(self.pg_acceptance, self.pg_acceptance['source_sha'],
+                             self.pg_acceptance['image_digest'], self.channel, self.operation_id)
+            except Exception:
+                raise PostgresDeployError() from None
 
     def evidence(self) -> TerminalEvidence:
         self.validate()
@@ -192,15 +218,17 @@ class DeployJournal:
                 except FileNotFoundError:
                     pass
 
-    def write(self, operation_id: str, stage: str) -> DeployReceipt:
+    def write(self, operation_id: str, stage: str,
+              pg_acceptance: dict[str, Any] | None = None) -> DeployReceipt:
         receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
-                                stage if stage in {'committed', 'aborted', 'failed'} else None)
+                                stage if stage in {'committed', 'aborted', 'failed'} else None, pg_acceptance)
         receipt.validate()
         previous = self.read()
         successors = {
             'prepared': {'preflighted', 'aborted'}, 'preflighted': {'materialized', 'aborted'},
             'materialized': {'authenticating', 'activating', 'aborted'},
-            'authenticating': {'activating', 'aborted'}, 'activating': {'committed', 'aborted', 'failed'},
+            'authenticating': {'activating', 'aborted'}, 'activating': {'verifying', 'committed', 'aborted', 'failed'},
+            'verifying': {'committed', 'failed'},
         }
         if previous and previous.terminal_result is None:
             if previous.operation_id != operation_id or stage not in successors.get(previous.stage, set()):
@@ -212,7 +240,7 @@ class DeployJournal:
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
             try:
                 with os.fdopen(descriptor, 'wb') as target:
-                    target.write((json.dumps(receipt.__dict__, sort_keys=True) + '\n').encode())
+                    target.write((json.dumps(receipt.payload(), sort_keys=True) + '\n').encode())
                     target.flush()
                     os.fsync(target.fileno())
                 os.rename(temporary, self.channel + '.json', src_dir_fd=directory, dst_dir_fd=directory)
@@ -274,6 +302,8 @@ class VmEffects(Protocol):
     def authenticate(self) -> None: ...
     def stop_database(self) -> None: ...
     def activate(self, plan: DeployPlan) -> None: ...
+    def verify(self, operation_id: str, plan: DeployPlan) -> dict[str, Any]: ...
+    def cleanup_verification(self, operation_id: str, plan: DeployPlan) -> None: ...
     def quiescent(self) -> bool: ...
 
 
@@ -293,6 +323,7 @@ class DeployWorker:
         previous = self.journal.read()
         if previous and previous.operation_id == operation_id:
             if previous.terminal_result:
+                previous.require_profile(plan)
                 return previous
             # Process/worker loss does not authorize replay. Live reconnects join
             # the supervisor's existing invocation instead of calling run again.
@@ -329,7 +360,22 @@ class DeployWorker:
             self.effects.activate(plan)
             if not self.effects.quiescent():
                 raise PostgresDeployError()
-            return self.journal.write(operation_id, 'committed')
+            result = None
+            if plan.automatic:
+                self.journal.write(operation_id, 'verifying')
+                try:
+                    result = self.effects.verify(operation_id, plan)
+                    require_pass(result, plan.revision, plan.image_digest or '', plan.channel, operation_id)
+                except Exception:
+                    # Activation has completed. Verification failure is local to
+                    # this candidate once its owned scratch effects are removed.
+                    self.effects.cleanup_verification(operation_id, plan)
+                    if not self.effects.quiescent():
+                        raise PostgresDeployError()
+                    return self.journal.write(operation_id, 'failed')
+            if result is None:
+                return self.journal.write(operation_id, 'committed')
+            return self.journal.write(operation_id, 'committed', result)
         except Exception:
             if not activation_started:
                 try:
@@ -414,6 +460,7 @@ def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
                         # Never turn a completed operation into another send.
                         raise
                 else:
+                    receipt.require_profile(plan)
                     operation.finish(receipt.evidence())
                     return receipt
             with SecretHistory.open(admin.controller.directory) as history:
@@ -429,6 +476,7 @@ def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
                     bootstrap_password(admin, operation, empty=True)
                 else:
                     receipt = remote.join(operation.operation_id, plan)
+                    receipt.require_profile(plan)
                     operation.finish(receipt.evidence())
                     return receipt
             else:
@@ -449,12 +497,14 @@ def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
                 if missing_password:
                     if not empty:
                         receipt = remote.join(operation.operation_id, plan)
+                        receipt.require_profile(plan)
                         operation.finish(receipt.evidence())
                         return receipt
                     bootstrap_password(admin, operation, empty=True)
             if any(row['status'] not in {'ok', 'skipped'} for row in admin.check_selected(operation, plan.channel, plan.consumers)):
                 raise PostgresDeployError()
             receipt = remote.activate(operation.operation_id, plan)
+            receipt.require_profile(plan)
             operation.finish(receipt.evidence())
             return receipt
     except Exception:

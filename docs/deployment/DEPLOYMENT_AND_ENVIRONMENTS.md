@@ -150,7 +150,8 @@ The repository builds and verifies SHA-identified application images. After a su
 build, `.github/workflows/postmerge-dev-test.yml` admits its exact source-run image proof with read-only
 Actions permissions. The private macOS controller in `scripts/postmerge_dev_test.py` polls that same
 proof and calls the existing native host boundary for `dev` then `test`, using one immutable digest.
-The existing health, version, fleet-image and UI smoke gates must pass on dev before test starts.
+The existing health, version, fleet-image and UI smoke gates plus the fixed isolated PG acceptance
+profile must pass on dev before test starts. Each stage runs its own PG profile at the same digest.
 Actions receives no deployment credentials; there is no extra human approval between ordinary stages.
 
 `scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a retained, clean,
@@ -470,10 +471,31 @@ The existing private macOS host controller runs `scripts/postmerge_dev_test.py -
 existing-secrets-only boundary for `dev` followed by `test`, with the same SHA and image-index
 digest. No new human approval, Actions environment or self-hosted PR runner is required. Deployment
 retains the existing host-controller and VM channel locks, supervised worker, request journal,
-health/readiness/version, fleet and browser UI gates. This is deployment smoke coverage; it does
-not replace the retained PostgreSQL or product functional tests.
+health/readiness/version, fleet and browser UI gates. Before `committed`, the native worker enters
+`verifying` and runs `app.ops.pg_acceptance` with the same selection used by the retained GitHub
+`Index PG contracts` job. Required selector absence, skip/xfail, assertion failure, unavailable
+dependency, per-test 120-second timeout or the 30-minute profile deadline prevents acceptance.
+Observed selected/pass counts are evidence, not a permanent test-count gate.
 
-Automatic requests bind `image_digest` and `automatic=true` into the existing native journal.
+`app.ops.pg_acceptance_runner` creates an operation/channel-owned pgvector container with a
+network-none namespace and tmpfs database storage. The test container shares only that namespace;
+PostgreSQL is loopback-only, with no published port or route to persistent channel resources. The
+candidate has a readonly image, dropped capabilities, no host/Docker sockets or deployment env,
+and a scratch vault. Exact-SHA Git resources supply tests, UAT seed and required documents read-only;
+application Python files stay baked in the admitted image and are checked against exact Git blobs.
+The existing app-image producer supplies Git and pytest-timeout. Image revision, admitted digest,
+container image ID and resource tree must agree before a pass is accepted.
+
+The existing native receipt binds profile version/selection hash, result, source SHA, image digest,
+channel, operation ID, resource tree, image ID and report hash. Cleanup inspects exact resource IDs
+and matching ownership labels; interrupted verification is reconciled under the same native lock
+and cleans only that operation's resources. Missing/foreign-profile or smoke-only terminal history
+cannot establish PG acceptance. An unclean or indeterminate attempt remains unknown; a known failed
+candidate does not veto a later candidate. These repository mechanics still require actual
+both-channel equivalent-coverage evidence on #5675 before the GitHub PG job can be removed.
+
+Automatic requests bind `image_digest`, `automatic=true` and the fixed verification profile into
+the existing native journal.
 Compose uses `repository:SHA@sha256:...` through `APP_IMAGE_DIGEST_SUFFIX` in the channel pin.
 Fleet verification checks the actual container image IDs against that digest, including workers
 and gateways. A failed deployment restores the prior pin's digest where existing recovery allows
