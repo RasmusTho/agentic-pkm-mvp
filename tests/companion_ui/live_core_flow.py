@@ -174,6 +174,17 @@ root=pathlib.Path(os.environ['VAULT_ROOT']).resolve(strict=True)
 assert str(root)==p['vault_path']
 from app.vault.paths import get_vault_capture_note_rel
 assert get_vault_capture_note_rel(root)==p['capture_note_path'],'capture_producer_target_mismatch'
+# GET / and /workspace trigger first-contact on the server. Admit navigation
+# only when its actual producer is disabled or its dated idempotency file is
+# already present. Do not invoke the trigger, compose a note or construct a
+# vault manager merely to inspect this precondition.
+from app.briefing.trigger import BRIEFING_ENABLED,_local_now
+from app.briefing.compose import briefing_note_path
+from app.vault.manager import VaultContext
+briefing_safe=not BRIEFING_ENABLED
+if BRIEFING_ENABLED:
+ target=briefing_note_path(vault_context=VaultContext(status='selected',active_vault_path=str(root)),for_date=_local_now(None).date())
+ briefing_safe=not target.is_symlink() and target.is_file() and target.resolve(strict=True).is_relative_to(root)
 note=root/p['capture_note_path']
 assert not note.is_symlink() and note.resolve(strict=True).is_relative_to(root)
 raw=note.read_bytes();assert len(raw)<=2*1024*1024
@@ -193,7 +204,7 @@ with _connect() as conn:
   row=cur.fetchone()
 payload=dict(row['object_payload'] or {}) if row else {}
 vector=dict(row['vector_payload'] or {}) if row else {}
-print(json.dumps({'source_uuid':p['capture_note_uuid'],'source_raw_sha256':hashlib.sha256(raw).hexdigest(),'source_has_marker':p['marker'] in body,'object_has_marker':p['marker'] in canonicalize_indexable_text(payload),'object_hash':compute_payload_content_hash(payload) if row else None,'vector_hash':vector.get('provenance',{}).get('content_hash'),'embedding_identity':vector.get('embedding_identity') or vector.get('provenance',{}).get('embedding_identity'),'binding_verified':True}))
+print(json.dumps({'source_uuid':p['capture_note_uuid'],'source_raw_sha256':hashlib.sha256(raw).hexdigest(),'source_has_marker':p['marker'] in body,'object_has_marker':p['marker'] in canonicalize_indexable_text(payload),'object_hash':compute_payload_content_hash(payload) if row else None,'vector_hash':vector.get('provenance',{}).get('content_hash'),'embedding_identity':vector.get('embedding_identity') or vector.get('provenance',{}).get('embedding_identity'),'binding_verified':True,'first_contact_navigation_safe':briefing_safe}))
 """
 
 
@@ -372,6 +383,18 @@ class CoreFlow:
             raise AssertionError("browser_origin_changed")
         self._binding()
 
+    def _admit_navigation(self) -> dict[str, Any]:
+        # The gateway's document GET performs an internal POST which browser
+        # routing cannot intercept. Recheck its native read-only precondition
+        # before every root/note navigation, including fresh contexts.
+        self._binding()
+        evidence = self.probe(self.d, self.marker)
+        if evidence.get("binding_verified") is not True:
+            raise AssertionError("fixture_not_verified")
+        if evidence.get("first_contact_navigation_safe") is not True:
+            raise Blocked("first_contact_would_generate_unbudgeted_briefing")
+        return evidence
+
     def channel_gateway_and_health(self) -> None:
         version = self._get(urljoin(self.d["api_url"], "/version"))
         if version.get("git_sha") != self.d["expected_sha"]:
@@ -381,6 +404,9 @@ class CoreFlow:
             assert_operator_channel(health, expected_channel=self.d["channel"])
         except AssertionError as exc:
             raise AssertionError("backend_channel_mismatch") from exc
+        baseline = self._admit_navigation()
+        if baseline.get("source_has_marker"):
+            raise AssertionError("run_id_reused")
         response = self.page.goto(self.d["ui_url"], wait_until="domcontentloaded")
         if response is None or not response.ok:
             raise AssertionError("gateway_page_unavailable")
@@ -397,9 +423,6 @@ class CoreFlow:
             expected_git_sha=self.d["expected_sha"],
         )
         self._binding()
-        baseline = self.probe(self.d, self.marker)
-        if not baseline.get("binding_verified") or baseline.get("source_has_marker"):
-            raise AssertionError("fixture_not_verified_or_run_id_reused")
         self.identity_ok = True
         for name in (
             "workspace-error-state",
@@ -417,6 +440,7 @@ class CoreFlow:
             raise AssertionError("required_health_failed:" + ",".join(failed))
 
     def _open_note(self, page: Any, path: str) -> None:
+        self._admit_navigation()
         page.goto(self.d["ui_url"], wait_until="domcontentloaded")
         for selector in (
             '[data-testid="workspace-vault-chip"]',
@@ -444,6 +468,7 @@ class CoreFlow:
             if parse_qs(urlparse(link.get_attribute("href") or "").query).get("note_path") == [
                 path
             ]:
+                self._admit_navigation()
                 link.click()
                 page.get_by_test_id("workspace-note-rendered").wait_for(state="visible")
                 return

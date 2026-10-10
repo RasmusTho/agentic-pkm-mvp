@@ -80,6 +80,13 @@ channel. The active vault is rechecked before effects; the existing compatibilit
 retains its own authority semantics, so callers must keep the selected fixture stable during the
 bounded test window. This test preflight is not a new server-side atomic vault fence.
 
+Gateway document GETs also invoke the server's first-contact briefing trigger. Before the first
+navigation and each later root/note navigation, fixture admission runs a native read-only check
+using that producer's local date and canonical briefing path. Navigation requires the producer
+to be disabled or today's regular dated artifact to exist within the approved vault; otherwise
+it reports `blocked` before opening a page. The test never invokes the trigger or creates a
+briefing to satisfy this precondition. Keep the fixture and dated artifact stable for the run.
+
 The browser request guard durably consumes a mutation slot before forwarding at most one armed
 capture POST and one armed ASK POST to the
 declared gateway. It blocks other mutation requests. Capture/ASK refusal cases abort or fulfill
