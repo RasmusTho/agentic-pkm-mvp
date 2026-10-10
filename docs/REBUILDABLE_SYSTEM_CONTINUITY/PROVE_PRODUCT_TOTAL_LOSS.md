@@ -22,7 +22,11 @@ rebuild coverage.
 Add isolated retained-source fixtures and production readiness checks for an empty or corrupt
 Product database. The retained inventory uses the vault-alpha candidate/exclusion policy, and the
 three canonical note producers stamp source identity, source generation/content identity, and
-recipe version. `/readyz` stays blocked until reconstruction and integrity verification complete,
+recipe version and derive projected review state through the shared review-state/maturity axes. An
+unrecognized source review token with no canonical maturity therefore follows the normal
+provisional fallback, while valid maturity derives its corresponding state and an explicit
+canonical review state is preserved. `/readyz` stays blocked until reconstruction and integrity
+verification complete,
 while the narrowly named source-backed recovery admission remains available to perform that rebuild.
 
 ## Concretely
