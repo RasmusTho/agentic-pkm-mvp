@@ -813,13 +813,45 @@ class LinuxEffects:
                 path.unlink()
 
     def _running_one_shots(self) -> bool:
-        ids = _command([
-            'docker', 'ps', '--filter', 'label=com.docker.compose.project=pkm-' + self.config.channel,
-            '--filter', 'label=com.docker.compose.oneoff=True', '--format', '{{.ID}}',
-        ], cwd=self.config.root, timeout=15).strip()
-        if ids and any(re.fullmatch(r'[0-9a-f]{12,64}', value) is None for value in ids.splitlines()):
-            raise PostgresDeployError()
-        return bool(ids)
+        # Running-only inventory misses a created container that Docker may
+        # still start. This census grants no authority to stop any container.
+        def inventory() -> tuple[str, ...]:
+            output = _command([
+                'docker', 'ps', '--all', '--no-trunc', '--filter',
+                'label=com.docker.compose.project=pkm-' + self.config.channel,
+                '--filter', 'label=com.docker.compose.oneoff=True', '--format', '{{.ID}}',
+            ], cwd=self.config.root, timeout=15).strip()
+            ids = tuple(output.splitlines()) if output else ()
+            if len(set(ids)) != len(ids) or any(re.fullmatch(r'[0-9a-f]{64}', value) is None for value in ids):
+                raise PostgresDeployError()
+            return tuple(sorted(ids))
+
+        ids = inventory()
+        if not ids:
+            return bool(inventory())
+
+        def completed_snapshot() -> dict[str, tuple[str, ...]]:
+            output = _command([
+                'docker', 'inspect', '--type', 'container', '--format',
+                '{{.Id}} {{.State.Status}} {{.State.Running}} {{.State.Paused}} '
+                '{{.State.Restarting}} {{.State.Pid}}', *ids,
+            ], cwd=self.config.root, timeout=15)
+            records: dict[str, tuple[str, ...]] = {}
+            for line in output.splitlines():
+                fields = tuple(line.split())
+                if (len(fields) != 6 or fields[0] not in ids or fields[0] in records
+                    or fields[1] not in {'exited', 'dead'}
+                    or fields[2:] != ('false', 'false', 'false', '0')):
+                    raise PostgresDeployError()
+                records[fields[0]] = fields[1:]
+            if set(records) != set(ids):
+                raise PostgresDeployError()
+            return records
+
+        # A transition, disappearance during inspection, or unavailable daemon
+        # is unknown. Only stable completed state and membership are quiescent.
+        first = completed_snapshot()
+        return first != completed_snapshot() or inventory() != ids
 
     def quiescent(self) -> bool:
         # Called by the worker after each synchronous subprocess has been reaped.

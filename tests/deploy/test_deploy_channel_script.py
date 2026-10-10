@@ -5203,7 +5203,12 @@ def test_native_source_cleanup_requires_current_parent_guard(tmp_path: Path) -> 
     assert "native source producer quiescence is unproven" in result.stderr
 
 
-def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("fault", [
+    "created", "running", "paused", "restarting", "removing", "unknown",
+    "transition", "malformed", "unavailable", "timeout", "membership_changed",
+    "identity_changed", "inconsistent_state", "duplicate_id",
+])
+def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, monkeypatch, capsys, fault: str) -> None:
     from dataclasses import asdict
     from types import SimpleNamespace
     from uuid import uuid4
@@ -5224,10 +5229,41 @@ def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, 
     monkeypatch.setattr(linux.LinuxEffects, "activate", lambda *_args: pytest.fail("must not replay"))
     monkeypatch.setattr(linux.LinuxEffects, "compose", lambda *_args: '[{"Service":"api","State":"running","Health":""}]')
     active = {"value": True}
+    container_id = "0123456789abcdef" * 4
     commands = []
+    inspections = []
+    inventories = []
     def command(argv, **kwargs):
+        assert kwargs["timeout"] == 15
         commands.append(argv)
-        return "0123456789ab" if active["value"] else ""
+        if argv[:2] == ["docker", "ps"]:
+            inventories.append(argv)
+            # A created/unknown one-off is absent from Docker's running-only
+            # inventory. Exercise that omission through actual reconciliation.
+            if not active["value"] or ("--all" not in argv and fault != "running"):
+                return ""
+            if fault == "membership_changed" and len(inventories) > 1:
+                return container_id + "\n" + "f" * 64
+            if fault == "duplicate_id":
+                return container_id + "\n" + container_id
+            return container_id
+        assert argv[:2] == ["docker", "inspect"]
+        inspections.append(argv)
+        if fault == "unavailable":
+            raise linux.PostgresDeployError()
+        if fault == "timeout":
+            raise subprocess.TimeoutExpired(argv, 15, output="hostile-child-canary", stderr="private-endpoint")
+        if fault == "malformed":
+            return "hostile-child-canary private-endpoint"
+        identity = "f" * 64 if fault == "identity_changed" else container_id
+        state = "exited" if fault in {"membership_changed", "identity_changed", "inconsistent_state"} else fault
+        if fault == "transition":
+            state = "exited" if len(inspections) == 1 else "created"
+        running = "true" if state in {"running", "paused", "restarting"} or fault == "inconsistent_state" else "false"
+        paused = "true" if state == "paused" else "false"
+        restarting = "true" if state == "restarting" else "false"
+        pid = "23" if running == "true" else "0"
+        return f"{identity} {state} {running} {paused} {restarting} {pid}"
     monkeypatch.setattr(linux, "_command", command)
     supervisor = linux.DeploymentSupervisor(config)
     request = {"action":"reconcile-failed", "operation_id":operation, "plan":asdict(plan), "bootstrap":False}
@@ -5236,12 +5272,59 @@ def test_native_source_api_oneoff_blocks_same_id_reconciliation(tmp_path: Path, 
         supervisor.request(request)
     assert (journal.directory / "test.json").read_bytes() == prior
     assert lock.is_dir()
-    assert commands[-1][:2] == ["docker", "ps"]
-    assert "label=com.docker.compose.oneoff=True" in commands[-1]
+    assert inventories
+    assert all("--all" in argv and "--no-trunc" in argv for argv in inventories)
+    assert all("label=com.docker.compose.oneoff=True" in argv for argv in inventories)
+    assert not any(argv[1] in {"stop", "rm", "start", "restart", "kill"} for argv in commands)
+    captured = capsys.readouterr()
+    assert captured.out + captured.err == ""
     active["value"] = False
     receipt = supervisor.request(request)
     assert receipt["receipt"]["terminal_result"] == "failed"
     assert not lock.exists()
+    assert supervisor.request({**request, "action":"join"}) == receipt
+
+
+@pytest.mark.parametrize("state", ["exited", "dead"])
+def test_native_source_completed_oneoff_allows_same_id_reconciliation(tmp_path: Path, monkeypatch, state: str) -> None:
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan
+    root = tmp_path / "checkout"
+    lock = root / "config/deploy/test.env.lock"
+    lock.mkdir(parents=True, mode=0o700)
+    (lock / "bws-owner").touch(mode=0o600)
+    journal = DeployJournal(tmp_path / "journal", "test")
+    plan = DeployPlan("test", "a" * 40, ("db", "api"), ("postgres-db", "postgres-api"))
+    operation = str(uuid4())
+    journal.bind_request(operation, plan, False, create=True)
+    for stage in ("prepared", "preflighted", "materialized", "activating"):
+        journal.write(operation, stage)
+    config = SimpleNamespace(channel="test", root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, "load", lambda _channel: config)
+    monkeypatch.setattr(linux.LinuxEffects, "activate", lambda *_args: pytest.fail("must not replay"))
+    monkeypatch.setattr(linux.LinuxEffects, "compose", lambda *_args: '[{"Service":"api","State":"running","Health":""}]')
+    container_id = "0123456789abcdef" * 4
+    commands = []
+    def command(argv, **kwargs):
+        assert kwargs["timeout"] == 15
+        commands.append(argv)
+        if argv[:2] == ["docker", "ps"]:
+            assert "--all" in argv and "--no-trunc" in argv
+            return container_id
+        assert argv[:2] == ["docker", "inspect"]
+        assert argv[-1] == container_id
+        return f"{container_id} {state} false false false 0"
+    monkeypatch.setattr(linux, "_command", command)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {"action":"reconcile-failed", "operation_id":operation, "plan":asdict(plan), "bootstrap":False}
+    receipt = supervisor.request(request)
+    assert receipt["receipt"]["terminal_result"] == "failed"
+    assert not lock.exists()
+    assert sum(argv[:2] == ["docker", "inspect"] for argv in commands) == 2
+    assert not any(argv[1] in {"stop", "rm", "start", "restart", "kill"} for argv in commands)
     assert supervisor.request({**request, "action":"join"}) == receipt
 
 
