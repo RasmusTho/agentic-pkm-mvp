@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import yaml
+
+from app.ops.pg_acceptance import SELECTORS
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PG_TARGETS = (
@@ -23,10 +26,13 @@ def test_mvr05_pg_targets_run_on_provisioned_postgres_and_cannot_skip() -> None:
     nightly = (REPO_ROOT / ".github/workflows/integration-nightly.yaml").read_text()
     pr_path = (REPO_ROOT / ".github/workflows/ci-smoke.yaml").read_text()
     assert "--rootdir=." in _pytest_step(nightly, "Bounded PG verification lane")
+    steps = yaml.safe_load(pr_path)["jobs"]["pr-index-pg-contracts"]["steps"]
+    step = next(row for row in steps if "durable table ownership PG surface" in row.get("name", ""))
+    assert "python -m app.ops.pg_acceptance --ci" in step["run"]
 
     for target in PG_TARGETS:
         assert target in _pytest_step(nightly, "Bounded PG verification lane")
-        assert target in _pytest_step(pr_path, "durable table ownership PG surface")
+        assert target in SELECTORS
         assert f"- '{target}'" in pr_path
 
         source = (REPO_ROOT / target).read_text()

@@ -16,11 +16,23 @@ import pytest
 import yaml
 
 from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+from app.ops.pg_acceptance import MINIMUM_SELECTED, identity
 from scripts import postmerge_dev_test as driver
 
 SHA = 'a' * 40
 DIGEST = 'sha256:' + 'b' * 64
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _native_receipt(channel, candidate, result='committed'):
+    operation_id = candidate.operation_id(channel)
+    receipt = {'channel': channel, 'terminal_result': result, 'operation_id': operation_id}
+    if result == 'committed':
+        receipt['pg_acceptance'] = {**identity(candidate.sha, candidate.digest, channel, operation_id),
+                                    'result': 'passed', 'selected': MINIMUM_SELECTED, 'passed': MINIMUM_SELECTED,
+                                    'resource_tree': 'e' * 40, 'app_image_id': 'sha256:' + 'f' * 64,
+                                    'report_hash': '0' * 64}
+    return receipt
 
 
 def _build():
@@ -119,7 +131,7 @@ def test_dev_failure_blocks_test_and_success_preserves_same_candidate():
 
     def deploy(channel, received):
         calls.append((channel, received))
-        return {'channel': channel, 'terminal_result': 'committed', 'operation_id': str(uuid4())}
+        return _native_receipt(channel, received)
 
     assert driver.deliver(candidate, deploy=deploy, current_main=lambda: SHA, emit=outcomes.append) == 0
     assert calls == [('dev', candidate), ('test', candidate)]
@@ -237,7 +249,8 @@ def test_native_child_keeps_github_token_outside_deployment(monkeypatch):
         return SimpleNamespace(returncode=0, stdout=json.dumps({
             'operation_id': driver.Candidate(SHA, DIGEST, 123, 1, 456).operation_id('dev'),
             'channel': 'dev', 'kind': 'deploy',
-            'stage': 'committed', 'terminal_result': 'committed'}))
+            'stage': 'committed', 'terminal_result': 'committed',
+            'pg_acceptance': _native_receipt('dev', driver.Candidate(SHA, DIGEST, 123, 1, 456))['pg_acceptance']}))
 
     monkeypatch.setattr(driver.subprocess, 'run', run)
     candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
@@ -254,7 +267,7 @@ def test_controller_checkpoint_deduplicates_and_resumes_same_candidate(tmp_path)
 
     def deploy(channel, received):
         calls.append((channel, received))
-        return {'channel': channel, 'terminal_result': 'committed', 'operation_id': str(uuid4())}
+        return _native_receipt(channel, received)
 
     options = {'build': lambda: 123, 'load': lambda _run: candidate,
                'deploy': deploy, 'current_main': lambda: SHA}
@@ -264,6 +277,8 @@ def test_controller_checkpoint_deduplicates_and_resumes_same_candidate(tmp_path)
     checkpoint = tmp_path / 'postmerge-dev-test.json'
     stored = json.loads(checkpoint.read_text())
     stored['channel'] = stored['outcome']['channel'] = 'dev'
+    stored['outcome'].update(_native_receipt('dev', candidate))
+    stored['outcome'].pop('terminal_result')
     driver._atomic_checkpoint(checkpoint, stored)
     calls.clear()
     # A newer main does not abandon a dev-verified chain on restart.
@@ -284,11 +299,11 @@ def test_controller_recovers_only_native_terminal_evidence(tmp_path):
 
     def reconcile(channel, received):
         calls.append((channel, received))
-        return {'channel': channel, 'terminal_result': 'committed', 'operation_id': str(uuid4())}
+        return _native_receipt(channel, received)
 
     def deploy(channel, received):
         assert channel == 'test' and received == candidate
-        return {'channel': channel, 'terminal_result': 'committed', 'operation_id': str(uuid4())}
+        return _native_receipt(channel, received)
 
     assert driver.poll(tmp_path, resume=reconcile, deploy=deploy) == 0
     assert calls == [('dev', candidate)]
@@ -447,7 +462,8 @@ def test_controller_crash_reuses_exact_native_id_and_terminal_receipt(tmp_path, 
         def activate(self, operation_id, plan):
             nonlocal lost
             for stage in ('preflighted', 'materialized', 'authenticating', 'activating', 'committed'):
-                self.journal.write(operation_id, stage)
+                self.journal.write(operation_id, stage,
+                                   _native_receipt(plan.channel, candidate)['pg_acceptance'] if stage == 'committed' else None)
             events.append(('activate', plan.channel, operation_id))
             if crash == 'after_remote_commit' and plan.channel == 'dev' and not lost:
                 lost = True
@@ -545,8 +561,7 @@ def test_controller_known_failure_does_not_block_next_candidate(tmp_path):
 
     def deploy(channel, received):
         calls.append((channel, received))
-        return {'channel': channel, 'terminal_result': 'failed' if received == candidate else 'committed',
-                'operation_id': received.operation_id(channel)}
+        return _native_receipt(channel, received, 'failed' if received == candidate else 'committed')
 
     options = {'build': lambda: 123, 'load': lambda _run: candidate, 'deploy': deploy, 'current_main': lambda: SHA}
     assert driver.poll(tmp_path, **options) == 78

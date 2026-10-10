@@ -53,6 +53,9 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+import yaml
+
+from app.ops.pg_acceptance import SELECTORS
 
 from tests.architecture.durable_table_classification import (
     RECORDED_ATTACHED_DDL_DEBT,
@@ -878,7 +881,13 @@ def test_durable_ownership_pg_targets_run_in_both_pg_lanes() -> None:
     """
     for workflow_path, step_fragment in PG_LANES:
         workflow = workflow_path.read_text(encoding="utf-8")
-        invocation = _pytest_invocation_after(workflow, step_fragment)
+        if workflow_path.name == "ci-smoke.yaml":
+            steps = yaml.safe_load(workflow)["jobs"]["pr-index-pg-contracts"]["steps"]
+            step = next(row for row in steps if step_fragment in row.get("name", ""))
+            assert "python -m app.ops.pg_acceptance --ci" in step["run"]
+            invocation = " ".join(SELECTORS)
+        else:
+            invocation = _pytest_invocation_after(workflow, step_fragment)
         missing = [target for target in DURABLE_OWNERSHIP_PG_TARGETS if target not in invocation]
         assert missing == [], (
             f"{missing} are pg-marked but absent from the {step_fragment!r} pytest "

@@ -26,6 +26,8 @@ from typing import Any, Callable
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zipfile import ZipFile
 
+from app.ops.pg_acceptance import require_pass
+
 REPOSITORY = 'RasmusTho/agentic-pkm-mvp'
 IMAGE_REPOSITORY = 'ghcr.io/rasmustho/pkm-app'
 BUILD_WORKFLOW = '.github/workflows/app-image-build.yml'
@@ -226,12 +228,31 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
             # reply and a committed native receipt preceding checkpoint fsync.
             candidate = Candidate(**checkpoint['candidate'])
             receipt = (resume or native_deploy)(checkpoint['channel'], candidate)
+            _require_terminal_profile(receipt, checkpoint['channel'], candidate)
             result = 'passed' if receipt['terminal_result'] == 'committed' else 'failed'
             outcome = {**checkpoint['outcome'], 'result': result, 'operation_id': receipt['operation_id']}
+            if result == 'passed':
+                outcome['pg_acceptance'] = receipt['pg_acceptance']
             _save_outcome(path, candidate, outcome)
             checkpoint.update(phase=result, outcome=outcome)
             if result != 'passed':
                 return 78
+        if checkpoint and checkpoint['phase'] == 'passed':
+            candidate = Candidate(**checkpoint['candidate'])
+            try:
+                require_pass(checkpoint['outcome'].get('pg_acceptance'), candidate.sha, candidate.digest,
+                             checkpoint['channel'], candidate.operation_id(checkpoint['channel']))
+            except Exception:
+                # A completed smoke/foreign-profile cache cannot advance dev.
+                # Retire that candidate's cached acceptance, then admit later
+                # builds normally. This does not replay a native operation.
+                outcome = {'source_sha': candidate.sha, 'image_digest': candidate.digest,
+                           'source_run_id': candidate.run_id, 'source_run_attempt': candidate.run_attempt,
+                           'artifact_id': candidate.artifact_id, 'channel': checkpoint['channel'],
+                           'operation_id': candidate.operation_id(checkpoint['channel']),
+                           'result': 'failed', 'reason': 'pg_profile_missing_or_mismatched'}
+                _save_outcome(path, candidate, outcome)
+                checkpoint.update(phase='failed', outcome=outcome)
         if checkpoint and checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'dev':
             candidate = Candidate(**checkpoint['candidate'])
             return deliver(candidate, deploy=deploy or native_deploy, current_main=lambda: candidate.sha,
@@ -284,7 +305,8 @@ def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
     result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
     try:
         receipt = json.loads(result.stdout)
-        if (set(receipt) != {'operation_id', 'channel', 'kind', 'stage', 'terminal_result'}
+        if (set(receipt) not in ({'operation_id', 'channel', 'kind', 'stage', 'terminal_result'},
+                                {'operation_id', 'channel', 'kind', 'stage', 'terminal_result', 'pg_acceptance'})
             or receipt['channel'] != channel or receipt['kind'] != 'deploy'
             or receipt['stage'] != receipt['terminal_result']
             or receipt['terminal_result'] not in {'committed', 'failed', 'aborted'}
@@ -294,9 +316,19 @@ def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
             raise ValueError()
         if str(UUID(receipt['operation_id'])) != receipt['operation_id']:
             raise ValueError()
+        _require_terminal_profile(receipt, channel, candidate)
         return receipt
     except Exception:
         raise CandidateRefused('native_terminal_evidence_refused') from None
+
+
+def _require_terminal_profile(receipt: dict[str, Any], channel: str, candidate: Candidate) -> None:
+    if (receipt.get('channel') != channel or receipt.get('operation_id') != candidate.operation_id(channel)
+        or receipt.get('terminal_result') not in {'committed', 'failed', 'aborted'}):
+        raise CandidateRefused('native_terminal_evidence_refused')
+    if receipt['terminal_result'] == 'committed':
+        require_pass(receipt.get('pg_acceptance'), candidate.sha, candidate.digest,
+                     channel, candidate.operation_id(channel))
 
 
 def deliver(candidate: Candidate, *, deploy: Callable[[str, Candidate], dict[str, Any]] = native_deploy,
@@ -316,8 +348,7 @@ def deliver(candidate: Candidate, *, deploy: Callable[[str, Candidate], dict[str
         emit({**identity, 'channel': channel, 'result': 'started', 'operation_id': candidate.operation_id(channel)})
         try:
             receipt = deploy(channel, candidate)
-            if receipt.get('terminal_result') not in {'committed', 'failed', 'aborted'} or receipt.get('channel') != channel:
-                raise CandidateRefused('native_terminal_evidence_refused')
+            _require_terminal_profile(receipt, channel, candidate)
         except Exception:
             emit({**identity, 'channel': channel, 'result': 'pending', 'operation_id': candidate.operation_id(channel),
                   'failure_reference': f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'})
@@ -326,7 +357,8 @@ def deliver(candidate: Candidate, *, deploy: Callable[[str, Candidate], dict[str
             emit({**identity, 'channel': channel, 'result': 'failed', 'operation_id': receipt['operation_id'],
                   'failure_reference': f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'})
             return 78
-        emit({**identity, 'channel': channel, 'result': 'passed', 'operation_id': receipt['operation_id']})
+        emit({**identity, 'channel': channel, 'result': 'passed', 'operation_id': receipt['operation_id'],
+              'pg_acceptance': receipt['pg_acceptance']})
     return 0
 
 
