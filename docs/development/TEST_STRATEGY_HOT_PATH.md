@@ -25,16 +25,21 @@ conservative and enable those gates. This classification does not turn a require
 bare skipped success or remove exact AC coverage. Broad contract target sets remain until a narrower
 owner mapping is demonstrated; a Markdown suffix outside these roots is not documentation proof.
 
-The merge path stays distinct from post-merge runtime feedback. The proposed automatic exact-image
-`dev` → `test` path and its failure policy are target state in
-[`FAST_PR_TO_DEV_TEST_AUTOMATION`](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md); they are not current
-PR checks or shipped deployment automation.
+The merge path stays distinct from post-merge runtime feedback. #5922 supplies exact-image admission
+and private-controller `dev` → `test` support; its native smoke checks do not replace current PR/PG
+checks. [`FAST_PR_TO_DEV_TEST_AUTOMATION`](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) sequences live
+activation, functional coverage handoff and pilot acceptance separately under #5675.
 
 ## Current Protection Surface
 
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
+- Both full and scoped non-PG unit-test steps retain the verified 35-minute batch ceiling from
+  #5921 / PR #5924 and the existing 120-second per-test thread watchdog. This preserves every
+  target, marker, required check, assertion and failure handler. The earlier #5922 selection
+  reached 98 percent before its old 22-minute ceiling; a larger ceiling is execution margin,
+  not a reduction in execution time. Actual duration and coverage handoff are measured separately.
 - The `pr-index-pg-contracts` job has a finite 30-minute execution budget for its full qualified
   PostgreSQL acceptance surface (#5587). Each test also has the existing pytest-timeout plugin's
   120-second thread watchdog; verbose node IDs, unbuffered output, and the slowest 20 durations

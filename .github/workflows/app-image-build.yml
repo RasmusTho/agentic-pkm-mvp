@@ -129,11 +129,13 @@ jobs:
           jq -n \
             --arg contract "app-image-tts-engine-proof.v1" \
             --arg candidate_sha "${GITHUB_SHA}" \
+            --argjson run_id "${GITHUB_RUN_ID}" \
+            --argjson run_attempt "${GITHUB_RUN_ATTEMPT}" \
             --arg image "${image}" \
             --arg image_ref "${image_ref}" \
             --arg image_index_digest "${{ steps.build-app-main.outputs.digest }}" \
             --arg probe_scope "package_presence_cli_load_import_app_health" \
-            '{contract: $contract, candidate_sha: $candidate_sha, image: $image, image_ref: $image_ref, image_index_digest: $image_index_digest, probe_scope: $probe_scope, platforms: []}' \
+            '{contract: $contract, candidate_sha: $candidate_sha, run_id: $run_id, run_attempt: $run_attempt, image: $image, image_ref: $image_ref, image_index_digest: $image_index_digest, probe_scope: $probe_scope, platforms: []}' \
             > "${proof_file}"
 
           failures=0
@@ -179,7 +181,7 @@ jobs:
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: app-image-tts-engine-proof-${{ github.sha }}
+          name: app-image-tts-engine-proof-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: app-image-tts-engine-proof.json
           if-no-files-found: error
 
