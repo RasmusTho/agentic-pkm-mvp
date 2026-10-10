@@ -373,9 +373,12 @@ model/capability, changes embedding identity, or provisions access. A runtime en
 protected Model Access file remains a refusal.
 
 Failed supervised native deploy children report only a finite allowlisted gate stage and
-`command_failed` class to the existing supervisor diagnostic journal. Missing, malformed, or
+`command_failed` class directly to the existing native journal socket using one nonblocking
+datagram, independently of the service's nulled stdout/stderr. Missing, malformed, or
 ambiguous stage markers yield `unknown`; raw child output, arguments, environment, endpoints,
-paths, and secret values are discarded. The stage identifies the primary script gate even when
+paths, and secret values are discarded. An absent, refused, or full journal socket is best-effort
+diagnostic loss; it does not retry, delay, or replace the original deployment refusal. The stage
+identifies the primary script gate even when
 automatic recreation also fails. This diagnostic is advisory: exact same-operation reconciliation,
 quiescence proof, lock retirement, and terminal receipts retain their authority. Repository merge
 does not establish live DEV, TEST, or PROD acceptance, or diagnose an earlier failure whose stage

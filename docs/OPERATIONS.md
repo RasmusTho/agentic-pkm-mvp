@@ -443,8 +443,10 @@ Companion docs:
   empty bindings; see [Rollback posture](RELEASE_CHANNELS/README.md#rollback-posture) for the
   configuration and modern-caller limits.
 - A failed supervised deploy child reports only an allowlisted advisory gate stage and
-  `command_failed` class in the supervisor journal, with `unknown` for absent or ambiguous markers.
-  Raw child output is discarded. This diagnostic does not establish a terminal result or live
+  `command_failed` class directly to the existing native journal socket, with `unknown` for absent
+  or ambiguous markers. One nonblocking datagram carries only the finite message and fixed priority
+  and identifier; both raw service streams remain null. An unavailable or full socket loses only
+  the advisory diagnostic. This diagnostic does not establish a terminal result or live
   channel acceptance; use the same-ID reconciliation procedure above.
 - Before a Linux BWS deployment, operator setup must qualify the complete isolated host runtime,
   including Python helpers, Chromium headless payload, exact browser-smoke collection and tuning

@@ -703,6 +703,16 @@ tuning import covers the existing live pytest fixture's import closure without c
 or running live smoke. Only after every check passes does setup install the root-owned launcher at
 `/usr/local/libexec/yggdrasil-bws-deploy` with the matching interpreter path. The service and RPC
 launcher use that interpreter; it is one shared runtime for the host's dev, test, and prod channels.
+The canonical service keeps `StandardOutput=null` and `StandardError=null` so raw SDK and child
+streams never become journal entries. A failed deploy child's finite allowlisted stage and
+`command_failed` class are sent directly to `/run/systemd/journal/socket` as one nonblocking native
+datagram containing only `MESSAGE`, fixed `PRIORITY`, and fixed `SYSLOG_IDENTIFIER`. The journal
+derives its trusted unit metadata; callers supply no trusted fields, raw output, arguments,
+environment, endpoints, paths, or secret values. Socket absence, refusal, or saturation remains
+best-effort diagnostic loss and never changes the original refusal, pending operation, lock, or
+same-ID reconciliation authority. Repository tests prove the null-stream/Unix-socket boundary;
+Live qualification establishes visibility and unit attribution in the existing service namespace
+after an authorized host-tool update; code merge alone does not establish that proof.
 Managed deployment children receive `PYTHON` bound to the running supervisor's `sys.executable`,
 including the deploy shell's inherited guard and every guarded Compose call. The interpreter's bin
 directory is prepended to child `PATH`, so bare `python3` inventory and Signboard calls use the same
