@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -521,3 +522,83 @@ def test_native_probe_reads_before_any_provider_initialization(
     assert result["object_has_marker"] and result["source_has_marker"]
     assert result["object_hash"] == result["vector_hash"]
     assert result["first_contact_navigation_safe"] is (not enabled or present)
+
+
+@pytest.mark.browser_runtime
+@pytest.mark.skipif(
+    os.environ.get("COMPANION_UI_BROWSER_TESTS") != "1",
+    reason="Set COMPANION_UI_BROWSER_TESTS=1 for the offline actual-UI navigation proof.",
+)
+@pytest.mark.parametrize("landing", ["cold_start", "document"])
+def test_open_note_uses_visible_real_browser(tmp_path: Path, landing: str) -> None:
+    from playwright.sync_api import sync_playwright
+    from companion_ui.workspace.serve_dev_page import render_index_html, vendor_static_assets
+    from tests.companion_ui.browser_runtime_harness import install_offline_esm_routes
+    from tests.companion_ui.test_entry_state_machine import _orientation_payload, _workspace_fields
+
+    d = _manifest(tmp_path)
+    notes = [{"note_path": d["known_note_path"], "title": "Synthetic inbox"}]
+    browser_fields = {
+        "vault_browser_notes": notes,
+        "vault_browser_identity_available": True,
+        "vault_browser_total_notes": 1,
+        "vault_browser_filtered_notes": 1,
+        "vault_browser_state": "ready",
+    }
+    fields = _workspace_fields() | browser_fields
+    note_html = render_index_html(
+        api_base_url=d["api_url"], note_path=d["known_note_path"], fields=fields
+    )
+    root_html = (
+        render_index_html(
+            api_base_url=d["api_url"],
+            orientation=_orientation_payload(leave_status="absent"),
+            orientation_vault_browser={
+                "notes": notes,
+                "identity_available": True,
+                "total_notes": 1,
+                "filtered_notes": 1,
+                "state": "ready",
+            },
+        )
+        if landing == "cold_start"
+        else render_index_html(api_base_url=d["api_url"], note_path="Notes/other.md", fields=fields)
+    )
+    admissions: list[bool] = []
+    assets = vendor_static_assets()
+    with sync_playwright() as playwright:
+        launch = {"channel": "chrome"} if Path("/Applications/Google Chrome.app").exists() else {}
+        browser = playwright.chromium.launch(**launch)
+        try:
+            context = browser.new_context()
+            install_offline_esm_routes(context)
+
+            def intercepted(route: Any) -> None:
+                request = route.request
+                target = urlparse(request.url)
+                if request.method != "GET":
+                    route.abort()
+                elif target.scheme == "http":
+                    if target.path in assets:
+                        content_type, body = assets[target.path]
+                    elif request.resource_type == "document":
+                        content_type = "text/html"
+                        body = note_html if parse_qs(target.query).get("note_path") else root_html
+                    else:
+                        content_type, body = "application/json", "{}"
+                    route.fulfill(status=200, content_type=content_type, body=body)
+                else:
+                    route.fallback()
+
+            context.route("**/*", intercepted)
+            page = context.new_page()
+            page.set_default_timeout(5000)
+            runner = CoreFlow.__new__(CoreFlow)
+            runner.d = d
+            runner._admit_navigation = lambda: admissions.append(True) or {}
+            runner._open_note(page, d["known_note_path"])
+            assert parse_qs(urlparse(page.url).query)["note_path"] == [d["known_note_path"]]
+            assert page.get_by_test_id("workspace-note-rendered").is_visible()
+            assert len(admissions) == 2
+        finally:
+            browser.close()

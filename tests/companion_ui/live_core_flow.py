@@ -442,19 +442,30 @@ class CoreFlow:
     def _open_note(self, page: Any, path: str) -> None:
         self._admit_navigation()
         page.goto(self.d["ui_url"], wait_until="domcontentloaded")
-        for selector in (
-            '[data-testid="workspace-vault-chip"]',
-            '[data-testid="vault-browse-button"]',
-            '[data-testid="workspace-orientation-vault-entry"]',
-        ):
-            item = page.locator(selector).first
-            if item.count() and item.is_visible():
-                item.click()
-                break
+        pane = page.locator('[data-testid="workspace-vault-browser"]:visible').first
+        if not pane.count():
+            opened = False
+            for selector in (
+                '[data-testid="workspace-vault-chip"]',
+                '[data-intent="vault.open"]',
+                '[data-testid="vault-browse-button"]',
+            ):
+                controls = page.locator(selector)
+                for n in range(controls.count()):
+                    item = controls.nth(n)
+                    if item.is_visible():
+                        item.click()
+                        opened = True
+                        break
+                if opened:
+                    break
+            if not opened:
+                raise AssertionError("vault_browse_control_missing")
+        pane.wait_for(state="visible")
         folders = path.split("/")[:-1]
         for index in range(len(folders)):
             folder = "/".join(folders[: index + 1])
-            groups = page.get_by_test_id("workspace-vault-browser-group")
+            groups = pane.get_by_test_id("workspace-vault-browser-group")
             for n in range(groups.count()):
                 group = groups.nth(n)
                 if group.get_attribute("data-folder") == folder:
@@ -462,7 +473,7 @@ class CoreFlow:
                     if details.get_attribute("open") is None:
                         details.locator(":scope > summary").click()
                     break
-        links = page.get_by_test_id("workspace-vault-browser-note-link")
+        links = pane.get_by_test_id("workspace-vault-browser-note-link")
         for n in range(links.count()):
             link = links.nth(n)
             if parse_qs(urlparse(link.get_attribute("href") or "").query).get("note_path") == [

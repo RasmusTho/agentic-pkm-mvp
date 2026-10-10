@@ -58,6 +58,10 @@ capture, a fresh-context readback, exact object/vector freshness and retrieval, 
 and two browser-local failure cases. Required model-health failure does not hide independent
 navigation or capture results after channel, build and fixture checks succeed. Dependent steps
 report `blocked` when their prerequisite could not be proved; their pytest assertions are nonzero.
+Navigation uses the entry page's actionable browse control and scopes folder/note selection to
+the visible browser, excluding its hidden responsive copy. Offline renderer-backed navigation
+proofs in `test_live_core_flow_contract.py` run with `COMPANION_UI_BROWSER_TESTS=1` for both
+cold-start and document entry pages, without reaching a real application endpoint.
 
 ```sh
 COMPANION_UI_LIVE_CORE_FLOW=1 \
