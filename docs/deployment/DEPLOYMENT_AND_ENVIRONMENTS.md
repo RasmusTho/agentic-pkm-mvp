@@ -654,6 +654,12 @@ guard, API instance/ownership preflight, selected vault, migration authority and
 PostgreSQL consumer remain required. The one-shot keeps the normal API command/bootstrap and
 uses `--no-deps`, so an unready old API or UI health dependency cannot prevent reconstruction.
 
+Within the selected API command, preflight validates the configured backend through the canonical
+`app.objects` backend facade before the API migration command and requires PostgreSQL without
+constructing a StorePort. StorePort resolution is deferred until a vault root is selected and
+Product readiness must be checked. An absent root keeps the API on its idle path without StorePort
+construction or a SourceAction.
+
 With the ordinary write-capable services stopped, the producer freshly checks Product readiness.
 An explicitly unbound API retains its no-vault picker posture without a SourceAction. For a
 configured missing, inaccessible or invalid root, the canonical resolver refuses before any

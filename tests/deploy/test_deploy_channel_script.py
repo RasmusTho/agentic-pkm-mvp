@@ -4853,7 +4853,7 @@ fi
 from pathlib import Path
 from types import SimpleNamespace
 from app.config import paths
-from app import stores, rebuildability
+from app import objects, rebuildability
 from app.instance import runtime
 def instance_preflight(**kwargs):
     if os.environ.get("FAKE_API_CONTEXT_RC", "0") != "0":
@@ -4861,8 +4861,15 @@ def instance_preflight(**kwargs):
 runtime._preflight_runtime = instance_preflight
 paths.resolve_optional_vault_root = lambda: (None if os.environ.get("FAKE_API_UNBOUND") == "1"
                                            else Path(os.environ["FAKE_API_VAULT"]))
-stores.resolve_store_backend = lambda: os.environ.get("FAKE_API_BACKEND", "pg")
-stores.get_object_store = lambda: SimpleNamespace(list_objects=lambda **kwargs: [])
+objects.resolve_store_backend = lambda: os.environ.get("FAKE_API_BACKEND", "pg")
+def resolve_object_store_port():
+    if os.environ.get("FAKE_API_UNBOUND") == "1":
+        raise RuntimeError("unbound preflight must not construct a StorePort")
+    return SimpleNamespace(
+        backend=os.environ.get("FAKE_API_BACKEND", "pg"),
+        store=SimpleNamespace(list_objects=lambda **kwargs: []),
+    )
+objects.resolve_object_store_port = resolve_object_store_port
 rebuildability.evaluate_product_store_readiness = lambda root, rows: SimpleNamespace(
     ready=Path(os.environ["FAKE_API_READY_FILE"]).exists(),
     state="ready" if Path(os.environ["FAKE_API_READY_FILE"]).exists() else "refused")
@@ -4992,12 +4999,13 @@ def test_native_empty_vault_requires_empty_product_projection(
     )
     assert text.count(override) == 1
     text = text.replace(override, "")
-    store = 'stores.get_object_store = lambda: SimpleNamespace(list_objects=lambda **kwargs: [])'
+    store = 'store=SimpleNamespace(list_objects=lambda **kwargs: []),'
     assert text.count(store) == 1
-    site.write_text(text.replace(store, (
-        'stores.get_object_store = lambda: SimpleNamespace(\n'
-        f'    list_objects=lambda **kwargs: iter({rows!r}))'
-    )), encoding="utf-8")
+    site.write_text(text.replace(
+        store,
+        'store=SimpleNamespace(list_objects=lambda **kwargs: iter('
+        f'{rows!r})),',
+    ), encoding="utf-8")
     env["FAKE_SOURCE_SUMMARY"] = json.dumps({
         "scanned": 0, "ingested": 0, "errors": 0, "malformed": 0,
         "skipped_locked": 0, "skipped_invalid": 0,
@@ -5470,7 +5478,7 @@ def test_native_source_unbound_api_preserves_idle_without_source_write(tmp_path:
 @pytest.mark.parametrize("fault", ["missing", "not_directory", "symlink_loop", "inaccessible"])
 def test_native_source_configured_invalid_root_never_becomes_unbound(tmp_path: Path, monkeypatch, fault: str) -> None:
     from app.ops import native_source_bootstrap as source
-    from app import stores, version
+    from app import objects, version
     revision = "a" * 40
     selector = "test:" + revision
     selected = tmp_path / "selected"
@@ -5493,7 +5501,12 @@ def test_native_source_configured_invalid_root_never_becomes_unbound(tmp_path: P
     monkeypatch.setenv("VAULT_ROOT_DEV", str(tmp_path))
     monkeypatch.setenv("VAULT_ROOT_TEST", str(tmp_path))
     monkeypatch.setattr(version, "get_runtime_version", lambda: {"git_sha": revision})
-    monkeypatch.setattr(stores, "resolve_store_backend", lambda: "pg")
+    monkeypatch.setattr(objects, "resolve_store_backend", lambda: "pg")
+    monkeypatch.setattr(
+        objects,
+        "resolve_object_store_port",
+        lambda: pytest.fail("invalid root must be rejected before StorePort construction"),
+    )
     monkeypatch.setattr(source, "_instance_preflight", lambda channel: None)
     monkeypatch.setattr(source, "_run_json", lambda *args: pytest.fail("must refuse before SourceWrite"))
     with pytest.raises((RuntimeError, OSError, ValueError)):
