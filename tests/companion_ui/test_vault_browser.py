@@ -17,6 +17,7 @@ import re
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import pytest
 from companion_ui.workspace.real_note_workspace_dev_page import NoteLoadIntent, RealNoteWorkspaceDevPage
 from companion_ui.workspace.serve_dev_page import render_index_html
 from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError, WorkspaceHttpClient
@@ -205,6 +206,70 @@ def test_vault_browser_distinguishes_empty_error_and_identity_states() -> None:
         fields=identity_fields,
     )
     assert 'data-testid="workspace-vault-browser-state-identity-unavailable"' in identity_html
+
+
+@pytest.mark.parametrize("filtered_notes", [0, 1])
+@pytest.mark.parametrize("reason", ["note_read_failed", "private/path/<failure>"])
+def test_vault_browser_partial_state_is_visible_and_preserves_loaded_note(
+    filtered_notes: int, reason: str
+) -> None:
+    payload = _vault_browser_payload(total_notes=2, filtered_notes=filtered_notes)
+    if filtered_notes == 0:
+        payload["notes"] = []
+    payload.update(state="partial", degraded_reason=reason, unreadable_notes=1)
+    page = _load_page(browser_payload=payload)
+    fields = page.render_fields()
+    assert fields is not None
+    assert fields["note_path"] == "notes/current.md"
+    assert fields["vault_browser_state"] == "partial"
+    assert fields["vault_browser_degraded_reason"] == reason
+    assert page.state.is_loaded is True
+    assert page.state.error is None
+    assert page.state.shell is not None
+    assert page.state.shell.body == "# Body\n"
+
+    html = render_index_html(
+        api_base_url="http://127.0.0.1:18001",
+        note_path="notes/current.md",
+        fields=fields,
+    )
+    assert 'data-testid="workspace-vault-browser-state-partial"' in html
+    assert 'data-testid="workspace-vault-browser-state-empty"' not in html
+    assert "Some notes unavailable" in html
+    assert "The list is partial; refresh to retry" in html
+    state_match = re.search(
+        r'<div class="vault-browser-state" data-testid="workspace-vault-browser-state-partial">(.*?)</div>',
+        html,
+        re.DOTALL,
+    )
+    assert state_match is not None
+    assert "connection failed" not in state_match.group(1)
+    assert "private/path/" not in html
+    if reason == "note_read_failed":
+        assert "one or more files could not be read" in html
+    else:
+        assert "details withheld" in html
+    assert (
+        '.vault-browser-state:not([data-testid="workspace-vault-browser-state-ready"]) '
+        "{ display: block; }"
+    ) in html
+    if filtered_notes:
+        assert 'data-testid="workspace-vault-browser-note-link"' in html
+        assert "Companion UI UAT" in html
+
+
+def test_vault_browser_transport_error_keeps_loaded_note_and_visible_state() -> None:
+    page = _load_page(browser_error=WorkspaceClientNetworkError("private transport error"))
+    assert page.state.is_loaded is True
+    assert page.state.shell is not None
+    assert page.state.shell.body == "# Body\n"
+    fields = page.render_fields()
+    assert fields is not None
+    html = render_index_html(api_base_url="http://127.0.0.1:18001", note_path="notes/current.md", fields=fields)
+    assert 'data-testid="workspace-vault-browser-state-error"' in html
+    assert "Notes unavailable" in html
+    assert "connection failed" in html
+    assert "private transport error" not in html
 
 
 # ---- AC4: metadata badges rendered per row ----
