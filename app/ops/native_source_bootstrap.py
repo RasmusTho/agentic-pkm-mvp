@@ -163,7 +163,7 @@ def _instance_preflight(channel: str) -> None:
 def preflight(selector: str) -> Path | None:
     from app.config.environment import active_environment
     from app.config.paths import resolve_optional_vault_root
-    from app.objects import resolve_object_store_port
+    from app.objects import resolve_store_backend
     from app.version import get_runtime_version
 
     match = re.fullmatch(r'(dev|test|prod):([0-9a-f]{40})', selector)
@@ -180,7 +180,10 @@ def preflight(selector: str) -> Path | None:
         _instance_preflight(match[1])
     selected = resolve_optional_vault_root()
     root = selected.resolve(strict=True) if selected is not None else None
-    if (root is not None and not root.is_dir()) or resolve_object_store_port().backend != 'pg':
+    # Backend selection validates configuration without constructing the store.
+    # StorePort construction can run provider initialization/repair effects, so
+    # defer it until the bound-root Product-readiness path below.
+    if (root is not None and not root.is_dir()) or resolve_store_backend() != 'pg':
         raise ValueError('source context invalid')
     return root
 
