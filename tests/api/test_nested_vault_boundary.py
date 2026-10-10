@@ -18,6 +18,7 @@ merged into the parent's listing.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -136,6 +137,35 @@ def test_parent_enumeration_excludes_child_vault_notes(
 
     # Sanity: the child genuinely contains notes (so the exclusion is real).
     assert (child / "Secret Plan.md").exists()
+
+
+def test_nested_vault_boundary(tmp_path: Path, monkeypatch) -> None:
+    """Receipt attachment must preserve the real endpoint's selected-vault boundary."""
+    bind_selected_vault(monkeypatch, tmp_path)
+    child = _build_parent_with_nested_child(tmp_path)
+    (tmp_path / "child-link.md").symlink_to(child / "Secret Plan.md")
+    hidden = tmp_path / ".hidden" / "secret.md"
+    _write_note(hidden, title="Hidden secret")
+    outbox = tmp_path / "outbox.jsonl"
+    records = [
+        {"event": "panel.action.logged", "event_id": "parent-receipt", "payload": {"note_path": "notes/Parent Note.md"}},
+        {"event": "panel.action.logged", "event_id": "private-receipt", "payload": {"note_path": "projects/private-child/Secret Plan.md"}},
+        {"event": "panel.action.logged", "event_id": "hidden-receipt", "payload": {"note_path": ".hidden/secret.md"}},
+    ]
+    outbox.write_text("\n".join(json.dumps(record) for record in records), encoding="utf-8")
+    before = outbox.read_bytes(), outbox.stat().st_mtime_ns
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+
+    response = TestClient(app).get("/api/companion/vault-browser")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["read_only"] is True and data["identity_available"] is True
+    assert {note["note_path"] for note in data["notes"]} == {"notes/Parent Note.md", "projects/Roadmap.md"}
+    assert data["nested_vault_roots"][0]["note_path"] == "projects/private-child"
+    by_path = {note["note_path"]: note for note in data["notes"]}
+    assert [row["receipt_id"] for row in by_path["notes/Parent Note.md"]["receipts"]] == ["parent-receipt"]
+    assert "private-receipt" not in response.text and "hidden-receipt" not in response.text
+    assert (outbox.read_bytes(), outbox.stat().st_mtime_ns) == before
 
 
 def test_private_child_vault_notes_never_leak_through_any_read_surface(

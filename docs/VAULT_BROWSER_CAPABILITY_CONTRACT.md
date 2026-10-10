@@ -264,6 +264,17 @@ event scan, and not an ObjectStore-derived authority surface. It must remain bat
 notes returned by a browser load. If no outbox/event receipt source is available, the per-note
 `receipts` key is omitted so the inspector renders `data-receipt-state="unavailable"` honestly.
 
+The receipt-source traversal reads complete PostgreSQL history through a read-only server cursor
+in bounded batches, followed by incremental JSONL records under the existing shared read lock
+(#5940). Selected-note UUID/path matching and receipt-ID de-duplication happen during traversal.
+All matching receipt history and chronological order are preserved; this is not a row cap or a
+tail window. Source memory scales with the batch/current record and retained matching projection,
+rather than the complete outbox. A configured database that fails before or during traversal makes
+the receipt projection unavailable even when JSONL is readable. Malformed JSONL remains a refusal,
+and a complete final record without a newline is read without repair. Neither receipt source nor
+vault content is mutated by these reads. This bound does not establish a response-time bound or
+identify a single cause of a live host memory failure.
+
 Current UI detail implementation note (#1284): receipt rows may expand/collapse locally in the
 inspector to reveal read-only receipt details. The expanded detail displays available VaultReceipt
 fields and must not contain action buttons, forms, authoring controls, or server mutation hooks.
@@ -464,6 +475,9 @@ For future implementation issues, this contract requires:
 - The browser endpoint must remain read-only in the HTTP sense at the MLP v0 boundary (no mutating verbs accepted on the browser route).
 - UI states (`empty`, `error`, `identity-unavailable`, future `degraded`/`blocked`) must have stable test IDs / data attributes so contract tests can assert them.
 - Read-only contract tests must assert that calling the browser endpoint does not mutate any vault file.
+- Receipt tests must exercise the production endpoint with complete large-source traversal,
+  selected-page aggregation, concurrent readers, unavailable/malformed sources, and unchanged
+  source bytes, modification times and modes. Returned matching history remains uncapped.
 - Docs must be updated in the same change as shipped behavior changes (per `AGENTS.md` required rules).
 - New event types are not expected for browser work. If a future slice introduces one, `docs/EVENTS.md` must be updated in the same change (per `docs/CONCEPTS/EVENT_COMPATIBILITY_CONTRACT.md`).
 

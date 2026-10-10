@@ -7,15 +7,16 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from app.receipts.outbox_sources import (
+    ReceiptSourceUnavailableError,
     first_str,
     nested,
     normalize_note_path,
-    read_receipt_source_records,
+    open_receipt_source_records,
     record_event,
     record_payload,
     record_source_label,
 )
-from app.receipts.promotion_receipts import query_promotion_receipts
+from app.receipts.promotion_receipts import PromotionReceiptRow, iter_promotion_receipt_rows
 
 
 @dataclass(frozen=True)
@@ -130,10 +131,6 @@ def receipts_for_artifacts(
     if not target_list:
         return {}
 
-    records = read_receipt_source_records(outbox_path=outbox_path)
-    if records is None:
-        return None
-
     path_targets = {normalize_note_path(target.note_path, vault_root=vault_root): target for target in target_list}
     uuid_targets = {
         str(target.artifact_uuid).strip(): target
@@ -145,62 +142,72 @@ def receipts_for_artifacts(
     }
     seen: dict[str, set[str]] = {target.note_path: set() for target in target_list}
 
-    for record in records:
-        projected = _project_receipt_record(record, vault_root=vault_root)
-        if projected is None:
-            continue
-        receipt, artifact_uuid, artifact_path = projected
+    def matched_paths(artifact_uuid: str | None, artifact_path: str | None) -> set[str]:
         matched: set[str] = set()
         if artifact_uuid and artifact_uuid in uuid_targets:
             matched.add(uuid_targets[artifact_uuid].note_path)
         if artifact_path and artifact_path in path_targets:
             matched.add(path_targets[artifact_path].note_path)
-        if not matched:
-            continue
-        receipt_id = str(receipt.get("receipt_id") or "")
-        for note_path in matched:
-            if receipt_id in seen[note_path]:
-                continue
-            result[note_path].append(dict(receipt))
-            seen[note_path].add(receipt_id)
+        return matched
 
-    promotion_projection = query_promotion_receipts(vault_root=vault_root, records=records)
-    for row in promotion_projection.rows:
-        receipt = row.to_artifact_receipt()
-        # Receipts v2 display fields for promotion receipts (#3363), enriched
-        # at the merge point where vault_root is available. Promotion rows are
-        # already authority-validated (promotion.transition.applied), so the
-        # verb/run label name the transition family the record itself declares.
-        # The verb only claims "Promoted" for an applied outcome; any held or
-        # failed outcome keeps the honest fallback so the lead verb never
-        # asserts an effect the record does not declare.
-        receipt.update(
-            {
-                "display_verb": (
-                    "Promoted" if receipt.get("state") == "applied" else DISPLAY_VERB_FALLBACK
-                ),
-                "run_key": first_str(row.trace_id, receipt.get("receipt_id")),
-                "run_label": "Promotion",
-                "target_absolute": _target_absolute(row.artifact_path, vault_root=vault_root),
-            }
-        )
-        promotion_matched: set[str] = set()
-        if row.artifact_uuid and row.artifact_uuid in uuid_targets:
-            promotion_matched.add(uuid_targets[row.artifact_uuid].note_path)
-        if row.artifact_path and row.artifact_path in path_targets:
-            promotion_matched.add(path_targets[row.artifact_path].note_path)
-        if not promotion_matched:
-            continue
-        receipt_id = str(receipt.get("receipt_id") or "")
-        for note_path in promotion_matched:
-            if receipt_id in seen[note_path]:
-                continue
+    # Preserve ordinary-receipt precedence on duplicate IDs. Promotions are
+    # retained only for selected targets, then merged in timestamp order as
+    # before; the complete source is never replayed or materialized.
+    promotions: dict[str, dict[str, tuple[int, dict[str, str | None]]]] = {
+        target.note_path: {} for target in target_list
+    }
+    try:
+        with open_receipt_source_records(outbox_path=outbox_path) as records:
+            if records is None:
+                return None
+            for position, record in enumerate(records):
+                projected = _project_receipt_record(record, vault_root=vault_root)
+                if projected is not None:
+                    receipt, artifact_uuid, artifact_path = projected
+                    receipt_id = str(receipt.get("receipt_id") or "")
+                    for note_path in matched_paths(artifact_uuid, artifact_path):
+                        if receipt_id in seen[note_path]:
+                            continue
+                        result[note_path].append(dict(receipt))
+                        seen[note_path].add(receipt_id)
+                        promotions[note_path].pop(receipt_id, None)
+                else:
+                    for row in iter_promotion_receipt_rows((record,), vault_root=vault_root):
+                        matched = matched_paths(row.artifact_uuid, row.artifact_path)
+                        if not matched:
+                            continue
+                        receipt = _promotion_artifact_receipt(row, vault_root=vault_root)
+                        for note_path in matched:
+                            if row.receipt_id in seen[note_path]:
+                                continue
+                            previous = promotions[note_path].get(row.receipt_id)
+                            if previous is None or row.timestamp < str(previous[1].get("timestamp") or ""):
+                                promotions[note_path][row.receipt_id] = (position, receipt)
+    except ReceiptSourceUnavailableError:
+        return None
+
+    for note_path, selected in promotions.items():
+        # The winning duplicate's position preserves stable timestamp ties,
+        # including a later source record that replaces a newer timestamp.
+        for _, receipt in sorted(selected.values(), key=lambda item: (str(item[1].get("timestamp") or ""), item[0])):
             result[note_path].append(dict(receipt))
-            seen[note_path].add(receipt_id)
 
     for rows in result.values():
         rows.sort(key=lambda row: str(row.get("timestamp") or ""))
     return result
+
+
+def _promotion_artifact_receipt(row: PromotionReceiptRow, *, vault_root: Path) -> dict[str, str | None]:
+    receipt = row.to_artifact_receipt()
+    # Keep only the browser's returned fields, not the promotion's full basis.
+    # A held or failed outcome never claims "Promoted" as its lead verb.
+    receipt.update({
+        "display_verb": "Promoted" if receipt.get("state") == "applied" else DISPLAY_VERB_FALLBACK,
+        "run_key": first_str(row.trace_id, receipt.get("receipt_id")),
+        "run_label": "Promotion",
+        "target_absolute": _target_absolute(row.artifact_path, vault_root=vault_root),
+    })
+    return receipt
 
 
 def _project_receipt_record(
