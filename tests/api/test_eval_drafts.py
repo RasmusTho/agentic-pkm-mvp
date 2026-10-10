@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import json
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
-from threading import Barrier, Lock
+from threading import Barrier, Event, Lock
 from typing import Any
 
 import pytest
@@ -459,7 +459,9 @@ def test_durable_receipt_with_lost_acknowledgement_returns_existing_receipt(
         status_writes += 1
         return real_write(*args, **kwargs)
 
-    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_status_write)
+    monkeypatch.setattr(
+        failure_capture_module, "write_note_relative", count_status_write
+    )
     response = TestClient(app).post(
         f"/api/eval-drafts/{draft.draft_id}/decision", json=payload
     )
@@ -852,3 +854,122 @@ def test_concurrent_same_decision_posts_reconcile_one_terminal_mutation(
         matching[0]["payload"]["decision_token"]["token_id"]
         == terminal.decision_token.token_id
     )
+
+
+def test_concurrent_initial_and_retry_receipts_converge_before_acknowledgement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, first, _extra, principal_record = provisioned_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    outbox_path = tmp_path / "concurrent-initial-retry-eval-disposition.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    vault = Path(first.path)
+    bind_initialized_vault(monkeypatch, vault)
+    draft = draft_unknown_classification_case(
+        vault_root=vault,
+        utterance="initial disposition concurrent with exact retry",
+        trace_id="api-concurrent-initial-retry-disposition",
+    )
+    assert draft is not None
+    payload = {
+        "action": "promote",
+        "decided_by": principal_record.local_operator_role_id,
+        "notes": "one exact concurrent decision",
+    }
+
+    counter_lock = Lock()
+    persist_barrier = Barrier(2)
+    first_persist_entered = Event()
+    receipt_candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    emitted_events: list[dict[str, Any]] = []
+    status_writes = 0
+    token_issues = 0
+    real_persist = failure_capture_module._persist_disposition_authority_receipt
+    real_append = failure_capture_module.append_jsonl_outbox_event
+    real_write = failure_capture_module.write_note_relative
+    adapter = failure_capture_module._GOVERNED_WRITE_ADAPTER
+    real_issue_token = adapter.issue_human_decision_token
+
+    def synchronize_receipt_persist(**kwargs: Any) -> None:
+        with counter_lock:
+            receipt_candidates.append(
+                (
+                    asdict(kwargs["mutation_receipt"]),
+                    asdict(kwargs["authority_receipt"]),
+                )
+            )
+            first_persist_entered.set()
+        persist_barrier.wait(timeout=15)
+        real_persist(**kwargs)
+
+    def capture_event(*args: Any, **kwargs: Any) -> bool:
+        event = args[1] if len(args) > 1 else kwargs["event"]
+        with counter_lock:
+            emitted_events.append(event.model_dump(mode="json"))
+        return real_append(*args, **kwargs)
+
+    def count_status_write(*args: Any, **kwargs: Any) -> Any:
+        nonlocal status_writes
+        with counter_lock:
+            status_writes += 1
+        return real_write(*args, **kwargs)
+
+    def count_token_issue(**kwargs: Any) -> Any:
+        nonlocal token_issues
+        with counter_lock:
+            token_issues += 1
+        return real_issue_token(**kwargs)
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "_persist_disposition_authority_receipt",
+        synchronize_receipt_persist,
+    )
+    monkeypatch.setattr(
+        failure_capture_module, "append_jsonl_outbox_event", capture_event
+    )
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_status_write)
+    monkeypatch.setattr(adapter, "issue_human_decision_token", count_token_issue)
+
+    def post_decision() -> Any:
+        return TestClient(app).post(
+            f"/api/eval-drafts/{draft.draft_id}/decision", json=payload
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        initial = pool.submit(post_decision)
+        assert first_persist_entered.wait(timeout=15)
+        retry = pool.submit(post_decision)
+        initial_response = initial.result(timeout=30)
+        retry_response = retry.result(timeout=30)
+
+    assert initial_response.status_code == 200, initial_response.text
+    assert retry_response.status_code == 200, retry_response.text
+    assert initial_response.json() == retry_response.json()
+    assert len(receipt_candidates) == 2
+    assert receipt_candidates[0] == receipt_candidates[1]
+    assert len(emitted_events) == 2
+    assert emitted_events[0] == emitted_events[1]
+    assert status_writes == 1
+    assert token_issues == 1
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None
+    assert terminal.status == DRAFT_STATUS_PROMOTED
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("event") == "governance.authority_receipt.recorded"
+        and record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    assert matching[0]["payload"]["authority_receipt"] == receipt_candidates[0][1]

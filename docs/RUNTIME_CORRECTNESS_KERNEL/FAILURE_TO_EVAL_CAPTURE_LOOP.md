@@ -42,8 +42,10 @@ separately reviewed integration into regression coverage.
   status mutation, `reconcile_pending_disposition_receipt` reuses the original GOV DecisionToken
   persisted with the durable terminal draft, reconstructs the state-owner receipt, and emits the
   same stable receipt event without minting replacement authority or performing a second status
-  mutation; acknowledgement remains withheld until the receipt is durable. Golden-set or fixture integration
-  is a separate reviewed code change.
+  mutation. The state-owner and GOV receipt fields, including their timestamps and receipt ID, are
+  derived from the durable disposition identity so an initial writer and concurrent exact retry
+  converge on identical event content before either acknowledges success. Golden-set or fixture
+  integration is a separate reviewed code change.
   It does **not reuse `MemoryCandidateReviewQueue`** — see "Reviewer surfacing" below for why that
   queue is memory-candidate-specific and an eval-dataset case is a distinct artifact class.
 - Drafting is **WriteGuard-gated** like all vault writes: call
@@ -142,6 +144,10 @@ note-write and concurrency contract follows
       AuthorityReceipt without minting replacement authority or repeating the status mutation.
       Repeating the same POST with the same authenticated principal, action, and notes resumes that
       reconciliation; a different reviewer, action, or notes is refused.
+      Concurrent initial and exact-retry writers derive identical state-owner receipts,
+      AuthorityReceipts, and event content from the durable disposition identity before either
+      acknowledges success; JSONL's event-ID uniqueness seam makes the duplicate emission
+      idempotent.
       The production POST route derives the reviewer actor from the authenticated GOV principal
       boundary; a client-supplied `decided_by` may only assert that same principal.
       Reconciliation accepts an existing event only when its outcome is `applied` and its
@@ -170,6 +176,7 @@ note-write and concurrency contract follows
       Verify: `tests/api/test_eval_drafts.py::test_exact_retry_returns_db_receipt_when_jsonl_source_is_corrupt`
       Verify: `tests/api/test_eval_drafts.py::test_malformed_receipt_jsonl_fails_closed_on_exact_retry`
       Verify: `tests/api/test_eval_drafts.py::test_concurrent_same_decision_posts_reconcile_one_terminal_mutation`
+      Verify: `tests/api/test_eval_drafts.py::test_concurrent_initial_and_retry_receipts_converge_before_acknowledgement`
       Verify: `tests/api/test_eval_drafts.py::test_decision_route_rejects_request_identity_not_bound_to_auth`
 - [ ] Candidate intake remains non-authoritative: promoting a draft records the human decision but
       does not itself change the golden dataset or fixture. Integration is a separate reviewed code

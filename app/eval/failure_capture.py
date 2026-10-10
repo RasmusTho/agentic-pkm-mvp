@@ -80,7 +80,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
@@ -97,6 +97,7 @@ from app.governance.governed_write import (
 )
 from app.knowledge.errors import KnowledgeWriteConflict
 from app.knowledge.contracts import WriteReceipt
+from app.knowledge.multiwriter import NoteClass
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
@@ -655,6 +656,66 @@ def _disposition_id(*, draft_id: str, decision: str, decided_at: str) -> str:
     return f"eval-disposition-{hashlib.sha256(seed).hexdigest()}"
 
 
+def _disposition_mutation_receipt(
+    *,
+    draft: DraftEvalCase,
+    rel_path: str,
+    observed: WriteReceipt | None = None,
+) -> WriteReceipt:
+    """Return the stable receipt facts for the terminal note mutation."""
+    locator = make_note_locator(rel_path)
+    if observed is not None and (
+        observed.operation != "write_note"
+        or observed.locator != locator
+        or observed.adapter != "fs_vault"
+        or observed.note_class != NoteClass.REWRITTEN
+        or observed.writer_identity != "eval.failure_capture.decision"
+        or observed.outcome != "written"
+        or observed.fallback_used
+        or observed.conflict_artifact is not None
+    ):
+        raise AuthorityReceiptPersistenceError(
+            "state-owner write receipt does not match eval draft disposition"
+        )
+    return WriteReceipt(
+        operation="write_note",
+        locator=locator,
+        adapter="fs_vault",
+        trace_id=draft.trace_id,
+        fallback_used=False,
+        note_class=NoteClass.REWRITTEN,
+        writer_identity="eval.failure_capture.decision",
+        written_at=draft.decided_at,
+        outcome="written",
+    )
+
+
+def _disposition_authority_receipt(
+    *,
+    disposition_id: str,
+    draft: DraftEvalCase,
+    grant: GovernedWriteGrant,
+    mutation_receipt: WriteReceipt,
+    rel_path: str,
+) -> AuthorityReceipt:
+    """Create one stable AuthorityReceipt for this terminal disposition."""
+    receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
+        decision_token=grant.decision_token,
+        mutation_receipt=mutation_receipt,
+        state_owner=EVAL_DRAFT_STATE_OWNER,
+        resource=rel_path,
+        trace_id=draft.trace_id,
+    )
+    receipt_seed = f"{EVAL_DRAFT_DISPOSITION_EVENT}\x00{disposition_id}".encode(
+        "utf-8"
+    )
+    return replace(
+        receipt,
+        receipt_id=f"authority_receipt_{hashlib.sha256(receipt_seed).hexdigest()}",
+        recorded_at=draft.decided_at,
+    )
+
+
 def _read_persisted_disposition_receipt(
     *,
     disposition_id: str,
@@ -781,6 +842,7 @@ def _persist_disposition_authority_receipt(
         source=EVAL_DRAFT_EVENT_SOURCE,
         payload=payload,
         trace_id=trace_id or disposition_id,
+        timestamp=authority_receipt.recorded_at,
     )
     event = event.model_copy(update={"event_id": disposition_id})
     emitted = False
@@ -941,6 +1003,17 @@ def reconcile_pending_disposition_receipt(
         decision=decision,
         decided_at=draft.decided_at,
     )
+    mutation_receipt = _disposition_mutation_receipt(
+        draft=draft,
+        rel_path=rel_path,
+    )
+    expected_authority_receipt = _disposition_authority_receipt(
+        disposition_id=disposition_id,
+        draft=draft,
+        grant=grant,
+        mutation_receipt=mutation_receipt,
+        rel_path=rel_path,
+    )
     persisted = _read_persisted_disposition_receipt(
         disposition_id=disposition_id,
         outbox_path=_resolve_outbox_path(),
@@ -954,7 +1027,6 @@ def reconcile_pending_disposition_receipt(
             payload.get("decision_token")
         )
         state_owner_receipt = payload.get("state_owner_receipt")
-        expected_source_receipt_ref = f"fs_vault:write_note:{rel_path}"
         if (
             draft.policy_decision is None
             or draft.decision_token is None
@@ -963,26 +1035,9 @@ def reconcile_pending_disposition_receipt(
             or payload.get("decision") != decision
             or persisted_policy != grant.policy_decision
             or persisted_token != grant.decision_token
-            or existing.outcome != "applied"
-            or existing.decision_id != grant.policy_decision.decision_id
-            or existing.decision_token_id != grant.decision_token.token_id
-            or existing.actor != draft.decided_by
-            or existing.action != action
-            or existing.write_class != EVAL_DRAFT_DISPOSITION_WRITE_CLASS
-            or existing.resource != rel_path
-            or existing.operation != "write_note"
-            or existing.adapter != "fs_vault"
-            or existing.state_owner != EVAL_DRAFT_STATE_OWNER
-            or existing.source_receipt_ref != expected_source_receipt_ref
-            or existing.contract_version != GOVERNED_WRITE_CONTRACT_VERSION
             or not isinstance(state_owner_receipt, dict)
-            or state_owner_receipt.get("operation") != "write_note"
-            or state_owner_receipt.get("adapter") != "fs_vault"
-            or state_owner_receipt.get("outcome") not in {"written", "applied"}
-            or state_owner_receipt.get("writer_identity")
-            != "eval.failure_capture.decision"
-            or not isinstance(state_owner_receipt.get("locator"), dict)
-            or state_owner_receipt["locator"].get("path") != rel_path
+            or existing != expected_authority_receipt
+            or state_owner_receipt != asdict(mutation_receipt)
         ):
             raise AuthorityReceiptPersistenceError(
                 "persisted eval draft receipt does not match the terminal draft"
@@ -998,22 +1053,7 @@ def reconcile_pending_disposition_receipt(
 
     # The terminal note is the durable state-owner result. Reconciliation
     # maps it to the existing receipt shape without repeating the mutation.
-    mutation_receipt = WriteReceipt(
-        operation="write_note",
-        locator=make_note_locator(rel_path),
-        adapter="fs_vault",
-        trace_id=draft.trace_id,
-        writer_identity="eval.failure_capture.decision",
-        written_at=draft.decided_at,
-        outcome="written",
-    )
-    authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
-        decision_token=grant.decision_token,
-        mutation_receipt=mutation_receipt,
-        state_owner=EVAL_DRAFT_STATE_OWNER,
-        resource=rel_path,
-        trace_id=draft.trace_id,
-    )
+    authority_receipt = expected_authority_receipt
     _persist_disposition_authority_receipt(
         disposition_id=disposition_id,
         draft_id=draft_id,
@@ -1105,7 +1145,7 @@ def _decide(
     )
     title = f"{_VALID_DECISIONS[target_status].capitalize()}d draft: {draft.kind}"
     content = _render_draft_note(updated, title=title)
-    mutation_receipt = write_note_relative(
+    observed_mutation_receipt = write_note_relative(
         rel_path,
         content,
         vault_root=vault_root,
@@ -1114,12 +1154,17 @@ def _decide(
         expected_version=expected_version,
         writer_identity="eval.failure_capture.decision",
     )
-    authority_receipt = _GOVERNED_WRITE_ADAPTER.record_authority_receipt(
-        decision_token=token,
+    mutation_receipt = _disposition_mutation_receipt(
+        draft=updated,
+        rel_path=rel_path,
+        observed=observed_mutation_receipt,
+    )
+    authority_receipt = _disposition_authority_receipt(
+        disposition_id=disposition_id,
+        draft=updated,
+        grant=grant,
         mutation_receipt=mutation_receipt,
-        state_owner=EVAL_DRAFT_STATE_OWNER,
-        resource=rel_path,
-        trace_id=draft.trace_id,
+        rel_path=rel_path,
     )
     _persist_disposition_authority_receipt(
         disposition_id=disposition_id,
