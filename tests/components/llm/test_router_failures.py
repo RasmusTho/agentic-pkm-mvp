@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.components.llm.router import LLMRouter, LLMTaskIntent
+from app.settings.models import InstanceSettings, SettingsBundle
 
 
 def test_router_degrades_to_mock_on_invalid_provider(clean_llm_env) -> None:
@@ -12,7 +13,9 @@ def test_router_degrades_to_mock_on_invalid_provider(clean_llm_env) -> None:
     See: docs/LLM_ROUTING.md §Future: task-aware routing
     """
     clean_llm_env.setenv("LLM_PROVIDER", "nonexistent-provider")
-    router = LLMRouter()
+    router = LLMRouter(
+        settings=SettingsBundle(instance=InstanceSettings(llm_routing_profile="default"))
+    )
     route = router.route(LLMTaskIntent(task_kind="decide"))
 
     assert route.provider == "mock", "Should degrade to mock"
@@ -26,7 +29,9 @@ def test_router_handles_empty_provider_env(clean_llm_env) -> None:
     See: docs/LLM_ROUTING.md §Supported environment variables
     """
     clean_llm_env.setenv("LLM_PROVIDER", "")
-    router = LLMRouter()
+    router = LLMRouter(
+        settings=SettingsBundle(instance=InstanceSettings(llm_routing_profile="default"))
+    )
     route = router.route(LLMTaskIntent(task_kind="decide"))
     assert route.provider == "mock"
     assert route.degraded is False
