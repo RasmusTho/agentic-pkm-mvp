@@ -12,7 +12,7 @@ import os
 import re
 import stat
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -2448,7 +2448,11 @@ def _owning_vault_root(note_path: Path, *, selected_root: Path) -> Path | None:
     return nearest_enclosing_vault_root(note_path, search_root=selected_root)
 
 
-def _iter_vault_note_files(vault_root: Path) -> "Iterator[tuple[Path, str]]":
+def _iter_vault_note_files(
+    vault_root: Path,
+    *,
+    on_file_error: Callable[[str], None] | None = None,
+) -> "Iterator[tuple[Path, str]]":
     """Yield ``(absolute_path, vault_relative_posix)`` for the SELECTED vault only.
 
     Nested-vault boundary (#2313): the enumeration of a parent vault STOPS at any
@@ -2491,7 +2495,19 @@ def _iter_vault_note_files(vault_root: Path) -> "Iterator[tuple[Path, str]]":
             # read now rejects the same real target. Gate symlinks on real-path
             # ownership so only parent-owned notes are yielded (#2313). Non-symlink
             # files are parent-owned by construction (child dirs already pruned).
-            if candidate.is_symlink():
+            if on_file_error is None:
+                candidate_is_symlink = candidate.is_symlink()
+            else:
+                try:
+                    candidate_is_symlink = stat.S_ISLNK(candidate.lstat().st_mode)
+                except (OSError, UnicodeError):
+                    # The browser must not read a candidate whose ownership
+                    # check is unavailable. Report it, then keep healthy peers.
+                    safe_path = _vault_relative(candidate, vault_root)
+                    if safe_path is not None:
+                        on_file_error(safe_path)
+                    continue
+            if candidate_is_symlink:
                 try:
                     real = candidate.resolve()
                 except OSError:
@@ -3499,7 +3515,14 @@ def _select_vault_notes(
     # materializing the full sorted collection in memory.
     selected_heap: list[tuple[str, VaultBrowserNoteState]] = []
     previous_cursor_heap: list[str] = []
-    for candidate, safe_path in _iter_vault_note_files(vault_root):
+
+    def record_file_error(safe_path: str) -> None:
+        nonlocal total_notes, unreadable_notes
+        if not _is_hidden_browser_path(safe_path):
+            total_notes += 1
+            unreadable_notes += 1
+
+    for candidate, safe_path in _iter_vault_note_files(vault_root, on_file_error=record_file_error):
         if _is_hidden_browser_path(safe_path):
             continue
         try:
@@ -3510,8 +3533,7 @@ def _select_vault_notes(
             # Count the failed Markdown candidate without exposing its path,
             # body, or exception. Filtering/pagination only use readable notes;
             # the response explicitly marks their projection as incomplete.
-            total_notes += 1
-            unreadable_notes += 1
+            record_file_error(safe_path)
             continue
         total_notes += 1
         title = _browser_title(body, fallback=candidate.stem)
