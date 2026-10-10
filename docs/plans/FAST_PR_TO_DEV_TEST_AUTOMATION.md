@@ -1,11 +1,11 @@
-State: Target-state delivery plan; no post-merge dev/test automation is claimed as shipped.
+State: Delivery plan with repository automation support; live activation and pilot acceptance are tracked separately.
 Doc role: Plan.
 Authority: Proposes the post-merge Product Runtime `dev` → `test` automation boundary. `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` remains the deployment-mechanics owner; `docs/TESTING.md` remains the testing-gate owner; `docs/RELEASE_CHANNELS/README.md` remains the promotion-authority owner.
 Temporal class: operational
 Review cadence: before implementation and after the first ten-candidate pilot
 Source of truth: repository workflows/scripts plus fresh, redaction-safe runtime receipts
-Last reviewed: 2026-09-25
-Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md`, issue #2698 final receipt
+Last reviewed: 2026-10-10
+Last verified against: #5922; `.github/workflows/postmerge-dev-test.yml`, `scripts/postmerge_dev_test.py`, `scripts/install_postmerge_controller.py`, native DeployPlan/RPC and digest-pin tests; #5675 remains the live acceptance owner
 
 # Fast PR-to-merge with automatic dev/test delivery
 
@@ -24,7 +24,7 @@ Production remains on the separately governed promotion path. Neither a green de
 - `.github/workflows/ci-smoke.yaml` is the PR fast path. Docs-only changes have a lighter selected path; source/integration changes retain their required smoke checks.
 - `.github/workflows/integration-nightly.yaml` runs the broad scheduled/on-demand suite, including its bounded PostgreSQL lane. It is not the PR merge gate and does not deploy or roll back a channel.
 - `.github/workflows/app-image-build.yml` builds and publishes an image identified by source SHA and verifies image/runtime identity on its current main path.
-- `scripts/deploy_channel.sh` provides channel-scoped deployment mechanics, but no workflow in the verified repository state invokes it.
+- #5922 adds credential-free source-build admission in Actions and private-host polling of the same authoritative image proof. The poller uses the existing native deployment boundary; Actions does not execute deployments or acquire their credentials.
 - Issue #2698 is closed. Its final public receipt records a successful pinned-image production deployment at SHA `311631b08efdf08809a5677d20e3612f80a0022c`; that receipt does not establish fresh equivalent `dev` and `test` acceptance here. Do not infer their current deployment state from the production receipt.
 - Issue #5676 remains an owner decision about whether the bounded PG nightly is standalone or also candidate-bound pre-promotion evidence. This plan does not decide it.
 
@@ -46,7 +46,12 @@ Production remains on the separately governed promotion path. Neither a green de
 
 Serialize deployments independently per channel. Do not allow overlapping mutations of one channel. A newer main commit may supersede an older queued candidate before its deployment starts; once a deployment mutation starts, let it reach a recorded terminal result. A candidate may enter `test` only after its own `dev` check passes.
 
-GitHub Actions environments can scope deployment approvals/secrets by branch, and workflow concurrency can serialize work. Apply those controls if supported by repository policy, but first select and qualify the actual private executor. Do not assume a long-lived self-hosted runner is safe: keep untrusted PR jobs away from it and review its isolation and persistence before use. See [GitHub deployment environments](https://docs.github.com/en/actions/concepts/workflows-and-actions/deployment-environments), [deployment concurrency](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/control-deployments), and [self-hosted runner security](https://docs.github.com/en/actions/reference/security/secure-use).
+The selected executor is the existing private host secret controller, supervised by a host-local
+LaunchAgent. It polls successful `main` builds every 60 seconds and revalidates their exact proof;
+the Actions workflow is a credential-free admission signal. This avoids installing a new trusted
+GitHub runner alongside public PR execution. Native locks remain channel mutation authority.
+Ordinary dev/test candidates need no additional manual approval. Installation and recovery mechanics
+belong to `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: CI deployment automation posture`.
 
 ### Failure and recovery policy
 
@@ -63,9 +68,9 @@ No automated database rollback is part of this plan. A failed health check must 
 ## Preconditions and delivery sequence
 
 1. **Refresh deployment evidence.** Obtain fresh, redaction-safe `dev` and `test` channel topology, executor, image-pin, health/version, and recovery receipts from the authorized runtime owner. The dated Builder Vault summaries and #2698 production receipt do not substitute for this evidence.
-2. **Select one trusted executor.** Confirm its identity, private reachability, least privilege, branch/environment restrictions, channel locking, audit output, and separation from untrusted PR code. Do not add personal or long-lived workstation credentials to GitHub.
-3. **Qualify migration behavior, then add the workflow.** For each channel, classify the exact current-channel-SHA-to-candidate-SHA migration set before mutation. The automatic path may proceed only when its migrations pass the existing gate without a forward-only acknowledgement. A forward-only result stops that channel/candidate before pin, marker, volume, or Docker mutation; the workflow must not synthesize the acknowledgement or resume around the existing operator-governed path. For production, retain the existing target-bound token preflight. Then trigger only from trusted main/image-build evidence, bind the immutable digest, and deploy `dev` then `test` with separate environment/concurrency controls. Preserve one deployment authority per channel; reconcile any existing operator path before enabling the workflow.
-4. **Add failure-path verification.** Prove image mismatch refusal, dev failure stopping test, test failure stopping its promotion path, forward-only refusal before mutation with no automated acknowledgement, nightly SHA attribution without a new production veto, lock contention, newer-candidate supersession before mutation, and secret-free receipts.
+2. **Install the existing private host executor.** #5922 delivers the host-local LaunchAgent installer, exact build/artifact admission and native dev → test driver. Retain a clean reviewed-main tooling checkout and its working dependencies, and install the updated native VM runtime once through the existing installer. Later automatic candidates fetch their missing exact-SHA Git objects under the native VM lock without moving the retained checkout or supplying credentials. Reuse existing private reachability and credentials; GitHub receives none of the deployment credentials. Coordinate the live owner of a frozen acceptance run before loading the unit; this is writer coordination, not a new approval gate.
+3. **Qualify migration and deployment behavior.** #5922 supplies native preflight and shell refusal for automatic forward-only work, including pending work, before materialization or mutation. It binds SHA plus digest in the existing request journal, pin, Compose reference and fleet verification. Run the live same-digest dev/test path after current channel acceptance permits a new candidate. Production keeps its existing target-bound token and separate promotion authority.
+4. **Verify failure paths and coverage handoff.** #5922 covers artifact mismatch, dev failure preventing test, supersession before mutation, checkpoint/lock behavior, native recovery, immutable image IDs and migration refusal deterministically. Live functional tests and failure repair remain on #5675. Child #5932 implements the isolated scratch-PG profile inside the existing native verification phase; it is pending delivery, not current coverage. Existing PR/PG and nightly checks stay in place until equivalent dev/test execution is verified. An interrupted native operation must produce matching terminal evidence before continuation; a normal failed candidate does not add a global veto on later candidates.
 5. **Pilot and measure.** Enable the path for a bounded candidate set, keep production manual, and review elapsed PR-open-to-merge time plus post-merge failure/repair time after ten merged candidates. Adjust only with observed evidence.
 
 ## Acceptance

@@ -254,7 +254,12 @@ Current implementation:
 - `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC, explicit deterministic acceptance harness coverage via `tests/quality_wave/test_uat_harness.py`, first bounded PG contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`), runtime contract regressions, and fitness gates.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
 
-Post-merge automatic `dev` → `test` deployment is not currently implemented by these workflows. The proposed fast PR-to-merge and exact-image delivery policy is documented in [FAST_PR_TO_DEV_TEST_AUTOMATION](plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md); it is target state and does not change the current test gates or resolve the separate PG nightly policy decision.
+Post-merge image admission is implemented by `.github/workflows/postmerge-dev-test.yml`; the existing
+private host controller performs native same-digest `dev` → `test` deployment and its health/version,
+fleet and UI smoke checks. Actions admission alone does not prove deployment or functional testing.
+[FAST_PR_TO_DEV_TEST_AUTOMATION](plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) sequences live activation,
+functional/isolated-PG coverage handoff and pilot acceptance under #5675. Existing PR/PG and nightly
+gates remain; this support does not resolve the separate PG nightly policy decision.
 
 Dedicated PR workflows are path-scoped to the subsystem they validate: PanelAgent live-LLM E2E runs only for panel/promotion/LLM changes, Companion UI browser runtime only for Companion UI/API/web changes, app-image validation only for image inputs, and import-linter only when the import graph or its contract changes. Generic PR pytest excludes opt-in live/provider/browser/UAT/eval markers.
 

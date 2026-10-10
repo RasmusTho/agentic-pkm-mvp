@@ -1,0 +1,47 @@
+name: Post-merge dev and test
+
+on:
+  workflow_run:
+    workflows: [App Image Build]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+# Latest pending candidate may replace an older pending one. A started native
+# worker owns its channel locks/recovery and must reach terminal evidence.
+concurrency:
+  group: product-postmerge-dev-test
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.repository.full_name == github.repository
+    # Credential-free signal only. The existing private host controller consumes
+    # successful builds; Actions never receives SSH or deployment credentials.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted orchestration code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate exact published source candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          python3 scripts/postmerge_dev_test.py --source-run "$SOURCE_RUN_ID" --admit-only > candidate.json
+      - name: Publish immutable candidate identity
+        uses: actions/upload-artifact@v4
+        with:
+          name: postmerge-candidate-${{ github.event.workflow_run.head_sha }}
+          path: candidate.json
+          if-no-files-found: error

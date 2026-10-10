@@ -495,7 +495,7 @@ def _pin_value(config: LinuxConfig, key: str) -> str:
     return values[0] if values else ''
 
 
-def _migration_baseline(config: LinuxConfig, target_revision: str) -> str:
+def _migration_baseline(config: LinuxConfig, target_revision: str, *, automatic: bool = False) -> str:
     """Use the deploy script's pending marker or current pin as migration base."""
     pending = config.root / 'config/deploy' / (config.channel + '.migration-pending.env')
     try:
@@ -523,12 +523,15 @@ def _migration_baseline(config: LinuxConfig, target_revision: str) -> str:
         raise PostgresDeployError()
     if fields['TARGET_SHA'] != target_revision or fields['ACK_FORWARD_ONLY'] not in {'0', '1'}:
         raise PostgresDeployError()
+    if automatic and fields['ACK_FORWARD_ONLY'] == '1':
+        raise PostgresDeployError()
     if fields['FROM_SHA'] == '__NO_BASELINE__':
         return ''
     return fields['FROM_SHA']
 
 
-def _raw_representation_migration_pending(config: LinuxConfig, target_revision: str) -> bool:
+def _raw_representation_migration_pending(config: LinuxConfig, target_revision: str,
+                                         *, automatic: bool = False) -> bool:
     """Select the same changed migration set and HAR-02 predicate as deploy_channel.sh."""
     from app.release_channels.reversibility import (
         HEIMDAL_RAW_REPRESENTATION_MIGRATION,
@@ -536,7 +539,8 @@ def _raw_representation_migration_pending(config: LinuxConfig, target_revision: 
         heimdal_raw_representation_migration_pending,
     )
 
-    baseline = _migration_baseline(config, target_revision)
+    baseline = (_migration_baseline(config, target_revision, automatic=True)
+                if automatic else _migration_baseline(config, target_revision))
     has_baseline = bool(baseline) and subprocess.run(
         ['git', '-C', str(config.root), 'rev-parse', '--verify', baseline + '^{commit}'],
         capture_output=True, check=False,
@@ -554,6 +558,8 @@ def _raw_representation_migration_pending(config: LinuxConfig, target_revision: 
         name = Path(raw_path).name
         snapshots.append((name, _git_bytes(config.root, 'show', target_revision + ':' + raw_path)))
     receipt = check_migration_snapshots(snapshots)
+    if automatic and receipt['forward_only']:
+        raise PostgresDeployError()
     pending = heimdal_raw_representation_migration_pending(receipt)
     if pending and HEIMDAL_RAW_REPRESENTATION_MIGRATION not in {
         name for name, _content in snapshots
@@ -620,6 +626,28 @@ class PasswordSource:
             raise PostgresDeployError()
         self.verify()
         self.config.password_file.unlink()
+
+
+def ensure_candidate_object(config: LinuxConfig, revision: str) -> None:
+    """Fetch only missing public candidate objects; never switch host tooling.
+
+    The native channel lock is already held. Candidate SHA admission remains
+    upstream; Git's content identity supplies the exact code/migration snapshots.
+    No deployment or GitHub credential is inherited by this public fetch.
+    """
+    environment = {key: os.environ[key] for key in ('HOME', 'USER', 'LOGNAME', 'PATH') if key in os.environ}
+    environment.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0')
+    command = ['git', '-c', 'safe.directory=' + str(config.root), '-C', str(config.root),
+               'cat-file', '-e', revision + '^{commit}']
+    if subprocess.run(command, env=environment, capture_output=True, check=False).returncode == 0:
+        return
+    fetched = subprocess.run([
+        'git', '-c', 'credential.helper=', '-c', 'safe.directory=' + str(config.root),
+        '-C', str(config.root), 'fetch',
+        '--no-tags', '--no-write-fetch-head', 'https://github.com/RasmusTho/agentic-pkm-mvp.git', revision,
+    ], env=environment, capture_output=True, timeout=60, check=False)
+    if fetched.returncode or subprocess.run(command, env=environment, capture_output=True, check=False).returncode:
+        raise PostgresDeployError()
 
 
 class LinuxEffects:
@@ -708,12 +736,17 @@ class LinuxEffects:
             or set(plan.consumers) != _BASE_DEPLOY_CONSUMERS):
             raise PostgresDeployError()
         validate_database_inputs(os.environ, database_input_files(self.config))
+        if plan.automatic:
+            if self.lock_fd is None:
+                raise PostgresDeployError()
+            ensure_candidate_object(self.config, plan.revision)
         require_file_protocol(self.config.root, plan.revision)
 
     def select_active_plan(self, plan: DeployPlan) -> DeployPlan:
         self.validate_plan(plan)
         capture = _capture_watch_configured(self.config)
-        migration = _raw_representation_migration_pending(self.config, plan.revision)
+        migration = (_raw_representation_migration_pending(self.config, plan.revision, automatic=True)
+                     if plan.automatic else _raw_representation_migration_pending(self.config, plan.revision))
         selected = list(plan.consumers)
         if capture:
             selected.append('heimdal-capture-watch')
@@ -731,7 +764,8 @@ class LinuxEffects:
         self.active_revision = plan.revision
         self.capture_watch_configured = capture
         self.raw_migration_pending = migration
-        return DeployPlan(plan.channel, plan.revision, plan.services, candidate, plan.ack_forward_only)
+        return DeployPlan(plan.channel, plan.revision, plan.services, candidate, plan.ack_forward_only,
+                          plan.image_digest, plan.automatic)
 
     def preflight(self, plan: DeployPlan) -> str:
         selected_plan = self.select_active_plan(plan)
@@ -855,6 +889,10 @@ class LinuxEffects:
                     'deploy', plan.channel, plan.revision]
             if plan.ack_forward_only:
                 argv.append('--ack-forward-only')
+            if plan.image_digest:
+                argv += ['--image-digest', plan.image_digest]
+            if plan.automatic:
+                argv.append('--automatic')
             _command(argv, cwd=self.config.root, env=env, pass_fds=(self.lock_fd,),
                      deploy_diagnostics=True)
         finally:
@@ -1138,13 +1176,17 @@ class DeploymentSupervisor:
         if str(UUID(operation_id)) != operation_id or type(data['bootstrap']) is not bool:
             raise PostgresDeployError()
         raw = data['plan']
-        if not isinstance(raw, dict) or set(raw) != {
-            'channel', 'revision', 'services', 'consumers', 'ack_forward_only'
-        }:
+        legacy_keys = {'channel', 'revision', 'services', 'consumers', 'ack_forward_only'}
+        if not isinstance(raw, dict) or set(raw) not in (
+            legacy_keys, legacy_keys | {'image_digest', 'automatic'}
+        ):
             raise PostgresDeployError()
         plan = DeployPlan(raw['channel'], raw['revision'], tuple(raw['services']),
-                          tuple(raw['consumers']), raw['ack_forward_only'])
+                          tuple(raw['consumers']), raw['ack_forward_only'],
+                          raw.get('image_digest'), raw.get('automatic', False))
         plan.validate()
+        if plan.automatic and data['bootstrap']:
+            raise PostgresDeployError()
         if plan.channel != self.config.channel or data['action'] not in {
             'prepare', 'activate', 'join', 'reconcile-failed'
         }:
@@ -1252,7 +1294,7 @@ class SshDeployRemote:
         self.bootstrap = False
 
     def _request(self, action: str, operation_id: str, plan: DeployPlan) -> dict[str, Any]:
-        request = {'action': action, 'operation_id': operation_id, 'plan': asdict(plan), 'bootstrap': self.bootstrap}
+        request = {'action': action, 'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': self.bootstrap}
         result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '--', self.host,
             'sudo', '-n', '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', plan.channel],
             input=json.dumps(request) + '\n', text=True, capture_output=True, check=False)

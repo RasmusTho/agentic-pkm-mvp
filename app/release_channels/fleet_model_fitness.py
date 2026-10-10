@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import urllib.error
@@ -51,6 +52,7 @@ class ServiceFitness:
     state: str | None = None
     health: str | None = None
     capture_watch_configured: bool | None = None
+    image_id: str | None = None
 
     @property
     def has_app_bind_mount(self) -> bool:
@@ -62,6 +64,7 @@ class ServiceFitness:
             "container_id": self.container_id,
             "image": self.image,
             "image_tag": self.image_tag,
+            "image_id": self.image_id,
             "app_bind_mount_sources": list(self.app_bind_mount_sources),
             "state": self.state,
             "health": self.health,
@@ -150,7 +153,7 @@ def _read_channel_pin(root: Path, channel: str) -> str:
 
 def _image_tag(image: str) -> str:
     # ghcr.io/org/name:tag -> tag; sha-only pins may also be passed directly.
-    tail = image.rsplit("/", 1)[-1]
+    tail = image.split('@', 1)[0].rsplit("/", 1)[-1]
     if ":" in tail:
         return tail.rsplit(":", 1)[1]
     return image
@@ -223,6 +226,7 @@ def _inspect_service(
     return ServiceFitness(
         service=service,
         container_id=container_id,
+        image_id=str(info.get('Image') or ''),
         image=image,
         image_tag=_image_tag(image),
         app_bind_mount_sources=app_bind_sources,
@@ -269,6 +273,25 @@ def check_fleet_model_fitness(
     root_path = Path(root)
     spec = CHANNEL_SPECS[channel]
     pin = _read_channel_pin(root_path, channel)
+    lines = (root_path / 'config/deploy' / (channel + '.env')).read_text().splitlines()
+    suffixes = [line.split('=', 1)[1] for line in lines if line.startswith('APP_IMAGE_DIGEST_SUFFIX=')]
+    repositories = [line.split('=', 1)[1] for line in lines if line.startswith('APP_IMAGE_REPOSITORY=')]
+    digest_ref = None
+    expected_image_id = None
+    if len(suffixes) > 1:
+        raise FleetModelInspectionError('invalid immutable channel image pin')
+    if suffixes and suffixes[0]:
+        if (len(suffixes) != 1 or re.fullmatch(r'@sha256:[0-9a-f]{64}', suffixes[0]) is None
+            or len(repositories) != 1):
+            raise FleetModelInspectionError('invalid immutable channel image pin')
+        digest_ref = repositories[0] + ':' + pin + suffixes[0]
+        try:
+            image_info = json.loads(docker_runner(['image', 'inspect', digest_ref]))
+            expected_image_id = image_info[0]['Id']
+            if re.fullmatch(r'sha256:[0-9a-f]{64}', expected_image_id) is None:
+                raise ValueError()
+        except (ValueError, KeyError, IndexError, TypeError):
+            raise FleetModelInspectionError('cannot verify immutable channel image') from None
     core_services = tuple(
         _inspect_service(
             service,
@@ -349,6 +372,8 @@ def check_fleet_model_fitness(
             f"{sources}"
         )
     for service in app_services:
+        if digest_ref and (service.image != digest_ref or service.image_id != expected_image_id):
+            violations.append(f"service '{service.service}' differs from immutable channel image")
         if not _matches_pin(service.image, pin):
             violations.append(
                 f"service '{service.service}' runs image tag '{service.image_tag}', "
@@ -356,6 +381,8 @@ def check_fleet_model_fitness(
             )
 
     gateway_sha = gateway_service.image_tag
+    if digest_ref and (gateway_service.image != digest_ref or gateway_service.image_id != expected_image_id):
+        violations.append('gateway differs from immutable channel image')
     if not _matches_pin(gateway_service.image, pin):
         violations.append(
             f"gateway service '{GATEWAY_SERVICE}' runs image tag '{gateway_sha}', "
