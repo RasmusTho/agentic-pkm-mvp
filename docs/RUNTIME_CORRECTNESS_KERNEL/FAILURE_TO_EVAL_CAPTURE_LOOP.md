@@ -33,9 +33,19 @@ separately reviewed integration into regression coverage.
   and a payload snapshot. Enough for a reviewer to reconstruct the failure without log archaeology.
 - Drafts land in a **file-based human review surface** that *mirrors the shape* of the existing
   pattern (`app/agent_memory/review_queue.py` + `materialize_promoted_memory` in
-  `app/agent_memory/materialization.py`): a WriteGuard-gated file, an explicit human-decision
-  promotion step that records the decision on the draft, and no golden-set write as part of that
-  decision. Golden-set or fixture integration is a separate reviewed code change.
+  `app/agent_memory/materialization.py`): a WriteGuard-gated, candidate-only file and an explicit
+  human disposition step. Intake never grants authority. Promotion or rejection uses the shared
+  GOV adapter to issue and validate a DecisionToken bound to the reviewer, decision, write class,
+  and exact draft resource before the state-owner status write. The state-owner write receipt and
+  distinct GOV AuthorityReceipt are persisted through the existing receipt/outbox path before the
+  disposition is acknowledged. If receipt persistence or acknowledgement is uncertain after the
+  status mutation, `reconcile_pending_disposition_receipt` reuses the original GOV DecisionToken
+  persisted with the durable terminal draft, reconstructs the state-owner receipt, and emits the
+  same stable receipt event without minting replacement authority or performing a second status
+  mutation. The state-owner and GOV receipt fields, including their timestamps and receipt ID, are
+  derived from the durable disposition identity so an initial writer and concurrent exact retry
+  converge on identical event content before either acknowledges success. Golden-set or fixture
+  integration is a separate reviewed code change.
   It does **not reuse `MemoryCandidateReviewQueue`** — see "Reviewer surfacing" below for why that
   queue is memory-candidate-specific and an eval-dataset case is a distinct artifact class.
 - Drafting is **WriteGuard-gated** like all vault writes: call
@@ -88,9 +98,12 @@ review **UI** itself stays out of scope (W7/W8, see below).
 
 Promotion and rejection persist `decided_by`, `decided_at`, and reviewer `notes`
 in the existing draft frontmatter, using the same WriteGuard and observed-byte
-version check as the status change. The decision API returns the same values
-that were written. This keeps decision provenance with the draft and prevents
-a stale concurrent edit from being overwritten.
+version check as the status change. The decision path separately records the
+human-bound DecisionToken, state-owner status receipt, and AuthorityReceipt
+through the shared outbox sink; WriteGuard health and OEF findings remain
+neither authorization nor accountability. The decision API returns the same
+values that were written. This keeps decision provenance with the draft and
+prevents a stale concurrent edit from being overwritten.
 
 To track a promoted draft's intended integration, include exactly one
 standalone line in its decision notes, using the form that matches the draft:
@@ -122,14 +135,61 @@ note-write and concurrency contract follows
 - [ ] Draft writes go through WriteGuard; a blocked write-state prevents the draft, asserted through
       the production write path.
       Verify: `tests/eval/test_failure_capture_loop.py::test_draft_is_write_guard_gated` — asserts `WriteGuard.assert_writes_allowed` is invoked from the draft-write entrypoint.
-- [ ] No auto-promotion: promoting a draft records the human decision but does not itself change
-      the golden dataset or fixture. Integration is a separate reviewed change.
+- [ ] Explicit promote and reject transitions use the production GOV chain: a DecisionToken is
+      bound to the human reviewer, decision action, `eval_draft_disposition` write class, and
+      exact draft resource before the state-owner status mutation; the distinct state-owner write
+      receipt and AuthorityReceipt are durable before acknowledgement. Missing or mismatched
+      tokens leave the draft unchanged. If receipt persistence fails after the status mutation,
+      explicit reconciliation reuses the original persisted DecisionToken and emits the durable
+      AuthorityReceipt without minting replacement authority or repeating the status mutation.
+      Repeating the same POST with the same authenticated principal, action, and notes resumes that
+      reconciliation; a different reviewer, action, or notes is refused.
+      Concurrent initial and exact-retry writers derive identical state-owner receipts,
+      AuthorityReceipts, and event content from the durable disposition identity before either
+      acknowledges success; JSONL's event-ID uniqueness seam makes the duplicate emission
+      idempotent.
+      The production POST route derives the reviewer actor from the authenticated GOV principal
+      boundary; a client-supplied `decided_by` may only assert that same principal.
+      Reconciliation accepts an existing event only when its outcome is `applied` and its
+      PolicyDecision, DecisionToken, AuthorityReceipt, state-owner receipt, draft, action, and
+      resource bindings all match the terminal draft, after the shared GOV adapter validates the
+      persisted original authorization. It rejects a nested state-owner receipt whose outcome or
+      writer identity is wrong and discovers a durable DB-only receipt before reconstructing one.
+      Reconciliation reads configured sinks independently: a validated matching receipt in a
+      readable sink can be replayed when another sink is unavailable or malformed. If no matching
+      receipt is found and any configured source is unavailable, it fails closed rather than
+      emitting a replacement; conflicting matching event payloads across sinks also fail closed.
+      An event-ID conflict during JSONL append is not treated as sink unavailability and withholds
+      acknowledgement even when the configured DB sink is writable.
+      Readable empty sources still permit valid first-time recovery.
+      OEF findings, traces, and WriteGuard health do not supply authorization or accountability.
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_receipt_pending_reconciles_without_second_status_mutation`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_acknowledges_when_jsonl_sink_survives_db_write_failure`
+      Verify: `tests/api/test_eval_drafts.py::test_receipt_pending_retry_reconciles_same_disposition_without_second_mutation`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_rejects_tampered_persisted_receipt`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_discovers_db_only_receipt`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_rejects_conflicting_receipts_across_sinks`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_jsonl_event_id_conflict_withholds_ack_before_db_fallback`
+      Verify: `tests/api/test_eval_drafts.py::test_receipt_pending_retry_rejects_tampered_governed_token`
+      Verify: `tests/api/test_eval_drafts.py::test_legacy_terminal_eval_draft_retry_fails_closed_without_minting_authority`
+      Verify: `tests/api/test_eval_drafts.py::test_durable_receipt_with_lost_acknowledgement_returns_existing_receipt`
+      Verify: `tests/api/test_eval_drafts.py::test_exact_retry_returns_jsonl_receipt_when_configured_db_is_unavailable`
+      Verify: `tests/api/test_eval_drafts.py::test_exact_retry_returns_db_receipt_when_jsonl_source_is_corrupt`
+      Verify: `tests/api/test_eval_drafts.py::test_malformed_receipt_jsonl_fails_closed_on_exact_retry`
+      Verify: `tests/api/test_eval_drafts.py::test_concurrent_same_decision_posts_reconcile_one_terminal_mutation`
+      Verify: `tests/api/test_eval_drafts.py::test_concurrent_initial_and_retry_receipts_converge_before_acknowledgement`
+      Verify: `tests/api/test_eval_drafts.py::test_decision_route_rejects_request_identity_not_bound_to_auth`
+- [ ] Candidate intake remains non-authoritative: promoting a draft records the human decision but
+      does not itself change the golden dataset or fixture. Integration is a separate reviewed code
+      change.
       Verify: `tests/eval/test_eval_draft_reconciliation.py::test_promoted_unintegrated_draft_is_reported`
       Verify: `tests/eval/test_failure_capture_loop.py::test_no_auto_promotion`
 
 ## How to Verify (Pre-Merge)
 
-1. `pytest -q tests/eval/test_failure_capture_loop.py`.
+1. `pytest -q tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain tests/eval/test_failure_capture_loop.py`.
 2. Full `pytest -q -m "not pg"` + `RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q -m uat_integrated_runtime`
    (vault-write path).
 3. `ruff check app tests`.

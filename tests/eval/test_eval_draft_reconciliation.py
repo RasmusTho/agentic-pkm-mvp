@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+import app.api.routes.eval_drafts as eval_drafts_module
 import app.eval.failure_capture as failure_capture
 from app.eval.draft_reconciliation import build_reconciliation_report, main
 from app.eval.failure_capture import (
@@ -33,6 +34,11 @@ pytestmark = pytest.mark.not_pg
 @pytest.fixture()
 def vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     bind_initialized_vault(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        eval_drafts_module,
+        "_authenticated_principal_id",
+        lambda request, api_key: "principal:test",
+    )
     return tmp_path
 
 
@@ -348,7 +354,7 @@ def test_api_conflict_is_not_reported_as_a_success(
         f"/api/eval-drafts/{draft.draft_id}/decision",
         json={
             "action": "promote",
-            "decided_by": "owner:api",
+            "decided_by": "principal:test",
             "notes": "must not report success",
         },
     )

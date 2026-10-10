@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -8,8 +9,22 @@ from typing import Any, Callable
 
 import pytest
 
+import app.eval.failure_capture as failure_capture_module
 import app.orchestrator.executor as executor_module
+import app.receipts.outbox_sources as receipt_sources
 from app.governance.governed_write import GovernedWriteAdapter
+from app.eval.failure_capture import (
+    AuthorityReceiptPersistenceError,
+    DRAFT_STATUS_PENDING,
+    DRAFT_STATUS_PROMOTED,
+    DRAFT_STATUS_REJECTED,
+    draft_dead_letter_case,
+    promote_draft,
+    reconcile_pending_disposition_receipt,
+    read_draft,
+    reject_draft,
+    PromotionDecisionError,
+)
 from app.mcp.vault_tools import append_note as production_append_note
 from app.orchestrator.executor import MockPlanExecutor, StepContext, StepExecutionError
 from app.orchestrator.runtime import Orchestrator
@@ -1271,3 +1286,641 @@ def test_same_process_same_effect_calls_are_serialized_without_duplicate_writer_
 
     assert all(result["status"] == "ok" for result in results)
     assert len(list((tmp_path / "_mcp").glob("*.md"))) == 1
+
+
+def test_eval_capture_disposition_uses_production_governed_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Human eval disposition uses GOV token + state-owner receipt + GOV receipt.
+
+    Candidate creation is exercised separately from the disposition. Both
+    production promote/reject entrypoints bind the reviewer, action, write
+    class, and exact draft resource before changing the candidate status; a
+    mismatched token is refused before any note mutation.
+    """
+    outbox_path = tmp_path / "eval-disposition-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    golden_path = Path("docs/eval/classification_golden.yaml")
+    golden_before = golden_path.read_bytes()
+
+    for index, (decide, expected_status, actor) in enumerate(
+        (
+            (promote_draft, DRAFT_STATUS_PROMOTED, "human:promoter"),
+            (reject_draft, DRAFT_STATUS_REJECTED, "human:reviewer"),
+        )
+    ):
+        vault = tmp_path / f"vault-{index}"
+        vault.mkdir()
+        draft = draft_dead_letter_case(
+            vault_root=vault,
+            topic="ingest.vault.changed",
+            reason="schema_violation:missing_required_field",
+            event_id=f"evt-{index}",
+            payload={"event_id": f"evt-{index}"},
+            trace_id=f"trace-{index}",
+            write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+        )
+        assert draft is not None and draft.draft_path is not None
+        assert draft.status == DRAFT_STATUS_PENDING
+
+        decision = decide(vault, draft.draft_id, decided_by=actor)
+        assert decision.decision == ("promote" if expected_status == DRAFT_STATUS_PROMOTED else "reject")
+        assert decision.authority_receipt is not None
+        assert decision.authority_receipt.actor == actor
+        assert decision.authority_receipt.resource == draft.draft_path
+        assert decision.authority_receipt.write_class == "eval_draft_disposition"
+        assert decision.authority_receipt.action.endswith(decision.decision)
+
+        persisted = read_draft(vault, draft.draft_id)
+        assert persisted is not None
+        assert persisted.status == expected_status
+        assert persisted.decided_by == actor
+
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    disposition_events = [
+        record
+        for record in records
+        if record["event"] == "governance.authority_receipt.recorded"
+        and record["source"] == "eval.failure_capture"
+    ]
+    assert len(disposition_events) == 2
+    for event in disposition_events:
+        payload = event["payload"]
+        token = payload["decision_token"]
+        policy = payload["policy_decision"]
+        state_owner_receipt = payload["state_owner_receipt"]
+        authority = payload["authority_receipt"]
+        assert policy["source"] == "human_review"
+        assert token["actor"] in {"human:promoter", "human:reviewer"}
+        assert token["action"].endswith(payload["decision"])
+        assert token["write_class"] == "eval_draft_disposition"
+        assert token["resource"] == authority["resource"]
+        assert authority["decision_token_id"] == token["token_id"]
+        assert authority["actor"] == token["actor"]
+        assert authority["outcome"] == "applied"
+        assert authority["source_receipt_ref"]
+        assert state_owner_receipt["operation"] == "write_note"
+        assert state_owner_receipt["locator"]["path"] == authority["resource"]
+
+    # A candidate disposition never edits golden-set membership.
+    assert golden_path.read_bytes() == golden_before
+
+    mismatch_vault = tmp_path / "vault-mismatch"
+    mismatch_vault.mkdir()
+    mismatch = draft_dead_letter_case(
+        vault_root=mismatch_vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-mismatch",
+        payload={"event_id": "evt-mismatch"},
+        trace_id="trace-mismatch",
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    )
+    assert mismatch is not None and mismatch.draft_path is not None
+    mismatch_path = mismatch_vault / mismatch.draft_path
+    before = mismatch_path.read_bytes()
+    adapter = failure_capture_module._GOVERNED_WRITE_ADAPTER
+    real_issue = adapter.issue_human_decision_token
+
+    def issue_mismatched_token(**kwargs: Any) -> Any:
+        grant = real_issue(**kwargs)
+        bad_token = replace(grant.decision_token, resource="other-draft.md")
+        return replace(grant, decision_token=bad_token)
+
+    monkeypatch.setattr(adapter, "issue_human_decision_token", issue_mismatched_token)
+    with pytest.raises(PromotionDecisionError, match="GOV refused"):
+        promote_draft(mismatch_vault, mismatch.draft_id, decided_by="human:bad-token")
+    assert mismatch_path.read_bytes() == before
+    unchanged = read_draft(mismatch_vault, mismatch.draft_id)
+    assert unchanged is not None and unchanged.status == DRAFT_STATUS_PENDING
+
+
+def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A sink fault after mutation is recoverable through one durable receipt."""
+    outbox_path = tmp_path / "eval-disposition-reconcile-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-reconcile"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-reconcile",
+        payload={"event_id": "evt-reconcile"},
+        trace_id="trace-reconcile",
+        write_guard=write_guard,
+    )
+    assert draft is not None and draft.draft_path is not None
+
+    real_write = failure_capture_module.write_note_relative
+    writes: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def count_write(*args: Any, **kwargs: Any) -> Any:
+        writes.append((args, kwargs))
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_write)
+    real_append = failure_capture_module.append_jsonl_outbox_event
+    append_attempts = 0
+
+    def fail_receipt_sink_once(*args: Any, **kwargs: Any) -> bool:
+        nonlocal append_attempts
+        append_attempts += 1
+        if append_attempts == 1:
+            raise OSError("fault injection after status mutation")
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "append_jsonl_outbox_event",
+        fail_receipt_sink_once,
+    )
+    db_attempts = 0
+
+    def fail_db_sink_once(*args: Any, **kwargs: Any) -> str:
+        nonlocal db_attempts
+        db_attempts += 1
+        if db_attempts == 1:
+            raise OSError("fault injection for the configured DB sink")
+        return "db-receipt-event"
+
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", fail_db_sink_once)
+
+    with pytest.raises(AuthorityReceiptPersistenceError, match="could not be persisted"):
+        promote_draft(
+            vault,
+            draft.draft_id,
+            decided_by="human:reconcile",
+            write_guard=write_guard,
+        )
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None
+    assert terminal.status == DRAFT_STATUS_PROMOTED
+    assert terminal.decided_by == "human:reconcile"
+    assert terminal.decision_token is not None
+    original_token_id = terminal.decision_token.token_id
+    assert len(writes) == 1
+    assert append_attempts == 1
+    assert db_attempts == 1
+
+    # The configured DB source is healthy but empty on recovery, so first-time
+    # reconciliation remains allowed to emit the missing receipt.
+    outbox_path.touch()
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: [])
+    recovered = reconcile_pending_disposition_receipt(vault, draft.draft_id)
+    assert recovered.decision == "promote"
+    assert recovered.authority_receipt is not None
+    assert recovered.authority_receipt.actor == "human:reconcile"
+    assert recovered.authority_receipt.decision_token_id == original_token_id
+    assert len(writes) == 1
+    assert append_attempts == 2
+    assert db_attempts == 2
+
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record["event"] == "governance.authority_receipt.recorded"
+        and record["payload"]["draft_id"] == draft.draft_id
+    ]
+    assert len(matching) == 1
+    assert matching[0]["event_id"] == matching[0]["payload"]["disposition_id"]
+    assert matching[0]["payload"]["decision_token"]["token_id"] == original_token_id
+    assert (
+        matching[0]["payload"]["authority_receipt"]["decision_token_id"]
+        == original_token_id
+    )
+    assert matching[0]["payload"]["authority_receipt"]["actor"] == "human:reconcile"
+
+    replay = reconcile_pending_disposition_receipt(vault, draft.draft_id)
+    assert replay.authority_receipt is not None
+    assert replay.authority_receipt.receipt_id == recovered.authority_receipt.receipt_id
+    assert len(writes) == 1
+    assert append_attempts == 2
+
+
+def test_eval_capture_acknowledges_when_jsonl_sink_survives_db_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One durable configured receipt sink is enough to acknowledge disposition."""
+    outbox_path = tmp_path / "partial-eval-disposition-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-partial-sink"
+    vault.mkdir()
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-partial-sink",
+        payload={"event_id": "evt-partial-sink"},
+        trace_id="trace-partial-sink",
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    )
+    assert draft is not None
+
+    db_attempts = 0
+
+    def fail_db_sink(*_args: Any, **_kwargs: Any) -> str:
+        nonlocal db_attempts
+        db_attempts += 1
+        raise OSError("fault injection for configured DB sink")
+
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", fail_db_sink)
+    decision = promote_draft(
+        vault,
+        draft.draft_id,
+        decided_by="human:partial-sink",
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    )
+
+    assert decision.authority_receipt is not None
+    assert decision.authority_receipt.actor == "human:partial-sink"
+    assert db_attempts == 1
+    terminal = read_draft(vault, draft.draft_id)
+    assert (
+        terminal is not None
+        and terminal.status == DRAFT_STATUS_PROMOTED
+        and terminal.decision_token is not None
+    )
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("event") == "governance.authority_receipt.recorded"
+        and record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    assert (
+        matching[0]["payload"]["authority_receipt"]["decision_token_id"]
+        == terminal.decision_token.token_id
+    )
+
+
+def test_eval_capture_jsonl_event_id_conflict_withholds_ack_before_db_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A divergent JSONL event ID is not treated as a failed sink."""
+    outbox_path = tmp_path / "conflicting-jsonl-disposition.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-conflicting-jsonl-disposition"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-conflicting-jsonl-disposition",
+        payload={"event_id": "evt-conflicting-jsonl-disposition"},
+        trace_id="trace-conflicting-jsonl-disposition",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+
+    real_append = failure_capture_module.append_jsonl_outbox_event
+
+    def seed_conflicting_event_then_append(
+        path: Path,
+        event: Any,
+        **kwargs: Any,
+    ) -> bool:
+        conflicting_payload = dict(event.payload)
+        assert conflicting_payload["decision"] == "promote"
+        conflicting_payload["decision"] = "reject"
+        conflicting_event = event.model_copy(update={"payload": conflicting_payload})
+        real_append(path, conflicting_event, **kwargs)
+        return real_append(path, event, **kwargs)
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "append_jsonl_outbox_event",
+        seed_conflicting_event_then_append,
+    )
+    db_attempts = 0
+
+    def writable_db_sink(*_args: Any, **_kwargs: Any) -> str:
+        nonlocal db_attempts
+        db_attempts += 1
+        return "db-disposition-event"
+
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", writable_db_sink)
+
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="conflicts with an existing JSONL event identity",
+    ):
+        promote_draft(
+            vault,
+            draft.draft_id,
+            decided_by="human:conflicting-jsonl",
+            write_guard=write_guard,
+        )
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None and terminal.status == DRAFT_STATUS_PROMOTED
+    assert terminal.decision_token is not None
+    assert db_attempts == 0
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(records) == 1
+    assert records[0]["event_id"] == records[0]["payload"]["disposition_id"]
+    assert records[0]["payload"]["decision"] == "reject"
+
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: [])
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="persisted eval draft receipt does not match the terminal draft",
+    ):
+        reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+
+def test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An unreadable configured DB cannot be mistaken for an empty receipt source."""
+    outbox_path = tmp_path / "unavailable-db-receipt.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-unavailable-db"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-unavailable-db",
+        payload={"event_id": "evt-unavailable-db"},
+        trace_id="trace-unavailable-db",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+
+    writes: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_write = failure_capture_module.write_note_relative
+
+    def count_write(*args: Any, **kwargs: Any) -> Any:
+        writes.append((args, kwargs))
+        return real_write(*args, **kwargs)
+
+    def fail_jsonl(*_args: Any, **_kwargs: Any) -> bool:
+        raise OSError("JSONL unavailable")
+
+    def fail_db(*_args: Any, **_kwargs: Any) -> str:
+        raise OSError("DB unavailable")
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_write)
+    monkeypatch.setattr(failure_capture_module, "append_jsonl_outbox_event", fail_jsonl)
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", fail_db)
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: None)
+
+    with pytest.raises(AuthorityReceiptPersistenceError, match="could not be persisted"):
+        promote_draft(
+            vault,
+            draft.draft_id,
+            decided_by="human:unavailable-db",
+            write_guard=write_guard,
+        )
+
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="configured DB receipt source is unavailable",
+    ):
+        outbox_path.touch()
+        reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None and terminal.status == DRAFT_STATUS_PROMOTED
+    assert len(writes) == 1
+    assert outbox_path.read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "outcome",
+        "decision_token_id",
+        "state_owner_outcome",
+        "state_owner_writer",
+        "contract_version",
+        "contract_version_missing",
+    ],
+)
+def test_eval_capture_reconciliation_rejects_tampered_persisted_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    """A matching event is usable only when its durable receipt is applied and bound."""
+    outbox_path = tmp_path / f"tampered-{tamper}.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    vault = tmp_path / f"vault-tampered-{tamper}"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id=f"evt-tampered-{tamper}",
+        payload={"event_id": f"evt-tampered-{tamper}"},
+        trace_id=f"trace-tampered-{tamper}",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+    promote_draft(
+        vault,
+        draft.draft_id,
+        decided_by="human:tamper-check",
+        write_guard=write_guard,
+    )
+
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    payload = matching[0]["payload"]
+    receipt = payload["authority_receipt"]
+    if tamper == "outcome":
+        receipt["outcome"] = "failed"
+    elif tamper == "decision_token_id":
+        receipt["decision_token_id"] = "tampered-token"
+    elif tamper == "state_owner_outcome":
+        payload["state_owner_receipt"]["outcome"] = "failed"
+    elif tamper == "state_owner_writer":
+        payload["state_owner_receipt"]["writer_identity"] = "attacker"
+    elif tamper == "contract_version":
+        receipt["contract_version"] = "unsupported-governed-write-contract"
+    elif tamper == "contract_version_missing":
+        receipt.pop("contract_version")
+    else:
+        pytest.fail(f"unexpected tamper value: {tamper}")
+    outbox_path.write_text(
+        "".join(json.dumps(record) + "\n" for record in records),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="does not match the terminal draft",
+    ):
+        reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+
+def test_eval_capture_reconciliation_discovers_db_only_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A durable DB receipt is replayed instead of reconstructing a second receipt."""
+    outbox_path = tmp_path / "db-only-receipt.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    vault = tmp_path / "vault-db-only-receipt"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-db-only-receipt",
+        payload={"event_id": "evt-db-only-receipt"},
+        trace_id="trace-db-only-receipt",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+    promoted = promote_draft(
+        vault,
+        draft.draft_id,
+        decided_by="human:db-replay",
+        write_guard=write_guard,
+    )
+    assert promoted.authority_receipt is not None
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    db_record = matching[0]
+    outbox_path.unlink()
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: [db_record])
+
+    writes: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    real_write = failure_capture_module.write_note_relative
+
+    def count_write(*args: Any, **kwargs: Any) -> Any:
+        writes.append((args, kwargs))
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_write)
+    recovered = reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+    assert recovered.authority_receipt is not None
+    assert recovered.authority_receipt.receipt_id == promoted.authority_receipt.receipt_id
+    assert recovered.authority_receipt.decision_token_id == (
+        promoted.authority_receipt.decision_token_id
+    )
+    assert writes == []
+    assert not outbox_path.exists()
+
+
+def test_eval_capture_reconciliation_rejects_conflicting_receipts_across_sinks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A matching event ID with divergent durable payloads is indeterminate."""
+    outbox_path = tmp_path / "conflicting-sink-receipts.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-conflicting-sink-receipts"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-conflicting-sink-receipts",
+        payload={"event_id": "evt-conflicting-sink-receipts"},
+        trace_id="trace-conflicting-sink-receipts",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+    monkeypatch.setattr(
+        failure_capture_module,
+        "write_outbox_event",
+        lambda *_args, **_kwargs: "db-id",
+    )
+    promoted = promote_draft(
+        vault,
+        draft.draft_id,
+        decided_by="human:conflicting-sink",
+        write_guard=write_guard,
+    )
+    assert promoted.authority_receipt is not None
+    jsonl_records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in jsonl_records
+        if record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    conflicting_record = json.loads(json.dumps(matching[0]))
+    conflicting_record["payload"]["decision"] = "reject"
+    monkeypatch.setattr(
+        receipt_sources,
+        "_read_db_outbox_records",
+        lambda: [conflicting_record],
+    )
+
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="conflicting eval draft disposition receipts",
+    ):
+        reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None and terminal.status == DRAFT_STATUS_PROMOTED
+    assert len(jsonl_records) == 1
