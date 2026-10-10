@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import stat
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterator, Literal
 from uuid import uuid4
@@ -3502,7 +3503,7 @@ def _select_vault_notes(
         if _is_hidden_browser_path(safe_path):
             continue
         try:
-            if not candidate.is_file():
+            if not stat.S_ISREG(candidate.stat().st_mode):
                 continue
             body = candidate.read_text(encoding="utf-8")
         except (OSError, UnicodeError):

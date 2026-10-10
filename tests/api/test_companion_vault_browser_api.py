@@ -30,11 +30,15 @@ def _write_note(path: Path, *, title: str, body: str = "Body.\n") -> None:
 
 
 def _fail_browser_file(monkeypatch, path: Path, *, operation: str = "read") -> None:
-    if operation == "stat":
+    if operation.startswith("stat"):
         original_stat = Path.stat
 
         def failing_stat(candidate, *, follow_symlinks=True):
             if candidate == path and follow_symlinks:
+                if operation == "stat_missing":
+                    raise FileNotFoundError(2, "private failure detail", str(path))
+                if operation == "stat_io":
+                    raise OSError(5, "private failure detail", str(path))
                 raise PermissionError(13, "private failure detail", str(path))
             return original_stat(candidate, follow_symlinks=follow_symlinks)
 
@@ -52,7 +56,7 @@ def _fail_browser_file(monkeypatch, path: Path, *, operation: str = "read") -> N
         monkeypatch.setattr(Path, "read_text", failing_read)
 
 
-@pytest.mark.parametrize("operation", ["read", "stat", "decode"])
+@pytest.mark.parametrize("operation", ["read", "stat", "stat_missing", "stat_io", "decode"])
 @pytest.mark.parametrize("readable_count", [0, 1])
 def test_vault_browser_returns_partial_state_when_one_note_is_unreadable(
     tmp_path: Path, monkeypatch, operation: str, readable_count: int
