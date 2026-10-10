@@ -118,6 +118,9 @@ class PgAcceptanceRunner:
                 raise PgAcceptanceError()
             self.preparing.unlink()
         if owner is not None:
+            # Persist resource-directory absence before retiring its proof,
+            # including recovery that observes an already removed directory.
+            self._sync_parent()
             self.marker.unlink()
         self._sync_parent()
 

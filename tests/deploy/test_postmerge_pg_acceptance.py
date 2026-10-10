@@ -460,3 +460,29 @@ def test_resource_creation_and_removal_crashes_recover_same_native_operation(tmp
     assert retired == ['same-native-lock']
     assert not runner.directory.exists() and not runner.marker.exists() and not runner.preparing.exists()
     assert not boundary.containers
+
+
+@pytest.mark.parametrize('directory_already_removed', [False, True])
+def test_cleanup_durably_removes_directory_before_retiring_owner(tmp_path, monkeypatch, directory_already_removed):
+    runner, _boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    runner.resources(IMAGE_ID)
+    if directory_already_removed:
+        # Prior cleanup may have removed the directory without reaching its
+        # parent durability barrier; current recovery must still flush absence.
+        shutil.rmtree(runner.directory)
+    events = []
+    actual_sync = runner._sync_parent
+    def sync():
+        actual_sync()
+        events.append(('parent_fsync', runner.directory.exists(), runner.marker.exists()))
+    monkeypatch.setattr(runner, '_sync_parent', sync)
+    actual_unlink = Path.unlink
+    def unlink(path, *args, **kwargs):
+        if path == runner.marker:
+            assert events and events[-1] == ('parent_fsync', False, True)
+            events.append(('marker_unlink', False, True))
+        return actual_unlink(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'unlink', unlink)
+    runner.cleanup()
+    assert events == [('parent_fsync', False, True), ('marker_unlink', False, True),
+                      ('parent_fsync', False, False)]
