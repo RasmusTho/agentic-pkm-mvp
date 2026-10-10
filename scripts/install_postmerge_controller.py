@@ -58,6 +58,9 @@ def require_reviewed_checkout(checkout: Path, python: Path) -> None:
         or git('status', '--porcelain').stdout
         or not (checkout / 'scripts/postmerge_dev_test.py').is_file()):
         raise ValueError('reviewed checkout required')
+    if any(line[0].islower() or line[0] == 'S'
+           for line in git('ls-files', '-v').stdout.splitlines()):
+        raise ValueError('unmasked reviewed checkout required')
     # get-url expands Git URL rewrites. Bind both effective authorities before
     # fetching or importing any code from the supplied checkout.
     for options in (('--all',), ('--push', '--all')):

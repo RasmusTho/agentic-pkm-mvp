@@ -363,7 +363,7 @@ def test_installer_refuses_foreign_origin_before_fetch_or_import(tmp_path, monke
 
 
 @pytest.mark.parametrize('fault', ['push', 'multiple', 'rewrite', 'forged_tracking_head',
-                                  'replacement', 'graft', None])
+                                  'replacement', 'graft', 'assume_unchanged', 'skip_worktree', None])
 def test_installer_binds_effective_repository_and_fetched_main(tmp_path, monkeypatch, fault):
     from scripts import install_postmerge_controller as installer
     reviewed = tmp_path / 'reviewed'
@@ -380,6 +380,10 @@ def test_installer_binds_effective_repository_and_fetched_main(tmp_path, monkeyp
         git('remote', 'set-url', '--add', 'origin', canonical)
     elif fault == 'rewrite':
         git('config', 'url.https://github.com/foreign/.insteadOf', 'https://github.com/RasmusTho/')
+    elif fault in ('assume_unchanged', 'skip_worktree'):
+        source = 'app/ops/postgres_deploy_host.py'
+        (checkout / source).write_text("raise RuntimeError('unreviewed checkout code')\n")
+        git('update-index', '--' + fault.replace('_', '-'), source)
     elif fault in ('forged_tracking_head', 'replacement', 'graft'):
         reviewed_head = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD'],
                                        capture_output=True, text=True, check=True).stdout.strip()
@@ -398,6 +402,7 @@ def test_installer_binds_effective_repository_and_fetched_main(tmp_path, monkeyp
             (checkout / '.git/info/grafts').write_text(reviewed_head + ' ' + foreign_head + '\n')
     run = subprocess.run
     effects = []
+    monkeypatch.setenv('GIT_DIR', str(reviewed / '.git'))
     def observed(command, **kwargs):
         if 'fetch' in command:
             effects.append('fetch')

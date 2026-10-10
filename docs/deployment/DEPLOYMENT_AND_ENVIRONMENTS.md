@@ -497,6 +497,7 @@ Install from a clean retained tooling checkout contained in reviewed `main` of
 client. Before importing checkout code, the installer requires one credential-free canonical
 GitHub URL for each effective fetch/push origin and checks ancestry against freshly fetched main,
 independently of local tracking references, replacement objects and legacy graft overlays.
+Index hints that could hide working-file changes are refused before checkout imports.
 Coordinate the current channel owner before
 loading the unit so that an ongoing functional acceptance run keeps its frozen candidate:
 
