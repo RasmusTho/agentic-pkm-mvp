@@ -619,6 +619,14 @@ def test_vm_fetches_new_candidate_objects_without_checkout_or_credentials(tmp_pa
     assert (vm / 'candidate').read_text() == 'old'
 
 
+def test_controller_script_entrypoint_imports_without_pythonpath(tmp_path):
+    script = ROOT / 'scripts/postmerge_dev_test.py'
+    result = subprocess.run([sys.executable, '-I', '-S', str(script), '--help'], cwd=tmp_path,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert '--source-run' in result.stdout and '--latest' in result.stdout
+
+
 def test_installer_script_entrypoint_imports_without_pythonpath(tmp_path):
     script = ROOT / 'scripts/install_postmerge_controller.py'
     code = '''
