@@ -4827,7 +4827,8 @@ paths.resolve_optional_vault_root = lambda: (None if os.environ.get("FAKE_API_UN
 stores.resolve_store_backend = lambda: os.environ.get("FAKE_API_BACKEND", "pg")
 stores.get_object_store = lambda: SimpleNamespace(list_objects=lambda **kwargs: [])
 rebuildability.evaluate_product_store_readiness = lambda root, rows: SimpleNamespace(
-    ready=Path(os.environ["FAKE_API_READY_FILE"]).exists())
+    ready=Path(os.environ["FAKE_API_READY_FILE"]).exists(),
+    state="ready" if Path(os.environ["FAKE_API_READY_FILE"]).exists() else "refused")
 ''', encoding="utf-8",
     )
     (root / "app/cli.py").write_text(
@@ -4925,6 +4926,62 @@ def test_native_deploy_rebuilds_source_projection_before_health_gate(
         assert f"api-cli vault-alpha-ingest --vault-root {(root / 'tmp').resolve()} --max-notes 0 --force --source-backed-rebuild --json" in events
     assert "hostile-child-canary" not in result.stdout + result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("rows,refused", [
+    ([], False),
+    ([{"kind": "note", "payload": {}}], True),
+    ([{"payload": {}}], True),
+    ([{"kind": "builder_learning", "payload": {}}], False),
+])
+def test_native_empty_vault_requires_empty_product_projection(
+    tmp_path: Path, rows: list[dict], refused: bool,
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    layout = root / "tmp/⚙️ System/vault.layout.md"
+    layout.parent.mkdir(parents=True)
+    layout.write_text(
+        "---\nsystem_folder: ⚙️ System\ninbox_folder: Inbox\ndesk_folder: Desk\n"
+        "include_folders:\n  - Notes\n---\n\nEmpty-source fixture layout.\n",
+        encoding="utf-8",
+    )
+    (root / "tmp/Notes").mkdir()
+    site = tmp_path / "api-python-fixture/sitecustomize.py"
+    text = site.read_text(encoding="utf-8")
+    override = (
+        'rebuildability.evaluate_product_store_readiness = lambda root, rows: SimpleNamespace(\n'
+        '    ready=Path(os.environ["FAKE_API_READY_FILE"]).exists(),\n'
+        '    state="ready" if Path(os.environ["FAKE_API_READY_FILE"]).exists() else "refused")\n'
+    )
+    assert text.count(override) == 1
+    text = text.replace(override, "")
+    store = 'stores.get_object_store = lambda: SimpleNamespace(list_objects=lambda **kwargs: [])'
+    assert text.count(store) == 1
+    site.write_text(text.replace(store, (
+        'stores.get_object_store = lambda: SimpleNamespace(\n'
+        f'    list_objects=lambda **kwargs: iter({rows!r}))'
+    )), encoding="utf-8")
+    env["FAKE_SOURCE_SUMMARY"] = json.dumps({
+        "scanned": 0, "ingested": 0, "errors": 0, "malformed": 0,
+        "skipped_locked": 0, "skipped_invalid": 0,
+    })
+
+    result = _run_deploy(root, env, sha)
+
+    events = _deploy_events(env)
+    if refused:
+        assert result.returncode != 0
+        assert events.count("source-rebuild") == 1
+        assert not any("up -d --force-recreate api" in event for event in events)
+        assert not any("/readyz" in event for event in events)
+        assert "api-cli index doctor --json --strict" not in events
+        assert not list((root / "ops/deployments").glob("*.json"))
+        assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+    else:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "source-rebuild" not in events
+        assert "api-cli index doctor --json --strict" in events
+    assert "hostile-child-canary" not in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("database_target", ["local", "external"])

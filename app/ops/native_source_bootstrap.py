@@ -187,11 +187,16 @@ def preflight(selector: str) -> Path | None:
 
 def _product_ready(root: Path) -> bool:
     from app.rebuildability import evaluate_product_store_readiness
+    from app.rebuildability.product_total_loss import _is_product_row
     from app.stores import get_object_store
 
-    return evaluate_product_store_readiness(
-        root, get_object_store().list_objects(limit=None),
-    ).ready is True
+    rows = list(get_object_store().list_objects(limit=None))
+    readiness = evaluate_product_store_readiness(root, rows)
+    # Empty retained sources do not prove that this binding is empty. Refuse
+    # stale Product rows without deleting them or admitting ordinary writers.
+    return readiness.ready is True and (
+        readiness.state != 'empty' or not any(_is_product_row(row) for row in rows)
+    )
 
 
 def _run_json(arguments: list[str]) -> Any:
