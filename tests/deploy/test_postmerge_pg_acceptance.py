@@ -72,6 +72,8 @@ class DockerBoundary:
         self.commands = []
         self.containers = {}
         self.fault = None
+        self.tcp_ready = False
+        self.tcp_probes = 0
 
     def command(self, *arguments, timeout=60):
         self.commands.append((arguments, timeout))
@@ -85,6 +87,14 @@ class DockerBoundary:
             return json.dumps([image]).encode()
         if arguments[0] == 'pull' and self.fault == 'dependency':
             raise profile.PgAcceptanceError()
+        if arguments[0] == 'exec' and self.fault in {'startup_race', 'readiness_exhausted'}:
+            if '-h' not in arguments:
+                return b'temporary socket server accepting connections'
+            self.tcp_probes += 1
+            if self.fault == 'readiness_exhausted' or self.tcp_probes < 3:
+                raise profile.PgAcceptanceError()
+            self.tcp_ready = True
+            return b'final TCP server accepting connections'
         if arguments[:2] == ('container', 'ls'):
             name = arguments[arguments.index('--filter') + 1][len('name=^/'):-1]
             return (self.containers.get(name, {}).get('Id', '') + '\n').encode()
@@ -113,6 +123,8 @@ class DockerBoundary:
             del self.containers[name]
             return b''
         if arguments[:2] == ('start', '--attach'):
+            if self.fault == 'startup_race' and not self.tcp_ready:
+                raise profile.PgAcceptanceError()
             if self.fault == 'timeout':
                 raise profile.PgAcceptanceError()
             if self.fault == 'interrupted':
@@ -352,3 +364,99 @@ def test_foreign_labels_are_never_cleanup_authority(tmp_path, monkeypatch):
         runner.cleanup()
     assert len(boundary.containers) == 1
     assert not any(args[0] == 'rm' for args, _timeout in boundary.commands)
+
+
+@pytest.mark.parametrize('case', ['startup_race', 'readiness_exhausted'])
+def test_database_startup_waits_for_candidate_tcp_listener(tmp_path, monkeypatch, case):
+    runner, boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
+    boundary.fault = case
+    monkeypatch.setattr(runner_module.time, 'sleep', lambda _seconds: None)
+    if case == 'startup_race':
+        assert runner.verify()['result'] == 'passed'
+        assert boundary.tcp_probes == 3
+    else:
+        with pytest.raises(profile.PgAcceptanceError):
+            runner.verify()
+        assert boundary.tcp_probes == 30
+        assert not any(args[:2] == ('start', '--attach') for args, _timeout in boundary.commands)
+    probes = [args for args, _timeout in boundary.commands if args[0] == 'exec']
+    assert probes and all(args[args.index('-h') + 1] == '127.0.0.1' for args in probes)
+    assert all(args[args.index('-p') + 1] == '5432' for args in probes)
+    assert not boundary.containers and not runner.directory.exists() and not runner.marker.exists()
+
+
+@pytest.mark.parametrize('crash', ['before_owner_open', 'partial_owner', 'owner_ready_before_directory',
+                                  'after_directory_creation', 'partial_rmtree', 'directory_removed'])
+def test_resource_creation_and_removal_crashes_recover_same_native_operation(tmp_path, monkeypatch, crash):
+    runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
+    if crash in {'partial_rmtree', 'directory_removed'}:
+        runner.resources(IMAGE_ID)
+    with monkeypatch.context() as interrupted:
+        if crash == 'before_owner_open':
+            original = runner_module.os.open
+            def fail_open(path, *args, **kwargs):
+                if Path(path) == runner.preparing:
+                    raise OSError('interrupted owner creation')
+                return original(path, *args, **kwargs)
+            interrupted.setattr(runner_module.os, 'open', fail_open)
+        elif crash == 'partial_owner':
+            original = runner_module.json.dump
+            def fail_write(value, target, *args, **kwargs):
+                if value == runner.identity:
+                    target.write('{')
+                    target.flush()
+                    raise OSError('interrupted owner write')
+                return original(value, target, *args, **kwargs)
+            interrupted.setattr(runner_module.json, 'dump', fail_write)
+        elif crash == 'owner_ready_before_directory':
+            original = Path.mkdir
+            def fail_mkdir(path, *args, **kwargs):
+                if path == runner.directory:
+                    raise OSError('interrupted directory create')
+                return original(path, *args, **kwargs)
+            interrupted.setattr(Path, 'mkdir', fail_mkdir)
+        elif crash == 'after_directory_creation':
+            interrupted.setattr(runner, '_git', lambda *_args: (_ for _ in ()).throw(OSError('interrupted snapshot')))
+        elif crash == 'partial_rmtree':
+            original = runner_module.shutil.rmtree
+            def fail_rmtree(path, *args, **kwargs):
+                if path == runner.directory:
+                    (path / 'source/tests/conftest.py').unlink()
+                    raise OSError('interrupted resource deletion')
+                return original(path, *args, **kwargs)
+            interrupted.setattr(runner_module.shutil, 'rmtree', fail_rmtree)
+        else:
+            original = Path.unlink
+            def fail_unlink(path, *args, **kwargs):
+                if path == runner.marker:
+                    raise OSError('interrupted final marker removal')
+                return original(path, *args, **kwargs)
+            interrupted.setattr(Path, 'unlink', fail_unlink)
+        with pytest.raises(OSError):
+            if crash in {'partial_rmtree', 'directory_removed'}:
+                runner.cleanup()
+            else:
+                runner.resources(IMAGE_ID)
+    journal = DeployJournal(tmp_path / 'native', 'dev')
+    plan = DeployPlan('dev', sha, ('db', 'api'), ('postgres-db', 'postgres-api'), image_digest=DIGEST, automatic=True)
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating', 'verifying'):
+        journal.write(operation_id, stage)
+    config = SimpleNamespace(channel='dev', root=runner.repository, journal=journal)
+    supervisor = linux.DeploymentSupervisor(config)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    retired = []
+    @contextmanager
+    def lock(_self):
+        yield 'same-native-lock'
+    monkeypatch.setattr(linux.LinuxEffects, 'failed_reconciliation_lock', lock)
+    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda _self: True)
+    monkeypatch.setattr(linux.LinuxEffects, 'retire_reconciled_channel_lock', lambda _self, value: retired.append(value))
+    monkeypatch.setattr(linux.LinuxEffects, '_pg_runner', lambda _self, _id, _plan: runner)
+    request = {'action': 'reconcile-failed', 'operation_id': operation_id,
+               'plan': json.loads(json.dumps(plan.payload())), 'bootstrap': False}
+    receipt = supervisor.request(request)['receipt']
+    assert receipt['terminal_result'] == 'failed' and journal.read().stage == 'failed'
+    assert retired == ['same-native-lock']
+    assert not runner.directory.exists() and not runner.marker.exists() and not runner.preparing.exists()
+    assert not boundary.containers

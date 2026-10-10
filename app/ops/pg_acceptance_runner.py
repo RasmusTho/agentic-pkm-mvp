@@ -54,6 +54,8 @@ class PgAcceptanceRunner:
         self.repository = repository
         self.name = 'ygg-pg-' + channel + '-' + operation_id + '-' + SELECTION_HASH[:12]
         self.directory = journal_directory / 'pg-acceptance' / self.name
+        self.marker = self.directory.with_name(self.name + '.owner.json')
+        self.preparing = self.directory.with_name(self.name + '.owner.preparing')
         self.image = IMAGE_REPOSITORY + ':' + sha + '@' + digest
         self.labels = {'io.yggdrasil.pg.' + key: value for key, value in self.identity.items()}
 
@@ -94,39 +96,87 @@ class PgAcceptanceRunner:
                 self._docker('rm', '--force', row['Id'])
                 if self._owned(suffix) is not None:
                     raise PgAcceptanceError()
+        if not self.directory.parent.exists():
+            return
+        self._require_parent()
+        owner = self._owner()
         if self.directory.exists() or self.directory.is_symlink():
             self._require_directory()
-            owner = self.directory / 'owner.json'
-            if owner.is_symlink() or json.loads(owner.read_text()) != self.identity:
+            if owner != self.identity:
                 raise PgAcceptanceError()
             shutil.rmtree(self.directory)
+        # A preparing file can be incomplete only before directory/container
+        # creation. Its exact operation namespace and private parent are owned
+        # by the existing locked request; no durable resource relies on it.
+        if self.preparing.exists() or self.preparing.is_symlink():
+            self._regular_marker(self.preparing)
+            try:
+                prepared = json.loads(self.preparing.read_text())
+            except (ValueError, UnicodeError):
+                prepared = None
+            if prepared is not None and prepared != self.identity:
+                raise PgAcceptanceError()
+            self.preparing.unlink()
+        if owner is not None:
+            self.marker.unlink()
+        self._sync_parent()
+
+    def _regular_marker(self, path: Path) -> None:
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1 or info.st_size > 8192):
+            raise PgAcceptanceError()
+
+    def _owner(self) -> dict[str, str] | None:
+        try:
+            self.marker.lstat()
+        except FileNotFoundError:
+            return None
+        self._regular_marker(self.marker)
+        owner = json.loads(self.marker.read_text())
+        if owner != self.identity:
+            raise PgAcceptanceError()
+        return owner
+
+    def _sync_parent(self) -> None:
+        descriptor = os.open(self.directory.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _require_parent(self) -> None:
+        info = self.directory.parent.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o700
+            or any(path.is_symlink() for path in self.directory.parents)):
+            raise PgAcceptanceError()
 
     def _require_directory(self) -> None:
-        for path in (self.directory, self.directory.parent):
-            info = path.lstat()
-            if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
-                or stat.S_IMODE(info.st_mode) != 0o700):
-                raise PgAcceptanceError()
-        if any(path.is_symlink() for path in self.directory.parents):
+        self._require_parent()
+        info = self.directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
             raise PgAcceptanceError()
 
     def resources(self, app_image_id: str) -> dict[str, Any]:
         # Recovery first removes only this operation's owned remnants. A fresh
         # snapshot is always made from immutable objects, never working files.
         self.directory.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._require_parent()
+        if self._owner() is not None or self.directory.exists():
+            raise PgAcceptanceError()
+        descriptor = os.open(self.preparing, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'w') as owner_stream:
+            json.dump(self.identity, owner_stream, sort_keys=True)
+            owner_stream.flush()
+            os.fsync(owner_stream.fileno())
+        os.rename(self.preparing, self.marker)
+        self._sync_parent()
+        # The complete owner proof is outside the removable tree, durable
+        # before its first directory, and removed only after the tree is gone.
         self.directory.mkdir(mode=0o700)
         self._require_directory()
-        owner = self.directory / 'owner.json'
-        descriptor = os.open(owner, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(descriptor, 'w') as target:
-            json.dump(self.identity, target, sort_keys=True)
-            target.flush()
-            os.fsync(target.fileno())
-        directory_fd = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
         revision = self.identity['source_sha']
         if self._git('rev-parse', revision + '^{commit}').decode().strip() != revision:
             raise PgAcceptanceError()
@@ -216,7 +266,8 @@ class PgAcceptanceRunner:
             self._docker('start', database)
             for attempt in range(30):
                 try:
-                    self._docker('exec', database, 'pg_isready', '-U', 'app', '-d', 'app_test', timeout=5)
+                    self._docker('exec', database, 'pg_isready', '-h', '127.0.0.1', '-p', '5432',
+                                 '-U', 'app', '-d', 'app_test', timeout=5)
                     break
                 except PgAcceptanceError:
                     if attempt == 29:
