@@ -154,7 +154,7 @@ def test_pg_failure_after_forward_only_activation_retains_compatible_target(
         result = _run_deploy(root, env, target_sha, '--automatic', '--image-digest',
                             digest, channel=channel)
         if result.returncode:
-            raise PostgresDeployError(result.stdout + result.stderr)
+            raise PostgresDeployError()
         return result.stdout
 
     monkeypatch.setattr(linux, '_command', shell_transport)
@@ -169,7 +169,7 @@ def test_pg_failure_after_forward_only_activation_retains_compatible_target(
             assert deployment['image_digest'] == digest and deployment['automatic'] is True
             assert deployment['image'].endswith(':' + target_sha + '@' + digest)
             activation_events[:] = _deploy_events(env)
-            raise PgAcceptanceError('injected candidate PG failure after activation')
+            raise PgAcceptanceError()
 
         def cleanup(self):
             cleanup_calls.append(operation_id)
