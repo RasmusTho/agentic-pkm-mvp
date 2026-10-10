@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import app
@@ -26,6 +27,151 @@ from tests.api._vault_test_helpers import bind_selected_vault
 def _write_note(path: Path, *, title: str, body: str = "Body.\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"---\ntitle: {title}\n---\n\n{body}", encoding="utf-8")
+
+
+def _fail_browser_file(monkeypatch, path: Path, *, operation: str = "read") -> None:
+    if operation == "stat":
+        original_stat = Path.stat
+
+        def failing_stat(candidate, *, follow_symlinks=True):
+            if candidate == path and follow_symlinks:
+                raise PermissionError(13, "private failure detail", str(path))
+            return original_stat(candidate, follow_symlinks=follow_symlinks)
+
+        monkeypatch.setattr(Path, "stat", failing_stat)
+    else:
+        original_read = Path.read_text
+
+        def failing_read(candidate, *args, **kwargs):
+            if candidate == path:
+                if operation == "decode":
+                    raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")
+                raise PermissionError(13, "private failure detail", str(path))
+            return original_read(candidate, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "read_text", failing_read)
+
+
+@pytest.mark.parametrize("operation", ["read", "stat", "decode"])
+@pytest.mark.parametrize("readable_count", [0, 1])
+def test_vault_browser_returns_partial_state_when_one_note_is_unreadable(
+    tmp_path: Path, monkeypatch, operation: str, readable_count: int
+) -> None:
+    bind_selected_vault(monkeypatch, tmp_path)
+    bad = tmp_path / "System" / "browser" / "unreadable.md"
+    _write_note(bad, title="Private failed note", body="UNREADABLE_BODY_SENTINEL\n")
+    for index in range(readable_count):
+        _write_note(tmp_path / "notes" / f"readable-{index}.md", title="Readable")
+    _fail_browser_file(monkeypatch, bad, operation=operation)
+
+    response = TestClient(app).get("/api/companion/vault-browser")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["state"] == "partial"
+    assert data["degraded_reason"] == "note_read_failed"
+    assert data["unreadable_notes"] == 1
+    assert data["total_notes"] == readable_count + 1
+    assert data["filtered_notes"] == readable_count
+    assert len(data["notes"]) == readable_count
+    assert data["read_only"] is True
+    assert data["identity_available"] is True
+    assert "UNREADABLE_BODY_SENTINEL" not in response.text
+    assert "private failure detail" not in response.text
+    assert "unreadable.md" not in response.text
+    assert str(tmp_path) not in response.text
+
+
+def test_vault_browser_partial_state_preserves_identity_health_pagination_and_boundaries(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bind_selected_vault(monkeypatch, tmp_path)
+    contents = {
+        "a/uuidless.md": "# UUID-less human note\n",
+        "b/non-indexed.md": "---\nuuid: non-indexed-id\nkind: human_note\n---\nBody\n",
+        "c/invalid.md": "---\nuuid: [broken\n---\nBody\n",
+        "System/browser/readable.md": "# Readable system sibling\n",
+        "00 Infrastructure/System/companions/continuity.md": (
+            "---\nuuid: continuity-id\nkind: companion_note\n---\nContinuity\n"
+        ),
+    }
+    for relative, content in contents.items():
+        note = tmp_path / relative
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text(content, encoding="utf-8")
+    bad = tmp_path / "System" / "browser" / "unreadable.md"
+    _write_note(bad, title="Failed note")
+    child = tmp_path / "private-child"
+    _write_note(child / "settings" / "vault.md", title="Child vault")
+    _write_note(child / "secret.md", title="Private secret")
+    (tmp_path / "child-link.md").symlink_to(child / "secret.md")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.md"
+    _write_note(outside, title="Outside secret")
+    (tmp_path / "outside-link.md").symlink_to(outside)
+    _write_note(tmp_path / ".hidden" / "secret.md", title="Hidden secret")
+    _fail_browser_file(monkeypatch, bad)
+
+    client = TestClient(app)
+    rows = []
+    cursor = None
+    while True:
+        params = {"limit": 2}
+        if cursor:
+            params["cursor"] = cursor
+        response = client.get("/api/companion/vault-browser", params=params)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["state"] == "partial"
+        assert data["unreadable_notes"] == 1
+        assert data["total_notes"] == 6
+        assert data["filtered_notes"] == 5
+        assert data["pagination"]["total_filtered_notes"] == 5
+        assert data["identity_available"] is True
+        assert data["vault_identity"]["channel"] == "dev"
+        assert data["read_only"] is True
+        assert data["nested_vault_roots"][0]["note_path"] == "private-child"
+        assert "Private secret" not in response.text
+        assert "Outside secret" not in response.text
+        rows.extend(data["notes"])
+        cursor = data["pagination"]["next_cursor"]
+        if not data["pagination"]["has_next"]:
+            break
+    assert [row["note_path"] for row in rows] == sorted(contents)
+    by_path = {row["note_path"]: row for row in rows}
+    assert by_path["a/uuidless.md"]["uuid"] is None
+    assert by_path["a/uuidless.md"]["frontmatter_valid"] is False
+    assert by_path["b/non-indexed.md"]["uuid"] == "non-indexed-id"
+    assert by_path["c/invalid.md"]["frontmatter_valid"] is False
+    assert "uuid" in by_path["c/invalid.md"]["missing_required_fields"]
+    assert by_path["00 Infrastructure/System/companions/continuity.md"]["kind"] == "companion_note"
+    filtered = client.get("/api/companion/vault-browser", params={"q": "no-match"}).json()
+    assert filtered["state"] == "partial"
+    assert filtered["notes"] == []
+    assert filtered["filtered_notes"] == 0
+    assert filtered["unreadable_notes"] == 1
+
+
+def test_vault_browser_per_file_failure_does_not_mutate_or_exclude_namespace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bind_selected_vault(monkeypatch, tmp_path)
+    bad = tmp_path / "System" / "browser" / "unreadable.md"
+    readable = bad.with_name("readable.md")
+    _write_note(bad, title="Private failed note", body="UNREADABLE_BODY_SENTINEL\n")
+    _write_note(readable, title="Readable sibling")
+    before = {path: (path.read_bytes(), path.stat().st_mode) for path in (bad, readable)}
+    _fail_browser_file(monkeypatch, bad)
+    client = TestClient(app)
+
+    for _ in range(2):
+        response = client.get("/api/companion/vault-browser")
+        assert response.status_code == 200
+        assert [note["note_path"] for note in response.json()["notes"]] == [
+            "System/browser/readable.md"
+        ]
+        assert response.json()["state"] == "partial"
+    assert client.post("/api/companion/vault-browser", json={}).status_code == 405
+    assert {path: (path.read_bytes(), path.stat().st_mode) for path in (bad, readable)} == before
 
 
 def test_vault_browser_lists_markdown_notes_for_active_dev_vault(

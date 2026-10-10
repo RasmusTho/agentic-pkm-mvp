@@ -1999,6 +1999,9 @@ class VaultBrowserStateResponse(BaseModel):
     query: str
     total_notes: int
     filtered_notes: int
+    state: Literal["ready", "partial"] = "ready"
+    degraded_reason: Literal["note_read_failed"] | None = None
+    unreadable_notes: int = 0
     read_only: bool = True
     vault_identity: VaultIdentityState
     identity_available: bool
@@ -3483,24 +3486,33 @@ def _select_vault_notes(
     limit: int,
     cursor: str | None = None,
     filters: dict[str, list[str]] | None = None,
-) -> tuple[list[VaultBrowserNoteState], int, int, bool, str | None]:
+) -> tuple[list[VaultBrowserNoteState], int, int, bool, str | None, int]:
     needle = query.strip().lower()
     cursor_path = str(cursor or "").strip() or None
     active_filters = filters or {}
     total_notes = 0
     filtered_notes = 0
+    unreadable_notes = 0
     page_window_limit = limit + 1
     # Keep only the lexicographically-smallest page window without
     # materializing the full sorted collection in memory.
     selected_heap: list[tuple[str, VaultBrowserNoteState]] = []
     previous_cursor_heap: list[str] = []
     for candidate, safe_path in _iter_vault_note_files(vault_root):
-        if not candidate.is_file():
-            continue
         if _is_hidden_browser_path(safe_path):
             continue
+        try:
+            if not candidate.is_file():
+                continue
+            body = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            # Count the failed Markdown candidate without exposing its path,
+            # body, or exception. Filtering/pagination only use readable notes;
+            # the response explicitly marks their projection as incomplete.
+            total_notes += 1
+            unreadable_notes += 1
+            continue
         total_notes += 1
-        body = candidate.read_text(encoding="utf-8")
         title = _browser_title(body, fallback=candidate.stem)
         if needle and needle not in safe_path.lower() and needle not in title.lower():
             continue
@@ -3542,7 +3554,10 @@ def _select_vault_notes(
     selected = sorted((item[1] for item in selected_heap), key=lambda note: note.note_path)
     previous_window = sorted(previous_cursor_heap)
     previous_cursor = previous_window[0] if len(previous_window) > limit else None
-    return selected[:limit], total_notes, filtered_notes, len(selected) > limit, previous_cursor
+    return (
+        selected[:limit], total_notes, filtered_notes, len(selected) > limit,
+        previous_cursor, unreadable_notes,
+    )
 
 
 def _vault_browser_pagination(
@@ -4186,7 +4201,7 @@ def read_companion_vault_browser(
         active_filters["review_state"] = list(review_state)
     if trust:
         active_filters["trust"] = list(trust)
-    selected, total_notes, filtered_notes, has_next_page, previous_cursor = _select_vault_notes(
+    selected, total_notes, filtered_notes, has_next_page, previous_cursor, unreadable_notes = _select_vault_notes(
         vault_root,
         query=q,
         limit=effective_limit,
@@ -4225,6 +4240,9 @@ def read_companion_vault_browser(
         total_notes=total_notes,
         filtered_notes=filtered_notes,
         read_only=True,
+        state="partial" if unreadable_notes else "ready",
+        degraded_reason="note_read_failed" if unreadable_notes else None,
+        unreadable_notes=unreadable_notes,
         vault_identity=identity,
         identity_available=identity_available,
         active_filters=active_filters,

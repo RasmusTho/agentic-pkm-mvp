@@ -113,13 +113,14 @@ def test_parent_enumeration_excludes_child_vault_notes(
     assert not any("private-child" in p for p in list_paths), list_paths
 
     # Direct helper coverage (independent of route plumbing).
-    selected, total, _filtered, _has_next, _prev = _select_vault_notes(
+    selected, total, _filtered, _has_next, _prev, unreadable = _select_vault_notes(
         tmp_path, query="", limit=1000
     )
     helper_paths = {note.note_path for note in selected}
     assert not any("private-child" in p for p in helper_paths), helper_paths
     # total_notes must also exclude the child's notes (no leak in counts).
     assert total == 2
+    assert unreadable == 0
 
     collected, _truncated = _collect_vault_note_paths(tmp_path, limit=5000)
     assert not any("private-child" in p for p in collected), collected
