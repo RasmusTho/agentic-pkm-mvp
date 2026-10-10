@@ -4,8 +4,11 @@ from dataclasses import replace
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
+import subprocess
+import sys
 from uuid import uuid4
 from zipfile import ZipFile
 
@@ -189,7 +192,8 @@ def test_native_child_keeps_github_token_outside_deployment(monkeypatch):
     def run(argv, **kwargs):
         calls.append((argv, kwargs))
         return SimpleNamespace(returncode=0, stdout=json.dumps({
-            'operation_id': str(uuid4()), 'channel': 'dev', 'kind': 'deploy',
+            'operation_id': driver.Candidate(SHA, DIGEST, 123, 1, 456).operation_id('dev'),
+            'channel': 'dev', 'kind': 'deploy',
             'stage': 'committed', 'terminal_result': 'committed'}))
 
     monkeypatch.setattr(driver.subprocess, 'run', run)
@@ -243,12 +247,12 @@ def test_controller_recovers_only_native_terminal_evidence(tmp_path):
         assert channel == 'test' and received == candidate
         return {'channel': channel, 'terminal_result': 'committed', 'operation_id': str(uuid4())}
 
-    assert driver.poll(tmp_path, reconcile=reconcile, deploy=deploy) == 0
+    assert driver.poll(tmp_path, resume=reconcile, deploy=deploy) == 0
     assert calls == [('dev', candidate)]
     # An unreadable pending operation cannot start a fresh deployment.
     driver._save_outcome(path, candidate, outcomes[0])
     with pytest.raises(driver.CandidateRefused):
-        driver.poll(tmp_path, reconcile=lambda *_args: (_ for _ in ()).throw(driver.CandidateRefused('pending')),
+        driver.poll(tmp_path, resume=lambda *_args: (_ for _ in ()).throw(driver.CandidateRefused('pending')),
                     deploy=lambda *_args: pytest.fail('fresh activation'))
 
 
@@ -274,3 +278,197 @@ def test_controller_launch_agent_uses_fixed_reviewed_tooling_without_secrets():
     assert config['StartInterval'] == 60 and config['RunAtLoad'] is True
     assert set(config['EnvironmentVariables']) == {'PATH'}
     assert 'prod' not in json.dumps(config) and 'TOKEN' not in json.dumps(config)
+
+
+@pytest.mark.parametrize('crash', ['before_native_call', 'after_remote_commit', 'after_host_finish'])
+def test_controller_crash_reuses_exact_native_id_and_terminal_receipt(tmp_path, crash):
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import deploy_from_host
+    state = tmp_path / 'poll'
+    state.mkdir(mode=0o700)
+    controller = HostSecretController(tmp_path / 'host')
+    admin = SimpleNamespace(controller=controller, check_selected=lambda *_args: [])
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    events = []
+    lost = False
+
+    class Remote:
+        def __init__(self, channel):
+            self.journal = DeployJournal(tmp_path / 'vm', channel)
+
+        def prepare(self, operation_id, plan, *, bootstrap):
+            self.journal.bind_request(operation_id, plan, bootstrap, create=True)
+            self.journal.write(operation_id, 'prepared')
+            events.append(('prepare', plan.channel, operation_id))
+            return False
+
+        def activate(self, operation_id, plan):
+            nonlocal lost
+            for stage in ('preflighted', 'materialized', 'authenticating', 'activating', 'committed'):
+                self.journal.write(operation_id, stage)
+            events.append(('activate', plan.channel, operation_id))
+            if crash == 'after_remote_commit' and plan.channel == 'dev' and not lost:
+                lost = True
+                raise RuntimeError('lost reply')
+            return self.journal.read()
+
+        def reconcile_failed(self, operation_id, plan):
+            self.journal.bind_request(operation_id, plan, False)
+            receipt = self.journal.read()
+            assert receipt.operation_id == operation_id and receipt.terminal_result == 'committed'
+            events.append(('read-terminal', plan.channel, operation_id))
+            return receipt
+
+    def deploy(channel, received):
+        nonlocal lost
+        if crash == 'before_native_call' and channel == 'dev' and not lost:
+            lost = True
+            raise RuntimeError('interrupted invocation')
+        plan = DeployPlan(channel, received.sha, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                          image_digest=received.digest, automatic=True)
+        receipt = deploy_from_host(admin, Remote(channel), plan, qualified=lambda: pytest.fail('bootstrap'),
+                                   allow_bootstrap=False, operation_id=received.operation_id(channel))
+        if crash == 'after_host_finish' and channel == 'dev' and not lost:
+            lost = True
+            raise RuntimeError('checkpoint gap')
+        return receipt.__dict__
+
+    options = {'build': lambda: 123, 'load': lambda _run: candidate, 'deploy': deploy,
+               'resume': deploy, 'current_main': lambda: SHA}
+    assert driver.poll(state, **options) == 78
+    assert json.loads((state / 'postmerge-dev-test.json').read_text())['phase'] == 'pending'
+    assert driver.poll(state, **options) == 0
+    assert driver.poll(state, **options) == 0
+    assert [entry for entry in events if entry[0] == 'activate'] == [
+        ('activate', 'dev', candidate.operation_id('dev')),
+        ('activate', 'test', candidate.operation_id('test')),
+    ]
+    assert candidate.operation_id('dev') != candidate.operation_id('test')
+    # The existing host history remains valid; no duplicate prepared/sent entries
+    # are appended when a completed operation is read again.
+    with controller._locked_journal() as descriptor:
+        assert controller._pending(descriptor) is None
+
+
+def test_native_completed_replay_refuses_changed_digest_and_foreign_pending(tmp_path):
+    from app.ops.host_secret_controller import HostSecretAdmissionError, HostSecretController, TerminalEvidence
+    from app.ops.postgres_deploy import deploy_from_host
+    controller = HostSecretController(tmp_path / 'host')
+    operation_id = driver.Candidate(SHA, DIGEST, 123, 1, 456).operation_id('dev')
+    plan = DeployPlan('dev', SHA, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                      image_digest=DIGEST, automatic=True)
+    journal = DeployJournal(tmp_path / 'vm', 'dev')
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'committed'):
+        journal.write(operation_id, stage)
+    with controller.deploy_operation('dev', allow_bootstrap=False, operation_id=operation_id) as (operation, resumed):
+        assert not resumed
+        operation.prepare_mutation()
+        operation.finish(TerminalEvidence(operation_id, 'deploy', 'dev', 'committed', 'remote-terminal'))
+    history = (controller.directory / 'operations.jsonl').read_bytes()
+    with controller.deploy_operation('dev', allow_bootstrap=False, operation_id=operation_id) as (operation, resumed):
+        assert resumed and operation.completed_result == 'committed'
+        with pytest.raises(HostSecretAdmissionError):
+            operation.prepare_mutation()
+        with pytest.raises(HostSecretAdmissionError):
+            operation.finish(TerminalEvidence(operation_id, 'deploy', 'dev', 'aborted', 'remote-terminal'))
+        operation.finish(TerminalEvidence(operation_id, 'deploy', 'dev', 'committed', 'remote-terminal'))
+    assert (controller.directory / 'operations.jsonl').read_bytes() == history
+
+    class Remote:
+        def reconcile_failed(self, identifier, received):
+            journal.bind_request(identifier, received, False)
+            return journal.read()
+
+        def prepare(self, *_args, **_kwargs):
+            pytest.fail('completed deployment sent again')
+
+    admin = SimpleNamespace(controller=controller, check_selected=lambda *_args: pytest.fail('new secret read'))
+    with pytest.raises(PostgresDeployError):
+        deploy_from_host(admin, Remote(), replace(plan, image_digest='sha256:' + 'c' * 64),
+                         qualified=lambda: pytest.fail('bootstrap'), allow_bootstrap=False, operation_id=operation_id)
+    assert (controller.directory / 'operations.jsonl').read_bytes() == history
+    with controller.deploy_operation('dev', allow_bootstrap=False) as (operation, _resumed):
+        operation.prepare_mutation()
+    with pytest.raises(HostSecretAdmissionError):
+        with controller.deploy_operation('dev', allow_bootstrap=False, operation_id=operation_id):
+            pytest.fail('foreign pending operation adopted')
+
+
+def test_controller_known_failure_does_not_block_next_candidate(tmp_path):
+    tmp_path.chmod(0o700)
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    next_candidate = driver.Candidate('c' * 40, 'sha256:' + 'd' * 64, 124, 1, 457)
+    calls = []
+
+    def deploy(channel, received):
+        calls.append((channel, received))
+        return {'channel': channel, 'terminal_result': 'failed' if received == candidate else 'committed',
+                'operation_id': received.operation_id(channel)}
+
+    options = {'build': lambda: 123, 'load': lambda _run: candidate, 'deploy': deploy, 'current_main': lambda: SHA}
+    assert driver.poll(tmp_path, **options) == 78
+    assert json.loads((tmp_path / 'postmerge-dev-test.json').read_text())['phase'] == 'failed'
+    assert driver.poll(tmp_path, resume=lambda *_args: pytest.fail('completed failure is pending'), **options) == 0
+    assert driver.poll(tmp_path, build=lambda: 124, load=lambda _run: next_candidate,
+                       deploy=deploy, current_main=lambda: next_candidate.sha) == 0
+    assert calls == [('dev', candidate), ('dev', next_candidate), ('test', next_candidate)]
+
+
+def test_vm_fetches_new_candidate_objects_without_checkout_or_credentials(tmp_path, monkeypatch):
+    from app.ops import postgres_deploy_linux as linux
+    upstream = tmp_path / 'upstream'
+    vm = tmp_path / 'vm'
+
+    def git(*arguments, cwd=None):
+        return subprocess.check_output(['git', *arguments], cwd=cwd, text=True, stderr=subprocess.DEVNULL).strip()
+
+    git('init', str(upstream))
+    (upstream / 'candidate').write_text('old')
+    git('add', 'candidate', cwd=upstream)
+    git('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'baseline', cwd=upstream)
+    git('clone', str(upstream), str(vm))
+    baseline = git('rev-parse', 'HEAD', cwd=vm)
+    (upstream / 'candidate').write_text('new')
+    git('add', 'candidate', cwd=upstream)
+    git('-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'candidate', cwd=upstream)
+    revision = git('rev-parse', 'HEAD', cwd=upstream)
+    real_run = linux.subprocess.run
+    fetches = []
+    monkeypatch.setenv('BWS_ACCESS_TOKEN', 'secret-canary')
+    monkeypatch.setenv('GH_TOKEN', 'secret-canary')
+
+    def run(argv, **options):
+        if 'fetch' in argv:
+            assert argv[-2:] == ['https://github.com/RasmusTho/agentic-pkm-mvp.git', revision]
+            assert 'BWS_ACCESS_TOKEN' not in options['env'] and 'GH_TOKEN' not in options['env']
+            fetches.append(argv)
+            argv = [*argv[:-2], str(upstream), revision]
+        return real_run(argv, **options)
+
+    monkeypatch.setattr(linux.subprocess, 'run', run)
+    linux.ensure_candidate_object(SimpleNamespace(root=vm), revision)
+    linux.ensure_candidate_object(SimpleNamespace(root=vm), revision)
+    assert len(fetches) == 1
+    assert git('rev-parse', 'HEAD', cwd=vm) == baseline
+    assert git('show', revision + ':candidate', cwd=vm) == 'new'
+    assert (vm / 'candidate').read_text() == 'old'
+
+
+def test_installer_script_entrypoint_imports_without_pythonpath(tmp_path):
+    script = ROOT / 'scripts/install_postmerge_controller.py'
+    code = '''
+import pathlib, runpy, sys
+sys.path[0] = str(pathlib.Path(sys.argv[1]).parent)
+entry = runpy.run_path(sys.argv[1])
+globals_ = entry['main'].__globals__
+globals_['sys'].platform = 'darwin'
+globals_['require_reviewed_checkout'] = lambda *args: None
+globals_['shutil'].which = lambda name: '/usr/bin/gh'
+globals_['Path'].home = staticmethod(lambda: pathlib.Path(sys.argv[2]))
+raise SystemExit(entry['main'](['--checkout', '/reviewed/tooling', '--python', '/reviewed/python']))
+'''
+    result = subprocess.run([sys.executable, '-c', code, str(script), str(tmp_path)], cwd=tmp_path,
+                            env={key: value for key, value in os.environ.items() if key != 'PYTHONPATH'},
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr

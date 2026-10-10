@@ -58,6 +58,7 @@ class HostSecretOperation:
         allow_bootstrap: bool | None = None,
         prepared: bool = False,
         mutation_started: bool = False,
+        completed_result: str | None = None,
     ) -> None:
         self._journal_fd = journal_fd
         self.operation_id = operation_id
@@ -70,9 +71,10 @@ class HostSecretOperation:
         self._deferred_prepared = False
         self._prepared = prepared
         self._mutation_started = mutation_started
+        self._completed_result = completed_result
 
     def _record(self, stage: str, source: str | None = None) -> None:
-        if not self._active or self._finished:
+        if not self._active or self._finished or self._completed_result is not None:
             raise HostSecretAdmissionError()
         record: dict[str, str | bool | None] = {
             "operation_id": self.operation_id,
@@ -102,6 +104,10 @@ class HostSecretOperation:
     def mutation_started(self) -> bool:
         return self._mutation_started
 
+    @property
+    def completed_result(self) -> str | None:
+        return self._completed_result
+
     def prepare_mutation(self) -> None:
         """Persist before the first remote effect; caller already holds the host lock."""
         if self.kind == "check" or (self.kind == "token-push" and not self._prepared):
@@ -123,6 +129,8 @@ class HostSecretOperation:
         self._record("prepared")
 
     def finish(self, evidence: TerminalEvidence) -> None:
+        if not self._active or self._finished:
+            raise HostSecretAdmissionError()
         valid_source = evidence.source == _TERMINAL_SOURCES.get(self.kind)
         if (
             self.kind == "token-push"
@@ -143,7 +151,11 @@ class HostSecretOperation:
             or not valid_source
         ):
             raise HostSecretAdmissionError()
-        self._record(evidence.result, evidence.source)
+        if self._completed_result is not None:
+            if evidence.result != self._completed_result:
+                raise HostSecretAdmissionError()
+        else:
+            self._record(evidence.result, evidence.source)
         self._finished = True
 
 
@@ -442,11 +454,16 @@ class HostSecretController:
 
     @contextmanager
     def deploy_operation(
-        self, target: str, *, allow_bootstrap: bool | None = None
+        self, target: str, *, allow_bootstrap: bool | None = None, operation_id: str | None = None
     ) -> Iterator[tuple[HostSecretOperation, bool]]:
         """Resume only the same channel/ID; the remote receipt remains authority."""
         if target not in _TARGETS - {"shared"} or (
             allow_bootstrap is not None and type(allow_bootstrap) is not bool
+        ):
+            raise HostSecretAdmissionError()
+        if operation_id is not None and (
+            target not in {'dev', 'test'} or allow_bootstrap is not False
+            or str(UUID(operation_id)) != operation_id
         ):
             raise HostSecretAdmissionError()
         with self._locked_journal(wait=True) as descriptor:
@@ -457,14 +474,33 @@ class HostSecretController:
                 # Legacy pending deployment records have no mode. Reconcile their
                 # matching remote receipt before a new request can adopt the ID.
                 raise HostSecretAdmissionError()
+            if pending and operation_id is not None and pending['operation_id'] != operation_id:
+                raise HostSecretAdmissionError()
+            completed = None
+            if operation_id is not None and pending is None:
+                # _pending has validated the entire durable history. An exact
+                # terminal ID is read-only; it cannot append another prepared or
+                # sent record. The caller must still bind and read the VM receipt.
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                with os.fdopen(os.dup(descriptor), 'r') as source:
+                    records = [json.loads(line) for line in source]
+                matches = [record for record in records if record['operation_id'] == operation_id]
+                if matches:
+                    last = matches[-1]
+                    if (last['kind'] != 'deploy' or last['target'] != target
+                        or last.get('allow_bootstrap') is not False
+                        or last['stage'] not in {'committed', 'aborted', 'failed'}
+                        or last['source'] != 'remote-terminal'):
+                        raise HostSecretAdmissionError()
+                    completed = str(last['stage'])
             operation = HostSecretOperation(descriptor,
-                str(pending["operation_id"]) if pending else str(uuid4()), "deploy", target,
-                allow_bootstrap=allow_bootstrap)
+                str(pending["operation_id"]) if pending else operation_id or str(uuid4()), "deploy", target,
+                allow_bootstrap=allow_bootstrap, completed_result=completed)
             # Read-only host preflight holds the same lock but does not leave a
             # pending mutation that would prevent importing a missing value.
             # prepare_mutation persists prepared + sent before the first RPC.
-            operation._deferred_prepared = not bool(pending)
+            operation._deferred_prepared = not bool(pending) and completed is None
             try:
-                yield operation, bool(pending)
+                yield operation, bool(pending) or completed is not None
             finally:
                 operation._active = False

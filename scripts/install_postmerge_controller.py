@@ -14,6 +14,9 @@ import shutil
 import subprocess
 import sys
 
+if __package__ in {None, ''}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 LABEL = 'se.yggdrasil.postmerge-dev-test'
 
 
@@ -79,16 +82,17 @@ def main(argv: list[str] | None = None) -> int:
             with path.open('wb') as target:
                 os.chmod(path, 0o600)
                 plistlib.dump(launch_agent(args.checkout, args.python, Path(gh), state), target)
-        if args.enable:
-            domain = 'gui/' + str(os.getuid())
-            # Replace only this one declared unit, without touching any worker.
-            result = subprocess.run(['/bin/launchctl', 'print', domain + '/' + LABEL],
-                                    capture_output=True, check=False)
-            if result.returncode == 0:
-                subprocess.run(['/bin/launchctl', 'bootout', domain + '/' + LABEL],
+            if args.enable:
+                domain = 'gui/' + str(os.getuid())
+                # Hold the poller's lock through replacement so a new poll
+                # cannot start between configuration and bootout.
+                result = subprocess.run(['/bin/launchctl', 'print', domain + '/' + LABEL],
+                                        capture_output=True, check=False)
+                if result.returncode == 0:
+                    subprocess.run(['/bin/launchctl', 'bootout', domain + '/' + LABEL],
+                                   capture_output=True, check=True)
+                subprocess.run(['/bin/launchctl', 'bootstrap', domain, str(path)],
                                capture_output=True, check=True)
-            subprocess.run(['/bin/launchctl', 'bootstrap', domain, str(path)],
-                           capture_output=True, check=True)
         print('post-merge controller ' + ('enabled' if args.enable else 'installed'))
         return 0
     except Exception:

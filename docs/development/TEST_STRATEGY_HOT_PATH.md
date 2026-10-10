@@ -25,10 +25,10 @@ conservative and enable those gates. This classification does not turn a require
 bare skipped success or remove exact AC coverage. Broad contract target sets remain until a narrower
 owner mapping is demonstrated; a Markdown suffix outside these roots is not documentation proof.
 
-The merge path stays distinct from post-merge runtime feedback. The proposed automatic exact-image
-`dev` → `test` path and its failure policy are target state in
-[`FAST_PR_TO_DEV_TEST_AUTOMATION`](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md); they are not current
-PR checks or shipped deployment automation.
+The merge path stays distinct from post-merge runtime feedback. #5922 supplies exact-image admission
+and private-controller `dev` → `test` support; its native smoke checks do not replace current PR/PG
+checks. [`FAST_PR_TO_DEV_TEST_AUTOMATION`](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) sequences live
+activation, functional coverage handoff and pilot acceptance separately under #5675.
 
 ## Current Protection Surface
 

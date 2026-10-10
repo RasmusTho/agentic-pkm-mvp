@@ -579,6 +579,28 @@ class PasswordSource:
         self.config.password_file.unlink()
 
 
+def ensure_candidate_object(config: LinuxConfig, revision: str) -> None:
+    """Fetch only missing public candidate objects; never switch host tooling.
+
+    The native channel lock is already held. Candidate SHA admission remains
+    upstream; Git's content identity supplies the exact code/migration snapshots.
+    No deployment or GitHub credential is inherited by this public fetch.
+    """
+    environment = {key: os.environ[key] for key in ('HOME', 'USER', 'LOGNAME', 'PATH') if key in os.environ}
+    environment.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0')
+    command = ['git', '-c', 'safe.directory=' + str(config.root), '-C', str(config.root),
+               'cat-file', '-e', revision + '^{commit}']
+    if subprocess.run(command, env=environment, capture_output=True, check=False).returncode == 0:
+        return
+    fetched = subprocess.run([
+        'git', '-c', 'credential.helper=', '-c', 'safe.directory=' + str(config.root),
+        '-C', str(config.root), 'fetch',
+        '--no-tags', '--no-write-fetch-head', 'https://github.com/RasmusTho/agentic-pkm-mvp.git', revision,
+    ], env=environment, capture_output=True, timeout=60, check=False)
+    if fetched.returncode or subprocess.run(command, env=environment, capture_output=True, check=False).returncode:
+        raise PostgresDeployError()
+
+
 class LinuxEffects:
     def __init__(self, config: LinuxConfig) -> None:
         self.config = config
@@ -665,6 +687,10 @@ class LinuxEffects:
             or set(plan.consumers) != _BASE_DEPLOY_CONSUMERS):
             raise PostgresDeployError()
         validate_database_inputs(os.environ, database_input_files(self.config))
+        if plan.automatic:
+            if self.lock_fd is None:
+                raise PostgresDeployError()
+            ensure_candidate_object(self.config, plan.revision)
         require_file_protocol(self.config.root, plan.revision)
 
     def select_active_plan(self, plan: DeployPlan) -> DeployPlan:

@@ -348,6 +348,7 @@ class DeployRemote(Protocol):
     def prepare(self, operation_id: str, plan: DeployPlan, *, bootstrap: bool) -> bool: ...
     def activate(self, operation_id: str, plan: DeployPlan) -> DeployReceipt: ...
     def join(self, operation_id: str, plan: DeployPlan) -> DeployReceipt: ...
+    def reconcile_failed(self, operation_id: str, plan: DeployPlan) -> DeployReceipt: ...
 
 
 def bootstrap_password(admin: SecretAdmin, operation: HostSecretOperation, *, empty: bool) -> None:
@@ -393,15 +394,28 @@ def bootstrap_password(admin: SecretAdmin, operation: HostSecretOperation, *, em
 
 
 def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
-                     *, qualified: Callable[[], None], allow_bootstrap: bool = True) -> DeployReceipt:
+                     *, qualified: Callable[[], None], allow_bootstrap: bool = True,
+                     operation_id: str | None = None) -> DeployReceipt:
     """Hold the shared controller lock through matching remote terminal evidence."""
-    if type(allow_bootstrap) is not bool or (plan.automatic and allow_bootstrap):
+    if (type(allow_bootstrap) is not bool or (plan.automatic and allow_bootstrap)
+        or (operation_id is not None and not plan.automatic)):
         raise PostgresDeployError()
     plan.validate()
     try:
-        with admin.controller.deploy_operation(
-            plan.channel, allow_bootstrap=allow_bootstrap
-        ) as (operation, resumed):
+        arguments: dict[str, Any] = {'allow_bootstrap': allow_bootstrap}
+        if operation_id is not None:
+            arguments['operation_id'] = operation_id
+        with admin.controller.deploy_operation(plan.channel, **arguments) as (operation, resumed):
+            if operation_id is not None and resumed:
+                try:
+                    receipt = remote.reconcile_failed(operation.operation_id, plan)
+                except Exception:
+                    if operation.completed_result is not None:
+                        # Never turn a completed operation into another send.
+                        raise
+                else:
+                    operation.finish(receipt.evidence())
+                    return receipt
             with SecretHistory.open(admin.controller.directory) as history:
                 bootstrap_history = bool(history.records(operation.operation_id)) if resumed else False
             if bootstrap_history:

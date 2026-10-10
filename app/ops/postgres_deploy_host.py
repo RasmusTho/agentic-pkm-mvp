@@ -156,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('revision')
     parser.add_argument('--image-digest', help='immutable published sha256 image-index digest')
     parser.add_argument('--automatic', action='store_true', help='non-production existing-secret delivery')
+    parser.add_argument('--operation-id', help='stable automatic candidate/channel operation UUID')
     parser.add_argument(
         '--ack-forward-only', action='store_true',
         help='acknowledge forward-only migrations in this exact deployment request',
@@ -171,6 +172,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.automatic and not args.existing_secrets_only:
+            raise PostgresDeployError()
+        if args.operation_id is not None and (
+            not args.automatic or str(UUID(args.operation_id)) != args.operation_id
+        ):
             raise PostgresDeployError()
         controller = HostSecretController()
         # The controller can inspect DB credentials and the API's degrade-visibly
@@ -192,17 +197,22 @@ def main(argv: list[str] | None = None) -> int:
                 receipts.append(receipt)
                 return receipt.evidence()
 
-            controller.reconcile(
-                readback,
-                expected=('deploy', args.channel, False),
-            )
+            if args.operation_id is not None:
+                with controller.deploy_operation(args.channel, allow_bootstrap=False,
+                                                 operation_id=args.operation_id) as (operation, resumed):
+                    if not resumed:
+                        raise PostgresDeployError()
+                    operation.finish(readback(operation.operation_id, 'deploy', args.channel))
+            else:
+                controller.reconcile(readback, expected=('deploy', args.channel, False))
             receipt = receipts[-1]
             print(json.dumps(receipt.__dict__, sort_keys=True))
             return 0
         admin = SecretAdmin(_configured_host_admin(), controller=controller)
+        options = {'operation_id': args.operation_id} if args.operation_id is not None else {}
         receipt = deploy_from_host(admin, SshDeployRemote('ygg-' + args.channel), plan,
                                    qualified=lambda: require_qualification(controller),
-                                   allow_bootstrap=not args.existing_secrets_only)
+                                   allow_bootstrap=not args.existing_secrets_only, **options)
         print(json.dumps(receipt.__dict__, sort_keys=True))
         return 0 if receipt.terminal_result == 'committed' else 78
     except Exception:

@@ -2,7 +2,8 @@
 
 Only public build identities and fixed terminal fields enter the output. No test
 or deployment child receives the GitHub read token; remote/native recovery owns
-unknown outcomes. This driver never retries or reconciles a deployment itself.
+unknown outcomes. Resumption retains the same native operation ID; the native
+worker decides terminality without replaying an indeterminate activation.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 from typing import Any, Callable
+from uuid import NAMESPACE_URL, UUID, uuid5
 from zipfile import ZipFile
 
 REPOSITORY = 'RasmusTho/agentic-pkm-mvp'
@@ -40,6 +42,13 @@ class Candidate:
     run_id: int
     run_attempt: int
     artifact_id: int
+
+    def operation_id(self, channel: str) -> str:
+        if channel not in {'dev', 'test'}:
+            raise CandidateRefused('invalid_stage_sequence')
+        return str(uuid5(NAMESPACE_URL,
+                        f'https://github.com/{REPOSITORY}/actions/runs/{self.run_id}/attempts/{self.run_attempt}'
+                        f'#{channel}:{self.sha}:{self.digest}'))
 
 
 def _digest(value: Any) -> bool:
@@ -166,7 +175,7 @@ def checkpoint_lock(directory: Path):
 def poll(directory: Path, *, build: Callable[[], int] = latest_build,
          load: Callable[[int], Candidate] = load_candidate,
          deploy: Callable[[str, Candidate], dict[str, Any]] | None = None,
-         reconcile: Callable[[str, Candidate], dict[str, Any]] | None = None,
+         resume: Callable[[str, Candidate], dict[str, Any]] | None = None,
          current_main: Callable[[], str] = _current_main) -> int:
     # No CI job runs this path. It is supervised on the existing private agent
     # host, which already owns credentials, SSH dispatch and terminal recovery.
@@ -185,12 +194,12 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
                     raise CandidateRefused('checkpoint_refused')
                 checkpoint = json.load(source)
                 _validate_checkpoint(checkpoint)
-        if checkpoint and checkpoint['phase'] == 'started':
-            # Read the exact pending native request under its existing lock. No
-            # new activation, retry or adoption of a different request is allowed.
+        if checkpoint and checkpoint['phase'] in {'started', 'pending'}:
+            # The candidate's durable operation ID covers both a lost pending
+            # reply and a committed native receipt preceding checkpoint fsync.
             candidate = Candidate(**checkpoint['candidate'])
-            receipt = (reconcile or native_reconcile)(checkpoint['channel'], candidate)
-            result = 'passed' if receipt['terminal_result'] == 'committed' else 'failed_or_pending'
+            receipt = (resume or native_deploy)(checkpoint['channel'], candidate)
+            result = 'passed' if receipt['terminal_result'] == 'committed' else 'failed'
             outcome = {**checkpoint['outcome'], 'result': result, 'operation_id': receipt['operation_id']}
             _save_outcome(path, candidate, outcome)
             checkpoint.update(phase=result, outcome=outcome)
@@ -223,7 +232,7 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
             or re.fullmatch(r'[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
             or any(type(value) is not int or value < 1
                    for value in (candidate.run_id, candidate.run_attempt, candidate.artifact_id))
-            or checkpoint['phase'] not in {'started', 'passed', 'failed_or_pending', 'superseded_before_deployment'}
+            or checkpoint['phase'] not in {'started', 'passed', 'pending', 'failed', 'superseded_before_deployment'}
             or checkpoint['channel'] not in {'dev', 'test', None}
             or (checkpoint['channel'] is None) != (checkpoint['phase'] == 'superseded_before_deployment')
             or any(checkpoint['outcome'].get(key) != value for key, value in {
@@ -236,40 +245,31 @@ def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
         raise CandidateRefused('checkpoint_refused') from None
 
 
-def _native(channel: str, candidate: Candidate, *, reconcile: bool = False) -> dict[str, Any]:
+def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
     # Existing host code sanitizes SSH's environment and retains the VM worker
     # through terminal evidence. Capture all streams; never print child errors.
     environment = {k: v for k, v in os.environ.items() if k not in {'GH_TOKEN', 'GITHUB_TOKEN'}}
     command = [
         sys.executable, '-m', 'app.ops.postgres_deploy_host', channel, candidate.sha,
+        '--operation-id', candidate.operation_id(channel),
         '--existing-secrets-only', '--automatic', '--image-digest', candidate.digest,
     ]
-    if reconcile:
-        command.append('--reconcile-pending')
     result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
-    if result.returncode:
-        raise CandidateRefused('native_stage_failed_or_pending')
     try:
         receipt = json.loads(result.stdout)
         if (set(receipt) != {'operation_id', 'channel', 'kind', 'stage', 'terminal_result'}
             or receipt['channel'] != channel or receipt['kind'] != 'deploy'
             or receipt['stage'] != receipt['terminal_result']
-            or receipt['terminal_result'] not in ({'committed', 'failed', 'aborted'} if reconcile else {'committed'})):
+            or receipt['terminal_result'] not in {'committed', 'failed', 'aborted'}
+            or (receipt['terminal_result'] == 'committed' and result.returncode != 0)
+            or result.returncode not in {0, 78}
+            or receipt['operation_id'] != candidate.operation_id(channel)):
             raise ValueError()
-        from uuid import UUID
         if str(UUID(receipt['operation_id'])) != receipt['operation_id']:
             raise ValueError()
         return receipt
     except Exception:
         raise CandidateRefused('native_terminal_evidence_refused') from None
-
-
-def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
-    return _native(channel, candidate)
-
-
-def native_reconcile(channel: str, candidate: Candidate) -> dict[str, Any]:
-    return _native(channel, candidate, reconcile=True)
 
 
 def deliver(candidate: Candidate, *, deploy: Callable[[str, Candidate], dict[str, Any]] = native_deploy,
@@ -286,13 +286,17 @@ def deliver(candidate: Candidate, *, deploy: Callable[[str, Candidate], dict[str
         emit({**identity, 'result': 'superseded_before_deployment'})
         return 0
     for channel in channels:
-        emit({**identity, 'channel': channel, 'result': 'started'})
+        emit({**identity, 'channel': channel, 'result': 'started', 'operation_id': candidate.operation_id(channel)})
         try:
             receipt = deploy(channel, candidate)
-            if receipt.get('terminal_result') != 'committed' or receipt.get('channel') != channel:
+            if receipt.get('terminal_result') not in {'committed', 'failed', 'aborted'} or receipt.get('channel') != channel:
                 raise CandidateRefused('native_terminal_evidence_refused')
         except Exception:
-            emit({**identity, 'channel': channel, 'result': 'failed_or_pending',
+            emit({**identity, 'channel': channel, 'result': 'pending', 'operation_id': candidate.operation_id(channel),
+                  'failure_reference': f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'})
+            return 78
+        if receipt['terminal_result'] != 'committed':
+            emit({**identity, 'channel': channel, 'result': 'failed', 'operation_id': receipt['operation_id'],
                   'failure_reference': f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'})
             return 78
         emit({**identity, 'channel': channel, 'result': 'passed', 'operation_id': receipt['operation_id']})

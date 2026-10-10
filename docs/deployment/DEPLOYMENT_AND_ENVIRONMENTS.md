@@ -146,13 +146,29 @@ test deployment and verification. Production was not contacted and remains out o
 
 ### CI deployment automation posture
 
-The repository builds and verifies SHA-identified application images, and `scripts/deploy_channel.sh`
-provides channel deployment mechanics. In the verified workflow set, no GitHub Actions workflow calls
-that deploy script; post-merge automatic `dev` → `test` delivery is therefore not shipped. The
-[fast PR-to-dev/test plan](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) proposes a separate post-merge
-path that keeps nightly and live deployment out of the PR merge gate. It requires fresh channel and
-executor qualification, exact SHA/digest receipts, per-channel serialization, and a recovery contract
-before enablement. Production authority and promotion remain separate.
+The repository builds and verifies SHA-identified application images. After a successful `main` push
+build, `.github/workflows/postmerge-dev-test.yml` admits its exact source-run image proof with read-only
+Actions permissions. The private macOS controller in `scripts/postmerge_dev_test.py` polls that same
+proof and calls the existing native host boundary for `dev` then `test`, using one immutable digest.
+The existing health, version, fleet-image and UI smoke gates must pass on dev before test starts.
+Actions receives no deployment credentials; there is no extra human approval between ordinary stages.
+
+`scripts/install_postmerge_controller.py` installs the host-local LaunchAgent from a retained, clean,
+reviewed-main tooling checkout. Install the updated native VM runtime once through the existing
+deployment installer before enabling the poller. Future automatic candidates fetch their exact Git
+objects from the public repository under the native channel lock, without moving the retained
+checkout or passing credentials. A private atomic checkpoint deduplicates build attempts. Stable
+candidate/channel operation IDs resume an interrupted call through the existing native journals,
+including a terminal result written before the checkpoint; unknown outcomes are retried with that
+same ID and never silently treated as completed. A failed candidate does not veto later candidates.
+
+Automatic deployment uses existing secrets only and refuses forward-only migrations before runtime
+mutation. Native host and VM locks remain the deployment authority. The
+[fast PR-to-dev/test plan](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) records live activation,
+functional dev/test acceptance and the ten-candidate pilot under #5675. Repository tests prove support,
+not live enablement. Coordinate an ongoing frozen acceptance run before loading the unit. Current
+PR/PG and nightly checks stay in place until their coverage handoff is verified; production promotion
+remains separately governed.
 
 RCA on 2026-06-29 (BuilderOps LearningSignal `lrn_20260629093241_59713bc1`) found that the system had **no deployment source-of-truth**. The observed reality:
 
