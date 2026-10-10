@@ -436,7 +436,8 @@ Companion docs:
   for the canonical path, ownership, and receipt contract.
 - Native Linux BWS activation runs a fixed source-only API one-shot after migrations and before
   normal service recreation, using the existing source-backed producer in the same target,
-  selected vault, file-backed database and transient API consumer context. Normal producers stay
+  selected vault, PostgreSQL credentials delivered through files and transient API consumer
+  context. Normal producers stay
   stopped; an already-ready Product avoids full replay. Strict source counters, fresh Product
   readiness and strict vector/index diagnosis remain required. Only proven owned-producer
   quiescence permits compensation or terminal same-ID reconciliation. See the [Deploy procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure)
