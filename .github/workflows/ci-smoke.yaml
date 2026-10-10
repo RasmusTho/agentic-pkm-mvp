@@ -813,9 +813,9 @@ jobs:
       - name: Run shared not-pg unit tests in process shards
         if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite == 'true'
         shell: bash
-        timeout-minutes: 22
+        timeout-minutes: 30
         env:
-          # Per-test timeout must fire well before the 22-min job wall clock,
+          # Per-test timeout must fire well before the 30-min step wall clock,
           # otherwise an intermittently-hanging test (a pure-Python block such
           # as a join()/queue.get()/Event.wait() with no timeout) loses the race
           # to the job cap and the run dies with NO diagnostics — no stack dump,
@@ -918,7 +918,10 @@ jobs:
       - name: Run scoped not-pg unit tests
         if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'
         shell: bash
-        timeout-minutes: 22
+        # Current deployment-heavy selections can approach the former 22-min
+        # ceiling while still progressing. Keep coverage and the per-test
+        # watchdog; allow the healthy batch to finish and report its result.
+        timeout-minutes: 30
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
         run: |
