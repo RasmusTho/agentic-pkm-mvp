@@ -326,6 +326,8 @@ class DeployWorker:
     def _wait_for_post_activation_quiescence(self) -> bool:
         deadline = self._monotonic() + _POST_ACTIVATION_QUIESCENCE_TIMEOUT_SECONDS
         while True:
+            if self._monotonic() >= deadline:
+                return False
             try:
                 proven = self.effects.quiescent()
                 if self._monotonic() >= deadline:
