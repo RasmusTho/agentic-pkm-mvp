@@ -558,8 +558,6 @@ def _raw_representation_migration_pending(config: LinuxConfig, target_revision: 
         name = Path(raw_path).name
         snapshots.append((name, _git_bytes(config.root, 'show', target_revision + ':' + raw_path)))
     receipt = check_migration_snapshots(snapshots)
-    if automatic and receipt['forward_only']:
-        raise PostgresDeployError()
     pending = heimdal_raw_representation_migration_pending(receipt)
     if pending and HEIMDAL_RAW_REPRESENTATION_MIGRATION not in {
         name for name, _content in snapshots

@@ -233,18 +233,12 @@ def test_full_suite_shards_retain_failure_logs(tmp_path: Path) -> None:
 
 
 def test_pg_contracts_have_bounded_diagnostics() -> None:
-    job = yaml.safe_load(_smoke_text())["jobs"]["pr-index-pg-contracts"]
-    step = next(s for s in job["steps"] if s.get("name", "").startswith("Run exact index,"))
-    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
-    assert step["env"]["PYTHONUNBUFFERED"] == "1"
-    assert 120 < job["timeout-minutes"] * 60
     from app.ops.pg_acceptance import pytest_arguments
-    assert 'python -m app.ops.pg_acceptance --ci' in step["run"]
+
     arguments = pytest_arguments()
+    assert '--timeout=120' in arguments and '--timeout-method=thread' in arguments
     assert '-vv' in arguments and '--durations=20' in arguments
     assert arguments[arguments.index('-m') + 1] == 'pg'
-    install = next(s for s in job["steps"] if s.get("name") == "Install dependencies")
-    assert "pip install -r dev-requirements.txt" in install["run"]
     assert "pytest-timeout==" in (REPO_ROOT / "dev-requirements.txt").read_text()
 
 
@@ -264,61 +258,87 @@ def test_ci_smoke_installs_acl_tools_for_linux_acl_fixture() -> None:
     assert install_start < selected_test_run
 
 
-def test_pr_index_pg_contracts_run_exact_acceptance_surface() -> None:
+def test_pg_acceptance_handoff_preserves_required_coverage() -> None:
     from app.ops.pg_acceptance import SELECTORS, pytest_arguments
-    workflow = _smoke_text()
 
-    assert "pr-index-pg-contracts:" in workflow
-    job = workflow[
-        workflow.index("pr-index-pg-contracts:") : workflow.index("contract-validation:")
-    ]
-    assert "\n    timeout-minutes: 30\n" in job
-    assert "github.event_name == 'pull_request'" in job
-    assert "pgvector/pgvector:pg16" in job
-    assert "dorny/paths-filter@v3" in job
-    assert "app/cli/index_rebuild.py" in job
-    assert "app/agents/panel/**" in job
-    assert "tests/index/test_provenance_stamp.py" in job
-    assert "tests/indexer/test_outbox_roundtrip_pg.py" in job
-    assert "app/knowledge_acquisition/youtube_api_client.py" in job
-    assert "app/alembic/versions/d9e0f1a2b3c4_yss03_youtube_api_quota.py" in job
-    assert "tests/knowledge_acquisition/test_youtube_api_quota_pg.py" in job
-    # Entity-review operation journal (EROJ-01, #4350): all its
-    # committed-visibility proofs are pg-marked, so this lane is the only
-    # PR-path check that can regress-test them.
-    assert "app/heimdal/entity_review_operation_journal.py" in job
-    assert "app/alembic/versions/e7a2b9c4d1f8_eroj01_entity_review_operations.py" in job
-    assert "tests/heimdal/test_entity_review_operation_journal.py" in job
-    assert "tests/migrations/test_entity_review_operation_journal_schema_parity.py" in job
-    # HAR-02's forward-only raw representation backfill is pg-only. Both the
-    # runtime/migration sources must trigger this PR lane and the exact proof
-    # must appear in its pytest invocation.
-    assert "app/heimdal/raw_store.py" in job
-    assert "app/alembic/versions/e7b4c9d2a6f1_heimdal_raw_representation.py" in job
-    assert "tests/migrations/test_heimdal_raw_representation_migration.py" in job
-    assert "tests/migrations/test_heimdal_raw_representation_migration.py" in (
-        INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
-    )
-    assert 'python -m app.ops.pg_acceptance --ci' in job
+    # Accepted PR coverage at the handoff. New selectors may add coverage;
+    # neither a permanent test count nor another manual stage gate is added.
+    accepted_targets = {
+        'tests/index/test_provenance_stamp.py',
+        'tests/index/test_identity_migration.py',
+        'tests/indexer/test_outbox_roundtrip_pg.py',
+        'tests/indexer/test_mixed_identity_detection.py',
+        'tests/cli/test_index_doctor_mixed.py',
+        'tests/cli/test_index_rebuild_cli.py',
+        'tests/cli/test_index_reconcile.py',
+        'tests/knowledge_acquisition/test_youtube_api_quota_pg.py',
+        'tests/knowledge_acquisition/test_youtube_sync_state_pg.py',
+        'tests/heimdal/test_entity_review_operation_journal.py',
+        'tests/migrations/test_entity_review_operation_journal_schema_parity.py',
+        'tests/migrations/test_file_state_adoption.py',
+        'tests/migrations/test_objects_adoption.py',
+        'tests/migrations/test_legacy_objects_fk_migration.py',
+        'tests/migrations/test_store_schema_parity.py',
+        'tests/migrations/test_multi_vault_ingest_projection_keys.py',
+        'tests/store/test_membership_store.py',
+        'tests/migrations/test_ingest_schema_parity.py',
+        'tests/migrations/test_multi_vault_replay_projection_backfill.py',
+        'tests/migrations/test_replay_schema_parity.py',
+        'tests/migrations/test_mvr05a_residual_binding_keys.py',
+        'tests/migrations/test_decisions_fk_set_null.py',
+        'tests/integration/test_decisions_rebuild_from_log_only.py',
+        'tests/integration/test_multi_vault_projection_isolation.py',
+        'tests/episodes/test_episode_projection.py',
+        'tests/integration/test_vault_sync_atomicity.py',
+        'tests/ingest/test_vault_root_ingest_pg.py',
+        'tests/invariants/test_retrieval_spine_invariants.py',
+        'tests/jobs/test_decisions_export.py',
+        'tests/jobs/test_decisions_projection_rebuild.py',
+        'tests/jobs/test_multi_vault_decisions_rebuild_scope.py',
+        'tests/jobs/test_calibration_projection_rebuild.py',
+        'tests/integration/test_calibration_rebuild_from_log_only.py',
+        'tests/stores/test_decisions_fk_semantics.py',
+        'tests/stores/test_ensure_tables_assert_only.py',
+        'tests/stores/test_multi_vault_store_reset_scope.py',
+        'tests/stores/test_pg_truncate_reset.py',
+        'tests/stores/test_pg_vector_index.py',
+        'tests/stores/test_store_contract_pg.py',
+        'tests/stores/test_vector_generation_identity.py',
+        'tests/services/test_audit_writer.py',
+        'tests/migrations/test_outbox_schema_parity.py',
+        'tests/migrations/test_multi_vault_outbox_upgrade.py',
+        'tests/services/test_multi_vault_outbox_dual_key_dedup.py',
+        'tests/services/test_outbox_bootstrap_assert_only.py',
+        'tests/instance/test_file_state_binding_key.py',
+        'tests/services/test_vault_sync_binding_scope.py',
+        'tests/integration/test_single_vault_compatibility.py',
+        'tests/heimdal/test_trigger_ownership_pg.py',
+        'tests/migrations/test_heimdal_raw_representation_migration.py',
+        'tests/migrations/test_heimdal_raw_liveness_migration.py',
+        'tests/builderops/test_owner_fact_producers.py',
+        'tests/api/test_devui_owner_facts.py',
+        'tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_production_admission',
+        'tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_transaction_recovery',
+        'tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_concurrent_identical_start_replays_winner',
+        'tests/builderops/test_control_plane_issue_delivery.py::test_issue_approval_concurrent_competing_start_preserves_conflict',
+        'tests/builderops/test_control_plane_issue_delivery.py::test_host_candidate_versions_preserve_v1_v2_history',
+        'tests/builderops/test_control_plane_issue_delivery.py::test_v3_live_start_refuses_unqualified_continuation',
+        'tests/builderops/test_devui_runtime.py::test_managed_source_preserves_v3_candidate_binding',
+        'tests/builderops/control_plane/test_postgres_transaction_kernel.py::test_initial_issue_import_preserves_transaction_lease_and_outbox_boundaries',
+        'tests/builderops/test_issue_delivery_effect_executor.py',
+        'tests/builderops/test_issue_delivery_operation.py',
+        'tests/builderops/test_issue_delivery_readback.py',
+        'tests/builderops/test_standalone_consumer_conformance.py',
+    }
+    assert accepted_targets.issubset(set(SELECTORS))
+    assert all((REPO_ROOT / selector.split('::')[0]).is_file() for selector in SELECTORS)
+    jobs = yaml.safe_load(_smoke_text())["jobs"]
+    assert "pr-index-pg-contracts" not in jobs
     assert pytest_arguments()[pytest_arguments().index('-m') + 1] == 'pg'
-    # FCA-06 conformance must execute in PG CI, not merely collect/deselect
-    # in the not-pg lane. Bind both change selectors and the actual invocation.
-    assert "- 'app/builderops/second_consumer.py'" in job
-    assert "- 'tests/builderops/test_standalone_consumer_conformance.py'" in job
-    assert 'tests/builderops/test_standalone_consumer_conformance.py' in SELECTORS
-    # #5593: exact new PG-only nodes plus the existing full effect modules.
-    for path in ("cli", "epic_dispatch", "issue_delivery_operation", "issue_delivery_effect_executor",
-                 "issue_delivery_worker_isolation", "issue_delivery_readback", "devui_sources"):
-        assert f"- 'app/builderops/{path}.py'" in job
-    for module in ("test_issue_delivery_effect_executor", "test_issue_delivery_operation", "test_issue_delivery_readback"):
-        assert f"- 'tests/builderops/{module}.py'" in job
-        assert f'tests/builderops/{module}.py' in SELECTORS
-    for module, node in (("test_control_plane_issue_delivery", "test_host_candidate_versions_preserve_v1_v2_history"),
-                         ("test_control_plane_issue_delivery", "test_v3_live_start_refuses_unqualified_continuation"),
-                         ("test_devui_runtime", "test_managed_source_preserves_v3_candidate_binding")):
-        assert f"- 'tests/builderops/{module}.py'" in job
-        assert f'tests/builderops/{module}.py::{node}' in SELECTORS
-    assert "- 'tests/builderops/issue_delivery_production_harness.py'" in job
+    nightly = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+    assert "tests/migrations/test_heimdal_raw_representation_migration.py" in nightly
+    assert "tests/heimdal/test_entity_review_operation_journal.py" in nightly
+    assert "tests/migrations/test_entity_review_operation_journal_schema_parity.py" in nightly
 
 
 def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:

@@ -196,13 +196,20 @@ def test_automatic_migration_guard_runs_before_native_effects(tmp_path, monkeypa
     monkeypatch.setattr(effects, 'validate_plan', lambda _plan: None)
     monkeypatch.setattr(linux, '_capture_watch_configured', lambda _config: False)
     monkeypatch.setattr(linux, '_migration_baseline', lambda *_args, **_kwargs: '')
-    monkeypatch.setattr(linux, '_git_bytes', lambda *_args: b'')
-    monkeypatch.setattr(reversibility, 'check_migration_snapshots',
-                        lambda _snapshots: {'forward_only': ['irreversible.py']})
+    monkeypatch.setattr(linux, '_git_bytes', lambda *_args: (
+        b'app/alembic/versions/missing_marker.py\n' if 'ls-tree' in _args
+        else b'revision = "missing_marker"\ndown_revision = None\n'))
     monkeypatch.setattr(linux, 'vm_selected_values', lambda *_args: pytest.fail('credential materialization'))
-    with pytest.raises(PostgresDeployError):
+    with pytest.raises(reversibility.MigrationMarkerError):
         effects.preflight(plan)
     assert effects.password is None
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_automatic_nonprod_forward_only_preserves_migration_policy(tmp_path, channel):
+    from tests.deploy.test_deploy_channel import _assert_nonprod_forward_only_migration_policy
+
+    _assert_nonprod_forward_only_migration_policy(tmp_path, channel, automatic=True)
 
 
 def test_automatic_native_guard_refuses_inherited_ack_before_credentials(tmp_path, monkeypatch):

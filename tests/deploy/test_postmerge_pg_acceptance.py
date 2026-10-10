@@ -14,7 +14,6 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-import yaml
 
 from app.ops import pg_acceptance as profile
 from app.ops import pg_acceptance_runner as runner_module
@@ -196,13 +195,6 @@ def test_native_automatic_operation_requires_profile_before_commit(tmp_path, mon
 
 
 def test_shared_pg_surface_preserves_selection_and_required_results():
-    workflow = yaml.safe_load((ROOT / '.github/workflows/ci-smoke.yaml').read_text())
-    job = workflow['jobs']['pr-index-pg-contracts']
-    step = next(row for row in job['steps'] if 'Run exact index' in row.get('name', ''))
-    assert 'python -m app.ops.pg_acceptance --ci' in step['run']
-    assert job['services']['postgres']['image'] == profile.POSTGRES_IMAGE
-    assert any('CREATE EXTENSION IF NOT EXISTS vector' in row.get('run', '') for row in job['steps'])
-    assert len(profile.SELECTORS) == 65
     assert all((ROOT / selector.split('::')[0]).is_file() for selector in profile.SELECTORS)
     args = profile.pytest_arguments()
     assert args[args.index('-m') + 1] == 'pg'

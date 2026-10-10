@@ -352,11 +352,13 @@ Platform enforcement is a floor, not the process gate. [`PR_HOT_PATH.md`](PR_HOT
 governs when a PR may merge, and the absence of a protection rule on any other surface never waives
 it.
 
-`pg`-marked tests reach the PR path only through the narrow `Index PG contracts`
-(`pr-index-pg-contracts`) job, which runs `pytest -m "pg"` against a pgvector service for the exact
-index/outbox/YouTube-quota acceptance files when those paths change. That job is not a required
-check. Broad `pg` and integration coverage stays on `integration-nightly.yaml` (nightly schedule
-plus `workflow_dispatch`).
+The shared `app/ops/pg_acceptance.py` profile retains the former PR PG acceptance surface and runs
+inside native post-merge dev/test verification after the coverage handoff under #5675. Each stage
+uses the same immutable candidate image with its own disposable pgvector database and scratch
+vault, and requires every selected PG result to pass. Non-PG PR CI remains the merge check; its
+success cannot replace the native PG receipt. The independently bounded PG and integration lanes
+remain on `integration-nightly.yaml` (nightly schedule plus `workflow_dispatch`). See
+[`TESTING.md`](../TESTING.md) and the [deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
 
 ## Documentation rules
 

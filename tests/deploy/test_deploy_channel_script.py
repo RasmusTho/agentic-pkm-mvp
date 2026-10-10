@@ -1989,20 +1989,56 @@ def _commit_har_raw_migration(root: Path, name: str) -> str:
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
-def test_automatic_deploy_refuses_forward_only_before_mutation(tmp_path: Path, channel: str) -> None:
+def test_automatic_deploy_preflights_forward_only_raw_migration(tmp_path: Path, channel: str) -> None:
     root, env, _sha = _deploy_harness(tmp_path)
     target = _commit_har_raw_migration(root, 'e7b4c9d2a6f1_heimdal_raw_representation.py')
     env['FAKE_SHA'] = target
+    env['FAKE_SECURITY_EVENT_LOG'] = env['FAKE_DEPLOY_EVENT_LOG']
     _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
     pin = root / 'config/deploy' / (channel + '.env')
-    before = pin.read_bytes() if pin.exists() else None
+    digest = 'sha256:' + 'b' * 64
     result = _run_deploy(root, env, target, '--automatic', '--image-digest',
-                         'sha256:' + 'b' * 64, channel=channel)
-    assert result.returncode == 78, result.stdout + result.stderr
-    assert 'automatic migration gate refused' in result.stderr
-    assert (pin.read_bytes() if pin.exists() else None) == before
+                         digest, channel=channel)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'APP_IMAGE_DIGEST_SUFFIX=@' + digest in pin.read_text()
     assert not (root / 'config/deploy' / (channel + '.migration-pending.env')).exists()
+    events = _deploy_events(env)
+    first_secret = events.index('security migrate-primary')
+    first_docker = next(i for i, event in enumerate(events) if event.startswith('docker '))
+    assert first_secret < first_docker
+    receipt = json.loads((root / 'ops/deployments' / (channel + '-latest.json')).read_text())
+    assert receipt['migration_receipt']['forward_only'] == ['e7b4c9d2a6f1_heimdal_raw_representation.py']
+    assert receipt['migration_receipt']['ack_forward_only'] is False
+    assert receipt['image_digest'] == digest and receipt['automatic'] is True
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_automatic_deploy_refuses_inherited_ack_with_empty_migration_delta(
+    tmp_path: Path, channel: str,
+) -> None:
+    root, env, target = _deploy_harness(tmp_path)
+    _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
+    pin = root / 'config/deploy' / (channel + '.env')
+    pin.write_text(f'APP_IMAGE_TAG={target}\n', encoding='utf-8')
+    pin_before = pin.read_bytes()
+    pending = root / 'config/deploy' / (channel + '.migration-pending.env')
+    pending.write_text(
+        f'FROM_SHA={target}\nTARGET_SHA={target}\nACK_FORWARD_ONLY=1\n',
+        encoding='utf-8',
+    )
+    pending_before = pending.read_bytes()
+
+    result = _run_deploy(
+        root, env, target, '--automatic', '--image-digest', 'sha256:' + 'b' * 64,
+        channel=channel,
+    )
+
+    assert result.returncode == 78, result.stdout + result.stderr
+    assert 'refused inherited migration acknowledgement' in result.stderr
+    assert pin.read_bytes() == pin_before
+    assert pending.read_bytes() == pending_before
     assert not any(event.startswith('docker ') for event in _deploy_events(env))
+    assert not (root / 'ops/deployments' / (channel + '-latest.json')).exists()
 
 
 def test_automatic_deploy_preserves_digest_in_pin_receipt_and_recovery(tmp_path: Path) -> None:

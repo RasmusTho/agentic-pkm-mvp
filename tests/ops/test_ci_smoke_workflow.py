@@ -22,8 +22,9 @@ def test_ci_smoke_installs_media_system_dependencies() -> None:
 
 def test_declared_ci_image_sources_are_verified_digest_pins() -> None:
     """Check actual service, action inputs and Dockerfile pull entrypoints."""
-    smoke_jobs = yaml.safe_load(_workflow_text())["jobs"]
-    assert smoke_jobs["pr-index-pg-contracts"]["services"]["postgres"]["image"] == (
+    from app.ops.pg_acceptance import POSTGRES_IMAGE
+
+    assert POSTGRES_IMAGE == (
         "mirror.gcr.io/pgvector/pgvector:pg16@sha256:"
         "7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a"
     )
