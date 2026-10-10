@@ -348,3 +348,115 @@ def test_queue_review_writeguard_block_does_not_stage_or_mutate(
     assert _proposal_count() == 0
     assert note.read_text(encoding="utf-8") == before
     assert _outbox_records(outbox) == []
+
+
+@pytest.mark.parametrize("system_dir", ["⚙️ System", "00 Infrastructure/System"])
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("alias", [False, True])
+def test_queue_review_uuid_scope_prefers_genuine_human_source_over_companion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system_dir: str, legacy: bool, alias: bool
+) -> None:
+    vault = tmp_path / "vault"
+    target_uuid = "human-queue-5933"
+    human_path = "🧠 Notes/human.md"
+    companion_path = f"{'_system' if legacy else system_dir}/companions/{target_uuid}.md"
+    _write_note(vault, human_path, uuid=target_uuid)
+    _write_note(vault, companion_path, title="Continuity", uuid=target_uuid)
+    if alias:
+        (vault / "a-companion.md").symlink_to(vault / companion_path)
+    before = {path: path.read_bytes() for path in vault.rglob("*.md")}
+    bind_selected_vault(monkeypatch, vault)
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", system_dir)
+    outbox = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+
+    response = TestClient(app).post(
+        "/api/companion/vault-browser/actions/queue-review", json={"artifact_uuid": target_uuid}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["note_path"] == human_path
+    assert data["artifact_uuid"] == target_uuid
+    assert data["requires_confirmation"] is True
+    assert data["receipt_state"] == "pending_intent_not_durable_receipt"
+    proposal = _staged_proposal(data["proposal_id"])
+    assert proposal is not None
+    assert proposal.intent_event.payload.note.path == human_path
+    assert proposal.intent_event.payload.note.uuid == target_uuid
+    assert _proposal_count() == 1
+    assert {path: path.read_bytes() for path in before} == before
+    assert _outbox_records(outbox) == []
+
+
+@pytest.mark.parametrize("scope", ["missing", "companion_only", "ambiguous", "companion_mismatch", "companion_path"])
+def test_queue_review_refuses_invalid_human_uuid_scope_without_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scope: str
+) -> None:
+    vault = tmp_path / "vault"
+    target_uuid = "scope-refusal-5933"
+    companion_path = "00 Infrastructure/System/companions/retained.md"
+    _write_note(vault, companion_path, title="Continuity", uuid=target_uuid)
+    params = {"artifact_uuid": "missing-5933" if scope == "missing" else target_uuid}
+    if scope == "companion_path":
+        params = {"note_path": companion_path}
+    if scope in {"ambiguous", "companion_mismatch"}:
+        _write_note(vault, "notes/first.md", uuid=target_uuid)
+        params["note_path"] = "notes/first.md" if scope == "ambiguous" else companion_path
+    if scope == "ambiguous":
+        _write_note(vault, "notes/second.md", uuid=target_uuid)
+    before = {path: path.read_bytes() for path in vault.rglob("*.md")}
+    bind_selected_vault(monkeypatch, vault)
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "00 Infrastructure/System")
+    outbox = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+
+    response = TestClient(app).post("/api/companion/vault-browser/actions/queue-review", json=params)
+
+    assert response.status_code == (409 if scope in {"ambiguous", "companion_mismatch", "companion_path"} else 404)
+    expected_error = {
+        "ambiguous": "artifact_uuid_conflict", "companion_mismatch": "artifact_scope_mismatch",
+        "companion_path": "artifact_scope_read_only",
+    }.get(scope, "artifact_not_found")
+    assert response.json()["detail"]["error"] == expected_error
+    assert _proposal_count() == 0
+    assert {path: path.read_bytes() for path in before} == before
+    assert _outbox_records(outbox) == []
+
+
+@pytest.mark.parametrize("note_path", [None, "notes/human.md", "a-alias.md"])
+def test_queue_review_human_symlink_alias_is_one_uuid_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, note_path: str | None
+) -> None:
+    vault = tmp_path / "vault"
+    human = _write_note(vault, "notes/human.md", uuid="human-alias-5933")
+    (vault / "a-alias.md").symlink_to(human)
+    companion = vault / "00 Infrastructure/System/companions/retained.md"
+    companion.parent.mkdir(parents=True)
+    companion.symlink_to(human)
+    bind_selected_vault(monkeypatch, vault)
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "00 Infrastructure/System")
+    before = {path: path.read_bytes() for path in vault.rglob("*.md")}
+    outbox = tmp_path / "index-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox))
+    params = {"artifact_uuid": "human-alias-5933"}
+    if note_path:
+        params["note_path"] = note_path
+    client = TestClient(app)
+
+    response = client.post("/api/companion/vault-browser/actions/queue-review", json=params)
+
+    assert response.status_code == 200
+    assert response.json()["note_path"] == "notes/human.md"
+    proposal = _staged_proposal(response.json()["proposal_id"])
+    assert proposal is not None
+    assert proposal.intent_event.payload.note.path == "notes/human.md"
+    mismatch = client.post(
+        "/api/companion/vault-browser/actions/queue-review",
+        json={"note_path": companion.relative_to(vault).as_posix(), "artifact_uuid": "human-alias-5933"},
+    )
+    assert mismatch.status_code == 409
+    assert mismatch.json()["detail"]["error"] == "artifact_scope_mismatch"
+    assert _proposal_count() == 1
+    assert {path: path.read_bytes() for path in vault.rglob("*.md")} == before
+    assert _outbox_records(outbox) == []

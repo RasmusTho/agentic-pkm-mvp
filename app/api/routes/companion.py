@@ -112,6 +112,7 @@ from app.receipts.artifact_receipts import ArtifactReceiptTarget, receipts_for_a
 from app.relevance import collect_now_moments
 from app.resurfacing.runtime import evaluate_resurfacing_candidates
 from app.services.artifact_identity import resolve_note_artifact_identity
+from app.services.companion_note import is_companion_path
 from app.services.commitment_persistence import load_commitments
 from app.services.llm import LLMError
 from app.tts.cache import TTSUnsafeCacheRootError, audio_path
@@ -3735,6 +3736,14 @@ def _collect_relation_notes(vault_root: Path) -> list[dict[str, object]]:
             continue
         path_zone = _zone_for_path(safe_path)
         metadata = _parse_note_artifact_metadata(body, path_derived_zone=path_zone)
+        # Companions retain the source UUID for continuity; they do not own
+        # that human identity. Keep their path rows for read-only inspection,
+        # including aliases, without admitting them as UUID-scoped targets.
+        owns_identity = not is_companion_path(candidate, vault_root)
+        artifact_uuid = metadata["uuid"] if owns_identity else None
+        source_note_path = _vault_relative(candidate.resolve(), vault_root.resolve())
+        if source_note_path is None:
+            continue
         frontmatter = _frontmatter_dict(body)
         tags = _coerce_relation_tags(frontmatter.get("tags") or frontmatter.get("tag"))
         title = _browser_title(body, fallback=candidate.stem)
@@ -3742,7 +3751,9 @@ def _collect_relation_notes(vault_root: Path) -> list[dict[str, object]]:
             {
                 "note_path": safe_path,
                 "title": title,
-                "artifact_uuid": metadata["uuid"],
+                "artifact_uuid": artifact_uuid,
+                "owns_identity": owns_identity,
+                "source_note_path": source_note_path,
                 "kind": metadata["kind"],
                 "zone": metadata["zone"],
                 "source_ref": metadata["source_ref"],
@@ -3773,6 +3784,39 @@ def _relation_link_keys(note: dict[str, object]) -> set[str]:
     }
 
 
+def _resolve_human_uuid_scope(
+    notes: list[dict[str, object]], *, artifact_uuid: str
+) -> dict[str, object]:
+    matches = [note for note in notes if note.get("artifact_uuid") == artifact_uuid]
+    if not matches:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "artifact_not_found",
+                "message": "No human vault note exists for the requested artifact_uuid.",
+                "artifact_uuid": artifact_uuid,
+            },
+        )
+    source_paths = {
+        str(note.get("source_note_path") or note.get("note_path")) for note in matches
+    }
+    if len(source_paths) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "artifact_uuid_conflict",
+                "message": "Multiple human vault notes share the requested artifact_uuid.",
+                "artifact_uuid": artifact_uuid,
+            },
+        )
+    # A human symlink is another locator for the same source, not a second
+    # human artifact. Prefer the genuine source's row when it is enumerated.
+    return next(
+        (note for note in matches if note.get("note_path") == note.get("source_note_path")),
+        matches[0],
+    )
+
+
 def _resolve_related_scope(
     notes: list[dict[str, object]],
     *,
@@ -3792,20 +3836,12 @@ def _resolve_related_scope(
                 },
             )
     if artifact_uuid:
-        uuid_match = next(
-            (note for note in notes if note.get("artifact_uuid") == artifact_uuid),
-            None,
-        )
-        if uuid_match is None:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "artifact_not_found",
-                    "message": "No vault note exists for the requested artifact_uuid.",
-                    "artifact_uuid": artifact_uuid,
-                },
-            )
-        if target is not None and target.get("note_path") != uuid_match.get("note_path"):
+        uuid_match = _resolve_human_uuid_scope(notes, artifact_uuid=artifact_uuid)
+        if target is not None and (
+            target.get("owns_identity") is False
+            or target.get("source_note_path", target.get("note_path"))
+            != uuid_match.get("source_note_path", uuid_match.get("note_path"))
+        ):
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -3847,20 +3883,12 @@ def _resolve_vault_action_scope(
                 },
             )
     if artifact_uuid:
-        uuid_match = next(
-            (note for note in notes if note.get("artifact_uuid") == artifact_uuid),
-            None,
-        )
-        if uuid_match is None:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "artifact_not_found",
-                    "message": f"No vault note exists for the requested {action_name} artifact_uuid.",
-                    "artifact_uuid": artifact_uuid,
-                },
-            )
-        if target is not None and target.get("note_path") != uuid_match.get("note_path"):
+        uuid_match = _resolve_human_uuid_scope(notes, artifact_uuid=artifact_uuid)
+        if target is not None and (
+            target.get("owns_identity") is False
+            or target.get("source_note_path", target.get("note_path"))
+            != uuid_match.get("source_note_path", uuid_match.get("note_path"))
+        ):
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -3877,6 +3905,15 @@ def _resolve_vault_action_scope(
             detail={
                 "error": "artifact_scope_required",
                 "message": f"Provide note_path and/or artifact_uuid for {action_name}.",
+            },
+        )
+    if target.get("owns_identity") is False:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "artifact_scope_read_only",
+                "message": "Companion notes support read-only path inspection.",
+                "note_path": note_path,
             },
         )
     return target
