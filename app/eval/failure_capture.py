@@ -101,6 +101,7 @@ from app.knowledge.multiwriter import NoteClass
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
+    JsonlOutboxEventIdConflictError,
     append_jsonl_outbox_event,
     coerce_outbox_event,
     derive_idempotency_key,
@@ -850,9 +851,17 @@ def _persist_disposition_authority_receipt(
         emitted = append_jsonl_outbox_event(
             _resolve_outbox_path(), event, default_source=EVAL_DRAFT_EVENT_SOURCE
         )
+    except JsonlOutboxEventIdConflictError as exc:
+        # A conflicting record is evidence of divergent durable content, not an
+        # unavailable sink. Do not let a successful write to another sink hide
+        # the event-ID conflict and acknowledge an indeterminate receipt.
+        raise AuthorityReceiptPersistenceError(
+            "eval draft disposition receipt conflicts with an existing JSONL "
+            "event identity; success acknowledgement withheld"
+        ) from exc
     except Exception:
         # A DB outbox may still be available; try it below before refusing the
-        # acknowledgement.
+        # acknowledgement. Only ordinary sink failures are recoverable this way.
         emitted = False
 
     backend = (os.getenv("STORE_BACKEND") or "").strip().lower()

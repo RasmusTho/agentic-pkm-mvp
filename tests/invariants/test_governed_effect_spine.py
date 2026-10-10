@@ -1578,6 +1578,88 @@ def test_eval_capture_acknowledges_when_jsonl_sink_survives_db_write_failure(
     )
 
 
+def test_eval_capture_jsonl_event_id_conflict_withholds_ack_before_db_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A divergent JSONL event ID is not treated as a failed sink."""
+    outbox_path = tmp_path / "conflicting-jsonl-disposition.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-conflicting-jsonl-disposition"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-conflicting-jsonl-disposition",
+        payload={"event_id": "evt-conflicting-jsonl-disposition"},
+        trace_id="trace-conflicting-jsonl-disposition",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+
+    real_append = failure_capture_module.append_jsonl_outbox_event
+
+    def seed_conflicting_event_then_append(
+        path: Path,
+        event: Any,
+        **kwargs: Any,
+    ) -> bool:
+        conflicting_payload = dict(event.payload)
+        assert conflicting_payload["decision"] == "promote"
+        conflicting_payload["decision"] = "reject"
+        conflicting_event = event.model_copy(update={"payload": conflicting_payload})
+        real_append(path, conflicting_event, **kwargs)
+        return real_append(path, event, **kwargs)
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "append_jsonl_outbox_event",
+        seed_conflicting_event_then_append,
+    )
+    db_attempts = 0
+
+    def writable_db_sink(*_args: Any, **_kwargs: Any) -> str:
+        nonlocal db_attempts
+        db_attempts += 1
+        return "db-disposition-event"
+
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", writable_db_sink)
+
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="conflicts with an existing JSONL event identity",
+    ):
+        promote_draft(
+            vault,
+            draft.draft_id,
+            decided_by="human:conflicting-jsonl",
+            write_guard=write_guard,
+        )
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None and terminal.status == DRAFT_STATUS_PROMOTED
+    assert terminal.decision_token is not None
+    assert db_attempts == 0
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert len(records) == 1
+    assert records[0]["event_id"] == records[0]["payload"]["disposition_id"]
+    assert records[0]["payload"]["decision"] == "reject"
+
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: [])
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="persisted eval draft receipt does not match the terminal draft",
+    ):
+        reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+
 def test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

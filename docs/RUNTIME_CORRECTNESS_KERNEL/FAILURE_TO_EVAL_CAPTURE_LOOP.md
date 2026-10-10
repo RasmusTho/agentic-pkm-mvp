@@ -159,6 +159,8 @@ note-write and concurrency contract follows
       readable sink can be replayed when another sink is unavailable or malformed. If no matching
       receipt is found and any configured source is unavailable, it fails closed rather than
       emitting a replacement; conflicting matching event payloads across sinks also fail closed.
+      An event-ID conflict during JSONL append is not treated as sink unavailability and withholds
+      acknowledgement even when the configured DB sink is writable.
       Readable empty sources still permit valid first-time recovery.
       OEF findings, traces, and WriteGuard health do not supply authorization or accountability.
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
@@ -169,6 +171,7 @@ note-write and concurrency contract follows
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_discovers_db_only_receipt`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_rejects_conflicting_receipts_across_sinks`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_jsonl_event_id_conflict_withholds_ack_before_db_fallback`
       Verify: `tests/api/test_eval_drafts.py::test_receipt_pending_retry_rejects_tampered_governed_token`
       Verify: `tests/api/test_eval_drafts.py::test_legacy_terminal_eval_draft_retry_fails_closed_without_minting_authority`
       Verify: `tests/api/test_eval_drafts.py::test_durable_receipt_with_lost_acknowledgement_returns_existing_receipt`
