@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import re
 from typing import Any
@@ -197,9 +196,6 @@ def main(argv: list[str] | None = None) -> int:
             Path('/scratch/vault').mkdir(parents=True, exist_ok=True)
             # Candidate execution has no host network: only its disposable PG
             # server is reachable in the shared network-none namespace.
-            import psycopg
-            with psycopg.connect(os.environ['DATABASE_URL'], autocommit=True) as connection:
-                connection.execute('CREATE EXTENSION IF NOT EXISTS vector')
             summary = {**expected, **run_pytest(), 'result': 'passed',
                        'resource_tree': manifest['resource_tree'], 'app_image_id': manifest['app_image_id']}
             verify_resources(manifest)

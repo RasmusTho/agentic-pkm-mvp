@@ -87,7 +87,9 @@ class DockerBoundary:
             return json.dumps([image]).encode()
         if arguments[0] == 'pull' and self.fault == 'dependency':
             raise profile.PgAcceptanceError()
-        if arguments[0] == 'exec' and self.fault in {'startup_race', 'readiness_exhausted'}:
+        if arguments[0] == 'exec' and arguments[2] == 'psql' and self.fault == 'provision':
+            raise profile.PgAcceptanceError()
+        if arguments[0] == 'exec' and arguments[2] == 'pg_isready' and self.fault in {'startup_race', 'readiness_exhausted'}:
             if '-h' not in arguments:
                 return b'temporary socket server accepting connections'
             self.tcp_probes += 1
@@ -152,7 +154,7 @@ def _runner(tmp_path, monkeypatch, *, channel='dev', operation_id=None):
     return runner, boundary, sha, operation_id
 
 
-@pytest.mark.parametrize('fault', [None, 'timeout', 'dependency', 'profile', 'resource', 'image'])
+@pytest.mark.parametrize('fault', [None, 'timeout', 'dependency', 'provision', 'profile', 'resource', 'image'])
 def test_native_automatic_operation_requires_profile_before_commit(tmp_path, monkeypatch, fault):
     runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
     boundary.fault = fault
@@ -198,6 +200,7 @@ def test_shared_pg_surface_preserves_selection_and_required_results():
     step = next(row for row in job['steps'] if 'Run exact index' in row.get('name', ''))
     assert 'python -m app.ops.pg_acceptance --ci' in step['run']
     assert job['services']['postgres']['image'] == profile.POSTGRES_IMAGE
+    assert any('CREATE EXTENSION IF NOT EXISTS vector' in row.get('run', '') for row in job['steps'])
     assert len(profile.SELECTORS) == 65
     assert all((ROOT / selector.split('::')[0]).is_file() for selector in profile.SELECTORS)
     args = profile.pytest_arguments()
@@ -251,6 +254,9 @@ def test_production_runner_isolates_database_vault_and_credentials(tmp_path, mon
     assert all(str(runner.directory) in mount and mount.endswith('readonly') for mount in mounts)
     assert all('/app/app' not in mount and 'docker.sock' not in mount for mount in mounts)
     assert not boundary.containers
+    provision = next(args for args in calls if args[0] == 'exec' and args[2] == 'psql')
+    assert provision[-2:] == ('--command', 'CREATE EXTENSION IF NOT EXISTS vector')
+    assert calls.index(provision) < calls.index(tests)
     # Actual subprocess boundary discards all caller credential/socket settings.
     observed = []
     monkeypatch.setattr(runner_module.subprocess, 'run', lambda argv, **options:
@@ -379,7 +385,7 @@ def test_database_startup_waits_for_candidate_tcp_listener(tmp_path, monkeypatch
             runner.verify()
         assert boundary.tcp_probes == 30
         assert not any(args[:2] == ('start', '--attach') for args, _timeout in boundary.commands)
-    probes = [args for args, _timeout in boundary.commands if args[0] == 'exec']
+    probes = [args for args, _timeout in boundary.commands if args[0] == 'exec' and args[2] == 'pg_isready']
     assert probes and all(args[args.index('-h') + 1] == '127.0.0.1' for args in probes)
     assert all(args[args.index('-p') + 1] == '5432' for args in probes)
     assert not boundary.containers and not runner.directory.exists() and not runner.marker.exists()

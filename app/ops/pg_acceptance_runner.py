@@ -276,6 +276,10 @@ class PgAcceptanceRunner:
                     if attempt == 29:
                         raise
                     time.sleep(2)
+            # Provision the isolated acceptance dependency at the trusted
+            # native effect boundary, matching CI's existing service setup.
+            self._docker('exec', database, 'psql', '--username', 'app', '--dbname', 'app_test',
+                         '--command', 'CREATE EXTENSION IF NOT EXISTS vector')
             source = self.directory / 'source'
             mounts = [argument for path in RESOURCE_PATHS for argument in (
                 '--mount', f'type=bind,src={source / path},dst=/app/{path},readonly',
