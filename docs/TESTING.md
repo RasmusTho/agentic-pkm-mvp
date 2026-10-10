@@ -51,6 +51,79 @@ Execution:
 - Live UI smoke (`tests/companion_ui/test_companion_ui_live_smoke.py`) is a separate opt-in check
   against a *running* gateway; it skips unless `COMPANION_UI_SMOKE_URL` is set, so it never gates a PR.
 
+The live core-flow suite is `tests/companion_ui/test_companion_ui_live_core_flow.py`. It uses the
+same installed pytest/Playwright runtime and runs one serial journey per explicit private
+dev/test manifest. Its eight results cover channel/build/health, note navigation, one governed
+capture, a fresh-context readback, exact object/vector freshness and retrieval, one grounded ASK,
+and two browser-local failure cases. Required model-health failure does not hide independent
+navigation or capture results after channel, build and fixture checks succeed. Dependent steps
+report `blocked` when their prerequisite could not be proved; their pytest assertions are nonzero.
+Navigation uses the entry page's actionable browse control and scopes folder/note selection to
+the visible browser, excluding its hidden responsive copy. Offline renderer-backed navigation
+proofs in `test_live_core_flow_contract.py` run with `COMPANION_UI_BROWSER_TESTS=1` for both
+cold-start and document entry pages, without reaching a real application endpoint.
+
+```sh
+COMPANION_UI_LIVE_CORE_FLOW=1 \
+COMPANION_UI_CORE_FLOW_MANIFEST=/private/channel-core-flow.json \
+PLAYWRIGHT_BROWSERS_PATH=/installed/playwright/browsers \
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
+python3 scripts/run_with_host_lease.py --resource pytest-not-pg \
+  --execution-id channel:sha:run-id --wait-seconds 30 -- \
+  python3 -m pytest -q -m 'not pg' tests/companion_ui/test_companion_ui_live_core_flow.py
+```
+
+The mode-0600 manifest supplies `channel` (`dev`/`test`), `ui_url`, `api_url`, `expected_sha`,
+`run_id`, and a fresh absolute `output_dir`. UI/backend origins use the same explicit host and
+channel ports (8111/18001 or 8112/18002), using exactly `127.0.0.1` on the selected guest so the native
+diagnostic and HTTP requests reach the same host. A writing journey additionally supplies `vault_id`,
+`vault_path`, `known_note_path`, `known_note_uuid`, `known_excerpt`, `capture_note_path`,
+`capture_note_uuid`, `vault_binding_id`, and `embedding_identity`, with explicit boolean
+`allow_capture` and `allow_ask`. Operator-qualified non-production fixtures are distinct per
+channel. Before HTTP admission, native Docker reads bind the loopback gateway's running image,
+published port, exact startup configuration and resolved upstream address to the selected API
+container. The passive probe checks existing last-active restore inputs and complete vault/local
+identities before a context read can restore selection; a configured registry must already have
+its private lock and canonical rollback export. It refuses initialization, recovery, projection
+repair, missing identities and settings-rebind state. Then the API's active context is rechecked
+before navigation/effects.
+Evidence paths must be canonical and outside the canonical approved vault path.
+This applies independently of capture permission.
+The existing compatibility capture endpoint
+retains its own authority semantics, so callers must keep the selected fixture stable during the
+bounded test window. This test preflight is not a new server-side atomic vault fence.
+
+Gateway document GETs also invoke the server's first-contact briefing trigger. Before the first
+navigation and each later root/note navigation, fixture admission runs a native read-only check
+using that producer's local date and canonical briefing path. Navigation requires the producer
+to be disabled or today's regular dated artifact to exist within the approved vault; otherwise
+it reports `blocked` before opening a page. The test never invokes the trigger or creates a
+briefing to satisfy this precondition. Keep the fixture and dated artifact stable for the run.
+
+The browser request guard durably consumes a mutation slot before forwarding at most one armed
+capture POST and one armed ASK POST to the
+declared gateway. It blocks other mutation requests. Capture/ASK refusal cases abort or fulfill
+only their isolated browser context; they do not establish real-model acceptance. The native
+read probe checks the selected API image, approved source UUID and storage binding, and reads
+the capture endpoint's effective destination and that object's vector provenance using the
+producer's canonical content hash. This diagnostic supports the existing unscoped compatibility
+binding and reads the exact object/vector row in a transaction made read-only before its first
+query; it does not initialize store providers (whose constructors may repair data). It performs no
+deployment, service restart, reindex, reset or deletion. Captured synthetic data and its actual
+acknowledgement are retained immediately in an atomic report snapshot before later UI assertions.
+An observed `written` response is distinct from a validated capture; dependent readback/index
+steps require the validated acknowledgement, rendered trace and source readback. ASK also requires
+real provider/model provenance and rejects the runtime's mock/backend-mock synthesis shape;
+do not rerun the whole write sequence as a retry.
+
+`report.json`, failure screenshots and a Playwright trace are private in `output_dir`. The report
+labels `passed`, `failed` and dependency-`blocked` steps separately and records timings, exact SHA,
+run ID and capture acknowledgement. A directory already containing evidence is refused rather
+than overwritten. With opt-in disabled the module skips in ordinary CI; explicit opt-in with a
+missing/invalid manifest or unavailable prerequisite is not a successful skip. Live reports are
+application observations and may remain red when the test implementation's deterministic contract
+tests pass; neither result by itself establishes release acceptance.
+
 ## Panel Read-Mode Checkbox Projection Coverage
 
 Companion UI read-mode Panel checkbox confirmation must keep focused coverage for:
