@@ -200,6 +200,12 @@ def test_vault_browser_production_callsite_bounds_receipt_reads_without_truncati
     _browser()
     memories = read_promoted_memories(vault_root=root, outbox_path=outbox, active_vault_id="vault-a")
     assert [memory.promotion_id for memory in memories] == ["memory-old", "memory-latest"]
+    recalled = retrieve_relevant_promoted(
+        "contracts implementation", k=2, vault_root=root, outbox_path=outbox,
+        active_scope_id="scope:work/project-alpha", active_vault_id="vault-a",
+    )
+    assert [candidate.receipt_id for candidate in recalled] == ["memory-old", "memory-latest"]
+    assert all(candidate.memory_scope_id == candidate.applied_scope_id == "scope:work/project-alpha" for candidate in recalled)
     assert records.peak <= 4 and rows.peak <= 8
     assert _snapshot(paths) == before
     assert all(connection.closed and connection.reader.closed for connection in connections)
