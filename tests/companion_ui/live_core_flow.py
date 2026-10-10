@@ -109,7 +109,12 @@ def load_manifest(path: Path) -> dict[str, Any]:
     if urlparse(d["ui_url"]).hostname != urlparse(d["api_url"]).hostname:
         raise ValueError("gateway_backend_host_mismatch")
     out = Path(d["output_dir"])
-    if not out.is_absolute() or out.is_symlink() or any(p.is_symlink() for p in out.parents):
+    if (
+        not out.is_absolute()
+        or out.is_symlink()
+        or any(p.is_symlink() for p in out.parents)
+        or out.resolve() != out
+    ):
         raise ValueError("output_directory_invalid")
     for key in ("allow_capture", "allow_ask"):
         if type(d.get(key, False)) is not bool:
@@ -137,7 +142,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
                 raise ValueError("approved_capture_fixture_missing")
         if not Path(d["vault_path"]).is_absolute():
             raise ValueError("approved_vault_path_invalid")
-        if out.is_relative_to(Path(d["vault_path"])):
+        if out.is_relative_to(Path(d["vault_path"]).resolve()):
             raise ValueError("evidence_must_be_outside_the_vault")
         identity = d["embedding_identity"]
         if (
@@ -368,13 +373,20 @@ class CoreFlow:
         return response.json()
 
     def _binding(self) -> None:
-        ctx = self._get(urljoin(self.d["api_url"], "/api/companion/vault/context"))
-        if (
-            ctx.get("status") != "selected"
-            or ctx.get("active_vault_id") != self.d.get("vault_id")
-            or ctx.get("active_vault_path") != self.d.get("vault_path")
-        ):
-            raise AssertionError("active_fixture_binding_mismatch")
+        direct = self._get(urljoin(self.d["api_url"], "/api/companion/vault/context"))
+        # This existing same-origin proxy exposes the actual upstream context.
+        # Checking only the direct API could admit writes through a misbound UI.
+        upstream = self._get(urljoin(self.d["ui_url"], "/api/companion/vault/settings")).get(
+            "context", {}
+        )
+        for ctx in (direct, upstream):
+            if (
+                not isinstance(ctx, dict)
+                or ctx.get("status") != "selected"
+                or ctx.get("active_vault_id") != self.d.get("vault_id")
+                or ctx.get("active_vault_path") != self.d.get("vault_path")
+            ):
+                raise AssertionError("active_fixture_binding_mismatch")
 
     def _need_identity(self) -> None:
         if not self.identity_ok:

@@ -80,7 +80,10 @@ diagnostic and HTTP requests reach the same host. A writing journey additionally
 `vault_path`, `known_note_path`, `known_note_uuid`, `known_excerpt`, `capture_note_path`,
 `capture_note_uuid`, `vault_binding_id`, and `embedding_identity`, with explicit boolean
 `allow_capture` and `allow_ask`. Operator-qualified non-production fixtures are distinct per
-channel. The active vault is rechecked before effects; the existing compatibility capture endpoint
+channel. The direct API and gateway's actual upstream vault contexts are both rechecked before
+navigation/effects via their existing read endpoints; a misbound UI proxy refuses the journey.
+Evidence paths must be canonical and outside the canonical approved vault path.
+The existing compatibility capture endpoint
 retains its own authority semantics, so callers must keep the selected fixture stable during the
 bounded test window. This test preflight is not a new server-side atomic vault fence.
 

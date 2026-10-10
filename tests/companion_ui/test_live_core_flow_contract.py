@@ -94,6 +94,8 @@ class _Page:
                 "active_vault_id": self.d["vault_id"],
                 "active_vault_path": self.d["vault_path"],
             }
+            if url.endswith("/api/companion/vault/settings"):
+                payload = {"context": payload}
         return SimpleNamespace(ok=True, status=200, url=url, json=lambda: payload)
 
     def goto(self, url: str, **kwargs: Any) -> Any:
@@ -194,6 +196,26 @@ def test_wrong_fixture_refuses_before_any_gateway_navigation(
     assert not runner.page.navigations and not runner.identity_ok
 
 
+def test_wrong_gateway_upstream_refuses_before_navigation_or_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _runner(tmp_path)
+    get = runner.page.get
+
+    def request(url: str, **kwargs: Any) -> Any:
+        response = get(url, **kwargs)
+        if url.endswith("/api/companion/vault/settings"):
+            response.json = lambda: {"context": {"status": "selected", "active_vault_id": "other"}}
+        return response
+
+    monkeypatch.setattr(runner.page, "get", request)
+    report = runner.run()
+    assert report["steps"][0]["reason"] == "active_fixture_binding_mismatch"
+    assert not runner.page.navigations and not runner.identity_ok
+    assert report["capture_posts"] == report["real_ask_actions"] == 0
+    assert all(step["status"] == "blocked" for step in report["steps"][1:])
+
+
 def test_missing_briefing_refuses_before_initial_and_fresh_context_navigation(
     tmp_path: Path,
 ) -> None:
@@ -228,6 +250,7 @@ def test_missing_manifest_is_not_a_live_pass(tmp_path: Path) -> None:
         {"ui_url": "http://remote-host:8111/", "api_url": "http://remote-host:18001/"},
         {"embedding_identity": {"dim": 768}},
         {"capture_note_path": "Inbox/./inbox.md"},
+        {"output_dir": "/tmp/../approved/dev-fixture/evidence"},
     ],
 )
 def test_invalid_manifest_refuses_before_browser(tmp_path: Path, change: dict[str, Any]) -> None:
@@ -251,6 +274,19 @@ def test_public_or_symlinked_manifest_is_refused(tmp_path: Path) -> None:
     link.symlink_to(p)
     with pytest.raises(OSError):
         load_manifest(link)
+
+
+def test_evidence_containment_uses_canonical_vault_path(tmp_path: Path) -> None:
+    d = _manifest(tmp_path)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    d["vault_path"] = str(tmp_path / "unused" / ".." / "vault")
+    d["output_dir"] = str(vault / "evidence")
+    path = tmp_path / "input.json"
+    path.write_text(json.dumps(d))
+    path.chmod(0o600)
+    with pytest.raises(ValueError, match="evidence_must_be_outside_the_vault"):
+        load_manifest(path)
 
 
 def test_written_capture_survives_later_failure(
