@@ -368,8 +368,22 @@ jobs:
       # Deterministic, fully offline (rendered HTML + ESM stubs, no live vault):
       # this is a real regression gate, so it is NOT continue-on-error.
       - name: Run deterministic Companion UI browser-runtime tests
+        env:
+          COMPANION_UI_STATE_EVIDENCE_DIR: ${{ runner.temp }}/vault-browser-state-matrix
         run: |
+          mkdir -p "$COMPANION_UI_STATE_EVIDENCE_DIR"
           pytest -q tests/companion_ui/test_runtime_unavailable_browser.py
+          pytest -q \
+            --junitxml="$COMPANION_UI_STATE_EVIDENCE_DIR/junit.xml" \
+            tests/companion_ui/test_vault_browser_state_runtime.py
+
+      - name: Retain Vault Browser state-matrix diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vault-browser-state-matrix-${{ github.sha }}
+          path: ${{ runner.temp }}/vault-browser-state-matrix
+          if-no-files-found: error
 
       # NAV-3a (#2639): overlay↔browser-history is real browser behaviour
       # (history.pushState on a net-new mount, popstate → reconcile-to-depth so
