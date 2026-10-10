@@ -69,7 +69,11 @@ write_pin() {
   } >"${tmp}"
   # Pins contain deployment metadata only. The non-root API must observe
   # directory-based atomic replacement; secret custody paths are untouched.
-  chmod 0644 "${tmp}" || return
+  if [[ "${file}" = "${PIN_FILE}" ]]; then
+    chmod 0644 "${tmp}" || return
+  else
+    chmod 0600 "${tmp}" || return
+  fi
   chmod o+x "${BUILDEROPS_PIN_DIRECTORY}" || return
   mv "${tmp}" "${file}"
 }

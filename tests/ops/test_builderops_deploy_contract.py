@@ -547,6 +547,7 @@ def test_deploy_and_rollback_receipts_bind_pin_schema_and_epoch(tmp_path: Path) 
         root / "config/deploy/builderops.previous.env"
     ).read_text(encoding="utf-8")
     assert f"BUILDEROPS_CANDIDATE_RECEIPT_SHA={candidate_sha}" in previous_pin
+    assert (root / "config/deploy/builderops.previous.env").stat().st_mode & 0o777 == 0o600
 
     events = Path(env["FAKE_EVENT_LOG"]).read_text(encoding="utf-8")
     assert "probe-secret" not in events

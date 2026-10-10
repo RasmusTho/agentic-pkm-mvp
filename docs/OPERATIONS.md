@@ -603,8 +603,9 @@ restored release from an unrefreshed private loopback boundary.
 BuilderOps post-effect verification reads its successful deployment receipt and selected pin
 through authenticated status. Compose mounts the pin directory read-only so atomic pin replacement
 withdraws admission immediately. The deploy wrapper records the directory, basename and receipt
-location in the selected pin for later service-manager restarts. Metadata pins are published
-readable by the non-root API (0644), with directory traversal enabled; secret custody is unchanged.
+location in the selected pin for later service-manager restarts. The active metadata pin is published
+readable by the non-root API (0644), with directory traversal enabled. The rollback pin stays
+private (0600) to satisfy the existing unattended rollback custody gate; secret custody is unchanged.
 Missing, stale or mismatched
 readback refuses the consumer; this repository mechanism does not establish live activation.
 The owning contract is [verified issue-set merge and exact closure](AGENT_ISSUE_DISPATCHER.md#current-state-honesty).
