@@ -65,6 +65,7 @@ def test_guard_diagnostic_preserves_success_and_original_failure(
     from types import SimpleNamespace
 
     from app.ops import postgres_deploy_linux as linux
+    from app.ops.bws_secret_reader import BwsItemAbsent
     from app.ops.postgres_deploy import PostgresDeployError
 
     directory = tmp_path / "config" / "deploy"
@@ -83,7 +84,7 @@ def test_guard_diagnostic_preserves_success_and_original_failure(
         channel="test",
         password_file=password,
         runtime_env_file=runtime,
-        reader=lambda: object(),
+        reader=None,
         journal=SimpleNamespace(
             read=lambda: SimpleNamespace(stage="activating", operation_id="operation"),
         ),
@@ -92,11 +93,16 @@ def test_guard_diagnostic_preserves_success_and_original_failure(
     monkeypatch.setattr(linux, "_capture_watch_configured", lambda config: False)
     monkeypatch.setattr(linux.PasswordSource, "verify", lambda self: None)
     monkeypatch.setattr(linux, "validate_database_inputs", lambda *args: None)
-    monkeypatch.setattr(
-        linux,
-        "vm_selected_values",
-        lambda *args: {"postgres-db": {"postgres.password": "fixture-password"}},
-    )
+
+    class Reader:
+        def lookup(self, _project: str, identity: str) -> str:
+            if identity.endswith("github.token"):
+                raise BwsItemAbsent()
+            if identity.endswith("heimdal.raw-store-key"):
+                return "a" * 64
+            return "fixture-password"
+
+    cfg.reader = lambda: Reader()
     environment = {
         "BWS_DEPLOY_RUNTIME_ENV_FILE": str(runtime),
         "BWS_DEPLOY_LOCK_FD": "0",
@@ -125,6 +131,23 @@ def test_guard_diagnostic_preserves_success_and_original_failure(
         with pytest.raises(PostgresDeployError) as failure:
             linux.inherited_worker_guard("test")
         assert failure.value is expected
+
+
+def test_guard_checkpoint_malformed_input_is_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.ops import postgres_deploy_linux as linux
+
+    with tempfile.TemporaryDirectory(prefix="g5930-", dir="/tmp") as directory:
+        socket_path = Path(directory) / "journal.sock"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver:
+            receiver.bind(str(socket_path))
+            monkeypatch.setattr(linux, "_DEPLOY_JOURNAL_SOCKET", str(socket_path))
+            linux._emit_guard_failure("checkpoint=argv-secret-canary")
+            receiver.settimeout(2)
+            payload = receiver.recv(4096)
+    assert payload == (
+        "PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n"
+        "MESSAGE=native deployment failure: checkpoint=unknown class=guard_refused\n"
+    ).encode("ascii")
 
 
 @pytest.mark.parametrize("sink", ["missing", "refused", "full"])
