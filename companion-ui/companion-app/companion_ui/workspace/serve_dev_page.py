@@ -3392,6 +3392,8 @@ def _render_note_section(fields: dict) -> tuple[str, str, str]:
         vault_provenance=str(fields.get("vault_browser_vault_provenance") or "unresolved"),
         active_filters=dict(fields.get("vault_browser_active_filters") or {}),
         pagination=dict(fields.get("vault_browser_pagination") or {}),
+        state=str(fields.get("vault_browser_state") or "ready"),
+        degraded_reason=fields.get("vault_browser_degraded_reason"),
     )
     suggested_insertions_html = _render_suggested_insertions(
         fields.get("suggested_insertions") or []
@@ -4813,6 +4815,8 @@ def _render_vault_browser(
     vault_provenance: str,
     active_filters: dict[str, list[str]] | None = None,
     pagination: dict | None = None,
+    state: str = "ready",
+    degraded_reason: str | None = None,
 ) -> str:
     query_text = _e(query or "")
     identity_label = f"{vault_name}/{vault_channel}"
@@ -4835,6 +4839,24 @@ def _render_vault_browser(
                     why="connection failed",
                     nothing_clause=NOTHING_LOST,
                     what_to_do="Refresh to retry",
+                )
+            )
+            + "</div>"
+        )
+    elif state == "partial":
+        state_html = (
+            '<div class="vault-browser-state" '
+            'data-testid="workspace-vault-browser-state-partial">'
+            + _e(
+                calm_degraded(
+                    what="Some notes",
+                    why=(
+                        "one or more files could not be read"
+                        if degraded_reason == "note_read_failed"
+                        else "details withheld"
+                    ),
+                    nothing_clause=NOTHING_LOST,
+                    what_to_do="The list is partial; refresh to retry",
                 )
             )
             + "</div>"
@@ -8838,6 +8860,8 @@ def _render_orientation_vault_entry(
         vault_provenance=str(identity.get("provenance") or "unresolved"),
         active_filters=dict(payload.get("active_filters") or {}),
         pagination=dict(payload.get("pagination") or {}),
+        state=str(payload.get("state") or "ready"),
+        degraded_reason=payload.get("degraded_reason"),
     )
     _collapsed_attrs = (
         ' hidden data-browse-focused="false" data-vault-entry-collapsed="true"'
@@ -14839,6 +14863,7 @@ def render_index_html(
        "Browse vault notes" toggle matches the Outline heading label. */
     .vault-browser-meta,
     .vault-browser-state {{ display: none; }}
+    .vault-browser-state:not([data-testid="workspace-vault-browser-state-ready"]) {{ display: block; }}
     .vault-browser > summary[data-testid="workspace-vault-browser-toggle"] {{
       color: var(--fg-2);
       cursor: pointer;
