@@ -140,6 +140,8 @@ note-write and concurrency contract follows
       tokens leave the draft unchanged. If receipt persistence fails after the status mutation,
       explicit reconciliation reuses the original persisted DecisionToken and emits the durable
       AuthorityReceipt without minting replacement authority or repeating the status mutation.
+      Repeating the same POST with the same authenticated principal, action, and notes resumes that
+      reconciliation; a different reviewer, action, or notes is refused.
       The production POST route derives the reviewer actor from the authenticated GOV principal
       boundary; a client-supplied `decided_by` may only assert that same principal.
       Reconciliation accepts an existing event only when its outcome is `applied` and its
@@ -153,6 +155,7 @@ note-write and concurrency contract follows
       OEF findings, traces, and WriteGuard health do not supply authorization or accountability.
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_receipt_pending_reconciles_without_second_status_mutation`
+      Verify: `tests/api/test_eval_drafts.py::test_receipt_pending_retry_reconciles_same_disposition_without_second_mutation`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_rejects_tampered_persisted_receipt`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_discovers_db_only_receipt`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable`

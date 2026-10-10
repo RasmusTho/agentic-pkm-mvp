@@ -30,6 +30,7 @@ Review UI (W7/W8) and auto-promotion are out of scope.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -41,10 +42,16 @@ from app.auth import api_key_header, resolve_auth_subject
 from app.api.routes.vault_resolution import active_vault_root_or_selection_required
 from app.eval.failure_capture import (
     DraftEvalCase,
+    DRAFT_STATUS_PENDING,
+    DRAFT_STATUS_PROMOTED,
+    DRAFT_STATUS_REJECTED,
     FailureCaptureError,
+    PromotionDecision,
     PromotionDecisionError,
     list_pending_drafts,
     promote_draft,
+    read_draft,
+    reconcile_pending_disposition_receipt,
     reject_draft,
 )
 from app.knowledge.errors import KnowledgeWriteConflict
@@ -132,6 +139,30 @@ def _authenticated_principal_id(
     return derived.principal.principal_id
 
 
+def _reconcile_matching_terminal_decision(
+    vault_root: Path,
+    draft_id: str,
+    *,
+    action: Literal["promote", "reject"],
+    actor: str,
+    notes: str | None,
+) -> PromotionDecision | None:
+    """Recover only an exact retry of this principal's recorded decision."""
+    draft = read_draft(vault_root, draft_id)
+    if draft is None or draft.status == DRAFT_STATUS_PENDING:
+        return None
+    expected_status = (
+        DRAFT_STATUS_PROMOTED if action == "promote" else DRAFT_STATUS_REJECTED
+    )
+    if (
+        draft.status != expected_status
+        or draft.decided_by != actor
+        or draft.notes != notes
+    ):
+        return None
+    return reconcile_pending_disposition_receipt(vault_root, draft_id)
+
+
 @router.get("", response_model=PendingEvalDraftsResponse)
 def get_pending_eval_drafts() -> PendingEvalDraftsResponse | JSONResponse:
     """Bounded read over pending eval-draft candidates awaiting review.
@@ -183,12 +214,37 @@ def post_eval_draft_decision(
 
     decide = promote_draft if req.action == "promote" else reject_draft
     try:
-        decision = decide(
+        decision = _reconcile_matching_terminal_decision(
             vault_root,
             draft_id,
-            decided_by=authenticated_actor,
+            action=req.action,
+            actor=authenticated_actor,
             notes=req.notes,
         )
+        if decision is None:
+            try:
+                decision = decide(
+                    vault_root,
+                    draft_id,
+                    decided_by=authenticated_actor,
+                    notes=req.notes,
+                )
+            except (KnowledgeWriteConflict, FailureCaptureError):
+                # Another identical request may have completed the state-owner
+                # mutation while this request was in flight, or this request
+                # may have reached applied_receipt_pending. Recover only when
+                # the authenticated actor and full decision match the durable
+                # terminal draft; otherwise preserve the original refusal.
+                recovered = _reconcile_matching_terminal_decision(
+                    vault_root,
+                    draft_id,
+                    action=req.action,
+                    actor=authenticated_actor,
+                    notes=req.notes,
+                )
+                if recovered is None:
+                    raise
+                decision = recovered
     except KnowledgeWriteConflict as exc:
         if exc.receipt is None or exc.receipt.outcome != "conflict_staged":
             raise
