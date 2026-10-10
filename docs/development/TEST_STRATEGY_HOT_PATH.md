@@ -35,11 +35,11 @@ activation, functional coverage handoff and pilot acceptance separately under #5
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
-- Both full and scoped non-PG unit-test steps retain a finite 30-minute batch ceiling and the
-  existing 120-second per-test thread watchdog. The batch margin addresses the deployment-heavy
-  #5922 selection that reached 98 percent before the old 22-minute ceiling; it changes no target,
-  marker, required check, assertion or failure handling. CI duration and coverage handoff remain
-  pilot measurements, not claims that a longer ceiling reduces execution time.
+- Both full and scoped non-PG unit-test steps retain the verified 35-minute batch ceiling from
+  #5921 / PR #5924 and the existing 120-second per-test thread watchdog. This preserves every
+  target, marker, required check, assertion and failure handler. The earlier #5922 selection
+  reached 98 percent before its old 22-minute ceiling; a larger ceiling is execution margin,
+  not a reduction in execution time. Actual duration and coverage handoff are measured separately.
 - The `pr-index-pg-contracts` job has a finite 30-minute execution budget for its full qualified
   PostgreSQL acceptance surface (#5587). Each test also has the existing pytest-timeout plugin's
   120-second thread watchdog; verbose node IDs, unbuffered output, and the slowest 20 durations
