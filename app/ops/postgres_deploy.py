@@ -373,6 +373,8 @@ class DeployWorker:
                     if not self.effects.quiescent():
                         raise PostgresDeployError()
                     return self.journal.write(operation_id, 'failed')
+            if result is None:
+                return self.journal.write(operation_id, 'committed')
             return self.journal.write(operation_id, 'committed', result)
         except Exception:
             if not activation_started:
