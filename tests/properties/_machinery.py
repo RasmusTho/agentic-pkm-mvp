@@ -1720,11 +1720,11 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "-> store_objects. Verified by test_plan_to_object_carries_episode_ref."
     ),
     # -- transport_passthrough: facade/plumbing forwarding a caller-built (verified) payload ------
-    ("app/objects/__init__.py", 121): (
+    ("app/objects/__init__.py", 124): (
         "transport_passthrough: ObjectStore.save_object facade forwards dict(obj.payload) to the "
         "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
-        "(every save_object caller is itself a classified producer above). Line drifted 116 -> 122 "
-        "when atomic create support was added above this facade call (#4111)."
+        "(every save_object caller is itself a classified producer above). Line drifted 121 -> 124 "
+        "when #5921 documented and exported the backend-only facade; the sink behavior is unchanged."
     ),
     ("app/stores/memory.py", 98): (
         "transport_passthrough: MemoryObjectStore.put_if_absent delegates the caller-supplied "

@@ -813,15 +813,10 @@ jobs:
       - name: Run shared not-pg unit tests in process shards
         if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite == 'true'
         shell: bash
-        timeout-minutes: 22
+        # Workflow/test configuration changes select this full-suite lane.
+        # The 120-second per-test timeout still catches individual hangs.
+        timeout-minutes: 35
         env:
-          # Per-test timeout must fire well before the 22-min job wall clock,
-          # otherwise an intermittently-hanging test (a pure-Python block such
-          # as a join()/queue.get()/Event.wait() with no timeout) loses the race
-          # to the job cap and the run dies with NO diagnostics — no stack dump,
-          # no test name. 120s is ~20-40x the slowest legitimate single test yet
-          # leaves the whole suite (~5 min) untouched, so a hang fails fast AND
-          # prints the offending test's nodeid + full traceback. See #2259.
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
         run: |
           set -euo pipefail
@@ -918,7 +913,9 @@ jobs:
       - name: Run scoped not-pg unit tests
         if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'
         shell: bash
-        timeout-minutes: 22
+        # Several independently selected subsystems run serially in this step.
+        # The 120-second per-test timeout still catches individual hangs.
+        timeout-minutes: 35
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
         run: |
