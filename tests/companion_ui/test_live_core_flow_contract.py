@@ -29,7 +29,12 @@ def _manifest(tmp_path: Path) -> dict[str, Any]:
         "capture_note_uuid": "11111111-1111-4111-8111-111111111111",
         "known_excerpt": "synthetic fixture",
         "vault_binding_id": "fixture-binding",
-        "embedding_identity": {"dim": 768},
+        "embedding_identity": {
+            "provider": "fixture",
+            "model": "fixture",
+            "dim": 768,
+            "normalize": True,
+        },
         "allow_capture": True,
         "allow_ask": True,
         "navigation_ms": 30000,
@@ -178,6 +183,9 @@ def test_missing_manifest_is_not_a_live_pass(tmp_path: Path) -> None:
         {"capture_note_path": "../personal.md"},
         {"allow_capture": "yes"},
         {"allow_capture": True, "vault_id": None},
+        {"ui_url": "http://remote-host:8111/", "api_url": "http://remote-host:18001/"},
+        {"embedding_identity": {"dim": 768}},
+        {"capture_note_path": "Inbox/./inbox.md"},
     ],
 )
 def test_invalid_manifest_refuses_before_browser(tmp_path: Path, change: dict[str, Any]) -> None:
@@ -270,3 +278,35 @@ def test_existing_evidence_directory_is_not_overwritten(tmp_path: Path) -> None:
     (tmp_path / "evidence").mkdir()
     with pytest.raises(FileExistsError):
         _runner(tmp_path)
+
+
+def test_report_consumes_capture_slot_before_forwarding(tmp_path: Path) -> None:
+    runner = _runner(tmp_path)
+    runner.identity_ok = runner.capture_armed = True
+    observations: list[int] = []
+    route = SimpleNamespace(
+        request=SimpleNamespace(method="POST", url="http://127.0.0.1:8111/api/companion/capture"),
+        continue_=lambda: observations.append(
+            json.loads((runner.output / "report.json").read_text())["capture_posts"]
+        ),
+        abort=lambda *_: None,
+    )
+    runner._guard_request(route)
+    assert observations == [1]
+
+
+def test_report_failure_preserves_previous_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _runner(tmp_path)
+    runner._write_report()
+    previous = (runner.output / "report.json").read_bytes()
+
+    def failed_replace(*args: Any) -> None:
+        raise OSError("injected report publication failure")
+
+    monkeypatch.setattr(os, "replace", failed_replace)
+    runner.capture_posts = 1
+    with pytest.raises(OSError):
+        runner._write_report()
+    assert (runner.output / "report.json").read_bytes() == previous

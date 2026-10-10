@@ -7,6 +7,7 @@ bounded read of the approved note and its existing object/vector rows.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -35,7 +36,11 @@ def _origin(url: str) -> tuple[str, str | None, int | None]:
 
 def _relative(value: str) -> bool:
     p = PurePosixPath(value)
-    return bool(value) and not p.is_absolute() and not any(x in {"..", "."} for x in p.parts)
+    return (
+        bool(value)
+        and not p.is_absolute()
+        and not any(x in {"", "..", "."} for x in value.split("/"))
+    )
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
@@ -75,6 +80,8 @@ def load_manifest(path: Path) -> dict[str, Any]:
         raise ValueError("manifest_fields_invalid")
     if d["channel"] not in {"dev", "test"}:
         raise ValueError("only_dev_and_test_are_supported")
+    if any(not isinstance(d[k], str) or "\x00" in d[k] or len(d[k]) > 4096 for k in required):
+        raise ValueError("manifest_string_invalid")
     if not re.fullmatch(r"[0-9a-f]{40}", d["expected_sha"]):
         raise ValueError("expected_sha_invalid")
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", d["run_id"]):
@@ -93,6 +100,12 @@ def load_manifest(path: Path) -> dict[str, Any]:
             or p.path not in {"", "/"}
         ):
             raise ValueError("channel_origin_invalid")
+        try:
+            loopback = ipaddress.ip_address(p.hostname).is_loopback
+        except ValueError:
+            loopback = False
+        if not loopback:
+            raise ValueError("native_probe_requires_guest_loopback_origins")
     if urlparse(d["ui_url"]).hostname != urlparse(d["api_url"]).hostname:
         raise ValueError("gateway_backend_host_mismatch")
     out = Path(d["output_dir"])
@@ -124,6 +137,21 @@ def load_manifest(path: Path) -> dict[str, Any]:
                 raise ValueError("approved_capture_fixture_missing")
         if not Path(d["vault_path"]).is_absolute():
             raise ValueError("approved_vault_path_invalid")
+        if out.is_relative_to(Path(d["vault_path"])):
+            raise ValueError("evidence_must_be_outside_the_vault")
+        identity = d["embedding_identity"]
+        if (
+            not isinstance(identity, dict)
+            or set(identity) != {"provider", "model", "dim", "normalize"}
+            or not isinstance(identity["provider"], str)
+            or not identity["provider"]
+            or not isinstance(identity["model"], str)
+            or not identity["model"]
+            or type(identity["dim"]) is not int
+            or not 1 <= identity["dim"] <= 8192
+            or type(identity["normalize"]) is not bool
+        ):
+            raise ValueError("embedding_identity_invalid")
     for key, default, maximum in (
         ("navigation_ms", 30000, 60000),
         ("request_ms", 35000, 60000),
@@ -150,6 +178,10 @@ raw=note.read_bytes();assert len(raw)<=2*1024*1024
 from app.rebuildability.product_total_loss import parse_bounded_frontmatter
 fm,body,error=parse_bounded_frontmatter(raw.decode());assert error is None
 assert str(fm.get('uuid') or fm.get('id') or '')==p['capture_note_uuid']
+assert os.environ.get('STORE_SCHEMA_AUTOCREATE','').lower() not in {'1','true','yes'}
+from app.stores.pg import _connect
+with _connect() as conn:
+ assert conn.info.dbname=={'dev':'app_dev','test':'app_test'}[p['channel']]
 from app.stores import get_object_store
 provider=get_object_store()
 assert getattr(provider,'vault_binding_id',None)==p['vault_binding_id']
@@ -157,7 +189,6 @@ from app.objects import ObjectStore
 obj=ObjectStore().get_object(p['capture_note_uuid'],strict_backend=True)
 from app.index.artifact_metadata import canonicalize_indexable_text,compute_payload_content_hash
 payload=obj.payload if obj is not None else {}
-from app.stores.pg import _connect
 with _connect() as conn:
  conn.read_only=True
  with conn.cursor() as cur:
@@ -270,6 +301,7 @@ class CoreFlow:
         ):
             self.capture_posts += 1
             self.capture_armed = False
+            self._write_report()
             route.continue_()
         elif (
             path == "/api/operator/ask"
@@ -280,6 +312,7 @@ class CoreFlow:
         ):
             self.ask_posts += 1
             self.ask_armed = False
+            self._write_report()
             route.continue_()
         else:
             route.abort("blockedbyclient")
@@ -428,6 +461,7 @@ class CoreFlow:
         # Preserve a durable success acknowledgement even if a later UI/index
         # assertion fails. Re-running capture is not a recovery operation.
         self.capture_written = self.ack.get("outcome") == "written"
+        self._write_report()
         if (
             not self.capture_written
             or self.ack.get("note_path") != self.d["capture_note_path"]
@@ -635,9 +669,18 @@ class CoreFlow:
             "passed": len(self.results) == 8 and all(x["status"] == "passed" for x in self.results),
         }
         path = self.output / "report.json"
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        temporary = self.output / "report.json.next"
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, path)
+        directory = os.open(self.output, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
         return report
 
 

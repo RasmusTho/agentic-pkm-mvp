@@ -71,7 +71,8 @@ python3 scripts/run_with_host_lease.py --resource pytest-not-pg \
 
 The mode-0600 manifest supplies `channel` (`dev`/`test`), `ui_url`, `api_url`, `expected_sha`,
 `run_id`, and a fresh absolute `output_dir`. UI/backend origins use the same explicit host and
-channel ports (8111/18001 or 8112/18002). A writing journey additionally supplies `vault_id`,
+channel ports (8111/18001 or 8112/18002), using loopback on the selected guest so the native
+diagnostic and HTTP requests reach the same host. A writing journey additionally supplies `vault_id`,
 `vault_path`, `known_note_path`, `known_note_uuid`, `known_excerpt`, `capture_note_path`,
 `capture_note_uuid`, `vault_binding_id`, and `embedding_identity`, with explicit boolean
 `allow_capture` and `allow_ask`. Operator-qualified non-production fixtures are distinct per
@@ -79,13 +80,15 @@ channel. The active vault is rechecked before effects; the existing compatibilit
 retains its own authority semantics, so callers must keep the selected fixture stable during the
 bounded test window. This test preflight is not a new server-side atomic vault fence.
 
-The browser request guard forwards at most one armed capture POST and one armed ASK POST to the
+The browser request guard durably consumes a mutation slot before forwarding at most one armed
+capture POST and one armed ASK POST to the
 declared gateway. It blocks other mutation requests. Capture/ASK refusal cases abort or fulfill
 only their isolated browser context; they do not establish real-model acceptance. The native
 read probe checks the selected API image, approved source UUID and storage binding, and reads
 that object's vector provenance using the producer's canonical content hash. It performs no
 deployment, service restart, reindex, reset or deletion. Captured synthetic data and its actual
-acknowledgement are retained after later failures; do not rerun the whole write sequence as a retry.
+acknowledgement are retained immediately in an atomic report snapshot before later UI assertions;
+do not rerun the whole write sequence as a retry.
 
 `report.json`, failure screenshots and a Playwright trace are private in `output_dir`. The report
 labels `passed`, `failed` and dependency-`blocked` steps separately and records timings, exact SHA,
