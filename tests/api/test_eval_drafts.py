@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
+from threading import Barrier, Lock
 from typing import Any
 
 import pytest
@@ -203,4 +206,438 @@ def test_receipt_pending_retry_reconciles_same_disposition_without_second_mutati
     assert (
         matching[0]["payload"]["authority_receipt"]["decision_token_id"]
         == original_token_id
+    )
+
+
+@pytest.mark.parametrize("tamper", ["contract_version", "issued_at"])
+def test_receipt_pending_retry_rejects_tampered_governed_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper: str,
+) -> None:
+    runtime, first, _extra, principal_record = provisioned_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    outbox_path = tmp_path / f"tampered-token-{tamper}.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    vault = Path(first.path)
+    bind_initialized_vault(monkeypatch, vault)
+    draft = draft_unknown_classification_case(
+        vault_root=vault,
+        utterance=f"tampered token {tamper} case",
+        trace_id=f"api-tampered-token-{tamper}",
+    )
+    assert draft is not None
+    notes = "reviewed exact disposition"
+    payload = {
+        "action": "promote",
+        "decided_by": principal_record.local_operator_role_id,
+        "notes": notes,
+    }
+
+    issue_calls = 0
+    adapter = failure_capture_module._GOVERNED_WRITE_ADAPTER
+    real_issue = adapter.issue_human_decision_token
+
+    def count_issue(**kwargs: Any) -> Any:
+        nonlocal issue_calls
+        issue_calls += 1
+        return real_issue(**kwargs)
+
+    monkeypatch.setattr(adapter, "issue_human_decision_token", count_issue)
+    append_attempts = 0
+
+    def fail_receipt_write(*_args: Any, **_kwargs: Any) -> bool:
+        nonlocal append_attempts
+        append_attempts += 1
+        raise OSError("fault injection leaves an applied receipt pending")
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "append_jsonl_outbox_event",
+        fail_receipt_write,
+    )
+    real_write = failure_capture_module.write_note_relative
+    status_mutations = 0
+
+    def count_status_mutations(*args: Any, **kwargs: Any) -> Any:
+        nonlocal status_mutations
+        status_mutations += 1
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_status_mutations)
+    client = TestClient(app)
+    first_response = client.post(
+        f"/api/eval-drafts/{draft.draft_id}/decision", json=payload
+    )
+    assert first_response.status_code == 409, first_response.text
+    assert issue_calls == 1
+    assert status_mutations == 1
+    assert append_attempts == 2
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert (
+        terminal is not None
+        and terminal.decision_token is not None
+        and terminal.draft_path is not None
+    )
+    if tamper == "contract_version":
+        changed_token = replace(
+            terminal.decision_token,
+            contract_version="unsupported-governed-write-contract",
+        )
+    else:
+        changed_token = replace(
+            terminal.decision_token,
+            issued_at=f"{terminal.decision_token.issued_at}-tampered",
+        )
+    tampered_terminal = replace(terminal, decision_token=changed_token)
+    terminal_path = vault / terminal.draft_path
+    terminal_path.write_text(
+        failure_capture_module._render_draft_note(
+            tampered_terminal,
+            title="Promoted draft: tampered authorization",
+        ),
+        encoding="utf-8",
+    )
+
+    retry = client.post(f"/api/eval-drafts/{draft.draft_id}/decision", json=payload)
+
+    assert retry.status_code == 409, retry.text
+    assert issue_calls == 1
+    assert status_mutations == 1
+    assert append_attempts == 2
+    persisted = read_draft(vault, draft.draft_id)
+    assert persisted is not None and persisted.status == DRAFT_STATUS_PROMOTED
+    assert persisted.decision_token == changed_token
+    assert not outbox_path.exists()
+
+
+def test_legacy_terminal_eval_draft_retry_fails_closed_without_minting_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, first, _extra, principal_record = provisioned_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    outbox_path = tmp_path / "legacy-terminal-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    vault = Path(first.path)
+    bind_initialized_vault(monkeypatch, vault)
+    draft = draft_unknown_classification_case(
+        vault_root=vault,
+        utterance="legacy terminal API case",
+        trace_id="api-legacy-terminal",
+    )
+    assert draft is not None and draft.draft_path is not None
+    notes = "legacy adjudication"
+    legacy_terminal = replace(
+        draft,
+        status=DRAFT_STATUS_PROMOTED,
+        decided_by=principal_record.local_operator_role_id,
+        decided_at="2026-10-01T12:00:00+00:00",
+        notes=notes,
+    )
+    legacy_path = vault / draft.draft_path
+    legacy_path.write_text(
+        failure_capture_module._render_draft_note(
+            legacy_terminal,
+            title="Promoted draft: legacy fixture",
+        ),
+        encoding="utf-8",
+    )
+
+    issue_calls = 0
+    adapter = failure_capture_module._GOVERNED_WRITE_ADAPTER
+    real_issue = adapter.issue_human_decision_token
+
+    def count_issue(**kwargs: Any) -> Any:
+        nonlocal issue_calls
+        issue_calls += 1
+        return real_issue(**kwargs)
+
+    monkeypatch.setattr(adapter, "issue_human_decision_token", count_issue)
+
+    outbox_reads = 0
+    real_read_receipts = failure_capture_module.read_receipt_source_records
+
+    def count_outbox_read(*args: Any, **kwargs: Any) -> Any:
+        nonlocal outbox_reads
+        outbox_reads += 1
+        return real_read_receipts(*args, **kwargs)
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "read_receipt_source_records",
+        count_outbox_read,
+    )
+    outbox_writes = 0
+
+    def count_outbox_write(*_args: Any, **_kwargs: Any) -> bool:
+        nonlocal outbox_writes
+        outbox_writes += 1
+        return True
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "append_jsonl_outbox_event",
+        count_outbox_write,
+    )
+    response = TestClient(app).post(
+        f"/api/eval-drafts/{draft.draft_id}/decision",
+        json={
+            "action": "promote",
+            "decided_by": principal_record.local_operator_role_id,
+            "notes": notes,
+        },
+    )
+
+    assert response.status_code == 409, response.text
+    assert issue_calls == 0
+    assert outbox_reads == 0
+    assert outbox_writes == 0
+    persisted = read_draft(vault, draft.draft_id)
+    assert persisted is not None
+    assert persisted.status == DRAFT_STATUS_PROMOTED
+    assert persisted.decided_by == principal_record.local_operator_role_id
+    assert persisted.decided_at == legacy_terminal.decided_at
+    assert persisted.notes == notes
+    assert persisted.policy_decision is None
+    assert persisted.decision_token is None
+    assert outbox_reads == 0
+    assert outbox_writes == 0
+    assert not outbox_path.exists()
+
+
+def test_durable_receipt_with_lost_acknowledgement_returns_existing_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, first, _extra, principal_record = provisioned_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    outbox_path = tmp_path / "lost-ack-receipt.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    vault = Path(first.path)
+    bind_initialized_vault(monkeypatch, vault)
+    draft = draft_unknown_classification_case(
+        vault_root=vault,
+        utterance="durable receipt acknowledgement case",
+        trace_id="api-lost-receipt-ack",
+    )
+    assert draft is not None
+    payload = {
+        "action": "promote",
+        "decided_by": principal_record.local_operator_role_id,
+        "notes": "reviewed exact disposition",
+    }
+
+    real_append = failure_capture_module.append_jsonl_outbox_event
+    append_attempts = 0
+
+    def append_then_lose_ack(*args: Any, **kwargs: Any) -> bool:
+        nonlocal append_attempts
+        append_attempts += 1
+        real_append(*args, **kwargs)
+        raise OSError("fault injected after the receipt became durable")
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "append_jsonl_outbox_event",
+        append_then_lose_ack,
+    )
+    real_write = failure_capture_module.write_note_relative
+    status_writes = 0
+
+    def count_status_write(*args: Any, **kwargs: Any) -> Any:
+        nonlocal status_writes
+        status_writes += 1
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_status_write)
+    response = TestClient(app).post(
+        f"/api/eval-drafts/{draft.draft_id}/decision", json=payload
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["decision"] == "promote"
+    assert append_attempts == 1
+    assert status_writes == 1
+    persisted = read_draft(vault, draft.draft_id)
+    assert persisted is not None and persisted.decision_token is not None
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("event") == "governance.authority_receipt.recorded"
+        and record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    assert (
+        matching[0]["payload"]["decision_token"]["token_id"]
+        == persisted.decision_token.token_id
+    )
+
+
+def test_malformed_receipt_jsonl_fails_closed_on_exact_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, first, _extra, principal_record = provisioned_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    outbox_path = tmp_path / "malformed-receipt-source.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    vault = Path(first.path)
+    bind_initialized_vault(monkeypatch, vault)
+    draft = draft_unknown_classification_case(
+        vault_root=vault,
+        utterance="malformed receipt source case",
+        trace_id="api-malformed-receipt-source",
+    )
+    assert draft is not None
+    payload = {
+        "action": "promote",
+        "decided_by": principal_record.local_operator_role_id,
+        "notes": "reviewed exact disposition",
+    }
+
+    issue_calls = 0
+    adapter = failure_capture_module._GOVERNED_WRITE_ADAPTER
+    real_issue = adapter.issue_human_decision_token
+
+    def count_issue(**kwargs: Any) -> Any:
+        nonlocal issue_calls
+        issue_calls += 1
+        return real_issue(**kwargs)
+
+    monkeypatch.setattr(adapter, "issue_human_decision_token", count_issue)
+    append_attempts = 0
+
+    def fail_receipt_write(*_args: Any, **_kwargs: Any) -> bool:
+        nonlocal append_attempts
+        append_attempts += 1
+        raise OSError("fault injection leaves an applied receipt pending")
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "append_jsonl_outbox_event",
+        fail_receipt_write,
+    )
+    real_write = failure_capture_module.write_note_relative
+    status_writes = 0
+
+    def count_status_write(*args: Any, **kwargs: Any) -> Any:
+        nonlocal status_writes
+        status_writes += 1
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_status_write)
+    client = TestClient(app)
+    first_response = client.post(
+        f"/api/eval-drafts/{draft.draft_id}/decision", json=payload
+    )
+    assert first_response.status_code == 409, first_response.text
+    assert append_attempts == 2
+    assert status_writes == 1
+    outbox_path.write_text('{"event": malformed\n', encoding="utf-8")
+    malformed_source = outbox_path.read_text(encoding="utf-8")
+
+    retry = client.post(f"/api/eval-drafts/{draft.draft_id}/decision", json=payload)
+
+    assert retry.status_code == 409, retry.text
+    assert issue_calls == 1
+    assert append_attempts == 2
+    assert status_writes == 1
+    assert outbox_path.read_text(encoding="utf-8") == malformed_source
+
+
+def test_concurrent_same_decision_posts_reconcile_one_terminal_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, first, _extra, principal_record = provisioned_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    outbox_path = tmp_path / "concurrent-eval-disposition.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    vault = Path(first.path)
+    bind_initialized_vault(monkeypatch, vault)
+    draft = draft_unknown_classification_case(
+        vault_root=vault,
+        utterance="concurrent exact decision case",
+        trace_id="api-concurrent-disposition",
+    )
+    assert draft is not None
+    payload = {
+        "action": "promote",
+        "decided_by": principal_record.local_operator_role_id,
+        "notes": "one exact concurrent decision",
+    }
+
+    real_write = failure_capture_module.write_note_relative
+    before_write = Barrier(2)
+    counter_lock = Lock()
+    write_attempts = 0
+    status_writes = 0
+
+    def synchronize_and_write(*args: Any, **kwargs: Any) -> Any:
+        nonlocal write_attempts, status_writes
+        with counter_lock:
+            write_attempts += 1
+        before_write.wait(timeout=15)
+        result = real_write(*args, **kwargs)
+        with counter_lock:
+            status_writes += 1
+        return result
+
+    monkeypatch.setattr(
+        failure_capture_module,
+        "write_note_relative",
+        synchronize_and_write,
+    )
+
+    def post_decision(_: int) -> Any:
+        return TestClient(app).post(
+            f"/api/eval-drafts/{draft.draft_id}/decision", json=payload
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(post_decision, (1, 2)))
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert responses[0].json() == responses[1].json()
+    assert write_attempts == 2
+    assert status_writes == 1
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None
+    assert terminal.status == DRAFT_STATUS_PROMOTED
+    assert terminal.decision_token is not None
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("event") == "governance.authority_receipt.recorded"
+        and record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    assert (
+        matching[0]["payload"]["decision_token"]["token_id"]
+        == terminal.decision_token.token_id
     )

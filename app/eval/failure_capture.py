@@ -89,6 +89,7 @@ from uuid import uuid4
 from app.events.schema import make_outbox_event
 from app.governance.governed_write import (
     AuthorityReceipt,
+    CONTRACT_VERSION as GOVERNED_WRITE_CONTRACT_VERSION,
     DecisionToken,
     GovernedWriteAdapter,
     GovernedWriteGrant,
@@ -660,7 +661,12 @@ def _read_persisted_disposition_receipt(
     outbox_path: Path,
 ) -> tuple[AuthorityReceipt, dict[str, Any]] | None:
     """Read an existing receipt event without mutating either outbox sink."""
-    records = read_receipt_source_records(outbox_path=outbox_path)
+    try:
+        records = read_receipt_source_records(outbox_path=outbox_path)
+    except Exception as exc:
+        raise AuthorityReceiptPersistenceError(
+            "configured receipt source is unreadable; eval draft recovery refused"
+        ) from exc
     if records is None:
         backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
         db_configured = backend == "pg" or bool(
@@ -683,6 +689,10 @@ def _read_persisted_disposition_receipt(
         if not isinstance(raw_receipt, dict):
             raise AuthorityReceiptPersistenceError(
                 "eval draft disposition receipt event is malformed"
+            )
+        if raw_receipt.get("contract_version") != GOVERNED_WRITE_CONTRACT_VERSION:
+            raise AuthorityReceiptPersistenceError(
+                "persisted eval draft receipt does not match the terminal draft"
             )
         try:
             return AuthorityReceipt(**raw_receipt), payload
@@ -842,7 +852,10 @@ def _validated_reconciliation_grant(
     if (
         draft.policy_decision.status != "approved"
         or draft.policy_decision.source != "human_review"
+        or draft.policy_decision.contract_version != GOVERNED_WRITE_CONTRACT_VERSION
         or draft.policy_decision.decision_id != draft.decision_token.decision_id
+        or draft.decision_token.contract_version != GOVERNED_WRITE_CONTRACT_VERSION
+        or draft.policy_decision.issued_at != draft.decision_token.issued_at
         or draft.policy_decision.actor != draft.decided_by
         or draft.policy_decision.action != action
         or draft.policy_decision.write_class != EVAL_DRAFT_DISPOSITION_WRITE_CLASS
@@ -934,6 +947,7 @@ def reconcile_pending_disposition_receipt(
             or existing.adapter != "fs_vault"
             or existing.state_owner != EVAL_DRAFT_STATE_OWNER
             or existing.source_receipt_ref != expected_source_receipt_ref
+            or existing.contract_version != GOVERNED_WRITE_CONTRACT_VERSION
             or not isinstance(state_owner_receipt, dict)
             or state_owner_receipt.get("operation") != "write_note"
             or state_owner_receipt.get("adapter") != "fs_vault"

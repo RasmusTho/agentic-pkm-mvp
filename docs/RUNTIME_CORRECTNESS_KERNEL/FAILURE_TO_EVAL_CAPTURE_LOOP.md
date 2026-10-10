@@ -155,10 +155,16 @@ note-write and concurrency contract follows
       OEF findings, traces, and WriteGuard health do not supply authorization or accountability.
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_receipt_pending_reconciles_without_second_status_mutation`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_acknowledges_when_jsonl_sink_survives_db_write_failure`
       Verify: `tests/api/test_eval_drafts.py::test_receipt_pending_retry_reconciles_same_disposition_without_second_mutation`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_rejects_tampered_persisted_receipt`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_discovers_db_only_receipt`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable`
+      Verify: `tests/api/test_eval_drafts.py::test_receipt_pending_retry_rejects_tampered_governed_token`
+      Verify: `tests/api/test_eval_drafts.py::test_legacy_terminal_eval_draft_retry_fails_closed_without_minting_authority`
+      Verify: `tests/api/test_eval_drafts.py::test_durable_receipt_with_lost_acknowledgement_returns_existing_receipt`
+      Verify: `tests/api/test_eval_drafts.py::test_malformed_receipt_jsonl_fails_closed_on_exact_retry`
+      Verify: `tests/api/test_eval_drafts.py::test_concurrent_same_decision_posts_reconcile_one_terminal_mutation`
       Verify: `tests/api/test_eval_drafts.py::test_decision_route_rejects_request_identity_not_bound_to_auth`
 - [ ] Candidate intake remains non-authoritative: promoting a draft records the human decision but
       does not itself change the golden dataset or fixture. Integration is a separate reviewed code

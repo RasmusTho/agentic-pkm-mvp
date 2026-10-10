@@ -1515,6 +1515,69 @@ def test_eval_capture_receipt_pending_reconciles_without_second_status_mutation(
     assert append_attempts == 2
 
 
+def test_eval_capture_acknowledges_when_jsonl_sink_survives_db_write_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """One durable configured receipt sink is enough to acknowledge disposition."""
+    outbox_path = tmp_path / "partial-eval-disposition-outbox.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-partial-sink"
+    vault.mkdir()
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-partial-sink",
+        payload={"event_id": "evt-partial-sink"},
+        trace_id="trace-partial-sink",
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    )
+    assert draft is not None
+
+    db_attempts = 0
+
+    def fail_db_sink(*_args: Any, **_kwargs: Any) -> str:
+        nonlocal db_attempts
+        db_attempts += 1
+        raise OSError("fault injection for configured DB sink")
+
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", fail_db_sink)
+    decision = promote_draft(
+        vault,
+        draft.draft_id,
+        decided_by="human:partial-sink",
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+    )
+
+    assert decision.authority_receipt is not None
+    assert decision.authority_receipt.actor == "human:partial-sink"
+    assert db_attempts == 1
+    terminal = read_draft(vault, draft.draft_id)
+    assert (
+        terminal is not None
+        and terminal.status == DRAFT_STATUS_PROMOTED
+        and terminal.decision_token is not None
+    )
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("event") == "governance.authority_receipt.recorded"
+        and record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    assert (
+        matching[0]["payload"]["authority_receipt"]["decision_token_id"]
+        == terminal.decision_token.token_id
+    )
+
+
 def test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1578,7 +1641,14 @@ def test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavail
 
 @pytest.mark.parametrize(
     "tamper",
-    ["outcome", "decision_token_id", "state_owner_outcome", "state_owner_writer"],
+    [
+        "outcome",
+        "decision_token_id",
+        "state_owner_outcome",
+        "state_owner_writer",
+        "contract_version",
+        "contract_version_missing",
+    ],
 )
 def test_eval_capture_reconciliation_rejects_tampered_persisted_receipt(
     monkeypatch: pytest.MonkeyPatch,
@@ -1628,8 +1698,14 @@ def test_eval_capture_reconciliation_rejects_tampered_persisted_receipt(
         receipt["decision_token_id"] = "tampered-token"
     elif tamper == "state_owner_outcome":
         payload["state_owner_receipt"]["outcome"] = "failed"
-    else:
+    elif tamper == "state_owner_writer":
         payload["state_owner_receipt"]["writer_identity"] = "attacker"
+    elif tamper == "contract_version":
+        receipt["contract_version"] = "unsupported-governed-write-contract"
+    elif tamper == "contract_version_missing":
+        receipt.pop("contract_version")
+    else:
+        pytest.fail(f"unexpected tamper value: {tamper}")
     outbox_path.write_text(
         "".join(json.dumps(record) + "\n" for record in records),
         encoding="utf-8",
