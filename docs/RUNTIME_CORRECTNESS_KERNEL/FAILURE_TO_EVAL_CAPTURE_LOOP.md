@@ -38,11 +38,11 @@ separately reviewed integration into regression coverage.
   GOV adapter to issue and validate a DecisionToken bound to the reviewer, decision, write class,
   and exact draft resource before the state-owner status write. The state-owner write receipt and
   distinct GOV AuthorityReceipt are persisted through the existing receipt/outbox path before the
-  disposition is acknowledged. If both configured receipt sinks fail after the status mutation,
-  `reconcile_pending_disposition_receipt` reuses the original GOV DecisionToken persisted with
-  the durable terminal draft, reconstructs the state-owner receipt, and emits the same stable
-  receipt event without minting replacement authority or performing a second status mutation;
-  acknowledgement remains withheld until the receipt is durable. Golden-set or fixture integration
+  disposition is acknowledged. If receipt persistence or acknowledgement is uncertain after the
+  status mutation, `reconcile_pending_disposition_receipt` reuses the original GOV DecisionToken
+  persisted with the durable terminal draft, reconstructs the state-owner receipt, and emits the
+  same stable receipt event without minting replacement authority or performing a second status
+  mutation; acknowledgement remains withheld until the receipt is durable. Golden-set or fixture integration
   is a separate reviewed code change.
   It does **not reuse `MemoryCandidateReviewQueue`** — see "Reviewer surfacing" below for why that
   queue is memory-candidate-specific and an eval-dataset case is a distinct artifact class.
@@ -149,9 +149,11 @@ note-write and concurrency contract follows
       resource bindings all match the terminal draft, after the shared GOV adapter validates the
       persisted original authorization. It rejects a nested state-owner receipt whose outcome or
       writer identity is wrong and discovers a durable DB-only receipt before reconstructing one.
-      If a configured DB receipt source is unreadable, reconciliation fails closed even when an
-      existing JSONL source is empty; a complete readable empty source still permits valid
-      first-time recovery.
+      Reconciliation reads configured sinks independently: a validated matching receipt in a
+      readable sink can be replayed when another sink is unavailable or malformed. If no matching
+      receipt is found and any configured source is unavailable, it fails closed rather than
+      emitting a replacement; conflicting matching event payloads across sinks also fail closed.
+      Readable empty sources still permit valid first-time recovery.
       OEF findings, traces, and WriteGuard health do not supply authorization or accountability.
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_disposition_uses_production_governed_chain`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_receipt_pending_reconciles_without_second_status_mutation`
@@ -160,9 +162,12 @@ note-write and concurrency contract follows
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_rejects_tampered_persisted_receipt`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_discovers_db_only_receipt`
       Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_fails_closed_when_db_receipt_source_unavailable`
+      Verify: `tests/invariants/test_governed_effect_spine.py::test_eval_capture_reconciliation_rejects_conflicting_receipts_across_sinks`
       Verify: `tests/api/test_eval_drafts.py::test_receipt_pending_retry_rejects_tampered_governed_token`
       Verify: `tests/api/test_eval_drafts.py::test_legacy_terminal_eval_draft_retry_fails_closed_without_minting_authority`
       Verify: `tests/api/test_eval_drafts.py::test_durable_receipt_with_lost_acknowledgement_returns_existing_receipt`
+      Verify: `tests/api/test_eval_drafts.py::test_exact_retry_returns_jsonl_receipt_when_configured_db_is_unavailable`
+      Verify: `tests/api/test_eval_drafts.py::test_exact_retry_returns_db_receipt_when_jsonl_source_is_corrupt`
       Verify: `tests/api/test_eval_drafts.py::test_malformed_receipt_jsonl_fails_closed_on_exact_retry`
       Verify: `tests/api/test_eval_drafts.py::test_concurrent_same_decision_posts_reconcile_one_terminal_mutation`
       Verify: `tests/api/test_eval_drafts.py::test_decision_route_rejects_request_identity_not_bound_to_auth`

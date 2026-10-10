@@ -19,6 +19,7 @@ from app.eval.failure_capture import (
     draft_unknown_classification_case,
     read_draft,
 )
+from app.receipts import outbox_sources as receipt_sources
 from tests._mvr03_principal_harness import provisioned_instance
 from tests.api._vault_test_helpers import bind_initialized_vault
 
@@ -361,7 +362,7 @@ def test_legacy_terminal_eval_draft_retry_fails_closed_without_minting_authority
     monkeypatch.setattr(adapter, "issue_human_decision_token", count_issue)
 
     outbox_reads = 0
-    real_read_receipts = failure_capture_module.read_receipt_source_records
+    real_read_receipts = failure_capture_module.read_receipt_source_snapshot
 
     def count_outbox_read(*args: Any, **kwargs: Any) -> Any:
         nonlocal outbox_reads
@@ -370,7 +371,7 @@ def test_legacy_terminal_eval_draft_retry_fails_closed_without_minting_authority
 
     monkeypatch.setattr(
         failure_capture_module,
-        "read_receipt_source_records",
+        "read_receipt_source_snapshot",
         count_outbox_read,
     )
     outbox_writes = 0
@@ -485,6 +486,216 @@ def test_durable_receipt_with_lost_acknowledgement_returns_existing_receipt(
         matching[0]["payload"]["decision_token"]["token_id"]
         == persisted.decision_token.token_id
     )
+
+
+def test_exact_retry_returns_jsonl_receipt_when_configured_db_is_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, first, _extra, principal_record = provisioned_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    outbox_path = tmp_path / "jsonl-receipt-db-unavailable.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    vault = Path(first.path)
+    bind_initialized_vault(monkeypatch, vault)
+    draft = draft_unknown_classification_case(
+        vault_root=vault,
+        utterance="JSONL receipt with unavailable DB case",
+        trace_id="api-jsonl-receipt-db-unavailable",
+    )
+    assert draft is not None
+    payload = {
+        "action": "promote",
+        "decided_by": principal_record.local_operator_role_id,
+        "notes": "replay the already durable JSONL receipt",
+    }
+
+    append_calls = 0
+    real_append = failure_capture_module.append_jsonl_outbox_event
+
+    def count_append(*args: Any, **kwargs: Any) -> bool:
+        nonlocal append_calls
+        append_calls += 1
+        return real_append(*args, **kwargs)
+
+    db_write_calls = 0
+
+    def fail_db_write(*_args: Any, **_kwargs: Any) -> str:
+        nonlocal db_write_calls
+        db_write_calls += 1
+        raise OSError("configured DB sink is unavailable")
+
+    status_writes = 0
+    real_write_note = failure_capture_module.write_note_relative
+
+    def count_status_write(*args: Any, **kwargs: Any) -> Any:
+        nonlocal status_writes
+        status_writes += 1
+        return real_write_note(*args, **kwargs)
+
+    token_issues = 0
+    adapter = failure_capture_module._GOVERNED_WRITE_ADAPTER
+    real_issue_token = adapter.issue_human_decision_token
+
+    def count_token_issue(**kwargs: Any) -> Any:
+        nonlocal token_issues
+        token_issues += 1
+        return real_issue_token(**kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "append_jsonl_outbox_event", count_append)
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", fail_db_write)
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_status_write)
+    monkeypatch.setattr(adapter, "issue_human_decision_token", count_token_issue)
+    client = TestClient(app)
+
+    first_response = client.post(
+        f"/api/eval-drafts/{draft.draft_id}/decision", json=payload
+    )
+
+    assert first_response.status_code == 200, first_response.text
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None and terminal.decision_token is not None
+    original_token_id = terminal.decision_token.token_id
+    original_decided_at = terminal.decided_at
+    assert append_calls == 1
+    assert db_write_calls == 1
+    assert status_writes == 1
+    assert token_issues == 1
+
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: None)
+    retry = client.post(f"/api/eval-drafts/{draft.draft_id}/decision", json=payload)
+
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["decided_at"] == original_decided_at
+    assert append_calls == 1
+    assert db_write_calls == 1
+    assert status_writes == 1
+    assert token_issues == 1
+    reread = read_draft(vault, draft.draft_id)
+    assert reread is not None and reread.decision_token is not None
+    assert reread.decision_token.token_id == original_token_id
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("event") == "governance.authority_receipt.recorded"
+        and record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+
+
+def test_exact_retry_returns_db_receipt_when_jsonl_source_is_corrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, first, _extra, principal_record = provisioned_instance(tmp_path)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(runtime.layout.registry_path))
+    outbox_path = tmp_path / "db-receipt-jsonl-corrupt.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("DB_DSN", raising=False)
+    vault = Path(first.path)
+    bind_initialized_vault(monkeypatch, vault)
+    draft = draft_unknown_classification_case(
+        vault_root=vault,
+        utterance="DB receipt with corrupt JSONL case",
+        trace_id="api-db-receipt-jsonl-corrupt",
+    )
+    assert draft is not None
+    payload = {
+        "action": "promote",
+        "decided_by": principal_record.local_operator_role_id,
+        "notes": "replay the already durable DB receipt",
+    }
+
+    append_calls = 0
+    real_append = failure_capture_module.append_jsonl_outbox_event
+
+    def count_append(*args: Any, **kwargs: Any) -> bool:
+        nonlocal append_calls
+        append_calls += 1
+        return real_append(*args, **kwargs)
+
+    db_write_calls = 0
+
+    def acknowledge_db_write(*_args: Any, **_kwargs: Any) -> str:
+        nonlocal db_write_calls
+        db_write_calls += 1
+        return "db-receipt-event"
+
+    status_writes = 0
+    real_write_note = failure_capture_module.write_note_relative
+
+    def count_status_write(*args: Any, **kwargs: Any) -> Any:
+        nonlocal status_writes
+        status_writes += 1
+        return real_write_note(*args, **kwargs)
+
+    token_issues = 0
+    adapter = failure_capture_module._GOVERNED_WRITE_ADAPTER
+    real_issue_token = adapter.issue_human_decision_token
+
+    def count_token_issue(**kwargs: Any) -> Any:
+        nonlocal token_issues
+        token_issues += 1
+        return real_issue_token(**kwargs)
+
+    monkeypatch.setattr(failure_capture_module, "append_jsonl_outbox_event", count_append)
+    monkeypatch.setattr(failure_capture_module, "write_outbox_event", acknowledge_db_write)
+    monkeypatch.setattr(failure_capture_module, "write_note_relative", count_status_write)
+    monkeypatch.setattr(adapter, "issue_human_decision_token", count_token_issue)
+    client = TestClient(app)
+
+    first_response = client.post(
+        f"/api/eval-drafts/{draft.draft_id}/decision", json=payload
+    )
+
+    assert first_response.status_code == 200, first_response.text
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None and terminal.decision_token is not None
+    original_token_id = terminal.decision_token.token_id
+    original_decided_at = terminal.decided_at
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in records
+        if record.get("event") == "governance.authority_receipt.recorded"
+        and record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    db_record = matching[0]
+    assert append_calls == 1
+    assert db_write_calls == 1
+    assert status_writes == 1
+    assert token_issues == 1
+
+    outbox_path.write_text('{"event": malformed\n', encoding="utf-8")
+    malformed_source = outbox_path.read_text(encoding="utf-8")
+    monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: [db_record])
+    retry = client.post(f"/api/eval-drafts/{draft.draft_id}/decision", json=payload)
+
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["decided_at"] == original_decided_at
+    assert append_calls == 1
+    assert db_write_calls == 1
+    assert status_writes == 1
+    assert token_issues == 1
+    assert outbox_path.read_text(encoding="utf-8") == malformed_source
+    reread = read_draft(vault, draft.draft_id)
+    assert reread is not None and reread.decision_token is not None
+    assert reread.decision_token.token_id == original_token_id
 
 
 def test_malformed_receipt_jsonl_fails_closed_on_exact_retry(

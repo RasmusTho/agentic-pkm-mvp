@@ -1778,3 +1778,66 @@ def test_eval_capture_reconciliation_discovers_db_only_receipt(
     )
     assert writes == []
     assert not outbox_path.exists()
+
+
+def test_eval_capture_reconciliation_rejects_conflicting_receipts_across_sinks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A matching event ID with divergent durable payloads is indeterminate."""
+    outbox_path = tmp_path / "conflicting-sink-receipts.jsonl"
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(outbox_path))
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    vault = tmp_path / "vault-conflicting-sink-receipts"
+    vault.mkdir()
+    write_guard = WriteGuard(snapshot_fn=lambda: {"state": "healthy"})
+    draft = draft_dead_letter_case(
+        vault_root=vault,
+        topic="ingest.vault.changed",
+        reason="schema_violation:missing_required_field",
+        event_id="evt-conflicting-sink-receipts",
+        payload={"event_id": "evt-conflicting-sink-receipts"},
+        trace_id="trace-conflicting-sink-receipts",
+        write_guard=write_guard,
+    )
+    assert draft is not None
+    monkeypatch.setattr(
+        failure_capture_module,
+        "write_outbox_event",
+        lambda *_args, **_kwargs: "db-id",
+    )
+    promoted = promote_draft(
+        vault,
+        draft.draft_id,
+        decided_by="human:conflicting-sink",
+        write_guard=write_guard,
+    )
+    assert promoted.authority_receipt is not None
+    jsonl_records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    matching = [
+        record
+        for record in jsonl_records
+        if record.get("payload", {}).get("draft_id") == draft.draft_id
+    ]
+    assert len(matching) == 1
+    conflicting_record = json.loads(json.dumps(matching[0]))
+    conflicting_record["payload"]["decision"] = "reject"
+    monkeypatch.setattr(
+        receipt_sources,
+        "_read_db_outbox_records",
+        lambda: [conflicting_record],
+    )
+
+    with pytest.raises(
+        AuthorityReceiptPersistenceError,
+        match="conflicting eval draft disposition receipts",
+    ):
+        reconcile_pending_disposition_receipt(vault, draft.draft_id)
+
+    terminal = read_draft(vault, draft.draft_id)
+    assert terminal is not None and terminal.status == DRAFT_STATUS_PROMOTED
+    assert len(jsonl_records) == 1

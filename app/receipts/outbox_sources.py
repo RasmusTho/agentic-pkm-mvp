@@ -4,11 +4,25 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from app.settings.watcher_settings import load_watcher_settings
+
+
+@dataclass(frozen=True)
+class ReceiptSourceSnapshot:
+    """Independently readable receipt records and any unavailable sources.
+
+    This snapshot is for reconciliation paths that may accept a validated
+    matching receipt from one durable sink. Callers must still fail closed if
+    no matching receipt is found while a configured source is unavailable.
+    """
+
+    records: tuple[dict[str, Any], ...]
+    unavailable_sources: tuple[str, ...]
 
 
 def read_receipt_source_records(*, outbox_path: Path | None = None) -> list[dict[str, Any]] | None:
@@ -37,6 +51,44 @@ def read_receipt_source_records(*, outbox_path: Path | None = None) -> list[dict
         records.extend(jsonl_records)
 
     return records if source_available else None
+
+
+def read_receipt_source_snapshot(*, outbox_path: Path | None = None) -> ReceiptSourceSnapshot:
+    """Read each receipt source independently for idempotent reconciliation.
+
+    Unlike :func:`read_receipt_source_records`, this reports partial
+    availability instead of discarding records from a healthy sink. It does
+    not make a partial empty view authoritative: a caller may use matching
+    records that are present, but must refuse to create a replacement receipt
+    when an unavailable source might already contain it.
+    """
+
+    records: list[dict[str, Any]] = []
+    unavailable_sources: list[str] = []
+
+    if _db_outbox_configured():
+        try:
+            db_records = _read_db_outbox_records()
+        except Exception:
+            db_records = None
+        if db_records is None:
+            unavailable_sources.append("DB")
+        else:
+            records.extend(db_records)
+
+    try:
+        jsonl_records = _read_jsonl_outbox_records(outbox_path=outbox_path)
+    except Exception:
+        jsonl_records = None
+        unavailable_sources.append("JSONL")
+    else:
+        if jsonl_records is not None:
+            records.extend(jsonl_records)
+
+    return ReceiptSourceSnapshot(
+        records=tuple(records),
+        unavailable_sources=tuple(unavailable_sources),
+    )
 
 
 def record_event(record: dict[str, Any]) -> str:
@@ -192,6 +244,8 @@ __all__ = [
     "nested",
     "normalize_note_path",
     "read_receipt_source_records",
+    "read_receipt_source_snapshot",
+    "ReceiptSourceSnapshot",
     "record_event",
     "record_payload",
     "record_source_label",

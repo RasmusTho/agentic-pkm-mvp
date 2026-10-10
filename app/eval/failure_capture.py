@@ -30,8 +30,8 @@ case to a golden dataset or fixture. Integration into
 `docs/eval/classification_golden.yaml` or a topic-schema fixture is a separate,
 reviewed code change. Until a decision is recorded the draft remains pending.
 
-If a status mutation succeeds while both configured receipt sinks reject the
-AuthorityReceipt, :func:`reconcile_pending_disposition_receipt` explicitly
+If a status mutation succeeds while receipt persistence or acknowledgement is
+uncertain, :func:`reconcile_pending_disposition_receipt` explicitly
 reconciles the durable terminal draft through the same GOV and outbox seams,
 reusing the original DecisionToken persisted with that status mutation; it
 never mints a replacement authority or mutates the draft status a second time,
@@ -113,7 +113,7 @@ from app.knowledge.write_ops import (
     read_note_text_with_version,
     write_note_relative,
 )
-from app.receipts.outbox_sources import read_receipt_source_records
+from app.receipts.outbox_sources import read_receipt_source_snapshot
 from app.vault.paths import get_vault_system_dir_rel
 from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
 
@@ -662,30 +662,44 @@ def _read_persisted_disposition_receipt(
 ) -> tuple[AuthorityReceipt, dict[str, Any]] | None:
     """Read an existing receipt event without mutating either outbox sink."""
     try:
-        records = read_receipt_source_records(outbox_path=outbox_path)
+        snapshot = read_receipt_source_snapshot(outbox_path=outbox_path)
     except Exception as exc:
         raise AuthorityReceiptPersistenceError(
             "configured receipt source is unreadable; eval draft recovery refused"
         ) from exc
-    if records is None:
-        backend = (os.getenv("STORE_BACKEND") or "").strip().lower()
-        db_configured = backend == "pg" or bool(
-            os.getenv("DATABASE_URL") or os.getenv("DB_DSN")
+
+    matching_records = [
+        record
+        for record in snapshot.records
+        if record.get("event_id") == disposition_id
+    ]
+    if any(
+        record.get("event") != EVAL_DRAFT_DISPOSITION_EVENT
+        for record in matching_records
+    ):
+        raise AuthorityReceiptPersistenceError(
+            "conflicting eval draft disposition event shares the same event identity"
         )
-        if db_configured:
+    if not matching_records and snapshot.unavailable_sources:
+        unavailable = ", ".join(snapshot.unavailable_sources)
+        if "DB" in snapshot.unavailable_sources:
             raise AuthorityReceiptPersistenceError(
-                "configured DB receipt source is unavailable and no JSONL "
-                "receipt source can be read"
+                "configured DB receipt source is unavailable and no matching "
+                "receipt was found in readable sources"
             )
-        records = []
-    for record in records:
-        if (
-            record.get("event") != EVAL_DRAFT_DISPOSITION_EVENT
-            or record.get("event_id") != disposition_id
-        ):
-            continue
+        raise AuthorityReceiptPersistenceError(
+            f"configured receipt source is unreadable ({unavailable}); "
+            "eval draft recovery refused"
+        )
+
+    validated: list[tuple[AuthorityReceipt, dict[str, Any]]] = []
+    for record in matching_records:
         payload = record.get("payload")
-        raw_receipt = payload.get("authority_receipt") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict):
+            raise AuthorityReceiptPersistenceError(
+                "eval draft disposition receipt event is malformed"
+            )
+        raw_receipt = payload.get("authority_receipt")
         if not isinstance(raw_receipt, dict):
             raise AuthorityReceiptPersistenceError(
                 "eval draft disposition receipt event is malformed"
@@ -695,12 +709,25 @@ def _read_persisted_disposition_receipt(
                 "persisted eval draft receipt does not match the terminal draft"
             )
         try:
-            return AuthorityReceipt(**raw_receipt), payload
+            validated.append((AuthorityReceipt(**raw_receipt), payload))
         except (TypeError, ValueError) as exc:
             raise AuthorityReceiptPersistenceError(
                 "eval draft disposition receipt event is invalid"
             ) from exc
-    return None
+
+    if not validated:
+        return None
+    first_receipt, first_payload = validated[0]
+    if any(payload != first_payload for _, payload in validated[1:]):
+        raise AuthorityReceiptPersistenceError(
+            "conflicting eval draft disposition receipts share the same event identity"
+        )
+    for receipt, _ in validated[1:]:
+        if receipt != first_receipt:
+            raise AuthorityReceiptPersistenceError(
+                "conflicting eval draft disposition receipts share the same event identity"
+            )
+    return first_receipt, first_payload
 
 
 def _governed_disposition_payload(
