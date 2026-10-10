@@ -178,6 +178,8 @@ class DevPageState:
     vault_browser_query: str = ""
     vault_browser_total_notes: int = 0
     vault_browser_filtered_notes: int = 0
+    vault_browser_state: str = "ready"
+    vault_browser_degraded_reason: str | None = None
     vault_browser_error: str | None = None
     vault_browser_read_only: bool = True
     vault_browser_identity_available: bool = False
@@ -537,6 +539,8 @@ class RealNoteWorkspaceDevPage:
             vault_browser_query=str(vault_browser.get("query") or ""),
             vault_browser_total_notes=int(vault_browser.get("total_notes") or 0),
             vault_browser_filtered_notes=int(vault_browser.get("filtered_notes") or 0),
+            vault_browser_state=str(vault_browser.get("state") or "ready"),
+            vault_browser_degraded_reason=vault_browser.get("degraded_reason"),
             vault_browser_error=vault_browser_error,
             vault_browser_read_only=bool(vault_browser.get("read_only", True)),
             vault_browser_identity_available=bool(vault_browser.get("identity_available", False)),
@@ -1057,6 +1061,8 @@ class RealNoteWorkspaceDevPage:
             "vault_browser_query": self.state.vault_browser_query,
             "vault_browser_total_notes": self.state.vault_browser_total_notes,
             "vault_browser_filtered_notes": self.state.vault_browser_filtered_notes,
+            "vault_browser_state": self.state.vault_browser_state,
+            "vault_browser_degraded_reason": self.state.vault_browser_degraded_reason,
             "vault_browser_error": self.state.vault_browser_error,
             "vault_browser_read_only": self.state.vault_browser_read_only,
             "vault_browser_identity_available": self.state.vault_browser_identity_available,
