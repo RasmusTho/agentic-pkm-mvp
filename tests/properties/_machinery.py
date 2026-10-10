@@ -46,8 +46,10 @@ APP_ROOT = REPO_ROOT / "app"
 # from the formal model's Σ by declaration (formal-model.md §2.3) and MUST
 # NEVER run against a real vault -- they are not part of this census.
 
+# #5912 shifted these existing source-publication sites; their classifications
+# and event/payload justifications remain unchanged.
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 175): (
+    ("app/services/indexer.py", 195): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize). "
@@ -64,7 +66,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "run_panel_note_execution, which emits panel.action.logged/blocked via the "
         "runtime's own outbox path (app/agents/panel_agent/runtime.py) for the same turn."
     ),
-    ("app/watcher/vault_watcher.py", 400): (
+    ("app/watcher/vault_watcher.py", 405): (
         "_hydrate_store_with_markdown: best-effort raw_text hydration for panel-scan "
         "note refresh; the mutating vault-sync path (T-sync) already emitted "
         "ingest.object.* for this note earlier in the same tick."
@@ -108,7 +110,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
-    ("app/ingest/vault_alpha.py", 780): (
+    ("app/ingest/vault_alpha.py", 781): (
         "Legacy vault-alpha compatibility save; the alpha ingest pipeline emits the "
         "corresponding ingest event upstream in the same run, so this mirror suppresses "
         "a duplicate."
@@ -1573,16 +1575,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
         "-> store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 780): (
+    ("app/ingest/vault_alpha.py", 781): (
         "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
         "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
         "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
     ),
-    ("app/ingest/vault_alpha.py", 783): (
+    ("app/ingest/vault_alpha.py", 784): (
         "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
         "store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 802): (
+    ("app/ingest/vault_alpha.py", 803): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
     ("app/ingest/vault_root.py", 194): (
@@ -1665,13 +1667,13 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 175): (
+    ("app/services/indexer.py", 195): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
         "into the input on the vault-changed path and preserves an existing binding via the merge. "
         "Line shifted 176 -> 175 when #5820 routed Product embedding through the portal client."
     ),
-    ("app/services/indexer.py", 257): (
+    ("app/services/indexer.py", 277): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
         "'payload'] = build_indexed_unit_payload(...) -> store_vector_index. Line shifted 256 -> 257 "
         "when #5820 routed Product embedding through the portal client."
@@ -1699,7 +1701,7 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "store_objects; a new-note branch has no prior row and no binding (unbound correct via the "
         "build_indexed_unit_payload choke at index time)."
     ),
-    ("app/watcher/vault_watcher.py", 400): (
+    ("app/watcher/vault_watcher.py", 405): (
         "preserves_existing_payload: _hydrate_store_with_markdown updates raw_text on "
         "dict(obj.payload); save_object -> store_objects; episode_ref preserved."
     ),

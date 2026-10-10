@@ -60,6 +60,23 @@ layout-aware path above. The legacy dual-write to `_system/companions/` has been
 Read fallback to `_system/companions/` is retained temporarily for vaults that have not yet
 migrated to the layout-aware path.
 
+The production registry and the runtime loop's snapshot watcher exclude both companion subtrees
+from normal source observation and publication, including nested configured system folders. The
+targeted vault-alpha candidate gates apply the same full companion prefix. Queued vault-changed
+and object-created ingest, panel refresh, and delete consumers apply the boundary before
+reading, writing, refreshing, or purging a source identity. A companion's shared source UUID does
+not make its metadata a human source. Ordinary Markdown and settings sources outside those
+subtrees retain their existing observation and reload behavior.
+
+After a clean registry generation, historical companion observations are removed only from the
+watcher checkpoint. The snapshot watcher also retires historical companion deletion observations
+and retries before the source-delete seam; continuity files and the genuine source's object/vector identity
+are retained. Reingesting a validated genuine source in the same bound vault also restores an
+existing companion-contaminated canonical source locator and its indexed citation/provenance
+locators to the source path. This recovery preserves the UUID and source bytes and leaves other
+existing source locators to their current contract. Repository delivery of this boundary does
+not assert that any live channel has already deployed it.
+
 Compatibility note:
 - older `System/Metadata/VaultMirror/...` files should be read as proto-companion continuity
   artifacts during transition

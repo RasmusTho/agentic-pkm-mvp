@@ -62,7 +62,7 @@ from app.services.indexer import (
     purge_object_vectors,
     resolve_event_object_id,
 )
-from app.services.companion_note import CompanionNote, scan_attachments, write_companion
+from app.services.companion_note import CompanionNote, is_companion_path, scan_attachments, write_companion
 from app.settings.runtime import get_settings_bundle
 from app.services.note_uuid import ensure_note_uuid
 from app.services.outbox import (
@@ -381,7 +381,10 @@ def run_once(
     event_id = _event_id_from_message(message)
     with worker_effect_window(message, runtime=binding_runtime):
         try:
-            _dispatch_topic(topic, payload, trace_id=trace_id, message=message, event_id=event_id)
+            _dispatch_topic(
+                topic, payload, trace_id=trace_id, message=message,
+                event_id=event_id, vault_root=resolved_root,
+            )
         except InvalidPanelNoteUUIDDispatchError as uuid_exc:
             logger.warning(
                 "worker dead-lettered malformed panel note uuid topic=%s id=%s",
@@ -482,6 +485,7 @@ def _dispatch_topic(
     trace_id: str,
     message: Mapping[str, Any],
     event_id: str = "",
+    vault_root: Path | None = None,
 ) -> None:
     """Dispatch one outbox message to its real topic handler.
 
@@ -499,20 +503,27 @@ def _dispatch_topic(
         message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
     )
     if topic == INGEST_OBJECT_CREATED:
-        handle_ingest_object_created(_indexer_payload(payload))
+        if _is_companion_source_event(payload, vault_root=vault_root):
+            logger.info("object-created ingest skipped: companion continuity file")
+            return
+        handle_ingest_object_created(
+            _indexer_payload(payload), vault_root=_resolve_optional_vault_root(vault_root)
+        )
     elif topic == INGEST_VAULT_CHANGED:
         handle_ingest_vault_changed(
             payload,
+            vault_root=vault_root,
             trace_id=trace_id,
             source_vault_binding_id=source_vault_binding_id,
             payload_schema=payload_schema,
         )
     elif topic == INGEST_OBJECT_DELETED:
-        handle_ingest_object_deleted(payload)
+        handle_ingest_object_deleted(payload, vault_root=vault_root)
     elif topic == PANEL_SCAN_REQUESTED:
         event_timestamp = message.get("timestamp") or payload.get("timestamp")
         handle_panel_scan_requested(
             payload,
+            vault_root=vault_root,
             trace_id=trace_id,
             scan_requested_ts=event_timestamp,
             source_vault_binding_id=source_vault_binding_id,
@@ -556,6 +567,15 @@ def _indexer_payload(payload: Mapping[str, Any]) -> dict[str, object]:
     return dict(payload)
 
 
+def _is_companion_source_event(payload: Mapping[str, Any], *, vault_root: Path | None = None) -> bool:
+    resolved_root = _resolve_optional_vault_root(vault_root)
+    return any(
+        is_companion_path(Path(str(payload[key])), resolved_root)
+        for key in ("path", "relative_path", "vault_path", "source_ref")
+        if payload.get(key)
+    )
+
+
 def _trace_id_from_envelope(envelope: object) -> str | None:
     if isinstance(envelope, dict):
         raw = envelope.get("trace_id")
@@ -564,7 +584,7 @@ def _trace_id_from_envelope(envelope: object) -> str | None:
     return str(raw) if raw else None
 
 
-def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
+def handle_ingest_object_deleted(payload: Mapping[str, Any], *, vault_root: Path | None = None) -> None:
     """Purge the deleted object's vectors from the durable index (T-delete).
 
     The purge itself is delegated to
@@ -601,6 +621,9 @@ def handle_ingest_object_deleted(payload: Mapping[str, Any]) -> None:
     on for their own purge+upsert writes -- this handler does not need its
     own bespoke cache-eviction path to stay consistent with that contract.
     """
+    if _is_companion_source_event(payload, vault_root=vault_root):
+        logger.info("ingest delete skipped: companion continuity file")
+        return
     raw_uuid = resolve_event_object_id(dict(payload))
     object_id: UUID | None = None
     if raw_uuid:
@@ -1568,6 +1591,9 @@ def handle_panel_scan_requested(
 ) -> WorkerPanelSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
+    if is_companion_path(note_path, resolved_root):
+        logger.info("panel scan skipped: companion continuity file")
+        return WorkerPanelSummary(emitted=0)
 
     # Capture runtime start timestamp for latency tracking
     runtime_start_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -1733,6 +1759,9 @@ def handle_ingest_vault_changed(
 ) -> WorkerIngestSummary:
     resolved_root = _resolve_vault_root(vault_root)
     note_path = _note_path_from_payload(payload, vault_root=resolved_root)
+    if is_companion_path(note_path, resolved_root):
+        logger.info("ingest skipped: companion continuity file")
+        return WorkerIngestSummary(ingested=0)
 
     raw_text = _stabilized_note_text(note_path)
     if raw_text is None:
@@ -1830,7 +1859,7 @@ def handle_ingest_vault_changed(
         "kind": "note",
     }
 
-    handle_ingest_object_created(ingest_obj)
+    handle_ingest_object_created(ingest_obj, vault_root=resolved_root)
     return WorkerIngestSummary(ingested=1)
 
 
@@ -2075,6 +2104,7 @@ def run(
                             trace_id=trace_id,
                             message=message,
                             event_id=event_id,
+                            vault_root=tick_vault_root,
                         )
                     except InvalidPanelNoteUUIDDispatchError as uuid_exc:
                         errors_total += 1

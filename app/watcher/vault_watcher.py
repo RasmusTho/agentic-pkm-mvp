@@ -25,6 +25,7 @@ from app.ingest import vault_alpha as vault_alpha
 from app.services.companion_note import (
     find_companion_by_content_hash,
     find_companion_by_source_ref,
+    is_companion_path,
     read_companion,
 )
 from app.events.types import INGEST_OBJECT_DELETED
@@ -50,6 +51,7 @@ from app.objects import ObjectStore, canonical_event_identity, resolve_canonical
 from app.watcher.events import emit_watcher_run_event
 from app.write_guard import DEFAULT_WRITE_GUARD, WritesBlockedError
 from app.vault.manager import iter_vault_markdown_files
+from app.vault.paths import resolve_vault_system_dir_rel_or_default
 from scripts.yaml_roundtrip import load_frontmatter
 
 Snapshot = dict[str, float]
@@ -313,10 +315,13 @@ def _advance_terminal_delete_observations(snapshot_path: Path) -> None:
 
 def _scan_md_files(vault_root: Path) -> dict[str, float]:
     current: dict[str, float] = {}
+    system_dir = resolve_vault_system_dir_rel_or_default(vault_root)
     for path in iter_vault_markdown_files(vault_root):
         try:
             rel = path.relative_to(vault_root)
         except Exception:
+            continue
+        if is_companion_path(path, vault_root, configured_system_dir=system_dir):
             continue
         if rel.parts and rel.parts[0] == "System" and rel.parts[1:2] == ("Metadata",):
             continue
@@ -747,6 +752,7 @@ def run_watcher_tick(
     except Exception:
         pass
     watcher = VaultWatcher(vault_root, snapshot_path=snapshot_path)
+    system_dir = resolve_vault_system_dir_rel_or_default(vault_root)
     initial_snapshot = load_snapshot(watcher.snapshot_path)
     result = watcher.run(save=False)
     resolved_outbox = _resolve_outbox_path(outbox_path)
@@ -897,6 +903,12 @@ def run_watcher_tick(
             if observed_mtime is None:
                 observed_mtime = prior_snapshot.get(str(deleted_path))
             pending_key = rel_deleted.as_posix()
+            # A pre-fix snapshot/retry can contain a companion even though
+            # it is now excluded. Retire only that observation before the
+            # source-delete seam can tombstone its shared UUID.
+            if is_companion_path(deleted_path, vault_root, configured_system_dir=system_dir):
+                pending.pop(pending_key, None)
+                continue
             unresolved = False
             try:
                 # delete_note commits its event inside its own transaction, so
