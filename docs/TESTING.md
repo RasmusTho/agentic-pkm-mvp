@@ -85,9 +85,15 @@ capture POST and one armed ASK POST to the
 declared gateway. It blocks other mutation requests. Capture/ASK refusal cases abort or fulfill
 only their isolated browser context; they do not establish real-model acceptance. The native
 read probe checks the selected API image, approved source UUID and storage binding, and reads
-that object's vector provenance using the producer's canonical content hash. It performs no
+the capture endpoint's effective destination and that object's vector provenance using the
+producer's canonical content hash. This diagnostic supports the existing unscoped compatibility
+binding and reads the exact object/vector row in a transaction made read-only before its first
+query; it does not initialize store providers (whose constructors may repair data). It performs no
 deployment, service restart, reindex, reset or deletion. Captured synthetic data and its actual
-acknowledgement are retained immediately in an atomic report snapshot before later UI assertions;
+acknowledgement are retained immediately in an atomic report snapshot before later UI assertions.
+An observed `written` response is distinct from a validated capture; dependent readback/index
+steps require the validated acknowledgement, rendered trace and source readback. ASK also requires
+real provider/model provenance and rejects the runtime's mock/backend-mock synthesis shape;
 do not rerun the whole write sequence as a retry.
 
 `report.json`, failure screenshots and a Playwright trace are private in `output_dir`. The report

@@ -172,6 +172,8 @@ p=json.load(sys.stdin)
 assert os.environ.get('PKM_ENVIRONMENT')==p['channel']
 root=pathlib.Path(os.environ['VAULT_ROOT']).resolve(strict=True)
 assert str(root)==p['vault_path']
+from app.vault.paths import get_vault_capture_note_rel
+assert get_vault_capture_note_rel(root)==p['capture_note_path'],'capture_producer_target_mismatch'
 note=root/p['capture_note_path']
 assert not note.is_symlink() and note.resolve(strict=True).is_relative_to(root)
 raw=note.read_bytes();assert len(raw)<=2*1024*1024
@@ -180,22 +182,18 @@ fm,body,error=parse_bounded_frontmatter(raw.decode());assert error is None
 assert str(fm.get('uuid') or fm.get('id') or '')==p['capture_note_uuid']
 assert os.environ.get('STORE_SCHEMA_AUTOCREATE','').lower() not in {'1','true','yes'}
 from app.stores.pg import _connect
-with _connect() as conn:
- assert conn.info.dbname=={'dev':'app_dev','test':'app_test'}[p['channel']]
-from app.stores import get_object_store
-provider=get_object_store()
-assert getattr(provider,'vault_binding_id',None)==p['vault_binding_id']
-from app.objects import ObjectStore
-obj=ObjectStore().get_object(p['capture_note_uuid'],strict_backend=True)
+from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
+assert p['vault_binding_id']==COMPATIBILITY_BINDING_ID,'unsupported_scoped_capture_probe'
 from app.index.artifact_metadata import canonicalize_indexable_text,compute_payload_content_hash
-payload=obj.payload if obj is not None else {}
 with _connect() as conn:
  conn.read_only=True
+ assert conn.info.dbname=={'dev':'app_dev','test':'app_test'}[p['channel']]
  with conn.cursor() as cur:
-  cur.execute('SELECT payload FROM store_vector_index WHERE vault_binding_id=%s AND object_id=%s LIMIT 1',(p['vault_binding_id'],UUID(p['capture_note_uuid'])))
+  cur.execute('SELECT o.payload AS object_payload,v.payload AS vector_payload FROM store_objects o LEFT JOIN store_vector_index v ON o.vault_binding_id=v.vault_binding_id AND o.object_id=v.object_id WHERE o.vault_binding_id=%s AND o.object_id=%s LIMIT 1',(p['vault_binding_id'],UUID(p['capture_note_uuid'])))
   row=cur.fetchone()
-vector=dict(row['payload'] or {}) if row else {}
-print(json.dumps({'source_uuid':p['capture_note_uuid'],'source_raw_sha256':hashlib.sha256(raw).hexdigest(),'source_has_marker':p['marker'] in body,'object_has_marker':p['marker'] in canonicalize_indexable_text(payload),'object_hash':compute_payload_content_hash(payload) if obj else None,'vector_hash':vector.get('provenance',{}).get('content_hash'),'embedding_identity':vector.get('embedding_identity') or vector.get('provenance',{}).get('embedding_identity'),'binding_verified':True}))
+payload=dict(row['object_payload'] or {}) if row else {}
+vector=dict(row['vector_payload'] or {}) if row else {}
+print(json.dumps({'source_uuid':p['capture_note_uuid'],'source_raw_sha256':hashlib.sha256(raw).hexdigest(),'source_has_marker':p['marker'] in body,'object_has_marker':p['marker'] in canonicalize_indexable_text(payload),'object_hash':compute_payload_content_hash(payload) if row else None,'vector_hash':vector.get('provenance',{}).get('content_hash'),'embedding_identity':vector.get('embedding_identity') or vector.get('provenance',{}).get('embedding_identity'),'binding_verified':True}))
 """
 
 
@@ -244,6 +242,22 @@ def validate_ask(payload: dict[str, Any], source_uuid: str, facts: list[str]) ->
     answer = payload.get("answer")
     if not isinstance(answer, str) or not all(x.casefold() in answer.casefold() for x in facts):
         raise AssertionError("ask_did_not_answer_current_run_facts")
+    route = payload.get("llm_route")
+    if (
+        not isinstance(route, dict)
+        or not isinstance(route.get("provider"), str)
+        or not route["provider"].strip()
+        or not isinstance(route.get("model"), str)
+        or not route["model"].strip()
+    ):
+        raise AssertionError("ask_generation_route_missing")
+    if (
+        route["provider"].strip().lower() in {"mock", "fake", "dummy"}
+        or str(route.get("backend", "")).strip().lower() in {"mock", "golden"}
+        or str(route.get("model", "")).strip().lower() in {"mock", "fake", "dummy"}
+        or answer.lstrip().startswith("MOCK_ASK_ANSWER:")
+    ):
+        raise AssertionError("ask_mock_generation_is_not_live_acceptance")
     sources = payload.get("sources") or []
     if source_uuid not in {x.get("uuid") for x in sources if isinstance(x, dict)}:
         raise AssertionError("ask_did_not_cite_current_source")
@@ -251,6 +265,19 @@ def validate_ask(payload: dict[str, Any], source_uuid: str, facts: list[str]) ->
         payload.get("synthesis_source_ids") or []
     ):
         raise AssertionError("ask_has_no_admitted_grounded_synthesis")
+
+
+def validate_capture_ack(ack: dict[str, Any], expected_path: str, posts: int) -> None:
+    if (
+        ack.get("outcome") != "written"
+        or ack.get("note_path") != expected_path
+        or not isinstance(ack.get("trace_id"), str)
+        or not ack["trace_id"].strip()
+        or not isinstance(ack.get("governed_write"), dict)
+        or not ack["governed_write"]
+        or posts != 1
+    ):
+        raise AssertionError("capture_acknowledgement_invalid")
 
 
 class CoreFlow:
@@ -272,6 +299,7 @@ class CoreFlow:
         self.page.set_default_navigation_timeout(d["navigation_ms"])
         self.page.set_default_timeout(10000)
         self.identity_ok = self.capture_written = self.persisted = self.indexed = False
+        self.capture_verified = False
         self.capture_posts = self.ask_posts = 0
         self.capture_armed = self.ask_armed = False
         self.ack: dict[str, Any] | None = None
@@ -462,14 +490,7 @@ class CoreFlow:
         # assertion fails. Re-running capture is not a recovery operation.
         self.capture_written = self.ack.get("outcome") == "written"
         self._write_report()
-        if (
-            not self.capture_written
-            or self.ack.get("note_path") != self.d["capture_note_path"]
-            or not self.ack.get("trace_id")
-            or not self.ack.get("governed_write")
-            or self.capture_posts != 1
-        ):
-            raise AssertionError("capture_acknowledgement_invalid")
+        validate_capture_ack(self.ack, self.d["capture_note_path"], self.capture_posts)
         self.page.locator('[data-capture-state="written"]').filter(has_text=self.marker).wait_for()
         item = self.page.locator('[data-capture-state="written"]').filter(has_text=self.marker)
         if item.get_attribute("data-ack-trace-id") != self.ack["trace_id"]:
@@ -477,11 +498,13 @@ class CoreFlow:
         self._binding()
         if not self.probe(self.d, self.marker).get("source_has_marker"):
             raise AssertionError("capture_not_in_approved_source")
+        self.capture_verified = True
+        self._write_report()
 
     def capture_survives_new_browser_context(self) -> None:
         self._need_identity()
-        if not self.capture_written:
-            raise Blocked("no_acknowledged_capture")
+        if not self.capture_verified:
+            raise Blocked("no_verified_capture")
         context = self.browser.new_context()
         try:
             page = context.new_page()
@@ -497,8 +520,8 @@ class CoreFlow:
 
     def fresh_capture_is_indexed_and_retrievable(self) -> None:
         self._need_identity()
-        if not self.capture_written:
-            raise Blocked("no_acknowledged_capture")
+        if not self.capture_verified:
+            raise Blocked("no_verified_capture")
         if self.ack and self.ack.get("ingest_warning"):
             raise AssertionError("capture_ack_reports_ingest_binding_warning")
         deadline = time.monotonic() + self.d["index_seconds"]
@@ -666,6 +689,8 @@ class CoreFlow:
             "capture_posts": self.capture_posts,
             "real_ask_actions": self.ask_posts,
             "capture_acknowledgement": self.ack,
+            "capture_write_observed": self.capture_written,
+            "capture_verified": self.capture_verified,
             "passed": len(self.results) == 8 and all(x["status"] == "passed" for x in self.results),
         }
         path = self.output / "report.json"

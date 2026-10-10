@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+import io
 import json
 import os
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
-from tests.companion_ui.live_core_flow import CoreFlow, load_manifest, validate_ask
+from tests.companion_ui.live_core_flow import Blocked, CoreFlow, _PROBE, load_manifest, validate_ask
 
 
 def _manifest(tmp_path: Path) -> dict[str, Any]:
@@ -236,6 +239,7 @@ def test_written_capture_survives_later_failure(
 def test_ask_fallback_cannot_pass_grounded_answer() -> None:
     source = "11111111-1111-4111-8111-111111111111"
     response = {"answer": "Person1 booking 999 at Place1", "sources": [{"uuid": source}]}
+    response["llm_route"] = {"provider": "fixture-real", "model": "fixture-real"}
     with pytest.raises(AssertionError, match="admitted_grounded_synthesis"):
         validate_ask(response, source, ["Person1", "999", "Place1"])
     response.update(synthesis_receipt_id="receipt", synthesis_source_ids=[source])
@@ -310,3 +314,148 @@ def test_report_failure_preserves_previous_snapshot(
     with pytest.raises(OSError):
         runner._write_report()
     assert (runner.output / "report.json").read_bytes() == previous
+
+
+@pytest.mark.parametrize(
+    "route,answer",
+    [
+        ({"provider": "mock", "model": "mock"}, "Person1 999 Place1"),
+        (
+            {"provider": "fixture-real", "model": "fixture-real"},
+            "MOCK_ASK_ANSWER: Person1 999 Place1",
+        ),
+        (
+            {"provider": "fixture-real", "model": "fixture-real", "backend": "mock"},
+            "Person1 999 Place1",
+        ),
+        (None, "Person1 999 Place1"),
+    ],
+)
+def test_mock_or_unproven_generation_cannot_pass(route: Any, answer: str) -> None:
+    source = "11111111-1111-4111-8111-111111111111"
+    response = {
+        "answer": answer,
+        "sources": [{"uuid": source}],
+        "llm_route": route,
+        "synthesis_receipt_id": "receipt",
+        "synthesis_source_ids": [source],
+    }
+    with pytest.raises(AssertionError):
+        validate_ask(response, source, ["Person1", "999", "Place1"])
+
+
+def test_invalid_ack_blocks_actual_dependent_steps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = _runner(tmp_path)
+    runner.identity_ok = True
+    runner.capture_posts = 1
+    monkeypatch.setattr(
+        runner.page,
+        "get_by_test_id",
+        lambda *_: SimpleNamespace(click=lambda: None, fill=lambda *_: None),
+    )
+    response = SimpleNamespace(
+        ok=True,
+        url="http://127.0.0.1:8111/api/companion/capture",
+        json=lambda: {
+            "outcome": "written",
+            "note_path": "Other/inbox.md",
+            "trace_id": "trace",
+            "governed_write": {"receipt": "receipt"},
+        },
+    )
+    monkeypatch.setattr(
+        runner.page,
+        "expect_response",
+        lambda *args, **kwargs: nullcontext(SimpleNamespace(value=response)),
+        raising=False,
+    )
+    with pytest.raises(AssertionError, match="capture_acknowledgement_invalid"):
+        runner.capture_acknowledged_once()
+    assert runner.capture_written and not runner.capture_verified
+    for action in (
+        runner.capture_survives_new_browser_context,
+        runner.fresh_capture_is_indexed_and_retrievable,
+    ):
+        with pytest.raises(Blocked, match="no_verified_capture"):
+            action()
+    saved = json.loads((runner.output / "report.json").read_text())
+    assert saved["capture_write_observed"] and not saved["capture_verified"]
+
+
+def _probe_input(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    monkeypatch.setenv("PKM_ENVIRONMENT", "dev")
+    monkeypatch.setenv("VAULT_ROOT", str(tmp_path))
+    monkeypatch.setenv("VAULT_CAPTURE_NOTE_REL", "Inbox/inbox.md")
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    return {
+        "channel": "dev",
+        "vault_path": str(tmp_path),
+        "capture_note_path": "Inbox/inbox.md",
+        "capture_note_uuid": "11111111-1111-4111-8111-111111111111",
+        "vault_binding_id": "legacy-compatibility-binding",
+        "marker": "PW-probe-marker",
+    }
+
+
+def test_native_probe_refuses_wrong_capture_producer_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data = _probe_input(tmp_path, monkeypatch)
+    data["capture_note_path"] = "Approved/different.md"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+    with pytest.raises(AssertionError, match="capture_producer_target_mismatch"):
+        exec(_PROBE, {})
+
+
+def test_native_probe_reads_before_any_provider_initialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from app.index.artifact_metadata import compute_payload_content_hash
+    import app.stores
+    import app.stores.pg
+
+    data = _probe_input(tmp_path, monkeypatch)
+    target = tmp_path / data["capture_note_path"]
+    target.parent.mkdir()
+    target.write_text("---\nuuid: " + data["capture_note_uuid"] + "\n---\n" + data["marker"])
+    payload = {"text": data["marker"]}
+    calls: list[str] = []
+
+    class Connection:
+        read_only = False
+        info = SimpleNamespace(dbname="app_dev")
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+        def cursor(self) -> Any:
+            def execute(sql: str, parameters: Any) -> None:
+                assert self.read_only and sql.startswith("SELECT ")
+                assert parameters[0] == data["vault_binding_id"]
+                calls.append("readonly_select")
+
+            row = {
+                "object_payload": payload,
+                "vector_payload": {
+                    "provenance": {"content_hash": compute_payload_content_hash(payload)}
+                },
+            }
+            return nullcontext(SimpleNamespace(execute=execute, fetchone=lambda: row))
+
+    monkeypatch.setattr(app.stores.pg, "_connect", Connection)
+
+    def forbidden_provider() -> None:
+        raise AssertionError("a provider constructor was invoked")
+
+    monkeypatch.setattr(app.stores, "get_object_store", forbidden_provider)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+    exec(_PROBE, {})
+    result = json.loads(capsys.readouterr().out)
+    assert calls == ["readonly_select"]
+    assert result["object_has_marker"] and result["source_has_marker"]
+    assert result["object_hash"] == result["vector_hash"]
