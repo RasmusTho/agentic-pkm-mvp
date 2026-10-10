@@ -227,7 +227,7 @@ _is_return_orientation_question = is_return_orientation_question
 
 
 @router.post("/ask", response_model=AskResponse)
-async def ask(
+def ask(
     req: AskRequest,
     request: Request,
 ) -> AskResponse:
@@ -237,7 +237,7 @@ async def ask(
 
 
 @router.post("/ask/scoped", response_model=AskResponse)
-async def ask_scoped(
+def ask_scoped(
     req: AskRequest,
     request: Request,
     context: ActiveContextSetV1 = Depends(require_scoped_read_context),

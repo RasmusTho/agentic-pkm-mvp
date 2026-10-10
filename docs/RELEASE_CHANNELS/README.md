@@ -384,6 +384,15 @@ quiescence proof, lock retirement, and terminal receipts retain their authority.
 does not establish live DEV, TEST, or PROD acceptance, or diagnose an earlier failure whose stage
 was not captured.
 
+An exception escaping the complete Linux inherited-worker guard reports only the latest fixed,
+allowlisted guard checkpoint through the same one-datagram emitter. The checkpoint identifies the
+guard group reached (`config_runtime_file_binding`, inherited owner FD/inode/flock, active
+journal/operation, selector and capture/migration agreement, selected image file protocol, database
+target binding, password source/read, credential-free database input, selected BWS consumer scope,
+or password equality); it does not establish the cause or authorize a repair. A successful guard,
+including a recovered optional absence, emits no checkpoint, and the original guard refusal remains
+the caller's result.
+
 ### Runtime floors constrain which images are valid rollback targets
 
 Rollback is a tag-bump, but not every previous tag is a legal target. A shipped **runtime

@@ -49,12 +49,12 @@ APP_ROOT = REPO_ROOT / "app"
 # #5912 shifted these existing source-publication sites; their classifications
 # and event/payload justifications remain unchanged.
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 195): (
+    ("app/services/indexer.py", 379): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize). "
-        "Line drifted 176 -> 175 (site unchanged) when #5820 simplified llm_embed_text "
-        "above while routing Product embeddings through the Mac portal."
+        "Line moved to 379 when #5927 added source-backed metadata and binding checks "
+        "before the established store mirror."
     ),
     ("app/promotion/consumer.py", 98): (
         "_apply_promotion_to_store: the caller (consume_promotion_intents) emits "
@@ -1667,16 +1667,17 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 195): (
+    ("app/services/indexer.py", 379): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
         "into the input on the vault-changed path and preserves an existing binding via the merge. "
-        "Line shifted 176 -> 175 when #5820 routed Product embedding through the portal client."
+        "Line moved to 379 when #5927 added source-backed metadata and binding checks before the sink."
     ),
-    ("app/services/indexer.py", 277): (
+    ("app/services/indexer.py", 461): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
         "'payload'] = build_indexed_unit_payload(...) -> store_vector_index. Line shifted 256 -> 257 "
-        "when #5820 routed Product embedding through the portal client."
+        "when #5820 routed Product embedding through the portal client, then moved to 461 when #5927 "
+        "added source-backed metadata and binding checks before the sink."
     ),
     # -- preserves_existing_payload: update starting from dict(existing.payload) ------------------
     ("app/agents/panel/writeback.py", 213): (
@@ -1719,11 +1720,11 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "-> store_objects. Verified by test_plan_to_object_carries_episode_ref."
     ),
     # -- transport_passthrough: facade/plumbing forwarding a caller-built (verified) payload ------
-    ("app/objects/__init__.py", 121): (
+    ("app/objects/__init__.py", 124): (
         "transport_passthrough: ObjectStore.save_object facade forwards dict(obj.payload) to the "
         "backing store.put -> store_objects; the caller that builds obj.payload carries episode_ref "
-        "(every save_object caller is itself a classified producer above). Line drifted 116 -> 122 "
-        "when atomic create support was added above this facade call (#4111)."
+        "(every save_object caller is itself a classified producer above). Line drifted 121 -> 124 "
+        "when #5921 documented and exported the backend-only facade; the sink behavior is unchanged."
     ),
     ("app/stores/memory.py", 98): (
         "transport_passthrough: MemoryObjectStore.put_if_absent delegates the caller-supplied "

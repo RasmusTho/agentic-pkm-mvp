@@ -15,6 +15,7 @@ from app.index.artifact_metadata import (
     canonicalize_indexed_text,
 )
 from app.index.embedding_identity import ensure_index_primary_identity
+from app.domain.state_axes import normalize_artifact_state_axes
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.llm.embed_queue import EmbedDeadLetterError
 from app.llm.fallback_orchestrator import embed_with_fallback
@@ -93,6 +94,156 @@ def resolve_event_object_id(obj: Dict[str, object]) -> object:
     return candidate
 
 
+def _source_backed_projection_metadata(
+    obj: Dict[str, object],
+    *,
+    vault_root: Path | None,
+    source_snapshot: str | None,
+) -> dict[str, object]:
+    """Derive retained-source metadata from the worker's admitted file snapshot.
+
+    The generic ``ingest.object.created`` producer has no source-backed
+    authority. Only the watched-note worker supplies ``source_snapshot`` after
+    it has read and admitted the whole file, so arbitrary client payloads cannot
+    mint replay provenance or replace a retained title.
+    """
+    if vault_root is None or source_snapshot is None:
+        return {}
+
+    raw_source_ref = obj.get("source_ref")
+    if not isinstance(raw_source_ref, str) or not raw_source_ref.strip():
+        return {}
+
+    root = vault_root.expanduser().resolve()
+    source_path = Path(raw_source_ref).expanduser()
+    if not source_path.is_absolute():
+        source_path = root / source_path
+    source_path = source_path.resolve()
+    if (
+        not source_path.is_relative_to(root)
+        or not source_path.is_file()
+        or is_companion_path(source_path, root)
+    ):
+        return {}
+
+    from app.ingest.vault_alpha import (
+        _derive_title,
+        _frontmatter_title,
+        product_replay_for_vault_note,
+    )
+    from app.rebuildability import canonical_product_body_text, parse_bounded_frontmatter
+
+    frontmatter, body, parse_error = parse_bounded_frontmatter(source_snapshot)
+    if parse_error is not None:
+        return {}
+
+    normalized = normalize_artifact_state_axes(
+        frontmatter,
+        default_review_state="provisional",
+    )
+    return {
+        "title": _frontmatter_title(frontmatter) or _derive_title(body, source_path),
+        "review_state": normalized["review_state"],
+        "maturity": normalized.get("maturity"),
+        "episode_ref": episode_ref_from_frontmatter(frontmatter),
+        "replay": product_replay_for_vault_note(
+            source_path,
+            vault_root=root,
+            source_text=source_snapshot,
+        ),
+        "content": canonical_product_body_text(body),
+    }
+
+
+def _source_metadata_matches_existing(
+    existing: DomainObject | None,
+    *,
+    incoming_ref: str,
+    vault_root: Path | None,
+) -> bool:
+    """Keep a source-backed update bound to the object's retained locator."""
+    if existing is None:
+        return True
+    if vault_root is None or not existing.source_ref:
+        return False
+
+    root = vault_root.expanduser().resolve()
+
+    def _resolved_ref(value: str) -> Path:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        return path.resolve()
+
+    try:
+        existing_path = _resolved_ref(existing.source_ref)
+        incoming_path = _resolved_ref(incoming_ref)
+    except OSError:
+        return False
+    if existing_path == incoming_path:
+        return True
+    # Preserve the established stale-locator repair seam. A different live
+    # source path sharing a UUID is a binding conflict; missing old locators
+    # are still repairable from the admitted source event.
+    if is_companion_path(existing_path, root):
+        return True
+    return not existing_path.is_file()
+
+
+def _source_replay_matches_existing(
+    existing: DomainObject | None,
+    source_metadata: dict[str, object],
+) -> bool:
+    """Reject a refresh that would mix a new source replay with an old one."""
+    if existing is None:
+        return True
+    existing_replay = existing.payload.get("replay")
+    incoming_replay = source_metadata.get("replay")
+    if not isinstance(existing_replay, dict) or not isinstance(incoming_replay, dict):
+        return True
+    existing_identity = existing_replay.get("source_identity")
+    incoming_identity = incoming_replay.get("source_identity")
+    if not isinstance(existing_identity, str) or not isinstance(incoming_identity, str):
+        return True
+    return existing_identity == incoming_identity
+
+
+def _source_metadata_for_existing(
+    existing: DomainObject | None,
+    source_metadata: dict[str, object],
+    *,
+    incoming_ref: str,
+    vault_root: Path | None,
+) -> dict[str, object]:
+    """Avoid minting replay provenance for a legacy row with a stale locator."""
+    if existing is None or vault_root is None or not existing.source_ref:
+        return source_metadata
+    if isinstance(existing.payload.get("replay"), dict):
+        return source_metadata
+    if not isinstance(source_metadata.get("replay"), dict):
+        return source_metadata
+
+    root = vault_root.expanduser().resolve()
+
+    def _resolved_ref(value: str) -> Path:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            path = root / path
+        return path.resolve()
+
+    try:
+        existing_path = _resolved_ref(existing.source_ref)
+        incoming_path = _resolved_ref(incoming_ref)
+    except OSError:
+        return source_metadata
+    if existing_path == incoming_path or is_companion_path(existing_path, root):
+        return source_metadata
+    # The row has no replay authority and its old source file is gone. Keep
+    # the legacy fields updateable, but do not pair a new replay identity with
+    # that retained locator; readiness must remain refused until reconciled.
+    return {key: value for key, value in source_metadata.items() if key != "replay"}
+
+
 def _infer_dim_from_error(exc: Exception) -> int | None:
     text = str(exc)
     match = re.search(r"got\s+(\d+)", text, re.IGNORECASE)
@@ -101,12 +252,22 @@ def _infer_dim_from_error(exc: Exception) -> int | None:
     return None
 
 
-def handle_ingest_object_created(obj: Dict[str, object], *, vault_root: Path | None = None) -> None:
+def handle_ingest_object_created(
+    obj: Dict[str, object],
+    *,
+    vault_root: Path | None = None,
+    source_snapshot: str | None = None,
+) -> None:
     incoming_uuid = resolve_event_object_id(obj)
     object_uuid = incoming_uuid if _is_valid_uuid(incoming_uuid) else str(_uuid.uuid4())
 
     content = str(obj.get("content") or "")
     obj_payload = obj.get("payload") or {}
+    source_metadata = _source_backed_projection_metadata(
+        obj,
+        vault_root=vault_root,
+        source_snapshot=source_snapshot,
+    )
     payload = {
         "title": obj.get("title"),
         "review_state": obj.get("review_state"),
@@ -148,6 +309,29 @@ def handle_ingest_object_created(obj: Dict[str, object], *, vault_root: Path | N
     store = ObjectStore()
     existing = store.get_object(object_uuid)
     incoming_ref = str(obj.get("source_ref") or obj.get("path") or "")
+    source_metadata_bound = _source_metadata_matches_existing(
+        existing,
+        incoming_ref=incoming_ref,
+        vault_root=vault_root,
+    )
+    source_replay_bound = _source_replay_matches_existing(existing, source_metadata)
+    if source_snapshot is not None and (not source_metadata_bound or not source_replay_bound):
+        logger.warning(
+            "watched source binding conflict; preserving existing projection object_id=%s source_ref=%s incoming_ref=%s replay_bound=%s",
+            object_uuid,
+            existing.source_ref if existing is not None else None,
+            incoming_ref,
+            source_replay_bound,
+        )
+        return
+    if source_metadata_bound:
+        source_metadata = _source_metadata_for_existing(
+            existing,
+            source_metadata,
+            incoming_ref=incoming_ref,
+            vault_root=vault_root,
+        )
+        payload.update({key: value for key, value in source_metadata.items() if value is not None})
 
     if existing is None:
         domain = DomainObject(

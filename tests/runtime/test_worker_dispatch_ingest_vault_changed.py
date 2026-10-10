@@ -82,11 +82,11 @@ def test_worker_run_dispatches_ingest_vault_changed(
 def test_worker_run_dispatches_ingest_object_deleted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    called: list[dict] = []
+    called: list[dict[str, object]] = []
     acked: list[str] = []
 
-    def fake_handle_deleted(payload):
-        called.append(dict(payload))
+    def fake_handle_deleted(payload, *, vault_root: Path | None = None):
+        called.append({"payload": dict(payload), "vault_root": vault_root})
 
     monkeypatch.setattr(outbox_worker, "handle_ingest_object_deleted", fake_handle_deleted)
     monkeypatch.setattr(outbox_worker, "bootstrap", lambda: None)
@@ -117,7 +117,18 @@ def test_worker_run_dispatches_ingest_object_deleted(
 
     outbox_worker.run(interval=0.0, heartbeat_interval=9999, log_heartbeat_interval=None, stop_after_ticks=2)
 
-    assert called == [{"uuid": "u-del-1", "path": "/tmp/vault/Inbox/deleted.md", "deleted": True, "event_id": "evt-del-1", "trace_id": "trace-del-1"}]
+    assert called == [
+        {
+            "payload": {
+                "uuid": "u-del-1",
+                "path": "/tmp/vault/Inbox/deleted.md",
+                "deleted": True,
+                "event_id": "evt-del-1",
+                "trace_id": "trace-del-1",
+            },
+            "vault_root": Path("/tmp/vault"),
+        }
+    ]
     assert acked == ["del-1"]
 
 

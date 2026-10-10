@@ -42,6 +42,13 @@ _DEPLOY_FAILURE_STAGES = frozenset({
     'scalar_runtime', 'embedding_configuration', 'health', 'version',
     'fleet_fitness', 'ui_smoke', 'capture_watch', 'receipt',
 })
+_GUARD_FAILURE_CHECKPOINTS = frozenset({
+    'config_runtime_file_binding', 'inherited_owner_fd_inode_flock',
+    'active_journal_operation', 'selector_shape_capture_raw_migration',
+    'selected_image_file_protocol', 'database_target_binding',
+    'password_source_read', 'credential_free_database_input',
+    'selected_bws_consumer_scope', 'password_equality',
+})
 
 
 def _deploy_failure_stage(stderr: str) -> str:
@@ -53,6 +60,17 @@ def _deploy_failure_stage(stderr: str) -> str:
     return 'unknown'
 
 
+def _emit_native_diagnostic(payload: bytes) -> None:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as journal:
+            journal.setblocking(False)
+            journal.sendto(payload, _DEPLOY_JOURNAL_SOCKET)
+    except OSError:
+        # Diagnostics are advisory; absence, refusal or queue pressure must not
+        # delay recovery or replace the original deployment failure/authority.
+        pass
+
+
 def _emit_deploy_failure(stage: str) -> None:
     # The service deliberately nulls both raw streams. Only these fixed fields
     # reach the existing native journal; no captured text or caller metadata does.
@@ -62,14 +80,34 @@ def _emit_deploy_failure(stage: str) -> None:
         'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
         f'MESSAGE=native deployment failure: stage={stage} class=command_failed\n'
     ).encode('ascii')
+    _emit_native_diagnostic(payload)
+
+
+def _guard_failure_checkpoint(value: object) -> str:
+    if isinstance(value, str) and value in _GUARD_FAILURE_CHECKPOINTS:
+        return value
+    return 'unknown'
+
+
+def _emit_guard_failure(checkpoint: object) -> None:
+    # Only fixed checkpoint names reach the existing native journal. The guard
+    # exception, traceback, locals, and caller inputs never enter this payload.
+    safe_checkpoint = _guard_failure_checkpoint(checkpoint)
+    payload = (
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        f'MESSAGE=native deployment failure: checkpoint={safe_checkpoint} class=guard_refused\n'
+    ).encode('ascii')
+    _emit_native_diagnostic(payload)
+
+
+@contextmanager
+def _guard_failure_boundary() -> Iterator[dict[str, str]]:
+    checkpoint = {'name': 'config_runtime_file_binding'}
     try:
-        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as journal:
-            journal.setblocking(False)
-            journal.sendto(payload, _DEPLOY_JOURNAL_SOCKET)
-    except OSError:
-        # Diagnostics are advisory; absence, refusal or queue pressure must not
-        # delay recovery or replace the original deployment failure/authority.
-        pass
+        yield checkpoint
+    except Exception:
+        _emit_guard_failure(checkpoint.get('name'))
+        raise
 
 
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
@@ -216,69 +254,80 @@ def require_file_protocol(root: Path, revision: str) -> None:
 
 def inherited_worker_guard(channel: str, compose_command: str | None = None) -> None:
     import fcntl
-    cfg = LinuxConfig.load(channel)
-    runtime_env_file = _runtime_env_file_path(cfg.runtime_env_file)
-    if os.environ.get('BWS_DEPLOY_RUNTIME_ENV_FILE') != str(runtime_env_file):
-        raise PostgresDeployError()
-    descriptor = int(os.environ['BWS_DEPLOY_LOCK_FD'])
-    expected = cfg.root / 'config/deploy' / (channel + '.env.lock') / 'bws-owner'
-    info, held = expected.lstat(), os.fstat(descriptor)
-    if not stat.S_ISREG(info.st_mode) or (held.st_dev, held.st_ino) != (info.st_dev, info.st_ino):
-        raise PostgresDeployError()
-    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    receipt = cfg.journal.read()
-    if receipt is None or receipt.stage != 'activating' or receipt.operation_id != os.environ.get('BWS_DEPLOY_OPERATION_ID'):
-        raise PostgresDeployError()
-    expected_capture = os.environ.get('BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED')
-    expected_migration = os.environ.get('BWS_EXPECTED_RAW_MIGRATION_PENDING')
-    target_revision = os.environ.get('BWS_DEPLOY_TARGET_REVISION', '')
-    if (expected_capture not in {'0', '1'} or expected_migration not in {'0', '1'}
-        or not re.fullmatch(r'[0-9a-f]{40}', target_revision)):
-        raise PostgresDeployError()
-    # The worker selected these consumers before any deployment mutation. Check
-    # capture config again for every Compose call. Before the shell runs its
-    # migration gate, independently derive HAR-02 from the current pin/marker;
-    # afterward, require the shell's gate result to match the immutable choice.
-    if _capture_watch_configured(cfg) != (expected_capture == '1'):
-        raise PostgresDeployError()
-    actual_capture = os.environ.get('DEPLOY_CAPTURE_WATCH_CONFIGURED')
-    if actual_capture is not None and actual_capture != expected_capture:
-        raise PostgresDeployError()
-    actual_migration = os.environ.get('DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING')
-    if actual_migration is None:
-        migration_pending = _raw_representation_migration_pending(cfg, target_revision)
-    elif actual_migration in {'0', '1'}:
-        migration_pending = actual_migration == '1'
-    else:
-        raise PostgresDeployError()
-    if migration_pending != (expected_migration == '1'):
-        raise PostgresDeployError()
-    if compose_command in {'up', 'run', 'start', 'restart'}:
-        # Automatic rollback may restore an older pin. It cannot recreate clients
-        # from a legacy image that bypasses the file-aware resolver.
-        from scripts.compose_env import compose_env_value
-        pin = cfg.root / 'config/deploy' / (channel + '.env')
-        revisions = [compose_env_value(line.split('=', 1)[1]) for line in pin.read_text().splitlines()
-                     if line.startswith('APP_IMAGE_TAG=')]
-        if len(revisions) != 1:
+    with _guard_failure_boundary() as checkpoint:
+        checkpoint['name'] = 'config_runtime_file_binding'
+        cfg = LinuxConfig.load(channel)
+        runtime_env_file = _runtime_env_file_path(cfg.runtime_env_file)
+        if os.environ.get('BWS_DEPLOY_RUNTIME_ENV_FILE') != str(runtime_env_file):
             raise PostgresDeployError()
-        require_file_protocol(cfg.root, revisions[0])
-    target = database_target(effective_database_fields(cfg, os.environ))
-    if os.environ.get('BWS_DATABASE_TARGET') != target or (target == 'external' and os.environ.get('COMPOSE_PROFILES')):
-        raise PostgresDeployError()
-    PasswordSource(cfg).verify()
-    validate_database_inputs(os.environ, database_input_files(cfg))
-    # Recheck the same selected scope before every Compose call, including
-    # calls made by the preserved migration/pin/rollback machinery.
-    consumers = [*DATABASE_CONSUMERS, 'heimdal-api-ingress']
-    if expected_capture == '1':
-        consumers.append('heimdal-capture-watch')
-    if expected_migration == '1':
-        consumers.append('heimdal-raw-migrate')
-    plan = DeployPlan(channel, target_revision, tuple(DATABASE_CONSUMERS.values()), tuple(consumers))
-    values = vm_selected_values(plan, cfg.reader())
-    if values['postgres-db']['postgres.password'].encode() != cfg.password_file.read_bytes():
-        raise PostgresDeployError()
+        checkpoint['name'] = 'inherited_owner_fd_inode_flock'
+        descriptor = int(os.environ['BWS_DEPLOY_LOCK_FD'])
+        expected = cfg.root / 'config/deploy' / (channel + '.env.lock') / 'bws-owner'
+        info, held = expected.lstat(), os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or (held.st_dev, held.st_ino) != (info.st_dev, info.st_ino):
+            raise PostgresDeployError()
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        checkpoint['name'] = 'active_journal_operation'
+        receipt = cfg.journal.read()
+        if receipt is None or receipt.stage != 'activating' or receipt.operation_id != os.environ.get('BWS_DEPLOY_OPERATION_ID'):
+            raise PostgresDeployError()
+        checkpoint['name'] = 'selector_shape_capture_raw_migration'
+        expected_capture = os.environ.get('BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED')
+        expected_migration = os.environ.get('BWS_EXPECTED_RAW_MIGRATION_PENDING')
+        target_revision = os.environ.get('BWS_DEPLOY_TARGET_REVISION', '')
+        if (expected_capture not in {'0', '1'} or expected_migration not in {'0', '1'}
+            or not re.fullmatch(r'[0-9a-f]{40}', target_revision)):
+            raise PostgresDeployError()
+        # The worker selected these consumers before any deployment mutation. Check
+        # capture config again for every Compose call. Before the shell runs its
+        # migration gate, independently derive HAR-02 from the current pin/marker;
+        # afterward, require the shell's gate result to match the immutable choice.
+        if _capture_watch_configured(cfg) != (expected_capture == '1'):
+            raise PostgresDeployError()
+        actual_capture = os.environ.get('DEPLOY_CAPTURE_WATCH_CONFIGURED')
+        if actual_capture is not None and actual_capture != expected_capture:
+            raise PostgresDeployError()
+        actual_migration = os.environ.get('DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING')
+        if actual_migration is None:
+            migration_pending = _raw_representation_migration_pending(cfg, target_revision)
+        elif actual_migration in {'0', '1'}:
+            migration_pending = actual_migration == '1'
+        else:
+            raise PostgresDeployError()
+        if migration_pending != (expected_migration == '1'):
+            raise PostgresDeployError()
+        if compose_command in {'up', 'run', 'start', 'restart'}:
+            checkpoint['name'] = 'selected_image_file_protocol'
+            # Automatic rollback may restore an older pin. It cannot recreate clients
+            # from a legacy image that bypasses the file-aware resolver.
+            from scripts.compose_env import compose_env_value
+            pin = cfg.root / 'config/deploy' / (channel + '.env')
+            revisions = [compose_env_value(line.split('=', 1)[1]) for line in pin.read_text().splitlines()
+                         if line.startswith('APP_IMAGE_TAG=')]
+            if len(revisions) != 1:
+                raise PostgresDeployError()
+            require_file_protocol(cfg.root, revisions[0])
+        checkpoint['name'] = 'database_target_binding'
+        target = database_target(effective_database_fields(cfg, os.environ))
+        if os.environ.get('BWS_DATABASE_TARGET') != target or (target == 'external' and os.environ.get('COMPOSE_PROFILES')):
+            raise PostgresDeployError()
+        checkpoint['name'] = 'password_source_read'
+        PasswordSource(cfg).verify()
+        checkpoint['name'] = 'credential_free_database_input'
+        validate_database_inputs(os.environ, database_input_files(cfg))
+        checkpoint['name'] = 'selected_bws_consumer_scope'
+        # Recheck the same selected scope before every Compose call, including
+        # calls made by the preserved migration/pin/rollback machinery.
+        consumers = [*DATABASE_CONSUMERS, 'heimdal-api-ingress']
+        if expected_capture == '1':
+            consumers.append('heimdal-capture-watch')
+        if expected_migration == '1':
+            consumers.append('heimdal-raw-migrate')
+        plan = DeployPlan(channel, target_revision, tuple(DATABASE_CONSUMERS.values()), tuple(consumers))
+        values = vm_selected_values(plan, cfg.reader())
+        checkpoint['name'] = 'password_equality'
+        if values['postgres-db']['postgres.password'].encode() != cfg.password_file.read_bytes():
+            raise PostgresDeployError()
 
 
 def _private_json(path: Path) -> dict[str, Any]:

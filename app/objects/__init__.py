@@ -8,11 +8,14 @@ should import from this package::
     from app.objects import DomainObject, ObjectStore
     from app.objects import RelationIndex, RelationEdge, GraphSlice
     from app.objects import VectorIndex, ScoredNeighbor
+    from app.objects import resolve_store_backend
 
 ``DomainObject`` and ``ObjectStore`` are owned here (KERNEL-03 removed the
 legacy ``app.store.object_store`` module). Durable writes route exclusively
 through the ``app.stores`` provider seam (``resolve_object_store_port``);
 store failures propagate — there is no silent in-memory fallback.
+``resolve_store_backend`` validates the configured backend without constructing
+the concrete store, while ``resolve_object_store_port`` resolves the StorePort.
 
 The disabled ``app.store.relation_index`` SQL seam is retired. Its non-writing
 contract types live in ``app.objects.relation_types``; ``app.store.vector_index``
@@ -33,7 +36,7 @@ from app.instance.binding_ids import COMPATIBILITY_BINDING_ID
 from app.services.outbox import insert_object_and_outbox, payload_fingerprint
 from app.objects.relation_types import RelationEdge, GraphSlice, RelationIndex
 from app.store.vector_index import ScoredNeighbor, VectorIndex
-from app.stores import resolve_object_store_port
+from app.stores import resolve_object_store_port, resolve_store_backend as resolve_store_backend
 
 
 @dataclass
