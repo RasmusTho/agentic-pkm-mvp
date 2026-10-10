@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path, PurePosixPath
 import re
+import secrets
 import shutil
 import stat
 import subprocess
@@ -256,10 +257,12 @@ class PgAcceptanceRunner:
                 raise PgAcceptanceError()
             manifest = self.resources(image['Id'])
             self._docker('pull', POSTGRES_IMAGE, timeout=120)
+            scratch_password = secrets.token_hex(24)
             database = self._create('db', [
                 '--network', 'none', '--read-only', '--tmpfs', '/var/lib/postgresql/data:rw,nosuid,nodev',
                 '--tmpfs', '/var/run/postgresql:rw,nosuid,nodev',
-                '--env', 'POSTGRES_USER=app', '--env', 'POSTGRES_PASSWORD=app', '--env', 'POSTGRES_DB=app_test',
+                '--env', 'POSTGRES_USER=app', '--env', 'POSTGRES_PASSWORD=' + scratch_password,
+                '--env', 'POSTGRES_DB=app_test',
                 POSTGRES_IMAGE, '-c', 'listen_addresses=127.0.0.1',
             ])
             row = self._inspect(database)
@@ -279,7 +282,7 @@ class PgAcceptanceRunner:
             # Provision the isolated acceptance dependency at the trusted
             # native effect boundary, matching CI's existing service setup.
             self._docker('exec', database, 'psql', '--username', 'app', '--dbname', 'app_test',
-                         '--command', 'CREATE EXTENSION IF NOT EXISTS vector')
+                         '--set=ON_ERROR_STOP=1', '--command', 'CREATE EXTENSION IF NOT EXISTS vector')
             source = self.directory / 'source'
             mounts = [argument for path in RESOURCE_PATHS for argument in (
                 '--mount', f'type=bind,src={source / path},dst=/app/{path},readonly',
@@ -288,8 +291,8 @@ class PgAcceptanceRunner:
             environment = {
                 'PATH': '/usr/local/bin:/usr/bin:/bin', 'PYTHONPATH': '/app:/app/companion-ui/companion-app',
                 'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONUNBUFFERED': '1', 'HOME': '/tmp',
-                'DATABASE_URL': 'postgresql://app:app@127.0.0.1:5432/app_test',
-                'DB_DSN': 'postgresql://app:app@127.0.0.1:5432/app_test',
+                'DATABASE_URL': f'postgresql://app:{scratch_password}@127.0.0.1:5432/app_test',
+                'DB_DSN': f'postgresql://app:{scratch_password}@127.0.0.1:5432/app_test',
                 'STORE_BACKEND': 'pg', 'LLM_PROVIDER': 'mock', 'PKM_ENVIRONMENT': 'test',
                 'VAULT_ROOT': '/scratch/vault', 'VAULT_ROOT_TEST': '/scratch/vault', 'TEST_VAULT_ROOT': '/scratch/vault',
             }

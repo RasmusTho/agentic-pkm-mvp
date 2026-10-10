@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -239,7 +240,7 @@ def test_production_runner_isolates_database_vault_and_credentials(tmp_path, mon
     runner, boundary, _sha, _operation_id = _runner(tmp_path, monkeypatch)
     for key in ('DATABASE_URL', 'DB_DSN', 'VAULT_ROOT', 'BWS_ACCESS_TOKEN', 'GITHUB_TOKEN', 'DOCKER_HOST'):
         monkeypatch.setenv(key, 'persistent-private-secret-canary')
-    runner.verify()
+    result = runner.verify()
     calls = [arguments for arguments, _timeout in boundary.commands]
     db = next(args for args in calls if args[0] == 'create' and args[args.index('--name') + 1].endswith('-db'))
     tests = next(args for args in calls if args[0] == 'create' and args[args.index('--name') + 1].endswith('-tests'))
@@ -250,13 +251,24 @@ def test_production_runner_isolates_database_vault_and_credentials(tmp_path, mon
     assert '/usr/bin/env' in tests and '-i' in tests
     assert 'VAULT_ROOT=/scratch/vault' in tests
     assert 'persistent-private-secret-canary' not in json.dumps(calls)
+    scratch_password = next(value.split('=', 1)[1] for value in db if value.startswith('POSTGRES_PASSWORD='))
+    assert re.fullmatch(r'[0-9a-f]{48}', scratch_password)
+    assert f'DATABASE_URL=postgresql://app:{scratch_password}@127.0.0.1:5432/app_test' in tests
+    assert f'DB_DSN=postgresql://app:{scratch_password}@127.0.0.1:5432/app_test' in tests
+    assert scratch_password not in json.dumps(result)
     mounts = [tests[i + 1] for i, value in enumerate(tests) if value == '--mount']
     assert all(str(runner.directory) in mount and mount.endswith('readonly') for mount in mounts)
     assert all('/app/app' not in mount and 'docker.sock' not in mount for mount in mounts)
     assert not boundary.containers
     provision = next(args for args in calls if args[0] == 'exec' and args[2] == 'psql')
+    assert '--set=ON_ERROR_STOP=1' in provision
     assert provision[-2:] == ('--command', 'CREATE EXTENSION IF NOT EXISTS vector')
     assert calls.index(provision) < calls.index(tests)
+    runner.verify()
+    passwords = [next(value.split('=', 1)[1] for value in args if value.startswith('POSTGRES_PASSWORD='))
+                 for args, _timeout in boundary.commands
+                 if args[0] == 'create' and args[args.index('--name') + 1].endswith('-db')]
+    assert len(passwords) == 2 and passwords[0] != passwords[1]
     # Actual subprocess boundary discards all caller credential/socket settings.
     observed = []
     monkeypatch.setattr(runner_module.subprocess, 'run', lambda argv, **options:
