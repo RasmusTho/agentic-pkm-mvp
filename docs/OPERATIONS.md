@@ -438,6 +438,14 @@ Companion docs:
   same-ID recovery procedure in [Deployment and environments](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning)
   before starting a new deployment. A `failed` receipt leaves deployment unverified and does not
   claim rollback or absence of partial effects.
+- Physical automatic and explicit previous-good recreation retains existing valid Model Access
+  path references through the four-key allowlist. Missing or invalid optional input keeps legacy
+  empty bindings; see [Rollback posture](RELEASE_CHANNELS/README.md#rollback-posture) for the
+  configuration and modern-caller limits.
+- A failed supervised deploy child reports only an allowlisted advisory gate stage and
+  `command_failed` class in the supervisor journal, with `unknown` for absent or ambiguous markers.
+  Raw child output is discarded. This diagnostic does not establish a terminal result or live
+  channel acceptance; use the same-ID reconciliation procedure above.
 - Before a Linux BWS deployment, operator setup must qualify the complete isolated host runtime,
   including Python helpers, Chromium headless payload, exact browser-smoke collection and tuning
   imports. Follow [Linux channel secret provisioning](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning)

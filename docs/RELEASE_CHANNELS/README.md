@@ -364,6 +364,23 @@ If this check fails, promotion aborts fail-closed with a reconciliation-PR instr
 - Rollback proceeds via a **governed revert PR targeting `stable`**, not a direct ref write. The revert PR must pass the same required status checks as a promotion PR. After merge, prod is updated to the merged `origin/stable` rollback commit before reversible migrations are reversed; `stable-prev` remains the rollback target/anchor.
 - Migrations are classified at promotion time as **reversible** or **forward-only**. Forward-only migrations are allowed but require the operator to acknowledge that rollback cannot restore DB shape.
 
+Physical previous-good recreation in `scripts/deploy_channel.sh` uses the same Model Access
+configuration rule for explicit rollback and automatic startup-failure recovery. An existing valid
+protected path-reference file is revalidated through the exact four-key allowlist and retained, so
+modern required Product callers keep their configured route. Missing or invalid optional input
+clears inherited references for legacy recovery; it never admits malformed keys, selects a new
+model/capability, changes embedding identity, or provisions access. A runtime env alias to the
+protected Model Access file remains a refusal.
+
+Failed supervised native deploy children report only a finite allowlisted gate stage and
+`command_failed` class to the existing supervisor diagnostic journal. Missing, malformed, or
+ambiguous stage markers yield `unknown`; raw child output, arguments, environment, endpoints,
+paths, and secret values are discarded. The stage identifies the primary script gate even when
+automatic recreation also fails. This diagnostic is advisory: exact same-operation reconciliation,
+quiescence proof, lock retirement, and terminal receipts retain their authority. Repository merge
+does not establish live DEV, TEST, or PROD acceptance, or diagnose an earlier failure whose stage
+was not captured.
+
 ### Runtime floors constrain which images are valid rollback targets
 
 Rollback is a tag-bump, but not every previous tag is a legal target. A shipped **runtime

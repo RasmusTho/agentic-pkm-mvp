@@ -3623,6 +3623,69 @@ def test_supervisor_loss_never_replays_nonterminal_worker(tmp_path):
     assert journal.read().terminal_result is None
 
 
+@pytest.mark.parametrize("hostile_marker,expected_stage", [
+    ("", "service_recreate"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=service_recreate secret-canary", "unknown"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=https://private.invalid/secret-canary", "unknown"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=committed", "unknown"),
+    ("YGGDRASIL_DEPLOY_FAILURE_STAGE=health", "unknown"),
+])
+def test_supervised_failure_diagnostics_expose_only_allowlisted_stage(
+    tmp_path: Path, capsys, hostile_marker: str, expected_stage: str,
+) -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, DeployWorker, PostgresDeployError
+
+    root, env, previous_sha = _deploy_harness(tmp_path)
+    target_sha = _commit_prefloor_successor(root, "native failed-child diagnostic")
+    _seed_previous_pin(root, previous_sha)
+    env.update(FAKE_SHA=target_sha, FAKE_DOCKER_FAIL_MATCH="up -d --force-recreate api worker watcher",
+               FAKE_DEPLOY_HOSTILE_MARKER=hostile_marker)
+    # Compose already captures its own command diagnostics. Inject hostile
+    # captured child streams at the script boundary that the adapter reads.
+    script = root / "scripts/deploy_channel.sh"
+    injection = '''printf '%s\\n' 'raw-stdout-canary'
+printf '%s\\n' 'postgresql://fixture:secret-canary@private.invalid/db /private/fixture' >&2
+if [ -n "${FAKE_DEPLOY_HOSTILE_MARKER:-}" ]; then
+  printf '%s\\n' "$FAKE_DEPLOY_HOSTILE_MARKER" >&2
+fi
+'''
+    script.write_text(script.read_text().replace("set -euo pipefail\n", "set -euo pipefail\n" + injection, 1))
+    source = tmp_path / "private-handles"
+    source.mkdir()
+    journal = DeployJournal(tmp_path / "journal", "dev")
+    config = SimpleNamespace(channel="dev", root=root, source_directory=source, journal=journal)
+    effects = linux.LinuxEffects(config)
+    effects.source = SimpleNamespace(verify=lambda: None)
+    effects.environment = lambda: env.copy()
+    effects.active_consumers = (*DATABASE_CONSUMERS, "heimdal-api-ingress")
+    effects.consumer_values = {"heimdal-api-ingress": {}, "heimdal-capture-watch": {},
+                              "heimdal-raw-migrate": {}}
+    effects.preflight = lambda _plan: "synthetic-postgres-canary"
+    effects.initialized = lambda: False
+    effects.materialize = lambda _password: None
+    effects.quiescent = lambda: True
+    plan = DeployPlan("dev", target_sha, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, "heimdal-api-ingress"))
+    operation_id = str(uuid4())
+    journal.bind_request(operation_id, plan, False, create=True)
+    worker = DeployWorker(journal, effects)
+    with (tmp_path / "lock-handle").open("w") as lock:
+        effects.lock_fd = lock.fileno()
+        worker.prepare(operation_id)
+        with pytest.raises(PostgresDeployError):
+            worker.run(operation_id, plan)
+    observed = capsys.readouterr()
+    assert observed.out == ""
+    assert observed.err == f"native deployment failure: stage={expected_stage} class=command_failed\n"
+    assert journal.read().stage == "activating"
+    assert journal.read().terminal_result is None
+    assert list(source.iterdir()) == []
+
+
 @pytest.mark.parametrize(('service', 'state', 'expected'), [
     ('api', 'running', True),
     ('migrate', 'running', False),

@@ -329,14 +329,17 @@ deploy_channel_model_access_preflight() {
     return $?
   fi
 
-  # Rollback must remain available when optional new-route configuration is
-  # absent or malformed. Do not consume those references during recovery, and
-  # clear ambient values so a previous-good mock image receives no MARR path.
+  # Modern previous-good callers still require their validated references.
+  # Reuse the same allowlist on recovery; an invalid optional file retains the
+  # legacy empty-binding path rather than admitting any of its contents.
   if [ "${action:-deploy}" = "rollback" ]; then
+    if deploy_channel_model_access_runtime_env_preflight "${model_access_env_file}"; then
+      return 0
+    fi
     for key in "${model_access_keys[@]}"; do
       export "${key}="
     done
-    echo "model-access runtime env preflight: skipped reason=rollback" >&2
+    echo "model-access runtime env preflight: skipped reason=rollback_optional_invalid" >&2
     return 0
   fi
 
