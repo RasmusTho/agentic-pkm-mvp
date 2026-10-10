@@ -676,15 +676,34 @@ The root-owned `config/systemd/yggdrasil-bws-deploy@.service` and installed
 `scripts/postgres_deploy_service.py` launcher supervise VM work independently of SSH. Operator setup
 runs `sudo scripts/install_bws_deploy_runtime.sh` from the checkout. That idempotent command
 requires Python 3.12 or newer, creates or updates `/opt/yggdrasil/bws-deploy-runtime` from the
-pinned `requirements-bws-deploy.txt` manifest, imports the BWS SDK, PostgreSQL driver, and Linux
-supervisor module through that runtime, then installs the root-owned launcher at
+pinned `requirements-bws-deploy.txt` manifest, imports the BWS SDK, PostgreSQL driver, YAML, pytest,
+Playwright, Linux supervisor, and the real retrieval-tuning module through that runtime, then
+provisions Playwright's matching Chromium headless shell with `playwright install --only-shell
+chromium` in `/opt/yggdrasil/bws-deploy-runtime/browsers`. Setup runs the unchanged mandatory
+Companion browser preflight: actual `chromium.launch()` and collection of the exact
+`tests/companion_ui/test_companion_ui_live_smoke.py` command. Collection retains the intentional
+unset-URL module skip and refuses an empty/deselected collection without that skip. The explicit
+tuning import covers the existing live pytest fixture's import closure without changing the fixture
+or running live smoke. Only after every check passes does setup install the root-owned launcher at
 `/usr/local/libexec/yggdrasil-bws-deploy` with the matching interpreter path. The service and RPC
 launcher use that interpreter; it is one shared runtime for the host's dev, test, and prod channels.
+Managed deployment children receive `PYTHON` bound to the running supervisor's `sys.executable`,
+including the deploy shell's inherited guard and every guarded Compose call. The interpreter's bin
+directory is prepended to child `PATH`, so bare `python3` inventory and Signboard calls use the same
+runtime. Child `PLAYWRIGHT_BROWSERS_PATH` selects that runtime's `browsers` directory; ambient
+interpreter and browser-cache selections are replaced on this managed path. The manifest reuses the
+application's existing PyYAML, pytest, Pydantic/core and settings pins and narrowly pins their
+required imports plus Playwright 1.63.0 (Chromium headless-shell revision 1243). No full application
+or ML dependency graph is installed. This host control runtime is installed
+independently of the authorized application image; updating it does not select a new application
+candidate or authorize a channel deployment, credential/grant change, or migration acknowledgment.
 Re-run it after changing the manifest, with no deployment operation in flight, then restart every
 active supervisor instance before starting another operation. If dependency installation or its
-import check fails, keep supervisor work idle and rerun setup after correcting the runtime issue;
+import/browser/collection check fails, keep supervisor work idle and rerun setup after correcting the runtime issue;
 the launcher is installed only after the checks pass. The setup does not install packages into
-system Python.
+system Python or install OS libraries. Infrastructure owns prerequisite browser OS libraries;
+missing libraries or an unavailable payload fail clearly before launcher publication and require
+an authorized host repair. Setup never invokes Playwright's `--with-deps` or `install-deps` modes.
 
 Operator setup then creates an owner-only (`root:root`, `0600`)
 `/etc/yggdrasil/bws-deploy/<channel>.json` containing the root-owned, non-writable checkout `root`,

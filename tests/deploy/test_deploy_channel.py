@@ -3726,9 +3726,24 @@ def test_bws_supervisor_launcher_uses_declared_runtime_dependencies():
     assert manifest.splitlines() == [
         'bitwarden-sdk==2.1.0',
         'psycopg[binary]==3.2.10',
+        'PyYAML==6.0.3',
         'python-dateutil==2.9.0.post0',
         'six==1.17.0',
         'typing-extensions==4.15.0',
+        'pytest==9.0.3',
+        'iniconfig==2.1.0',
+        'packaging==25.0',
+        'pluggy==1.6.0',
+        'Pygments==2.20.0',
+        'playwright==1.63.0',
+        'pyee==13.0.1',
+        'greenlet==3.5.6',
+        'pydantic==2.12.0',
+        'pydantic_core==2.41.1',
+        'pydantic-settings==2.6.1',
+        'annotated-types==0.7.0',
+        'typing-inspection==0.4.2',
+        'python-dotenv==1.2.2',
     ]
     assert launcher.splitlines()[0] == f'#!{runtime_python}'
     assert 'ExecStart=/usr/local/libexec/yggdrasil-bws-deploy serve %i' in unit
@@ -3754,8 +3769,11 @@ if [[ \"$1\" == \"-m\" && \"$2\" == \"venv\" ]]; then
 set -euo pipefail
 printf 'runtime:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
 if [[ \"$1\" == \"-m\" && \"$2\" == \"pip\" && \"${BWS_FAIL_RUNTIME_PIP:-0}\" == \"1\" ]]; then exit 1; fi
+if [[ \"$1\" == \"-m\" && \"$2\" == \"playwright\" && \"${BWS_FAIL_RUNTIME_BROWSER_INSTALL:-0}\" == \"1\" ]]; then exit 1; fi
 if [[ \"$1\" == \"-c\" && \"${BWS_FAIL_RUNTIME_VERSION:-0}\" == \"1\" ]]; then exit 1; fi
 if [[ \"$1\" == \"-c\" && \"$*\" == *bitwarden_sdk* && \"${BWS_FAIL_RUNTIME_CHECK:-0}\" == \"1\" ]]; then exit 1; fi
+if [[ \"$1\" == \"-c\" && -n \"${BWS_REAL_RUNTIME_PYTHON:-}\" ]]; then exec \"$BWS_REAL_RUNTIME_PYTHON\" \"$@\"; fi
+if [[ \"$1\" == \"-m\" && \"$2\" == \"pytest\" && -n \"${BWS_REAL_RUNTIME_PYTHON:-}\" ]]; then exec \"$BWS_REAL_RUNTIME_PYTHON\" \"$@\"; fi
 RUNTIME_PYTHON
   chmod 755 \"$runtime_root/bin/python3\"
   printf 'bootstrap:%s\\n' \"$*\" >> \"$BWS_SETUP_TRACE\"
@@ -3809,12 +3827,13 @@ def test_bws_supervisor_runtime_setup_is_idempotent_and_preserves_credentials(tm
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
-    calls = trace.read_text(encoding='utf-8').splitlines()
+    calls = [line for line in trace.read_text(encoding='utf-8').splitlines()
+             if line.startswith(('bootstrap:', 'runtime:'))]
     requirements = REPO_ROOT / 'requirements-bws-deploy.txt'
     bootstrap_check = 'bootstrap:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
     runtime_version_check = 'runtime:-c import sys; sys.version_info >= (3, 12) or sys.exit(78)'
-    runtime_import_check = 'runtime:-c import bitwarden_sdk, psycopg, app.ops.postgres_deploy_linux'
-    assert len(calls) == 10
+    runtime_import_check = 'runtime:-c import bitwarden_sdk, psycopg, yaml, app.ops.postgres_deploy_linux'
+    assert len(calls) == 16
     assert calls[0] == bootstrap_check
     assert calls[1] == f'bootstrap:-m venv {runtime_root}'
     assert calls[2] == runtime_version_check
@@ -3822,18 +3841,173 @@ def test_bws_supervisor_runtime_setup_is_idempotent_and_preserves_credentials(tm
         f'runtime:-m pip install --disable-pip-version-check --requirement {requirements}'
     )
     assert calls[4].startswith(runtime_import_check)
-    assert calls[5] == bootstrap_check
-    assert calls[6] == f'bootstrap:-m venv --upgrade {runtime_root}'
-    assert calls[7] == runtime_version_check
-    assert calls[8] == (
+    assert calls[5] == 'runtime:-m playwright install --only-shell chromium'
+    assert calls[6] == 'runtime:-c '
+    assert calls[7] == (
+        f'runtime:-m pytest {REPO_ROOT}/tests/companion_ui/test_companion_ui_live_smoke.py --collect-only -q -ra'
+    )
+    assert calls[8] == bootstrap_check
+    assert calls[9] == f'bootstrap:-m venv --upgrade {runtime_root}'
+    assert calls[10] == runtime_version_check
+    assert calls[11] == (
         f'runtime:-m pip install --disable-pip-version-check --requirement {requirements}'
     )
-    assert calls[9].startswith(runtime_import_check)
+    assert calls[12].startswith(runtime_import_check)
+    assert calls[13:] == calls[5:8]
     source_body = source_launcher.read_bytes().partition(b'\n')[2]
     assert installed_launcher.read_bytes() == f'#!{runtime_root}/bin/python3\n'.encode() + source_body
     assert installed_launcher.stat().st_mode & 0o777 == 0o755
     assert unit_path.read_bytes() == original_unit
     assert 'LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current' in original_unit.decode()
+
+
+@pytest.mark.parametrize('missing_import', [None, 'yaml', 'bitwarden_sdk', 'psycopg'])
+def test_bws_runtime_declares_and_probes_yaml_for_child_guard(tmp_path, missing_import):
+    application_manifest = (REPO_ROOT / 'requirements.txt').read_text(encoding='utf-8').splitlines()
+    runtime_manifest = (REPO_ROOT / 'requirements-bws-deploy.txt').read_text(encoding='utf-8').splitlines()
+    yaml_pin = next(line for line in application_manifest if line.startswith('PyYAML=='))
+    assert yaml_pin in runtime_manifest
+
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    installed_launcher = install_root / 'yggdrasil-bws-deploy'
+    installed_launcher.parent.mkdir()
+    installed_launcher.write_bytes(b'previous-launcher\n')
+    instrumentation = _bws_browser_probe_instrumentation(tmp_path)
+    # Execute the installer's actual import command through Python. Inject an
+    # unavailable dependency at the import boundary without running pip.
+    (instrumentation / 'sitecustomize.py').write_text(
+        'import importlib.abc, os, sys\n'
+        'class MissingDependency(importlib.abc.MetaPathFinder):\n'
+        '    def find_spec(self, fullname, path=None, target=None):\n'
+        '        if fullname == os.environ.get("BWS_MISSING_IMPORT"):\n'
+        '            raise ModuleNotFoundError(fullname)\n'
+        'sys.meta_path.insert(0, MissingDependency())\n',
+        encoding='utf-8',
+    )
+    trace = tmp_path / 'setup.trace'
+    result = subprocess.run(
+        ['bash', str(REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'),
+         '--runtime-root', str(runtime_root), '--install-root', str(install_root)],
+        cwd=REPO_ROOT,
+        env=_bws_setup_environment(
+            fake_bin, trace, BWS_REAL_RUNTIME_PYTHON=sys.executable,
+            BWS_MISSING_IMPORT=missing_import or '', PYTHONPATH=str(instrumentation),
+        ),
+        capture_output=True, text=True, check=False,
+    )
+
+    if missing_import is None:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert installed_launcher.read_bytes().startswith(f'#!{runtime_root}/bin/python3\n'.encode())
+    else:
+        assert result.returncode == 78, result.stdout + result.stderr
+        assert 'BWS deploy runtime dependency check failed' in result.stderr
+        assert installed_launcher.read_bytes() == b'previous-launcher\n'
+    assert any('import bitwarden_sdk, psycopg, yaml, app.ops.postgres_deploy_linux' in call
+               for call in trace.read_text(encoding='utf-8').splitlines())
+
+
+def _bws_browser_probe_instrumentation(tmp_path):
+    instrumentation = tmp_path / 'instrumentation'
+    instrumentation.mkdir()
+    # Keep default unit CI offline: only the external browser process is simulated.
+    # The installer, existing preflight script, Python import probe and exact pytest
+    # collection execute normally. A clean manifest-only installation separately
+    # proves the real pinned Chromium launch at the delivery convergence boundary.
+    package = instrumentation / 'playwright'
+    package.mkdir()
+    (package / '__init__.py').write_text('', encoding='utf-8')
+    (package / 'sync_api.py').write_text(
+        'from contextlib import contextmanager\n'
+        'from pathlib import Path\n'
+        'import os\n'
+        'def trace(event):\n'
+        '    with Path(os.environ["BWS_SETUP_TRACE"]).open("a") as target:\n'
+        '        target.write("browser:" + event + ":" + os.environ["PLAYWRIGHT_BROWSERS_PATH"] + "\\n")\n'
+        'class Chromium:\n'
+        '    def launch(self):\n'
+        '        trace("launch")\n'
+        '        if os.environ.get("BWS_BROWSER_UNAVAILABLE") == "1":\n'
+        '            raise RuntimeError("unavailable browser")\n'
+        '        return self\n'
+        '    def close(self):\n'
+        '        trace("close")\n'
+        '@contextmanager\n'
+        'def sync_playwright():\n'
+        '    yield type("Playwright", (), {"chromium": Chromium()})()\n',
+        encoding='utf-8',
+    )
+    return instrumentation
+
+
+@pytest.mark.parametrize('failure', [None, 'self-skip', 'pytest', 'playwright',
+                                    'pydantic_settings', 'app.retrieval.tuning',
+                                    'browser', 'collection'])
+def test_bws_runtime_setup_covers_mandatory_browser_smoke(tmp_path, failure):
+    manifest = (REPO_ROOT / 'requirements-bws-deploy.txt').read_text().splitlines()
+    application_manifest = (REPO_ROOT / 'requirements.txt').read_text().splitlines()
+    for package in ('pytest', 'pydantic', 'pydantic_core', 'pydantic-settings'):
+        assert next(line for line in application_manifest if line.startswith(package + '==')) in manifest
+    assert 'playwright==1.63.0' in manifest
+
+    fake_bin = tmp_path / 'fake-bin'
+    _write_fake_bws_runtime_python(fake_bin)
+    trace = tmp_path / 'setup.trace'
+    runtime_root = tmp_path / 'runtime'
+    install_root = tmp_path / 'libexec'
+    install_root.mkdir()
+    launcher = install_root / 'yggdrasil-bws-deploy'
+    launcher.write_bytes(b'previous-launcher\n')
+    instrumentation = _bws_browser_probe_instrumentation(tmp_path)
+    (instrumentation / 'sitecustomize.py').write_text(
+        'import importlib.abc, os, sys\n'
+        'class MissingDependency(importlib.abc.MetaPathFinder):\n'
+        '    def find_spec(self, fullname, path=None, target=None):\n'
+        '        if fullname == os.environ.get("BWS_MISSING_IMPORT"):\n'
+        '            raise ModuleNotFoundError(fullname)\n'
+        'sys.meta_path.insert(0, MissingDependency())\n', encoding='utf-8',
+    )
+    env = _bws_setup_environment(
+        fake_bin, trace, BWS_REAL_RUNTIME_PYTHON=sys.executable,
+        PYTHONPATH=str(instrumentation), PLAYWRIGHT_BROWSERS_PATH=str(tmp_path / 'ambient-browsers'),
+        BWS_MISSING_IMPORT=failure or '', BWS_BROWSER_UNAVAILABLE=str(int(failure == 'browser')),
+        # Import the actual live smoke during collection without contacting this URL.
+        COMPANION_UI_SMOKE_URL='http://127.0.0.1:1/', PYTEST_ADDOPTS='',
+    )
+    if failure == 'self-skip':
+        env.pop('COMPANION_UI_SMOKE_URL')
+    if failure == 'collection':
+        env['PYTEST_ADDOPTS'] = '-k bws_manifest_deselected_smoke'
+    result = subprocess.run(
+        ['bash', str(REPO_ROOT / 'scripts/install_bws_deploy_runtime.sh'),
+         '--runtime-root', str(runtime_root), '--install-root', str(install_root)],
+        cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False,
+    )
+    calls = trace.read_text().splitlines()
+    if failure in {None, 'self-skip'}:
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert launcher.read_bytes().startswith(f'#!{runtime_root}/bin/python3\n'.encode())
+    else:
+        assert result.returncode == 78, result.stdout + result.stderr
+        assert launcher.read_bytes() == b'previous-launcher\n'
+    if failure in {None, 'self-skip', 'browser', 'collection'}:
+        assert 'runtime:-m playwright install --only-shell chromium' in calls
+        assert f'browser:launch:{runtime_root}/browsers' in calls
+        if failure == 'browser':
+            assert 'Playwright Chromium runtime is unavailable' in result.stderr
+            assert 'prerequisite OS libraries' in result.stderr
+            assert not any('--collect-only' in call for call in calls)
+        else:
+            assert f'browser:close:{runtime_root}/browsers' in calls
+            assert f'runtime:-m pytest {REPO_ROOT}/tests/companion_ui/test_companion_ui_live_smoke.py --collect-only -q -ra' in calls
+        if failure == 'collection':
+            assert 'collected nothing without its intentional' in result.stderr
+    else:
+        assert 'BWS deploy runtime dependency check failed' in result.stderr
+        assert not any('playwright install' in call for call in calls)
 
 
 def test_bws_supervisor_runtime_rejects_old_bootstrap_python_before_mutation(tmp_path):
@@ -3866,7 +4040,8 @@ def test_bws_supervisor_runtime_rejects_old_bootstrap_python_before_mutation(tmp
 
 @pytest.mark.parametrize(
     'failure',
-    ['BWS_FAIL_RUNTIME_VERSION', 'BWS_FAIL_RUNTIME_PIP', 'BWS_FAIL_RUNTIME_CHECK'],
+    ['BWS_FAIL_RUNTIME_VERSION', 'BWS_FAIL_RUNTIME_PIP', 'BWS_FAIL_RUNTIME_CHECK',
+     'BWS_FAIL_RUNTIME_BROWSER_INSTALL'],
 )
 def test_bws_supervisor_runtime_failure_keeps_installed_launcher(tmp_path, failure):
     fake_bin = tmp_path / 'fake-bin'
