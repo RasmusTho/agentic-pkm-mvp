@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
+from itertools import chain
 from pathlib import Path
-from typing import Any
+from typing import Any, Generator, Iterator
 
 from app.settings.watcher_settings import load_watcher_settings
+
+
+_DB_RECEIPT_BATCH_SIZE = 256
+
+
+class ReceiptSourceUnavailableError(RuntimeError):
+    """A configured DB receipt source failed before traversal completed."""
 
 
 @dataclass(frozen=True)
@@ -23,6 +32,42 @@ class ReceiptSourceSnapshot:
 
     records: tuple[dict[str, Any], ...]
     unavailable_sources: tuple[str, ...]
+
+
+@contextmanager
+def open_receipt_source_records(
+    *, outbox_path: Path | None = None,
+) -> Iterator[Iterator[dict[str, Any]] | None]:
+    """Open complete DB-before-JSONL traversal without retaining source history.
+
+    ``None`` retains the unavailable-source meaning of the list adapter,
+    including refusal when the configured DB cannot be read. A late DB failure
+    raises ``ReceiptSourceUnavailableError`` so consumers discard their partial
+    projection. JSONL corruption still raises its existing integrity error.
+    Exiting the context closes cursors, connections, files and read locks even
+    when a consumer stops early.
+    """
+
+    from app.services.outbox import iter_jsonl_outbox_records
+
+    with _open_db_outbox_records() as db_records:
+        if _db_outbox_configured() and db_records is None:
+            yield None
+            return
+        resolved = _resolve_jsonl_outbox_path(outbox_path)
+        jsonl_records = (
+            iter_jsonl_outbox_records(resolved)
+            if resolved is not None and resolved.exists() and resolved.is_file()
+            else None
+        )
+        if db_records is None and jsonl_records is None:
+            yield None
+            return
+        try:
+            yield chain(db_records or (), jsonl_records or ())
+        finally:
+            if jsonl_records is not None:
+                jsonl_records.close()
 
 
 def read_receipt_source_records(*, outbox_path: Path | None = None) -> list[dict[str, Any]] | None:
@@ -160,44 +205,82 @@ def coerce_timestamp(value: Any) -> str:
 
 
 def _read_db_outbox_records() -> list[dict[str, Any]] | None:
+    """Compatibility adapter for callers whose result is complete source history."""
+
+    with _open_db_outbox_records() as records:
+        if records is None:
+            return None
+        try:
+            return list(records)
+        except ReceiptSourceUnavailableError:
+            return None
+
+
+@contextmanager
+def _open_db_outbox_records() -> Iterator[Iterator[dict[str, Any]] | None]:
     if not _db_outbox_configured():
-        return None
+        yield None
+        return
+    conn = None
     try:
         from app.services import outbox as outbox_service
 
         conn = outbox_service._open_conn()
-    except Exception:
-        return None
-    try:
-        cur = conn.cursor()
+        # A normal psycopg cursor buffers its whole result client-side even
+        # with fetchmany. This self-owned read-only transaction uses a server
+        # cursor; close rolls back without issuing any source mutation.
+        conn.autocommit = False
+        conn.read_only = True
+        cur = conn.cursor(name="receipt_source")
         cur.execute("select id, topic, payload, created_at from outbox order by created_at asc")
-        rows = cur.fetchall() or []
     except Exception:
-        return None
+        if conn is not None:
+            _close_connection(conn)
+        yield None
+        return
+    records = _iter_db_outbox_records(cur)
+    try:
+        yield records
     finally:
+        records.close()
         try:
-            conn.close()
+            cur.close()
         except Exception:
             pass
+        _close_connection(conn)
 
-    records: list[dict[str, Any]] = []
-    for row in rows:
-        if isinstance(row, dict):
-            row_id = row.get("id")
-            topic = row.get("topic")
-            payload = row.get("payload")
-            created_at = row.get("created_at")
-        else:
-            row_id, topic, payload, created_at = row
-        record = _coerce_record(payload)
-        record.setdefault("event", topic)
-        record.setdefault("event_type", topic)
-        record.setdefault("event_id", str(row_id) if row_id is not None else "")
-        if created_at is not None:
-            record.setdefault("created_at", coerce_timestamp(created_at))
-            record.setdefault("timestamp", coerce_timestamp(created_at))
-        records.append(record)
-    return records
+
+def _close_connection(conn: Any) -> None:
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+def _iter_db_outbox_records(cur: Any) -> Generator[dict[str, Any], None, None]:
+    while True:
+        try:
+            rows = cur.fetchmany(_DB_RECEIPT_BATCH_SIZE)
+        except Exception as exc:
+            raise ReceiptSourceUnavailableError("DB receipt traversal unavailable") from exc
+        if not rows:
+            return
+        for row in rows:
+            if isinstance(row, dict):
+                row_id = row.get("id")
+                topic = row.get("topic")
+                payload = row.get("payload")
+                created_at = row.get("created_at")
+            else:
+                row_id, topic, payload, created_at = row
+            record = _coerce_record(payload)
+            record.setdefault("event", topic)
+            record.setdefault("event_type", topic)
+            record.setdefault("event_id", str(row_id) if row_id is not None else "")
+            if created_at is not None:
+                record.setdefault("created_at", coerce_timestamp(created_at))
+                record.setdefault("timestamp", coerce_timestamp(created_at))
+            yield record
 
 
 def _db_outbox_configured() -> bool:
@@ -206,12 +289,12 @@ def _db_outbox_configured() -> bool:
 
 
 def _read_jsonl_outbox_records(*, outbox_path: Path | None) -> list[dict[str, Any]] | None:
-    from app.services.outbox import read_jsonl_outbox_records
+    from app.services.outbox import iter_jsonl_outbox_records
 
     resolved = _resolve_jsonl_outbox_path(outbox_path)
     if resolved is None or not resolved.exists() or not resolved.is_file():
         return None
-    return read_jsonl_outbox_records(resolved, read_only=True)
+    return list(iter_jsonl_outbox_records(resolved))
 
 
 def _resolve_jsonl_outbox_path(outbox_path: Path | None) -> Path | None:
@@ -243,6 +326,8 @@ __all__ = [
     "first_str",
     "nested",
     "normalize_note_path",
+    "open_receipt_source_records",
+    "ReceiptSourceUnavailableError",
     "read_receipt_source_records",
     "read_receipt_source_snapshot",
     "ReceiptSourceSnapshot",

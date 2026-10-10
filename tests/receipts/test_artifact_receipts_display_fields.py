@@ -17,6 +17,8 @@ record already declares.
 from __future__ import annotations
 
 import json
+import weakref
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.receipts.artifact_receipts import (
@@ -25,6 +27,7 @@ from app.receipts.artifact_receipts import (
     ArtifactReceiptTarget,
     receipts_for_artifacts,
 )
+from app.receipts import promotion_receipts
 
 _EXISTING_FIELDS = {
     "receipt_id",
@@ -417,3 +420,73 @@ def test_target_absolute_none_when_no_path_declared(tmp_path: Path) -> None:
     rows = result["Notes/anything.md"]
     assert len(rows) == 1
     assert rows[0]["target_absolute"] is None
+
+
+def test_receipts_for_artifacts_preserves_complete_matching_history_with_streamed_source(tmp_path: Path) -> None:
+    outbox = tmp_path / "outbox.jsonl"
+    start = datetime(2026, 10, 10, tzinfo=timezone.utc)
+    with outbox.open("w", encoding="utf-8") as handle:
+        for index in range(513):
+            record = {
+                "event": "panel.action.logged", "event_id": f"match-{index}",
+                "timestamp": (start + timedelta(seconds=index)).isoformat(),
+                "payload": {"note_uuid": "target-uuid"} if index % 2 else {"note_path": "notes/selected.md"},
+            }
+            handle.write(json.dumps(record) + "\n")
+            if index == 0:
+                handle.write(json.dumps(record) + "\n")
+        for index in range(10_003):
+            handle.write(json.dumps({"event": "panel.action.logged", "event_id": f"unselected-{index}", "payload": {"note_path": "notes/other.md"}}) + "\n")
+    result = receipts_for_artifacts(
+        [ArtifactReceiptTarget("target-uuid", "notes/selected.md"), ArtifactReceiptTarget(None, "notes/no-match.md")],
+        vault_root=tmp_path, outbox_path=outbox,
+    )
+    assert result is not None
+    assert [row["receipt_id"] for row in result["notes/selected.md"]] == [f"match-{index}" for index in range(513)]
+    assert result["notes/no-match.md"] == []
+    assert receipts_for_artifacts([ArtifactReceiptTarget(None, "notes/no-match.md")], vault_root=tmp_path, outbox_path=tmp_path / "missing.jsonl") is None
+
+
+def test_selected_promotion_duplicates_preserve_winner_and_stable_ties_without_retention(tmp_path: Path, monkeypatch) -> None:
+    original = promotion_receipts._project_transition_applied
+    live = 0
+    peak = 0
+
+    def release():
+        nonlocal live
+        live -= 1
+
+    def project(record, *, vault_root):
+        nonlocal live, peak
+        row, reason = original(record, vault_root=vault_root)
+        if row is not None:
+            live += 1
+            peak = max(peak, live)
+            assert live <= 4, "selected duplicates retained full promotion history"
+            weakref.finalize(row, release)
+        return row, reason
+
+    monkeypatch.setattr(promotion_receipts, "_project_transition_applied", project)
+    outbox = tmp_path / "duplicates.jsonl"
+
+    def record(event_id, hour):
+        return {
+            "event": "promotion.transition.applied", "event_id": event_id,
+            "timestamp": f"2026-10-10T{hour:02}:00:00Z",
+            "payload": {
+                "note_path": "notes/selected.md", "authority": {}, "basis": {"padding": "x" * 1024},
+                "outcome": {"status": "applied"}, "artifact_linkage": {"note_path": "notes/selected.md"},
+            },
+        }
+
+    with outbox.open("w", encoding="utf-8") as handle:
+        handle.write(json.dumps(record("winner", 3)) + "\n")
+        handle.write(json.dumps(record("other", 0)) + "\n")
+        for _ in range(10_003):
+            handle.write(json.dumps(record("winner", 2)) + "\n")
+        handle.write(json.dumps(record("winner", 0)))
+    result = receipts_for_artifacts([ArtifactReceiptTarget(None, "notes/selected.md")], vault_root=tmp_path, outbox_path=outbox)
+    assert result is not None
+    assert [row["receipt_id"] for row in result["notes/selected.md"]] == ["other", "winner"]
+    assert all(row["timestamp"] == "2026-10-10T00:00:00Z" for row in result["notes/selected.md"])
+    assert peak <= 3

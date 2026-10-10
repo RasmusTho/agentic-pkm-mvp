@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from app.events.types import PROMOTE_DONE, PROMOTION_TRANSITION_APPLIED
 from app.receipts.promotion_receipts import PromotionReceiptQuery, query_promotion_receipts
+from app.receipts import promotion_receipts
 
 
 def _write_jsonl(path: Path, *records: dict) -> None:
@@ -222,3 +225,28 @@ def test_query_distinguishes_unavailable_empty_and_non_authoritative_sources(
             "reason": "missing_authority",
         },
     )
+
+
+def test_query_filters_during_source_consumption(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    consumed = 0
+    projected = 0
+    original = promotion_receipts._project_transition_applied
+
+    def records():
+        nonlocal consumed
+        for index in range(10_003):
+            consumed += 1
+            yield _transition_record(event_id=f"unselected-{index}", note_uuid="unselected")
+        consumed += 1
+        yield _transition_record(event_id="selected", note_uuid="selected")
+
+    def project(record, *, vault_root):
+        nonlocal projected
+        projected += 1
+        assert consumed == projected, "source was copied before projection"
+        return original(record, vault_root=vault_root)
+
+    monkeypatch.setattr(promotion_receipts, "_project_transition_applied", project)
+    result = query_promotion_receipts(PromotionReceiptQuery(artifact_uuid="selected"), vault_root=tmp_path, records=records())
+    assert [row.receipt_id for row in result.rows] == ["selected"]
+    assert consumed == projected == 10_004
