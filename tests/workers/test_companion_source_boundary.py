@@ -12,7 +12,7 @@ import pytest
 from app import objects
 from app.components.embeddings import EmbeddingIdentity
 from app.events.models import new_event
-from app.events.types import INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
+from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from app.index.artifact_metadata import build_indexed_unit_payload
 from app.objects import ObjectStore
 from app.services import indexer
@@ -228,3 +228,42 @@ def test_companion_delete_does_not_purge_source_identity(
     assert boundary_index.count_vectors() == 0
     assert ObjectStore().get_object(SOURCE_UUID) == original_object
     assert companion.read_bytes() == retained_bytes
+
+
+@pytest.mark.parametrize("location", ["canonical", "legacy"])
+@pytest.mark.parametrize("locator", ["source_ref", "path"])
+@pytest.mark.parametrize("form", ["absolute", "relative"])
+def test_queued_companion_object_created_does_not_publish_source_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary_index: MemoryVectorIndex,
+    fake_conn: FakeOutboxConn, location: str, locator: str, form: str,
+) -> None:
+    vault = tmp_path / "vault"
+    source = write_source(vault)
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault))
+    dispatch(INGEST_VAULT_CHANGED, source_payload(vault, source))
+    canonical = vault / companion_path(SOURCE_UUID, vault)
+    companion = canonical if location == "canonical" else vault / f"_system/companions/{SOURCE_UUID}.md"
+    companion.parent.mkdir(parents=True, exist_ok=True)
+    companion.write_bytes(canonical.read_bytes())
+    retained = companion.read_bytes()
+    original = deepcopy(ObjectStore().get_object(SOURCE_UUID))
+    # Drive the real DB consume/ack entrypoint with an explicit binding and
+    # no root environment; the content was queued before the boundary repair.
+    monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+    monkeypatch.delenv("VAULT_ROOT", raising=False)
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    raw_locator = companion.relative_to(vault) if form == "relative" else companion
+    bad = {"uuid": SOURCE_UUID, "content": retained.decode(), locator: str(raw_locator)}
+    good = {"uuid": SOURCE_UUID, "content": SOURCE_BODY, "source_ref": str(source), "title": "Source"}
+    for index in range(2):
+        write_outbox_event(
+            new_event(event_type=INGEST_OBJECT_CREATED, payload=bad),
+            idempotency_key=f"queued-companion-created:{location}:{locator}:{index}",
+        )
+    write_outbox_event(new_event(event_type=INGEST_OBJECT_CREATED, payload=good), idempotency_key="healthy-created")
+    while fake_conn.undelivered_count():
+        assert outbox_worker.run_once(vault_root=vault).state == "processed"
+        assert_source_publication(boundary_index)
+    assert ObjectStore().get_object(SOURCE_UUID).source_ref == original.source_ref
+    assert companion.read_bytes() == retained
+    assert source.read_text(encoding="utf-8").endswith(f"{SOURCE_BODY}\n")

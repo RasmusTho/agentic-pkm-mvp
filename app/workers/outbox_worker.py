@@ -503,6 +503,9 @@ def _dispatch_topic(
         message.get("vault_binding_id") or COMPATIBILITY_BINDING_ID
     )
     if topic == INGEST_OBJECT_CREATED:
+        if _is_companion_source_event(payload, vault_root=vault_root):
+            logger.info("object-created ingest skipped: companion continuity file")
+            return
         handle_ingest_object_created(_indexer_payload(payload))
     elif topic == INGEST_VAULT_CHANGED:
         handle_ingest_vault_changed(
@@ -562,6 +565,15 @@ def _indexer_payload(payload: Mapping[str, Any]) -> dict[str, object]:
     return dict(payload)
 
 
+def _is_companion_source_event(payload: Mapping[str, Any], *, vault_root: Path | None = None) -> bool:
+    resolved_root = _resolve_optional_vault_root(vault_root)
+    return any(
+        is_companion_path(Path(str(payload[key])), resolved_root)
+        for key in ("path", "relative_path", "vault_path", "source_ref")
+        if payload.get(key)
+    )
+
+
 def _trace_id_from_envelope(envelope: object) -> str | None:
     if isinstance(envelope, dict):
         raw = envelope.get("trace_id")
@@ -607,12 +619,7 @@ def handle_ingest_object_deleted(payload: Mapping[str, Any], *, vault_root: Path
     on for their own purge+upsert writes -- this handler does not need its
     own bespoke cache-eviction path to stay consistent with that contract.
     """
-    resolved_root = _resolve_optional_vault_root(vault_root)
-    if any(
-        is_companion_path(Path(str(payload[key])), resolved_root)
-        for key in ("path", "relative_path", "vault_path", "source_ref")
-        if payload.get(key)
-    ):
+    if _is_companion_source_event(payload, vault_root=vault_root):
         logger.info("ingest delete skipped: companion continuity file")
         return
     raw_uuid = resolve_event_object_id(dict(payload))

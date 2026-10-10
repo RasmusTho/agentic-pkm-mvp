@@ -151,8 +151,11 @@ def is_companion_path(
             path = candidate.resolve().relative_to(root)
         except (OSError, ValueError):
             return False
-    elif path.is_absolute():
-        return False
+    else:
+        if path.is_absolute():
+            return False
+        if configured_system_dir is not None:
+            directories.append(Path(configured_system_dir) / "companions")
     return any(path.is_relative_to(directory) for directory in directories)
 
 

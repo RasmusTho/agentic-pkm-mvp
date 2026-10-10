@@ -9,20 +9,27 @@ from pathlib import Path
 import pytest
 
 from app.events.types import INGEST_VAULT_CHANGED
+from app.ingest import vault_alpha
+from app.objects import ObjectStore
+from app.runtime import runtime_loop
+from app.search import service as search_service
 from app.services.companion_note import companion_path, read_companion, write_companion
 from app.services import companion_note
 from app.stores.memory import MemoryVectorIndex
-from app.watcher import registry
+from app.watcher import registry, vault_watcher
 from app.watcher.settings_delta import SettingsSourceDeltaResult
 from app.watcher.state import WatcherState
 from app.workers import outbox_worker
 from tests.watcher.test_registry_incremental_scan import _load_state, _make_cfg
 from tests.workers.test_companion_source_boundary import (
     SOURCE_UUID,
+    SOURCE_BODY,
     SYSTEM_DIR,
     assert_source_publication,
+    dispatch,
     boundary_index as _boundary_index_fixture,
     write_source,
+    source_payload,
 )
 from tests.workers.test_outbox_worker_consumes_ingest import (
     FakeOutboxConn,
@@ -188,3 +195,105 @@ def test_checkpoint_cleanup_preserves_source_identity(
     assert_source_publication(boundary_index)
     assert all(path.read_bytes() == data for path, data in retained.items())
     assert read_companion(vault, SOURCE_UUID).source_ref == "Inbox/source.md"
+
+
+def _runtime_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, index: MemoryVectorIndex
+) -> tuple[Path, Path, runtime_loop.RuntimeLoopConfig]:
+    vault = tmp_path / "vault"
+    source = write_source(vault)
+    layout = vault / SYSTEM_DIR / "vault.layout.md"
+    layout.parent.mkdir(parents=True, exist_ok=True)
+    layout.write_text(
+        f"---\nsystem_folder: {SYSTEM_DIR}\ninbox_folder: Inbox\ndesk_folder: Workbench\ninclude_folders: ['.']\n---\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(vault))
+    monkeypatch.setenv("VAULT_LAYOUT_NOTE_REL", f"{SYSTEM_DIR}/vault.layout.md")
+    monkeypatch.setenv("WATCHER_RUN_LOG_PATH", str(tmp_path / "watcher-runs.jsonl"))
+    monkeypatch.setenv("INVALID_FILES_LOG_PATH", str(tmp_path / "invalid-files.jsonl"))
+    monkeypatch.setenv("COMPANION_CREATE_COOLDOWN_SECONDS", "0")
+    monkeypatch.setattr(runtime_loop, "_emit_runtime_heartbeat", lambda _: None)
+    monkeypatch.setattr(vault_alpha, "classify_run", lambda *_a, **_kw: {})
+    monkeypatch.setattr(search_service, "get_vector_index", lambda: index)
+    dispatch(INGEST_VAULT_CHANGED, source_payload(vault, source))
+    monkeypatch.setattr(search_service, "embed_query", lambda _: ([1.0, 0.0, 0.0, 0.0], index.get_identity()))
+    cfg = runtime_loop.RuntimeLoopConfig(
+        snapshot_path=tmp_path / "snapshot.json", outbox_path=tmp_path / "runtime-outbox.jsonl",
+        run_panels=False, run_promotion_consumer=False, watcher_run_log_path=tmp_path / "runtime-runs.jsonl",
+    )
+    return vault, source, cfg
+
+
+@pytest.mark.parametrize("route", ["runtime_loop", "retained_candidates"])
+def test_runtime_watcher_excludes_nested_companions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary_index: MemoryVectorIndex, route: str,
+) -> None:
+    vault, source, cfg = _runtime_fixture(tmp_path, monkeypatch, boundary_index)
+    original_bytes = source.read_bytes()
+    canonical = vault / companion_path(SOURCE_UUID, vault)
+    legacy = vault / f"_system/companions/{SOURCE_UUID}.md"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(canonical.read_bytes())
+    retained = {p: p.read_bytes() for p in (canonical, legacy)}
+    inputs: list[Path] = []
+    real_ingest = vault_watcher.run_vault_alpha_ingest_paths
+
+    def ingest(root: Path, paths: list[Path], **kwargs):
+        inputs.extend(paths)
+        return real_ingest(root, paths, **kwargs)
+
+    monkeypatch.setattr(vault_watcher, "run_vault_alpha_ingest_paths", ingest)
+    if route == "runtime_loop":
+        result = runtime_loop.run_once(vault, cfg)
+        assert result.watcher["errors"] == 0
+        assert source in inputs
+        assert canonical not in inputs and legacy not in inputs
+        snapshot = vault_watcher.load_snapshot(cfg.snapshot_path)
+        assert canonical.relative_to(vault).as_posix() not in snapshot
+        assert legacy.relative_to(vault).as_posix() not in snapshot
+    else:
+        # The real final candidate gate must also refuse retained/stale source
+        # inputs, even when they bypass the outer glob selection.
+        result = vault_alpha._ingest_candidates(
+            vault, candidates=[canonical, legacy], included_folders=["."], force=True, resume_from=None,
+        )
+        assert result.ingested == 0
+    obj = ObjectStore().get_object(SOURCE_UUID)
+    assert obj is not None and obj.payload["text"] == SOURCE_BODY
+    rows = [row for row in boundary_index.all_rows() if str(row["object_id"]) == SOURCE_UUID]
+    assert len(rows) == 1 and rows[0]["payload"]["text"] == SOURCE_BODY
+    assert source.read_bytes() == original_bytes
+    assert all(p.exists() for p in retained)
+    assert legacy.read_bytes() == retained[legacy]
+    assert read_companion(vault, SOURCE_UUID).source_ref == "Inbox/source.md"
+
+
+def test_runtime_watcher_cleanup_preserves_source_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary_index: MemoryVectorIndex,
+) -> None:
+    vault, source, cfg = _runtime_fixture(tmp_path, monkeypatch, boundary_index)
+    canonical = vault / companion_path(SOURCE_UUID, vault)
+    legacy = vault / f"_system/companions/{SOURCE_UUID}.md"
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    legacy.write_bytes(canonical.read_bytes())
+    retained = {p: p.read_bytes() for p in (canonical, legacy)}
+    historical = {source.relative_to(vault).as_posix(): source.stat().st_mtime}
+    historical.update({p.relative_to(vault).as_posix(): 1.0 for p in retained})
+    historical[f"{SYSTEM_DIR}/companions/missing.md"] = 1.0
+    vault_watcher.save_snapshot(cfg.snapshot_path, historical)
+    vault_watcher._save_unreconciled_deletions(
+        cfg.snapshot_path,
+        {p: {"attempts": 1, "observed_mtime": 1.0, "status": "pending"}
+         for p in historical if p != "Inbox/source.md"},
+    )
+    deleted_sources: list[str] = []
+    monkeypatch.setattr(vault_watcher, "delete_note", lambda p: deleted_sources.append(p) or True)
+    result = runtime_loop.run_once(vault, cfg)
+    assert result.watcher["errors"] == 0
+    assert deleted_sources == []
+    assert_source_publication(boundary_index)
+    snapshot = vault_watcher.load_snapshot(cfg.snapshot_path)
+    assert not (set(historical) - {"Inbox/source.md"}) & set(snapshot)
+    assert vault_watcher._load_unreconciled_deletions(cfg.snapshot_path) == {}
+    assert all(p.read_bytes() == data for p, data in retained.items())
