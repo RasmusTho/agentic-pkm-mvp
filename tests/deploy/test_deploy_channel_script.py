@@ -6,7 +6,7 @@ import socket
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -3704,8 +3704,7 @@ raise SystemExit(99)
     # Short private paths satisfy the platform Unix-socket address limit.
     with tempfile.TemporaryDirectory(prefix="j5915-", dir="/tmp") as socket_dir:
         journal_socket = Path(socket_dir) / "journal.sock"
-        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver, \
-             socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as filler:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver, ExitStack() as fillers:
             if sink in {"ready", "full"}:
                 receiver.bind(str(journal_socket))
             elif sink == "refused":
@@ -3713,15 +3712,24 @@ raise SystemExit(99)
             prefill = b"queue-prefill"
             if sink == "full":
                 receiver.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
-                filler.setblocking(False)
-                for _ in range(4096):
-                    try:
-                        filler.sendto(prefill, str(journal_socket))
-                    except OSError as error:
-                        assert error.errno in {errno.EAGAIN, errno.EWOULDBLOCK, errno.ENOBUFS}
+                # A sender can exhaust its own buffer before the receiver is
+                # full. Retain each sender and require a fresh empty sender to
+                # fail its first send, as the native emitter must do below.
+                for _ in range(64):
+                    filler = fillers.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM))
+                    filler.setblocking(False)
+                    for sent in range(4096):
+                        try:
+                            filler.sendto(prefill, str(journal_socket))
+                        except OSError as error:
+                            assert error.errno in {errno.EAGAIN, errno.EWOULDBLOCK, errno.ENOBUFS}
+                            break
+                    else:
+                        pytest.fail("private datagram sender did not saturate")
+                    if sent == 0:
                         break
                 else:
-                    pytest.fail("private datagram queue did not saturate")
+                    pytest.fail("private datagram receiver did not saturate for a fresh sender")
             result = subprocess.run(
                 [sys.executable, "-c", child, str(root), str(journal_socket), target_sha,
                  str(source), str(journal_dir), "argv-secret-canary"],
