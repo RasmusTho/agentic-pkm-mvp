@@ -506,7 +506,9 @@ def _dispatch_topic(
         if _is_companion_source_event(payload, vault_root=vault_root):
             logger.info("object-created ingest skipped: companion continuity file")
             return
-        handle_ingest_object_created(_indexer_payload(payload))
+        handle_ingest_object_created(
+            _indexer_payload(payload), vault_root=_resolve_optional_vault_root(vault_root)
+        )
     elif topic == INGEST_VAULT_CHANGED:
         handle_ingest_vault_changed(
             payload,

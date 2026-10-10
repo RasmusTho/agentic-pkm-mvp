@@ -15,13 +15,14 @@ from app.events.models import new_event
 from app.events.types import INGEST_OBJECT_CREATED, INGEST_OBJECT_DELETED, INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED
 from app.index.artifact_metadata import build_indexed_unit_payload
 from app.objects import ObjectStore
-from app.services import indexer
+from app.services import indexer, vault_sync, outbox as outbox_service
 from app.services.outbox import write_outbox_event
 from app.services.companion_note import companion_path
 from app.stores.memory import MemoryVectorIndex
 from app.workers import outbox_worker
 from app.write_guard import DEFAULT_WRITE_GUARD
 from tests.workers.test_outbox_worker_consumes_ingest import FakeOutboxConn, fake_conn as _fake_conn_fixture
+from tests.services.test_vault_sync_atomicity import _RecConn, _install
 
 SOURCE_UUID = "11111111-1111-4111-8111-111111111111"
 SOURCE_BODY = "The retained source fact is companion-boundary-regression-5912."
@@ -137,9 +138,10 @@ def test_queued_companion_events_do_not_publish_source_metadata(
 
 
 @pytest.mark.parametrize("previous_locator", ["canonical", "legacy", "relative", "aliased", "ordinary", "foreign"])
+@pytest.mark.parametrize("producer", ["vault_changed", "vault_sync_object_created"])
 def test_source_reingest_recovers_only_companion_contaminated_locator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary_index: MemoryVectorIndex,
-    previous_locator: str,
+    fake_conn: FakeOutboxConn, previous_locator: str, producer: str,
 ) -> None:
     vault = tmp_path / "vault"
     source = write_source(vault)
@@ -159,8 +161,24 @@ def test_source_reingest_recovers_only_companion_contaminated_locator(
     }
     old_ref = locators[previous_locator]
     expected_ref = str(source) if previous_locator in {"canonical", "legacy", "relative", "aliased"} else old_ref
+    original_source = deepcopy(ObjectStore().get_object(SOURCE_UUID))
+    if producer == "vault_sync_object_created":
+        conn = _RecConn(has_file_state=False)
+
+        def enqueue(payload, topic, trace_id=None, *, conn=None, observation=None):
+            return outbox_service.insert_object_and_outbox(
+                payload, topic, trace_id, conn=fake_conn, observation=observation,
+            )
+
+        captured = _install(monkeypatch, conn, enqueue)
+        vault_sync.upsert_object_from_note(
+            str(source), {"uuid": SOURCE_UUID, "title": "Source"}, SOURCE_BODY,
+            fm_changed=False, body_changed=False, vault_root=vault,
+        )
+        assert captured["topic"] == INGEST_OBJECT_CREATED
+        assert captured["conn"] is conn
     store = ObjectStore()
-    contaminated = store.get_object(SOURCE_UUID)
+    contaminated = store.get_object(SOURCE_UUID) or original_source
     assert contaminated is not None
     contaminated.source_ref = old_ref
     contaminated.payload = build_indexed_unit_payload(
@@ -169,7 +187,15 @@ def test_source_reingest_recovers_only_companion_contaminated_locator(
     )
     store.save_object(contaminated, emit_outbox=False)
 
-    dispatch(INGEST_VAULT_CHANGED, source_payload(vault, source))
+    if producer == "vault_sync_object_created":
+        # A pre-fix companion publication contaminated the row after this
+        # source event was queued. Replay must recover row and vector cites.
+        monkeypatch.delenv("WATCHER_VAULT_PATH", raising=False)
+        monkeypatch.delenv("VAULT_ROOT", raising=False)
+        while fake_conn.undelivered_count():
+            assert outbox_worker.run_once(vault_root=vault).state == "processed"
+    else:
+        dispatch(INGEST_VAULT_CHANGED, source_payload(vault, source))
     assert_source_publication(boundary_index)
     restored = store.get_object(SOURCE_UUID)
     assert restored is not None
