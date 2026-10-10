@@ -492,8 +492,11 @@ mismatched evidence cannot start a fresh operation or advance the candidate. Fai
 SHA/digest/run/channel/result JSON in the private controller log. A newer candidate can supersede
 an older one before deployment begins; a started chain completes with its original identity.
 
-Install from a clean retained tooling checkout contained in reviewed `main`, with its own working
-Python environment and the existing `gh` read client. Coordinate the current channel owner before
+Install from a clean retained tooling checkout contained in reviewed `main` of
+`RasmusTho/agentic-pkm-mvp`, with its own working Python environment and the existing `gh` read
+client. Before importing checkout code, the installer requires one credential-free canonical
+GitHub URL for each effective fetch/push origin and checks ancestry against freshly fetched main,
+independently of local tracking references. Coordinate the current channel owner before
 loading the unit so that an ongoing functional acceptance run keeps its frozen candidate:
 
 ```sh
