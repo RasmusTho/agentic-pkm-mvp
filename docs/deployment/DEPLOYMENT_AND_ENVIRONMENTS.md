@@ -496,7 +496,8 @@ Install from a clean retained tooling checkout contained in reviewed `main` of
 `RasmusTho/agentic-pkm-mvp`, with its own working Python environment and the existing `gh` read
 client. Before importing checkout code, the installer requires one credential-free canonical
 GitHub URL for each effective fetch/push origin and checks ancestry against freshly fetched main,
-independently of local tracking references. Coordinate the current channel owner before
+independently of local tracking references, replacement objects and legacy graft overlays.
+Coordinate the current channel owner before
 loading the unit so that an ongoing functional acceptance run keeps its frozen candidate:
 
 ```sh

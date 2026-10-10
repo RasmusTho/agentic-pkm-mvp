@@ -362,7 +362,8 @@ def test_installer_refuses_foreign_origin_before_fetch_or_import(tmp_path, monke
         installer.require_reviewed_checkout(checkout, Path(sys.executable).resolve())
 
 
-@pytest.mark.parametrize('fault', ['push', 'multiple', 'rewrite', 'forged_tracking_head', None])
+@pytest.mark.parametrize('fault', ['push', 'multiple', 'rewrite', 'forged_tracking_head',
+                                  'replacement', 'graft', None])
 def test_installer_binds_effective_repository_and_fetched_main(tmp_path, monkeypatch, fault):
     from scripts import install_postmerge_controller as installer
     reviewed = tmp_path / 'reviewed'
@@ -379,13 +380,22 @@ def test_installer_binds_effective_repository_and_fetched_main(tmp_path, monkeyp
         git('remote', 'set-url', '--add', 'origin', canonical)
     elif fault == 'rewrite':
         git('config', 'url.https://github.com/foreign/.insteadOf', 'https://github.com/RasmusTho/')
-    elif fault == 'forged_tracking_head':
+    elif fault in ('forged_tracking_head', 'replacement', 'graft'):
+        reviewed_head = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD'],
+                                       capture_output=True, text=True, check=True).stdout.strip()
         git('config', 'user.name', 'Fixture')
         git('config', 'user.email', 'fixture@example.invalid')
         (checkout / 'foreign').write_text('not on canonical main')
         git('add', 'foreign')
         git('commit', '--quiet', '-m', 'Foreign head')
-        git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        if fault == 'forged_tracking_head':
+            git('update-ref', 'refs/remotes/origin/main', 'HEAD')
+        elif fault == 'replacement':
+            git('replace', '--graft', reviewed_head, 'HEAD')
+        else:
+            foreign_head = subprocess.run(['git', '-C', str(checkout), 'rev-parse', 'HEAD'],
+                                          capture_output=True, text=True, check=True).stdout.strip()
+            (checkout / '.git/info/grafts').write_text(reviewed_head + ' ' + foreign_head + '\n')
     run = subprocess.run
     effects = []
     def observed(command, **kwargs):
@@ -404,7 +414,7 @@ def test_installer_binds_effective_repository_and_fetched_main(tmp_path, monkeyp
     else:
         with pytest.raises((ValueError, subprocess.CalledProcessError)):
             installer.require_reviewed_checkout(checkout, Path(sys.executable).resolve())
-        assert effects == (['fetch'] if fault == 'forged_tracking_head' else [])
+        assert effects == (['fetch'] if fault in ('forged_tracking_head', 'replacement', 'graft') else [])
 
 
 @pytest.mark.parametrize('crash', ['before_native_call', 'after_remote_commit', 'after_host_finish'])

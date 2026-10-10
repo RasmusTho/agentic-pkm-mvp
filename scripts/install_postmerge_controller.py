@@ -43,8 +43,14 @@ def launch_agent(checkout: Path, python: Path, gh: Path, state: Path) -> dict:
 
 
 def require_reviewed_checkout(checkout: Path, python: Path) -> None:
+    git_environment = {key: os.environ[key] for key in
+                       ('HOME', 'USER', 'LOGNAME', 'PATH', 'SSH_AUTH_SOCK') if key in os.environ}
+    # Verify the stored commit graph, not local replacement/graft overlays or
+    # an ambient GIT_DIR/GIT_WORK_TREE selecting another checkout.
+    git_environment['GIT_GRAFT_FILE'] = os.devnull
     def git(*arguments: str) -> subprocess.CompletedProcess:
-        return subprocess.run(['git', '-C', str(checkout), *arguments], capture_output=True,
+        return subprocess.run(['git', '--no-replace-objects', '-C', str(checkout), *arguments],
+                              env=git_environment, capture_output=True,
                               text=True, check=True, timeout=30)
 
     if (not checkout.is_absolute() or checkout.resolve() != checkout
