@@ -1759,6 +1759,7 @@ def test_eval_capture_reconciliation_discovers_db_only_receipt(
     assert len(matching) == 1
     db_record = matching[0]
     outbox_path.unlink()
+    monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.setattr(receipt_sources, "_read_db_outbox_records", lambda: [db_record])
 
     writes: list[tuple[tuple[Any, ...], dict[str, Any]]] = []

@@ -501,6 +501,11 @@ def test_exact_retry_returns_jsonl_receipt_when_configured_db_is_unavailable(
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setattr(
+        failure_capture_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        lambda: {"state": "healthy"},
+    )
     vault = Path(first.path)
     bind_initialized_vault(monkeypatch, vault)
     draft = draft_unknown_classification_case(
@@ -604,6 +609,11 @@ def test_exact_retry_returns_db_receipt_when_jsonl_source_is_corrupt(
     monkeypatch.setenv("STORE_BACKEND", "pg")
     monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.delenv("DB_DSN", raising=False)
+    monkeypatch.setattr(
+        failure_capture_module.DEFAULT_WRITE_GUARD,
+        "snapshot_fn",
+        lambda: {"state": "healthy"},
+    )
     vault = Path(first.path)
     bind_initialized_vault(monkeypatch, vault)
     draft = draft_unknown_classification_case(
@@ -802,16 +812,29 @@ def test_concurrent_same_decision_posts_reconcile_one_terminal_mutation(
 
     real_write = failure_capture_module.write_note_relative
     before_write = Barrier(2)
+    first_write_completed = Event()
     counter_lock = Lock()
     write_attempts = 0
     status_writes = 0
+    write_errors: list[str] = []
 
     def synchronize_and_write(*args: Any, **kwargs: Any) -> Any:
         nonlocal write_attempts, status_writes
         with counter_lock:
             write_attempts += 1
+            attempt = write_attempts
         before_write.wait(timeout=15)
-        result = real_write(*args, **kwargs)
+        if attempt > 1 and not first_write_completed.wait(timeout=15):
+            raise TimeoutError("first concurrent status write did not complete")
+        try:
+            result = real_write(*args, **kwargs)
+        except Exception as exc:
+            with counter_lock:
+                write_errors.append(f"{type(exc).__name__}: {exc}")
+            raise
+        finally:
+            if attempt == 1:
+                first_write_completed.set()
         with counter_lock:
             status_writes += 1
         return result
@@ -833,7 +856,9 @@ def test_concurrent_same_decision_posts_reconcile_one_terminal_mutation(
     assert [response.status_code for response in responses] == [200, 200]
     assert responses[0].json() == responses[1].json()
     assert write_attempts == 2
-    assert status_writes == 1
+    assert status_writes == 1, write_errors
+    assert len(write_errors) == 1
+    assert write_errors[0].startswith("KnowledgeWriteConflict:")
     terminal = read_draft(vault, draft.draft_id)
     assert terminal is not None
     assert terminal.status == DRAFT_STATUS_PROMOTED

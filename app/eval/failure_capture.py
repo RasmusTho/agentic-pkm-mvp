@@ -1107,7 +1107,7 @@ def _decide(
             actor=decided_by,
             resource=rel_path,
         )
-        token = _GOVERNED_WRITE_ADAPTER.validate_decision_token(
+        _GOVERNED_WRITE_ADAPTER.validate_decision_token(
             decision_token=grant.decision_token,
             action=action,
             write_class=EVAL_DRAFT_DISPOSITION_WRITE_CLASS,
