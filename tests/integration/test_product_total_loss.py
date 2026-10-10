@@ -18,6 +18,7 @@ from app.rebuildability import (
 from app.write_guard import WriteGuard, WritesBlockedError
 
 from app.ingest.vault_alpha import _VAULT_NOTE_UUID_NAMESPACE
+from app.stores import get_object_store, reset_memory_store_backend
 
 
 def _write_source(vault_root: Path, text: str = "Meaning-bearing Product note.") -> str:
@@ -112,6 +113,60 @@ def test_product_readiness_rejects_meaningful_metadata_drift(
 
     assert result.ready is False
     assert source_identity in result.refused_source_identities
+
+
+def test_alpha_source_backed_rebuild_converges_review_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    """The actual alpha recovery seam must converge with retained-source readiness."""
+    monkeypatch.setenv("STORE_BACKEND", "memory")
+    reset_memory_store_backend()
+    request.addfinalizer(reset_memory_store_backend)
+
+    from app.ingest import vault_alpha
+
+    monkeypatch.setattr(vault_alpha, "classify_run", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(vault_alpha, "index_ingest_object", lambda **_kwargs: None)
+    monkeypatch.setattr(vault_alpha, "append_jsonl", lambda *_args, **_kwargs: None)
+
+    vault_root = tmp_path / "vault"
+    layout = vault_root / "⚙️ System" / "vault.layout.md"
+    layout.parent.mkdir(parents=True)
+    layout.write_text(
+        "---\nsystem_folder: ⚙️ System\ninbox_folder: 📥 Inbox\n"
+        "desk_folder: 🛠️ Workbench\ninclude_folders:\n  - Notes\n---\n\n"
+        "Product total-loss fixture layout.\n",
+        encoding="utf-8",
+    )
+    note_uuid = "22222222-2222-4222-8222-222222222222"
+    note_path = vault_root / "Notes" / "product.md"
+    note_path.parent.mkdir()
+    note_path.write_text(
+        f"---\nuuid: {note_uuid}\ntitle: Product\n"
+        "review_state: unrecognized-source-token\n---\n\n"
+        "Meaning-bearing Product note.\n",
+        encoding="utf-8",
+    )
+    source_bytes = note_path.read_bytes()
+
+    from app.ingest.vault_alpha import run_vault_alpha_ingest
+
+    run_vault_alpha_ingest(vault_root, source_backed_rebuild=True)
+    first = evaluate_product_store_readiness(vault_root, get_object_store().list_objects())
+    assert first.ready is True
+    assert first.refused_source_identities == ()
+
+    run_vault_alpha_ingest(vault_root, source_backed_rebuild=True)
+    second = evaluate_product_store_readiness(vault_root, get_object_store().list_objects())
+    assert second.ready is True
+    assert second.refused_source_identities == ()
+    assert note_path.read_bytes() == source_bytes
+
+    projection = get_object_store().get(uuid.UUID(note_uuid))
+    assert projection is not None
+    payload = projection["payload"]
+    assert payload["review_state"] == "provisional"
+    assert payload["replay"]["source_identity"] == "Notes/product.md"
 
 
 def test_empty_or_corrupt_store_is_unready_until_verified_rebuild(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ import click
 from app.agents.classifier.agent import run as classify_run
 from app.agents.panel.filters import strip_ai_panels
 from app.agents.panel.writeback import strip_ai_status_block
+from app.domain.state_axes import normalize_artifact_state_axes
 from app.ingest.config import resolve_ingest_config
 from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.index.outbox import append_jsonl
@@ -616,7 +617,10 @@ def _ingest_single(
     companion = identity.companion
 
     title = _frontmatter_title(frontmatter) or _derive_title(body, path)
-    review_state = str(frontmatter.get("review_state") or "provisional")
+    normalized_frontmatter = normalize_artifact_state_axes(
+        frontmatter, default_review_state="provisional"
+    )
+    review_state = normalized_frontmatter["review_state"]
     trust = str(frontmatter.get("trust") or "unreviewed")
     language = str(frontmatter.get("language") or frontmatter.get("lang") or "und")
     maturity = str(frontmatter.get("maturity") or "note")
