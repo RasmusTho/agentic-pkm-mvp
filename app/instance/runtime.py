@@ -3226,14 +3226,32 @@ def _materialize_authenticated_channel_registrations(
 
     from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
 
-    snapshot = registry.load()
-    if snapshot.registrations or snapshot.removal_tombstones or snapshot.transfer_lineage:
-        return snapshot
     channel_owners = tuple(
         owner
         for owner in owners
         if owner.channel_id == channel and owner.vault_binding_id
     )
+    snapshot = registry.load()
+    registered_binding_ids = set(snapshot.registrations)
+    owner_binding_ids = {owner.vault_binding_id for owner in channel_owners}
+    resumable_partial_materialization = (
+        bool(snapshot.registrations)
+        and not snapshot.removal_tombstones
+        and not snapshot.transfer_lineage
+        and registered_binding_ids < owner_binding_ids
+        and registered_binding_ids.issubset(owner_binding_ids)
+        and all(
+            registration.extensions.get("provenance")
+            == "authenticated_legacy_owner_inventory"
+            for registration in snapshot.registrations.values()
+        )
+    )
+    if (
+        snapshot.registrations
+        or snapshot.removal_tombstones
+        or snapshot.transfer_lineage
+    ) and not resumable_partial_materialization:
+        return snapshot
     if not channel_owners:
         return snapshot
     for owner in channel_owners:
@@ -3265,6 +3283,13 @@ def _materialize_authenticated_channel_registrations(
                 "provenance": "authenticated_legacy_owner_inventory",
             },
         )
+        existing = snapshot.registrations.get(owner.vault_binding_id)
+        if existing is not None:
+            if existing != registration:
+                raise InstanceStatePreflightError(
+                    "authenticated owner registry entry does not match its binding"
+                )
+            continue
         snapshot = registry.register(
             registration,
             expected_revision=snapshot.revision,

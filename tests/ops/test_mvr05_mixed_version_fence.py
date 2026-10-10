@@ -1730,6 +1730,122 @@ def test_finish_path_bootstraps_fresh_owner_before_authenticated_materialization
     assert ledger.require_existing().leases[binding_id].state == "active"
 
 
+def test_finish_path_retries_after_partial_fresh_materialization(
+    tmp_path, monkeypatch
+) -> None:
+    """A stopped-window retry completes registrations after a partial write."""
+
+    state_root = tmp_path / "instance-state"
+    state_root.mkdir(mode=0o700)
+    ownership_root = tmp_path / "host-global"
+    ownership_root.mkdir(mode=0o700)
+    first_root = tmp_path / "first-vault"
+    second_root = tmp_path / "second-vault"
+    first_root.mkdir()
+    second_root.mkdir()
+    ledger = OwnershipLedger(ownership_root)
+    layout = InstanceStateLayout.for_channel(state_root, "test")
+    legacy_path = tmp_path / "missing-app-local.md"
+    controller_start_token = "linux:" + "0" * 64
+    runtime_module._begin_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        controller_pid=os.getpid(),
+        controller_start_token=controller_start_token,
+    )
+    domains = {domain: [] for domain in ("dev", "native", "prod", "test")}
+    inventory_digest = hashlib.sha256(
+        json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    quiescence_inventory = ownership_root / "deployment-quiescence-inventory.json"
+    quiescence_inventory.write_text(
+        json.dumps(
+            {
+                "schema": "agentic-pkm.host-deployment-quiescence.v2",
+                "inventory_complete": True,
+                "all_consumers_stopped": True,
+                "probe_count": 2,
+                "controller": {
+                    "pid": os.getpid(),
+                    "start_token": controller_start_token,
+                },
+                "domains": domains,
+                "snapshot_digests": [inventory_digest, inventory_digest],
+            }
+        ),
+        encoding="utf-8",
+    )
+    quiescence_inventory.chmod(0o600)
+    proof = runtime_module._prove_instance_state_quiescence(
+        channel="test",
+        host_global_root=ownership_root,
+        inventory_path=quiescence_inventory,
+    )
+    owner_inventory = ownership_root / "legacy-owner-inventory.json"
+    owner_inventory.write_text(
+        json.dumps(
+            _legacy_owner_inventory(
+                [
+                    {"channel_id": "test", "root": str(first_root)},
+                    {"channel_id": "test", "root": str(second_root)},
+                ]
+            )
+        ),
+        encoding="utf-8",
+    )
+    owner_inventory.chmod(0o600)
+    proof = runtime_module._bind_legacy_owner_inventory_to_proof(
+        inventory_path=owner_inventory,
+        quiescence_proof=proof,
+        channel="test",
+        host_global_root=ownership_root,
+    )
+    original_register = VaultRegistryStore.register
+    interrupted = False
+
+    def interrupt_after_first(registry, registration, **kwargs):
+        nonlocal interrupted
+        result = original_register(registry, registration, **kwargs)
+        if not interrupted:
+            interrupted = True
+            raise OSError("injected partial materialization interruption")
+        return result
+
+    monkeypatch.setattr(VaultRegistryStore, "register", interrupt_after_first)
+    with pytest.raises(OSError, match="partial materialization"):
+        runtime_module._finish_instance_state_deployment(
+            channel="test",
+            instance_state_root=state_root,
+            host_global_root=ownership_root,
+            legacy_path=legacy_path,
+            inventory_path=owner_inventory,
+            backup_root=tmp_path / "backup",
+            restore_root=None,
+            quiescence_proof=proof,
+        )
+    assert VaultRegistryStore(layout.registry_path).load().revision == 1
+    monkeypatch.setattr(VaultRegistryStore, "register", original_register)
+
+    retry = runtime_module._finish_instance_state_deployment(
+        channel="test",
+        instance_state_root=state_root,
+        host_global_root=ownership_root,
+        legacy_path=legacy_path,
+        inventory_path=owner_inventory,
+        backup_root=tmp_path / "backup-retry",
+        restore_root=None,
+        quiescence_proof=proof,
+    )
+    migrated = VaultRegistryStore(layout.registry_path).load()
+    assert retry["restart_fence_cleared"] is True
+    assert Path(str(retry["backup_manifest"])).is_file()
+    assert migrated.revision == 2
+    assert len(migrated.registrations) == 2
+    assert all(lease.state == "active" for lease in ledger.require_existing().leases.values())
+
+
 @pytest.mark.parametrize("case", ("foreign", "conflicting"))
 def test_finish_path_fresh_bootstrap_refuses_foreign_or_conflicting_owner_before_effects(
     tmp_path, case: str
