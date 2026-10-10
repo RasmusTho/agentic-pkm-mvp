@@ -134,6 +134,10 @@ def _validate_row_derived_evidence(
             evidence=evidence,
         )
         return
+    if "merged" in evidence:
+        from app.builderops.control_plane.api_models import GitHubMergeReadbackEvidence
+        GitHubMergeReadbackEvidence.model_validate(evidence)
+        return
     allowed = {"readback", "relaunch_performed"}
     if not isinstance(evidence, Mapping) or not set(evidence).issubset(allowed):
         raise ValueError("row-derived readback evidence contains unknown fields")
@@ -2796,7 +2800,7 @@ class PostgresBuilderOpsStore:
             conn.execute("SET LOCAL synchronous_commit = on")
             self._assert_executor_enabled(conn, envelope.repository)
             row = conn.execute(
-                "SELECT task_id, status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
+                "SELECT task_id, effect_type, status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
                 "claim_fencing_token, claim_expires_at, post_effect_phase, reconciliation_receipt_sequence, "
                 "reconciliation_lsn::text AS reconciliation_lsn "
                 "FROM builderops_outbox WHERE repository = %s AND operation_key = %s FOR UPDATE",
@@ -2818,6 +2822,8 @@ class PostgresBuilderOpsStore:
                 raise LeaseUnavailable("outbox operation is terminal: succeeded")
             if row["status"] == "dead_letter":
                 raise LeaseUnavailable("outbox operation is terminal: dead_letter")
+            if row["status"] == "pending" and row["effect_type"] == "github.merge" and row["claim_fencing_token"] > 0:
+                raise UnknownEffectNeedsReconciliation("attempted merge requires readback-only recovery")
             if row["status"] == "pending" and row["post_effect_phase"] == "pending":
                 raise LeaseUnavailable("row-derived post-effect reconciliation must finish before reclaim")
             if row["status"] == "pending" and row["reconciliation_receipt_sequence"] is not None:
@@ -2919,10 +2925,12 @@ class PostgresBuilderOpsStore:
                 "SELECT repository, operation_key, task_id, effect_type, payload, "
                 "status, intent_receipt_sequence, intent_lsn::text AS intent_lsn, "
                 "reconciliation_evidence, reconciliation_receipt_sequence, "
-                "authority_envelope, post_effect_phase, post_effect_fencing_token, "
+                "authority_envelope, claim_fencing_token, post_effect_phase, post_effect_fencing_token, "
                 "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
                 "post_effect_claim_lsn::text AS post_effect_claim_lsn, "
-                "post_effect_observed_applied, post_effect_terminal_unknown "
+                "post_effect_observed_applied, post_effect_terminal_unknown, "
+                "post_effect_claim_receipt_sequence, post_effect_receipt_sequence, "
+                "post_effect_recovery_lsn::text AS post_effect_recovery_lsn, post_effect_evidence "
                 "FROM builderops_outbox "
                 "WHERE repository = %s AND operation_key = %s",
                 (canonical, operation_key),
@@ -2933,6 +2941,26 @@ class PostgresBuilderOpsStore:
             raise DurabilityPending("outbox intent durability binding is incomplete")
         return dict(row)
 
+    @staticmethod
+    def _assert_post_effect_origin(conn: psycopg.Connection[dict[str, Any]], repository: str, operation_key: str, row: Mapping[str, Any]) -> None:
+        """Authenticate retained merge anchors against their original claim receipt."""
+        receipt = conn.execute(
+            "SELECT receipt.lease_fencing_token, receipt.recovery_lsn::text AS recovery_lsn, "
+            "receipt.idempotency_key FROM builderops_receipts AS receipt "
+            "JOIN builderops_outbox AS outbox ON outbox.repository = receipt.repository "
+            "AND outbox.task_id = receipt.task_id WHERE outbox.repository = %s "
+            "AND outbox.operation_key = %s AND receipt.receipt_sequence = %s "
+            "AND receipt.event_type IN ('outbox.claimed', 'outbox.recovered')",
+            (repository, operation_key, row["post_effect_claim_receipt_sequence"]),
+        ).fetchone()
+        fence = row["post_effect_fencing_token"]
+        if (receipt is None or receipt["lease_fencing_token"] != fence
+                or receipt["recovery_lsn"] != row["post_effect_claim_lsn"]
+                or row["post_effect_intent_lsn"] != row["intent_lsn"]
+                or receipt["idempotency_key"] not in {f"outbox:{operation_key}:claim:{fence}",
+                                                     f"outbox:{operation_key}:recover:{fence}"}):
+            raise StaleFencingToken("post-effect original claim receipt is inconsistent")
+
     def begin_post_effect_pending(
         self, *, repository: str, operation_key: str, minimum_fencing_token: int,
         expected_principal: str,
@@ -2940,9 +2968,10 @@ class PostgresBuilderOpsStore:
         """Persist dormant phase identity from a locked row, never request evidence."""
         repository = canonical_repository(repository)
         with self._connect() as conn:
+            conn.execute("SET LOCAL synchronous_commit = on")
             self._assert_executor_enabled(conn)
             row = conn.execute(
-                "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
+                "SELECT effect_type, status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
                 "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at, authority_envelope, "
                 "post_effect_phase, post_effect_fencing_token, "
                 "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
@@ -2977,6 +3006,14 @@ class PostgresBuilderOpsStore:
                     (derived["fencing_token"], derived["intent_lsn"], derived["claim_lsn"],
                      derived["claim_receipt_sequence"], repository, operation_key),
                 )
+            elif row["effect_type"] == "github.merge":
+                self._assert_post_effect_origin(conn, repository, operation_key, row)
+                if row["post_effect_phase"] != "pending":
+                    raise StateConflict("merge post-effect phase is already terminal")
+                derived = {"fencing_token": int(row["post_effect_fencing_token"]),
+                           "intent_lsn": str(row["post_effect_intent_lsn"]),
+                           "claim_lsn": str(row["post_effect_claim_lsn"]),
+                           "claim_receipt_sequence": int(row["post_effect_claim_receipt_sequence"])}
             elif (
                 row["post_effect_fencing_token"] != derived["fencing_token"]
                 or row["post_effect_intent_lsn"] != derived["intent_lsn"]
@@ -3002,9 +3039,10 @@ class PostgresBuilderOpsStore:
                 raise ValueError("readback evidence contradicts the requested outcome")
         repository = canonical_repository(repository)
         with self._connect() as conn:
+            conn.execute("SET LOCAL synchronous_commit = on")
             self._assert_reconciliation_admitted(conn)
             row = conn.execute(
-                "SELECT status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
+                "SELECT effect_type, payload, status, worker_id, claim_fencing_token, intent_lsn::text AS intent_lsn, "
                 "claim_lsn::text AS claim_lsn, claim_receipt_sequence, claim_expires_at, authority_envelope, "
                 "post_effect_phase, post_effect_fencing_token, "
                 "post_effect_intent_lsn::text AS post_effect_intent_lsn, "
@@ -3021,12 +3059,24 @@ class PostgresBuilderOpsStore:
                 raise StaleFencingToken("post-effect reconciliation requires current locked fence")
             if dict(row["authority_envelope"] or {}).get("actor") != expected_principal:
                 raise PermissionError("post-effect claim does not belong to authenticated principal")
+            merge_effect = row["effect_type"] == "github.merge"
+            if merge_effect:
+                self._assert_post_effect_origin(conn, repository, operation_key, row)
+                payload = dict(row["payload"] or {})
+                from app.dispatcher.verified_merge import (
+                    FIXED_VERIFIED_MERGE_COMMIT_MESSAGE, fixed_verified_merge_commit_title,
+                )
+                if (not observed_applied or terminal_unknown or evidence.get("merged") is not True
+                        or evidence.get("head_sha") != payload.get("head_sha")
+                        or evidence.get("merge_commit_title") != fixed_verified_merge_commit_title(payload.get("pr_number"))
+                        or evidence.get("merge_commit_message") != FIXED_VERIFIED_MERGE_COMMIT_MESSAGE):
+                    raise ValueError("merge reconciliation requires exact positive governed readback")
             if row["post_effect_phase"] == "reconciled":
                 if (
-                    row["post_effect_fencing_token"] != row["claim_fencing_token"]
+                    (not merge_effect and row["post_effect_fencing_token"] != row["claim_fencing_token"])
                     or row["post_effect_intent_lsn"] != row["intent_lsn"]
-                    or row["post_effect_claim_lsn"] != row["claim_lsn"]
-                    or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
+                    or (not merge_effect and row["post_effect_claim_lsn"] != row["claim_lsn"])
+                    or (not merge_effect and row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"])
                 ):
                     raise StaleFencingToken("reconciled post-effect identity drifted from locked row")
                 if (
@@ -3042,10 +3092,10 @@ class PostgresBuilderOpsStore:
                 expected_status = "dead_letter" if terminal_unknown else ("succeeded" if observed_applied else "pending")
                 if (
                     row["status"] != expected_status
-                    or row["post_effect_fencing_token"] != row["claim_fencing_token"]
+                    or (not merge_effect and row["post_effect_fencing_token"] != row["claim_fencing_token"])
                     or row["post_effect_intent_lsn"] != row["intent_lsn"]
-                    or row["post_effect_claim_lsn"] != row["claim_lsn"]
-                    or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
+                    or (not merge_effect and row["post_effect_claim_lsn"] != row["claim_lsn"])
+                    or (not merge_effect and row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"])
                     or dict(row["reconciliation_evidence"] or {}) != dict(evidence)
                     or row["reconciliation_receipt_sequence"] is None
                     or row["reconciliation_lsn"] is None
@@ -3059,10 +3109,10 @@ class PostgresBuilderOpsStore:
                 or row["worker_id"] is None or row["intent_lsn"] is None or row["claim_lsn"] is None
                 or row["claim_receipt_sequence"] is None or row["claim_expires_at"] is None
                 or row["claim_expires_at"] <= row["database_now"]
-                or row["post_effect_fencing_token"] != row["claim_fencing_token"]
+                or (not merge_effect and row["post_effect_fencing_token"] != row["claim_fencing_token"])
                 or row["post_effect_intent_lsn"] != row["intent_lsn"]
-                or row["post_effect_claim_lsn"] != row["claim_lsn"]
-                or row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"]
+                or (not merge_effect and row["post_effect_claim_lsn"] != row["claim_lsn"])
+                or (not merge_effect and row["post_effect_claim_receipt_sequence"] != row["claim_receipt_sequence"])
             ):
                 raise StaleFencingToken("post-effect reconciliation is stale or reordered")
             else:
@@ -3078,13 +3128,14 @@ class PostgresBuilderOpsStore:
                       "replayed": reconciled.replayed}
         race_retry = False
         with self._connect() as conn:
+            conn.execute("SET LOCAL synchronous_commit = on")
             self._assert_reconciliation_admitted(conn)
             updated = conn.execute(
                 "UPDATE builderops_outbox SET post_effect_phase = 'reconciled', "
                 "post_effect_evidence = %s, post_effect_receipt_sequence = %s, "
                 "post_effect_recovery_lsn = %s, post_effect_observed_applied = %s, "
                 "post_effect_terminal_unknown = %s WHERE repository = %s AND operation_key = %s "
-                "AND post_effect_phase = 'pending' AND post_effect_fencing_token = %s RETURNING operation_key",
+                "AND post_effect_phase = 'pending' AND claim_fencing_token = %s RETURNING operation_key",
                 (Jsonb(dict(evidence)), result["receipt_sequence"], result["recovery_lsn"], observed_applied,
                  terminal_unknown, repository, operation_key, minimum_fencing_token),
             ).fetchone()
@@ -3190,7 +3241,7 @@ class PostgresBuilderOpsStore:
             conn.execute("SET LOCAL synchronous_commit = on")
             self._assert_reconciliation_admitted(conn)
             row = conn.execute(
-                "SELECT outbox.task_id, outbox.status, outbox.worker_id, "
+                "SELECT outbox.task_id, outbox.status, outbox.worker_id, outbox.effect_type, "
                 "outbox.claim_fencing_token, "
                 "outbox.intent_lsn::text AS intent_lsn, "
                 "outbox.claim_lsn::text AS claim_lsn, "
@@ -3240,11 +3291,11 @@ class PostgresBuilderOpsStore:
                 "UPDATE builderops_outbox SET status = 'unknown', "
                 "worker_id = %s, claim_fencing_token = %s, "
                 "claim_expires_at = %s, claim_lsn = NULL, "
-                "claim_receipt_sequence = %s, post_effect_phase = NULL, post_effect_fencing_token = NULL, "
-                "post_effect_intent_lsn = NULL, post_effect_claim_lsn = NULL, "
-                "post_effect_claim_receipt_sequence = NULL, post_effect_receipt_sequence = NULL, "
-                "post_effect_recovery_lsn = NULL, post_effect_evidence = NULL, "
-                "post_effect_observed_applied = NULL, post_effect_terminal_unknown = NULL, "
+                "claim_receipt_sequence = %s, post_effect_phase = CASE WHEN effect_type = 'github.merge' THEN post_effect_phase ELSE NULL END, post_effect_fencing_token = CASE WHEN effect_type = 'github.merge' THEN post_effect_fencing_token ELSE NULL END, "
+                "post_effect_intent_lsn = CASE WHEN effect_type = 'github.merge' THEN post_effect_intent_lsn ELSE NULL END, post_effect_claim_lsn = CASE WHEN effect_type = 'github.merge' THEN post_effect_claim_lsn ELSE NULL END, "
+                "post_effect_claim_receipt_sequence = CASE WHEN effect_type = 'github.merge' THEN post_effect_claim_receipt_sequence ELSE NULL END, post_effect_receipt_sequence = CASE WHEN effect_type = 'github.merge' THEN post_effect_receipt_sequence ELSE NULL END, "
+                "post_effect_recovery_lsn = CASE WHEN effect_type = 'github.merge' THEN post_effect_recovery_lsn ELSE NULL END, post_effect_evidence = CASE WHEN effect_type = 'github.merge' THEN post_effect_evidence ELSE NULL END, "
+                "post_effect_observed_applied = CASE WHEN effect_type = 'github.merge' THEN post_effect_observed_applied ELSE NULL END, post_effect_terminal_unknown = CASE WHEN effect_type = 'github.merge' THEN post_effect_terminal_unknown ELSE NULL END, "
                 "unknown_detail = 'worker process lost; external readback "
                 "required', authority_envelope = %s, "
                 "updated_at = clock_timestamp() "

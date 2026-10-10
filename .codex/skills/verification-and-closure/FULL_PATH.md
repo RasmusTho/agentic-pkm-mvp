@@ -173,6 +173,17 @@ or the normal issue-maintenance/owner-authority path, then re-run the affected c
 
 Verification owns the merge decision.
 
+For the recoverable post-effect consumer, require fresh exact deployed capability preflight under
+`docs/AGENT_ISSUE_DISPATCHER.md :: Current-State Honesty` before activation. Build all four phases
+as `verified_issue_set_merge_phase.v2` using `scripts/build_verified_issue_set_merge_phase.py`
+with fresh authenticated status deployment readback (or the explicit
+`--post-effect-deployment-json` override); reconciled/restored also require the exact
+`--post-effect-operation-key`. The builder reads the persisted record through the authenticated
+API. Reuse one identical terminal record across those phases. Pending or ordinary negative
+readback never grants closure authority; restart repeats bounded readback without merge replay.
+Missing, stale or drifted source/image/pin/schema/epoch/capability evidence stops the consumer.
+This gate does not authorize deployment or provision credentials.
+
 ### Delivery-path routing (light vs full)
 
 This file applies only after the router in `SKILL.md :: Routing` selects the executor/in-flight

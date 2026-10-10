@@ -48,6 +48,22 @@ MECHANISM_PATH_SHA = hashlib.sha256(
 NEXT_BASE = "c" * 40
 
 
+def deployed_post_effect():
+    receipt = {"project": "builderops-control-plane", "migration_completed": True,
+               "authority_fencing_required": True, "candidate_receipt_sha": "f" * 64,
+               "source_sha": "e" * 40, "image_digest": "sha256:" + "a" * 64,
+               "postgres_image_digest": "sha256:" + "b" * 64,
+               "schema_version": 8, "authority_epoch": 1}
+    return {"deployment_receipt": receipt, "selected_pin": {
+        key: receipt[key] for key in ("source_sha", "image_digest", "postgres_image_digest", "candidate_receipt_sha")
+    }, "observed_at": datetime.now(timezone.utc).isoformat()}
+
+
+def deployed_status():
+    return {**deployed_post_effect()["deployment_receipt"],
+            "post_effect_capability": "post_effect_merge_readback.v1"}
+
+
 class RepositoryAuthority:
     def __init__(
         self,
@@ -266,6 +282,8 @@ class Outbox:
         self.evidence = None
         self.payload_loader = payload_loader
         self.intent_payload_override = None
+        self.post_effect_phase = None
+        self.post_effect_evidence = None
 
     def _payload(self):
         if self.intent_payload_override is not None:
@@ -305,11 +323,28 @@ class Outbox:
             "effect_type": self.effect_type,
             "payload": self._payload(),
             "status": self.state,
+            "post_effect_phase": self.post_effect_phase,
+            "readback_fencing_token": 1,
             "reconciliation_evidence": self.evidence,
             "reconciliation_receipt_sequence": (
                 3 if self.evidence is not None else None
             ),
         }
+
+    def begin_post_effect_pending(self, **values):
+        self.calls.append("post-effect-pending")
+        if self.post_effect_phase is None:
+            self.post_effect_phase = "pending"
+        return {"fencing_token": 1, "intent_lsn": "0/10", "claim_lsn": "0/20",
+                "claim_receipt_sequence": 2}
+
+    def reconcile_post_effect(self, **values):
+        result = {"status": self.state} if self.evidence == values["evidence"] else self.reconcile({"operation_key": values["operation_key"]},
+                                observed_applied=values["observed_applied"],
+                                evidence=values["evidence"])
+        self.post_effect_phase = "reconciled"
+        self.post_effect_evidence = values["evidence"]
+        return result
 
     def mark_unknown(self, claim, *, detail: str):
         self.calls.append("unknown")
@@ -405,7 +440,8 @@ def claimed_run(
     api: FakeBuilderOpsClient | None = None,
 ):
     api = api or FakeBuilderOpsClient()
-    ledger = BuilderOpsVerificationLedger(api, repository=REPO)
+    ledger = BuilderOpsVerificationLedger(api, repository=REPO, post_effect_deployment=deployed_post_effect())
+    api.status = deployed_status
     run = ledger.ingest(request())
     claimed = ledger.claim(run.run_id, "verification-host")
     assert claimed.lease_id is not None
@@ -468,6 +504,9 @@ def claimed_run(
         payload_loader=_pending_payload,
     )
     ledger.effect_outbox = outbox
+    api.begin_post_effect_pending = lambda **values: ledger.effect_outbox.begin_post_effect_pending(**values)
+    api.reconcile_post_effect = lambda **values: ledger.effect_outbox.reconcile_post_effect(**values)
+    api.get_outbox_status = lambda **values: ledger.effect_outbox.status(values["operation_key"])
     return ledger, ready, outbox
 
 
@@ -779,7 +818,7 @@ def test_merge_requires_fixed_non_closing_text_in_transport_and_readback(
         repository.last_merge["commit_message"]
         == FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
     )
-    assert outbox.state == "pending"
+    assert outbox.state == "unknown"
     pending = ledger.pending_effect_binding(run.run_id)
     assert pending is not None
     payload = pending["payload"]
@@ -1045,9 +1084,9 @@ def test_recovery_fences_unrecorded_boundary_rejection_before_live_gate() -> Non
     assert outbox.state == "unknown"
     receipt = executor.recover(run)
 
-    assert receipt.outcome == "terminal_no_effect"
-    assert repository.prepared_gate_calls == 4
-    assert "recover" in outbox.calls
+    assert receipt.outcome == "retry_after_readback"
+    assert repository.prepared_gate_calls == 3
+    assert outbox.post_effect_phase == "pending"
 
 
 def test_response_loss_reconciles_before_retry() -> None:
@@ -1064,7 +1103,7 @@ def test_response_loss_reconciles_before_retry() -> None:
 
     assert receipt.outcome == "retry_after_readback"
     assert repository.calls == ["merge", "readback"]
-    assert outbox.state == "pending"
+    assert outbox.state == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -1099,7 +1138,7 @@ def test_crash_recovery_rejects_wrong_merge_text_before_base_drift(
             lease_id=run.lease_id or "",
         )
 
-    assert outbox.state == "claimed"
+    assert outbox.state == "unknown"
     assert outbox.evidence is None
     with pytest.raises(
         MergeAuthorityError,
@@ -1107,7 +1146,7 @@ def test_crash_recovery_rejects_wrong_merge_text_before_base_drift(
     ):
         executor.recover(run)
 
-    assert outbox.state == "claimed"
+    assert outbox.state == "unknown"
     assert outbox.evidence is None
     assert "reconcile" not in outbox.calls
 
@@ -1146,6 +1185,7 @@ def test_recovery_rejects_durable_wrong_text_merged_evidence(
                 ledger.client,
                 repository=REPO,
                 effect_outbox=outbox,
+                post_effect_deployment=deployed_post_effect(),
             ),
             outbox,
             repository,
@@ -1172,7 +1212,7 @@ def test_pending_reconciliation_cannot_be_upgraded_to_merged_receipt() -> None:
         lease_id=run.lease_id or "",
     )
     assert first.outcome == "retry_after_readback"
-    assert outbox.state == "pending"
+    assert outbox.state == "unknown"
     outbox.evidence = {
         "merged": True,
         "head_sha": HEAD,
@@ -1183,6 +1223,7 @@ def test_pending_reconciliation_cannot_be_upgraded_to_merged_receipt() -> None:
         ledger.client,
         repository=REPO,
         effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
     )
     with pytest.raises(
         MergeAuthorityError,
@@ -1192,7 +1233,7 @@ def test_pending_reconciliation_cannot_be_upgraded_to_merged_receipt() -> None:
             restarted, outbox, repository, Credentials()
         ).recover(run)
 
-    assert outbox.state == "pending"
+    assert outbox.state == "unknown"
 
 
 def test_expired_outbox_claim_performs_no_credential_or_merge_effect() -> None:
@@ -1261,6 +1302,7 @@ def test_dry_run_recovers_after_crash_with_task_bound_operation() -> None:
         ledger.client,
         repository=REPO,
         effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
     )
     receipt = VerificationMergeExecutor(
         restarted, outbox, repository, Credentials()
@@ -1288,6 +1330,7 @@ def test_merge_recovers_exact_readback_after_transport_return_crash() -> None:
         ledger.client,
         repository=REPO,
         effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
     )
     receipt = VerificationMergeExecutor(
         restarted, outbox, repository, Credentials()
@@ -1329,6 +1372,7 @@ def test_merge_reconstructs_receipt_after_durable_reconciliation_crash() -> None
         ledger.client,
         repository=REPO,
         effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
     )
     calls_before = list(outbox.calls)
     receipt = VerificationMergeExecutor(
@@ -1559,6 +1603,7 @@ def test_live_adapter_authenticates_exact_prepared_merge_window(
     body_edit = convergence_receipt["body_edit"]
     assert isinstance(body_edit, Mapping)
     phase = build_verified_merge_phase(
+        phase_version=2,
         authority_receipt=authority_receipt,
         phase="prepared",
         pr=prepared_pr,
@@ -2637,3 +2682,115 @@ def test_required_behavioral_check_requires_authenticated_success(
     gates = authority.required_gates(REPO, 3603, HEAD)
 
     assert gates["ci"] is expected_ci
+
+
+def test_post_effect_consumer_activation_requires_exact_deployed_substrate():
+    from app.dispatcher.verification_merge import require_post_effect_deployment
+    deployment = deployed_post_effect()
+    require_post_effect_deployment(deployment, deployed_status())
+    with pytest.raises(MergeAuthorityError):
+        require_post_effect_deployment(None, deployed_status())
+    for key in ("source_sha", "image_digest", "schema_version", "authority_epoch", "post_effect_capability"):
+        drifted = {**deployed_status(), key: None}
+        with pytest.raises(MergeAuthorityError):
+            require_post_effect_deployment(deployment, drifted)
+    ledger, run, outbox = claimed_run()
+    ledger.post_effect_deployment = None
+    authority = RepositoryAuthority()
+    with pytest.raises(MergeAuthorityError, match="deployed substrate"):
+        VerificationMergeExecutor(ledger, outbox, authority, Credentials()).execute(
+            run, holder="verification-host", lease_id=run.lease_id)
+    assert "merge" not in authority.calls
+    assert outbox.state == "missing"
+
+
+def test_merge_recovery_persists_pending_before_no_phase_readback_without_replay():
+    ledger, run, outbox = claimed_run()
+    authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 3)
+    def crash_before_pending(operation_key):
+        raise SystemExit("post-transport crash before pending")
+    ledger.prepare_merge_readback = crash_before_pending
+    executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
+    with pytest.raises(SystemExit, match="post-transport"):
+        executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert authority.calls.count("merge") == 1
+    assert outbox.post_effect_phase is None
+    original = authority.merge_readback
+    def readback(repository, pr_number):
+        assert outbox.post_effect_phase == "pending"
+        return original(repository, pr_number)
+    authority.merge_readback = readback
+    restarted = BuilderOpsVerificationLedger(ledger.client, repository=REPO, effect_outbox=outbox,
+                                             post_effect_deployment=deployed_post_effect())
+    receipt = VerificationMergeExecutor(restarted, outbox, authority, Credentials()).recover(run)
+    assert receipt.outcome == "merged"
+    assert authority.calls.count("merge") == 1
+    assert outbox.post_effect_phase == "reconciled"
+
+
+def test_merge_recovery_keeps_transient_negative_pending_until_exact_positive_readback():
+    ledger, run, outbox = claimed_run()
+    authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 5,
+                                    transport_error=True, merged=False)
+    executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
+    first = executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    assert first.outcome == "retry_after_readback"
+    key = first.operation_key
+    assert outbox.post_effect_phase == "pending"
+    assert outbox.evidence is None
+    assert executor.recover(run).outcome == "retry_after_readback"
+    assert outbox.post_effect_phase == "pending"
+    authority.merged = True
+    final = executor.recover(run)
+    assert final.outcome == "merged"
+    assert final.operation_key == key
+    assert authority.calls.count("merge") == 1
+    assert outbox.calls.count("reconcile") == 1
+
+
+def test_merge_recovery_rejects_non_authoritative_terminal_negative_readback():
+    ledger, run, outbox = claimed_run()
+    authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 3,
+                                    transport_error=True, merged=False)
+    executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
+    executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    authority.gates = {"ci": False}
+    authority.head = "f" * 40
+    original = authority.merge_readback
+    authority.merge_readback = lambda *args: {**original(*args), "outcome": "terminal_no_effect_after_recovery"}
+    assert executor.recover(run).outcome == "retry_after_readback"
+    assert outbox.post_effect_phase == "pending"
+    assert outbox.evidence is None
+
+
+def test_retained_terminal_negative_after_recovery_cannot_grant_terminal_authority():
+    ledger, run, outbox = claimed_run()
+    authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 3,
+                                    transport_error=True, merged=False)
+    executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
+    first = executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    outbox.state = "succeeded"
+    outbox.evidence = {"merged": False, "head_sha": HEAD, "outcome": "terminal_no_effect_after_recovery"}
+    with pytest.raises(MergeAuthorityError, match="not authoritative terminal"):
+        executor.recover(run)
+    assert first.operation_key
+    assert authority.calls.count("merge") == 1
+
+
+def test_execute_retained_negative_merge_is_readback_only_without_replay():
+    ledger, run, outbox = claimed_run()
+    authority = RepositoryAuthority(base_reads=[BASE, BASE], manifest_blobs=["blob-1"] * 4,
+                                    transport_error=True, merged=False)
+    executor = VerificationMergeExecutor(ledger, outbox, authority, Credentials())
+    first = executor.execute(run, holder="verification-host", lease_id=run.lease_id)
+    outbox.state = "pending"
+    outbox.post_effect_phase = None
+    outbox.evidence = {"merged": False, "head_sha": HEAD, "outcome": "retry_after_readback"}
+    authority.merged = True
+    restarted = BuilderOpsVerificationLedger(ledger.client, repository=REPO, effect_outbox=outbox,
+                                             post_effect_deployment=deployed_post_effect())
+    final = VerificationMergeExecutor(restarted, outbox, authority, Credentials()).execute(
+        run, holder="verification-host", lease_id=run.lease_id)
+    assert final.outcome == "merged"
+    assert final.operation_key == first.operation_key
+    assert authority.calls.count("merge") == 1

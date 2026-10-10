@@ -2094,22 +2094,27 @@ def _merge_comments(
         "body": plan["original_body"],
     }
     convergence_kwargs = projection_phase_kwargs(authority, neutral)
+    from tests.dispatcher.verified_merge_projection_helpers import post_effect_authority
+    proof = post_effect_authority(authority, merged_neutral["merge_commit_sha"])
     phases = [
         build_verified_merge_phase(
             authority_receipt=authority,
             phase="prepared",
+            phase_version=2,
             pr=neutral,
             **convergence_kwargs,
         ),
         build_verified_merge_phase(
             authority_receipt=authority,
             phase="merged",
+            phase_version=2,
             pr=merged_neutral,
             **convergence_kwargs,
         ),
         build_verified_merge_phase(
             authority_receipt=authority,
             phase="reconciled",
+            phase_version=2, post_effect_authority=proof,
             pr=merged_neutral,
             closed_issues=[3603],
             reopened_unauthorized_issues=list(reopened_unauthorized),
@@ -2118,6 +2123,7 @@ def _merge_comments(
         build_verified_merge_phase(
             authority_receipt=authority,
             phase="restored",
+            phase_version=2, post_effect_authority=proof,
             pr=restored,
             closed_issues=[3603],
             reopened_unauthorized_issues=list(reopened_unauthorized),
@@ -4868,7 +4874,7 @@ def test_eligible_request_invokes_registered_verification_closer_with_minimal_co
     assert pack["agent_adapter"] == ".codex/agents/verification-closer.toml"
     assert pack["verification_skill"] == ".codex/skills/verification-and-closure/SKILL.md"
     assert pack["verified_merge_phase_contract"] == (
-        "verified_issue_set_merge_phase.v1"
+        "verified_issue_set_merge_phase.v2"
     )
     assert pack["verified_merge_phase_writer"] == (
         "scripts/build_verified_issue_set_merge_phase.py"
@@ -9145,3 +9151,22 @@ def test_unscoped_discovery_window_is_recent_not_merely_present() -> None:
         f"cutoff {cutoff.isoformat()} does not match the declared "
         f"{lookback} lookback"
     )
+
+
+def test_terminal_consumer_rejects_restored_v1_without_post_effect_authority(tmp_path):
+    state = ledger(tmp_path)
+    run = state.ingest(request())
+    budget = state.repair_budget_projection(run.run_id)
+    terminal_pr = merged_pr()
+    comments = _merge_comments(terminal_pr, repair_budget=budget, run_id=run.run_id)
+    for comment in comments:
+        body = str(comment["body"])
+        if body.startswith("verified issue-set merge phase:"):
+            phase = json.loads(body.split("```json\n", 1)[1].split("\n```", 1)[0])
+            phase["contract"] = "verified_issue_set_merge_phase.v1"
+            phase.pop("post_effect_authority")
+            comment["body"] = "verified issue-set merge phase:\n```json\n" + json.dumps(phase) + "\n```"
+    evidence = {"comments": comments, "merge_commit": {"repository": REPO, "sha": "b" * 40,
+                                                        "message": "Merge verified issue set"}}
+    assert verification_consumer.delivered_live_truth_rejection(run, terminal_pr, GREEN, evidence,
+        expected_head_sha=HEAD, expected_repair_budget=budget) == "merge_phase_incomplete"
