@@ -285,6 +285,23 @@ For read-only projection paths (e.g. orientation, resurfacing, vault-browser rea
 only operational traces are emitted; no receipt is returned and no accountability record is
 created. Read-only projection responses must not carry a top-level `receipt` field.
 
+Existing receipt history can still be projected read-only. Browser artifact receipts, promotion
+queries and materialized-memory recall traverse the complete DB-before-JSONL history incrementally
+(#5940); predicates apply before unrelated records are accumulated. PostgreSQL traversal uses a
+read-only server cursor with bounded batches, and JSONL traversal validates UTF-8 and LF-delimited
+objects under the existing read lock without repairing even a final unterminated record. Browser
+duplicate selection and chronological ties, promotion authority checks and full matching history,
+and recall scope/provenance and relevance ordering remain unchanged. Recall retains its requested
+`k` candidates; the complete promoted-memory history interface remains uncapped.
+
+Source failure must not publish a partial history as authoritative. A configured database failure
+invalidates the complete projection; JSONL corruption remains a refusal. The separate receipt
+reconciliation snapshot retains its existing independently readable-sink semantics. Legacy list
+interfaces remain compatible and may retain their complete returned history. The streaming bound
+is the source batch/current record plus the consumer's required matching result; it adds no source
+rewrite, receipt authority, history tail, byte cap or store. It does not prove total response time
+or attribution of a live out-of-memory event.
+
 This structural separation is asserted by:
 `tests/runtime/test_receipt_event_boundary.py::test_governed_mutation_receipt_is_distinct_from_event_trace`
 `tests/runtime/test_receipt_event_boundary.py::test_read_only_projection_trace_has_no_mutation_authority`

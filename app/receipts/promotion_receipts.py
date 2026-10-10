@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from app.events.types import PROMOTION_TRANSITION_APPLIED
 from app.receipts.outbox_sources import (
+    ReceiptSourceUnavailableError,
     first_str,
     nested,
     normalize_note_path,
-    read_receipt_source_records,
+    open_receipt_source_records,
     record_event,
     record_payload,
 )
@@ -96,34 +98,58 @@ def query_promotion_receipts(
     including ``promote.done``, are intentionally ignored.
     """
 
-    source_records = list(records) if records is not None else read_receipt_source_records(outbox_path=outbox_path)
-    if source_records is None:
-        return PromotionReceiptQueryResult(source_available=False)
-
-    filters = query or PromotionReceiptQuery()
-    rows: list[PromotionReceiptRow] = []
     non_authoritative: list[dict[str, str | None]] = []
-    for record in source_records:
-        event = record_event(record)
-        if event != PROMOTION_TRANSITION_APPLIED:
-            continue
-        row, reason = _project_transition_applied(record, vault_root=vault_root)
-        if row is None:
-            non_authoritative.append({
-                "event_id": first_str(record.get("event_id")),
-                "trace_id": first_str(record.get("trace_id")),
-                "reason": reason,
-            })
-            continue
-        if _matches(row, filters):
-            rows.append(row)
-
+    source = nullcontext(records) if records is not None else open_receipt_source_records(outbox_path=outbox_path)
+    try:
+        with source as source_records:
+            if source_records is None:
+                return PromotionReceiptQueryResult(source_available=False)
+            rows = list(iter_promotion_receipt_rows(
+                source_records,
+                query,
+                vault_root=vault_root,
+                non_authoritative=non_authoritative,
+            ))
+    except ReceiptSourceUnavailableError:
+        return PromotionReceiptQueryResult(source_available=False)
     rows.sort(key=lambda row: row.timestamp)
     return PromotionReceiptQueryResult(
         source_available=True,
         rows=tuple(rows),
         non_authoritative_records=tuple(non_authoritative),
     )
+
+
+def iter_promotion_receipt_rows(
+    records: Iterable[dict[str, Any]],
+    query: PromotionReceiptQuery | None = None,
+    *,
+    vault_root: Path,
+    non_authoritative: list[dict[str, str | None]] | None = None,
+) -> Iterator[PromotionReceiptRow]:
+    """Project and filter one record at a time without retaining source history.
+
+    Consumers choose their own matching-row aggregation. The query facade
+    retains its diagnostic rows and chronological order; artifact and recall
+    consumers need no non-authoritative diagnostic history.
+    """
+
+    filters = query or PromotionReceiptQuery()
+    for record in records:
+        event = record_event(record)
+        if event != PROMOTION_TRANSITION_APPLIED:
+            continue
+        row, reason = _project_transition_applied(record, vault_root=vault_root)
+        if row is None:
+            if non_authoritative is not None:
+                non_authoritative.append({
+                    "event_id": first_str(record.get("event_id")),
+                    "trace_id": first_str(record.get("trace_id")),
+                    "reason": reason,
+                })
+            continue
+        if _matches(row, filters):
+            yield row
 
 
 def _project_transition_applied(
@@ -263,5 +289,6 @@ __all__ = [
     "PromotionReceiptQuery",
     "PromotionReceiptQueryResult",
     "PromotionReceiptRow",
+    "iter_promotion_receipt_rows",
     "query_promotion_receipts",
 ]

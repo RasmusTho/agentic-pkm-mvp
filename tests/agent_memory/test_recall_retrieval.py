@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import weakref
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+
+from app.agent_memory import recall_retrieval
 
 from app.agent_memory.candidate import MemoryCandidate, MemoryType
 from app.agent_memory.materialization import materialize_promoted_memory
@@ -131,6 +135,49 @@ def test_reads_materialization_default_receipts_path(
     ]
 
 
+def test_recall_validates_scope_and_provenance_during_receipt_consumption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    store = ReviewDecisionStore(tmp_path / "decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    candidate = _candidate("candidate-streamed", title="Read contracts", content="Read contracts before implementation.")
+    _materialize(candidate, vault=_vault(vault_root), store=store, outbox=outbox)
+    retained = json.loads(outbox.read_text(encoding="utf-8").strip())
+    consumed = 0
+    validated = 0
+    original = recall_retrieval._promoted_from_row_with_scope
+
+    def records():
+        nonlocal consumed
+        for index in range(10_003):
+            record = dict(retained, event_id=f"other-{index}")
+            record["payload"] = dict(retained["payload"], vault_id="another-vault")
+            consumed += 1
+            yield record
+        for receipt_id, timestamp in [("later", "2026-10-10T01:00:00Z"), ("earlier", "2026-10-10T00:00:00Z")]:
+            record = dict(retained, event_id=receipt_id, timestamp=timestamp)
+            record["payload"] = dict(retained["payload"], receipt_id=receipt_id)
+            consumed += 1
+            yield record
+
+    def validate(row, **kwargs):
+        nonlocal validated
+        validated += 1
+        assert consumed == validated, "unscoped receipt history accumulated before eligibility checks"
+        return original(row, **kwargs)
+
+    monkeypatch.setattr(recall_retrieval, "_promoted_from_row_with_scope", validate)
+    results = retrieve_relevant_promoted(
+        "contracts implementation", k=3, vault_root=vault_root, records=records(),
+        active_scope_id=candidate.scope_id, active_vault_id="vault-a",
+    )
+    assert [result.receipt_id for result in results] == ["earlier", "later"]
+    assert consumed == validated == 10_005
+    assert all(result.memory_scope_id == candidate.scope_id for result in results)
+
+
 def test_preserves_inferred_posture_from_materialized_note(tmp_path: Path) -> None:
     vault_root = tmp_path / "vault"
     vault_root.mkdir()
@@ -149,6 +196,50 @@ def test_preserves_inferred_posture_from_materialized_note(tmp_path: Path) -> No
     memories = read_promoted_memories(vault_root=vault_root, outbox_path=outbox)
 
     assert memories[0].candidate.inferred is True
+
+
+def test_recall_retains_requested_k_and_preserves_chronological_ties(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    outbox = tmp_path / "outbox.jsonl"
+    candidate = _candidate("bounded-k", title="Read contracts", content="Read contracts before implementation.")
+    _materialize(candidate, vault=_vault(vault_root), store=ReviewDecisionStore(tmp_path / "decisions.sqlite3"), outbox=outbox)
+    retained = json.loads(outbox.read_text(encoding="utf-8").strip())
+    original = recall_retrieval.RecallCandidate
+    live = 0
+    peak = 0
+    consumed = 0
+
+    def release():
+        nonlocal live
+        live -= 1
+
+    def observe(**kwargs):
+        nonlocal live, peak
+        value = original(**kwargs)
+        live += 1
+        peak = max(peak, live)
+        assert live <= 8, "recall retained candidates beyond its requested k"
+        weakref.finalize(value, release)
+        return value
+
+    monkeypatch.setattr(recall_retrieval, "RecallCandidate", observe)
+    start = datetime(2026, 10, 10, tzinfo=timezone.utc)
+
+    def records():
+        nonlocal consumed
+        for index in reversed(range(1003)):
+            record = dict(retained, event_id=f"entry-{index}", timestamp=(start + timedelta(seconds=index)).isoformat())
+            record["payload"] = dict(retained["payload"], receipt_id=f"entry-{index}")
+            consumed += 1
+            yield record
+
+    results = retrieve_relevant_promoted(
+        "contracts implementation", k=3, vault_root=vault_root, records=records(),
+        active_scope_id=candidate.scope_id, active_vault_id="vault-a",
+    )
+    assert [result.receipt_id for result in results] == ["entry-0", "entry-1", "entry-2"]
+    assert consumed == 1003 and peak <= 5
 
 
 def test_missing_inferred_metadata_defaults_conservatively(tmp_path: Path) -> None:

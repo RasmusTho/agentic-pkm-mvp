@@ -9,7 +9,7 @@ import uuid as uuid_module
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterator, Literal, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, Iterator, Literal, Mapping, Optional, Tuple
 
 from app.config.database import DatabaseCredentialError, explicit_runtime_database_url
 from app.db.errors import OutboxSchemaMissingError
@@ -603,6 +603,8 @@ def read_jsonl_outbox_records(
         return _read_jsonl_records_unlocked(
             _canonical_jsonl_outbox_path(outbox_path), max_bytes=max_bytes
         )
+    if read_only and max_bytes is None:
+        return list(iter_jsonl_outbox_records(outbox_path))
     if read_only:
         with _jsonl_outbox_read_lock(outbox_path) as canonical_path:
             return _read_jsonl_records_unlocked(
@@ -612,6 +614,54 @@ def read_jsonl_outbox_records(
             )
     with jsonl_outbox_append_lock(outbox_path) as canonical_path:
         return _read_jsonl_records_unlocked(canonical_path, max_bytes=max_bytes)
+
+
+def iter_jsonl_outbox_records(outbox_path: Path) -> Generator[dict[str, Any], None, None]:
+    """Traverse complete JSONL history read-only, holding only the current line.
+
+    Retain the existing read-lock and UTF-8/object validation rules. A complete
+    final record without LF is readable, but is never repaired here. Callers
+    must finish traversal before treating the projection as complete and close
+    the iterator if they stop early.
+    """
+
+    with _jsonl_outbox_read_lock(outbox_path) as canonical_path:
+        try:
+            handle = canonical_path.open("rb")
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise JsonlOutboxCorruptionError(
+                f"JSONL outbox cannot be inspected safely: {canonical_path}"
+            ) from exc
+        try:
+            with handle:
+                # Binary iteration splits only on LF, never on Unicode line
+                # separators that are valid content inside a JSON string.
+                for raw in handle:
+                    try:
+                        line = raw.decode("utf-8")
+                    except UnicodeDecodeError as exc:
+                        raise JsonlOutboxCorruptionError(
+                            f"JSONL outbox is not valid UTF-8: {canonical_path}"
+                        ) from exc
+                    if not line.strip():
+                        continue
+                    try:
+                        record = json.loads(line)
+                    except (TypeError, ValueError) as exc:
+                        raise JsonlOutboxCorruptionError(
+                            f"JSONL outbox contains malformed JSON: {canonical_path}"
+                        ) from exc
+                    if not isinstance(record, dict):
+                        raise JsonlOutboxCorruptionError(
+                            f"JSONL outbox record is not an object: {canonical_path}"
+                        )
+                    yield record
+        except OSError as exc:
+            raise JsonlOutboxCorruptionError(
+                f"JSONL outbox cannot be inspected safely: {canonical_path}"
+            ) from exc
 
 
 def append_jsonl_record(
@@ -1304,6 +1354,7 @@ __all__ = [
     "JsonlOutboxCorruptionError",
     "jsonl_outbox_append_lock",
     "read_jsonl_outbox_records",
+    "iter_jsonl_outbox_records",
     "append_jsonl_record",
     "append_jsonl_outbox_event",
 ]

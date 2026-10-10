@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import heapq
 import re
+from contextlib import closing, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import cmp_to_key
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Generator, Iterable, Iterator
 
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -21,10 +24,11 @@ from app.agent_memory.materialization import (
     DEFAULT_MEMORY_DIR,
 )
 from app.agent_memory.promotion import PromotedMemory
+from app.receipts.outbox_sources import open_receipt_source_records
 from app.receipts.promotion_receipts import (
     PromotionReceiptQuery,
     PromotionReceiptRow,
-    query_promotion_receipts,
+    iter_promotion_receipt_rows,
 )
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
@@ -66,6 +70,10 @@ class RecallCandidate:
     applied_scope_id: str | None = None
 
 
+class _MaterializedReceiptReadError(RuntimeError):
+    """Receipt traversal failed; no partial recall projection is admissible."""
+
+
 def read_promoted_memories(
     *,
     vault_root: str | Path | None = None,
@@ -85,17 +93,22 @@ def read_promoted_memories(
         outbox_path=_resolve_outbox_path(outbox_path),
         records=records,
     )
-    memories: list[PromotedMemory] = []
-    for row in rows:
-        promoted = _promoted_from_row(
-            row,
-            vault_root=resolved_root,
-            memory_dir=memory_dir,
-            active_vault_id=active_vault_id,
-        )
-        if promoted is not None:
-            memories.append(promoted)
-    return memories
+    memories: list[tuple[str, PromotedMemory]] = []
+    try:
+        with closing(rows):
+            for row in rows:
+                promoted = _promoted_from_row(
+                    row,
+                    vault_root=resolved_root,
+                    memory_dir=memory_dir,
+                    active_vault_id=active_vault_id,
+                )
+                if promoted is not None:
+                    memories.append((row.timestamp, promoted))
+    except _MaterializedReceiptReadError:
+        return []
+    memories.sort(key=lambda item: item[0])
+    return [promoted for _, promoted in memories]
 
 
 def retrieve_relevant_promoted(
@@ -133,43 +146,55 @@ def retrieve_relevant_promoted(
         outbox_path=_resolve_outbox_path(outbox_path),
         records=records,
     )
-    candidates: list[RecallCandidate] = []
-    for row in rows:
-        promoted_with_scope = _promoted_from_row_with_scope(
-            row,
-            vault_root=resolved_root,
-            memory_dir=memory_dir,
-            active_vault_id=active_vault_id,
-        )
-        if promoted_with_scope is None:
-            continue
-        promoted, memory_scope_id = promoted_with_scope
-        if active_scope_id is not None and memory_scope_id != active_scope_id:
-            continue
-        score, reason = _score(promoted, query_tokens)
-        if score <= 0:
-            continue
-        candidates.append(
-            RecallCandidate(
-                promoted=promoted,
-                score=score,
-                reason=reason,
-                artifact_path=row.artifact_path,
-                receipt_id=row.receipt_id,
-                memory_scope_id=memory_scope_id,
-                applied_scope_id=active_scope_id,
+    def candidates() -> Iterator[tuple[str, int, RecallCandidate]]:
+        for position, row in enumerate(rows):
+            promoted_with_scope = _promoted_from_row_with_scope(
+                row,
+                vault_root=resolved_root,
+                memory_dir=memory_dir,
+                active_vault_id=active_vault_id,
             )
-        )
+            if promoted_with_scope is None:
+                continue
+            promoted, memory_scope_id = promoted_with_scope
+            if active_scope_id is not None and memory_scope_id != active_scope_id:
+                continue
+            score, reason = _score(promoted, query_tokens)
+            if score <= 0:
+                continue
+            yield (
+                row.timestamp, position,
+                RecallCandidate(
+                    promoted=promoted,
+                    score=score,
+                    reason=reason,
+                    artifact_path=row.artifact_path,
+                    receipt_id=row.receipt_id,
+                    memory_scope_id=memory_scope_id,
+                    applied_scope_id=active_scope_id,
+                ),
+            )
 
-    return sorted(
-        candidates,
-        key=lambda candidate: (
-            candidate.score,
-            candidate.promoted.decided_at,
-            candidate.promoted.candidate.title,
-        ),
-        reverse=True,
-    )[:k]
+    try:
+        with closing(rows):
+            selected = heapq.nlargest(k, candidates(), key=cmp_to_key(_compare_recall_candidates))
+    except _MaterializedReceiptReadError:
+        return []
+    return [candidate for _, _, candidate in selected]
+
+
+def _compare_recall_candidates(
+    left: tuple[str, int, RecallCandidate], right: tuple[str, int, RecallCandidate],
+) -> int:
+    """Existing descending relevance order, then stable chronological ties."""
+
+    left_key = (left[2].score, left[2].promoted.decided_at, left[2].promoted.candidate.title)
+    right_key = (right[2].score, right[2].promoted.decided_at, right[2].promoted.candidate.title)
+    if left_key != right_key:
+        return (left_key > right_key) - (left_key < right_key)
+    # Previously rows were sorted by timestamp before the stable relevance
+    # sort. Earlier timestamps/source positions must therefore win a tie.
+    return (left[:2] < right[:2]) - (left[:2] > right[:2])
 
 
 def _resolve_vault_root(vault_root: str | Path | None) -> Path | None:
@@ -193,23 +218,23 @@ def _materialized_rows(
     vault_root: Path,
     outbox_path: Path | None,
     records: Iterable[dict[str, Any]] | None,
-) -> tuple[PromotionReceiptRow, ...]:
+) -> Generator[PromotionReceiptRow, None, None]:
+    source = nullcontext(records) if records is not None else open_receipt_source_records(outbox_path=outbox_path)
     try:
-        result = query_promotion_receipts(
-            PromotionReceiptQuery(
-                transition_family="agent_memory_materialization",
-                target_maturity="semantic_memory",
-                outcome_status="applied",
-            ),
-            vault_root=vault_root,
-            outbox_path=outbox_path,
-            records=records,
-        )
-    except Exception:
-        return ()
-    if not result.source_available:
-        return ()
-    return result.rows
+        with source as source_records:
+            if source_records is None:
+                return
+            yield from iter_promotion_receipt_rows(
+                source_records,
+                PromotionReceiptQuery(
+                    transition_family="agent_memory_materialization",
+                    target_maturity="semantic_memory",
+                    outcome_status="applied",
+                ),
+                vault_root=vault_root,
+            )
+    except Exception as exc:
+        raise _MaterializedReceiptReadError("materialized receipt traversal unavailable") from exc
 
 
 def _promoted_from_row(
