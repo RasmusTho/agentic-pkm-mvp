@@ -5121,7 +5121,7 @@ time.sleep(30)
         runner.wait(timeout=10)
 
 
-@pytest.mark.parametrize("fault", ["none", "operation", "revision", "name", "service", "unavailable", "stop_lost_ack", "still_running"])
+@pytest.mark.parametrize("fault", ["none", "operation", "revision", "name", "project", "service", "oneoff", "unavailable", "stop_lost_ack", "still_running"])
 def test_native_source_container_termination_requires_exact_ownership(tmp_path: Path, monkeypatch, fault: str) -> None:
     from app.ops.native_source_bootstrap import quiesce_owned_container
     operation = "03b3bb2f-6d85-499a-8b45-e397f56812e1"
@@ -5144,14 +5144,18 @@ elif args[0] == "inspect":
     operation = os.environ["FAKE_CONTAINER_OPERATION"]
     revision = os.environ["FAKE_CONTAINER_REVISION"]
     name = os.environ["FAKE_CONTAINER_NAME"]
+    project = "pkm-test"
     service = "api"
+    oneoff = "True"
     fault = os.environ["FAKE_CONTAINER_FAULT"]
     if fault == "operation": operation = "00000000-0000-4000-8000-000000000002"
     if fault == "revision": revision = "b" * 40
     if fault == "name": name = "foreign"
+    if fault == "project": project = "pkm-dev"
     if fault == "service": service = "worker"
+    if fault == "oneoff": oneoff = "False"
     running = "false" if Path(os.environ["FAKE_CONTAINER_STOPPED"]).exists() else "true"
-    print(f"/{name} pkm-test {service} True {operation} {revision} {running}")
+    print(f"/{name} {project} {service} {oneoff} {operation} {revision} {running}")
 elif args[0] == "stop":
     if os.environ["FAKE_CONTAINER_FAULT"] == "still_running": raise SystemExit(42)
     os.kill(int(os.environ["FAKE_CONTAINER_PID"]), signal.SIGTERM)
@@ -5169,7 +5173,7 @@ elif args[0] != "rm": raise SystemExit(43)
     try:
         assert quiesce_owned_container("test", name, operation, revision) is (fault in {"none", "stop_lost_ack"})
         events = event_log.read_text().splitlines()
-        if fault in {"operation", "revision", "name", "service", "unavailable"}:
+        if fault in {"operation", "revision", "name", "project", "service", "oneoff", "unavailable"}:
             assert "stop" not in events and "rm" not in events
             assert producer.poll() is None
         if fault in {"none", "stop_lost_ack"}:
