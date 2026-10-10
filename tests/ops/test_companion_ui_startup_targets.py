@@ -1,11 +1,12 @@
 """
-Static inspection tests for the canonical Companion UI operator startup/doctor
+Contract tests for the canonical Companion UI operator startup/doctor
 commands (Issues #1358 / #1359 / #1360).
 
 These mirror tests/ops/test_release_channel_startup_targets.py: they read the
 Makefile and the channel startup scripts directly and assert the canonical
 operator surface, channel binding, vault guard, ports, and safe UI-port
-handling. No Docker, runtime, or real vault required.
+handling. The timeout wiring test resolves real Docker Compose into the UI
+entrypoint; other cases need no Docker, runtime, or real vault.
 
 Per-channel coverage is added as each sibling issue ships:
   - dev/Niflheim  : #1358 (this file's dev cases + shared library cases)
@@ -14,6 +15,7 @@ Per-channel coverage is added as each sibling issue ships:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -32,6 +34,76 @@ TEST_START = REPO_ROOT / "scripts" / "test" / "start_bifrost_ui.sh"
 TEST_DOCTOR = REPO_ROOT / "scripts" / "test" / "test_ui_doctor.sh"
 PROD_START = REPO_ROOT / "scripts" / "prod" / "start_midgard_ui.sh"
 PROD_DOCTOR = REPO_ROOT / "scripts" / "prod" / "prod_ui_doctor.sh"
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose is required")
+@pytest.mark.parametrize(
+    "channel,override,expected_timeout",
+    [
+        (None, None, 2.0),
+        (None, "9.0", 9.0),
+        ("dev", None, 30.0),
+        ("test", None, 30.0),
+        ("prod", None, 2.0),
+    ],
+)
+def test_managed_companion_ui_timeout_reaches_runtime(
+    tmp_path: Path,
+    monkeypatch,
+    channel: str | None,
+    override: str | None,
+    expected_timeout: float,
+) -> None:
+    """Resolve managed Compose into the real entrypoint's config and client."""
+    from companion_ui.workspace import serve_dev_page
+    from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
+
+    env = {
+        "PATH": os.environ["PATH"],
+        "HOME": os.environ["HOME"],
+        "INSTANCE_OWNERSHIP_HOST_STATE_DIR": str(tmp_path),
+        "WATCHER_RUNTIME_ENV_FILE": "/dev/null",
+    }
+    if override is not None:
+        env["COMPANION_API_TIMEOUT_SECONDS"] = override
+    command = [
+        "docker", "compose", "--env-file", "/dev/null",
+        "-f", str(REPO_ROOT / "docker-compose.yaml"),
+    ]
+    if channel is not None:
+        command.extend(["-f", str(REPO_ROOT / f"docker-compose.{channel}.yml")])
+    # Resolve all interpolation/merging, without reading other services' env files.
+    command.extend(["config", "--no-env-resolution", "--format", "json"])
+    result = subprocess.run(
+        command, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=True,
+    )
+    ui_env = json.loads(result.stdout)["services"]["companion-ui"]["environment"]
+    assert float(ui_env["COMPANION_API_TIMEOUT_SECONDS"]) == expected_timeout
+    if channel == "prod":
+        # Production's distinct entrypoint retains its existing client default;
+        # this leaf proves only its inherited Compose configuration stays 2.0.
+        return
+    monkeypatch.delenv("COMPANION_ASK_TIMEOUT_SECONDS", raising=False)
+    for key, value in ui_env.items():
+        monkeypatch.setenv(key, str(value))
+    monkeypatch.setenv("HOST", "127.0.0.1")
+    monkeypatch.setenv("PORT", "0")
+    observed = []
+
+    def inspect_startup(server) -> None:
+        observed.append(server.RequestHandlerClass)
+        server.server_close()
+
+    monkeypatch.setattr(
+        serve_dev_page.CompanionThreadingHTTPServer, "serve_forever", inspect_startup,
+    )
+    serve_dev_page.main()
+    handler = observed[0]
+    assert isinstance(handler._client, WorkspaceHttpClient)
+    assert handler._client._timeout == expected_timeout
+    assert handler._client._base_url == ui_env["COMPANION_API_BASE_URL"]
+    assert handler._ask_timeout_seconds == 120.0
+    assert handler._post_timeout_override(handler, "/api/companion/capture") is None
 
 
 def _makefile_target_body(makefile_text: str, target_name: str) -> str | None:
