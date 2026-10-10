@@ -66,6 +66,36 @@ def _malformed_frontmatter_note() -> str:
     )
 
 
+def test_companion_and_uuidless_human_notes_remain_visible_with_health(
+    tmp_path: Path, monkeypatch
+) -> None:
+    bind_selected_vault(monkeypatch, tmp_path)
+    monkeypatch.setenv("VAULT_SYSTEM_DIR_REL", "00 Infrastructure/System")
+    contents = {
+        "00 Infrastructure/System/companions/retained.md": _uuid_only_note("Continuity"),
+        "_system/companions/legacy.md": _uuid_only_note("Legacy continuity"),
+        "notes/uuidless.md": _no_frontmatter_note(),
+        "notes/invalid.md": _malformed_frontmatter_note(),
+        "notes/not-indexed.md": _uuid_only_note(),
+    }
+    for note_path, content in contents.items():
+        _write_note(tmp_path / note_path, content)
+    before = {path: path.read_bytes() for path in tmp_path.rglob("*.md")}
+
+    response = TestClient(app).get("/api/companion/vault-browser")
+
+    assert response.status_code == 200
+    assert response.json()["read_only"] is True
+    rows = {row["note_path"]: row for row in response.json()["notes"]}
+    assert set(contents).issubset(rows)
+    for note_path in ("notes/uuidless.md", "notes/invalid.md"):
+        assert rows[note_path]["uuid"] is None
+        assert rows[note_path]["frontmatter_valid"] is False
+        assert "uuid" in rows[note_path]["missing_required_fields"]
+    assert rows["notes/not-indexed.md"]["uuid"] == "uuid-only-abc"
+    assert {path: path.read_bytes() for path in tmp_path.rglob("*.md")} == before
+
+
 class TestReadModelReturnsExpectedFieldsForHealthyNote:
     def test_all_core_fields_present_when_frontmatter_complete(
         self, tmp_path: Path, monkeypatch
