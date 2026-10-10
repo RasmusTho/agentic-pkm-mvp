@@ -1963,6 +1963,17 @@ def _set_bws_consumer_selection(env: dict[str, str], *, raw_migration: bool) -> 
     )
 
 
+def _set_native_bws_operation_context(root: Path, env: dict[str, str]) -> None:
+    api_handle = root / "tmp/api-consumer.env"
+    api_handle.write_text("", encoding="utf-8")
+    api_handle.chmod(0o600)
+    env.update(
+        HOST_SECRET_RUNTIME_ENV_FILE_API=str(api_handle),
+        BWS_DEPLOY_OPERATION_ID="03b3bb2f-6d85-499a-8b45-e397f56812e1",
+        BWS_DEPLOY_TARGET_REVISION=env["FAKE_SHA"],
+    )
+
+
 def _commit_har_raw_migration(root: Path, name: str) -> str:
     migration = root / "app" / "alembic" / "versions" / name
     migration.write_text(
@@ -4184,6 +4195,7 @@ def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, chann
     env.update(FAKE_SHA=target, DEPLOY_ACK_FORWARD_ONLY='1', HOST_SECRET_PROVIDER='bws', BWS_DATABASE_TARGET='local',
                FAKE_SECURITY_EVENT_LOG=env['FAKE_DEPLOY_EVENT_LOG'])
     _set_bws_consumer_selection(env, raw_migration=True)
+    _set_native_bws_operation_context(root, env)
     _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
     if channel == 'prod':
         _configure_bws_retry_driver(tmp_path, env)
@@ -4340,6 +4352,7 @@ def test_bws_prod_retry_preflight_uses_file_connection_and_preserves_availabilit
     root, env, target = _deploy_harness(tmp_path)
     env.update(FAKE_SHA=target, HOST_SECRET_PROVIDER='bws')
     _set_bws_consumer_selection(env, raw_migration=False)
+    _set_native_bws_operation_context(root, env)
     _configure_prod_retry_preflight(root, env, tmp_path,
         rows=[('panel.scan.requested', {'_worker_retry_count': 3}, 0)],
         unreachable=failure == 'unreachable')
@@ -4517,6 +4530,7 @@ def test_runtime_identity_from_runtime_env_is_used_before_instance_state_init(
         LOCAL_UID=inherited_uid,
         LOCAL_GID=inherited_gid,
     )
+    _set_native_bws_operation_context(root, env)
 
     result = _run_deploy(root, env, sha)
 
@@ -4581,6 +4595,7 @@ def test_root_bws_deploy_accepts_runtime_owned_host_state_before_mutation(
         LOCAL_UID=str(runtime_uid),
         LOCAL_GID=str(runtime_gid),
     )
+    _set_native_bws_operation_context(root, env)
 
     result = _run_deploy(root, env, sha)
 

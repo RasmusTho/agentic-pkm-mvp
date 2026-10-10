@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any
+from typing import Any, cast
 
 SOURCE_TIMEOUT_SECONDS = 7200
 COMPOSE_TIMEOUT_SECONDS = SOURCE_TIMEOUT_SECONDS + 60
@@ -31,7 +31,7 @@ def source_rebuild_counts(payload: Any) -> tuple[int, ...]:
     values = tuple(payload.get(key) for key in _COUNTERS)
     if any(type(value) is not int or value < 0 for value in values):
         raise ValueError('source summary invalid')
-    return values
+    return cast(tuple[int, ...], values)
 
 
 def source_rebuild_complete(payload: Any) -> bool:
