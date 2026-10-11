@@ -468,6 +468,10 @@ promote public internet readiness.
   Deployment and validation owners are [deployment mechanics](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture)
   and [testing](TESTING.md). Last reviewed (this boundary): 2026-10-10. Last verified against:
   merged PR #5939 at `29f57913c9cabc2f29a8e26aaf703361eae6f43f` and #5675.
+- Native isolated PG verification uses a shared finite 60-minute aggregate watchdog, bound in
+  the profile hash, while retaining the 120-second per-test watchdog and complete selection (#5950).
+  Attach expiry produces only a fixed native failure signal before owned cleanup. Repository support
+  does not establish live DEV/TEST parity; parent #5675 retains that acceptance and GitHub PG CI.
 - Classification evaluation is offline by default. The opt-in live golden-set runner binds an
   exact registered model/transport and reports dataset coverage, mutation-side gate, captured
   usage and dated cost provenance. Unsupported billing or incomplete evidence cannot produce

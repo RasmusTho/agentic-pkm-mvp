@@ -17,11 +17,11 @@ import stat
 import subprocess
 import tarfile
 import time
-from typing import Any
+from typing import Any, Callable
 
 from app.ops.pg_acceptance import (
-    IMAGE_REPOSITORY, POSTGRES_IMAGE, SELECTORS, SELECTION_HASH,
-    PgAcceptanceError, identity, require_pass,
+    IMAGE_REPOSITORY, POSTGRES_IMAGE, PROFILE_DEADLINE, SELECTORS, SELECTION_HASH,
+    PgAcceptanceDeadlineExceeded, PgAcceptanceError, identity, require_pass,
 )
 
 RESOURCE_PATHS = (
@@ -30,7 +30,6 @@ RESOURCE_PATHS = (
     'docker-compose.devui-sources.yml', 'docker-compose.devui.yml', '.github', '.codex', 'AGENTS.md',
 )
 BAKED_PACKAGES = ('app', 'mimer_runtime', 'llm_contract', 'companion-ui/companion-app')
-PROFILE_DEADLINE = 1800
 
 
 def _command(argv: list[str], *, timeout: int = 60) -> bytes:
@@ -44,15 +43,20 @@ def _command(argv: list[str], *, timeout: int = 60) -> bytes:
         if result.returncode or len(result.stdout) > 128 * 1024 * 1024:
             raise PgAcceptanceError()
         return result.stdout
+    except subprocess.TimeoutExpired:
+        if argv[:3] == ['docker', 'start', '--attach']:
+            raise PgAcceptanceDeadlineExceeded() from None
+        raise PgAcceptanceError() from None
     except Exception:
         raise PgAcceptanceError() from None
 
 
 class PgAcceptanceRunner:
     def __init__(self, repository: Path, journal_directory: Path, *, sha: str, digest: str,
-                 channel: str, operation_id: str) -> None:
+                 channel: str, operation_id: str, deadline_signal: Callable[[], None] | None = None) -> None:
         self.identity = identity(sha, digest, channel, operation_id)
         self.repository = repository
+        self.deadline_signal = deadline_signal
         self.name = 'ygg-pg-' + channel + '-' + operation_id + '-' + SELECTION_HASH[:12]
         self.directory = journal_directory / 'pg-acceptance' / self.name
         self.marker = self.directory.with_name(self.name + '.owner.json')
@@ -318,7 +322,17 @@ class PgAcceptanceRunner:
                 or any(mount.get('RW') is not False for mount in observed_mounts if mount.get('Type') == 'bind')
                 or any(mount.get('Type') not in {'bind', 'tmpfs'} for mount in observed_mounts)):
                 raise PgAcceptanceError()
-            output = self._docker('start', '--attach', container, timeout=PROFILE_DEADLINE).decode()
+            try:
+                output = self._docker('start', '--attach', container, timeout=PROFILE_DEADLINE).decode()
+            except PgAcceptanceDeadlineExceeded:
+                # Observe the actual attach timeout before cleanup can replace
+                # it. Diagnostics are advisory and contain no transport values.
+                if self.deadline_signal is not None:
+                    try:
+                        self.deadline_signal()
+                    except Exception:
+                        pass
+                raise
             rows = [line for line in output.splitlines() if line.startswith('YGGDRASIL_PG_ACCEPTANCE=')]
             if len(rows) != 1:
                 raise PgAcceptanceError()

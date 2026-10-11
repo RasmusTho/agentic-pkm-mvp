@@ -84,6 +84,13 @@ def _emit_deploy_failure(stage: str) -> None:
     _emit_native_diagnostic(payload)
 
 
+def _emit_pg_deadline() -> None:
+    _emit_native_diagnostic(
+        b'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        b'MESSAGE=native PG acceptance failure: reason=profile_deadline_exceeded\n'
+    )
+
+
 def _guard_failure_checkpoint(value: object) -> str:
     if isinstance(value, str) and value in _GUARD_FAILURE_CHECKPOINTS:
         return value
@@ -1076,7 +1083,8 @@ class LinuxEffects:
             raise PostgresDeployError()
         return PgAcceptanceRunner(self.config.root, self.config.journal.directory,
                                   sha=plan.revision, digest=plan.image_digest,
-                                  channel=plan.channel, operation_id=operation_id)
+                                  channel=plan.channel, operation_id=operation_id,
+                                  deadline_signal=_emit_pg_deadline)
 
     def verify(self, operation_id: str, plan: DeployPlan) -> dict[str, Any]:
         receipt = self.config.journal.read()
