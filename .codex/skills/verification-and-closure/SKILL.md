@@ -5,8 +5,8 @@ description: "Verify coverage, merge the current candidate, and reconcile its ex
 
 # Verification and Closure
 
-This skill declares `execution_selection_intent: verification`. It owns merge and delivery closure,
-not deployment. User authority, exact scope, current-head checks, and truthful effects remain gates.
+This skill declares `execution_selection_intent: verification`. It owns merge and delivery closure, not deployment.
+Choose review capability under `docs/development/TOTAL_COST_OF_DEVELOPMENT.md :: Capability selection`. User authority, exact scope, current-head checks, and truthful effects remain gates.
 
 ## Routing
 

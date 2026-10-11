@@ -423,7 +423,8 @@ Capability routing across the whole chain follows `AGENTS.md :: Total Cost of De
 stage picks the cheapest *acceptable* capability (workflow/skill + model + reasoning effort + context
 discipline + tools + verification + review gate) for the lowest expected total cost per accepted
 delivery. Choose model and reasoning effort actively. The detailed decision rule and block schemas
-live in `docs/development/TOTAL_COST_OF_DEVELOPMENT.md`; context/input-token accounting, the
+live in `docs/development/TOTAL_COST_OF_DEVELOPMENT.md`; read `:: Capability selection` before
+choosing a model or escalating the highest-difficulty work. Context/input-token accounting, the
 root-coordinator → issue-agent → optional issue-helper hierarchy, escalation/de-escalation triggers,
 and model/reasoning policy are not duplicated in each skill.
 

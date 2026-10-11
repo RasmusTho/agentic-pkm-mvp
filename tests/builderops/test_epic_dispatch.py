@@ -340,10 +340,10 @@ def test_codex_launcher_resolves_model_from_capability_census(tmp_path: Path) ->
         / "models"
         / "providers.yaml"
     ).read_text(encoding="utf-8")
-    configured_model = "configured-astra-model"
+    configured_model = "configured-strong-model"
     census_path = tmp_path / "providers.yaml"
     census_path.write_text(
-        census_source.replace("gpt-6-astra", configured_model), encoding="utf-8"
+        census_source.replace("gpt-6.1-sol", configured_model), encoding="utf-8"
     )
     plan = build_dispatch_plan(
         independent_issue_numbers=[3006],
@@ -505,7 +505,7 @@ def test_run_state_accepts_dispatch_decision_summaries(tmp_path: Path) -> None:
                         "model_class": "high-reasoning",
                         "selection_intent": "strong_reasoning",
                         "capability": "sol",
-                        "model": "gpt-6-astra",
+                        "model": "gpt-6.1-sol",
                         "reasoning_effort": "max",
                         "runtime_difference": "invocation-hint-only",
                     },
@@ -1105,7 +1105,7 @@ def test_codex_issue_session_command_is_fresh_and_tcd_bounded(tmp_path: Path) ->
     command = launcher.command(plan["context_packs"][0])
 
     assert command[:3] == ["codex", "exec", "--json"]
-    assert command[command.index("--model") + 1] == "gpt-6-astra"
+    assert command[command.index("--model") + 1] == "gpt-6.1-sol"
     assert 'model_reasoning_effort="max"' in command
     assert "resume" not in command
     assert command[command.index("--add-dir") + 1] == str(tmp_path)
@@ -1150,7 +1150,7 @@ def test_codex_tcd_route_resolves_explicit_gpt_6_astra(tmp_path: Path) -> None:
         ],
     )
     default_command = launcher.command(default_plan["context_packs"][0])
-    assert default_command[default_command.index("--model") + 1] == "gpt-6-astra"
+    assert default_command[default_command.index("--model") + 1] == "gpt-6.1-sol"
 
     invalid_runtime = dict(plan["context_packs"][0]["runtime"])
     invalid_runtime["model"] = "gpt-5.6-terra"
@@ -1180,8 +1180,8 @@ def test_resolve_execution_target_uses_declared_model_reasoning() -> None:
     )
 
     assert (default_target.model, default_target.reasoning_effort) == (
-        "gpt-5.6-sol",
-        "high",
+        "gpt-6.1-sol",
+        "max",
     )
     assert (astra_target.model, astra_target.reasoning_effort) == (
         "gpt-6-astra",
@@ -1193,7 +1193,7 @@ def test_resolve_execution_target_uses_declared_model_reasoning() -> None:
     )
 
 
-def test_tcd_defaults_prefer_astra_over_sol_and_keep_terra_explicit() -> None:
+def test_tcd_defaults_prefer_sol_6_1_and_keep_terra_explicit() -> None:
     general_plan = build_dispatch_plan(
         independent_issue_numbers=[5810],
         run_id="selection-intent-general",
@@ -1203,6 +1203,9 @@ def test_tcd_defaults_prefer_astra_over_sol_and_keep_terra_explicit() -> None:
 
     assert general_runtime["selection_intent"] == "strong_reasoning"
     assert general_runtime["capability"] == "sol"
+    assert (general_runtime["model"], general_runtime["reasoning_effort"]) == (
+        "gpt-6.1-sol", "max"
+    )
 
     explicit_general = dict(_candidate(5811, risk="high", files=["app/b.py"]))
     explicit_general["selection_intent"] = "general_delivery"
@@ -1251,7 +1254,7 @@ def test_explicit_sol_capability_override_uses_sol_profile_default(
     runtime = plan["context_packs"][0]["runtime"]
 
     launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
-    assert launcher._tcd_route({"runtime": runtime}) == ("gpt-5.6-sol", "high")
+    assert launcher._tcd_route({"runtime": runtime}) == ("gpt-6.1-sol", "max")
 
 
 def test_legacy_low_cost_context_pack_uses_general_delivery_intent(
@@ -1311,7 +1314,7 @@ def test_codex_launcher_uses_resolved_target_and_claude_adapter_is_not_invoked(
     launcher = CodexIssueSessionLauncher(repo_root=tmp_path)
     command = launcher.command(plan["context_packs"][0])
 
-    assert command[command.index("--model") + 1] == "gpt-6-astra"
+    assert command[command.index("--model") + 1] == "gpt-6.1-sol"
     assert 'model_reasoning_effort="max"' in command
     claude_binding = get_carrier_adapter("claude").bind(
         resolve_execution_target(load_provider_census(), channel="dev", capability="sol"),
