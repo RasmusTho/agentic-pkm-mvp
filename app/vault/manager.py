@@ -9,7 +9,11 @@ from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
 from uuid import uuid4
 
-from app.instance.vault_registry import AppLocalSettingsStore, KnownVaultRef
+from app.instance.vault_registry import (
+    AppLocalSettingsStore,
+    KnownVaultRef,
+    REGISTRY_AUTHORITY_DORMANT,
+)
 from app.knowledge.multiwriter import is_conflict_artifact
 from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
@@ -499,12 +503,21 @@ class VaultManager:
                 if remember:
                     self._remember_context(context, vault_path)
             else:
-                activation, registration, known = rebind_selection
+                activation, registration, known, authority = rebind_selection
                 activation.activate(
                     selection=known,
                     candidate_binding_id=registration.vault_binding_id,
                     candidate_root=Path(registration.path),
                 )
+                # The rebind commit updates the registry's interaction history
+                # when it is authoritative.  While registry authority remains
+                # dormant, the legacy scalar is still the selection authority,
+                # so remember through the existing producer after the rebind
+                # has durably committed.  This ordering keeps a failed rebind
+                # from advancing remembered state and lets persistence failures
+                # remain explicit to the caller.
+                if remember and authority == REGISTRY_AUTHORITY_DORMANT:
+                    self._remember_context(context, vault_path)
         self._context = context
         self._emit_changed(previous, context)
         return context
@@ -513,7 +526,7 @@ class VaultManager:
         self,
         context: VaultContext,
         vault_path: Path,
-    ) -> tuple[Any, Any, KnownVaultRef] | None:
+    ) -> tuple[Any, Any, KnownVaultRef, str] | None:
         """Return the SETTINGS-05C activation inputs when the floor is installed."""
 
         if context.status != "selected":
@@ -589,6 +602,7 @@ class VaultManager:
             SettingsRebindActivation.from_environment(registry),
             registration,
             known,
+            snapshot.authority,
         )
 
     def validate_vault(self, vault_path: Path) -> VaultContext:
