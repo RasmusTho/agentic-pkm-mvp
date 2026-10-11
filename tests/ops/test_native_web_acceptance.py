@@ -264,7 +264,7 @@ def test_required_identity_and_integrations_cannot_false_green(tmp_path, monkeyp
         rows = _default_transport(CalendarBinding(calendar_id='default', base_url=web.CALDAV_URL,
                                   username='synthetic', app_password='synthetic',
                                   calendar_path='/calendar/', scope='work'))
-        assert len(rows) == 1 and rows[0].etag == source['calendar_etag']
+        assert len(rows) == 1 and rows[0].etag == source['calendar_etag'].strip('"')
         assert rows[0].uid == source['calendar_uid'] and source['report_count'] == 1
 
 
