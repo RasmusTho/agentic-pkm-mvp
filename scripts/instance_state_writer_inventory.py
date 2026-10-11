@@ -1621,6 +1621,10 @@ def _test_sync(ready_name: str, continue_name: str) -> None:
 
 def _enumerate_linux(*, boot_id: str) -> list[ProcessRecord]:
     last_error: _LinuxCensusIncomplete | None = None
+    _test_sync(
+        "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_READY_FD",
+        "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_CONTINUE_FD",
+    )
     for _attempt in range(LINUX_CENSUS_ATTEMPTS):
         try:
             pids = sorted(
@@ -1628,10 +1632,6 @@ def _enumerate_linux(*, boot_id: str) -> list[ProcessRecord]:
             )
         except OSError as exc:
             raise InventoryError("native process enumeration failed") from exc
-        _test_sync(
-            "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_READY_FD",
-            "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_CONTINUE_FD",
-        )
         records: list[ProcessRecord] = []
         try:
             for pid in pids:
