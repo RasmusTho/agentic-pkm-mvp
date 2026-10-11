@@ -85,7 +85,11 @@ published port, exact startup configuration and resolved upstream address to the
 container. The passive probe checks existing last-active restore inputs and complete vault/local
 identities before a context read can restore selection; a configured registry must already have
 its private lock and canonical rollback export. It refuses initialization, recovery, projection
-repair, missing identities and settings-rebind state. Then the API's active context is rechecked
+repair and missing identities. A settings-rebind record is supported only in settled
+`no_lifecycle` state: applied and reload revisions must equal desired, the candidate registration
+must identify the approved physical root, the persisted last-active reference must already match
+that candidate, and its existing private ingress lock must be present. This is the producer's
+same-selection/no-reload path; pending transitions remain refused. Then the API's active context is rechecked
 before navigation/effects.
 Evidence paths must be canonical and outside the canonical approved vault path.
 This applies independently of capture permission.
