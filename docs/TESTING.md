@@ -60,10 +60,11 @@ local run (CI already performs this setup). Preserve other installed browser ver
 PLAYWRIGHT_SKIP_BROWSER_GC=1 python3 -m playwright install chromium
 python3 scripts/run_jev_browser_advisory.py --output-dir .codex-tmp/jev-browser-advisory
 # Existing local Mac helper only, after installing the merged direct-tool script:
-python3 scripts/run_jev_browser_advisory.py --output-dir /Users/rasmus/agentic-pkm-mvp/.codex-tmp/jev-browser-advisory-runtime --live-jev
+python3 scripts/run_jev_browser_advisory.py --output-dir "${ADVISORY_EVIDENCE_ROOT:?set a persistent evidence directory}" --live-jev
 ```
 
-Use an isolated clean checkout. The runner retains exact source SHA, fixture/rubric versions,
+For live runs, set `ADVISORY_EVIDENCE_ROOT` to a retained absolute directory outside temporary
+worktrees. Use an isolated clean checkout. The runner retains exact source SHA, fixture/rubric versions,
 JUnit, fixture screenshots/traces and a separate `jev-browser-advisory.v1` report. It requires
 all twenty exact browser cases and all sixteen desktop/narrow observation records; ordinary
 skips or missing evidence fail. The four current known-defect probes may only xfail with their
