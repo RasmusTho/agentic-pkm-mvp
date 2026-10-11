@@ -84,6 +84,11 @@ portal. Installing both Ollama models locally does not qualify that caller; miss
 configuration or unavailable models fails loudly through the actual client. Do not use a mock,
 local provider bypass, fake endpoint or always-skip marker to stand in for live execution. Generic
 main/PR success proves deterministic checks and lane classification, not live retrieval quality.
+The synthetic `IdentityRun` context temporarily selects each declared model through the existing
+`LLM_FORCE_PROVIDER` / `LLM_FORCE_MODEL` operator seam, so a compiled default Product target cannot
+silently substitute Nomic for the BGE-M3 arm. Corpus and query embeddings still use the real shared
+Product router/client and admission boundary. The context restores the caller's prior selection,
+other environment values, memory documents and tuning on completion or failed entry.
 
 The existing DEV/TEST Model Access qualification owned by Issue #5963 supplies the admitted
 consumer prerequisite. Its capture/browser receipt is not automatically the SV/EN quality receipt.
