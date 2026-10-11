@@ -3,6 +3,8 @@ from __future__ import annotations
 import io
 import json
 import os
+import signal
+import time
 from pathlib import Path
 import subprocess
 import sys
@@ -497,15 +499,23 @@ def provider_fixture(monkeypatch: pytest.MonkeyPatch):
     from threading import Event, Thread
     import time
 
-    config: dict[str, Any] = {"mode": "fast", "requests": 0}
+    config: dict[str, Any] = {"mode": "fast", "requests": 0, "connections": 0, "received": Event()}
     stopping = Event()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args: object) -> None:
             return
 
+        def handle(self) -> None:
+            if config["mode"] == "tls":
+                config["connections"] += 1
+                stopping.wait(3)
+                return
+            super().handle()
+
         def do_POST(self) -> None:
             config["requests"] += 1
+            config["received"].set()
             self.rfile.read(int(self.headers.get("Content-Length", "0")))
             if config["mode"] == "headers":
                 stopping.wait(3)
@@ -537,7 +547,7 @@ def provider_fixture(monkeypatch: pytest.MonkeyPatch):
     # The override lives only in this child bootstrap, never in the public CLI.
     worker_code = (
         "import runpy,sys; f=runpy.run_path(sys.argv[1],run_name='_jev_transport')['_transport_worker']; "
-        f"f.__globals__['API_ENDPOINT']={endpoint!r}; sys.exit(f())"
+        f"f.__globals__['API_ENDPOINT']={endpoint!r}; sys.exit(f(int(sys.argv[2])))"
     )
     monkeypatch.setattr(ygg_jev, "API_ENDPOINT", endpoint)
     monkeypatch.setattr(ygg_jev, "_TRANSPORT_WORKER_CODE", worker_code, raising=False)
@@ -573,7 +583,7 @@ def test_provider_deadline_bounds_slow_trickle(monkeypatch: pytest.MonkeyPatch, 
     assert all(child.poll() is not None for child in children)
 
 
-@pytest.mark.parametrize("mode", ["headers", "fast", "oversized"])
+@pytest.mark.parametrize("mode", ["dns", "tls", "headers", "fast", "oversized"])
 def test_provider_deadline_covers_stalls_and_response_bounds(
     monkeypatch: pytest.MonkeyPatch, provider_fixture, mode: str,
 ) -> None:
@@ -581,6 +591,14 @@ def test_provider_deadline_covers_stalls_and_response_bounds(
 
     config, children = provider_fixture
     config["mode"] = mode
+    if mode == "dns":
+        code = ygg_jev._TRANSPORT_WORKER_CODE.replace(
+            "sys.exit(f(int(sys.argv[2])))",
+            "import socket,time; socket.getaddrinfo=lambda *a,**k: time.sleep(3); sys.exit(f(int(sys.argv[2])))",
+        )
+        monkeypatch.setattr(ygg_jev, "_TRANSPORT_WORKER_CODE", code)
+    elif mode == "tls":
+        monkeypatch.setattr(ygg_jev, "_TRANSPORT_WORKER_CODE", ygg_jev._TRANSPORT_WORKER_CODE.replace("http://", "https://"))
     monkeypatch.setattr(ygg_jev, "REQUEST_TIMEOUT_SECONDS", 0.5)
     started = time.monotonic()
     if mode == "fast":
@@ -588,9 +606,77 @@ def test_provider_deadline_covers_stalls_and_response_bounds(
     else:
         with pytest.raises(ygg_jev.ProviderFailure):
             ygg_jev.send_once(_request_bytes(), "synthetic-key-canary")
-    assert time.monotonic() - started < 1.5
-    assert config["requests"] == 1
+    elapsed = time.monotonic() - started
+    assert elapsed < 1.5
+    if mode in {"dns", "tls", "headers"}:
+        assert elapsed >= 0.4
+    assert config["requests"] == (0 if mode in {"dns", "tls"} else 1)
+    if mode == "tls":
+        assert config["connections"] == 1
     assert all(child.poll() is not None for child in children)
+
+
+@pytest.mark.parametrize("caller_signal", [signal.SIGINT, signal.SIGTERM, signal.SIGKILL])
+def test_provider_worker_stops_if_caller_is_killed(provider_fixture, caller_signal: int) -> None:
+    config, _ = provider_fixture
+    config["mode"] = "headers"
+    worker_code = ygg_jev._TRANSPORT_WORKER_CODE
+    parent_code = (
+        "import runpy,subprocess,sys\n"
+        "f=runpy.run_path(sys.argv[1],run_name='_jev_parent')['send_once']\n"
+        f"f.__globals__['_TRANSPORT_WORKER_CODE']={worker_code!r}\n"
+        "spawn=subprocess.Popen\n"
+        "def observe(*args,**kwargs):\n"
+        "    child=spawn(*args,**kwargs)\n"
+        "    print(child.pid,flush=True)\n"
+        "    return child\n"
+        "subprocess.Popen=observe\n"
+        "f(sys.stdin.buffer.read(),'synthetic-key-canary')\n"
+    )
+    parent = subprocess.Popen(
+        [sys.executable, "-I", "-c", parent_code, str(Path(ygg_jev.__file__).resolve())],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    worker_pid: int | None = None
+
+    def worker_running() -> bool:
+        assert worker_pid is not None
+        observed = subprocess.run(
+            ["ps", "-p", str(worker_pid), "-o", "stat="],
+            capture_output=True, timeout=1, check=False,
+        )
+        state = observed.stdout.decode().strip()
+        return bool(state) and not state.startswith("Z")
+
+    try:
+        assert parent.stdin is not None and parent.stdout is not None
+        parent.stdin.write(_request_bytes())
+        parent.stdin.close()
+        assert config["received"].wait(3), "real worker did not reach the fixture"
+        worker_pid = int(parent.stdout.readline())
+        assert os.getpgid(worker_pid) == parent.pid
+        parent.send_signal(caller_signal)
+        parent.wait(timeout=3)
+        deadline = time.monotonic() + 2
+        while worker_running() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert not worker_running(), "request worker survived caller death"
+        assert config["requests"] == 1
+    finally:
+        if parent.poll() is None:
+            parent.kill()
+        parent.wait(timeout=3)
+        if worker_pid is not None and worker_running():
+            try:
+                if os.getpgid(worker_pid) == parent.pid:
+                    os.kill(worker_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        for stream in (parent.stdin, parent.stdout):
+            if stream is not None:
+                stream.close()
+
 
 @pytest.mark.parametrize("failure", ["timeout", "interrupt", "spawn", "kill", "oversized", "worker_failure"])
 def test_provider_worker_cleanup_and_redaction(

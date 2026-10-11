@@ -11,6 +11,7 @@ import selectors
 import subprocess
 import sys
 import time
+from threading import Thread
 from typing import Any, Sequence
 import urllib.request
 
@@ -369,17 +370,25 @@ def _http_request_once(request_body: bytes, api_key: str) -> bytes:
     return raw
 
 
-
 _MAX_TRANSPORT_INPUT_BYTES = 4 + MAX_REQUEST_BYTES + MAX_SECRET_BYTES
 _TRANSPORT_WORKER_CODE = (
     "import runpy,sys; "
     "f=runpy.run_path(sys.argv[1],run_name='_jev_transport')['_transport_worker']; "
-    "sys.exit(f())"
+    "sys.exit(f(int(sys.argv[2])))"
 )
 
 
-def _transport_worker() -> int:
-    """Private worker: credentials travel only through anonymous stdin pipes."""
+def _transport_worker(lifeline_fd: int) -> int:
+    """Private worker: stop if the caller exits, even without Python cleanup."""
+    def stop_on_caller_exit() -> None:
+        try:
+            os.read(lifeline_fd, 1)
+        finally:
+            # EOF means the caller's only write handle is gone. Stop blocking
+            # native DNS/SSL too; no Python exception needs to reach that code.
+            os._exit(1)
+
+    Thread(target=stop_on_caller_exit, name="jev-caller-lifeline", daemon=True).start()
     try:
         wire = sys.stdin.buffer.read(_MAX_TRANSPORT_INPUT_BYTES + 1)
         if len(wire) > _MAX_TRANSPORT_INPUT_BYTES or len(wire) < 5:
@@ -405,6 +414,8 @@ def send_once(request_body: bytes, api_key: str) -> bytes:
     The public CLI stays argument-free; the private bootstrap contains no key.
     """
     process: subprocess.Popen[bytes] | None = None
+    lifeline_read: int | None = None
+    lifeline_write: int | None = None
     completed = False
     deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
     try:
@@ -412,14 +423,18 @@ def send_once(request_body: bytes, api_key: str) -> bytes:
         if not 1 <= len(request_body) <= MAX_REQUEST_BYTES or not 1 <= len(key_bytes) <= MAX_SECRET_BYTES:
             raise ProviderFailure()
         wire = len(request_body).to_bytes(4, "big") + request_body + key_bytes
+        lifeline_read, lifeline_write = os.pipe()
         process = subprocess.Popen(
-            [sys.executable, "-I", "-c", _TRANSPORT_WORKER_CODE, str(Path(__file__).resolve())],
+            [sys.executable, "-I", "-c", _TRANSPORT_WORKER_CODE, str(Path(__file__).resolve()), str(lifeline_read)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             env={"HOME": str(Path.home()), "PATH": os.defpath, "LANG": "C"},
             close_fds=True,
+            pass_fds=(lifeline_read,),
         )
+        os.close(lifeline_read)
+        lifeline_read = None
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ProviderFailure()
@@ -433,6 +448,12 @@ def send_once(request_body: bytes, api_key: str) -> bytes:
     except Exception:
         raise ProviderFailure() from None
     finally:
+        for fd in (lifeline_read, lifeline_write):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
         if process is not None:
             if not completed:
                 _stop_child(process)
@@ -442,6 +463,7 @@ def send_once(request_body: bytes, api_key: str) -> bytes:
                         stream.close()
                     except OSError:
                         pass
+
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
