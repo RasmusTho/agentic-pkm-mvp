@@ -64,6 +64,13 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   screenshots, traces, JUnit and an unassessed advisory report. Daily Mac checks may assess
   new relevant Focus changes with the separate finite facts/authority rubric; they add no
   acceptance or execution authority.
+- Focus evidence-state aggregation has a separate sixteen-case blocking matrix in
+  `tests/companion_ui/test_focus_evidence_state_runtime.py`. It reaches the managed HTTP route,
+  production composer and existing shell with finite synthetic source inputs. A fresh watermarked
+  empty read is ready; stale/unknown empty, partial/unavailable/unread evidence and unavailable
+  governing sources retain their warnings or blocking state without granting action authority.
+  Browser CI archives the offline state/authority report and diagnostics; the existing Mac advisory
+  checks may assess new relevant sources under the same no-replay and sixteen-question bounds.
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.

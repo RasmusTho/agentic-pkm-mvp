@@ -51,8 +51,8 @@ Execution:
 - Live UI smoke (`tests/companion_ui/test_companion_ui_live_smoke.py`) is a separate opt-in check
   against a *running* gateway; it skips unless `COMPANION_UI_SMOKE_URL` is set, so it never gates a PR.
 
-The advisory Jev pilot wraps two finite offline browser matrices: Vault Browser listing/identity
-and managed Focus owner facts. The default surface is `vault-browser`.
+The advisory Jev pilot wraps three finite offline browser matrices: Vault Browser listing/identity,
+managed Focus owner facts and Focus evidence state. The default surface is `vault-browser`.
 
 Install the Chromium version matching the selected Python Playwright package before the first
 local run (CI already performs this setup). Preserve other installed browser versions:
@@ -64,6 +64,7 @@ python3 scripts/run_jev_browser_advisory.py --output-dir .codex-tmp/jev-browser-
 python3 scripts/run_jev_browser_advisory.py --output-dir "${ADVISORY_EVIDENCE_ROOT:?set a persistent evidence directory}" --live-jev
 # The separate Focus surface uses the same helper and durable attempt fence:
 python3 scripts/run_jev_browser_advisory.py --surface focus-owner-facts --output-dir "${ADVISORY_EVIDENCE_ROOT:?set a persistent evidence directory}" --live-jev
+python3 scripts/run_jev_browser_advisory.py --surface focus-evidence-state --output-dir "${ADVISORY_EVIDENCE_ROOT:?set a persistent evidence directory}" --live-jev
 ```
 
 For live runs, set `ADVISORY_EVIDENCE_ROOT` to a retained absolute directory outside temporary
@@ -92,9 +93,20 @@ only expected booleans and visible fact, owner-source limitation and legality pr
 proposal hashes, locators, titles, hidden disclosures, DOM and screenshots remain local. The
 existing input, output, sixteen-question and elapsed-time bounds remain unchanged.
 
+Focus evidence state uses `tests/companion_ui/test_focus_evidence_state_runtime.py`: fresh nonempty,
+fresh empty, stale empty, unknown-timing empty, partial, unavailable and unread evidence, plus an
+unavailable governing source, at two widths. All sixteen cases must pass. Synthetic inputs replace
+the source-read boundary; the managed HTTP route, production composer, shell and source admission
+still run. Fresh watermarked zero-result reads are ready; nonfresh empties remain partial, and a
+ready context leaves next-step legality unchanged. The separate `focus-evidence-state-v1` fixture
+and `focus-evidence-state-truth-v1` rubric assess visible state/evidence and authority independently.
+Only allowlisted synthetic prose is sent; identifiers, hashes, watermarks, raw DOM and screenshots
+remain local. CI runs this third surface offline with mandatory counts and always-retained
+diagnostics. Daily Mac checks compare each surface's relevant source and preserve prior attempts.
+
 Provider input/output uses the existing bounded `jev-direct` command and validator. The installed
 helper must match the checked-out script, including the total deadline repair. Keys remain inside
-the helper. Hosted browser CI runs contract tests and both exact browser matrices with live Jev
+the helper. Hosted browser CI runs contract tests and all three exact browser matrices with live Jev
 disabled; its semantic report is explicitly unassessed. Daily live checks on the current Mac use
 existing access and isolated main checkouts, checking only new relevant changes for the affected
 surface. Each surface has its own versioned source/rubric report; an existing report or intent is
