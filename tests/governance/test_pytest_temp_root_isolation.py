@@ -15,11 +15,17 @@ def _harness(directory: Path) -> dict[str, str]:
     (directory / "conftest.py").write_bytes((root / "conftest.py").read_bytes())
     env = os.environ.copy()
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    # CI's plugin-specific flags do not belong to this standalone child suite.
+    # subprocess timeouts below independently bound each child's lifetime.
+    env.pop("PYTEST_ADDOPTS", None)
     env["PYTHONPATH"] = str(directory)
     return env
 
 
-def test_parallel_pytest_runs_use_unique_debug_temp_roots(tmp_path: Path) -> None:
+def test_parallel_pytest_runs_use_unique_debug_temp_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--timeout=120 --timeout-method=thread")
     env = _harness(tmp_path)
     parent = tmp_path / "shared-parent"
     parent.mkdir()
@@ -69,8 +75,9 @@ def test_parallel_pytest_runs_use_unique_debug_temp_roots(tmp_path: Path) -> Non
 
 @pytest.mark.parametrize("failure", ["creation", "validation"])
 def test_temp_root_setup_fails_loud_when_namespace_cannot_be_created(
-    tmp_path: Path, failure: str
+    tmp_path: Path, failure: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--timeout=120 --timeout-method=thread")
     env = _harness(tmp_path)
     env.pop("PYTEST_DEBUG_TEMPROOT", None)
     # Inject a filesystem failure through a plugin before root-hook configuration.
