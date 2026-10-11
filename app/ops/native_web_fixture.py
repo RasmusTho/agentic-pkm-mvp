@@ -6,6 +6,8 @@ its existing producer and normal guard; unsupported initialization is refused.
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +33,6 @@ def bootstrap_fixture(vault_root: Path, generation: str) -> dict[str, Any]:
     from app.domain.commitments import CommitmentRecord
     from app.episodes.notes import render_episode_note
     from app.knowledge.write_ops import write_note_relative
-    from app.receipts.decision_receipt_log import append_decision_receipt
     from app.relevance.materialization import materialize_moment
     from app.relevance.schema import Moment, MomentNeed, MomentProvenance, MomentTrigger, MomentUrgency, SurfacedRef
     from app.services.commitment_persistence import persist_commitment
@@ -79,9 +80,6 @@ def bootstrap_fixture(vault_root: Path, generation: str) -> dict[str, Any]:
     ), vault_context=context)
     if moment.status != 'materialized':
         raise NativeWebRefusal('canonical_moment_materialization_unavailable')
-    append_decision_receipt(object_id=NOTE_UUID, key='review', value={
-        'actor': 'synthetic.native-web', 'source': ref, 'scope_id': SCOPE_ID,
-    }, trace_id=generation, created_at=now, vault_root=vault_root, vault_uuid=context.active_vault_id)
     episode_id = 'ep-59690000-0000-4000-8000-000000000003'
     write_note_relative('episodes/' + episode_id + '.md', render_episode_note({
         'episode_id': episode_id, 'scope': SCOPE_ID, 'title': 'Synthetic work session',
@@ -112,20 +110,52 @@ def bootstrap_fixture(vault_root: Path, generation: str) -> dict[str, Any]:
     }
 
 
-def prepare_daily_sources(fixture: dict[str, Any]) -> dict[str, Any]:
+def _daily_helper() -> Any:
     # The helper is an exact-SHA read-only test resource, with Product imports
     # still baked. Missing delivered helper remains a recovery fact.
     from importlib import import_module
-    from app.vault.manager import get_vault_manager
     try:
         helper = import_module('tests.companion_ui.live_daily_briefing')
     except ImportError:
         raise NativeWebRefusal('daily_source_helper_missing') from None
     if not isinstance(helper.__file__, str) or Path(helper.__file__).resolve() != Path('/app/tests/companion_ui/live_daily_briefing.py'):
         raise NativeWebRefusal('daily_source_helper_origin_mismatch')
-    return helper.prepare_sources(vault_context=get_vault_manager().context,
-                                  for_date=datetime.now(ZoneInfo('Europe/Stockholm')).date(),
-                                  run_id=fixture['resource_generation'], marker_path=Path('/scratch/daily-source-marker.json'))
+    return helper
+
+
+def prepare_daily_sources(fixture: dict[str, Any], resource_version: str) -> dict[str, Any]:
+    from app.vault.manager import get_vault_manager
+    from app.receipts.decision_receipt_log import append_decision_receipt, decisions_receipts_dir
+    context = get_vault_manager().context
+    root = Path(context.active_vault_path or '').resolve(strict=True)
+    marker_relative = 'fixtures/native-web-daily.json'
+    marker = root / marker_relative
+    marker.parent.mkdir()
+    admission = {'schema': 'daily-briefing-synthetic-fixture.v1', 'synthetic': True,
+                 'run_id': fixture['resource_generation'], 'resource_version': resource_version,
+                 'vault_id': context.active_vault_id, 'vault_path': str(root)}
+    descriptor = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(descriptor, 'w') as stream:
+        json.dump(admission, stream, sort_keys=True)
+    # The original helper's previous-day monthly log must be absent. It runs
+    # first at the actual fixture day; native's own normal append follows.
+    result = _daily_helper().prepare_sources(vault_context=context,
+                 for_date=datetime.now(ZoneInfo('Europe/Stockholm')).date(),
+                 run_id=fixture['resource_generation'], marker_path=marker_relative)
+    now = datetime.now(UTC)
+    shard = decisions_receipts_dir(root) / ('decisions-' + now.strftime('%Y%m') + '.jsonl')
+    prior = shard.read_bytes() if shard.exists() else b''
+    receipt = append_decision_receipt(object_id=NOTE_UUID, key='review', value={
+        'actor': 'synthetic.native-web', 'source': 'vault://' + REVIEW_NOTE_PATH, 'scope_id': SCOPE_ID,
+    }, trace_id=fixture['resource_generation'], created_at=now, vault_root=root, vault_uuid=context.active_vault_id)
+    current = shard.read_bytes()
+    if not current.startswith(prior) or json.loads(current[len(prior):]) != receipt:
+        raise NativeWebRefusal('native_seed_receipt_append_unknown')
+    # Only this observed canonical bootstrap append advances its initial hash;
+    # every other original helper inventory entry stays byte-exact.
+    result['source_files'][shard.relative_to(root).as_posix()] = hashlib.sha256(current).hexdigest()
+    fixture['native_seed_receipt'] = receipt
+    return result
 
 
 def fixture_readback(vault_root: Path, fixture: dict[str, Any]) -> dict[str, Any]:

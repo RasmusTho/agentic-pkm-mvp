@@ -429,12 +429,23 @@ persistent channel mounts, host/Docker sockets, arbitrary commands or selectable
 
 Only the two named live wrappers execute. Each consumes the private `native-web-context.v1`
 readback and calls `app.ops.native_web_runtime.before_effect(pilot, effect)` before a declared
-browser effect. Original per-scenario reports, trace and JUnit files are retained separately for
-both pilots. Native readbacks bind API process, image, resources, UI program, configuration and
-fixture identities at start/before-effect/end. Declared fixture writes advance only after the
-normal guarded Product acknowledgement and receipt match the exact target and measured bytes;
-a requested write alone cannot excuse drift. Daily source degradation/restoration uses two fixed
-guarded writes to its own synthetic Moment, with original source hashes required again at end.
+browser effect. Native validates the original report schemas, exact run/source/image/resource and
+fixture bindings, all original scenario proofs and required effect counts. Each retained original
+trace must be a usable Playwright archive with actual fixed UI navigation; JUnit must contain the
+complete original scenario inventory or the actual successful fixed pytest wrapper. Pytest owns
+the latter artifact when the original helper does not write JUnit itself. No replacement success
+report is generated. The original pilot reports currently admit feature PASS only on `test`.
+
+Native readbacks bind API process, image, resources, UI program, configuration and fixture
+identities at start/before-effect/end. A consumed hook binds a declared mutable target version;
+the actual normal request must still have those exact pre-write bytes. Only the normal guarded
+acknowledgement, original receipt and exact permitted post-write bytes advance that version.
+The original report acknowledgement must match the API observer's response hash. The original
+Daily helper receives its pre-existing relative marker and creates current-day sources before
+the native monthly decision append. Its all-vault inventory tracks the two declared Deep-owned
+notes at their acknowledged versions; every other source retains its original hash. Daily source
+degradation/restoration uses two fixed guarded writes to its own synthetic Moment, with all
+Daily-owned source hashes required again at end. A requested write alone cannot excuse drift.
 These observations do not assert an idle freeze of a long-lived channel.
 
 Unavailable assets/OS libraries/selected integrations, wrong ABI/platform, missing wrappers,

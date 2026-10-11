@@ -65,7 +65,7 @@ def hash_json(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def require_reports(reports: Any) -> None:
+def require_reports(reports: Any, binding: dict[str, Any] | None = None) -> None:
     if not isinstance(reports, dict) or set(reports) != set(SCENARIOS):
         raise NativeWebRefusal('pilot_reports_incomplete')
     for pilot, inventory in SCENARIOS.items():
@@ -74,11 +74,15 @@ def require_reports(reports: Any) -> None:
         effects = report.get('effects' if pilot == 'deep-review' else 'effects_consumed') if isinstance(report, dict) else None
         if (not isinstance(scenarios, list) or len(scenarios) != len(inventory)
             or any(not isinstance(row, dict) or row.get('status') != 'passed' for row in scenarios)
-            or {row.get('id') for row in scenarios} != set(inventory) or report.get('passed') is not True
+            or [row.get('id') for row in scenarios] != list(inventory) or report.get('passed') is not True
             or not isinstance(effects, dict) or set(effects) != set(EFFECT_LIMITS[pilot])
             or any(type(count) is not int or count < 0 or count > EFFECT_LIMITS[pilot][key]
                    for key, count in effects.items())):
             raise NativeWebRefusal('pilot_outcomes_incomplete')
+    if binding is None:
+        raise NativeWebRefusal('original_report_context_missing')
+    from app.ops.native_web_reports import require_original_reports
+    require_original_reports(reports, binding)
 
 
 def require_wrappers(manifest: dict[str, Any], *, root: Path = Path('/app')) -> None:
@@ -105,14 +109,17 @@ def verify_resources(manifest: dict[str, Any], *, root: Path = Path('/app')) -> 
 
 
 class RequiredWebResults:
-    def __init__(self) -> None:
+    def __init__(self, wrapper: str | None = None) -> None:
+        if wrapper is not None and wrapper not in WRAPPERS:
+            raise NativeWebRefusal('unknown_pilot_wrapper')
+        self.required = {wrapper} if wrapper is not None else set(WRAPPERS)
         self.passed: set[str] = set()
         self.bad = False
 
     def pytest_collection_finish(self, session: Any) -> None:
         import pytest
         nodes = [item.nodeid for item in session.items]
-        if set(nodes) != set(WRAPPERS) or len(nodes) != len(WRAPPERS):
+        if set(nodes) != self.required or len(nodes) != len(self.required):
             raise pytest.UsageError('fixed web wrapper inventory is incomplete')
 
     def pytest_runtest_logreport(self, report: Any) -> None:
@@ -124,7 +131,7 @@ class RequiredWebResults:
             self.passed.add(report.nodeid)
 
     def require_complete(self, exit_status: int) -> None:
-        if exit_status != 0 or self.bad or self.passed != set(WRAPPERS):
+        if exit_status != 0 or self.bad or self.passed != self.required:
             raise NativeWebRefusal('wrapper_execution_incomplete')
 
 
@@ -160,7 +167,27 @@ def require_result(result: Any, expected: dict[str, str], manifest: dict[str, An
         or not fixture.get('logical_vault_id') or not fixture.get('local_clone_id')
         or not fixture.get('note_uuid') or not fixture.get('note_path')):
         raise NativeWebRefusal('web_service_or_fixture_identity_unknown')
-    require_reports(result.get('pilots'))
+    from app.ops.native_web_reports import report_binding
+    require_reports(result.get('pilots'), report_binding(manifest, start))
+    # Bind the original pilot acknowledgement to the API observer's exact
+    # guarded response and declared source transition, not just a report flag.
+    acknowledgements = result.get('guarded_acknowledgements')
+    versions = result.get('mutable_versions')
+    sources = fixture.get('controlled_mutable_sources')
+    if (not isinstance(acknowledgements, dict) or set(acknowledgements) != {'capture', 'panel_confirm'}
+        or not isinstance(versions, dict) or not isinstance(sources, list) or len(sources) != 2
+        or {source.get('effect') for source in sources} != {'capture', 'panel_confirm'}
+        or set(versions) != {source.get('note_path') for source in sources}):
+        raise NativeWebRefusal('original_guarded_acknowledgement_missing')
+    original = result['pilots']['deep-review']['backend_acknowledgements']
+    for source in sources:
+        effect, path = source['effect'], source['note_path']
+        ack = acknowledgements.get(effect)
+        if (not isinstance(ack, dict) or ack.get('target') != path or ack.get('source_uuid') != source['note_uuid']
+            or ack.get('pre_sha256') != source['seed_sha256'] or ack.get('post_sha256') != versions.get(path)
+            or re.fullmatch(r'[0-9a-f]{64}', str(ack.get('post_sha256'))) is None
+            or ack.get('response_sha256') != hash_json(original[effect])):
+            raise NativeWebRefusal('original_guarded_acknowledgement_mismatch')
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -25,6 +25,7 @@ from app.ops.native_web_acceptance import (
     RequiredWebResults, UI_URL, WRAPPERS, hash_json, require_reports, verify_resources,
 )
 from app.ops.native_web_fixture import SCOPE_ID, bootstrap_fixture, fixture_readback, prepare_daily_sources
+from app.ops.native_web_reports import pilot_manifest, report_binding
 
 
 class AcknowledgedFixtureState:
@@ -38,18 +39,82 @@ class AcknowledgedFixtureState:
         self.vault, self.fixture, self.effects = vault, fixture, effects
         self.versions = {source['note_path']: source['seed_sha256'] for source in fixture['controlled_mutable_sources']}
         self.acknowledgements: dict[str, Any] = {}
+        self.grants: dict[str, str] = {}
+        self.requests: dict[str, dict[str, Any]] = {}
 
     def require_current(self, mutable: dict[str, str]) -> None:
         if mutable != self.versions:
             raise NativeWebRefusal('unacknowledged_fixture_state_change')
 
-    def observe(self, route: str, response: dict[str, Any], panel_target: dict[str, str] | None = None) -> None:
+    def grant(self, effect: str) -> None:
+        targets = {'panel_confirm': self.fixture['review_note_path'], 'capture': self.fixture['capture_note_path']}
+        if effect not in targets:
+            return
+        if effect in self.grants or effect in self.acknowledgements:
+            raise NativeWebRefusal('duplicate_mutable_effect_grant')
+        path = targets[effect]
+        current = hashlib.sha256((self.vault / path).read_bytes()).hexdigest()
+        if current != self.versions[path]:
+            raise NativeWebRefusal('hook_fixture_prestate_drift')
+        self.grants[effect] = current
+
+    def begin_request(self, route: str, payload: dict[str, Any]) -> dict[str, Any]:
+        effect = 'capture' if route == '/api/companion/capture' else 'panel_confirm'
+        path = self.fixture['capture_note_path' if effect == 'capture' else 'review_note_path']
+        if (effect not in self.grants or effect in self.requests or effect in self.acknowledgements
+            or self.effects['deep-review'][effect] != 1):
+            raise NativeWebRefusal('normal_request_without_single_grant')
+        raw = (self.vault / path).read_bytes()
+        if hashlib.sha256(raw).hexdigest() != self.grants[effect] or self.versions[path] != self.grants[effect]:
+            raise NativeWebRefusal('normal_request_prestate_drift')
+        target = None
+        if effect == 'capture':
+            if set(payload) != {'text'} or not isinstance(payload['text'], str) or not payload['text'].strip():
+                raise NativeWebRefusal('normal_capture_request_unknown')
+        else:
+            if (set(payload) != {'proposal_id', 'artifact_id', 'action', 'idempotency_key'}
+                or payload['action'] != 'confirm' or payload['artifact_id'] != self.fixture['review_note_uuid']
+                or not isinstance(payload['idempotency_key'], str) or not payload['idempotency_key']):
+                raise NativeWebRefusal('normal_panel_request_target_mismatch')
+            target = self.panel_target(payload)
+            if (target is None or target['note_uuid'] != self.fixture['review_note_uuid']
+                or target['note_path'] != path):
+                raise NativeWebRefusal('normal_panel_request_target_mismatch')
+        admitted = {'effect': effect, 'route': route, 'payload': dict(payload), 'target': target,
+                    'path': path, 'pre_bytes': raw, 'pre_sha256': self.grants[effect], 'started': datetime.now(UTC)}
+        self.requests[effect] = admitted
+        return admitted
+
+    def _expected_panel(self, admitted: dict[str, Any], timestamp: str) -> set[str]:
+        from app.agents.panel.writeback import annotate_action_ids, remove_actions_from_markdown, stable_action_id, write_receipts
+        from app.agents.panel.parser import parse_panel
+        updated = remove_actions_from_markdown(annotate_action_ids(admitted['pre_bytes'].decode()),
+                                                {stable_action_id('Queue for review')})
+        parsed = parse_panel(updated)
+        preferred = parsed.spans[-1][1] + 1 if parsed.spans else None
+        end = datetime.fromisoformat(timestamp.replace('Z', '+00:00')).astimezone(UTC)
+        current = admitted['started'].replace(second=0, microsecond=0)
+        if end < admitted['started'] or end - admitted['started'] > timedelta(minutes=10):
+            raise NativeWebRefusal('normal_acknowledgement_time_unknown')
+        expected = set()
+        while current <= end:
+            text = write_receipts(updated, ['✅ Queue for review (' + current.strftime('%Y-%m-%d %H:%M') + ')'],
+                                  preferred_index=preferred)
+            expected.add(hashlib.sha256(text.encode()).hexdigest())
+            current += timedelta(minutes=1)
+        return expected
+
+    def observe(self, route: str, response: dict[str, Any], admitted: dict[str, Any] | None = None) -> None:
+        if (admitted is None or self.requests.get(admitted['effect']) is not admitted
+            or admitted['route'] != route or admitted['effect'] in self.acknowledgements):
+            raise NativeWebRefusal('normal_acknowledgement_without_prestate')
         if route == '/api/panel/confirm':
             from app.panel import confirmation
             receipt = response.get('receipt', {})
             if (response.get('status') not in {'executed', 'logged'} or not receipt.get('receipt_id')
                 or receipt.get('action_taken') != 'confirm' or receipt.get('outcome') not in {'success', 'logged'}):
                 return
+            panel_target = admitted['target']
             if panel_target is None or panel_target['proposal_id'] != response.get('proposal_id'):
                 raise NativeWebRefusal('normal_panel_receipt_target_unknown')
             if panel_target['note_uuid'] != self.fixture['review_note_uuid'] or panel_target['note_path'] != self.fixture['review_note_path']:
@@ -59,24 +124,36 @@ class AcknowledgedFixtureState:
                 raise NativeWebRefusal('normal_panel_acknowledgement_unknown')
             effect = 'panel_confirm'
             note_path = self.fixture['review_note_path']
+            expected = self._expected_panel(admitted, receipt['timestamp'])
         elif route == '/api/companion/capture':
             receipt = response.get('governed_write', {}).get('authority_receipt', {})
             if (response.get('outcome') != 'written' or response.get('operation') != 'append_note'
                 or response.get('adapter') != 'fs_vault' or not receipt.get('receipt_id')
-                or response.get('note_path') != self.fixture['capture_note_path']):
-                return
+                or response.get('note_path') != self.fixture['capture_note_path']
+                or receipt.get('resource') != self.fixture['capture_note_path']
+                or receipt.get('outcome') != 'applied' or receipt.get('operation') != 'append_note'):
+                raise NativeWebRefusal('normal_capture_receipt_target_mismatch')
             effect = 'capture'
             note_path = self.fixture['capture_note_path']
+            from app.api.routes.capture import _compose_entry
+            text = admitted['payload']['text'].strip('\n').strip()
+            prefix = admitted['pre_bytes']
+            append = (b'\n' if prefix and not prefix.endswith(b'\n') else b'')
+            append += _compose_entry(text, response['captured_at']).encode()
+            expected = {hashlib.sha256(prefix + append).hexdigest()}
         else:
             return
         if self.effects['deep-review'][effect] != 1 or effect in self.acknowledgements:
             raise NativeWebRefusal('normal_acknowledgement_without_budget')
         path = self.vault / note_path
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest not in expected:
+            raise NativeWebRefusal('normal_acknowledgement_poststate_drift')
         self.versions[note_path] = digest
         self.acknowledgements[effect] = {'target': note_path, 'source_uuid': self.fixture[
             'review_note_uuid' if effect == 'panel_confirm' else 'capture_note_uuid'],
-            'receipt': receipt, 'response_sha256': hash_json(response), 'post_sha256': digest}
+            'receipt': receipt, 'response_sha256': hash_json(response), 'pre_sha256': admitted['pre_sha256'],
+            'request_sha256': hash_json(admitted['payload']), 'post_sha256': digest}
 
     def panel_target(self, request: dict[str, Any]) -> dict[str, str] | None:
         from app.panel import confirmation
@@ -84,6 +161,10 @@ class AcknowledgedFixtureState:
         if proposal is None:
             return None
         note = proposal.intent_event.payload.note
+        actions = proposal.intent_event.payload.actions
+        if (len(actions) != 1 or not actions[0].checked or actions[0].label != 'Queue for review'
+            or actions[0].mapping is None or actions[0].mapping.id != 'queue_review'):
+            raise NativeWebRefusal('normal_panel_action_outside_fixed_fixture')
         if not isinstance(note.path, str) or not isinstance(note.uuid, str):
             raise NativeWebRefusal('normal_panel_receipt_target_unknown')
         path = Path(note.path)
@@ -94,21 +175,36 @@ class AcknowledgedFixtureState:
 
 class DailySourceFault:
     """Two fixed, guarded synthetic-fixture writes; no arbitrary target/input."""
-    def __init__(self, vault: Path, daily: dict[str, Any], effects: dict[str, dict[str, int]]) -> None:
+    def __init__(self, vault: Path, daily: dict[str, Any], effects: dict[str, dict[str, int]],
+                 deep: AcknowledgedFixtureState | None = None) -> None:
         self.vault, self.daily, self.effects = vault, daily, effects
         self.acknowledgements: dict[str, Any] = {}
         self.versions = dict(daily['source_files'])
+        self.deep = deep
+        self.deep_paths = set(deep.versions) if deep is not None else set()
+        if deep is not None and any(name not in self.versions or self.versions[name] != deep.versions[name] for name in self.deep_paths):
+            raise NativeWebRefusal('source_version_ownership_mismatch')
         path = Path(daily['moment_path'])
-        if path.is_absolute() or '..' in path.parts or path.as_posix() not in self.versions:
+        if (path.is_absolute() or '..' in path.parts or path.as_posix() not in self.versions
+            or path.as_posix() in self.deep_paths):
             raise NativeWebRefusal('daily_fixture_source_target_unknown')
         self.path = path.as_posix()
 
     def require_current(self) -> None:
-        for name, expected in self.versions.items():
+        for name, expected in self.expected_versions().items():
             path = self.vault / name
             if (Path(name).is_absolute() or '..' in Path(name).parts or path.is_symlink()
                 or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
                 raise NativeWebRefusal('daily_fixture_source_drift')
+
+    def expected_versions(self) -> dict[str, str]:
+        return {**self.versions, **(self.deep.versions if self.deep is not None else {})}
+
+    def require_restored(self) -> None:
+        self.require_current()
+        if any(self.versions[name] != expected for name, expected in self.daily['source_files'].items()
+               if name not in self.deep_paths):
+            raise NativeWebRefusal('daily_fixture_restore_incomplete')
 
     def write(self, restore: bool) -> dict[str, Any]:
         from dataclasses import asdict
@@ -179,19 +275,19 @@ def _api_app(manifest: dict[str, Any]) -> Any:
     _asset_readback(manifest)
     vault = Path('/scratch/vault')
     fixture = bootstrap_fixture(vault, manifest['resource_generation'])
-    fixture['daily'] = prepare_daily_sources(fixture)
+    fixture['daily'] = prepare_daily_sources(fixture, manifest['resource_tree'])
     from app.main import app
     baseline = fixture_readback(vault, fixture)
     baseline.pop('mutable_readback')
     effects = {pilot: dict.fromkeys(limits, 0) for pilot, limits in EFFECT_LIMITS.items()}
     acknowledged = AcknowledgedFixtureState(vault, fixture, effects)
-    daily_fault = DailySourceFault(vault, fixture['daily'], effects)
+    daily_fault = DailySourceFault(vault, fixture['daily'], effects, acknowledged)
 
     @app.middleware('http')
     async def observe_guarded_acknowledgement(request: Any, call_next: Any) -> Any:
-        target = None
-        if request.method == 'POST' and request.url.path == '/api/panel/confirm':
-            target = acknowledged.panel_target(await request.json())
+        admitted = None
+        if request.method == 'POST' and request.url.path in {'/api/panel/confirm', '/api/companion/capture'}:
+            admitted = acknowledged.begin_request(request.url.path, await request.json())
         response = await call_next(request)
         if request.method != 'POST' or request.url.path not in {'/api/panel/confirm', '/api/companion/capture'} or response.status_code != 200:
             return response
@@ -200,7 +296,7 @@ def _api_app(manifest: dict[str, Any]) -> Any:
         raw = b''.join(chunks)
         if len(raw) > 1024 * 1024:
             raise NativeWebRefusal('normal_acknowledgement_over_budget')
-        acknowledged.observe(request.url.path, json.loads(raw), target)
+        acknowledged.observe(request.url.path, json.loads(raw), admitted)
         # Forward the exact Product bytes/status/headers/background unchanged;
         # this observer neither creates a receipt nor fabricates an ack.
         return Response(raw, status_code=response.status_code, headers=dict(response.headers), background=response.background)
@@ -243,8 +339,10 @@ def _api_app(manifest: dict[str, Any]) -> Any:
             if effects[pilot][effect] >= EFFECT_LIMITS[pilot][effect]:
                 raise HTTPException(409, 'fixed browser effect budget exhausted')
             effects[pilot][effect] += 1
+            if pilot == 'deep-review':
+                acknowledged.grant(effect)
         return {'identity': observed, 'effects': effects, 'acknowledgements': acknowledged.acknowledgements,
-                'mutable_versions': acknowledged.versions, 'daily_source_versions': daily_fault.versions,
+                'mutable_versions': acknowledged.versions, 'daily_source_versions': daily_fault.expected_versions(),
                 'daily_source_acknowledgements': daily_fault.acknowledgements}
 
     @app.post('/__native_web_fixture/degrade-source', include_in_schema=False)
@@ -386,7 +484,8 @@ def qualify(manifest: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             raise NativeWebRefusal('actual_browser_launch_unavailable') from None
         start = _observations(manifest, api, ui)
-        context = {'schema': 'native-web-context.v1', 'native_identity': {
+        binding = report_binding(manifest, start)
+        context = {'schema': 'native-web-context.v1', 'report_binding': binding, 'native_identity': {
             key: manifest[key] for key in ('source_sha', 'image_digest', 'channel', 'operation_id',
                                           'resource_generation', 'resource_tree', 'app_image_id')},
             'api_url': API_URL, 'ui_url': UI_URL, 'caldav_url': CALDAV_URL,
@@ -397,15 +496,30 @@ def qualify(manifest: dict[str, Any]) -> dict[str, Any]:
         for pilot, variable in (('deep-review', 'COMPANION_UI_DEEP_REVIEW_MANIFEST'),
                                 ('daily-briefing', 'COMPANION_UI_DAILY_BRIEFING_MANIFEST')):
             path = Path('/scratch') / (pilot + '-manifest.json')
-            _private_json(path, {'schema': 'native-web-pilot-manifest.v1', 'pilot': pilot,
-                                 'native_context': str(CONTEXT_PATH), 'output_dir': str(REPORT_DIRECTORY / pilot)})
+            _private_json(path, pilot_manifest(pilot, binding))
             os.environ[variable] = str(path)
-        plugin = RequiredWebResults()
-        status = int(pytest.main(['-vv', *WRAPPERS, '-p', 'timeout', '--timeout=600', '--timeout-method=thread',
-                                 '-o', 'cache_dir=/tmp/native-web-cache'], plugins=[plugin]))
-        plugin.require_complete(status)
+        for pilot, wrapper in zip(EFFECT_LIMITS, WRAPPERS, strict=True):
+            if pilot == 'daily-briefing':
+                probe = _get_json(API_URL + '/__native_web_identity')
+                # Original all-vault inventory at Daily's actual start: only
+                # explicitly owned Deep targets advance to acknowledged bytes.
+                daily_sources = {**daily_sources, 'source_files': probe['daily_source_versions']}
+                context['daily_start_sources'] = daily_sources
+                # Atomic replacement changes no authority-bearing input; the
+                # normal API readback remains the source/version authority.
+                temporary = CONTEXT_PATH.with_suffix('.next')
+                _private_json(temporary, context)
+                os.replace(temporary, CONTEXT_PATH)
+            output = REPORT_DIRECTORY / pilot
+            plugin = RequiredWebResults(wrapper)
+            caller_junit = output / 'caller-junit.xml'
+            status = int(pytest.main(['-vv', wrapper, '-p', 'timeout', '--timeout=600', '--timeout-method=thread',
+                                     '--junitxml=' + str(caller_junit), '-o', 'cache_dir=/tmp/native-web-cache'], plugins=[plugin]))
+            plugin.require_complete(status)
+            if not (output / 'junit.xml').exists():
+                os.rename(caller_junit, output / 'junit.xml')
         reports = {pilot: json.loads(Path(path).read_text()) for pilot, path in context['reports'].items()}
-        require_reports(reports)
+        require_reports(reports, binding)
         end = _observations(manifest, api, ui)
         if start != end or calendar['report_count'] == 0 or Path('/scratch/calendar-unavailable').exists():
             raise NativeWebRefusal('service_assets_or_fixture_drift')

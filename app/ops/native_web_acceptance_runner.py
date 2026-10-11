@@ -347,6 +347,8 @@ class NativeWebRunner(PgAcceptanceRunner):
         for pilot, row in artifacts.items():
             if json.loads((Path(row['directory']) / 'report.json').read_text()) != result['pilots'][pilot]:
                 raise NativeWebRefusal('pilot_report_drift')
+            from app.ops.native_web_reports import require_artifacts
+            require_artifacts(pilot, Path(row['directory']))
         return {**result, 'artifacts': artifacts}
 
     def verify(self) -> dict[str, Any]:

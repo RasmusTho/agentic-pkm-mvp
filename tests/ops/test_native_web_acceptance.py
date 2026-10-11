@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import xml.etree.ElementTree as ET
+import zipfile
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -20,10 +22,55 @@ from tests.deploy.test_postmerge_pg_acceptance import DIGEST, IMAGE_ID, DockerBo
 from tests.api.conftest import mock_product_api_routes as mock_product_api_routes
 
 
-def _reports():
-    return {pilot: {'passed': True, 'scenarios': [{'id': key, 'status': 'passed'} for key in keys],
-                    'effects' if pilot == 'deep-review' else 'effects_consumed': dict.fromkeys(web.EFFECT_LIMITS[pilot], 0)}
-            for pilot, keys in web.SCENARIOS.items()}
+def _reports(binding=None):
+    binding = binding or {'source_sha': 'a' * 40, 'image_digest': DIGEST, 'channel': 'test', 'run_id': str(uuid4()),
+                          'resource_version': 'b' * 40, 'native_boundary_ref': 'c' * 64,
+                          'fixture_metadata_sha256': 'd' * 64, 'local_instance_id': 'local-test',
+                          'harness_hashes': {'live_deep_review.py': 'e' * 64, 'live_core_flow.py': 'f' * 64},
+                          'manifest_sha256': 'a' * 64, 'configuration_hashes': {'runtime': 'b' * 64, 'vault': 'a' * 64}}
+    deep = {'schema': 'companion_ui_deep_review_execution.v1', 'execution_kind': 'live', 'channel': 'test',
+            'expected_sha': binding['source_sha'], 'expected_image_digest': binding['image_digest'],
+            'run_id': binding['run_id'], 'test_resource_version': binding['resource_version'],
+            'qualification_ref': binding['native_boundary_ref'], 'fixture_metadata_sha256': binding['fixture_metadata_sha256'],
+            'local_instance_id': binding['local_instance_id'], 'harness_hashes': binding['harness_hashes'],
+            'manifest_sha256': binding['manifest_sha256'], 'required_scenarios': list(web.SCENARIOS['deep-review']),
+            'identity_verified': True, 'refused_requests': [], 'effects': dict(web.EFFECT_LIMITS['deep-review']),
+            'effect_budget': dict(web.EFFECT_LIMITS['deep-review']), 'artifacts': {'trace': 'trace.zip', 'junit': 'junit.xml'},
+            'passed': True, 'scenarios': []}
+    native = {key: True for key in ('gateway_upstream_verified', 'synthetic_fixture_verified', 'native_lock_verified', 'first_contact_navigation_safe')}
+    native.update(image_digest=binding['image_digest'], test_resource_version=binding['resource_version'], configuration_hashes=binding['configuration_hashes'])
+    ack = {'status': 'executed', 'outcome': 'success', 'receipt': {'receipt_id': 'test-receipt'}}
+    capture = {'outcome': 'written', 'trace_id': 'test-capture'}
+    proofs = {
+        'native_admission': {'native': native, 'served_sha': binding['source_sha']},
+        'a1_overlay_selection_continuity': {'cycles': 2, 'selection': {'start': 1}},
+        'a1_runtime_resume_position': {'prior_view': {'artifact_id': 'test', 'note_path': 'note.md', 'start': 1, 'end': 2, 'editor_scroll': 3, 'reading_scroll': 4},
+            'restored': {'start': 1, 'end': 2, 'editor_scroll': 3, 'reading_scroll': 4},
+            'runtime_leave_point': {'status': 'present', 'artifact_ref': {'artifact_uuid': 'test', 'logical_ref': 'note.md'}}},
+        'b4_all_overlay_focus_escape_return': {'overlays': {k: {'focus_trap': True, 'escape': True, 'focus_return': True} for k in ('cmd', 'capture', 'receipts', 'settings', 'memory', 'map')}},
+        'populated_vault_list_and_inspector': {'note_uuid': 'test', 'list_count': 1, 'inspector': True},
+        'populated_governed_apply_exact_receipt': {'confirmation': ack, 'exact_persisted_readback': True, 'receipt_history': True},
+        'populated_capture_confirmation_and_caret': {'capture': capture, 'source_readback': True, 'selection_restored': True},
+        'public_copy_populated_and_entry': {'surfaces': ['shell', 'entry', 'cmd', 'memory', 'receipts', 'settings', 'map'], 'public_copy_clean': True},
+        'public_copy_degraded': {'kind': 'browser_fault_injection', 'calm_unavailable': True},
+    }
+    for action, status in {'accept': 'accepted', 'reject': 'rejected', 'revise': 'revised', 'defer': 'deferred'}.items():
+        proofs['populated_memory_' + action] = {'decision': {'status': status}, 'actual_pending_ids': [], 'server_authority': {'observed': True}}
+    deep['scenarios'] = [{'id': name, 'status': 'passed', 'kind': 'browser_fault_injection' if name == 'public_copy_degraded' else 'actual',
+                          'proof': {'source': 'served_product', **proofs[name]}} for name in web.SCENARIOS['deep-review']]
+    deep['actual_proof'] = {'native': native}
+    deep['backend_acknowledgements'] = {'panel_confirm': ack, 'capture': capture}
+    daily = {'schema': 'daily_briefing_live_acceptance.v1', 'execution_kind': 'actual_native_browser', 'channel': 'test',
+             'expected_sha': binding['source_sha'], 'expected_digest': binding['image_digest'], 'run_id': binding['run_id'],
+             'resource_version': binding['resource_version'], 'native_boundary_ref': binding['native_boundary_ref'],
+             'fixture_restored': True, 'trace': 'trace.zip', 'junit': 'junit.xml', 'passed': True,
+             'effects_consumed': dict(web.EFFECT_LIMITS['daily-briefing']),
+             'scenarios': [{'id': key, 'status': 'passed', 'kind': 'browser_local_failure' if key == 'text_only_degradation' else 'actual'} for key in web.SCENARIOS['daily-briefing']],
+             'diagnostics': {'audio': {'playback_observed': True, 'frames': 12, 'sample_rate': 24000, 'audio_sha256': 'a' * 64,
+                 'source_text_sha256': 'b' * 64, 'cache_key': 'c' * 64,
+                 'segments': [{'language': 'sv-SE', 'provider': 'piper', 'voice_id': 'sv_SE-lisa-medium'},
+                              {'language': 'en-US', 'provider': 'kokoro', 'voice_id': 'bf_isabella'}]}}}
+    return {'deep-review': deep, 'daily-briefing': daily}
 
 
 class WebBoundary(DockerBoundary):
@@ -35,19 +82,51 @@ class WebBoundary(DockerBoundary):
             manifest = json.loads((self.runner.directory / 'source/native-web-manifest.json').read_text())
             row = self.containers[self.runner.name + '-tests']
             row['State'] = {'Running': False, 'ExitCode': 0}
-            self.pilots = _reports()
             api = {key: manifest[key] for key in ('source_sha', 'image_digest', 'app_image_id', 'resource_tree', 'resource_generation')}
             api.update(api_module='/app/app/main.py', api_pid=42, browser_audio_assets_hash=web.hash_json(manifest['prerequisites']),
                        fixture={'resource_generation': manifest['resource_generation'], 'note_sha256': 'a' * 64,
                                 'settings_hash': 'a' * 64, 'candidate_ids': list(fixture.CANDIDATE_IDS),
                                 'logical_vault_id': 'synthetic-vault', 'local_clone_id': 'synthetic-clone',
-                                'note_uuid': fixture.NOTE_UUID, 'note_path': fixture.NOTE_PATH})
+                                'note_uuid': fixture.NOTE_UUID, 'note_path': fixture.NOTE_PATH,
+                                'controlled_mutable_sources': [
+                                    {'note_uuid': uid, 'note_path': path, 'effect': effect, 'seed_sha256': 'a' * 64}
+                                    for uid, path, effect in ((fixture.REVIEW_NOTE_UUID, fixture.REVIEW_NOTE_PATH, 'panel_confirm'),
+                                        (fixture.CAPTURE_NOTE_UUID, fixture.CAPTURE_NOTE_PATH, 'capture'))]})
             observation = {'api': api, 'ui_pid': 43, 'configuration_hash': 'b' * 64,
                            'ui_program_sha256': manifest['files']['companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py']}
+            from app.ops.native_web_reports import report_binding
+            self.pilots = _reports(report_binding(manifest, observation))
+            if self.fault == 'report_missing':
+                for value in self.pilots.values():
+                    value.pop('schema')
+            if self.fault == 'report_foreign':
+                for value in self.pilots.values():
+                    value.update(schema='foreign', execution_kind='deterministic_fixture', channel='prod',
+                                 expected_sha='f' * 40, expected_digest='sha256:' + 'f' * 64, run_id='foreign')
+                    for scenario in value['scenarios']:
+                        scenario['proof'] = None
+            if self.fault == 'report_zero_effects':
+                for pilot, value in self.pilots.items():
+                    value['effects' if pilot == 'deep-review' else 'effects_consumed'] = dict.fromkeys(web.EFFECT_LIMITS[pilot], 0)
+            if self.fault == 'report_no_proof':
+                self.pilots['deep-review']['scenarios'][0]['proof'] = None
+            if self.fault == 'report_audio':
+                self.pilots['daily-briefing']['diagnostics']['audio']['playback_observed'] = False
+            if self.fault == 'report_native_config':
+                self.pilots['deep-review']['actual_proof']['native']['configuration_hashes'] = {'foreign': 'f' * 64}
             result = {**self.runner.identity, 'result': 'passed', 'wrappers': list(web.WRAPPERS),
                       'resource_tree': manifest['resource_tree'], 'app_image_id': IMAGE_ID,
                       'start': observation, 'end': observation,
                       'pilots': self.pilots, 'report_hash': web.hash_json(self.pilots)}
+            sources = observation['api']['fixture']['controlled_mutable_sources']
+            result['mutable_versions'] = {source['note_path']: 'c' * 64 for source in sources}
+            result['guarded_acknowledgements'] = {source['effect']: {
+                'target': source['note_path'], 'source_uuid': source['note_uuid'],
+                'pre_sha256': source['seed_sha256'], 'post_sha256': 'c' * 64,
+                'response_sha256': web.hash_json(self.pilots['deep-review']['backend_acknowledgements'][source['effect']]),
+            } for source in sources}
+            if self.fault == 'report_ack_foreign':
+                result['guarded_acknowledgements']['capture']['response_sha256'] = 'f' * 64
             if self.fault == 'fixture_drift':
                 result['end'] = {'service': 'drift'}
             if self.fault == 'missing_scenario':
@@ -57,7 +136,25 @@ class WebBoundary(DockerBoundary):
         if arguments[0] == 'cp':
             self.commands.append((arguments, timeout))
             pilot, filename = arguments[1].split('/')[-2:]
-            Path(arguments[-1]).write_text(json.dumps(self.pilots[pilot]) if filename == 'report.json' else 'actual transport artifact')
+            target = Path(arguments[-1])
+            if self.fault == 'artifacts_text' and filename != 'report.json':
+                target.write_text('actual transport artifact')
+                return b''
+            if filename == 'report.json':
+                target.write_text(json.dumps(self.pilots[pilot]))
+            elif filename == 'junit.xml':
+                suite = ET.Element('testsuite')
+                for name in web.SCENARIOS[pilot]:
+                    ET.SubElement(suite, 'testcase', name=name)
+                if self.fault == 'junit_foreign':
+                    suite[0].set('name', 'unrelated_test')
+                ET.ElementTree(suite).write(target, encoding='utf-8')
+            else:
+                events = [{'type': 'context-options'}]
+                for i in range(len(web.SCENARIOS[pilot])):
+                    events.extend([{'type': 'before', 'callId': str(i), 'params': {'url': web.UI_URL}}, {'type': 'after', 'callId': str(i)}])
+                with zipfile.ZipFile(target, 'w') as trace:
+                    trace.writestr('test.trace', '\n'.join(json.dumps(x) for x in events))
             return b''
         if arguments[0] == 'rm' and self.fault == 'cleanup':
             raise pg.PgAcceptanceError()
@@ -82,6 +179,11 @@ def _runner(tmp_path, monkeypatch, *, wrappers=True):
         path = root / selector.split('::')[0]
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('# exact fixed wrapper\n')
+        subprocess.run(['git', '-C', str(root), 'add', str(path)], check=True, capture_output=True)
+    for name in ('live_deep_review.py', 'live_core_flow.py'):
+        path = root / 'tests/companion_ui' / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('# fixed original report producer resource fixture')
         subprocess.run(['git', '-C', str(root), 'add', str(path)], check=True, capture_output=True)
     ui = root / 'companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py'
     ui.parent.mkdir(parents=True)
@@ -189,6 +291,9 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
         monkeypatch.setattr(module, name, record)
     generation = str(uuid4())
     produced = fixture.bootstrap_fixture(tmp_path / 'vault', generation)
+    from tests.ops import native_daily_source_reference
+    monkeypatch.setattr(fixture, '_daily_helper', lambda: native_daily_source_reference)
+    produced['daily'] = fixture.prepare_daily_sources(produced, 'a' * 40)
     assert set(calls) == {'initialize_vault', 'select_vault', 'write_note_relative', 'persist_commitment',
                           'materialize_moment', 'append_decision_receipt', 'render_episode_note', 'discover_candidates_from_companions'}
     assert produced['resource_generation'] == generation
@@ -202,12 +307,21 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     from starlette.requests import Request
     effects = {pilot: dict.fromkeys(limits, 0) for pilot, limits in web.EFFECT_LIMITS.items()}
     observer = AcknowledgedFixtureState(tmp_path / 'vault', produced, effects)
+    daily_monitor = DailySourceFault(tmp_path / 'vault', produced['daily'], effects, observer)
     effects['deep-review']['capture'] = 1
+    observer.grant('capture')
+    admitted = observer.begin_request('/api/companion/capture', {'text': 'Synthetic guarded capture.'})
     monkeypatch.setattr(capture, 'INDEX_OUTBOX_PATH', tmp_path / 'index-outbox.jsonl')
     request = Request({'type': 'http', 'method': 'POST', 'path': '/api/companion/capture', 'headers': []})
     acknowledgement = capture.capture_to_inbox(capture.CaptureRequest(text='Synthetic guarded capture.'), request)
-    observer.observe('/api/companion/capture', acknowledgement.model_dump(mode='json'))
+    observer.observe('/api/companion/capture', acknowledgement.model_dump(mode='json'), admitted)
     observer.require_current(fixture.fixture_readback(tmp_path / 'vault', produced)['mutable_readback'])
+    daily_monitor.require_current()
+    effects['daily-briefing']['degrade_source'] = 1
+    daily_monitor.write(False)
+    effects['daily-briefing']['restore_source'] = 1
+    daily_monitor.write(True)
+    daily_monitor.require_restored()
     capture_path = tmp_path / 'vault' / produced['capture_note_path']
     capture_path.write_text(capture_path.read_text() + '\nUnacknowledged fixture change.\n')
     with pytest.raises(web.NativeWebRefusal, match='unacknowledged_fixture_state_change'):
@@ -217,13 +331,13 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     write_ops.write_note_relative('moment.md', original, vault_root=tmp_path / 'vault')
     daily = {'source_files': {'moment.md': hashlib.sha256(source.read_bytes()).hexdigest()},
              'moment_path': 'moment.md', 'moment_full_text': original}
-    fault = DailySourceFault(tmp_path / 'vault', daily, effects)
+    fault = DailySourceFault(tmp_path / 'vault', daily, {pilot: dict.fromkeys(limits, 0) for pilot, limits in web.EFFECT_LIMITS.items()})
     with pytest.raises(web.NativeWebRefusal, match='without_budget'):
         fault.write(False)
-    effects['daily-briefing']['degrade_source'] = 1
+    fault.effects['daily-briefing']['degrade_source'] = 1
     assert fault.write(False)['receipt']['outcome'] == 'written'
     fault.require_current()
-    effects['daily-briefing']['restore_source'] = 1
+    fault.effects['daily-briefing']['restore_source'] = 1
     assert fault.write(True)['post_sha256'] == daily['source_files']['moment.md']
     assert source.read_text() == original
     with pytest.raises(web.NativeWebRefusal, match='fixture_not_fresh'):
@@ -236,7 +350,9 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     assert companion.get_memory_review_queue().pending_count == 0
 
 
-@pytest.mark.parametrize('fault', ['sha', 'digest', 'fixture_drift', 'missing_scenario', 'missing_wrapper', 'tts_missing'])
+@pytest.mark.parametrize('fault', ['sha', 'digest', 'fixture_drift', 'missing_scenario', 'missing_wrapper', 'tts_missing',
+                                  'report_missing', 'report_foreign', 'report_zero_effects', 'report_no_proof',
+                                  'report_audio', 'report_native_config', 'report_ack_foreign', 'artifacts_text', 'junit_foreign'])
 def test_required_identity_and_integrations_cannot_false_green(tmp_path, monkeypatch, fault):
     runner, boundary = _runner(tmp_path, monkeypatch, wrappers=fault != 'missing_wrapper')
     boundary.fault = fault

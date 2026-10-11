@@ -595,8 +595,13 @@ owners, not evidence that a pilot passed.
 The fixed API child uses the canonical producers and normal guards before startup, including its
 own in-process memory queue. Its transient identity probe and two fixed guarded synthetic source
 faults belong only to that disposable qualification. They are not a Product controller or a new
-channel authority. Successful browser writes are observed from the actual normal acknowledgement,
-original receipt, exact source target and measured resulting bytes; unrelated drift is refused.
+channel authority. A fixed hook grants one exact declared source version; the normal request must
+still match its pre-write bytes, and the actual acknowledgement/original receipt must match the
+exact permitted post-write bytes. The retained original pilot acknowledgement is bound to that
+observed response. The Daily helper creates actual current-day sources before the native monthly
+decision append, using its original relative fixture marker interface. Its all-vault inventory
+retains only the two declared Deep-owned notes at their acknowledged versions; immutable sources
+remain hash-bound and all Daily-owned sources must be restored. Unrelated drift is refused.
 The finite wrappers retain their original reports/trace/JUnit under private
 `native-web-results/` beside the existing journal, with separate web evidence. Cleanup re-reads
 exact container IDs and matching operation/generation labels and the external owner marker before
