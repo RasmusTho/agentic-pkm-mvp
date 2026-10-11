@@ -34,7 +34,7 @@ in Mimer/KAP through `candidate_writeback`; coordinate safe runs; and prove the 
 - Human knowledge impact: creates draft source candidates only; no promotion
 - Memory impact: none
 - Retrieval/context impact: later indexing may consume accepted candidate artifacts; no ranking change
-- Sync/deployment impact: adds a managed mac-mini service and scheduled acquisition worker
+- Sync/deployment impact: defines a managed source-service contract and scheduled acquisition worker; physical TEST service placement and private connectivity require current qualification
 - External boundary impact: Karakeep REST reads; endpoint and credential values remain operator-owned
 - New or changed contract: Heimdal Karakeep published-evidence → Mimer KAP refinement handoff
 - Owner-doc impact: follow-up after acceptance

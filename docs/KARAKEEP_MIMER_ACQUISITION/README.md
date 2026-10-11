@@ -1,7 +1,7 @@
 State: ACTIVE specification directory (parent #3367; children #3372–#3377). D1 is settled. The
-specification is merged; child pickup follows live GitHub dependency/label truth. No Karakeep
-service or ingestion support is claimed as shipped until the implementation and acceptance slices
-land.
+specification is merged; child pickup follows live GitHub dependency/label truth. The service
+manifest and ingestion implementation are delivered, but no physical Karakeep installation or
+end-to-end acquisition is claimed as accepted until a current authorized TEST receipt proves it.
 Doc role: Capability specification (feature-breakdown lane)
 Authority: Product/Runtime target-state specification subordinate first to accepted `docs/adr/ADR-0049-heimdall-ingestion-organ-and-v1-uiux-enactment.md`, then `docs/HEIMDAL/FABLE_COMPANION.md`, `docs/KNOWLEDGE_ACQUISITION/REFINEMENT_PIPELINE_CONTRACT.md`, and `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md`.
 Owner: Architecture / Product
@@ -10,8 +10,12 @@ Owner: Architecture / Product
 
 ## Capability boundary
 
-Run the owner-selected, self-hosted Karakeep service on the mac mini and incrementally acquire its
-saved links, notes, and highlights across the accepted Heimdal→Mimer boundary. **Heimdal owns the
+Use the owner-selected, self-hosted Karakeep source and incrementally acquire its saved links, notes,
+and highlights across the Heimdal→Mimer boundary. `test` is the logical acceptance channel; its
+physical service host, private route to Heimdal, and runtime configuration remain unqualified until
+a current authorized operations receipt establishes them. The earlier Mac-mini service placement is
+stale: current environment guidance does not qualify that machine as a Product Runtime TEST host.
+The checked-in Compose manifest is not evidence that Karakeep is installed or running. **Heimdal owns the
 entire external front:** REST watch/fetch, source identity and provenance, attribution/entity
 mentions, durable cursoring, and the published-evidence handoff. **Mimer starts only at that durable
 handoff:** KAP refines the published evidence and writes review-required reading candidates through
@@ -46,7 +50,7 @@ or Builder System authority changes.
 | Order | Task | Outcome |
 |---|---|---|
 | 1 | [DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md](DEFINE_READING_SOURCE_AND_CANDIDATE_CONTRACT.md) | Define Heimdal Karakeep acquisition/published-evidence → Mimer KAP refinement contract. |
-| 2 | [DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md](DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md) | Add a reproducible, health-checked mac-mini service deployment. |
+| 2 | [DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md](DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md) | Define a reproducible, health-checked service manifest and runbook; physical placement requires current TEST qualification. |
 | 3 | [FETCH_KARAKEEP_READING_EVIDENCE.md](FETCH_KARAKEEP_READING_EVIDENCE.md) | Implement Heimdal REST fetch, identity/provenance/attribution, producer cursor, and published handoff. |
 | 4 | [NORMALIZE_AND_WRITE_READING_CANDIDATES.md](NORMALIZE_AND_WRITE_READING_CANDIDATES.md) | Consume published evidence in Mimer/KAP and write deterministic review-required candidates. |
 | 5 | [SCHEDULE_INCREMENTAL_KARAKEEP_ACQUISITION.md](SCHEDULE_INCREMENTAL_KARAKEEP_ACQUISITION.md) | Coordinate independent Heimdal producer and Mimer consumer runs without crossing ownership. |
