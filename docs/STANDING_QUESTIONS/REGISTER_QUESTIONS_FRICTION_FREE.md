@@ -38,6 +38,11 @@ typing or pasting anything beyond the question itself.
    - Checking the box executes the governed write into the SQ-01 store (a new `open` Question note),
      through the same confirm→execute Panel loop every other checkbox-gated action uses — no new
      approval mechanism invented here.
+   - The capture endpoint commits the inbox append and its mandatory `AuthorityReceipt` event before
+     running this optional proposal pass. If the Product model catalog raises a known `CatalogError`
+     during classification, the already-written capture is acknowledged with
+     `registration_state: degraded`; the proposal is not retried or fabricated. Append or authority
+     event persistence failures still withhold the success acknowledgement.
 2. **Path (b) — explicit registration.** A companion UI action lets the human state a question
    directly (typed or dictated) and registers it immediately as `open` — this is unambiguous explicit
    human intent, so it writes through the SQ-01 guarded seam directly, no proposal/confirm step (the
