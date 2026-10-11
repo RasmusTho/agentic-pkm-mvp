@@ -192,9 +192,38 @@ def _browser():
 
 
 @pytest.mark.parametrize("history_count", [4096, 352_539])
+@pytest.mark.parametrize("consumer", ["browser", "promotion", "recall"])
 def test_vault_browser_production_callsite_bounds_receipt_reads_without_truncation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, history_count: int,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, history_count: int, consumer: str,
 ) -> None:
+    root, outbox, connections, records, rows, paths = _history(tmp_path, monkeypatch, count=history_count)
+    before = _snapshot(paths)
+    if consumer == "browser":
+        _browser()
+    elif consumer == "promotion":
+        memories = read_promoted_memories(vault_root=root, outbox_path=outbox, active_vault_id="vault-a")
+        assert [memory.promotion_id for memory in memories] == ["memory-old", "memory-latest"]
+    elif consumer == "recall":
+        recalled = retrieve_relevant_promoted(
+            "contracts implementation", k=2, vault_root=root, outbox_path=outbox,
+            active_scope_id="scope:work/project-alpha", active_vault_id="vault-a",
+        )
+        assert [candidate.receipt_id for candidate in recalled] == ["memory-old", "memory-latest"]
+        assert all(candidate.memory_scope_id == candidate.applied_scope_id == "scope:work/project-alpha" for candidate in recalled)
+    else:
+        raise AssertionError(f"unexpected read consumer: {consumer}")
+    assert records.peak <= 4 and rows.peak <= 8
+    assert _snapshot(paths) == before
+    assert all(connection.closed and connection.reader.closed for connection in connections)
+    assert all(connection.reader.returned == history_count for connection in connections)
+    if history_count == 352_539:
+        assert outbox.stat().st_size >= 198_000_000
+
+
+def test_combined_read_consumers_preserve_projection_and_source_integrity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    history_count = 4096
     root, outbox, connections, records, rows, paths = _history(tmp_path, monkeypatch, count=history_count)
     before = _snapshot(paths)
     _browser()
@@ -210,8 +239,6 @@ def test_vault_browser_production_callsite_bounds_receipt_reads_without_truncati
     assert _snapshot(paths) == before
     assert all(connection.closed and connection.reader.closed for connection in connections)
     assert all(connection.reader.returned == history_count for connection in connections)
-    if history_count == 352_539:
-        assert outbox.stat().st_size >= 198_000_000
 
 
 def test_repeated_concurrent_readers_preserve_projection_and_source_integrity(

@@ -11,6 +11,7 @@ import selectors
 import subprocess
 import sys
 import time
+from threading import Thread
 from typing import Any, Sequence
 import urllib.request
 
@@ -249,7 +250,7 @@ def validate_provider_response(raw: bytes, questions: dict[str, Any]) -> dict[st
     return {"model": MODEL, "answers": answers, "usage": usage}
 
 
-def _stop_secret_helper(process: subprocess.Popen[bytes]) -> None:
+def _stop_child(process: subprocess.Popen[bytes]) -> None:
     try:
         if process.poll() is not None:
             return
@@ -321,7 +322,7 @@ def _read_api_key() -> str:
     finally:
         if process is not None:
             if not completed:
-                _stop_secret_helper(process)
+                _stop_child(process)
             if process.stdout is not None:
                 try:
                     process.stdout.close()
@@ -342,7 +343,7 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def send_once(request_body: bytes, api_key: str) -> bytes:
+def _http_request_once(request_body: bytes, api_key: str) -> bytes:
     request = urllib.request.Request(
         API_ENDPOINT,
         data=request_body,
@@ -367,6 +368,101 @@ def send_once(request_body: bytes, api_key: str) -> bytes:
     if len(raw) > MAX_RESPONSE_BYTES:
         raise ProviderFailure()
     return raw
+
+
+_MAX_TRANSPORT_INPUT_BYTES = 4 + MAX_REQUEST_BYTES + MAX_SECRET_BYTES
+_TRANSPORT_WORKER_CODE = (
+    "import runpy,sys; "
+    "f=runpy.run_path(sys.argv[1],run_name='_jev_transport')['_transport_worker']; "
+    "sys.exit(f(int(sys.argv[2])))"
+)
+
+
+def _transport_worker(lifeline_fd: int) -> int:
+    """Private worker: stop if the caller exits, even without Python cleanup."""
+    def stop_on_caller_exit() -> None:
+        try:
+            os.read(lifeline_fd, 1)
+        finally:
+            # EOF means the caller's only write handle is gone. Stop blocking
+            # native DNS/SSL too; no Python exception needs to reach that code.
+            os._exit(1)
+
+    Thread(target=stop_on_caller_exit, name="jev-caller-lifeline", daemon=True).start()
+    try:
+        wire = sys.stdin.buffer.read(_MAX_TRANSPORT_INPUT_BYTES + 1)
+        if len(wire) > _MAX_TRANSPORT_INPUT_BYTES or len(wire) < 5:
+            raise ProviderFailure()
+        body_size = int.from_bytes(wire[:4], "big")
+        if not 1 <= body_size <= MAX_REQUEST_BYTES or len(wire) <= 4 + body_size:
+            raise ProviderFailure()
+        key_bytes = wire[4 + body_size:]
+        if len(key_bytes) > MAX_SECRET_BYTES:
+            raise ProviderFailure()
+        raw = _http_request_once(wire[4:4 + body_size], key_bytes.decode("utf-8"))
+        sys.stdout.buffer.write(raw)
+        return 0
+    except Exception:
+        # No provider errors, input material or credentials leave this worker.
+        return 1
+
+
+def send_once(request_body: bytes, api_key: str) -> bytes:
+    """Bound DNS, connection, headers and body with one monotonic deadline.
+
+    A fresh isolated process makes even blocking native DNS/SSL calls stoppable.
+    The public CLI stays argument-free; the private bootstrap contains no key.
+    """
+    process: subprocess.Popen[bytes] | None = None
+    lifeline_read: int | None = None
+    lifeline_write: int | None = None
+    completed = False
+    deadline = time.monotonic() + REQUEST_TIMEOUT_SECONDS
+    try:
+        key_bytes = api_key.encode("utf-8")
+        if not 1 <= len(request_body) <= MAX_REQUEST_BYTES or not 1 <= len(key_bytes) <= MAX_SECRET_BYTES:
+            raise ProviderFailure()
+        wire = len(request_body).to_bytes(4, "big") + request_body + key_bytes
+        lifeline_read, lifeline_write = os.pipe()
+        process = subprocess.Popen(
+            [sys.executable, "-I", "-c", _TRANSPORT_WORKER_CODE, str(Path(__file__).resolve()), str(lifeline_read)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            env={"HOME": str(Path.home()), "PATH": os.defpath, "LANG": "C"},
+            close_fds=True,
+            pass_fds=(lifeline_read,),
+        )
+        os.close(lifeline_read)
+        lifeline_read = None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ProviderFailure()
+        raw, _ = process.communicate(input=wire, timeout=remaining)
+        if process.returncode != 0 or len(raw) > MAX_RESPONSE_BYTES:
+            raise ProviderFailure()
+        if time.monotonic() > deadline:
+            raise ProviderFailure()
+        completed = True
+        return raw
+    except Exception:
+        raise ProviderFailure() from None
+    finally:
+        for fd in (lifeline_read, lifeline_write):
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        if process is not None:
+            if not completed:
+                _stop_child(process)
+            for stream in (process.stdin, process.stdout):
+                if stream is not None:
+                    try:
+                        stream.close()
+                    except OSError:
+                        pass
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -188,6 +188,7 @@ from app.instance.vault_registry import AppLocalSettingsStore,VaultRegistryStore
 registry=os.environ.get('INSTANCE_VAULT_REGISTRY_PATH','').strip()
 ownership=os.environ.get('INSTANCE_OWNERSHIP_ROOT','').strip()
 settings=None
+snapshot=None
 if registry:
  assert ownership and pathlib.Path(registry).is_file(),'fixture_restore_registry_missing'
  registry_store=VaultRegistryStore(pathlib.Path(registry))
@@ -198,7 +199,6 @@ if registry:
  snapshot=registry_store._read_current_locked(recover=False)
  export=registry_store.rollback_export_path
  assert export.is_file() and not export.is_symlink() and export.read_bytes()==registry_store._rollback_export_payload(snapshot),'fixture_restore_export_missing_or_stale'
- assert snapshot.settings_rebind is None,'fixture_restore_rebind_unsupported'
  if snapshot.authority==REGISTRY_AUTHORITY_ACTIVE:
   settings=_app_local_from_registry(snapshot)
 if settings is None:
@@ -207,6 +207,15 @@ if settings is None:
  settings=AppLocalSettingsStore(path=app_path).load()
 known=settings.known_vaults.get(settings.last_active_vault_ref)
 assert known is not None and pathlib.Path(known.path).resolve(strict=True)==root,'fixture_restore_target_mismatch'
+if snapshot is not None and snapshot.settings_rebind is not None:
+ from app.instance.settings_rebind import SettingsRebindRecord
+ record=SettingsRebindRecord.from_payload(snapshot.settings_rebind)
+ registration=snapshot.registrations.get(record.candidate_binding_id)
+ assert record.phase=='no_lifecycle' and record.applied_revision==record.desired_revision and record.reload_revision==record.desired_revision,'fixture_restore_rebind_unsettled'
+ assert registration is not None and pathlib.Path(registration.path).resolve(strict=True)==root and registration.vault_id in (None,p['vault_id']),'fixture_restore_rebind_target_mismatch'
+ assert snapshot.last_active_vault_ref==registration.ref==known.ref,'fixture_restore_rebind_selection_uncommitted'
+ ingress=registry_store.path.parent/'settings-rebind-ingress.lock'
+ assert ingress.is_file() and not ingress.is_symlink() and stat.S_IMODE(ingress.stat().st_mode)==0o600 and ingress.stat().st_uid==os.geteuid(),'fixture_restore_rebind_lock_missing'
 from app.vault.manager import REQUIRED_SETTINGS_FILES,SETTINGS_DIR_NAME
 from app.vault.markdown_settings import MarkdownSettingsStore
 for name in REQUIRED_SETTINGS_FILES:
