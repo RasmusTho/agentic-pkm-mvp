@@ -46,7 +46,7 @@ The owner requires every input source identified and part of the architecture. T
 | 10 | [LOCATION_STREAM_FUTURE_POSTURE](LOCATION_STREAM_FUTURE_POSTURE.md) | ERE-10 | spec-only posture; no issue until the Heimdal v2 trigger fires |
 | 11 | [REGISTRY_DRIVEN_ADAPTER_DISPATCH](REGISTRY_DRIVEN_ADAPTER_DISPATCH.md) | ERE-11 | implementation receipt #3523 / PR #3727; 4, 9 (owner-optional Product/Runtime refactor) |
 | 12 | [RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE](RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE.md) | ERE-12 | implementation active in #3524 / PR #3731; 11 (Product/Runtime SIP refactor) |
-| 13 | [QUALIFY_REAL_DAY_TEST_CHANNEL](QUALIFY_REAL_DAY_TEST_CHANNEL.md) | ERE-13 | ERE-09 + #5969 native qualification operation and finite admission/effect/evidence path; profile contract/tests only, real-day receipt remains parent acceptance |
+| 13 | [QUALIFY_REAL_DAY_TEST_CHANNEL](QUALIFY_REAL_DAY_TEST_CHANNEL.md) | ERE-13 | ERE-09 + #5969 native qualification operation and finite admission/effect/evidence path; exact source-binding and local-day reader filters, guarded effects, synthetic controls only; real-day receipt remains parent acceptance |
 
 Flat order: 1‖2‖3 → 4 → 5 → 6‖7‖8 → 9. ERE-10 is a declared posture, not a build step. ERE-13 is the bounded qualification-profile follow-on to ERE-09 and #5969; the actual-day receipt remains parent acceptance, not a child PR test. ERE-11 → 12 is an owner-optional Product/Runtime refactor lane, off the critical build path: it generalizes the ingestion seam so the ERE-01 "registry entry + adapter, not an engine change" claim becomes literally true and the Input-source inventory's 1:1 registry-match property becomes fail-loud enforced. It changes no segmentation behavior.
 
