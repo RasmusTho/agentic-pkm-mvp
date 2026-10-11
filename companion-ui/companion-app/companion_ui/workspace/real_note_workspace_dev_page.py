@@ -32,6 +32,7 @@ This module does NOT:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Optional
 from uuid import uuid4
@@ -275,39 +276,42 @@ class RealNoteWorkspaceDevPage:
         workspace_update_guard = guards.get("workspace_update") or {}
         vault_browser_error: str | None = None
         if isinstance(self._http, WorkspaceHttpClient):
-            try:
-                browser_params: dict[str, Any] = {"q": "", "limit": 250}
-                if intent.vault_browser_cursor:
-                    browser_params["cursor"] = intent.vault_browser_cursor
-                if intent.vault_browser_limit:
-                    browser_params["limit"] = intent.vault_browser_limit
-                browser_params.update(intent.active_filters)
-                vault_browser = self._http.get(
-                    "/api/companion/vault-browser",
-                    params=browser_params,
+            browser_params: dict[str, Any] = {"q": "", "limit": 250}
+            if intent.vault_browser_cursor:
+                browser_params["cursor"] = intent.vault_browser_cursor
+            if intent.vault_browser_limit:
+                browser_params["limit"] = intent.vault_browser_limit
+            browser_params.update(intent.active_filters)
+            # Both enrichments are independent bounded reads. Retain their
+            # separate error behavior without serializing two network deadlines.
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                browser_read = executor.submit(
+                    self._http.get, "/api/companion/vault-browser", params=browser_params
                 )
-            except WorkspaceClientError as exc:
-                vault_browser = {}
-                vault_browser_error = str(exc)
+                link_read = executor.submit(
+                    self._http.get, "/api/companion/vault-link-index", params={}
+                )
+                try:
+                    vault_browser = browser_read.result()
+                except WorkspaceClientError as exc:
+                    vault_browser = {}
+                    vault_browser_error = str(exc)
+                try:
+                    link_index_payload = link_read.result()
+                    vault_link_index = [
+                        str(path) for path in (link_index_payload.get("note_paths") or []) if path
+                    ]
+                except Exception:
+                    vault_link_index = []
         else:
             vault_browser = {}
+            vault_link_index = []
         # #1431 — fetch the complete vault link index so wikilinks resolve
         # end-to-end. This is a best-effort, non-critical enrichment: any failure
         # (client error, missing endpoint on an older runtime, malformed payload)
         # must degrade to an empty index — links stay diagnostic (prior
         # behaviour) and the note still renders. The UI never reads the vault
         # filesystem; it only consumes the runtime API payload.
-        vault_link_index: list[str] = []
-        if isinstance(self._http, WorkspaceHttpClient):
-            try:
-                link_index_payload = self._http.get(
-                    "/api/companion/vault-link-index", params={}
-                )
-                vault_link_index = [
-                    str(path) for path in (link_index_payload.get("note_paths") or []) if path
-                ]
-            except Exception:
-                vault_link_index = []
         raw_find_payload = raw.get("find")
         runtime_find_payload = runtime.get("find")
         find_payload_available = isinstance(raw_find_payload, dict) or isinstance(
