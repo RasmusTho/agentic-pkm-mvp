@@ -5811,10 +5811,19 @@ def _cache_activation_harness(tmp_path, monkeypatch, *, channel='test', automati
             rows = state['containers'] if argv[1] == 'container' else state['images']
             return '\n'.join(json.dumps(rows[item]) for item in ids)
         if argv[1:3] == ['image', 'rm']:
-            assert len(argv) == 4 and '--force' not in argv
+            assert len(argv) in {4, 5} and '--force' not in argv
+            if len(argv) == 5:
+                assert argv[3] == '--no-prune'
             if state['fault'] == 'deletion':
                 raise PostgresDeployError()
-            del state['images'][argv[3]]
+            image_id = argv[-1]
+            del state['images'][image_id]
+            # Docker's default removal also deletes untagged parent images;
+            # --no-prune is required to confine this effect to the selected ID.
+            if '--no-prune' not in argv:
+                for parent_id in state.get('parents', {}).get(image_id, ()):
+                    assert not state['images'][parent_id]['tags']
+                    del state['images'][parent_id]
             return ''
         raise AssertionError('unexpected Docker cache command')
 
@@ -5835,7 +5844,7 @@ def test_automatic_cache_cleanup_protects_live_and_recovery_images(tmp_path, mon
     assert {path.name: path.read_bytes() for path in (tmp_path / 'config/deploy').glob('*.env')} == pins
     assert {f'sha256:{number:064x}' for number in range(1, 13)} <= set(state['images'])
     assert [call for call in calls if call[:3] == ('docker', 'image', 'rm')] == [
-        ('docker', 'image', 'rm', f'sha256:{number:064x}') for number in (13, 14)]
+        ('docker', 'image', 'rm', '--no-prune', f'sha256:{number:064x}') for number in (13, 14)]
     assert calls[-1][0] == 'bash' and state['deploy_calls'] == 1
     assert not warnings and not list((tmp_path / 'secret-handles').iterdir())
 
@@ -5917,3 +5926,18 @@ def test_cache_cleanup_caps_exact_nonforce_removal_batch(tmp_path, monkeypatch):
     assert before - set(state['images']) == expected
     assert len([call for call in calls if call[:3] == ('docker', 'image', 'rm')]) == 8
     assert calls[-1][0] == 'bash' and not warnings
+
+
+def test_cache_cleanup_preserves_unproved_untagged_parents(tmp_path, monkeypatch):
+    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
+    selected = f'sha256:{13:064x}'
+    parent = f'sha256:{12:064x}'
+    # This parent has no tag or registry digest and cannot be reclaimed.
+    state['parents'] = {selected: (parent,)}
+    before = set(state['images'])
+    with effects.channel_lock():
+        effects.activate(plan)
+    assert parent in state['images']
+    assert before - set(state['images']) == {f'sha256:{number:064x}' for number in (13, 14)}
+    assert ('docker', 'image', 'rm', '--no-prune', selected) in calls
+    assert state['deploy_calls'] == 1 and calls[-1][0] == 'bash' and not warnings

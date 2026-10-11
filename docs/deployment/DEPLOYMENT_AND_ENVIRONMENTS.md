@@ -494,7 +494,8 @@ reference and exact admitted target digest remains protected, including differen
 same source SHA. Reclamation requires an official registry digest in `RepoDigests`; a local tag
 alone does not prove that an image is rebuildable. Images with another-repository aliases or
 unproved provenance are retained. Each
-exact, non-force removal rechecks the protected snapshot and image metadata. Manual and PROD paths
+exact, non-force `--no-prune` removal rechecks the protected snapshot and image metadata,
+retaining untagged parents that were not separately admitted for reclamation. Manual and PROD paths
 perform no cache maintenance, and this path never prunes volumes or touches application, database
 or vault data. Unavailable or malformed inventory, changed snapshots or failed removal stop further
 reclamation with a fixed warning, then continue the unchanged pull and deployment gates. This is

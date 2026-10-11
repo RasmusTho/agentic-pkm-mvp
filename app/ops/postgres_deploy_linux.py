@@ -1013,7 +1013,7 @@ class LinuxEffects:
                     reason = 'image_changed'
                     raise PostgresDeployError()
                 reason = 'removal_failed'
-                _command(['docker', 'image', 'rm', image_id], timeout=30)
+                _command(['docker', 'image', 'rm', '--no-prune', image_id], timeout=30)
         except Exception:
             # Optional recovery never replaces the ordinary pull/deploy gate.
             # Only a fixed phase reaches the journal, never Docker output.
