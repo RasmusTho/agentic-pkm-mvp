@@ -197,9 +197,7 @@ def _assert_browser_state(
             expect(surface.get_by_test_id("workspace-vault-browser-state-empty")).to_have_count(0)
         expect(surface.get_by_test_id("workspace-vault-browser-read-only")).to_have_text("read-only")
         expected_identity = "FixtureVault/test" if identity_available else "unresolved/unknown"
-        identity = surface.get_by_test_id("workspace-vault-browser-active-identity")
-        expect(identity).to_have_text(expected_identity)
-        expect(identity).to_be_visible()
+        expect(surface.get_by_test_id("workspace-vault-browser-active-identity")).to_have_text(expected_identity)
         links = surface.get_by_test_id("workspace-vault-browser-note-link")
         expect(links).to_have_count(int(list_state in {"populated", "partial"}))
         if list_state in {"populated", "partial"}:

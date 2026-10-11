@@ -69,8 +69,10 @@ all twenty exact browser cases and all sixteen desktop/narrow observation record
 skips or missing evidence fail. The four current known-defect probes may only xfail with their
 specific registry reference. When the UI repair removes those markers, passed probes are accepted.
 Eight desktop cases supply sixteen independent listing/identity Choice questions. Jev sees only
-synthetic expected facts, visible status prose, identity badge and row counts; no note paths,
-titles, bodies, DOM or screenshots. Narrow-pane behavior remains covered by exact browser tests.
+synthetic expected facts, visible status prose, any visible identity badge and row counts; no note paths,
+titles, bodies, DOM or screenshots. The pane deliberately hides metadata badges; they are absent evidence, and healthy identity
+judgments check for false degradation warnings. Unavailable identity requires explicit visible
+disclosure. Narrow-pane behavior remains covered by exact browser tests.
 
 Provider input/output uses the existing bounded `jev-direct` command and validator. The installed
 helper must match the checked-out script, including the total deadline repair. Keys remain inside

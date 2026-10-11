@@ -103,7 +103,7 @@ def build_judgment_request(observations: list[dict[str, Any]]) -> dict[str, Any]
     cases = [{key: item[key] for key in ("case_id", "expected", "observed")} for item in observations]
     rubric = {
         "listing": "Healthy populated/empty lists must show the expected visible row count without claiming list failure. An identity warning alone does not imply list failure. Partial lists must explicitly warn that the list is incomplete and preserve healthy rows. Error lists must explicitly warn of listing/connection failure, not claim an empty healthy list.",
-        "identity": "Available identity must have the FixtureVault/test badge and no false unavailability warning. Unavailable identity requires explicit visible warning prose that identity is unavailable and browsing context unresolved. The unresolved/unknown badge alone is insufficient disclosure. Listing warnings alone do not disclose identity failure.",
+        "identity": "When identity is available, visible prose must not falsely claim it is unavailable or context unresolved. If an identity badge is visible, it must agree with FixtureVault/test; a badge is not required for a healthy state. Hidden metadata supplies no evidence. Unavailable identity requires explicit visible warning prose that identity is unavailable and browsing context unresolved. The unresolved/unknown badge alone is insufficient disclosure. Listing warnings alone do not disclose identity failure.",
     }
     questions = {}
     for index, item in enumerate(cases):
