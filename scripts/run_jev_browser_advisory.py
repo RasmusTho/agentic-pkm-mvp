@@ -32,12 +32,11 @@ ORDINARY_NAMES = {
     for viewport in ("desktop", "narrow-pane")
     for method, cases in (
         ("test_vault_browser_failure_state_matrix", ("populated-bound", "populated-unbound", "empty-bound", "empty-unbound", "partial-bound", "error-bound")),
+        ("test_combined_degradation_discloses_identity_unavailable", ("partial", "error")),
         ("test_read_only_note_link_navigates_with_exact_path", ("populated", "partial")),
     )
     for case in cases
 }
-KNOWN_NAMES = {f"test_known_combined_identity_notice_omission[{viewport}-{case}]"
-               for viewport in ("desktop", "narrow-pane") for case in ("partial", "error")}
 
 
 def _fsync_directory(directory: Path) -> None:
@@ -77,24 +76,12 @@ def _persist(path: Path, report: dict[str, Any], *, exclusive: bool = False) -> 
 def _browser_inventory(junit: Path) -> dict[str, int]:
     cases = ET.parse(junit).getroot().findall(".//testcase")
     names = [case.get("name") for case in cases]
-    if len(names) != 20 or set(names) != ORDINARY_NAMES | KNOWN_NAMES:
+    if len(names) != len(ORDINARY_NAMES) or set(names) != ORDINARY_NAMES:
         raise InvalidObservation()
-    passed = known = 0
     for case in cases:
-        if case.get("classname") != "tests.companion_ui.test_vault_browser_state_runtime" or case.find("failure") is not None or case.find("error") is not None:
+        if case.get("classname") != "tests.companion_ui.test_vault_browser_state_runtime" or any(case.find(tag) is not None for tag in ("failure", "error", "skipped")):
             raise InvalidObservation()
-        if len(case.findall("skipped")) > 1:
-            raise InvalidObservation()
-        skipped = case.find("skipped")
-        if skipped is not None:
-            if case.get("name") not in KNOWN_NAMES or skipped.get("type") != "pytest.xfail" or "KD-87DEE784B97A" not in skipped.get("message", ""):
-                raise InvalidObservation()
-            known += 1
-        else:
-            passed += 1
-    if passed + known != 20 or known > 4:
-        raise InvalidObservation()
-    return {"passed": passed, "known_defect_xfails": known}
+    return {"passed": len(cases), "known_defect_xfails": 0}
 
 
 def _run_browser(directory: Path, source_sha: str) -> int:

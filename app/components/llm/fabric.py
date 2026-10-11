@@ -1539,7 +1539,9 @@ def describe_default_route_policies() -> dict[str, dict[str, object]]:
                     str(route.get("model") or ""),
                     factory=factory,
                 )
-                route["reasoning_effort"] = route.get("reasoning_effort") or "low"
+                # Preserve omission: the Product facade validates a described
+                # effort as an explicit choice, including for nonreasoning models.
+                route["reasoning_effort"] = route.get("reasoning_effort") or ""
     return policies
 
 

@@ -925,9 +925,9 @@ def test_inquiry_run_uses_operational_subscription_fallback(
     )
     assert terminal["details"]["effective_targets"] == [
         {
-            "adapter_id": "openai-gpt-5.6-sol-subscription",
+            "adapter_id": "openai-gpt-6.1-sol-subscription",
             "provider": "openai",
-            "model": "gpt-5.6-sol",
+            "model": "gpt-6.1-sol",
         }
     ]
     assert set(call[0] for call in calls) == {"openai"}

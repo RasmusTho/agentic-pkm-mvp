@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import copy
 import os
 from threading import Barrier
 from types import SimpleNamespace
@@ -777,6 +778,61 @@ def test_nonreasoning_openai_route_omits_default_effort_from_portal_requests() -
             unsupported,
             allow_catalog_promotion=False,
         )
+
+
+def _described_health_policy(monkeypatch, provider, model, effort):
+    route = {
+        "provider": provider, "model": model, "mode": "chat", "degraded": False,
+        "transport_id": None, "reasoning_effort": effort,
+    }
+    policies = {"decide": {
+        "intent": {"json_schema_required": True},
+        "effective": copy.deepcopy(route), "preferred": copy.deepcopy(route),
+    }}
+    original_router = fabric.LLMRouter
+
+    class _PolicyRouter(original_router):
+        def describe_routes(self, _intents):
+            return copy.deepcopy(policies)
+
+    monkeypatch.setenv("LLM_PROVIDER_ENFORCE", "0")
+    monkeypatch.setattr(fabric, "LLMRouter", _PolicyRouter)
+    return fabric.describe_default_route_policies()["decide"]
+
+
+@pytest.mark.parametrize("provider,model", [
+    ("ollama", "llama3.1:8b"), ("openai", "gpt-4.1"),
+])
+def test_nonreasoning_route_policy_does_not_invent_effort(monkeypatch, provider, model):
+    from app.cli.health import _probe_selected_route
+
+    policy = _described_health_policy(monkeypatch, provider, model, None)
+    assert policy["effective"]["reasoning_effort"] == ""
+    assert policy["preferred"]["reasoning_effort"] == ""
+    result = _probe_selected_route("decide", policy["effective"], policy["intent"])
+    assert result["status"] == "available"
+    assert result["transport_observation"]["status"] == "available"
+
+
+@pytest.mark.parametrize("model,effort,wire_effort", [
+    ("gpt-5.4", None, "low"), ("gpt-5.4", "low", "low"),
+    ("llama3.1:8b", "low", "refused"),
+])
+def test_route_policy_preserves_declared_and_explicit_effort(monkeypatch, model, effort, wire_effort):
+    provider = "ollama" if model == "llama3.1:8b" else "openai"
+    policy = _described_health_policy(monkeypatch, provider, model, effort)
+    assert policy["effective"]["reasoning_effort"] == (effort or "")
+    assert policy["preferred"]["reasoning_effort"] == (effort or "")
+    route = LLMRoute(provider=provider, model=model, mode="chat", reason="health-preflight",
+                     transport_id=policy["effective"]["transport_id"], reasoning_effort=effort)
+    if wire_effort == "refused":
+        with pytest.raises(LLMRouteError, match="does not declare the requested reasoning effort"):
+            _resolve_product_access_route(LLMTaskIntent(task_kind="health"), route,
+                                          allow_catalog_promotion=False)
+    else:
+        access = _resolve_product_access_route(LLMTaskIntent(task_kind="health"), route,
+                                              allow_catalog_promotion=False)
+        assert _product_preflight_request(access, response_format=None).reasoning_effort == wire_effort
 
 
 def test_product_trusted_and_user_messages_remain_separate_on_remote_route() -> None:
