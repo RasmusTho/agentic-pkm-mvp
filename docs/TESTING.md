@@ -70,7 +70,7 @@ PLAYWRIGHT_BROWSERS_PATH=/installed/playwright/browsers \
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 \
 python3 scripts/run_with_host_lease.py --resource pytest-not-pg \
   --execution-id channel:sha:run-id --wait-seconds 30 -- \
-  python3 -m pytest -q -m 'not pg' tests/companion_ui/test_companion_ui_live_core_flow.py
+  python3 -m pytest -p pytest_asyncio.plugin -p anyio.pytest_plugin -q -m 'not pg' tests/companion_ui/test_companion_ui_live_core_flow.py
 ```
 
 The mode-0600 manifest supplies `channel` (`dev`/`test`), `ui_url`, `api_url`, `expected_sha`,

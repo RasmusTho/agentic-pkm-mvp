@@ -904,8 +904,11 @@ the existing VM channel lock, the worker writes an owner-only persistent journal
 `materialized`, optional `authenticating`, `activating`, then `committed` or `aborted`. Atomic file
 and parent-directory fsyncs make each stage durable; a separate value-free request binding prevents
 same-ID retries from changing revision or consumer scope. Reconnect joins the same worker. After
-worker loss, missing terminal/quiescence proof stays pending; a released kernel lock is not success
-and does not remove the channel admission directory.
+activation, the worker observes the unchanged quiescence predicate at low frequency for a bounded
+startup-convergence window before starting automatic verification or writing `committed`; an
+unavailable or persistently false proof remains pending. After worker loss, missing
+terminal/quiescence proof stays pending; a released kernel lock is not success and does not remove
+the channel admission directory.
 
 For initialized data, the candidate must authenticate to the active PostgreSQL role with real
 password authentication. The probe and Compose share one effective credential-free connection snapshot:
