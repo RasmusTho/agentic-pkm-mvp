@@ -130,6 +130,8 @@ class DockerBoundary:
                 raise profile.PgAcceptanceError()
             if self.fault == 'timeout':
                 raise profile.PgAcceptanceError()
+            if self.fault == 'incomplete':
+                return b'457 passing cases; no complete envelope'
             if self.fault == 'interrupted':
                 raise KeyboardInterrupt()
             manifest = json.loads((self.runner.directory / 'source/pg-acceptance-manifest.json').read_text())
@@ -155,7 +157,7 @@ def _runner(tmp_path, monkeypatch, *, channel='dev', operation_id=None):
     return runner, boundary, sha, operation_id
 
 
-@pytest.mark.parametrize('fault', [None, 'timeout', 'dependency', 'provision', 'profile', 'resource', 'image'])
+@pytest.mark.parametrize('fault', [None, 'timeout', 'incomplete', 'dependency', 'provision', 'profile', 'resource', 'image'])
 def test_native_automatic_operation_requires_profile_before_commit(tmp_path, monkeypatch, fault):
     runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
     boundary.fault = fault
@@ -504,3 +506,115 @@ def test_cleanup_durably_removes_directory_before_retiring_owner(tmp_path, monke
     runner.cleanup()
     assert events == [('parent_fsync', False, True), ('marker_unlink', False, True),
                       ('parent_fsync', False, False)]
+
+
+def _deadline_native_worker(tmp_path, monkeypatch, *, cleanup_refuses=False):
+    root, sha = _repository(tmp_path)
+    operation_id = str(uuid4())
+    journal = DeployJournal(tmp_path / 'native-journal', 'dev')
+    effects = linux.LinuxEffects(SimpleNamespace(root=root, channel='dev', journal=journal))
+    effects.lock_fd = 123
+    effects.operation_id = operation_id
+    plan = DeployPlan('dev', sha, ('db', 'api'), ('postgres-db', 'postgres-api'),
+                      image_digest=DIGEST, automatic=True)
+    signals = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', signals.append)
+    # This is the production factory, including its fixed native signal wiring.
+    runner = effects._pg_runner(operation_id, plan)
+    boundary = DockerBoundary(runner)
+    actual_run = subprocess.run
+    expired = []
+
+    def run(argv, **options):
+        if argv[:3] == ['docker', 'start', '--attach']:
+            assert options['timeout'] == profile.PROFILE_DEADLINE
+            expired.append(True)
+            raise subprocess.TimeoutExpired(argv, options['timeout'],
+                                            output=b'private-output-canary', stderr=b'private-error-canary')
+        return actual_run(argv, **options)
+
+    def docker(*arguments, timeout=60):
+        if arguments[:2] == ('start', '--attach'):
+            return runner_module._command(['docker', *arguments], timeout=timeout)
+        return boundary.command(*arguments, timeout=timeout)
+
+    actual_cleanup = runner.cleanup
+    def cleanup():
+        if cleanup_refuses and expired:
+            raise profile.PgAcceptanceError()
+        actual_cleanup()
+
+    monkeypatch.setattr(runner_module.subprocess, 'run', run)
+    monkeypatch.setattr(runner, '_docker', docker)
+    monkeypatch.setattr(runner, 'cleanup', cleanup)
+    monkeypatch.setattr(effects, '_pg_runner', lambda identifier, _plan: runner if identifier == operation_id else None)
+    monkeypatch.setattr(effects, 'preflight', lambda _plan: 'fixture-password')
+    monkeypatch.setattr(effects, 'initialized', lambda: False)
+    monkeypatch.setattr(effects, 'materialize', lambda _password: None)
+    monkeypatch.setattr(effects, 'quiescent', lambda: True)
+    monkeypatch.setattr(effects, 'activate', lambda _plan: None)
+    journal.bind_request(operation_id, plan, False, create=True)
+    return DeployWorker(journal, effects), journal, plan, operation_id, runner, boundary, signals, actual_cleanup
+
+
+def test_native_profile_budget_is_bound_and_finite(tmp_path, monkeypatch):
+    runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
+    result = runner.verify()
+    attach = [(args, timeout) for args, timeout in boundary.commands if args[:2] == ('start', '--attach')]
+    assert len(attach) == 1 and attach[0][1] == profile.PROFILE_DEADLINE == 3600
+    profile.require_pass(result, sha, DIGEST, 'dev', operation_id)
+    assert profile.TEST_TIMEOUT == 120 and '--timeout=120' in profile.pytest_arguments()
+    assert not boundary.containers and not runner.directory.exists()
+
+
+def test_native_attach_timeout_is_typed_and_cleanup_runs(tmp_path, monkeypatch, capsys):
+    worker, journal, plan, operation_id, runner, boundary, signals, _cleanup = _deadline_native_worker(tmp_path, monkeypatch)
+    with pytest.raises(profile.PgAcceptanceDeadlineExceeded) as refused:
+        runner_module._command(['docker', 'start', '--attach', 'private-argv-canary'], timeout=profile.PROFILE_DEADLINE)
+    assert refused.value.__cause__ is None and 'canary' not in str(refused.value)
+    receipt = worker.run(operation_id, plan)
+    assert receipt.terminal_result == 'failed' and receipt.pg_acceptance is None
+    assert not boundary.containers and not runner.directory.exists() and not runner.marker.exists()
+    assert signals == [b'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+                       b'MESSAGE=native PG acceptance failure: reason=profile_deadline_exceeded\n']
+    assert 'canary' not in repr(signals) + repr(capsys.readouterr())
+    candidate, calls = driver.Candidate(plan.revision, DIGEST, 1, 1, 1), []
+    def failed(channel, _candidate):
+        calls.append(channel)
+        return {'stage': 'failed', 'terminal_result': 'failed', 'operation_id': operation_id}
+    assert driver.deliver(candidate, deploy=failed, current_main=lambda: plan.revision, emit=lambda _row: None) == 78
+    assert calls == ['dev'] and journal.read().terminal_result == 'failed'
+
+
+def test_deadline_signal_survives_cleanup_refusal(tmp_path, monkeypatch):
+    worker, journal, plan, operation_id, runner, boundary, signals, cleanup = _deadline_native_worker(
+        tmp_path, monkeypatch, cleanup_refuses=True)
+    with pytest.raises(PostgresDeployError):
+        worker.run(operation_id, plan)
+    receipt = journal.read()
+    assert receipt.stage == 'verifying' and receipt.terminal_result is None and receipt.pg_acceptance is None
+    assert signals and b'reason=profile_deadline_exceeded' in signals[0]
+    assert boundary.containers and runner.marker.exists()
+    cleanup()  # Fixture teardown only; this does not manufacture terminal evidence.
+
+
+def test_profile_budget_identity_rejects_old_receipts(tmp_path, monkeypatch):
+    old_hash = '64a82a73f52410361fd0605b6e9a2053d27e05ecc2ead25556d0e7109aa5f503'
+    runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
+    observed_manifests = []
+    original = boundary.command
+    def docker(*arguments, timeout=60):
+        if arguments[:2] == ('start', '--attach'):
+            observed_manifests.append(json.loads((runner.directory / 'source/pg-acceptance-manifest.json').read_text()))
+        return original(*arguments, timeout=timeout)
+    monkeypatch.setattr(runner, '_docker', docker)
+    result = runner.verify()
+    plan = DeployPlan('dev', sha, ('db', 'api'), ('postgres-db', 'postgres-api'), image_digest=DIGEST, automatic=True)
+    expected = {'version': profile.PROFILE_VERSION, 'selection_hash': profile.SELECTION_HASH}
+    assert plan.payload()['verification_profile'] == expected
+    assert observed_manifests[0]['selection_hash'] == result['selection_hash'] == profile.SELECTION_HASH != old_hash
+    with pytest.raises(profile.PgAcceptanceError):
+        profile.require_pass({**result, 'selection_hash': old_hash}, sha, DIGEST, 'dev', operation_id)
+    receipt = DeployReceipt(operation_id, 'dev', 'deploy', 'committed', 'committed', pg_acceptance=result)
+    receipt.validate()
+    receipt.require_profile(plan)

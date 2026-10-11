@@ -474,7 +474,13 @@ retains the existing host-controller and VM channel locks, supervised worker, re
 health/readiness/version, fleet and browser UI gates. Before `committed`, the native worker enters
 `verifying` and runs `app.ops.pg_acceptance` with the same selection used by the retained GitHub
 `Index PG contracts` job. Required selector absence, skip/xfail, assertion failure, unavailable
-dependency, per-test 120-second timeout or the 30-minute profile deadline prevents acceptance.
+dependency, per-test 120-second timeout or the finite 60-minute native aggregate deadline prevents acceptance.
+The aggregate budget is owned by the shared profile and included in its selection hash; there is
+no per-host override. A trusted Docker attach timeout emits only the fixed
+`profile_deadline_exceeded` native journal signal before owned cleanup, without raw command,
+output or credentials. Incomplete output still refuses acceptance. The observed parent run with
+457 passes and no envelope establishes incomplete execution; aggregate expiry was its leading
+inference, not a captured historical exception. Actual equivalent DEV/TEST acceptance remains on #5675.
 Observed selected/pass counts are evidence, not a permanent test-count gate.
 
 `app.ops.pg_acceptance_runner` creates an operation/channel-owned pgvector container with a
