@@ -223,6 +223,10 @@ citation site. `_shared/READ_SCOPE.md` is the canonical protocol, including the 
   - retain the separately governed Model Inquiry contract and launch exactly once through its
     sanctioned host-local boundary; this is not the active issue-worker carrier path and its
     provider/auth work is governed separately by #5203
+- `secret-routing`
+  - single entry point for routing Jev calls, Mac Keychain secrets, Linux BWS, Heimdal credentials,
+    and planned infrastructure credentials to their existing owner contracts and current
+    qualification state; it never stores or defines secret policy
 - `jev-direct`
   - run one bounded, typed development-time Jev call through the local helper; the provider key
     stays inside that helper, and the tool does not change Codex/Claude models or runtime routes
@@ -346,6 +350,7 @@ or design-provenance material and do not authorize invocation.
 | `rollback-promotion` | unaffected | Executes governed release recovery. |
 | `start-model-inquiry` | unaffected | Retains its separate role-specific model-access contract; it is not the active issue-worker carrier. |
 | `jev-direct` | unaffected | Runs one bounded typed judgment without changing coding-agent model or execution routing. |
+| `secret-routing` | unaffected | Routes credential handling to its owner contract; it does not select worker capability. |
 | `temporal-doc-governance` | principle-only | Uses TCD normally; temporal authority routing is unchanged. |
 | `verification-and-closure` | principle-only | Verification capability may vary under TCD, but routing cannot weaken its gates. |
 | `verify-promotion` | unaffected | Verifies release-channel state independently of execution routing. |
