@@ -1,6 +1,25 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def isolate_non_pg_memory_backend(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Keep a prior case's memory corpus and embedding identity out of API requests."""
+
+    if request.node.get_closest_marker("pg") is not None:
+        yield
+        return
+
+    from app.stores import reset_memory_store_backend
+
+    reset_memory_store_backend()
+    try:
+        yield
+    finally:
+        reset_memory_store_backend()
 
 
 @pytest.fixture

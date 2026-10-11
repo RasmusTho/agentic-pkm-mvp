@@ -509,6 +509,7 @@ Example commands:
 ## Hermetic test environment
 - The test suite clears VAULT_ROOT and PANEL_ACTION_WIRING_PATH by default to prevent accidentally reading a user’s real vault (often iCloud-backed) which can block and hang tests.
 - Tests that require vault wiring overrides must set VAULT_ROOT explicitly (use monkeypatch + temp vault containing System/Config/panel-action-wiring.yaml) or set PANEL_ACTION_WIRING_PATH explicitly.
+- Non-PG API cases reset the in-process memory object, vector and relation stores before and after each test. A prior case's corpus or embedding identity must not change an ask response or health result. This memory-only isolation never truncates database tables or selects a model route; intentional identity mismatches within a case still fail before embedding dispatch. `tests/ci/test_api_memory_store_isolation.py` runs the affected requests after a synthetic prior occupant to guard this boundary.
 
 ## Focused commands
 - Single test:
