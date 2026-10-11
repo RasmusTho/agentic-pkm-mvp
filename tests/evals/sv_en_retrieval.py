@@ -199,7 +199,8 @@ class IdentityRun:
 
     Entering the context sets the embedding identity and fusion strategy for the process, embeds the
     corpus once under that identity, and loads it into the live store. Leaving restores the prior
-    environment and clears the cached tuning, so runs cannot leak into one another.
+    environment and clears the cached tuning, including when entry fails, so runs cannot leak
+    into one another.
     """
 
     def __init__(self, identity_key: str, fusion: str) -> None:
@@ -220,69 +221,75 @@ class IdentityRun:
             os.environ[key] = value
 
     def __enter__(self) -> "IdentityRun":
-        self._set_env(
-            EMBED_PRIMARY_PROVIDER="ollama",
-            EMBED_MODEL=str(self.spec["model"]),
-            OLLAMA_EMBED_MODEL=str(self.spec["model"]),
-            EMBED_DIM=str(self.spec["dim"]),
-            RETRIEVAL_FUSION=self.fusion,
-            # Pin the same host the availability probe resolved, so a run can never silently fall
-            # back to zero vectors (see ollama_base_url).
-            OLLAMA_HOST=ollama_base_url(),
-            # The corpus is the whole eligible set; the prefilter must admit it so the ranking is
-            # what gets measured.
-            ASK_DOMAIN_SCOPE=EVAL_SCOPE,
-        )
         from app.retrieval.hybrid import get_store
 
-        # The retrieval store is process-global and tests/conftest.py does not reset it, so a run
-        # must hand it back exactly as it found it.
+        # Snapshot before any mutation; Python does not call __exit__ on failed entry.
         self._prior_docs = get_store().all()
-        from app.components.retrieval import embed_docs
-        from app.retrieval.tuning import get_retrieval_tuning, reset_retrieval_tuning_cache
-
-        reset_retrieval_tuning_cache()
-        tuning = get_retrieval_tuning()
-        if tuning.fusion != self.fusion:
-            raise RuntimeError(
-                f"fusion pin failed: asked for {self.fusion!r}, runtime resolved {tuning.fusion!r}"
+        try:
+            self._set_env(
+                EMBED_PRIMARY_PROVIDER="ollama",
+                EMBED_MODEL=str(self.spec["model"]),
+                OLLAMA_EMBED_MODEL=str(self.spec["model"]),
+                EMBED_DIM=str(self.spec["dim"]),
+                RETRIEVAL_FUSION=self.fusion,
+                # Pin the same host the availability probe resolved, so a run can never silently fall
+                # back to zero vectors (see ollama_base_url).
+                OLLAMA_HOST=ollama_base_url(),
+                # The corpus is the whole eligible set; the prefilter must admit it so the ranking is
+                # what gets measured.
+                ASK_DOMAIN_SCOPE=EVAL_SCOPE,
             )
+            from app.components.retrieval import embed_docs
+            from app.retrieval.tuning import get_retrieval_tuning, reset_retrieval_tuning_cache
 
-        self.docs = load_corpus()
-        vectors, identity = embed_docs([doc.text for doc in self.docs])
-        if identity.provider != "ollama" or identity.model != str(self.spec["model"]):
-            raise RuntimeError(f"identity pin failed: resolved {identity}")
-        if len(vectors[0]) != int(self.spec["dim"]):
-            raise RuntimeError(
-                f"dim mismatch for {self.spec['model']}: expected {self.spec['dim']}, got {len(vectors[0])}"
-            )
-        self.resolved_identity = identity
-        _load_corpus_into_store(self.docs, vectors)
-        return self
+            reset_retrieval_tuning_cache()
+            tuning = get_retrieval_tuning()
+            if tuning.fusion != self.fusion:
+                raise RuntimeError(
+                    f"fusion pin failed: asked for {self.fusion!r}, runtime resolved {tuning.fusion!r}"
+                )
+
+            self.docs = load_corpus()
+            vectors, identity = embed_docs([doc.text for doc in self.docs])
+            if identity.provider != "ollama" or identity.model != str(self.spec["model"]):
+                raise RuntimeError(f"identity pin failed: resolved {identity}")
+            if len(vectors[0]) != int(self.spec["dim"]):
+                raise RuntimeError(
+                    f"dim mismatch for {self.spec['model']}: expected {self.spec['dim']}, got {len(vectors[0])}"
+                )
+            self.resolved_identity = identity
+            _load_corpus_into_store(self.docs, vectors)
+            return self
+
+        except BaseException:
+            self.__exit__()
+            raise
 
     def __exit__(self, *exc: object) -> None:
         from app.retrieval.hybrid import get_store
         from app.retrieval.tuning import reset_retrieval_tuning_cache
 
-        get_store().set_documents(
-            [
-                {
-                    "doc_id": doc.doc_id,
-                    "text": doc.text,
-                    "language": doc.language,
-                    "source_ref": doc.source_ref,
-                    "payload": dict(doc.payload or {}),
-                    "embedding": doc.embedding,
-                }
-                for doc in self._prior_docs
-            ]
-        )
-        for key, value in self._prior.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-        reset_retrieval_tuning_cache()
+        try:
+            get_store().set_documents(
+                [
+                    {
+                        "doc_id": doc.doc_id,
+                        "text": doc.text,
+                        "language": doc.language,
+                        "source_ref": doc.source_ref,
+                        "payload": dict(doc.payload or {}),
+                        "embedding": doc.embedding,
+                    }
+                    for doc in self._prior_docs
+                ]
+            )
+        finally:
+            for key, value in self._prior.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+            reset_retrieval_tuning_cache()
 
     def ranked(self, query: str, k: int) -> list[str]:
         """Ranked doc ids from the production scoped entrypoint."""
