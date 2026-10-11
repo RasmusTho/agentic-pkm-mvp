@@ -152,7 +152,13 @@ ambiguous. Review remains responsible for those cases.
   - `python -m app.cli settings-validate --json`
 
 When the governing Issue requires the full non-PG suite, retain the exact selection
-command `pytest -q -m "not pg"` and run it through the host-global lease. The root
+and run it through the host-global lease:
+
+```bash
+python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> -- pytest -q -m "not pg"
+```
+
+The root
 `conftest.py` provisions and validates a unique `PYTEST_DEBUG_TEMPROOT` namespace
 before collection for every invocation. An inherited debug root supplies the parent
 directory; each process still receives a fresh child namespace. Setup failure aborts

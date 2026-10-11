@@ -208,8 +208,12 @@ for each invocation before collection, so concurrent processes do not share pyte
 numbered-directory root. Provisioning failure aborts the run before test execution.
 `tests/governance/test_pytest_temp_root_isolation.py` exercises the root hook in
 overlapping subprocesses and injects creation and validation failures before collection.
-The full-suite selection remains `pytest -q -m "not pg"`; host-global execution
-continues to use the lease owned by the development validation baseline.
+The full-suite selection remains unchanged. When the governing Issue requires it,
+run it under the lease owned by the development validation baseline:
+
+```bash
+python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id <issue-or-pr>:<sha> -- pytest -q -m "not pg"
+```
 
 For environment triage, `scripts/validation_environment_readiness.py` is an opt-in, value-free
 diagnostic that reports interpreter import compatibility, selected helper visibility, and whether
