@@ -53,7 +53,11 @@ Execution:
 
 The advisory Jev pilot wraps the existing offline Vault Browser listing/identity matrix:
 
+Install the Chromium version matching the selected Python Playwright package before the first
+local run (CI already performs this setup). Preserve other installed browser versions:
+
 ```bash
+PLAYWRIGHT_SKIP_BROWSER_GC=1 python3 -m playwright install chromium
 python3 scripts/run_jev_browser_advisory.py --output-dir .codex-tmp/jev-browser-advisory
 # Existing local Mac helper only, after installing the merged direct-tool script:
 python3 scripts/run_jev_browser_advisory.py --output-dir /Users/rasmus/agentic-pkm-mvp/.codex-tmp/jev-browser-advisory-runtime --live-jev
