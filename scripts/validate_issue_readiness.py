@@ -136,6 +136,45 @@ HUMAN_ONLY_PATTERNS = tuple(
     for pattern in (r"\bhuman only\b", r"\bmanual only\b", r"\boperator gated\b")
 )
 
+# This is a bounded lint for unsupported acceptance holds, not a judge of
+# human taste or authority. Facts stay in existing Issue sections/receipts.
+_MANUAL_ACCEPTANCE_HOLD = re.compile(
+    r"\b(?:requires?|needs|awaits?|waiting for|blocked (?:by|on|until))\s+"
+    r"(?:an?\s+)?(?:live(?:/operator)?|operator|human|manual)[ -](?:acceptance|UAT)\b"
+    r"|^\s*(?:[-*]\s*)?(?:Verify:\s*)?(?:manual (?:one-day )?operator UAT|"
+    r"operator UAT|live/operator acceptance|manual QA)\s*[.!]?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _has_human_acceptance_exception(body: str) -> bool:
+    """Require the four exception facts without adding a section or schema."""
+    if not re.search(r"\bhuman acceptance exception\b", body, re.IGNORECASE):
+        return False
+    facts = (
+        r"\b(?:observable (?:choice|observation)|observation|choice):[ \t]*(.+)",
+        r"\b(?:why it cannot be automated|cannot (?:be automated|automate) because):[ \t]*(.+)",
+        r"\bowner:[ \t]*(.+)",
+        r"\bunblocks_when:[ \t]*(.+)",
+    )
+    return all(
+        any(_non_placeholder_lines(match.group(1)) for match in re.finditer(pattern, body, re.I))
+        for pattern in facts
+    )
+
+
+def _has_acceptance_hold(body: str, labels: Sequence[str]) -> bool:
+    sections = extract_sections(body)
+    acceptance_text = "\n".join(
+        sections.get(_normalize_heading(name), "")
+        for name in ("Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation")
+    )
+    positive_hold = any(
+        not re.search(r"\b(?:not|never|without)\s*$", acceptance_text[:match.start()], re.I)
+        for match in _MANUAL_ACCEPTANCE_HOLD.finditer(acceptance_text)
+    )
+    return "action:human-acceptance" in labels or positive_hold
+
 
 @dataclass(frozen=True)
 class AcceptanceCriteriaReport:
@@ -499,17 +538,24 @@ def classify_issue_body(
     source_docs_present = bool(source_docs_lines)
     ac_report = analyze_acceptance_criteria(_section_content(sections, "Acceptance Criteria"))
     label_names = sorted(dict.fromkeys(labels))
+    acceptance_hold = _has_acceptance_hold(body, label_names)
+    human_acceptance_exception = acceptance_hold and _has_human_acceptance_exception(body)
+    unsupported_acceptance = acceptance_hold and not human_acceptance_exception
 
     classification = "ready_candidate"
     human_exception_required = (
-        "agent:needs-human" in label_names
-        or _contains_any(HUMAN_ONLY_PATTERNS, body)
-        or _contains_any(AUTHORITY_RISK_PATTERNS, body)
+        _contains_any(AUTHORITY_RISK_PATTERNS, body)
+        or any(label.startswith("action:human-") and label != "action:human-acceptance"
+               for label in label_names)
+        or human_acceptance_exception
+        or (not unsupported_acceptance and (
+            "agent:needs-human" in label_names or _contains_any(HUMAN_ONLY_PATTERNS, body)
+        ))
     )
 
     if _unknown_body(body, present_normalized):
         classification = "unknown"
-    elif "agent:needs-human" in label_names or "agent:blocked" in label_names:
+    elif "agent:needs-human" in label_names or "agent:blocked" in label_names or human_acceptance_exception:
         classification = "not_agentable"
     elif _contains_any(NOT_AGENTABLE_PATTERNS, body):
         classification = "not_agentable"
@@ -529,6 +575,8 @@ def classify_issue_body(
         classification = "admission_contract_conflict"
     elif _contains_any(AUTHORITY_RISK_PATTERNS, body):
         classification = "authority_risk"
+    elif unsupported_acceptance:
+        classification = "ambiguous_intent"
     elif _contains_any(AMBIGUOUS_PATTERNS, body):
         classification = "ambiguous_intent"
 
@@ -538,6 +586,13 @@ def classify_issue_body(
         source_docs_present=source_docs_present,
         ac_report=ac_report,
     )
+    if unsupported_acceptance:
+        guidance.append(
+            "Replace generic manual/live/operator acceptance with qualified automated TEST proof. "
+            "Missing environment is action:restore-environment; missing automation is bounded Builder work. "
+            "A human acceptance exception must name the observable choice/observation, why it cannot "
+            "be automated, owner and exact unblocks_when in the existing Issue/receipt."
+        )
 
     return IssueReadinessReport(
         issue_number=issue_number,

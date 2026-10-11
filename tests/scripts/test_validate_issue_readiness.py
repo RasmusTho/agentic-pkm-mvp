@@ -588,6 +588,95 @@ def test_explicit_human_evidence_survives_technical_unreadiness(extra, fixture) 
     assert report.human_exception_required is True
 
 
+@pytest.mark.parametrize("hold", [
+    "Requires operator UAT.", "Waiting for live/operator acceptance.", "Needs manual acceptance.",
+])
+def test_generic_acceptance_hold_is_builder_repair_not_human_decision(hold: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body = body.replace("## Suggested Validation", f"## Validation / Acceptance Path\n{hold}\n\n## Suggested Validation")
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ambiguous_intent"
+    assert report.human_exception_required is False
+    assert any("qualified automated TEST proof" in item for item in report.repair_guidance)
+
+
+def test_unsupported_human_acceptance_label_does_not_manufacture_human_evidence() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.readiness_classification == "not_agentable"
+    assert report.human_exception_required is False
+    assert any("action:restore-environment" in item for item in report.repair_guidance)
+
+
+_HUMAN_ACCEPTANCE_EXCEPTION = (
+    "\nHuman acceptance exception: personal accessibility preference.\n"
+    "Observable choice: owner selects the comfortable spoken cadence.\n"
+    "Cannot be automated because: only the owner can report their listening experience.\n"
+    "Owner: owner\n"
+    "unblocks_when: the owner records the chosen cadence on this Issue.\n"
+)
+
+
+def test_specific_human_acceptance_exception_preserves_human_gate() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text() + _HUMAN_ACCEPTANCE_EXCEPTION
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.readiness_classification == "not_agentable"
+    assert report.human_exception_required is True
+    assert not any("Replace generic" in item for item in report.repair_guidance)
+    body += "\n## Validation / Acceptance Path\nRequires human acceptance."
+    assert classify_issue_body(body, labels=["agent:ready"]).readiness_classification == "not_agentable"
+
+
+def test_retained_exception_history_without_a_current_hold_does_not_block_ready() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text() + _HUMAN_ACCEPTANCE_EXCEPTION
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ready_candidate"
+    assert report.human_exception_required is False
+
+
+@pytest.mark.parametrize("missing_fact", _HUMAN_ACCEPTANCE_EXCEPTION.strip().splitlines()[1:])
+def test_incomplete_human_acceptance_exception_requires_concrete_repair(missing_fact: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += _HUMAN_ACCEPTANCE_EXCEPTION.replace(missing_fact, "")
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.human_exception_required is False
+    assert any("observable choice/observation" in item for item in report.repair_guidance)
+
+
+def test_technical_acceptance_lint_does_not_weaken_separate_authority_gate() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text() + "\nRequires an owner decision."
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.human_exception_required is True
+    assert report.readiness_classification == "not_agentable"
+    report = classify_issue_body(body, labels=["action:human-acceptance"])
+    assert report.human_exception_required is True
+    assert report.readiness_classification == "authority_risk"
+
+
+@pytest.mark.parametrize("value", ["", "<name>", "TBD", "none"])
+def test_placeholder_human_exception_fact_is_not_acceptance_evidence(value: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += _HUMAN_ACCEPTANCE_EXCEPTION.replace("Owner: owner", f"Owner: {value}")
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.human_exception_required is False
+
+
+def test_explicit_no_manual_acceptance_default_is_not_rejected() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += "\n## Validation / Acceptance Path\nDoes not require operator UAT."
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ready_candidate"
+    assert report.human_exception_required is False
+
+
+def test_human_need_and_automated_acceptance_do_not_create_manual_gate() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += "\nHuman-need acceptance uses qualified automatic TEST journeys and synthetic actors."
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ready_candidate"
+    assert report.human_exception_required is False
+
+
 def test_cli_observe_only_writes_json_and_markdown(tmp_path: Path) -> None:
     json_path = tmp_path / "readiness.json"
     markdown_path = tmp_path / "readiness.md"

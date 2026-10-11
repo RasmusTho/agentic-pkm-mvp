@@ -59,6 +59,13 @@ Apply `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` before publicati
   and in-flight receipts, current-head CI, exact review, merge, and closure gates remain mandatory.
 - If acceptance requires a post-merge producer, keep its parent or explicit acceptance Issue open;
   do not pretend a pre-merge test proves the later outcome.
+- Own technical acceptance under `docs/TESTING.md :: Automated Technical Acceptance`: qualified
+  automatic TEST journeys by default, short DEV smoke and warranted DEV-specific scenarios,
+  actual same-candidate SHA/digest and isolated synthetic actor/source evidence. Resolve every
+  scoped AC before parent closure. Missing environment is concrete restore-environment recovery;
+  missing automation is bounded Builder work. Preserve existing effect authority and genuine human
+  intent guards. Human acceptance needs the observable choice, why automation cannot prove it,
+  owner and exact `unblocks_when`; generic live/operator acceptance is not a terminal handoff.
 - For pre-API startup failures, read `.codex/skills/verification-and-closure/FULL_PATH.md :: Pre-API startup failure classification`.
 - For a resumed run or owner handoff, read `.codex/skills/verification-and-closure/FULL_PATH.md :: Current SHA truth and scope drift`.
 

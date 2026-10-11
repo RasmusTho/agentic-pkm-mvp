@@ -77,6 +77,11 @@ remains subject to its existing gate. Do not weaken acceptance to match an incom
 
 ### Dependencies and verification intent
 
+- Apply `docs/TESTING.md :: Automated Technical Acceptance` to deployed outcomes. Use qualified
+  automated TEST journeys with concrete `Verify:` targets; a human need does not require manual
+  test execution. Missing environment is restore-environment work and missing automation is a
+  bounded Builder slice. A human acceptance exception names the observable choice/observation,
+  why it cannot be automated, owner and exact `unblocks_when`; generic operator UAT is not a gate.
 - A blocking dependency must name the unavailable artifact, interface, or precondition and explain
   why this slice cannot be implemented and meaningfully verified without it. An open linked Issue,
   parent/child relationship, planning order, or later enhancement is not sufficient. Keep preferred

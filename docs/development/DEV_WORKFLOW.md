@@ -558,6 +558,12 @@ Lifecycle truth rule:
 
 ## Acceptance verifiability
 
+`docs/TESTING.md :: Automated Technical Acceptance` owns deployed technical acceptance: automated
+TEST journeys by default, short DEV smoke, qualified synthetic actors/data and actual same-candidate
+SHA/digest evidence. Human-need outcomes do not imply manual execution. Missing environment or
+automation is concrete Builder recovery/delivery work; a human acceptance exception needs an
+observable choice, why it cannot be automated, owner and exact `unblocks_when`.
+
 Every Acceptance Criterion on a backlog Issue must declare its verification inline with a `Verify:` marker. This is a contract-shape rule, not a test-methodology rule: it covers behavioral and non-behavioral ACs alike.
 
 Form:

@@ -1,15 +1,15 @@
-State: Specification directory — FILED (parent #3314; children #3315–#3319 filed 2026-07-07, all agent:blocked at filing per the uniform closed-loops filing policy). System-level source of truth for building the Daily Briefing capability, the first (owner-ratified priority) of the seven Yggdrasil closed loops identified in `docs/research/yggdrasil-closed-loops-ideation.md`. Grounded in that ideation capture; not itself a plan for the other four loops. GitHub issues are execution artifacts; this spec remains the contract.
+State: Specification directory — FILED; parent #3314 is the validation hub. Qualified automated TARS TEST acceptance and current-state owner-doc promotion remain pending. Grounded in `docs/research/yggdrasil-closed-loops-ideation.md`; GitHub owns live delivery evidence, and this spec remains the contract.
 Doc role: Capability specification (feature-breakdown lane)
 Temporal class: strategic
 Review cadence: event-driven (task merges, parent-issue lifecycle)
 Source of truth: this directory + the ideation capture it grounds; GitHub issues (#3314–#3319) are execution artifacts, this spec is the contract
-Last reviewed: 2026-07-07
+Last reviewed: 2026-10-11
 
 # Daily Briefing — Specification
 
 The runtime capability that composes **one generated, provenance-cited, audio-first day-start briefing artifact** from already-live substrate — commitments, the Contextual Relevance Engine's proactive picks, and the decision-receipt log — writes it as a durable vault artifact through the governed write path, triggers its own generation once per day, renders it to speech, and surfaces it as one visual, zero-typing day-start card.
 
-Classification: **Product/Runtime System work** (new derived human-facing surface). Primary subsystem: **HIX** (Human Interaction & Intent — this capability *is* the daily touchpoint/distribution channel); secondary: **RCA** (composes context/evidence from multiple sources into one bundle), **HKA** (the briefing note is a new, vault-durable artifact class), **GOV** (decision receipts consumed as-is), **EBF** (local TTS engine invocation), **DRI** (future: reads the ERE calendar/episode projection).
+Classification: **Product/Runtime System work** (derived human-facing surface). Primary subsystem: **HIX** (Human Interaction & Intent — this capability *is* the daily touchpoint/distribution channel); secondary: **RCA** (composes context/evidence from multiple sources into one bundle), **HKA** (the briefing note is a vault-durable artifact class), **GOV** (decision receipts consumed as-is), **EBF** (local TTS engine invocation), **DRI** (reads the ERE calendar/episode projection; deployed integration proof remains required).
 
 ## Human need this serves
 
@@ -28,7 +28,7 @@ Strategically, this capability is also the **distribution seam** the Episode Res
 | commitments (`next_action` / `waiting` / `review_return`) | **live** | `app/services/commitment_persistence.py::load_commitments` → `app/domain/commitments.py::query_next_and_waiting_commitments` | `commitment_id`, `target_ref` |
 | CRE relevance picks (materialized Moments) | **live** | `app/relevance/now_surface.py::collect_now_moments` | `moment_id`, `surfaced_refs[].ref` |
 | decision receipts | **live** | `app/receipts/decision_receipt_log.py::iter_decision_receipts` | `receipt` entry (`object_id`, `vault_uuid`, `key`, `created_at`) |
-| calendar entries / today's episodes | **planned** (blocked on ERE-09 + ERE-02) | `docs/EPISODE_RESOLUTION_ENGINE/CALENDAR_STREAM_ADAPTER.md` registered stream + episode-note projection | episode note ref / calendar UID |
+| calendar entries / today's episodes | **implemented interface; qualified deployed proof pending** | `docs/EPISODE_RESOLUTION_ENGINE/CALENDAR_STREAM_ADAPTER.md` registered source-selected stream + episode-note projection | episode note ref / calendar UID |
 | future: decision-revisit prompts, standing-question updates, episode debriefs | **not designed here** | named as future input seams only — their spec directories (`docs/DECISION_CALIBRATION/`, `docs/STANDING_QUESTIONS/`, `docs/EPISODE_DEBRIEF/`) ship in the same closed-loops wave and each names the briefing as its delivery seam; wiring them in is future work owned by those capabilities | n/a |
 
 A source absent from this table (OS push, email, wake-word/always-listening, briefing-as-write-authority) is excluded deliberately — see Out of Scope.
@@ -73,9 +73,53 @@ Multiple tasks read or write the same briefing-note substrate; these invariants 
 - [ ] Generation happens once per day via a scheduled morning tick, with an on-first-contact-of-day fallback when the schedule is missed, idempotent under both paths firing. Verify: `tests/briefing/test_schedule_trigger.py::test_scheduled_tick_generates_once_per_day`, `tests/briefing/test_schedule_trigger.py::test_first_contact_of_day_falls_back_when_schedule_missed`, `tests/briefing/test_schedule_trigger.py::test_duplicate_trigger_same_day_is_idempotent_at_call_site` (BRIEF-02)
 - [ ] The briefing renders to mixed sv/en per-segment audio via the existing SpeechPlan/TTS pipeline, one-tap listen, degrading to text-only when TTS is unavailable. Verify: `tests/briefing/test_briefing_audio.py::test_briefing_text_produces_valid_speech_plan`, `tests/companion_ui/test_briefing_listen_affordance.py::test_degrades_to_text_only_when_tts_unavailable` (BRIEF-03)
 - [ ] The companion UI surfaces one day-start card (listen + read), zero typing required, read-only, honestly distinguishing "not yet generated" from a degraded or full briefing. Verify: `tests/companion_ui/test_day_start_card.py::test_day_start_card_renders_todays_briefing`, `tests/companion_ui/test_day_start_card.py::test_missing_todays_briefing_shows_pending_state_not_blank` (BRIEF-04)
-- [ ] Once ERE-09 (calendar stream) and ERE-02 (episode note store) are live, the briefing gains a today's-calendar/episodes section with the same fail-legible degrade discipline, adding no new episode/calendar logic of its own. Verify: `tests/briefing/test_briefing_calendar_section.py::test_briefing_includes_todays_calendar_episodes_when_stream_live` (BRIEF-05, blocked)
-- [ ] Live validation: a real day's briefing generates, lists real commitments/moments/receipts with working provenance links, is audible via one tap, and is visible as one day-start card — receipt posted to the parent issue once filed. Verify: parent-issue validation receipt (mac mini / operator channel)
-- [ ] Owner-doc promotion only after acceptance: a writeback naming Daily Briefing as a delivered capability (candidate target: `docs/HUMAN-FLOWS.md` or `docs/STATUS.md`, decided at promotion time) and a row added to `docs/research/yggdrasil-closed-loops-ideation.md` marking loop 1 delivered. Verify: doc writeback at the target chosen at promotion time (not pre-decided here)
+- [ ] The briefing's today's-calendar/episodes section consumes the existing ERE calendar stream
+  and episode note store with fail-legible degradation, adding no new episode/calendar logic.
+  Successful source-selected integration remains required by the deployed acceptance criterion.
+  Verify: `tests/briefing/test_briefing_calendar_section.py::test_briefing_includes_todays_calendar_episodes_when_stream_live` (BRIEF-05)
+- [ ] Deployed technical acceptance: one automated qualified TARS TEST journey generates today's
+  briefing from isolated synthetic commitments/moments/receipts and source-selected calendar/episode
+  inputs, follows working provenance links, opens one day-start card and plays mixed sv/en audio via
+  the source-selected local TTS plan/synthesis/audio path. It proves pending/degraded/full and
+  text-only failure states separately; no required scenario may be missing, blocked, skipped or xfailed.
+  - Verify: `tests/companion_ui/test_companion_ui_live_daily_briefing.py::test_daily_briefing_live_acceptance`
+  - Verify: runtime receipt: parent #3314 qualified TEST per-scenario report with actual SHA/digest, trace and source/provider evidence
+- [ ] Owner-doc promotion only after qualified live PASS: update this local capability owner and the
+  applicable Companion UI local-first TTS contract, then record the bounded supported capability in
+  `docs/STATUS.md`. The ideation capture remains grounding history, not runtime status authority.
+  - Verify: doc writeback at `docs/DAILY_BRIEFING/README.md :: Validation / acceptance path`
+  - Verify: doc writeback at `companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md :: Runtime Boundary`
+  - Verify: doc writeback at `docs/STATUS.md :: Runtime verification`
+
+## Validation / acceptance path
+
+Follow `docs/TESTING.md :: Automated Technical Acceptance`. TEST is the default acceptance channel;
+use the short same-candidate DEV core-flow smoke and add DEV scenarios only for a specific
+DEV contract or failure. Qualify the actual deployed UI/API and required producer SHA/image digest,
+source binding and synthetic test actor through the existing native/channel evidence. The live entry
+target above and `tests/companion_ui/test_live_daily_briefing_contract.py` are intended automation
+targets; deterministic contract tests and merged implementation are not a live PASS.
+
+Generation/first-contact, scheduling, provenance navigation and one-tap playback need observable
+journey results. Reuse the existing core-flow identity/admission/private artifact boundary, while
+qualifying this journey's effects separately: passive admission currently refuses first-contact
+generation when today's briefing is absent. Do not disable that guard or infer generation/TTS
+permission from a capture/ASK manifest. Assert the generated artifact and once-per-day behavior
+through the actual producer, and keep synthetic approvals inside existing WriteGuard/intent paths.
+
+Calendar proof consumes the registered source-selected adapter and episode read interfaces with
+approved synthetic feed/data, carrying calendar UID/etag and episode references. TTS proof binds
+per-segment language/provider/voice, actual synthesized audio and browser playback; engine presence,
+a doubled provider or a text-only fallback cannot satisfy successful audio acceptance. The existing
+TTS/cache/mount and calendar access contracts select the environment; this spec grants no personal
+calendar access, credential provisioning, deployment or production effect authority.
+
+Record each required scenario's outcome in the existing private report and link it on #3314.
+Unavailable qualified environment/source/provider is concrete restore-environment work with owner
+and exact `unblocks_when`; missing automation is a bounded Builder child. Successful graceful
+degradation leaves the corresponding successful integration AC pending. Promote the owners named
+above only after every scoped AC passes; `verification-and-closure` owns the PR-specific owner-doc
+result and parent closure. Future observation may move to a separate follow-up after that proof.
 
 ## Out of Scope (capability level)
 
@@ -87,7 +131,11 @@ Multiple tasks read or write the same briefing-note substrate; these invariants 
 
 ## Relationship to GitHub issues
 
-**Filed 2026-07-07.** Parent feature issue: **#3314** (Backlog, `agent:blocked` live validation hub; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). All five children were filed `agent:blocked`: BRIEF-01 → **#3315** (the dependency-free head — flips to `agent:ready` once this spec PR merges to `main`); BRIEF-02 → **#3318**, BRIEF-03 → **#3317**, BRIEF-04 → **#3319** (all stay `agent:blocked` until BRIEF-01/#3315 merges); BRIEF-05 → **#3316** (stays `agent:blocked` until BRIEF-01/#3315 merges **and** the external prerequisites ERE-09/#3184 + ERE-02/#3177 merge). The spec is the source of truth; issues track pickup state.
+**Filed 2026-07-07.** Parent feature issue **#3314** remains the live validation hub; see
+[PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md). Original implementation children are BRIEF-01 →
+**#3315**, BRIEF-02 → **#3318**, BRIEF-03 → **#3317**, BRIEF-04 → **#3319**, BRIEF-05 → **#3316**.
+GitHub owns their current lifecycle and the linked automation child/results. Implementation PRs can
+close separately; #3314 closes only after the scoped acceptance and owner-doc proof above.
 
 ## Related Docs
 
