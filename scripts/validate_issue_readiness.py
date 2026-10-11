@@ -151,33 +151,87 @@ _MANUAL_ACCEPTANCE_HOLD = re.compile(
 )
 
 
+_ACCEPTANCE_SECTIONS = (
+    "Scope", "Constraints", "Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation",
+)
+
+
+def _current_contract_text(body: str) -> str:
+    """Normalize visible inline prose without promoting history or code examples."""
+    lines: list[str] = []
+    history_level: int | None = None
+    fence: str | None = None
+    for raw in body.splitlines():
+        fence_match = re.match(r"^\s*(`{3,}|~{3,})", raw)
+        if fence_match:
+            marker = fence_match.group(1)[0]
+            if fence is None:
+                fence = marker
+            elif marker == fence:
+                fence = None
+            continue
+        if fence:
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.+)$", raw)
+        if heading:
+            level, title = len(heading.group(1)), heading.group(2)
+            if history_level is not None and level <= history_level:
+                history_level = None
+            if re.search(r"\b(?:historical|history|completed|resolved|previous|archive)\b", title, re.I):
+                history_level = level
+        if history_level is not None:
+            continue
+        line = re.sub(r"\*{1,3}|(?<!\w)_{1,3}|_{1,3}(?!\w)", "", raw)
+        line = re.sub(r"\[([^\]]+)\]\([^)]*\)|\[([^\]]+)\]\[[^\]]*\]",
+                      lambda match: match.group(1) or match.group(2), line)
+        line = re.sub(r"</?(?:strong|em|b|i|code)(?:\s[^>]*)?>", "", line, flags=re.I)
+
+        def inline(match: re.Match[str]) -> str:
+            prefix = line[:match.start()]
+            if re.search(r"\b(?:rejects?|examples?(?: of)?|quoted examples?)\s*[:=]?\s*$", prefix, re.I):
+                return ""
+            return match.group(1)
+
+        line = re.sub(r"`([^`\n]+)`", inline, line)
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _has_human_acceptance_exception(body: str) -> bool:
-    """Require the four exception facts without adding a section or schema."""
-    if not re.search(r"\bhuman acceptance exception\b", body, re.IGNORECASE):
-        return False
+    """Bind all facts to one current, unresolved exception in the contract."""
+    sections = extract_sections(_current_contract_text(body))
+    marker = re.compile(r"(?im)^\s*(?:-\s+(?:\[ \]\s+)?)?(?:current )?human acceptance exception:\s*\S.*$")
     facts = (
         r"\b(?:observable (?:choice|observation)|observation|choice):[ \t]*(.+)",
         r"\b(?:why it cannot be automated|cannot (?:be automated|automate) because):[ \t]*(.+)",
         r"\bowner:[ \t]*(.+)",
         r"\bunblocks_when:[ \t]*(.+)",
     )
-    return all(
-        any(_non_placeholder_lines(match.group(1)) for match in re.finditer(pattern, body, re.I))
-        for pattern in facts
-    )
+    for name in _ACCEPTANCE_SECTIONS:
+        section = sections.get(_normalize_heading(name), "")
+        starts = list(marker.finditer(section))
+        for index, start in enumerate(starts):
+            end = starts[index + 1].start() if index + 1 < len(starts) else len(section)
+            block = section[start.start():end]
+            next_item = re.search(r"(?m)^\s*-\s+\[[ xX]\]\s+", block[start.end()-start.start():])
+            if next_item:
+                block = block[:start.end()-start.start()+next_item.start()]
+            if re.search(r"(?im)^\s*(?:resolution|status):[^\n]*\b(?:completed|resolved|chosen|closed|done)\b", block):
+                continue
+            if all(any(_non_placeholder_lines(m.group(1)) for m in re.finditer(p, block, re.I)) for p in facts):
+                return True
+    return False
 
 
 def _has_acceptance_hold(body: str, labels: Sequence[str]) -> bool:
-    sections = extract_sections(body)
+    sections = extract_sections(_current_contract_text(body))
     acceptance_text = "\n".join(
         sections.get(_normalize_heading(name), "")
-        for name in ("Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation")
+        for name in _ACCEPTANCE_SECTIONS
     )
-    # Quoted code targets are examples, not the Issue's execution gate.
-    acceptance_text = re.sub(r"```.*?```|`[^`\n]*`", "", acceptance_text, flags=re.S)
     positive_hold = any(
-        not re.search(r"\b(?:not|never|without|automated|automatic|scripted)\s*$",
-                      acceptance_text[:match.start()], re.I)
+        not re.search(r"\b(?:no|not|never|without|automated|automatic|scripted)\s*$",
+                      acceptance_text[acceptance_text.rfind('\n', 0, match.start())+1:match.start()], re.I)
         for match in _MANUAL_ACCEPTANCE_HOLD.finditer(acceptance_text)
     )
     return "action:human-acceptance" in labels or positive_hold
@@ -378,11 +432,20 @@ def _has_concrete_verify_marker(item: str) -> bool:
         bool(targets)
         and len(set(targets)) == len(targets)
         and all(
-            is_resolvable_verify_target(target)
-            or _target_has_existing_file_path(target)
-            or _target_has_missing_file_path(target)
+            is_resolvable_verify_target(target) or _has_structural_verify_file_path(target)
             for target in targets
         )
+    )
+
+
+def _has_structural_verify_file_path(target: str) -> bool:
+    """Keep concrete legacy locators without using existence as grammar authority."""
+    path = _verify_file_path(target)
+    if path is None or re.search(r"<[^>]+>", target):
+        return False
+    return (
+        re.fullmatch(r"(?:\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+)(?:/[A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]+", path) is not None
+        and all(part not in {".", ".."} for part in path.split("/"))
     )
 
 
@@ -422,7 +485,7 @@ def _missing_verify_file_paths(item: str) -> list[str]:
     return missing_paths
 
 
-def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport:
+def analyze_acceptance_criteria(section: str | None, *, resolve_files: bool = True) -> AcceptanceCriteriaReport:
     lines = _non_placeholder_lines(section)
     items = _extract_acceptance_items(section)
     malformed = bool(lines) and not items
@@ -433,10 +496,10 @@ def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport
     ]
     missing_file_paths = [
         path for item in items for path in _missing_verify_file_paths(item)
-    ]
+    ] if resolve_files else []
     joined_targets = [
         target for item in items for target in _joined_verify_targets(item)
-    ]
+    ] if resolve_files else []
     return AcceptanceCriteriaReport(
         present=bool(items),
         count=len(items),
@@ -535,7 +598,10 @@ def classify_issue_body(
     *,
     issue_number: int | None = None,
     labels: Sequence[str] = (),
+    _resolve_verify_files: bool = True,
 ) -> IssueReadinessReport:
+    # The fixed retained-source importer mode preserves its independently
+    # qualified candidate-file evidence. It is not a CLI or Ready-mutation bypass.
     sections = extract_sections(body)
     present = [section for section in REQUIRED_SECTIONS if _section_content(sections, section) is not None]
     missing = [section for section in REQUIRED_SECTIONS if section not in present]
@@ -543,19 +609,24 @@ def classify_issue_body(
 
     source_docs_lines = _non_placeholder_lines(_section_content(sections, "Source Docs"))
     source_docs_present = bool(source_docs_lines)
-    ac_report = analyze_acceptance_criteria(_section_content(sections, "Acceptance Criteria"))
+    ac_report = analyze_acceptance_criteria(
+        _section_content(sections, "Acceptance Criteria"), resolve_files=_resolve_verify_files,
+    )
     label_names = sorted(dict.fromkeys(labels))
-    acceptance_hold = _has_acceptance_hold(body, label_names)
-    human_acceptance_exception = acceptance_hold and _has_human_acceptance_exception(body)
-    unsupported_acceptance = acceptance_hold and not human_acceptance_exception
+    human_acceptance_exception = _has_human_acceptance_exception(body)
+    # A current human choice never exempts an unrelated generic execution gate.
+    unsupported_acceptance = _has_acceptance_hold(body, ()) or (
+        "action:human-acceptance" in label_names and not human_acceptance_exception
+    )
+    current_prose = _current_contract_text(body)
 
     classification = "ready_candidate"
     human_exception_required = (
         # Labels can be backed by a canonical receipt outside this body-only
         # input. Missing body facts do not disprove that existing human hold.
         "agent:needs-human" in label_names
-        or _contains_any(HUMAN_ONLY_PATTERNS, body)
-        or _contains_any(AUTHORITY_RISK_PATTERNS, body)
+        or _contains_any(HUMAN_ONLY_PATTERNS, current_prose)
+        or _contains_any(AUTHORITY_RISK_PATTERNS, current_prose)
         or human_acceptance_exception
     )
 
@@ -563,7 +634,7 @@ def classify_issue_body(
         classification = "unknown"
     elif "agent:needs-human" in label_names or "agent:blocked" in label_names or human_acceptance_exception:
         classification = "not_agentable"
-    elif _contains_any(NOT_AGENTABLE_PATTERNS, body):
+    elif _contains_any(NOT_AGENTABLE_PATTERNS, current_prose):
         classification = "not_agentable"
     elif "Source Docs" in missing or not source_docs_present:
         classification = "missing_source_docs"
@@ -571,19 +642,19 @@ def classify_issue_body(
         classification = "missing_required_sections"
     elif not ac_report.present or ac_report.malformed:
         classification = "malformed_acceptance_criteria"
-    elif not ac_report.verify_markers_present:
-        classification = "missing_verify_markers"
     elif ac_report.missing_verify_file_paths:
         classification = "missing_verify_file_paths"
+    elif not ac_report.verify_markers_present:
+        classification = "missing_verify_markers"
     elif _parent_reference_problem(body) is not None:
         classification = "malformed_parent_reference"
     elif admission_contract_problem(body) is not None:
         classification = "admission_contract_conflict"
-    elif _contains_any(AUTHORITY_RISK_PATTERNS, body):
+    elif _contains_any(AUTHORITY_RISK_PATTERNS, current_prose):
         classification = "authority_risk"
     elif unsupported_acceptance:
         classification = "ambiguous_intent"
-    elif _contains_any(AMBIGUOUS_PATTERNS, body):
+    elif _contains_any(AMBIGUOUS_PATTERNS, current_prose):
         classification = "ambiguous_intent"
 
     guidance = repair_guidance(

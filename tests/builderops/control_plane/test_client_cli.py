@@ -584,6 +584,48 @@ def _import_source(repository="rasmustho/agentic-pkm-mvp", number=501):
     }
 
 
+@pytest.mark.parametrize("hold", [
+    "Requires operator UAT.", "Requires **operator UAT**.", "Requires `operator UAT`.",
+    "UAT is required before closure.", "A human must run the acceptance test.",
+])
+def test_issue_source_task_rejects_unsupported_manual_acceptance(hold: str) -> None:
+    from app.builderops.control_plane.client_cli import issue_source_task, _source_contract_ready
+    from scripts.validate_issue_readiness import classify_issue_body
+
+    source = _import_source()
+    source["body"] += f"\n## Validation / Acceptance Path\n{hold}"
+    assert classify_issue_body(source["body"], labels=["agent:ready"]).readiness_classification == "ambiguous_intent"
+    assert not _source_contract_ready(source["body"], ["agent:ready"])
+    with pytest.raises(ValueError, match="readiness"):
+        issue_source_task(source, repository="rasmustho/agentic-pkm-mvp", number=501,
+                          observed_at=source["updated_at"], authority_epoch=1)
+
+
+def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkeypatch, capsys):
+    from app.builderops import cockpit_github_plane
+
+    source = _import_source()
+    source["body"] += "\n## Validation / Acceptance Path\nRequires **operator UAT**."
+    reads = []
+    def source_read(args):
+        reads.append(args)
+        return source
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", source_read)
+    clients = []
+    def factory(config):
+        client = _RecordingClient(config)
+        client.authority_epoch = 1
+        clients.append(client)
+        return client
+    command = ["--delivery-manifest-dir", str(_manifest_dir(tmp_path)), "--task-class", "implementation",
+        "task-import-issue", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:501",
+        "--stack", "builderops-control-plane", "--issue", "501"]
+    assert main(command, client_factory=factory) != 0
+    capsys.readouterr()
+    assert reads == [["api", "repos/rasmustho/agentic-pkm-mvp/issues/501"]]
+    assert all(not client.calls for client in clients)
+
+
 def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys):
     import copy
     from app.builderops import cockpit_github_plane

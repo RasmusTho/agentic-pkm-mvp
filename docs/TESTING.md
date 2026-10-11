@@ -292,6 +292,14 @@ running a browser, listening for an audio response, missing automation and missi
 not sufficient reasons by themselves. Route genuinely missing authorization/access through their
 existing human action subtype. Resolve technical work first and retain the remaining exact choice.
 
+Keep the four facts together beside the current unresolved condition in the existing Scope,
+Constraints, AC or acceptance-path text. Completed/historical decisions and quoted examples remain
+context; they cannot justify a new current technical hold. A current human choice also cannot exempt
+an unrelated generic operator-UAT execution requirement. Ordinary inline Markdown formatting must
+preserve the requirement's meaning. All Builder eligibility consumers use the canonical classifier;
+the retained-source importer alone leaves candidate-file availability to its independently collected
+source-owner/document evidence, while ordinary CLI and Ready mutations retain strict file checks.
+
 Close a parent only when **every scoped AC**, including required deployed acceptance and owner-doc
 writeback, is satisfied under `docs/development/PARENT_ISSUE_CLOSURE.md`. Move future observation or
 adoption to a separate follow-up only after that proof; moving an unmet AC out of the checklist
