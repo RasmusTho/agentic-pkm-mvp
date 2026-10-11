@@ -18,7 +18,7 @@ The ERE parent requires live validation on a real day, while the native web qual
 
 ## What This Task Does
 
-Add a fixed, source-authorized ERE profile to the existing native qualification operation after #5969 delivers the native qualification operation and its finite admission/effect/evidence path. The profile describes and admits only the current registered live sources: `heimdal.observations`, `vault.activity`, and `calendar`. It does not activate `bifrost.native_capture`, which remains planned in the canonical registry; voice-originated evidence enters only through the registered Heimdal observation path.
+Add a fixed, source-authorized ERE profile to the existing native qualification operation after #5969 delivers the native qualification operation and its finite admission/effect/evidence path. The profile describes and admits only the current registered live sources: `heimdal.observations`, `vault.activity`, and `calendar`. It does not activate the planned native-capture stream; voice-originated evidence enters only through the registered Heimdal observation path.
 
 The profile binds one run to the admitted immutable candidate (source SHA and image digest), TEST channel, isolated test vault/binding, exact Heimdal consent/source binding, exact read-only iCloud CalDAV binding, bounded local calendar day (`Europe/Stockholm`), and one operation ID. The private-bindings owner supplies the configured `CALDAV_CALENDARS_JSON` entry (or the existing single-calendar `CALDAV_*` form) with calendar ID, endpoint, username, app-specific password, calendar path, and scope mapped to that same TEST vault; the test actor and receipts never receive the password. Record opaque binding IDs, source counts, time bounds, and content-free evidence references; never copy credentials, event descriptions, private notes, or raw observations into issue/PR/JUnit artifacts.
 
@@ -64,7 +64,7 @@ The parent-level real-day operation is performed only after the channel and sour
 
 ## Out of Scope
 
-- Changing the registered source inventory, enabling `bifrost.native_capture`, or adding another ERE source.
+- Changing the registered source inventory, enabling the planned native-capture stream, or adding another ERE source.
 - Altering the #5969 runner's general admission, deployment, browser, model, or channel authority.
 - Obtaining, creating, rotating, or reading a private credential outside the authorized service binding; writing calendar data; or executing against PROD.
 - Using fixture data as a substitute for the actual-day receipt.
