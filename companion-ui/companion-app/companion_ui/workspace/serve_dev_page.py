@@ -267,12 +267,22 @@ def load_config() -> dict:
         )
     except (TypeError, ValueError):
         ask_timeout_seconds = _DEFAULT_ASK_TIMEOUT_SECONDS
+    try:
+        from math import isfinite
+
+        capture_timeout_seconds = float(os.environ.get("COMPANION_CAPTURE_TIMEOUT_SECONDS", ""))
+        if not isfinite(capture_timeout_seconds):
+            raise ValueError("capture deadline must be finite")
+        capture_timeout_seconds = min(180.0, max(0.25, capture_timeout_seconds))
+    except (TypeError, ValueError):
+        capture_timeout_seconds = None
     return {
         "host": os.environ.get("HOST", _DEFAULT_HOST),
         "port": int(os.environ.get("PORT", str(_DEFAULT_PORT))),
         "api_base_url": os.environ.get("COMPANION_API_BASE_URL", _DEFAULT_API_BASE_URL),
         "api_timeout_seconds": max(0.25, api_timeout_seconds),
         "ask_timeout_seconds": max(0.25, ask_timeout_seconds),
+        "capture_timeout_seconds": capture_timeout_seconds,
     }
 
 
@@ -16070,6 +16080,7 @@ def make_handler(
     runtime_git_sha: str = "",
     static_assets: dict[str, tuple[str, bytes]] | None = None,
     ask_timeout_seconds: float = _DEFAULT_ASK_TIMEOUT_SECONDS,
+    capture_timeout_seconds: Optional[float] = None,
     devui_external_bind_host: str | None = None,
 ) -> type:
     """Return a configured BaseHTTPRequestHandler subclass.
@@ -16105,6 +16116,7 @@ def make_handler(
         _runtime_git_sha = _resolved_runtime_git_sha
         _static_assets = _merged_static_assets
         _ask_timeout_seconds = ask_timeout_seconds
+        _capture_timeout_seconds = capture_timeout_seconds
         _devui_enabled = _resolved_devui_enabled
 
         def _send_json(self, status_code: int, payload: object) -> None:
@@ -16917,6 +16929,7 @@ def make_handler(
         _POST_PATH_TIMEOUT_OVERRIDES: dict[str, str] = {
             "/api/operator/ask": "_ask_timeout_seconds",
             "/api/ask/voice": "_ask_timeout_seconds",
+            "/api/companion/capture": "_capture_timeout_seconds",
         }
 
         def _post_timeout_override(self, path: str) -> Optional[float]:
@@ -17034,6 +17047,7 @@ def main() -> None:
         client=client,
         api_base_url=config["api_base_url"],
         ask_timeout_seconds=config["ask_timeout_seconds"],
+        capture_timeout_seconds=config["capture_timeout_seconds"],
     )
     server = CompanionThreadingHTTPServer((config["host"], config["port"]), handler)
     print(

@@ -164,7 +164,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
             raise ValueError("embedding_identity_invalid")
     for key, default, maximum in (
         ("navigation_ms", 30000, 60000),
-        ("request_ms", 35000, 60000),
+        ("request_ms", 35000, 180000),
         ("index_seconds", 120, 180),
     ):
         d.setdefault(key, default)
@@ -211,7 +211,15 @@ if snapshot is not None and snapshot.settings_rebind is not None:
  from app.instance.settings_rebind import SettingsRebindRecord
  record=SettingsRebindRecord.from_payload(snapshot.settings_rebind)
  registration=snapshot.registrations.get(record.candidate_binding_id)
- assert record.phase=='no_lifecycle' and record.applied_revision==record.desired_revision and record.reload_revision==record.desired_revision,'fixture_restore_rebind_unsettled'
+ assert record.phase in ('no_lifecycle','committed') and record.applied_revision==record.desired_revision and record.reload_revision==record.desired_revision,'fixture_restore_rebind_unsettled'
+ if record.phase=='committed':
+  from app.watcher.settings_rebind import settings_rebind_watcher_receipt_path,load_settings_rebind_watcher_receipt
+  state_dir=os.environ.get('WATCHER_STATE_DIR','').strip()
+  assert state_dir,'fixture_restore_rebind_receipt_missing'
+  receipt_path=settings_rebind_watcher_receipt_path(pathlib.Path(state_dir),record.desired_revision)
+  assert receipt_path.is_file() and not receipt_path.is_symlink() and stat.S_IMODE(receipt_path.stat().st_mode)==0o600 and receipt_path.stat().st_uid==os.geteuid(),'fixture_restore_rebind_receipt_missing'
+  receipt=load_settings_rebind_watcher_receipt(receipt_path)
+  assert receipt.stage=='completed' and receipt.desired_revision==record.desired_revision and receipt.prior_binding_id==record.prior_binding_id and receipt.candidate_binding_id==record.candidate_binding_id,'fixture_restore_rebind_receipt_mismatch'
  assert registration is not None and pathlib.Path(registration.path).resolve(strict=True)==root and registration.vault_id in (None,p['vault_id']),'fixture_restore_rebind_target_mismatch'
  assert snapshot.last_active_vault_ref==registration.ref==known.ref,'fixture_restore_rebind_selection_uncommitted'
  ingress=registry_store.path.parent/'settings-rebind-ingress.lock'
@@ -633,7 +641,7 @@ class CoreFlow:
                 path
             ]:
                 self._admit_navigation()
-                link.click()
+                link.click(timeout=self.d["navigation_ms"])
                 page.get_by_test_id("workspace-note-rendered").wait_for(state="visible")
                 return
         raise AssertionError("approved_note_not_reachable_in_browser")

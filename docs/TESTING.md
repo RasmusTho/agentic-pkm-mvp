@@ -51,6 +51,45 @@ Execution:
 - Live UI smoke (`tests/companion_ui/test_companion_ui_live_smoke.py`) is a separate opt-in check
   against a *running* gateway; it skips unless `COMPANION_UI_SMOKE_URL` is set, so it never gates a PR.
 
+The advisory Jev pilot wraps the existing offline Vault Browser listing/identity matrix:
+
+Install the Chromium version matching the selected Python Playwright package before the first
+local run (CI already performs this setup). Preserve other installed browser versions:
+
+```bash
+PLAYWRIGHT_SKIP_BROWSER_GC=1 python3 -m playwright install chromium
+python3 scripts/run_jev_browser_advisory.py --output-dir .codex-tmp/jev-browser-advisory
+# Existing local Mac helper only, after installing the merged direct-tool script:
+python3 scripts/run_jev_browser_advisory.py --output-dir "${ADVISORY_EVIDENCE_ROOT:?set a persistent evidence directory}" --live-jev
+```
+
+For live runs, set `ADVISORY_EVIDENCE_ROOT` to a retained absolute directory outside temporary
+worktrees. Use an isolated clean checkout. The runner retains exact source SHA, fixture/rubric versions,
+JUnit, fixture screenshots/traces and a separate `jev-browser-advisory.v1` report. It requires
+all twenty exact browser cases and all sixteen desktop/narrow observation records; ordinary
+skips or missing evidence fail. The four current known-defect probes may only xfail with their
+specific registry reference. When the UI repair removes those markers, passed probes are accepted.
+Eight desktop cases supply sixteen independent listing/identity Choice questions. Jev sees only
+synthetic expected facts, visible status prose, any visible identity badge and row counts; no note paths,
+titles, bodies, DOM or screenshots. The pane deliberately hides metadata badges; they are absent evidence, and healthy identity
+judgments check for false degradation warnings. Unavailable identity requires explicit visible
+disclosure. Narrow-pane behavior remains covered by exact browser tests.
+
+Provider input/output uses the existing bounded `jev-direct` command and validator. The installed
+helper must match the checked-out script, including the total deadline repair. Keys remain inside
+the helper. Hosted browser CI runs contract tests and the same exact browser matrix with live Jev
+disabled; its semantic report is explicitly unassessed. Daily live checks on the current Mac use
+existing access and isolated main checkouts, checking only new relevant changes. Scheduler state
+is local operational state; its readback/activation receipt belongs on the governing pilot Issue.
+
+Semantic results are advisory: supported/contradicted judgments, unknown, low confidence (pilot
+threshold 0.6), absent evidence and service failures cannot replace deterministic acceptance.
+Confidence is concentration, not calibrated correctness. Reproduce a model flag before normal bug
+triage. The retained report records fsynced attempt intent before dispatch; repeated or interrupted
+source/rubric attempts in the same evidence root never replay. Do not reset the evidence root to
+retry an ambiguous send. Review usefulness, false alarms, unknowns and cost by 2026-11-11;
+the pilot does not make Product/Builder runtime TypeSafe acceptance claims.
+
 The live core-flow suite is `tests/companion_ui/test_companion_ui_live_core_flow.py`. It uses the
 same installed pytest/Playwright runtime and runs one serial journey per explicit private
 dev/test manifest. Its eight results cover channel/build/health, note navigation, one governed
@@ -86,13 +125,17 @@ container. The passive probe checks existing last-active restore inputs and comp
 identities before a context read can restore selection; a configured registry must already have
 its private lock and canonical rollback export. It refuses initialization, recovery, projection
 repair and missing identities. A settings-rebind record is supported only in settled
-`no_lifecycle` state: applied and reload revisions must equal desired, the candidate registration
+`no_lifecycle` or `committed` state: applied and reload revisions must equal desired, the candidate registration
 must identify the approved physical root, the persisted last-active reference must already match
 that candidate, and its existing private ingress lock must be present. Legacy registrations may
 omit their optional vault ID; a conflicting ID is refused and the initialized source identity is
-still checked against the approved ID. This is the producer's
+still checked against the approved ID. A committed state additionally requires the
+existing private, checksum-valid watcher receipt to report `completed` for the exact
+desired revision, prior binding and candidate binding. This is the producer's
 same-selection/no-reload path; pending transitions remain refused. Then the API's active context is rechecked
-before navigation/effects.
+before navigation/effects. Note clicks use the manifest's navigation budget;
+`request_ms` may be at most 180000 to cover the separately bounded capture and ASK
+operations. A longer budget never acknowledges a write or permits a replay.
 Evidence paths must be canonical and outside the canonical approved vault path.
 This applies independently of capture permission.
 The existing compatibility capture endpoint

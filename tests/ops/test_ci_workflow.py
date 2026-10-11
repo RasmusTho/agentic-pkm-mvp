@@ -528,7 +528,9 @@ def test_browser_runtime_supports_exact_ref_dispatch_with_pull_request_qualifica
         assert f"pytest -q {existing_blocking_module}" in browser
 
 
-def test_browser_runtime_executes_vault_state_matrix_and_retains_diagnostics() -> None:
+def test_browser_runtime_executes_vault_state_matrix_and_retains_diagnostics(
+    tmp_path: Path, monkeypatch,
+) -> None:
     step = _browser_step("Run deterministic Companion UI browser-runtime tests")
     assert step.get("continue-on-error", False) is False
     assert "if" not in step
@@ -536,8 +538,35 @@ def test_browser_runtime_executes_vault_state_matrix_and_retains_diagnostics() -
         "COMPANION_UI_STATE_EVIDENCE_DIR": "${{ runner.temp }}/vault-browser-state-matrix"
     }
     assert "pytest -q tests/companion_ui/test_runtime_unavailable_browser.py" in step["run"]
-    assert "tests/companion_ui/test_vault_browser_state_runtime.py" in step["run"]
-    assert '--junitxml="$COMPANION_UI_STATE_EVIDENCE_DIR/junit.xml"' in step["run"]
+    assert "pytest -q tests/companion_ui/test_jev_advisory.py" in step["run"]
+    assert "python3 scripts/run_jev_browser_advisory.py" in step["run"]
+    assert '--output-dir "$COMPANION_UI_STATE_EVIDENCE_DIR/advisory"' in step["run"]
+    assert "--live-jev" not in step["run"]
+
+    # Exercise the runner's real pytest entrypoint rather than depending on the
+    # command being inline in YAML. The subprocess is intercepted before launch.
+    from scripts import run_jev_browser_advisory as runner
+
+    invocations = []
+
+    def observe(args, **kwargs):
+        invocations.append((args, kwargs))
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(runner.subprocess, "run", observe)
+    assert runner._run_browser(tmp_path, "a" * 40) == 0
+    assert len(invocations) == 1
+    args, kwargs = invocations[0]
+    assert args == [
+        runner.sys.executable, "-m", "pytest", "-q",
+        f"--junitxml={tmp_path / 'junit.xml'}",
+        "tests/companion_ui/test_vault_browser_state_runtime.py",
+    ]
+    assert kwargs["env"]["COMPANION_UI_BROWSER_TESTS"] == "1"
+    assert kwargs["env"]["COMPANION_UI_STATE_EVIDENCE_DIR"] == str(tmp_path / "browser")
+    assert kwargs["env"]["COMPANION_UI_JEV_OBSERVATIONS_DIR"] == str(tmp_path / "observations")
+    assert kwargs["env"]["COMPANION_UI_JEV_SOURCE_SHA"] == "a" * 40
+
     evidence = _browser_step("Retain Vault Browser state-matrix diagnostics")
     assert evidence["if"] == "always()"
     assert evidence["uses"] == "actions/upload-artifact@v4"

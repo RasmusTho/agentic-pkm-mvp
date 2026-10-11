@@ -49,6 +49,12 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   requires removing the marker with the UI repair. These results prove offline
   browser behavior, not mobile-overlay or deployed dev/test acceptance. Live
   core-flow coverage is separately tracked by Issue #5942.
+- The optional Jev semantic pilot is versioned in `scripts/run_jev_browser_advisory.py`
+  and protected by `tests/companion_ui/test_jev_advisory.py`. Browser CI retains a source-bound
+  unassessed semantic report alongside its blocking exact matrix; live daily Mac checks use the
+  existing direct helper and a retained no-replay report. Supported/contradicted/unknown judgments
+  stay advisory. Execution, input limits and the one-month review are owned by
+  `docs/TESTING.md :: Companion UI Browser Runtime Tests`.
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
