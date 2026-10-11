@@ -280,7 +280,8 @@ def _caldav() -> Iterator[dict[str, Any]]:
                 self.send_error(503)
                 return
             content = ('<D:multistatus xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:caldav"><D:response>'
-                       '<D:href>/calendar/native-web.ics</D:href><D:propstat><D:prop><D:getetag>native-web-etag</D:getetag>'
+                       '<D:href>/calendar/native-web.ics</D:href><D:propstat><D:prop><D:getetag>' +
+                       escape(identity['calendar_etag']) + '</D:getetag>'
                        '<C:calendar-data>' + escape(identity['calendar_ics']) + '</C:calendar-data></D:prop>'
                        '<D:status>HTTP/1.1 200 OK</D:status></D:propstat></D:response></D:multistatus>').encode()
             self.send_response(207)
@@ -378,9 +379,12 @@ def qualify(manifest: dict[str, Any]) -> dict[str, Any]:
         calendar['calendar_ics_hash'] = hashlib.sha256(calendar['calendar_ics'].encode()).hexdigest()
         from playwright.sync_api import sync_playwright
         # This is a real launch with actual OS libraries, not payload existence.
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(headless=True)
-            browser.close()
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                browser.close()
+        except Exception:
+            raise NativeWebRefusal('actual_browser_launch_unavailable') from None
         start = _observations(manifest, api, ui)
         context = {'schema': 'native-web-context.v1', 'native_identity': {
             key: manifest[key] for key in ('source_sha', 'image_digest', 'channel', 'operation_id',

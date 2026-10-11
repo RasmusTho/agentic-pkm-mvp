@@ -256,6 +256,16 @@ def test_required_identity_and_integrations_cannot_false_green(tmp_path, monkeyp
     reports['deep-review']['effects']['capture'] = 2
     with pytest.raises(web.NativeWebRefusal):
         web.require_reports(reports)
+    # Real selected reader/HTTP REPORT consumer, with no fake rendered card.
+    from app.ops.native_web_runtime import _caldav
+    from app.episodes.calendar_stream import CalendarBinding, _default_transport
+    with _caldav() as source:
+        source['calendar_etag'] = '"exact-owned-etag"'
+        rows = _default_transport(CalendarBinding(calendar_id='default', base_url=web.CALDAV_URL,
+                                  username='synthetic', app_password='synthetic',
+                                  calendar_path='/calendar/', scope='work'))
+        assert len(rows) == 1 and rows[0].etag == source['calendar_etag']
+        assert rows[0].uid == source['calendar_uid'] and source['report_count'] == 1
 
 
 @pytest.mark.parametrize('fault', ['interrupt', 'cleanup', 'foreign'])
