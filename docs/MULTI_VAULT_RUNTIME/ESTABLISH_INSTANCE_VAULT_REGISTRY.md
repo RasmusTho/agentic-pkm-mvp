@@ -88,6 +88,11 @@ ledger. The task decomposition below retains its existing dependency order.
   scalar rollback target/gateway, native guard, latest export, and roll-forward lineage. Existing
   multi-registration state at first upgrade likewise keeps production cutover dormant until that
   01C floor is present.
+  While authority remains dormant, a successful remembered compatibility selection completes the
+  existing settings-rebind commit first and then writes the selected known vault through the legacy
+  scalar producer. `remember=false` keeps the passive restore path without a scalar write. After
+  authority cutover, the registry interaction-history commit remains authoritative and must not write
+  the legacy scalar.
   Relocation is specified behind a separate
   `capability_not_ready` floor: it cannot mutate the active root until MVR-06C proves every
   foreground and background consumer holds the shared per-binding effect lease and the production

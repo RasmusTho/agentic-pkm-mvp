@@ -69,6 +69,11 @@ Those substrate and registry responsibilities are owned by MVR-01:
   marker is written, recovery may replay that same callback; the durable marker prevents a second
   reload after completion. `VaultChangedEvent`
   remains an optional same-process wake-up hint, never cross-process delivery authority.
+- For a normal `remember=true` selection while registry authority is dormant, the existing legacy
+  app-local scalar producer runs only after that rebind commit succeeds, so the authoritative scalar
+  cannot advance on a failed rebind. `remember=false` does not add a scalar write. Once registry
+  authority is active, the registry commit remains authoritative and the legacy scalar is never
+  written; a required dormant scalar persistence failure is surfaced to the caller.
 - Recovers pre-commit failure by cancelling and resuming A before ingress reopens. Post-commit recovery
   rolls forward while ingress remains blocked until the old-root scan/buffer drain and resume finish.
   No candidate-root effect occurs before commit; no accepted or direct-filesystem A write in the
