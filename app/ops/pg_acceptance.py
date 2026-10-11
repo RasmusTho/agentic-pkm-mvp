@@ -11,6 +11,7 @@ from uuid import UUID
 
 PROFILE_VERSION = 'postmerge-pg.v1'
 TEST_TIMEOUT = 120
+PROFILE_DEADLINE = 3600
 POSTGRES_IMAGE = 'mirror.gcr.io/pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a'
 IMAGE_REPOSITORY = 'ghcr.io/rasmustho/pkm-app'
 SELECTORS = (
@@ -82,7 +83,7 @@ SELECTORS = (
 )
 MINIMUM_SELECTED = len(SELECTORS)
 SELECTION_HASH = hashlib.sha256(json.dumps(
-    [PROFILE_VERSION, SELECTORS, 'pg', TEST_TIMEOUT, 'thread', MINIMUM_SELECTED, POSTGRES_IMAGE],
+    [PROFILE_VERSION, SELECTORS, 'pg', TEST_TIMEOUT, 'thread', MINIMUM_SELECTED, POSTGRES_IMAGE, PROFILE_DEADLINE],
     separators=(',', ':'),
 ).encode()).hexdigest()
 
@@ -90,6 +91,10 @@ SELECTION_HASH = hashlib.sha256(json.dumps(
 class PgAcceptanceError(RuntimeError):
     def __init__(self) -> None:
         super().__init__('isolated PG acceptance refused')
+
+
+class PgAcceptanceDeadlineExceeded(PgAcceptanceError):
+    """Fixed, argumentless cause; transport values never cross the boundary."""
 
 
 def identity(sha: str, digest: str, channel: str, operation_id: str) -> dict[str, str]:
