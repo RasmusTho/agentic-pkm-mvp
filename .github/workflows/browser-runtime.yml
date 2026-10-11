@@ -10,6 +10,8 @@ on:
       - 'app/web/**'
       - 'tests/companion_ui/**'
       - '.github/workflows/browser-runtime.yml'
+      - 'scripts/run_jev_browser_advisory.py'
+      - 'scripts/ygg_jev.py'
   pull_request:
     paths:
       - 'companion-ui/**'
@@ -18,6 +20,8 @@ on:
       - 'app/web/**'
       - 'tests/companion_ui/**'
       - '.github/workflows/browser-runtime.yml'
+      - 'scripts/run_jev_browser_advisory.py'
+      - 'scripts/ygg_jev.py'
   workflow_dispatch:
 
 concurrency:
@@ -373,9 +377,9 @@ jobs:
         run: |
           mkdir -p "$COMPANION_UI_STATE_EVIDENCE_DIR"
           pytest -q tests/companion_ui/test_runtime_unavailable_browser.py
-          pytest -q \
-            --junitxml="$COMPANION_UI_STATE_EVIDENCE_DIR/junit.xml" \
-            tests/companion_ui/test_vault_browser_state_runtime.py
+          pytest -q tests/companion_ui/test_jev_advisory.py
+          python3 scripts/run_jev_browser_advisory.py \
+            --output-dir "$COMPANION_UI_STATE_EVIDENCE_DIR/advisory"
 
       - name: Retain Vault Browser state-matrix diagnostics
         if: always()
