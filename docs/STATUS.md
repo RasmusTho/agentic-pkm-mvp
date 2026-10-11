@@ -6,6 +6,10 @@ Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
 Last reviewed: 2026-10-09 (Issue #5868 existing-value TARS deployment candidate checked alongside the PR #5835, #5822, #5838, and #5847 evidence; no host credentials, route settings, database, or deployment changed)
+Last reviewed (Builder execution routing): 2026-10-11
+Last verified against (Builder execution routing): `docs/settings/models/providers.yaml`,
+`.codex/agents/verification-closer.toml`, and the focused provider-census, execution-routing,
+dispatch, and role-adapter tests; repository defaults and launcher-command evidence only.
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
@@ -722,6 +726,12 @@ High-level design rules for this direction now live in `docs/DESIGN_PRINCIPLES.m
   trace/authority/proposal/receipt linkage fields and the existing state classes now expose or adapt
   to that contract. This is runtime linkage only; it does not grant durable memory semantics or
   bypass WriteGuard/governance authority.
+- Builder execution defaults for `strong_reasoning` and `verification` are Sol 6.1/max across
+  the configured channels and the verification agent, including the highest task difficulty.
+  Astra remains an explicit selection under the evidence and expected-cost criteria in
+  [the TCD capability policy](development/TOTAL_COST_OF_DEVELOPMENT.md#capability-selection).
+  The census and launcher tests verify these repository defaults; live provider acceptance is
+  separate from this configuration change.
 - BuilderOps Vault is shipped as a build-plane runtime: `app/builderops/` provides the store,
   schema, projections, promotion gateway, and boundary layer with CLI and API surfaces, covered by
   `tests/builderops/`, `tests/cli/test_builderops_cli.py`, and `tests/api/test_builderops_api.py`.
