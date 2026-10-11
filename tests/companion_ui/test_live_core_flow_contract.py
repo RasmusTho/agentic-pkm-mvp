@@ -740,6 +740,162 @@ def test_native_probe_reads_before_any_provider_initialization(
     assert result["first_contact_navigation_safe"] is (not enabled or present)
 
 
+def _settled_rebind_fixture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, registered_identity: bool = True
+) -> tuple[dict[str, Any], Any, Any]:
+    from dataclasses import replace
+    from app.instance.settings_rebind import SettingsRebindRecord
+    from app.instance.vault_registry import VaultRegistryStore, VaultRegistration
+    from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+
+    data = _probe_input(tmp_path, monkeypatch)
+    store = VaultRegistryStore(tmp_path / "registry.md")
+    store.load()
+    store.register(
+        VaultRegistration(
+            "binding-dev",
+            "fixture",
+            str(tmp_path),
+            vault_id=data["vault_id"] if registered_identity else None,
+            local_instance_id="local-fixture",
+        ),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    store.install_settings_rebind_dormant(
+        binding_id="binding-dev", _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    record = SettingsRebindRecord(
+        schema_revision=1,
+        desired_revision=2,
+        applied_revision=2,
+        phase="no_lifecycle",
+        lifecycle_posture="no_lifecycle",
+        candidate_binding_id="binding-dev",
+        reload_revision=2,
+        scalar_drain_revision=2,
+    )
+    snapshot = store.set_settings_rebind_state(
+        record.as_payload(), _capability=STORAGE_MUTATION_CAPABILITY
+    )
+    store._write_locked(replace(snapshot, last_active_vault_ref="fixture"))
+    ingress = tmp_path / "settings-rebind-ingress.lock"
+    ingress.write_bytes(b"")
+    ingress.chmod(0o600)
+    monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(store.path))
+    monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(tmp_path / "ownership"))
+    monkeypatch.setenv("WATCHER_VAULT_PATH", "")
+    return data, store, record
+
+
+@pytest.mark.parametrize("registered_identity", [True, False])
+def test_settled_no_lifecycle_restore_is_passive(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    registered_identity: bool,
+) -> None:
+    import app.stores.pg
+    import app.settings.ingestion
+    import app.briefing.trigger
+    from app.vault.manager import VaultManager
+    from app.instance.vault_registry import AppLocalSettingsStore
+
+    data, store, record = _settled_rebind_fixture(
+        tmp_path, monkeypatch, registered_identity=registered_identity
+    )
+    note = tmp_path / data["capture_note_path"]
+    note.parent.mkdir()
+    note.write_text("---\nuuid: " + data["capture_note_uuid"] + "\n---\n" + data["marker"])
+    monkeypatch.setattr(app.briefing.trigger, "BRIEFING_ENABLED", False)
+    monkeypatch.setattr(
+        app.settings.ingestion,
+        "ingest_settings",
+        lambda **_: pytest.fail("settled restore reloaded settings"),
+    )
+
+    class Connection:
+        read_only = False
+        info = SimpleNamespace(dbname="app_dev")
+
+        def __enter__(self) -> Any:
+            return self
+
+        def __exit__(self, *args: Any) -> None:
+            pass
+
+        def cursor(self) -> Any:
+            def execute(sql: str, params: Any) -> None:
+                assert self.read_only and sql.startswith("SELECT ")
+
+            return nullcontext(SimpleNamespace(execute=execute, fetchone=lambda: None))
+
+    monkeypatch.setattr(app.stores.pg, "_connect", Connection)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+    exec(_PROBE, {})
+    assert json.loads(capsys.readouterr().out)["binding_verified"]
+    manager = VaultManager(app_local_store=AppLocalSettingsStore(path=tmp_path / "app-local.md"))
+    context = manager.load_last_active()
+    assert context.status == "selected" and context.active_vault_id == data["vault_id"]
+    assert store._read_current_locked(recover=False).settings_rebind == record.as_payload()
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize(
+    "fault", ["phase", "reload", "last_active", "root", "registered_id", "ingress_lock"]
+)
+def test_unsettled_rebind_refuses_before_http(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
+) -> None:
+    from dataclasses import replace
+
+    data, store, record = _settled_rebind_fixture(tmp_path, monkeypatch)
+    snapshot = store._read_current_locked(recover=False)
+    if fault == "phase":
+        record = replace(
+            record,
+            phase="prepared",
+            lifecycle_posture="watcher",
+            applied_revision=0,
+            reload_revision=0,
+            scalar_drain_revision=0,
+        )
+    if fault == "reload":
+        record = replace(record, reload_revision=None)
+    if fault == "last_active":
+        snapshot = replace(snapshot, last_active_vault_ref=None)
+    if fault == "root":
+        other = tmp_path / "other"
+        other.mkdir()
+        registration = replace(snapshot.registrations["binding-dev"], path=str(other))
+        snapshot = replace(snapshot, registrations={"binding-dev": registration})
+    if fault == "registered_id":
+        registration = replace(snapshot.registrations["binding-dev"], vault_id="another-vault")
+        snapshot = replace(snapshot, registrations={"binding-dev": registration})
+    store._write_locked(replace(snapshot, settings_rebind=record.as_payload()))
+    if fault == "ingress_lock":
+        (tmp_path / "settings-rebind-ingress.lock").unlink()
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    runner = _runner(tmp_path / "runner")
+
+    def probe(*_: Any) -> dict[str, Any]:
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+        exec(_PROBE, {})
+        pytest.fail("unsettled probe admitted")
+
+    runner.probe = probe
+    monkeypatch.setattr(runner.page, "get", lambda *a, **k: pytest.fail("HTTP before refusal"))
+    report = runner.run()
+    assert report["steps"][0]["reason"].startswith("fixture_restore_rebind_")
+    assert not runner.page.navigations and report["capture_posts"] == 0
+    after = {
+        p: p.read_bytes()
+        for p in tmp_path.rglob("*")
+        if p.is_file() and not p.is_relative_to(tmp_path / "runner")
+    }
+    assert after == before
+
+
 @pytest.mark.browser_runtime
 @pytest.mark.skipif(
     os.environ.get("COMPANION_UI_BROWSER_TESTS") != "1",
