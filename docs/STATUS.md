@@ -458,6 +458,10 @@ promote public internet readiness.
 - **Sync-latency harness — partial acceptance (2026-04-12, updated 2026-04-23):** iCloud transport chain validated end-to-end (MacBook → Mac mini via CloudDocs); server-side watcher detection confirmed; clean numeric latency measurement not yet captured. The allowlist blocker is now resolved for harness/operator runs via measurement mode (`WATCHER_MEASUREMENT_MODE=1`), which temporarily admits `ingest.summary.create` while preserving the default production-safe allowlist posture. Remaining blocker: Mac mini headless infrastructure gaps (Screen Sharing, auto-login recovery) tracked in #432. Follow-up timing receipt tracked in #433. Root cause of iCloud upload-queue blockage (`.git` dir inside vault) fixed by `.git.nosync` + symlink (Issue #421 closed).
 
 ## CI & Test Markers
+- Native isolated PG verification uses a shared finite 60-minute aggregate watchdog, bound in
+  the profile hash, while retaining the 120-second per-test watchdog and complete selection (#5950).
+  Attach expiry produces only a fixed native failure signal before owned cleanup. Repository support
+  does not establish live DEV/TEST parity; parent #5675 retains that acceptance and GitHub PG CI.
 - Classification evaluation is offline by default. The opt-in live golden-set runner binds an
   exact registered model/transport and reports dataset coverage, mutation-side gate, captured
   usage and dated cost provenance. Unsupported billing or incomplete evidence cannot produce
