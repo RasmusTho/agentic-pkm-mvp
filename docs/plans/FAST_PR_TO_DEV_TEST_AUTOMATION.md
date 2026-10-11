@@ -1,17 +1,17 @@
-State: Delivery plan with repository automation support; live activation and functional coverage handoff are tracked separately, with measurement following activation.
+State: Delivery plan with verified native PostgreSQL coverage handoff; permanent controller activation and measurement are tracked separately.
 Doc role: Plan.
 Authority: Proposes the post-merge Product Runtime `dev` → `test` automation boundary. `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` remains the deployment-mechanics owner; `docs/TESTING.md` remains the testing-gate owner; `docs/RELEASE_CHANNELS/README.md` remains the promotion-authority owner.
 Temporal class: operational
 Review cadence: before implementation and after the first ten merged candidates
 Source of truth: repository workflows/scripts plus fresh, redaction-safe runtime receipts
-Last reviewed: 2026-10-10
-Last verified against: #5922; `.github/workflows/postmerge-dev-test.yml`, `scripts/postmerge_dev_test.py`, `scripts/install_postmerge_controller.py`, native DeployPlan/RPC and digest-pin tests; #5675 remains the live acceptance owner
+Last reviewed: 2026-10-11
+Last verified against: #5922, #5932 and #5950; `.github/workflows/postmerge-dev-test.yml`, `scripts/postmerge_dev_test.py`, `scripts/install_postmerge_controller.py`, native DeployPlan/RPC and digest-pin tests; [actual same-candidate native DEV/TEST receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) under #5675
 
 # Fast PR-to-merge with automatic dev/test delivery
 
 ## Intent and boundary
 
-Reduce PR-to-merge time by keeping broad, slow, or live-host evidence out of the required PR merge path, while using isolated `dev` and `test` channels for fast post-merge feedback. This document is a delivery plan, not evidence that the automation or runtime qualification is complete.
+Reduce PR-to-merge time by keeping broad, slow, or live-host evidence out of the required PR merge path, while using isolated `dev` and `test` channels for fast post-merge feedback. Actual both-stage native coverage is recorded on #5675; permanent controller activation and the ten-candidate measurement are recorded separately.
 
 The intended flow is:
 
@@ -70,7 +70,7 @@ No automated database rollback is part of this plan. A failed health check must 
 1. **Refresh deployment evidence.** Obtain fresh, redaction-safe `dev` and `test` channel topology, executor, image-pin, health/version, and recovery receipts from the authorized runtime owner. The dated Builder Vault summaries and #2698 production receipt do not substitute for this evidence.
 2. **Install the existing private host executor.** #5922 delivers the host-local LaunchAgent installer, exact build/artifact admission and native dev → test driver. Retain a clean reviewed-main tooling checkout and its working dependencies, and install the updated native VM runtime once through the existing installer. Later automatic candidates fetch their missing exact-SHA Git objects under the native VM lock without moving the retained checkout or supplying credentials. Reuse existing private reachability and credentials; GitHub receives none of the deployment credentials. Coordinate the live owner of a frozen acceptance run before loading the unit; this is writer coordination, not a new approval gate.
 3. **Qualify migration and deployment behavior.** Automatic dev/test deployment follows the ordinary non-production migration policy: classify forward-only work without adding a manual acknowledgement, preserve exact pending-request validation and retain the compatible target on migration failure. SHA plus digest remain bound in the existing request journal, pin, Compose reference and fleet verification. Run the live same-digest dev/test path after current channel acceptance permits a new candidate. Production keeps its existing target-bound token and separate promotion authority.
-4. **Verify failure paths and coverage handoff.** #5922 covers artifact mismatch, dev failure preventing test, supersession before mutation, checkpoint/lock behavior, native recovery and immutable image IDs deterministically. Live functional tests and failure repair remain on #5675. Child #5932 is merged in PR #5939 and supplies the isolated scratch-PG profile inside the existing native verification phase. Its repository implementation preserves the retained selectors and watchdog; actual matching dev/test execution is still required for live coverage handoff. Existing PR/PG and nightly checks stay in place until equivalent dev/test execution is verified. An interrupted native operation must produce matching terminal evidence before continuation; a normal failed candidate does not add a global veto on later candidates.
+4. **Verify failure paths and coverage handoff.** #5922 covers artifact mismatch, dev failure preventing test, supersession before mutation, checkpoint/lock behavior, native recovery and immutable image IDs deterministically. Live functional tests and failure repair remain on #5675. Child #5932 is merged in PR #5939 and supplies the isolated scratch-PG profile inside the existing native verification phase. Its repository implementation preserves the retained selectors and watchdog; the accepted full controller flow has now committed equivalent DEV/TEST profiles at one admitted immutable image, each 547/547 selected tests with exact owned cleanup. The dated #5675 receipt establishes PostgreSQL PR coverage retirement; non-PG PR and bounded nightly checks remain. An interrupted native operation must produce matching terminal evidence before continuation; a normal failed candidate does not add a global veto on later candidates.
 5. **Enable and measure.** Enable the path for ordinary merged main candidates, keep production manual, and review elapsed PR-open-to-merge time plus post-merge failure/repair time after ten merged candidates. Measurement is follow-up and does not gate activation or candidate delivery. Adjust only with observed evidence.
 
 ## Acceptance

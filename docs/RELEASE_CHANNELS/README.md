@@ -334,10 +334,12 @@ under the native lock/journal and touch only that attempt's resources. A failed 
 veto later candidates. Manual request/receipt compatibility and automatic bootstrap, forward-only
 migration and production refusal remain intact.
 
-Repository delivery does not establish live dev/test parity or production eligibility. Parent
-#5675 owns actual both-channel equivalent-coverage receipts and the later GitHub PG coverage
-handoff; the PG CI job remains in place. The separate nightly PG policy is not an approval gate for
-ordinary automatic dev/test candidates. Physical mechanics are owned by
+The [actual both-channel receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) under #5675 verifies equivalent native PostgreSQL
+coverage at one admitted immutable candidate, with both stages committed and owned cleanup complete.
+It supports retirement of the duplicated PostgreSQL PR job. Permanent controller activation and
+its installed/loaded source are recorded separately on #5675. Native PG/smoke does not establish
+production eligibility or replace the functional promotion-test receipt. The separate nightly PG
+policy is not an approval gate for ordinary automatic dev/test candidates. Physical mechanics are owned by
 [Deployment and Environments](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#build-once--promote-model).
 
 > **The production phases below describe the _target_ gated model — deferred promotion hardening.** The current prod baseline tracks `main` directly; see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md).

@@ -458,20 +458,24 @@ promote public internet readiness.
 - **Sync-latency harness — partial acceptance (2026-04-12, updated 2026-04-23):** iCloud transport chain validated end-to-end (MacBook → Mac mini via CloudDocs); server-side watcher detection confirmed; clean numeric latency measurement not yet captured. The allowlist blocker is now resolved for harness/operator runs via measurement mode (`WATCHER_MEASUREMENT_MODE=1`), which temporarily admits `ingest.summary.create` while preserving the default production-safe allowlist posture. Remaining blocker: Mac mini headless infrastructure gaps (Screen Sharing, auto-login recovery) tracked in #432. Follow-up timing receipt tracked in #433. Root cause of iCloud upload-queue blockage (`.git` dir inside vault) fixed by `.git.nosync` + symlink (Issue #421 closed).
 
 ## CI & Test Markers
-- Post-merge image admission and private-host dev/test orchestration are delivered by #5922 / PR #5928;
-  #5932 / PR #5939 adds the shared isolated PostgreSQL profile to native verification. The driver
-  binds one main SHA and immutable digest across both channels. Actual channel qualification,
-  controller activation and PostgreSQL CI coverage handoff remain under #5675; repository and
-  deterministic test evidence alone do not establish live success. Coverage handoff requires
-  matching actual profile results in both channels. Ten-candidate measurement follows activation
-  without gating ordinary candidates; production retains its separate promotion contract.
-  Deployment and validation owners are [deployment mechanics](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture)
-  and [testing](TESTING.md). Last reviewed (this boundary): 2026-10-10. Last verified against:
-  merged PR #5939 at `29f57913c9cabc2f29a8e26aaf703361eae6f43f` and #5675.
+- Post-merge image admission/private-host orchestration (#5922), isolated native PostgreSQL
+  verification (#5932) and its shared finite watchdog (#5950) are delivered. The accepted full
+  controller flow verified one immutable candidate in DEV and TEST on 2026-10-11: App Image Build
+  `38110208012`, attempt `1`, artifact `11691163367`, source `216ef75e9a2ea009e547e96497a0bb2532b9a379`.
+  Both native operations committed 547/547 selected tests with matching current profile, image,
+  tree and complete report identities, health/version/UI and exact owned cleanup. The
+  [actual receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) establishes the PostgreSQL PR coverage handoff to native verification.
+  Observed counts are evidence, not a permanent test-count gate. The permanent controller's
+  installed/loaded source and checkpoint are tracked separately on #5675. Ten-candidate measurement
+  follows activation without gating ordinary candidates; production retains its separate promotion
+  and functional verification contract. Deployment and validation owners are
+  [deployment mechanics](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#ci-deployment-automation-posture)
+  and [testing](TESTING.md). Last reviewed (this boundary): 2026-10-11. Last verified against:
+  merged PR #5951 and the actual same-candidate native receipt on #5675.
 - Native isolated PG verification uses a shared finite 60-minute aggregate watchdog, bound in
   the profile hash, while retaining the 120-second per-test watchdog and complete selection (#5950).
-  Attach expiry produces only a fixed native failure signal before owned cleanup. Repository support
-  does not establish live DEV/TEST parity; parent #5675 retains that acceptance and GitHub PG CI.
+  Attach expiry produces only a fixed native failure signal before owned cleanup. Equivalent
+  both-stage coverage is verified by the dated receipt above; permanent unit activation is separate.
 - Classification evaluation is offline by default. The opt-in live golden-set runner binds an
   exact registered model/transport and reports dataset coverage, mutation-side gate, captured
   usage and dated cost provenance. Unsupported billing or incomplete evidence cannot produce
