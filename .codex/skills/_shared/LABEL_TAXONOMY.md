@@ -54,7 +54,9 @@ Rules:
 - Technical acceptance follows `docs/TESTING.md :: Automated Technical Acceptance`. Missing TEST
   environment uses `action:restore-environment`; missing automation is bounded Builder work.
   Preserve `action:human-acceptance` only for a human acceptance exception with observable
-  choice/observation, why it cannot be automated, owner and exact `unblocks_when`. Human-need
+  choice/observation, why it cannot be automated, owner and exact `unblocks_when` in the Issue body.
+  Reconcile a legacy comment-only exception before lifecycle changes; body-only readiness cannot
+  disprove a comment-backed human hold. Human-need
   outcomes, generic live/operator acceptance and manual test execution alone do not justify it.
 - `state:known-defect` belongs only on the locked rolling Known Defects registry Issue. That
   container also carries `type:bug`, is not an implementation Issue, carries no `agent:*` label,

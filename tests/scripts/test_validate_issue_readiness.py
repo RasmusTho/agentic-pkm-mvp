@@ -590,6 +590,8 @@ def test_explicit_human_evidence_survives_technical_unreadiness(extra, fixture) 
 
 @pytest.mark.parametrize("hold", [
     "Requires operator UAT.", "Waiting for live/operator acceptance.", "Needs manual acceptance.",
+    "UAT is required before closure.", "Requires UAT.", "Live acceptance is required.",
+    "A human must run the acceptance test.",
 ])
 def test_generic_acceptance_hold_is_builder_repair_not_human_decision(hold: str) -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
@@ -600,12 +602,14 @@ def test_generic_acceptance_hold_is_builder_repair_not_human_decision(hold: str)
     assert any("qualified automated TEST proof" in item for item in report.repair_guidance)
 
 
-def test_unsupported_human_acceptance_label_does_not_manufacture_human_evidence() -> None:
+def test_body_only_validator_keeps_human_hold_until_receipt_reconciliation() -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
     report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
     assert report.readiness_classification == "not_agentable"
-    assert report.human_exception_required is False
+    assert report.human_exception_required is True
     assert any("action:restore-environment" in item for item in report.repair_guidance)
+    assert any("latest blocker receipt" in item for item in report.repair_guidance)
+    assert not any("Replace generic" in item for item in report.repair_guidance)
 
 
 _HUMAN_ACCEPTANCE_EXCEPTION = (
@@ -639,7 +643,8 @@ def test_incomplete_human_acceptance_exception_requires_concrete_repair(missing_
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
     body += _HUMAN_ACCEPTANCE_EXCEPTION.replace(missing_fact, "")
     report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
-    assert report.human_exception_required is False
+    assert report.human_exception_required is True
+    assert report.readiness_classification == "not_agentable"
     assert any("observable choice/observation" in item for item in report.repair_guidance)
 
 
@@ -654,16 +659,30 @@ def test_technical_acceptance_lint_does_not_weaken_separate_authority_gate() -> 
 
 
 @pytest.mark.parametrize("value", ["", "<name>", "TBD", "none"])
-def test_placeholder_human_exception_fact_is_not_acceptance_evidence(value: str) -> None:
+def test_placeholder_human_exception_fact_requires_body_repair(value: str) -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
     body += _HUMAN_ACCEPTANCE_EXCEPTION.replace("Owner: owner", f"Owner: {value}")
     report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
-    assert report.human_exception_required is False
+    assert report.human_exception_required is True
+    assert report.readiness_classification == "not_agentable"
+    assert any("Issue body" in item for item in report.repair_guidance)
 
 
 def test_explicit_no_manual_acceptance_default_is_not_rejected() -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
     body += "\n## Validation / Acceptance Path\nDoes not require operator UAT."
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ready_candidate"
+    assert report.human_exception_required is False
+
+
+@pytest.mark.parametrize("line", [
+    "Automated UAT is required before closure.", "Scripted UAT is required.",
+    "Requires automated UAT in TEST.", "The checker rejects `Requires UAT` as a bare hold.",
+])
+def test_automatic_uat_and_quoted_examples_are_not_manual_holds(line: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += f"\n## Validation / Acceptance Path\n{line}"
     report = classify_issue_body(body, labels=["agent:ready"])
     assert report.readiness_classification == "ready_candidate"
     assert report.human_exception_required is False

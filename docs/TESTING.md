@@ -240,8 +240,11 @@ continue to govern the effects. A generic "live/operator acceptance" stop adds n
 
 Use `agent:needs-human` / `action:human-acceptance` only for a **human acceptance exception** that
 names the observable choice or observation, why it cannot be automated, the owner, and an exact
-`unblocks_when`. State these facts in the existing Issue contract/receipt; no separate approval
-ceremony is required. Taste, accessibility experience or a reserved product choice may need a human;
+`unblocks_when`. Put these facts in the self-sufficient **Issue body**, which readiness callers
+receive; the existing blocker receipt links that contract and records its current action. For a
+legacy comment-only exception, read the latest receipt and repair the body before lifecycle
+reconciliation. Missing body facts do not disprove or revoke a genuine human hold. No separate
+approval ceremony is required. Taste, accessibility experience or a reserved product choice may need a human;
 running a browser, listening for an audio response, missing automation and missing environment are
 not sufficient reasons by themselves. Route genuinely missing authorization/access through their
 existing human action subtype. Resolve technical work first and retain the remaining exact choice.

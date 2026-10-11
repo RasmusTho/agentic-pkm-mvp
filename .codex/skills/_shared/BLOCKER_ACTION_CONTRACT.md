@@ -30,8 +30,10 @@ For acceptance, apply `docs/TESTING.md :: Automated Technical Acceptance`. An un
 TEST environment names its service/channel, Builder recovery action and exact `unblocks_when` under
 `action:restore-environment`. Missing journey automation is executable bounded Builder work.
 `action:human-acceptance` requires a human acceptance exception naming the observable
-choice/observation, why it cannot be automated, owner and exact `unblocks_when` in the existing
-contract/receipt. Generic live/operator acceptance does not establish that exception or remove
+choice/observation, why it cannot be automated, owner and exact `unblocks_when` in the Issue body;
+the receipt references that contract. Read the latest receipt and repair a legacy comment-only
+exception into the body before lifecycle reconciliation; missing body facts do not revoke the
+existing human hold. Generic live/operator acceptance does not establish that exception or remove
 unmet technical ACs. This does not alter access/authorization/operator effect gates.
 
 ## Receipt-only recovery

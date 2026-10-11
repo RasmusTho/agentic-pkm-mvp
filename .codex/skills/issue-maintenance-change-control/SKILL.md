@@ -89,6 +89,10 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
   missing environment is concrete `action:restore-environment`; retain foreign claims, infrastructure
   ownership and effect gates. A human acceptance exception must name the observable choice,
   why it cannot be automated, owner and exact `unblocks_when`, rather than a manual test instruction.
+  Put the exception facts in the self-sufficient Issue body. Re-read the latest blocker receipt
+  before label/body repair; carry a genuine legacy comment-only exception into the body instead of
+  treating absent body facts as disproving the human hold. The readiness report grants no effect
+  or lifecycle authority.
 - Before adding or preserving `agent:ready`, run strict
   executable-contract validation on the exact Issue body:
   ```bash

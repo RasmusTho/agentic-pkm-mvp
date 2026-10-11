@@ -140,7 +140,11 @@ HUMAN_ONLY_PATTERNS = tuple(
 # human taste or authority. Facts stay in existing Issue sections/receipts.
 _MANUAL_ACCEPTANCE_HOLD = re.compile(
     r"\b(?:requires?|needs|awaits?|waiting for|blocked (?:by|on|until))\s+"
-    r"(?:an?\s+)?(?:live(?:/operator)?|operator|human|manual)[ -](?:acceptance|UAT)\b"
+    r"(?:an?\s+)?(?:(?:live(?:/operator)?|operator|human|manual)[ -])?(?:acceptance|UAT)\b"
+    r"|\b(?:UAT|(?:live|operator|human|manual)[ -]acceptance(?: test)?)\s+"
+    r"(?:is|are|remains?)\s+(?:required|mandatory|needed)\b"
+    r"|\b(?:human|operator)\s+(?:must|needs to|has to|is required to)\s+"
+    r"(?:run|execute|perform)\s+(?:the\s+|an?\s+)?(?:acceptance(?: test)?|UAT)\b"
     r"|^\s*(?:[-*]\s*)?(?:Verify:\s*)?(?:manual (?:one-day )?operator UAT|"
     r"operator UAT|live/operator acceptance|manual QA)\s*[.!]?\s*$",
     re.IGNORECASE | re.MULTILINE,
@@ -169,8 +173,11 @@ def _has_acceptance_hold(body: str, labels: Sequence[str]) -> bool:
         sections.get(_normalize_heading(name), "")
         for name in ("Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation")
     )
+    # Quoted code targets are examples, not the Issue's execution gate.
+    acceptance_text = re.sub(r"```.*?```|`[^`\n]*`", "", acceptance_text, flags=re.S)
     positive_hold = any(
-        not re.search(r"\b(?:not|never|without)\s*$", acceptance_text[:match.start()], re.I)
+        not re.search(r"\b(?:not|never|without|automated|automatic|scripted)\s*$",
+                      acceptance_text[:match.start()], re.I)
         for match in _MANUAL_ACCEPTANCE_HOLD.finditer(acceptance_text)
     )
     return "action:human-acceptance" in labels or positive_hold
@@ -544,13 +551,12 @@ def classify_issue_body(
 
     classification = "ready_candidate"
     human_exception_required = (
-        _contains_any(AUTHORITY_RISK_PATTERNS, body)
-        or any(label.startswith("action:human-") and label != "action:human-acceptance"
-               for label in label_names)
+        # Labels can be backed by a canonical receipt outside this body-only
+        # input. Missing body facts do not disprove that existing human hold.
+        "agent:needs-human" in label_names
+        or _contains_any(HUMAN_ONLY_PATTERNS, body)
+        or _contains_any(AUTHORITY_RISK_PATTERNS, body)
         or human_acceptance_exception
-        or (not unsupported_acceptance and (
-            "agent:needs-human" in label_names or _contains_any(HUMAN_ONLY_PATTERNS, body)
-        ))
     )
 
     if _unknown_body(body, present_normalized):
@@ -587,12 +593,22 @@ def classify_issue_body(
         ac_report=ac_report,
     )
     if unsupported_acceptance:
-        guidance.append(
-            "Replace generic manual/live/operator acceptance with qualified automated TEST proof. "
-            "Missing environment is action:restore-environment; missing automation is bounded Builder work. "
-            "A human acceptance exception must name the observable choice/observation, why it cannot "
-            "be automated, owner and exact unblocks_when in the existing Issue/receipt."
-        )
+        if human_exception_required:
+            guidance.append(
+                "Re-read the current contract and latest blocker receipt before lifecycle repair. "
+                "Carry a genuine comment-backed human acceptance exception into the Issue body: "
+                "observable choice/observation, why it cannot be automated, owner and exact unblocks_when. "
+                "Missing body facts do not revoke an existing human hold or authorize automated effects. "
+                "Only after source reconciliation, route an unsupported generic hold to Builder work: "
+                "missing environment is action:restore-environment and missing automation is a bounded slice."
+            )
+        else:
+            guidance.append(
+                "Replace generic manual/live/operator acceptance with qualified automated TEST proof. "
+                "Missing environment is action:restore-environment; missing automation is bounded Builder work. "
+                "A human acceptance exception must name the observable choice/observation, why it cannot "
+                "be automated, owner and exact unblocks_when in the Issue body."
+            )
 
     return IssueReadinessReport(
         issue_number=issue_number,
