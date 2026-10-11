@@ -24,6 +24,8 @@ if os.environ.get("COMPANION_UI_BROWSER_TESTS") != "1":
 # An explicitly enabled run must fail if its browser dependency is missing.
 from playwright.sync_api import Browser, BrowserContext, Page, Route, expect, sync_playwright
 
+from tests.companion_ui.jev_advisory import capture_observation
+
 from tests.companion_ui.browser_runtime_harness import (
     install_offline_esm_routes,
     serve_rendered_workspace,
@@ -202,6 +204,13 @@ def _assert_browser_state(
             expect(links).to_be_visible()
         assert "private transport error" not in surface.inner_text()
         observed.assert_clean()
+        advisory_dir = os.environ.get("COMPANION_UI_JEV_OBSERVATIONS_DIR")
+        if advisory_dir:
+            capture_observation(
+                surface, list_state=list_state, identity_available=identity_available,
+                width=observed.page.viewport_size["width"],
+                source_sha=os.environ["COMPANION_UI_JEV_SOURCE_SHA"], output_dir=Path(advisory_dir),
+            )
         if not identity_available:
             notice = surface.get_by_test_id("workspace-vault-browser-state-identity-unavailable")
             if notice.count() == 0:
