@@ -485,7 +485,9 @@ IDs under the existing native channel lock before the ordinary deployment script
 inventory reads only fixed image/container IDs, references, tags, digests and creation times. Every
 running, stopped or created container image, current/previous and rollback pin, pending-migration
 reference and exact admitted target digest remains protected, including different digests for the
-same source SHA. Images with another-repository alias or unproved provenance are retained. Each
+same source SHA. Reclamation requires an official registry digest in `RepoDigests`; a local tag
+alone does not prove that an image is rebuildable. Images with another-repository aliases or
+unproved provenance are retained. Each
 exact, non-force removal rechecks the protected snapshot and image metadata. Manual and PROD paths
 perform no cache maintenance, and this path never prunes volumes or touches application, database
 or vault data. Unavailable or malformed inventory, changed snapshots or failed removal stop further

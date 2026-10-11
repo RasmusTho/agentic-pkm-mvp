@@ -983,12 +983,16 @@ class LinuxEffects:
             candidates = []
             for image_id, row in images.items():
                 refs = [*(row['tags'] or []), *(row['digests'] or [])]
+                proved_digest = any(
+                    re.fullmatch(re.escape(IMAGE_REPOSITORY) + '@' + image_pattern, ref)
+                    for ref in (row['digests'] or [])
+                )
                 official = all(
                     re.fullmatch(re.escape(IMAGE_REPOSITORY) + r':[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', ref)
                     or re.fullmatch(re.escape(IMAGE_REPOSITORY) + '@' + image_pattern, ref)
                     for ref in refs
                 )
-                if refs and official and image_id not in protected and not protected.intersection(refs):
+                if proved_digest and official and image_id not in protected and not protected.intersection(refs):
                     candidates.append((datetime.fromisoformat(row['created'].replace('Z', '+00:00')), image_id))
             for _, image_id in sorted(candidates)[:8]:
                 reason = 'native_lock_unproven'

@@ -5753,7 +5753,7 @@ def _cache_activation_harness(tmp_path, monkeypatch, *, channel='test', automati
         'id': f'sha256:{number:064x}', 'tags': [f'{IMAGE_REPOSITORY}:{number:040x}'],
         'digests': [f'{IMAGE_REPOSITORY}@sha256:{number:064x}'],
         'created': '2020-01-01T00:00:00Z',
-    } for number in range(1, 15)}
+    } for number in range(1, 16)}
     # Current, previous and admitted target share one source SHA but have three
     # different digests. Digest-only previous and target images stay protected.
     for number in (4, 5, 9):
@@ -5764,6 +5764,8 @@ def _cache_activation_harness(tmp_path, monkeypatch, *, channel='test', automati
     images[f'sha256:{12:064x}']['tags'] = []
     images[f'sha256:{12:064x}']['digests'] = []
     images[f'sha256:{14:064x}']['tags'] = []
+    images[f'sha256:{15:064x}']['tags'] = [IMAGE_REPOSITORY + ':local-only']
+    images[f'sha256:{15:064x}']['digests'] = []
     containers = {f'{number + 100:064x}': {
         'id': f'{number + 100:064x}', 'image_id': f'sha256:{number:064x}',
         'ref': f'{IMAGE_REPOSITORY}:{number:040x}',
@@ -5880,13 +5882,32 @@ def test_cache_cleanup_requires_existing_native_lock(tmp_path, monkeypatch):
     assert len(warnings) == 1 and b'reason=native_lock_unproven' in warnings[0]
 
 
+def test_cache_cleanup_preserves_unproved_local_application_images(tmp_path, monkeypatch):
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
+    # A tag in the digest field also cannot establish a registry-backed image.
+    image_id = f'sha256:{16:064x}'
+    state['images'][image_id] = {
+        'id': image_id, 'tags': [IMAGE_REPOSITORY + ':manual-second'],
+        'digests': [IMAGE_REPOSITORY + ':looks-like-tag'],
+        'created': '2020-01-01T00:00:00Z',
+    }
+    before = set(state['images'])
+    with effects.channel_lock():
+        effects.activate(plan)
+    assert before - set(state['images']) == {f'sha256:{number:064x}' for number in (13, 14)}
+    assert {f'sha256:{number:064x}' for number in (15, 16)} <= set(state['images'])
+    assert state['deploy_calls'] == 1 and calls[-1][0] == 'bash' and not warnings
+
+
 def test_cache_cleanup_caps_exact_nonforce_removal_batch(tmp_path, monkeypatch):
     from app.ops.pg_acceptance import IMAGE_REPOSITORY
     effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
     for number in range(20, 31):
         image_id = f'sha256:{number:064x}'
         state['images'][image_id] = {
-            'id': image_id, 'tags': [f'{IMAGE_REPOSITORY}:{number:040x}'], 'digests': [],
+            'id': image_id, 'tags': [f'{IMAGE_REPOSITORY}:{number:040x}'],
+            'digests': [f'{IMAGE_REPOSITORY}@sha256:{number:064x}'],
             'created': '2020-01-01T00:00:00Z',
         }
     before = set(state['images'])
