@@ -204,6 +204,23 @@ def _isolated_native_inventory_helper(tmp_path: Path) -> tuple[Path, Path]:
     return helper, pids_path
 
 
+def _persistent_native_error_inventory_helper(tmp_path: Path) -> Path:
+    """Run the production CLI with a persistent native enumeration failure."""
+    helper = tmp_path / "persistent_native_error_inventory_helper.py"
+    helper.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
+        "from scripts import instance_state_writer_inventory as inventory\n"
+        "def fail_native(*, linux_boot_id=None):\n"
+        "    del linux_boot_id\n"
+        "    raise inventory.InventoryError('native process enumeration failed')\n"
+        "inventory._native_processes = fail_native\n"
+        "raise SystemExit(inventory.main(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    return helper
+
+
 def _controller_token(pid: int, *, env: dict[str, str] | None = None) -> str:
     return subprocess.check_output(
         [
@@ -3268,47 +3285,15 @@ def test_native_process_enumeration_error_fails_closed_without_proof(tmp_path) -
     output = tmp_path / "inventory.json"
     if sys.platform.startswith("linux"):
         env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
-        ready_r, ready_w = os.pipe()
-        continue_r, continue_w = os.pipe()
-        env |= {
-            "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_READY_FD": str(ready_w),
-            "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_CONTINUE_FD": str(continue_r),
-        }
-        launcher = _start_blocking_launcher(
-            _write_blocking_launcher(tmp_path), separate_session=True
-        )
-        helper = subprocess.Popen(
-            [
-                sys.executable,
-                str(WRITER_INVENTORY_HELPER),
-                "prove-quiescent",
-                "--controller-pid",
-                str(controller_pid),
-                "--controller-start-token",
-                controller_token,
-                "--output",
-                str(output),
-            ],
+        result, _ = _run_quiescence_helper(
+            tmp_path,
+            controller_pid=controller_pid,
+            controller_token=controller_token,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            pass_fds=(ready_w, continue_r),
-            text=True,
+            inventory_helper=_persistent_native_error_inventory_helper(tmp_path),
         )
-        os.close(ready_w)
-        os.close(continue_r)
-        try:
-            assert os.read(ready_r, 1) == b"R"
-            _stop_blocking_launcher(launcher)
-            os.write(continue_w, b"C")
-            _, stderr = helper.communicate(timeout=10)
-        finally:
-            os.close(ready_r)
-            os.close(continue_w)
-            _stop_blocking_launcher(launcher)
-            if helper.poll() is None:
-                helper.kill()
-                helper.wait(timeout=5)
+        stderr = result.stderr
+        helper = None
     else:
         fake_bin = tmp_path / "native-bin"
         fake_bin.mkdir()
