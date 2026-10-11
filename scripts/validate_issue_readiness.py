@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.builderops.issue_contract_validation import (  # noqa: E402
+    is_durable_repo_path,
     is_resolvable_verify_target,
 )
 
@@ -154,53 +155,85 @@ _MANUAL_ACCEPTANCE_HOLD = re.compile(
 _ACCEPTANCE_SECTIONS = (
     "Scope", "Constraints", "Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation",
 )
+_HEADING = re.compile(r"(?m)^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
+_HISTORY_HEADING = re.compile(r"\b(?:historical|history|completed|resolved|previous|archive)\b", re.I)
+_INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)(.*?)(?<!`)\1(?!`)", re.S)
 
 
-def _current_contract_text(body: str) -> str:
-    """Normalize visible inline prose without promoting history or code examples."""
+def _current_contract_markdown(body: str) -> str:
+    """Retain current section structure; fenced examples/history are context."""
     lines: list[str] = []
     history_level: int | None = None
-    fence: str | None = None
+    fence: tuple[str, int] | None = None
     for raw in body.splitlines():
-        fence_match = re.match(r"^\s*(`{3,}|~{3,})", raw)
-        if fence_match:
-            marker = fence_match.group(1)[0]
-            if fence is None:
-                fence = marker
-            elif marker == fence:
+        fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", raw)
+        if fence is not None:
+            if (fence_match and fence_match.group(1)[0] == fence[0]
+                    and len(fence_match.group(1)) >= fence[1] and not fence_match.group(2).strip()):
                 fence = None
             continue
-        if fence:
+        if fence_match and not (fence_match.group(1)[0] == "`" and "`" in fence_match.group(2)):
+            fence = fence_match.group(1)[0], len(fence_match.group(1))
             continue
-        heading = re.match(r"^(#{1,6})\s+(.+)$", raw)
+        heading = _HEADING.fullmatch(raw)
         if heading:
             level, title = len(heading.group(1)), heading.group(2)
             if history_level is not None and level <= history_level:
                 history_level = None
-            if re.search(r"\b(?:historical|history|completed|resolved|previous|archive)\b", title, re.I):
+            if _HISTORY_HEADING.search(title):
                 history_level = level
         if history_level is not None:
             continue
-        line = re.sub(r"\*{1,3}|(?<!\w)_{1,3}|_{1,3}(?!\w)", "", raw)
-        line = re.sub(r"\[([^\]]+)\]\([^)]*\)|\[([^\]]+)\]\[[^\]]*\]",
-                      lambda match: match.group(1) or match.group(2), line)
-        line = re.sub(r"</?(?:strong|em|b|i|code)(?:\s[^>]*)?>", "", line, flags=re.I)
-
-        def inline(match: re.Match[str]) -> str:
-            prefix = line[:match.start()]
-            if re.search(r"\b(?:rejects?|examples?(?: of)?|quoted examples?)\s*[:=]?\s*$", prefix, re.I):
-                return ""
-            return match.group(1)
-
-        line = re.sub(r"`([^`\n]+)`", inline, line)
-        lines.append(line)
+        lines.append(raw)
     return "\n".join(lines)
+
+
+def _current_contract_text(body: str) -> str:
+    """Normalize visible inline meaning, including every balanced code delimiter."""
+    current = _current_contract_markdown(body)
+    current = re.sub(r"\*{1,3}|(?<!\w)_{1,3}|_{1,3}(?!\w)", "", current)
+    current = re.sub(r"\[([^\]]+)\]\([^)]*\)|\[([^\]]+)\]\[[^\]]*\]",
+                     lambda match: match.group(1) or match.group(2), current)
+    current = re.sub(r"</?(?:strong|em|b|i|code)(?:\s[^>]*)?>", "", current, flags=re.I)
+
+    def inline(match: re.Match[str]) -> str:
+        prefix = current[current.rfind("\n", 0, match.start())+1:match.start()]
+        if re.search(r"\b(?:rejects?|examples?(?: of)?|quoted examples?)\s*[:=]?\s*$", prefix, re.I):
+            return ""
+        return " ".join(match.group(2).split())
+
+    return _INLINE_CODE.sub(inline, current)
+
+
+def _completed_exception(block: str) -> bool:
+    """Use the same visible block's explicit completed status, not future intent."""
+    marker_description = block.splitlines()[0].partition(":")[2]
+    # A marker may declare its choice settled; mentioning a completed sample
+    # in the description does not settle the current choice.
+    marker_declares_status = re.search(
+        r"^\s*(?:completed|resolved|closed|done|settled)\b|"
+        r"\b(?:choice|decision|exception|cadence)\s+(?:(?:is|was|has been|already|now)\s+)?"
+        r"(?:completed|resolved|chosen|closed|done|settled)\b", marker_description, re.I,
+    )
+    status_values = ([marker_description] if marker_declares_status else []) + re.findall(
+        r"(?im)(?:^\s*(?:[-+]\s+|\d+[.)]\s+)?|[;.]\s*)(?:resolution|status):[ \t]*([^\n]+)", block,
+    )
+    for value in status_values:
+        for clause in re.split(r"[;.]|\bbut\b|\bhowever\b", value, flags=re.I):
+            for match in re.finditer(r"\b(?:completed|resolved|chosen|closed|done|settled)\b", clause, re.I):
+                if not re.search(
+                    r"\b(?:not|never|unresolved|pending|waiting|awaiting|until|when|once|will|must)\b",
+                    clause, re.I,
+                ):
+                    return True
+    return False
 
 
 def _has_human_acceptance_exception(body: str) -> bool:
     """Bind all facts to one current, unresolved exception in the contract."""
     sections = extract_sections(_current_contract_text(body))
-    marker = re.compile(r"(?im)^\s*(?:-\s+(?:\[ \]\s+)?)?(?:current )?human acceptance exception:\s*\S.*$")
+    marker = re.compile(r"(?im)^\s*(?:[-+]\s+|\d+[.)]\s+)?(?:\[ \]\s+)?"
+                        r"(?:current )?human acceptance exception:\s*\S.*$")
     facts = (
         r"\b(?:observable (?:choice|observation)|observation|choice):[ \t]*(.+)",
         r"\b(?:why it cannot be automated|cannot (?:be automated|automate) because):[ \t]*(.+)",
@@ -213,10 +246,11 @@ def _has_human_acceptance_exception(body: str) -> bool:
         for index, start in enumerate(starts):
             end = starts[index + 1].start() if index + 1 < len(starts) else len(section)
             block = section[start.start():end]
-            next_item = re.search(r"(?m)^\s*-\s+\[[ xX]\]\s+", block[start.end()-start.start():])
+            next_item = re.search(r"(?m)^\s*(?:(?:[-+]\s+)?\[[ xX]\]\s+|#{1,6}\s+)",
+                                  block[start.end()-start.start():])
             if next_item:
                 block = block[:start.end()-start.start()+next_item.start()]
-            if re.search(r"(?im)^\s*(?:resolution|status):[^\n]*\b(?:completed|resolved|chosen|closed|done)\b", block):
+            if _completed_exception(block.lstrip()):
                 continue
             if all(any(_non_placeholder_lines(m.group(1)) for m in re.finditer(p, block, re.I)) for p in facts):
                 return True
@@ -275,13 +309,16 @@ def _normalize_heading(value: str) -> str:
 
 def extract_sections(body: str) -> dict[str, str]:
     sections: dict[str, str] = {}
-    heading_pattern = re.compile(r"^#{2,6}\s+(.+?)\s*$", re.MULTILINE)
-    matches = list(heading_pattern.finditer(body))
+    matches = list(_HEADING.finditer(body))
     for index, match in enumerate(matches):
-        title = re.sub(r"\s+\(optional\)\s*$", "", match.group(1).strip(), flags=re.I)
+        title = re.sub(r"\s+\(optional\)\s*$", "", match.group(2).strip(), flags=re.I)
         start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-        sections[_normalize_heading(title)] = body[start:end].strip()
+        end = next((later.start() for later in matches[index+1:]
+                    if len(later.group(1)) <= len(match.group(1))), len(body))
+        name = _normalize_heading(title)
+        # Current descendants belong to their ancestor. A repeated section may
+        # add requirements, but cannot overwrite an earlier current condition.
+        sections[name] = "\n".join(filter(None, (sections.get(name, ""), body[start:end].strip())))
     return sections
 
 
@@ -373,6 +410,7 @@ def _is_new_behavioral_test_file_target(target: str, path: str) -> bool:
     return (
         path.startswith("tests/")
         and path.endswith(".py")
+        and is_durable_repo_path(path)
         and is_resolvable_verify_target(target)
     )
 
@@ -431,21 +469,7 @@ def _has_concrete_verify_marker(item: str) -> bool:
     return (
         bool(targets)
         and len(set(targets)) == len(targets)
-        and all(
-            is_resolvable_verify_target(target) or _has_structural_verify_file_path(target)
-            for target in targets
-        )
-    )
-
-
-def _has_structural_verify_file_path(target: str) -> bool:
-    """Keep concrete legacy locators without using existence as grammar authority."""
-    path = _verify_file_path(target)
-    if path is None or re.search(r"<[^>]+>", target):
-        return False
-    return (
-        re.fullmatch(r"(?:\.[A-Za-z0-9_-]+|[A-Za-z0-9_-]+)(?:/[A-Za-z0-9_.-]+)*\.[A-Za-z0-9_-]+", path) is not None
-        and all(part not in {".", ".."} for part in path.split("/"))
+        and all(is_resolvable_verify_target(target) for target in targets)
     )
 
 
@@ -602,7 +626,7 @@ def classify_issue_body(
 ) -> IssueReadinessReport:
     # The fixed retained-source importer mode preserves its independently
     # qualified candidate-file evidence. It is not a CLI or Ready-mutation bypass.
-    sections = extract_sections(body)
+    sections = extract_sections(_current_contract_markdown(body))
     present = [section for section in REQUIRED_SECTIONS if _section_content(sections, section) is not None]
     missing = [section for section in REQUIRED_SECTIONS if section not in present]
     present_normalized = [_normalize_heading(section) for section in present]

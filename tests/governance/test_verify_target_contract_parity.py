@@ -151,7 +151,28 @@ def test_contract_documents_one_verify_line_per_target() -> None:
         "`<marker>` present in `tests/scripts/test_validate_issue_readiness.py`",
         "`docs/development/DEV_WORKFLOW.md :: later` removed as delivered.",
         "manual QA",
+        "docs/TESTING.md::",
+        "doc writeback at `docs/TESTING.md :: later`",
+        "doc writeback at `docs/TESTING.md :: later` (step 3)",
+        "`docs/TESTING.md::` (step 3)",
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications::",
+        "`docs/TESTING.md :: Automated Technical Acceptance` + `docs/DOCS_INDEX.md :: Overview`",
     ],
 )
 def test_grammar_still_rejects_unresolvable_targets(target: str) -> None:
     assert not is_resolvable_verify_target(target)
+
+
+@pytest.mark.parametrize("target", [
+    "doc writeback at `docs/development/DEV_WORKFLOW.md :: Acceptance verifiability` (step 3)",
+    "`doc writeback at `docs/development/DEV_WORKFLOW.md :: Acceptance verifiability` (step 3)`",
+    "tests/architecture/test_pr_hot_path_governance.py::test_hot_path_doc_defers_escalation_and_names_direct_repair_contract",
+])
+def test_concrete_legacy_locator_requires_one_complete_target(target: str) -> None:
+    assert is_resolvable_verify_target(target)
+
+
+def test_verify_locator_extension_does_not_change_source_anchor_authority() -> None:
+    from app.builderops.issue_contract_validation import is_durable_repo_path
+
+    assert not is_durable_repo_path("tests/architecture/test_pr_hot_path_governance.py")

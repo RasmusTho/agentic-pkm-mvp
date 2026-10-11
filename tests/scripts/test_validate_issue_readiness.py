@@ -702,6 +702,7 @@ def test_human_need_and_automated_acceptance_do_not_create_manual_gate() -> None
 
 @pytest.mark.parametrize("hold", [
     "Requires **operator UAT** before closure.", "Requires `operator UAT` before closure.",
+    "Requires ``operator UAT`` before closure.", "Requires ```operator UAT``` before closure.",
     "__UAT__ is required before closure.", "A **human** must run the acceptance test.",
     "Requires [operator UAT](https://example.test/acceptance) before closure.",
     "Requires [operator UAT][walkthrough] before closure.",
@@ -713,6 +714,97 @@ def test_markdown_manual_acceptance_hold_is_not_ready(hold: str) -> None:
     report = classify_issue_body(body, labels=["agent:ready"])
     assert report.readiness_classification == "ambiguous_intent"
     assert report.human_exception_required is False
+
+
+@pytest.mark.parametrize("section", [
+    "Scope", "Constraints", "Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation",
+])
+def test_current_acceptance_descendants_cannot_hide_manual_hold(section: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += f"\n## {section}\n### Required live acceptance\nRequires **operator UAT**."
+    for mode in (True, False):
+        report = classify_issue_body(body, labels=["agent:ready"], _resolve_verify_files=mode)
+        assert report.readiness_classification == "ambiguous_intent"
+        assert report.human_exception_required is False
+
+
+@pytest.mark.parametrize("prefix", ["", "- ", "- [ ] ", "1. "])
+def test_nested_current_human_choice_stays_held_without_labels(prefix: str) -> None:
+    body = _with_current_exception(
+        (FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        "### Current human acceptance\n" + _HUMAN_ACCEPTANCE_EXCEPTION.replace(
+            "Human acceptance exception:", prefix + "Human acceptance exception:"),
+    )
+    for mode in (True, False):
+        report = classify_issue_body(body, labels=["agent:ready"], _resolve_verify_files=mode)
+        assert report.readiness_classification == "not_agentable"
+        assert report.human_exception_required is True
+
+
+@pytest.mark.parametrize("completion", [
+    "- Resolution: cadence chosen and completed.", "* Status: completed.",
+    "Resolution: cadence chosen and completed.",
+    "Human acceptance exception: prior cadence decision resolved and completed.",
+    "Human acceptance exception: cadence selected; Status: completed.",
+])
+def test_completed_exception_format_cannot_supply_current_authority(completion: str) -> None:
+    exception = _HUMAN_ACCEPTANCE_EXCEPTION
+    if completion.startswith("Human acceptance exception:"):
+        exception = exception.replace("Human acceptance exception: personal accessibility preference.", completion)
+    else:
+        exception += completion + "\n"
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(), exception)
+    for mode in (True, False):
+        report = classify_issue_body(body, labels=["agent:ready"], _resolve_verify_files=mode)
+        assert report.readiness_classification == "ready_candidate"
+        assert report.human_exception_required is False
+        held = classify_issue_body(body + "\n## Validation / Acceptance Path\nRequires operator UAT.",
+                                   labels=["agent:ready"], _resolve_verify_files=mode)
+        assert held.readiness_classification == "ambiguous_intent"
+        assert held.human_exception_required is False
+    labelled = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert labelled.readiness_classification == "not_agentable"
+    assert labelled.human_exception_required is True
+
+
+@pytest.mark.parametrize("status", [
+    "- Status: pending until the cadence is chosen; not completed.",
+    "- Status: completed when the owner selects a cadence.",
+])
+def test_current_human_choice_is_not_completed_by_prospective_status(status: str) -> None:
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        _HUMAN_ACCEPTANCE_EXCEPTION + status + "\n")
+    assert classify_issue_body(body).human_exception_required is True
+    assert classify_issue_body(body).readiness_classification == "not_agentable"
+
+
+def test_completed_sample_does_not_resolve_a_current_human_choice() -> None:
+    exception = _HUMAN_ACCEPTANCE_EXCEPTION.replace("personal accessibility preference.",
+                                                   "accessibility preference for a completed audio sample.")
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(), exception)
+    assert classify_issue_body(body).human_exception_required is True
+    assert classify_issue_body(body).readiness_classification == "not_agentable"
+
+
+def test_historical_descendants_and_multi_tick_examples_remain_context() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += ("\n## Validation / Acceptance Path\n### Historical acceptance\nRequires ``operator UAT``.\n"
+             "### Current automated acceptance\nThe checker rejects ``Requires operator UAT``.\n"
+             "```markdown\n## Constraints\nRequires operator UAT.\n```\n")
+    assert classify_issue_body(body).readiness_classification == "ready_candidate"
+    assert classify_issue_body(body).human_exception_required is False
+
+
+@pytest.mark.parametrize("target", [
+    "docs/TESTING.md::", "doc writeback at `docs/TESTING.md :: later`",
+    "`docs/TESTING.md::` (step 3)", "doc writeback at `docs/TESTING.md :: later` (step 3)",
+])
+def test_file_locator_never_overrides_missing_or_vague_verify_selector(target: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text().replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification == "missing_verify_markers"
 
 
 @pytest.mark.parametrize("history", [

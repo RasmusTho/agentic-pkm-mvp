@@ -601,20 +601,42 @@ def test_issue_source_task_rejects_unsupported_manual_acceptance(hold: str) -> N
                           observed_at=source["updated_at"], authority_epoch=1)
 
 
-def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("case", ["bold", "nested", "double_ticks", "current_choice", "empty_selector", "vague_anchor"])
+def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkeypatch, capsys, case):
     from app.builderops import cockpit_github_plane
+    from app.builderops.control_plane.client import ControlPlaneNotFoundError
 
     source = _import_source()
-    source["body"] += "\n## Validation / Acceptance Path\nRequires **operator UAT**."
+    if case == "current_choice":
+        choice = ("### Current human acceptance\nHuman acceptance exception: personal accessibility preference.\n"
+            "Observable choice: owner selects the comfortable spoken cadence.\n"
+            "Cannot be automated because: only the owner can report their listening experience.\n"
+            "Owner: owner\nunblocks_when: the owner records the chosen cadence on this Issue.\n")
+        source["body"] = source["body"].replace("## Acceptance Criteria", choice + "\n## Acceptance Criteria")
+    elif case in {"empty_selector", "vague_anchor"}:
+        target = "docs/TESTING.md::" if case == "empty_selector" else "doc writeback at `docs/TESTING.md :: later`"
+        source["body"] = source["body"].replace(
+            "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target)
+    else:
+        condition = {"bold": "Requires **operator UAT**.", "nested": "### Required live acceptance\nRequires **operator UAT**.",
+                     "double_ticks": "Requires ``operator UAT``."}[case]
+        source["body"] += "\n## Validation / Acceptance Path\n" + condition
     reads = []
     def source_read(args):
         reads.append(args)
         return source
     monkeypatch.setattr(cockpit_github_plane, "_run_gh", source_read)
     clients = []
+    class ImportProbe(_RecordingClient):
+        authority_epoch = 1
+        def get_task(self, **address):
+            self.calls.append(("get_task", address))
+            raise ControlPlaneNotFoundError("synthetic absent task")
+        def transition_task(self, **request):
+            self.calls.append(("transition_task", request))
+            return {"result": {}}
     def factory(config):
-        client = _RecordingClient(config)
-        client.authority_epoch = 1
+        client = ImportProbe(config)
         clients.append(client)
         return client
     command = ["--delivery-manifest-dir", str(_manifest_dir(tmp_path)), "--task-class", "implementation",
@@ -623,7 +645,8 @@ def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkey
     assert main(command, client_factory=factory) != 0
     capsys.readouterr()
     assert reads == [["api", "repos/rasmustho/agentic-pkm-mvp/issues/501"]]
-    assert all(not client.calls for client in clients)
+    assert clients
+    assert all(not client.calls for client in clients), [client.calls for client in clients]
 
 
 def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys):
