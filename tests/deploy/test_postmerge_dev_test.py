@@ -196,13 +196,20 @@ def test_automatic_migration_guard_runs_before_native_effects(tmp_path, monkeypa
     monkeypatch.setattr(effects, 'validate_plan', lambda _plan: None)
     monkeypatch.setattr(linux, '_capture_watch_configured', lambda _config: False)
     monkeypatch.setattr(linux, '_migration_baseline', lambda *_args, **_kwargs: '')
-    monkeypatch.setattr(linux, '_git_bytes', lambda *_args: b'')
-    monkeypatch.setattr(reversibility, 'check_migration_snapshots',
-                        lambda _snapshots: {'forward_only': ['irreversible.py']})
+    monkeypatch.setattr(linux, '_git_bytes', lambda *_args: (
+        b'app/alembic/versions/missing_marker.py\n' if 'ls-tree' in _args
+        else b'revision = "missing_marker"\ndown_revision = None\n'))
     monkeypatch.setattr(linux, 'vm_selected_values', lambda *_args: pytest.fail('credential materialization'))
-    with pytest.raises(PostgresDeployError):
+    with pytest.raises(reversibility.MigrationMarkerError):
         effects.preflight(plan)
     assert effects.password is None
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_automatic_nonprod_forward_only_preserves_migration_policy(tmp_path, channel):
+    from tests.deploy.test_deploy_channel import _assert_nonprod_forward_only_migration_policy
+
+    _assert_nonprod_forward_only_migration_policy(tmp_path, channel, automatic=True)
 
 
 def test_automatic_native_guard_refuses_inherited_ack_before_credentials(tmp_path, monkeypatch):
@@ -610,6 +617,14 @@ def test_vm_fetches_new_candidate_objects_without_checkout_or_credentials(tmp_pa
     assert git('rev-parse', 'HEAD', cwd=vm) == baseline
     assert git('show', revision + ':candidate', cwd=vm) == 'new'
     assert (vm / 'candidate').read_text() == 'old'
+
+
+def test_controller_script_entrypoint_imports_without_pythonpath(tmp_path):
+    script = ROOT / 'scripts/postmerge_dev_test.py'
+    result = subprocess.run([sys.executable, '-I', '-S', str(script), '--help'], cwd=tmp_path,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    assert '--source-run' in result.stdout and '--latest' in result.stdout
 
 
 def test_installer_script_entrypoint_imports_without_pythonpath(tmp_path):

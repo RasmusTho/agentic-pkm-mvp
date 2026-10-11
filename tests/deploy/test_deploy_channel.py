@@ -2063,10 +2063,9 @@ def test_forward_only_migration_failure_retains_compatible_target_image(tmp_path
     assert len(strict_recreates) == 1
 
 
-@pytest.mark.parametrize("channel", ["dev", "test"])
-def test_nonprod_forward_only_migration_does_not_require_operator_ack(
-    tmp_path: Path, channel: str
-) -> None:
+def _forward_only_nonprod_harness(
+    tmp_path: Path, channel: str,
+) -> tuple[Path, dict[str, str], str, str]:
     root, env, previous_sha = _deploy_harness(tmp_path)
     if channel == "test":
         _configure_dev_test_environment_clobber_preflight(
@@ -2100,8 +2099,24 @@ def test_nonprod_forward_only_migration_does_not_require_operator_ack(
         ["git", "rev-parse", "HEAD"], cwd=root, text=True
     ).strip()
     env["FAKE_SHA"] = target_sha
+    return root, env, previous_sha, target_sha
 
-    result = _run_deploy(root, env, target_sha, channel=channel)
+
+def _assert_nonprod_forward_only_migration_policy(
+    tmp_path: Path, channel: str, *, automatic: bool = False
+) -> None:
+    root, env, _previous_sha, target_sha = _forward_only_nonprod_harness(tmp_path, channel)
+    pin_path = root / f"config/deploy/{channel}.env"
+
+    from app.ops import postgres_deploy_linux as linux
+    from types import SimpleNamespace
+
+    assert linux._raw_representation_migration_pending(
+        SimpleNamespace(root=root, channel=channel), target_sha, automatic=automatic
+    ) is False
+    digest = "sha256:" + "b" * 64
+    extra = ("--automatic", "--image-digest", digest) if automatic else ()
+    result = _run_deploy(root, env, target_sha, *extra, channel=channel)
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "migration gate ok: 1 migration(s), forward_only=1" in result.stdout
@@ -2109,11 +2124,12 @@ def test_nonprod_forward_only_migration_does_not_require_operator_ack(
     assert any(event.startswith("migration-full ack=") for event in events)
     assert not any(event.startswith("migration-token-probe ") for event in events)
     assert f"APP_IMAGE_TAG={target_sha}" in pin_path.read_text(encoding="utf-8")
-    receipt = json.loads(
+    deployment = json.loads(
         (root / "ops/deployments" / f"{channel}-latest.json").read_text(
             encoding="utf-8"
         )
-    )["migration_receipt"]
+    )
+    receipt = deployment["migration_receipt"]
     assert receipt["forward_only"] == ["forward_only_nonprod.py"]
     assert receipt["ack_forward_only"] is False
     assert receipt["classification_decisions"] == [
@@ -2123,6 +2139,18 @@ def test_nonprod_forward_only_migration_does_not_require_operator_ack(
             "is_forward_only": True,
         }
     ]
+    if automatic:
+        assert deployment["image_digest"] == digest
+        assert deployment["automatic"] is True
+        assert deployment["image"].endswith(":" + target_sha + "@" + digest)
+        assert "APP_IMAGE_DIGEST_SUFFIX=@" + digest in pin_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("channel", ["dev", "test"])
+def test_nonprod_forward_only_migration_does_not_require_operator_ack(
+    tmp_path: Path, channel: str
+) -> None:
+    _assert_nonprod_forward_only_migration_policy(tmp_path, channel)
 
 
 def test_prod_forward_only_ack_is_bound_before_writer_stop_and_full_migrate(
