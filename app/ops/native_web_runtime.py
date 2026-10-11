@@ -182,6 +182,11 @@ class DailySourceFault:
         self.versions = dict(daily['source_files'])
         self.deep = deep
         self.deep_paths = set(deep.versions) if deep is not None else set()
+        self.marker = daily.get('fixture_marker')
+        if self.marker is not None or deep is not None:
+            if (not isinstance(self.marker, str) or Path(self.marker).is_absolute() or '..' in Path(self.marker).parts
+                or re.fullmatch(r'[0-9a-f]{64}', str(daily.get('fixture_marker_sha256'))) is None):
+                raise NativeWebRefusal('daily_fixture_marker_unknown')
         if deep is not None and any(name not in self.versions or self.versions[name] != deep.versions[name] for name in self.deep_paths):
             raise NativeWebRefusal('source_version_ownership_mismatch')
         path = Path(daily['moment_path'])
@@ -191,6 +196,11 @@ class DailySourceFault:
         self.path = path.as_posix()
 
     def require_current(self) -> None:
+        if self.marker is not None:
+            marker = self.vault / self.marker
+            if (marker.is_symlink() or not marker.is_file()
+                or hashlib.sha256(marker.read_bytes()).hexdigest() != self.daily['fixture_marker_sha256']):
+                raise NativeWebRefusal('daily_fixture_marker_drift')
         for name, expected in self.expected_versions().items():
             path = self.vault / name
             if (Path(name).is_absolute() or '..' in Path(name).parts or path.is_symlink()

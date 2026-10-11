@@ -87,7 +87,8 @@ def test_normal_capture_exact_request_and_response_versions(sources, fault):
 
 
 @pytest.mark.usefixtures('mock_product_api_routes')
-def test_serial_original_daily_sources_acknowledgement_fault_restore_and_drift(sources, monkeypatch):
+@pytest.mark.parametrize('immutable_source', ['note', 'marker'])
+def test_serial_original_daily_sources_acknowledgement_fault_restore_and_drift(sources, monkeypatch, immutable_source):
     from app.api.routes.companion import _stage_queue_review_panel_proposal
     from app.api.routes.panel import panel_confirm
     from app.panel import confirmation
@@ -120,9 +121,9 @@ def test_serial_original_daily_sources_acknowledgement_fault_restore_and_drift(s
     effects['daily-briefing']['restore_source'] = 1
     daily.write(True)
     daily.require_restored()
-    immutable = vault / fixture.NOTE_PATH
+    immutable = vault / fixture.NOTE_PATH if immutable_source == 'note' else marker
     immutable.write_text(immutable.read_text() + '\nUnrelated drift.\n')
-    with pytest.raises(web.NativeWebRefusal, match='daily_fixture_source_drift'):
+    with pytest.raises(web.NativeWebRefusal, match='daily_fixture_(source|marker)_drift'):
         daily.require_current()
 
 
