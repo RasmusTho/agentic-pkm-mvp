@@ -604,6 +604,7 @@ def test_issue_source_task_rejects_unsupported_manual_acceptance(hold: str) -> N
 @pytest.mark.parametrize("case", [
     "bold", "nested", "double_ticks", "current_choice", "empty_selector", "vague_anchor", "artifact_topic",
     "joined_diff", "joined_marker", "joined_diff_and", "joined_diff_comma",
+    "malformed_doc_wrapper", "malformed_roadmap_wrapper", "mismatched_target_wrapper",
     "heading_acceptance_samples", "heading_audio_samples", "heading_acceptance_examples", "heading_choices_snapshots",
     "heading_exceptions_samples", "heading_completed_decisions", "heading_resolved_acceptance",
 ])
@@ -629,13 +630,17 @@ def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkey
             }[case]
             choice = choice.replace("### Current human acceptance", f"### {heading}") + "- Status: unresolved.\n"
         source["body"] = source["body"].replace("## Acceptance Criteria", choice + "\n## Acceptance Criteria")
-    elif case in {"empty_selector", "vague_anchor", "joined_diff", "joined_marker", "joined_diff_and", "joined_diff_comma"}:
+    elif case in {"empty_selector", "vague_anchor", "joined_diff", "joined_marker", "joined_diff_and", "joined_diff_comma",
+                  "malformed_doc_wrapper", "malformed_roadmap_wrapper", "mismatched_target_wrapper"}:
         target = {
             "empty_selector": "docs/TESTING.md::", "vague_anchor": "doc writeback at `docs/TESTING.md :: later`",
             "joined_diff": "diff of `docs/TESTING.md` + `docs/STATUS.md`",
             "joined_marker": "`accepted` present in `docs/TESTING.md` + `docs/STATUS.md`",
             "joined_diff_and": "diff of `docs/TESTING.md` and `docs/STATUS.md`",
             "joined_diff_comma": "diff of `docs/TESTING.md`, `docs/STATUS.md`",
+            "malformed_doc_wrapper": "`doc writeback at `docs/TESTING.md :: Automated Technical Acceptance``",
+            "malformed_roadmap_wrapper": "`roadmap diff: `docs/ROADMAP.md :: DDO-03``",
+            "mismatched_target_wrapper": "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications``",
         }[case]
         source["body"] = source["body"].replace(
             "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target)
@@ -671,17 +676,24 @@ def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkey
     assert all(not client.calls for client in clients), [client.calls for client in clients]
 
 
-@pytest.mark.parametrize("variant", ["canonical", "diff_annotation", "marker_annotation", "completed_choice", "closed_scope", "history_snapshot"])
+@pytest.mark.parametrize("variant", ["canonical", "diff_annotation", "marker_annotation", "wrapped_doc", "wrapped_roadmap",
+                                     "legacy_wrapped_doc", "legacy_wrapped_roadmap",
+                                     "completed_choice", "closed_scope", "history_snapshot"])
 def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys, variant):
     import copy
     from app.builderops import cockpit_github_plane
     from app.builderops.control_plane.client import ControlPlaneNotFoundError
 
     source = _import_source()
-    if variant in {"diff_annotation", "marker_annotation"}:
+    if variant in {"diff_annotation", "marker_annotation", "wrapped_doc", "wrapped_roadmap",
+                   "legacy_wrapped_doc", "legacy_wrapped_roadmap"}:
         target = {
             "diff_annotation": "diff of `docs/TESTING.md` adding a bounded step running `tests/scripts/test_validate_issue_readiness.py`",
             "marker_annotation": "`accepted` present in `docs/TESTING.md`, checked by the existing readiness fixture",
+            "wrapped_doc": "`doc writeback at docs/TESTING.md :: Automated Technical Acceptance`",
+            "wrapped_roadmap": "`roadmap diff: docs/ROADMAP.md :: DDO-03`",
+            "legacy_wrapped_doc": "`doc writeback at `docs/TESTING.md :: Automated Technical Acceptance` (step 3)`",
+            "legacy_wrapped_roadmap": "`roadmap diff: `docs/ROADMAP.md :: DDO-03` (step 3)`",
         }[variant]
         source["body"] = source["body"].replace(
             "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target)

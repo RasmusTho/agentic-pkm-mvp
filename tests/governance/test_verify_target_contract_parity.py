@@ -155,12 +155,37 @@ def test_contract_documents_one_verify_line_per_target() -> None:
         "doc writeback at `docs/TESTING.md :: later`",
         "doc writeback at `docs/TESTING.md :: later` (step 3)",
         "`docs/TESTING.md::` (step 3)",
+        "`doc writeback at `docs/TESTING.md :: Automated Technical Acceptance``",
+        "`roadmap diff: `docs/ROADMAP.md :: DDO-03``",
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications``",
         "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications::",
         "`docs/TESTING.md :: Automated Technical Acceptance` + `docs/DOCS_INDEX.md :: Overview`",
     ],
 )
 def test_grammar_still_rejects_unresolvable_targets(target: str) -> None:
+    from scripts.validate_issue_readiness import classify_issue_body
+
     assert not is_resolvable_verify_target(target)
+    body = (REPO_ROOT / "tests/fixtures/issue_readiness/valid_ready_candidate.md").read_text().replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification != "ready_candidate"
+
+
+@pytest.mark.parametrize("target", [
+    "`doc writeback at docs/TESTING.md :: Automated Technical Acceptance`",
+    "`roadmap diff: docs/ROADMAP.md :: DDO-03`",
+])
+def test_unambiguous_whole_target_code_wrapper_preserves_eligibility(target: str) -> None:
+    from scripts.validate_issue_readiness import classify_issue_body
+
+    assert is_resolvable_verify_target(target)
+    body = (REPO_ROOT / "tests/fixtures/issue_readiness/valid_ready_candidate.md").read_text().replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification == "ready_candidate"
 
 
 @pytest.mark.parametrize("target", [

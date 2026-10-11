@@ -72,7 +72,9 @@ def _contains_vague_authority_token(value: str) -> bool:
 
 
 def _strip_backtick_pair(value: str) -> str:
-    if len(value) >= 2 and value.startswith("`") and value.endswith("`"):
+    """Remove isolated outer ticks without splitting a delimiter run."""
+    if (len(value) >= 2 and value.startswith("`") and value.endswith("`")
+            and not value.startswith("``") and not value.endswith("``")):
         return value[1:-1]
     return value
 
@@ -186,11 +188,7 @@ def is_resolvable_verify_target(value: str) -> bool:
         return (_is_concrete_verify_path(presence_target.group("path"))
                 and _single_target_text(presence_target.group("annotation")))
 
-    unquoted_target = _strip_backtick_pair(target)
-    if (unquoted_target != target and "`" in unquoted_target
-            and not unquoted_target.startswith(("doc writeback at ", "roadmap diff: "))):
-        return False
-    target = unquoted_target
+    target = _strip_backtick_pair(target)
 
     if _is_canonical_backticked_inner(target):
         return True
