@@ -20,6 +20,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts import ygg_jev  # noqa: E402
 from tests.companion_ui import focus_jev_advisory  # noqa: E402
+from tests.companion_ui import focus_state_jev_advisory  # noqa: E402
 from tests.companion_ui.jev_advisory import (  # noqa: E402
     FIXTURE_VERSION, MIN_CONFIDENCE, RUBRIC_VERSION, InvalidObservation,
     assessed_answers, build_judgment_request, load_observations, request_fingerprint,
@@ -27,6 +28,7 @@ from tests.companion_ui.jev_advisory import (  # noqa: E402
 
 TEST_MODULE = "tests/companion_ui/test_vault_browser_state_runtime.py"
 FOCUS_TEST_MODULE = "tests/companion_ui/test_focus_owner_facts_runtime.py"
+FOCUS_STATE_TEST_MODULE = "tests/companion_ui/test_focus_evidence_state_runtime.py"
 HELPER = Path.home() / ".local/bin/jev-direct"
 
 ORDINARY_NAMES = {
@@ -42,6 +44,10 @@ ORDINARY_NAMES = {
 FOCUS_NAMES = {
     f"test_focus_owner_fact_identity_matrix[{viewport}-{case}]"
     for viewport in ("desktop", "narrow-pane") for case in focus_jev_advisory.CASES
+}
+FOCUS_STATE_NAMES = {
+    f"test_focus_evidence_state_matrix[{viewport}-{case}]"
+    for viewport in ("desktop", "narrow-pane") for case in focus_state_jev_advisory.CASES
 }
 
 
@@ -84,6 +90,9 @@ def _browser_inventory(junit: Path, surface: str = "vault-browser") -> dict[str,
     names = [case.get("name") for case in cases]
     expected = FOCUS_NAMES if surface == "focus-owner-facts" else ORDINARY_NAMES
     classname = "tests.companion_ui.test_focus_owner_facts_runtime" if surface == "focus-owner-facts" else "tests.companion_ui.test_vault_browser_state_runtime"
+    if surface == "focus-evidence-state":
+        expected = FOCUS_STATE_NAMES
+        classname = "tests.companion_ui.test_focus_evidence_state_runtime"
     if len(names) != len(expected) or set(names) != expected:
         raise InvalidObservation()
     for case in cases:
@@ -102,6 +111,8 @@ def _run_browser(directory: Path, source_sha: str, surface: str = "vault-browser
     # The exact suite remains the gate. Provider failure cannot replace this result.
     with (directory / "pytest.log").open("wb") as log:
         module = FOCUS_TEST_MODULE if surface == "focus-owner-facts" else TEST_MODULE
+        if surface == "focus-evidence-state":
+            module = FOCUS_STATE_TEST_MODULE
         return subprocess.run([sys.executable, "-m", "pytest", "-q", f"--junitxml={directory / 'junit.xml'}", module],
                               cwd=REPO_ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=False).returncode
 
@@ -134,10 +145,13 @@ def _judge_once(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def run(output_root: Path, *, live_jev: bool = False, surface: str = "vault-browser") -> int:
-    if surface not in {"vault-browser", "focus-owner-facts"}:
+    if surface not in {"vault-browser", "focus-owner-facts", "focus-evidence-state"}:
         raise ValueError("Unknown advisory surface")
     fixture_version = focus_jev_advisory.FIXTURE_VERSION if surface == "focus-owner-facts" else FIXTURE_VERSION
     rubric_version = focus_jev_advisory.RUBRIC_VERSION if surface == "focus-owner-facts" else RUBRIC_VERSION
+    if surface == "focus-evidence-state":
+        fixture_version = focus_state_jev_advisory.FIXTURE_VERSION
+        rubric_version = focus_state_jev_advisory.RUBRIC_VERSION
     source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True).strip()
     dirty = subprocess.check_output(["git", "status", "--porcelain"], cwd=REPO_ROOT, text=True)
     if dirty:
@@ -165,14 +179,17 @@ def run(output_root: Path, *, live_jev: bool = False, surface: str = "vault-brow
             return 2
     # Preserve the existing default invocation; each surface has its own finite
     # inventory and source/rubric attempt identity, using the same dispatch fence.
-    code = _run_browser(directory, source_sha, surface) if surface == "focus-owner-facts" else _run_browser(directory, source_sha)
+    code = _run_browser(directory, source_sha) if surface == "vault-browser" else _run_browser(directory, source_sha, surface)
     report["deterministic"] = {"status": "passed" if code == 0 else "failed", "exit_code": code}
     if code:
         report["jev"]["reason"] = "deterministic_failed"
     else:
         try:
             report["deterministic"].update(_browser_inventory(directory / "junit.xml", surface))
-            if surface == "focus-owner-facts":
+            if surface == "focus-evidence-state":
+                observations = focus_state_jev_advisory.load_observations(directory / "observations", source_sha)
+                request = focus_state_jev_advisory.build_judgment_request(observations)
+            elif surface == "focus-owner-facts":
                 observations = focus_jev_advisory.load_observations(directory / "observations", source_sha)
                 request = focus_jev_advisory.build_judgment_request(observations)
             else:
@@ -201,7 +218,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True, help="Retained evidence root; existing source/rubric attempts are never replayed.")
     parser.add_argument("--live-jev", action="store_true", help="One synthetic advisory batch through the existing reviewed local helper.")
-    parser.add_argument("--surface", choices=("vault-browser", "focus-owner-facts"), default="vault-browser", help="Finite browser/semantic matrix to assess; each surface retains a separate versioned report.")
+    parser.add_argument("--surface", choices=("vault-browser", "focus-owner-facts", "focus-evidence-state"), default="vault-browser", help="Finite browser/semantic matrix to assess; each surface retains a separate versioned report.")
     args = parser.parse_args()
     return run(args.output_dir, live_jev=args.live_jev, surface=args.surface)
 

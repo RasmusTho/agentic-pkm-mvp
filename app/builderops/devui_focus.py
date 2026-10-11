@@ -569,7 +569,9 @@ def _focus_state(
     ):
         return "focus_blocked"
     if has_unlinked_observation or any(
-        claim["owner_state"] != "fresh" for claim in evidence
+        claim["owner_state"] not in {"fresh", "measured_empty"}
+        or claim["freshness"] != "fresh"
+        for claim in evidence
     ):
         return "focus_partial"
     return "focus_ready"

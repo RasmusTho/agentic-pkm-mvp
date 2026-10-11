@@ -622,6 +622,14 @@ synthetic repository behavior through the existing listener and source transport
 live source qualification or owner acceptance. Missing or invalid outcome evidence withdraws that
 claim while the selected Issue and an independently admitted ask remain usable.
 
+A fresh, available, complete and linked measured-empty evidence read supports a ready Focus
+context with its original timestamp and read watermark. Empty cardinality remains separate from
+freshness: stale or unknown-timing empty reads keep the context partial, and unusable governing
+sources retain their blocking state. Context readiness does not change the independently declared
+next legal step or grant permission to act. The finite evidence-state browser matrix also proves
+these distinctions through the managed listener, composer and existing shell with synthetic
+source-read inputs.
+
 Focus presents, in this order:
 
 1. owner intent and why this subject is in view;

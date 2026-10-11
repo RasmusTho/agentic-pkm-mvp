@@ -557,6 +557,35 @@ def test_browser_runtime_runs_focus_owner_fact_advisory(tmp_path, monkeypatch) -
     assert evidence["with"]["if-no-files-found"] == "error"
 
 
+def test_browser_runtime_runs_focus_evidence_state_advisory(tmp_path, monkeypatch) -> None:
+    trigger = yaml.safe_load(BROWSER_WORKFLOW.read_text(encoding="utf-8"))[True]
+    for event in ("push", "pull_request"):
+        assert "tests/companion_ui/**" in trigger[event]["paths"]
+    step = _browser_step("Run deterministic Focus evidence-state browser regressions")
+    assert step.get("continue-on-error", False) is False
+    assert "if" not in step and "--live-jev" not in step["run"]
+    assert "--surface focus-evidence-state" in step["run"]
+    upload = _browser_step("Retain Focus evidence-state diagnostics")
+    assert upload["if"] == "always()" and upload["with"]["if-no-files-found"] == "error"
+    from scripts import run_jev_browser_advisory as runner
+    calls = []
+    def observe(args, **kwargs):
+        calls.append((args, kwargs)); return subprocess.CompletedProcess(args, 0)
+    monkeypatch.setattr(runner.subprocess, "run", observe)
+    assert runner._run_browser(tmp_path, "a" * 40, "focus-evidence-state") == 0
+    assert len(calls) == 1
+    args, kwargs = calls[0]
+    assert args[-1] == "tests/companion_ui/test_focus_evidence_state_runtime.py"
+    assert kwargs["env"]["COMPANION_UI_BROWSER_TESTS"] == "1"
+    assert kwargs["env"]["DEVUI_MANAGED_EVIDENCE_DIR"] == str(tmp_path / "browser")
+    assert kwargs["env"]["COMPANION_UI_JEV_OBSERVATIONS_DIR"] == str(tmp_path / "observations")
+    assert kwargs["env"]["COMPANION_UI_JEV_SOURCE_SHA"] == "a" * 40
+    evidence = _browser_step("Retain Focus evidence-state diagnostics")
+    assert evidence["if"] == "always()" and evidence["uses"] == "actions/upload-artifact@v4"
+    assert evidence["with"]["path"] == "${{ runner.temp }}/focus-evidence-state"
+    assert evidence["with"]["if-no-files-found"] == "error"
+
+
 def test_browser_runtime_executes_vault_state_matrix_and_retains_diagnostics(
     tmp_path: Path, monkeypatch,
 ) -> None:
