@@ -156,8 +156,18 @@ _ACCEPTANCE_SECTIONS = (
     "Scope", "Constraints", "Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation",
 )
 _HEADING = re.compile(r"(?m)^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
-_HISTORY_HEADING = re.compile(r"\b(?:historical|history|completed|resolved|previous|archive)\b", re.I)
+_HISTORY_HEADING = re.compile(
+    r"^(?:historical|history|previous|archive)\b|"
+    r"^(?:completed|resolved|closed|settled)\s+(?:human\s+)?(?:decisions?|choices?|exceptions?|acceptance)\b", re.I,
+)
 _INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)(.*?)(?<!`)\1(?!`)", re.S)
+_COMPLETED_CHOICE_CLAUSE = re.compile(
+    r"(?:(?:(?:the|prior|previous|historical|current)\s+)?"
+    r"(?:(?:cadence\s+)?(?:choice|decision|exception)|cadence)\s+"
+    r"(?:(?:is|was|has been)\s+)?(?:(?:already|now)\s+)?)?"
+    r"(?:completed|resolved|chosen|closed|done|settled)"
+    r"(?:\s+and\s+(?:completed|resolved|chosen|closed|done|settled))*", re.I,
+)
 
 
 def _current_contract_markdown(body: str) -> str:
@@ -177,7 +187,7 @@ def _current_contract_markdown(body: str) -> str:
             continue
         heading = _HEADING.fullmatch(raw)
         if heading:
-            level, title = len(heading.group(1)), heading.group(2)
+            level, title = len(heading.group(1)), _visible_contract_text(heading.group(2))
             if history_level is not None and level <= history_level:
                 history_level = None
             if _HISTORY_HEADING.search(title):
@@ -188,9 +198,8 @@ def _current_contract_markdown(body: str) -> str:
     return "\n".join(lines)
 
 
-def _current_contract_text(body: str) -> str:
-    """Normalize visible inline meaning, including every balanced code delimiter."""
-    current = _current_contract_markdown(body)
+def _visible_contract_text(current: str) -> str:
+    """Render the same bounded inline meaning in prose and section titles."""
     current = re.sub(r"\*{1,3}|(?<!\w)_{1,3}|_{1,3}(?!\w)", "", current)
     current = re.sub(r"\[([^\]]+)\]\([^)]*\)|\[([^\]]+)\]\[[^\]]*\]",
                      lambda match: match.group(1) or match.group(2), current)
@@ -205,28 +214,22 @@ def _current_contract_text(body: str) -> str:
     return _INLINE_CODE.sub(inline, current)
 
 
+def _current_contract_text(body: str) -> str:
+    return _visible_contract_text(_current_contract_markdown(body))
+
+
 def _completed_exception(block: str) -> bool:
-    """Use the same visible block's explicit completed status, not future intent."""
+    """Only a complete choice-status clause can settle the current exception."""
     marker_description = block.splitlines()[0].partition(":")[2]
-    # A marker may declare its choice settled; mentioning a completed sample
-    # in the description does not settle the current choice.
-    marker_declares_status = re.search(
-        r"^\s*(?:completed|resolved|closed|done|settled)\b|"
-        r"\b(?:choice|decision|exception|cadence)\s+(?:(?:is|was|has been|already|now)\s+)?"
-        r"(?:completed|resolved|chosen|closed|done|settled)\b", marker_description, re.I,
+    status_values = re.findall(
+        r"(?im)(?:^\s*(?:[-+]\s+|\d+[.)]\s+)?|[;.]\s*)(?:resolution|status):[ \t]*([^;\n]+)", block,
     )
-    status_values = ([marker_description] if marker_declares_status else []) + re.findall(
-        r"(?im)(?:^\s*(?:[-+]\s+|\d+[.)]\s+)?|[;.]\s*)(?:resolution|status):[ \t]*([^\n]+)", block,
-    )
-    for value in status_values:
-        for clause in re.split(r"[;.]|\bbut\b|\bhowever\b", value, flags=re.I):
-            for match in re.finditer(r"\b(?:completed|resolved|chosen|closed|done|settled)\b", clause, re.I):
-                if not re.search(
-                    r"\b(?:not|never|unresolved|pending|waiting|awaiting|until|when|once|will|must)\b",
-                    clause, re.I,
-                ):
-                    return True
-    return False
+    # Explicit current status wins over a topic. Conflicting/unknown declarations
+    # remain held. Without fields, only a full declarative choice clause counts;
+    # adjectives such as 'completed audio sample' are never completion evidence.
+    declarations = status_values or [marker_description]
+    return all(_COMPLETED_CHOICE_CLAUSE.fullmatch(re.split(r"[.;]", value, maxsplit=1)[0].strip())
+               is not None for value in declarations)
 
 
 def _has_human_acceptance_exception(body: str) -> bool:
@@ -311,7 +314,7 @@ def extract_sections(body: str) -> dict[str, str]:
     sections: dict[str, str] = {}
     matches = list(_HEADING.finditer(body))
     for index, match in enumerate(matches):
-        title = re.sub(r"\s+\(optional\)\s*$", "", match.group(2).strip(), flags=re.I)
+        title = re.sub(r"\s+\(optional\)\s*$", "", _visible_contract_text(match.group(2)).strip(), flags=re.I)
         start = match.end()
         end = next((later.start() for later in matches[index+1:]
                     if len(later.group(1)) <= len(match.group(1))), len(body))

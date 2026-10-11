@@ -176,3 +176,17 @@ def test_verify_locator_extension_does_not_change_source_anchor_authority() -> N
     from app.builderops.issue_contract_validation import is_durable_repo_path
 
     assert not is_durable_repo_path("tests/architecture/test_pr_hot_path_governance.py")
+
+
+@pytest.mark.parametrize("target", CONTRACT_FORM_EXAMPLES.values(), ids=CONTRACT_FORM_EXAMPLES.keys())
+@pytest.mark.parametrize("joiner", [" + ", " and ", ", "])
+def test_every_verify_form_refuses_a_joined_second_locator(target: str, joiner: str) -> None:
+    from scripts.validate_issue_readiness import classify_issue_body
+
+    joined = target + joiner + "`docs/STATUS.md`"
+    assert not is_resolvable_verify_target(joined)
+    body = (REPO_ROOT / "tests/fixtures/issue_readiness/valid_ready_candidate.md").read_text().replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", joined,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification != "ready_candidate"

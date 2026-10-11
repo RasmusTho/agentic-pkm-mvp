@@ -601,20 +601,32 @@ def test_issue_source_task_rejects_unsupported_manual_acceptance(hold: str) -> N
                           observed_at=source["updated_at"], authority_epoch=1)
 
 
-@pytest.mark.parametrize("case", ["bold", "nested", "double_ticks", "current_choice", "empty_selector", "vague_anchor"])
+@pytest.mark.parametrize("case", [
+    "bold", "nested", "double_ticks", "current_choice", "empty_selector", "vague_anchor", "artifact_topic",
+    "joined_diff", "joined_marker", "joined_diff_and", "joined_diff_comma",
+])
 def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkeypatch, capsys, case):
     from app.builderops import cockpit_github_plane
     from app.builderops.control_plane.client import ControlPlaneNotFoundError
 
     source = _import_source()
-    if case == "current_choice":
+    if case in {"current_choice", "artifact_topic"}:
         choice = ("### Current human acceptance\nHuman acceptance exception: personal accessibility preference.\n"
             "Observable choice: owner selects the comfortable spoken cadence.\n"
             "Cannot be automated because: only the owner can report their listening experience.\n"
             "Owner: owner\nunblocks_when: the owner records the chosen cadence on this Issue.\n")
+        if case == "artifact_topic":
+            choice = choice.replace("Human acceptance exception: personal accessibility preference.",
+                "Current human acceptance exception: completed audio sample accessibility preference.")
         source["body"] = source["body"].replace("## Acceptance Criteria", choice + "\n## Acceptance Criteria")
-    elif case in {"empty_selector", "vague_anchor"}:
-        target = "docs/TESTING.md::" if case == "empty_selector" else "doc writeback at `docs/TESTING.md :: later`"
+    elif case in {"empty_selector", "vague_anchor", "joined_diff", "joined_marker", "joined_diff_and", "joined_diff_comma"}:
+        target = {
+            "empty_selector": "docs/TESTING.md::", "vague_anchor": "doc writeback at `docs/TESTING.md :: later`",
+            "joined_diff": "diff of `docs/TESTING.md` + `docs/STATUS.md`",
+            "joined_marker": "`accepted` present in `docs/TESTING.md` + `docs/STATUS.md`",
+            "joined_diff_and": "diff of `docs/TESTING.md` and `docs/STATUS.md`",
+            "joined_diff_comma": "diff of `docs/TESTING.md`, `docs/STATUS.md`",
+        }[case]
         source["body"] = source["body"].replace(
             "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target)
     else:
@@ -649,12 +661,26 @@ def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkey
     assert all(not client.calls for client in clients), [client.calls for client in clients]
 
 
-def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("variant", ["canonical", "diff_annotation", "marker_annotation", "completed_choice"])
+def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys, variant):
     import copy
     from app.builderops import cockpit_github_plane
     from app.builderops.control_plane.client import ControlPlaneNotFoundError
 
     source = _import_source()
+    if variant in {"diff_annotation", "marker_annotation"}:
+        target = {
+            "diff_annotation": "diff of `docs/TESTING.md` adding a bounded step running `tests/scripts/test_validate_issue_readiness.py`",
+            "marker_annotation": "`accepted` present in `docs/TESTING.md`, checked by the existing readiness fixture",
+        }[variant]
+        source["body"] = source["body"].replace(
+            "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target)
+    elif variant == "completed_choice":
+        choice = ("### Current human acceptance\nCurrent human acceptance exception: completed audio sample accessibility preference.\n"
+            "Observable choice: owner selects the comfortable spoken cadence.\n"
+            "Cannot be automated because: only the owner can report their listening experience.\n"
+            "Owner: owner\nunblocks_when: the owner records the chosen cadence on this Issue.\n- Status: completed.\n")
+        source["body"] = source["body"].replace("## Acceptance Criteria", choice + "\n## Acceptance Criteria")
     reads, writes = [], []
     row = None
 
