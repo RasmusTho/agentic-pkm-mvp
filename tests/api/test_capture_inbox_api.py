@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 
 import app.api.routes.capture as capture_module
 from app.api.app import app
+from app.model_access.catalog import CatalogError
 from app.write_guard import WritesBlockedError
 from tests.api._vault_test_helpers import bind_initialized_vault
 
@@ -151,6 +152,46 @@ def test_capture_appends_to_inbox_through_governed_pipeline(
     written_after = inbox_note.read_text(encoding="utf-8")
     assert "Call the bank" in written_after
     assert "Renew the passport" in written_after
+
+
+def test_capture_acknowledges_written_note_when_question_catalog_unavailable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault, outbox = _setup_vault(tmp_path, monkeypatch)
+
+    def _catalog_unavailable(**_: object):
+        raise CatalogError("catalog_invalid")
+
+    monkeypatch.setattr(
+        capture_module, "propose_question_registration", _catalog_unavailable
+    )
+
+    resp = TestClient(app).post(
+        "/api/companion/capture",
+        json={"text": "capture survives a busy question catalog"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["outcome"] == "written"
+    assert data["registration_state"] == "degraded"
+    assert data["registration_proposal_id"] is None
+
+    inbox_note = vault / "Inbox" / "inbox.md"
+    written = inbox_note.read_text(encoding="utf-8")
+    assert written.count("capture survives a busy question catalog") == 1
+
+    events = _outbox_events(outbox)
+    capture_events = [
+        event for event in events if event.get("event") == "capture.inbox.appended"
+    ]
+    assert len(capture_events) == 1
+    authority_receipt = data["governed_write"]["authority_receipt"]
+    assert (
+        capture_events[0]["payload"]["authority_receipt_id"]
+        == authority_receipt["receipt_id"]
+    )
 
 
 def test_capture_has_no_task_semantics(
