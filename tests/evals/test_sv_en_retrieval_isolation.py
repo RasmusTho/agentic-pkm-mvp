@@ -110,3 +110,52 @@ def test_failed_entry_does_not_change_downstream_embedding_identity(monkeypatch,
             pass
     assert embeddings.get_primary_provider() == "mock"
     assert len(embeddings.embed_text("downstream", normalize=False)) == 4
+
+
+def test_actual_product_embedding_entry_restores_state(monkeypatch, isolated_state):
+    """Keep embed_docs and its Product facade; fail at client acquisition below them."""
+    from app.components.llm import fabric
+
+    original_embed_docs = retrieval.embed_docs
+    calls = []
+    failure = ExecutorNetworkConfigurationError("path_configuration_missing")
+
+    def fail_client(identity, *, router):
+        calls.append((identity, router))
+        raise failure
+
+    monkeypatch.setattr(fabric, "_product_embedding_client_for_identity", fail_client)
+    with pytest.raises(ExecutorNetworkConfigurationError) as caught:
+        with evaluation.IdentityRun("nomic", "linear"):
+            pytest.fail("failed Product client acquisition must not enter the body")
+    assert retrieval.embed_docs is original_embed_docs
+    assert len(calls) == 1
+    assert calls[0][0].dim > 0
+    assert caught.value is failure
+    _assert_restored(isolated_state)
+    assert embeddings.get_primary_provider() == "mock"
+    assert len(embeddings.embed_text("downstream", normalize=False)) == 4
+
+
+@pytest.mark.parametrize("interrupted", [False, True])
+def test_acquisition_failure_survives_cleanup_failure(monkeypatch, isolated_state, interrupted):
+    acquisition_error = KeyboardInterrupt() if interrupted else RuntimeError("acquisition failed")
+    cleanup_error = RuntimeError("store restoration failed")
+    store = isolated_state[0]
+
+    def fail_acquisition(*args, **kwargs):
+        raise acquisition_error
+
+    def fail_cleanup(*args, **kwargs):
+        raise cleanup_error
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(retrieval, "embed_docs", fail_acquisition)
+        scoped.setattr(store, "set_documents", fail_cleanup)
+        with pytest.raises(type(acquisition_error)) as caught:
+            with evaluation.IdentityRun("nomic", "linear"):
+                pytest.fail("failed acquisition must not enter the body")
+    assert caught.value is acquisition_error
+    assert caught.value.__cause__ is cleanup_error
+    _assert_restored(isolated_state)
+    assert len(embeddings.embed_text("downstream", normalize=False)) == 4

@@ -261,8 +261,13 @@ class IdentityRun:
             _load_corpus_into_store(self.docs, vectors)
             return self
 
-        except BaseException:
-            self.__exit__()
+        except BaseException as acquisition_error:
+            try:
+                self.__exit__()
+            except BaseException as cleanup_error:
+                # Preserve the failing acquisition (including interruption) as primary,
+                # while retaining any restoration failure as its explicit cause.
+                raise acquisition_error from cleanup_error
             raise
 
     def __exit__(self, *exc: object) -> None:
