@@ -480,6 +480,18 @@ dependency, per-test 120-second timeout or the 30-minute profile deadline preven
 Observed selected/pass counts are evidence, not a permanent test-count gate. This adds finite PG
 coverage; broader product functional acceptance remains separately governed.
 
+Automatic DEV/TEST activation may reclaim at most eight proved unused official application-image
+IDs under the existing native channel lock before the ordinary deployment script runs. The cache
+inventory reads only fixed image/container IDs, references, tags, digests and creation times. Every
+running, stopped or created container image, current/previous and rollback pin, pending-migration
+reference and exact admitted target digest remains protected, including different digests for the
+same source SHA. Images with another-repository alias or unproved provenance are retained. Each
+exact, non-force removal rechecks the protected snapshot and image metadata. Manual and PROD paths
+perform no cache maintenance, and this path never prunes volumes or touches application, database
+or vault data. Unavailable or malformed inventory, changed snapshots or failed removal stop further
+reclamation with a fixed warning, then continue the unchanged pull and deployment gates. This is
+optional recovery of rebuildable image cache, not a capacity or approval prerequisite.
+
 `app.ops.pg_acceptance_runner` creates an operation/channel-owned pgvector container with a
 network-none namespace and tmpfs database storage. The test container shares only that namespace;
 PostgreSQL is loopback-only, with no published port or route to persistent channel resources. The
