@@ -604,20 +604,30 @@ def test_issue_source_task_rejects_unsupported_manual_acceptance(hold: str) -> N
 @pytest.mark.parametrize("case", [
     "bold", "nested", "double_ticks", "current_choice", "empty_selector", "vague_anchor", "artifact_topic",
     "joined_diff", "joined_marker", "joined_diff_and", "joined_diff_comma",
+    "heading_acceptance_samples", "heading_audio_samples", "heading_acceptance_examples", "heading_choices_snapshots",
+    "heading_exceptions_samples", "heading_completed_decisions", "heading_resolved_acceptance",
 ])
 def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkeypatch, capsys, case):
     from app.builderops import cockpit_github_plane
     from app.builderops.control_plane.client import ControlPlaneNotFoundError
 
     source = _import_source()
-    if case in {"current_choice", "artifact_topic"}:
+    if case in {"current_choice", "artifact_topic"} or case.startswith("heading_"):
         choice = ("### Current human acceptance\nHuman acceptance exception: personal accessibility preference.\n"
             "Observable choice: owner selects the comfortable spoken cadence.\n"
             "Cannot be automated because: only the owner can report their listening experience.\n"
             "Owner: owner\nunblocks_when: the owner records the chosen cadence on this Issue.\n")
-        if case == "artifact_topic":
+        if case == "artifact_topic" or case.startswith("heading_"):
             choice = choice.replace("Human acceptance exception: personal accessibility preference.",
                 "Current human acceptance exception: completed audio sample accessibility preference.")
+        if case.startswith("heading_"):
+            heading = {
+                "heading_acceptance_samples": "Completed acceptance samples", "heading_audio_samples": "Completed audio samples",
+                "heading_acceptance_examples": "Resolved acceptance examples", "heading_choices_snapshots": "Closed choices snapshots",
+                "heading_exceptions_samples": "Settled exceptions samples", "heading_completed_decisions": "Completed decisions",
+                "heading_resolved_acceptance": "Resolved human acceptance",
+            }[case]
+            choice = choice.replace("### Current human acceptance", f"### {heading}") + "- Status: unresolved.\n"
         source["body"] = source["body"].replace("## Acceptance Criteria", choice + "\n## Acceptance Criteria")
     elif case in {"empty_selector", "vague_anchor", "joined_diff", "joined_marker", "joined_diff_and", "joined_diff_comma"}:
         target = {
@@ -661,7 +671,7 @@ def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkey
     assert all(not client.calls for client in clients), [client.calls for client in clients]
 
 
-@pytest.mark.parametrize("variant", ["canonical", "diff_annotation", "marker_annotation", "completed_choice"])
+@pytest.mark.parametrize("variant", ["canonical", "diff_annotation", "marker_annotation", "completed_choice", "closed_scope", "history_snapshot"])
 def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys, variant):
     import copy
     from app.builderops import cockpit_github_plane
@@ -675,11 +685,16 @@ def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys
         }[variant]
         source["body"] = source["body"].replace(
             "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target)
-    elif variant == "completed_choice":
+    elif variant in {"completed_choice", "closed_scope", "history_snapshot"}:
         choice = ("### Current human acceptance\nCurrent human acceptance exception: completed audio sample accessibility preference.\n"
             "Observable choice: owner selects the comfortable spoken cadence.\n"
             "Cannot be automated because: only the owner can report their listening experience.\n"
             "Owner: owner\nunblocks_when: the owner records the chosen cadence on this Issue.\n- Status: completed.\n")
+        if variant == "closed_scope":
+            choice = choice.replace("### Current human acceptance", "### Completed decisions")
+        elif variant == "history_snapshot":
+            choice = choice.replace("### Current human acceptance", "### Historical decisions").replace(
+                "Status: completed", "Status: unresolved")
         source["body"] = source["body"].replace("## Acceptance Criteria", choice + "\n## Acceptance Criteria")
     reads, writes = [], []
     row = None

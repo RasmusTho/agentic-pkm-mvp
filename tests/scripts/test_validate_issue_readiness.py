@@ -809,6 +809,43 @@ def test_conflicting_choice_status_keeps_the_current_human_condition() -> None:
     assert classify_issue_body(body).readiness_classification == "not_agentable"
 
 
+@pytest.mark.parametrize("heading", [
+    "Completed acceptance samples", "Completed audio samples", "Resolved acceptance examples",
+    "Closed choices snapshots", "Settled exceptions samples", "Completed decisions", "Resolved human acceptance",
+])
+@pytest.mark.parametrize("current_marker", [True, False])
+def test_scope_topic_cannot_erase_explicitly_unresolved_choice(heading: str, current_marker: bool) -> None:
+    exception = _HUMAN_ACCEPTANCE_EXCEPTION.replace("personal accessibility preference.",
+        "completed audio sample accessibility preference.")
+    if current_marker:
+        exception = exception.replace("Human acceptance exception:", "Current human acceptance exception:")
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        f"### {heading}\n" + exception + "- Status: unresolved.\n")
+    for mode in (True, False):
+        report = classify_issue_body(body, labels=["agent:ready"], _resolve_verify_files=mode)
+        assert report.readiness_classification == "not_agentable"
+        assert report.human_exception_required is True
+
+
+def test_closed_scope_cannot_erase_a_current_descendant_requirement() -> None:
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        "### Completed decisions\n#### Current acceptance\nRequires operator UAT.\n")
+    assert classify_issue_body(body).readiness_classification == "ambiguous_intent"
+    assert not classify_issue_body(body).human_exception_required
+
+
+@pytest.mark.parametrize("heading", ["Historical decisions", "Completed decisions", "Resolved human acceptance"])
+def test_true_history_or_closed_choice_scope_remains_context(heading: str) -> None:
+    exception = _HUMAN_ACCEPTANCE_EXCEPTION + "- Status: completed.\n"
+    if heading == "Historical decisions":
+        exception = exception.replace("Human acceptance exception:", "Current human acceptance exception:").replace(
+            "Status: completed", "Status: unresolved")
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        f"### {heading}\n" + exception)
+    assert classify_issue_body(body).readiness_classification == "ready_candidate"
+    assert not classify_issue_body(body).human_exception_required
+
+
 @pytest.mark.parametrize("history_heading", ["Historical acceptance", "**Historical acceptance**", "`Historical acceptance`"])
 def test_historical_descendants_and_multi_tick_examples_remain_context(history_heading: str) -> None:
     body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()

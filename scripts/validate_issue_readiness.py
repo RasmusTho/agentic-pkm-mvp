@@ -156,9 +156,13 @@ _ACCEPTANCE_SECTIONS = (
     "Scope", "Constraints", "Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation",
 )
 _HEADING = re.compile(r"(?m)^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
-_HISTORY_HEADING = re.compile(
-    r"^(?:historical|history|previous|archive)\b|"
-    r"^(?:completed|resolved|closed|settled)\s+(?:human\s+)?(?:decisions?|choices?|exceptions?|acceptance)\b", re.I,
+_HISTORY_HEADING = re.compile(r"^(?:historical|history|previous|archive)\b", re.I)
+_COMPLETED_SCOPE_HEADING = re.compile(
+    r"(?:completed|resolved|closed|settled)\s+(?:human\s+)?(?:decisions?|choices?|exceptions?|acceptance)", re.I,
+)
+_HUMAN_ACCEPTANCE_MARKER = re.compile(
+    r"(?im)^\s*(?:[-+]\s+|\d+[.)]\s+)?(?:\[ \]\s+)?"
+    r"(?P<current>current )?human acceptance exception:\s*\S.*$",
 )
 _INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)(.*?)(?<!`)\1(?!`)", re.S)
 _COMPLETED_CHOICE_CLAUSE = re.compile(
@@ -172,8 +176,7 @@ _COMPLETED_CHOICE_CLAUSE = re.compile(
 
 def _current_contract_markdown(body: str) -> str:
     """Retain current section structure; fenced examples/history are context."""
-    lines: list[str] = []
-    history_level: int | None = None
+    unfenced: list[str] = []
     fence: tuple[str, int] | None = None
     for raw in body.splitlines():
         fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", raw)
@@ -185,6 +188,12 @@ def _current_contract_markdown(body: str) -> str:
         if fence_match and not (fence_match.group(1)[0] == "`" and "`" in fence_match.group(2)):
             fence = fence_match.group(1)[0], len(fence_match.group(1))
             continue
+        unfenced.append(raw)
+
+    # Immutable history is context even if it quotes a then-current condition.
+    unarchived: list[str] = []
+    history_level: int | None = None
+    for raw in unfenced:
         heading = _HEADING.fullmatch(raw)
         if heading:
             level, title = len(heading.group(1)), _visible_contract_text(heading.group(2))
@@ -194,7 +203,27 @@ def _current_contract_markdown(body: str) -> str:
                 history_level = level
         if history_level is not None:
             continue
-        lines.append(raw)
+        unarchived.append(raw)
+
+    lines: list[str] = []
+    completed_level: int | None = None
+    for index, raw in enumerate(unarchived):
+        heading = _HEADING.fullmatch(raw)
+        if heading:
+            level, title = len(heading.group(1)), _visible_contract_text(heading.group(2))
+            if completed_level is not None and level <= completed_level:
+                completed_level = None
+            if _COMPLETED_SCOPE_HEADING.fullmatch(title):
+                end = next((later for later in range(index+1, len(unarchived))
+                            if (match := _HEADING.fullmatch(unarchived[later]))
+                            and len(match.group(1)) <= level), len(unarchived))
+                subtree = "\n".join(unarchived[index+1:end])
+                # A full closed-scope declaration is only a default context.
+                # Explicit current/unresolved descendants cannot be erased by it.
+                if not _explicit_current_condition(subtree):
+                    completed_level = level
+        if completed_level is None:
+            lines.append(raw)
     return "\n".join(lines)
 
 
@@ -218,12 +247,16 @@ def _current_contract_text(body: str) -> str:
     return _visible_contract_text(_current_contract_markdown(body))
 
 
+def _choice_status_values(block: str) -> list[str]:
+    return re.findall(
+        r"(?im)(?:^\s*(?:[-+]\s+|\d+[.)]\s+)?|[;.]\s*)(?:resolution|status):[ \t]*([^;\n]+)", block,
+    )
+
+
 def _completed_exception(block: str) -> bool:
     """Only a complete choice-status clause can settle the current exception."""
     marker_description = block.splitlines()[0].partition(":")[2]
-    status_values = re.findall(
-        r"(?im)(?:^\s*(?:[-+]\s+|\d+[.)]\s+)?|[;.]\s*)(?:resolution|status):[ \t]*([^;\n]+)", block,
-    )
+    status_values = _choice_status_values(block)
     # Explicit current status wins over a topic. Conflicting/unknown declarations
     # remain held. Without fields, only a full declarative choice clause counts;
     # adjectives such as 'completed audio sample' are never completion evidence.
@@ -232,11 +265,31 @@ def _completed_exception(block: str) -> bool:
                is not None for value in declarations)
 
 
+def _human_exception_blocks(section: str) -> list[tuple[re.Match[str], str]]:
+    starts = list(_HUMAN_ACCEPTANCE_MARKER.finditer(section))
+    blocks = []
+    for index, start in enumerate(starts):
+        end = starts[index+1].start() if index+1 < len(starts) else len(section)
+        block = section[start.start():end]
+        marker_end = start.end()-start.start()
+        boundary = re.search(r"(?m)^\s*(?:(?:[-+]\s+)?\[[ xX]\]\s+|#{1,6}\s+)", block[marker_end:])
+        if boundary:
+            block = block[:marker_end+boundary.start()]
+        blocks.append((start, block.lstrip()))
+    return blocks
+
+
+def _explicit_current_condition(subtree: str) -> bool:
+    visible = _visible_contract_text(subtree)
+    if any(match.group(2).casefold().startswith("current ") for match in _HEADING.finditer(visible)):
+        return True
+    return any(not _completed_exception(block) and (marker.group("current") or _choice_status_values(block))
+               for marker, block in _human_exception_blocks(visible))
+
+
 def _has_human_acceptance_exception(body: str) -> bool:
     """Bind all facts to one current, unresolved exception in the contract."""
     sections = extract_sections(_current_contract_text(body))
-    marker = re.compile(r"(?im)^\s*(?:[-+]\s+|\d+[.)]\s+)?(?:\[ \]\s+)?"
-                        r"(?:current )?human acceptance exception:\s*\S.*$")
     facts = (
         r"\b(?:observable (?:choice|observation)|observation|choice):[ \t]*(.+)",
         r"\b(?:why it cannot be automated|cannot (?:be automated|automate) because):[ \t]*(.+)",
@@ -245,15 +298,8 @@ def _has_human_acceptance_exception(body: str) -> bool:
     )
     for name in _ACCEPTANCE_SECTIONS:
         section = sections.get(_normalize_heading(name), "")
-        starts = list(marker.finditer(section))
-        for index, start in enumerate(starts):
-            end = starts[index + 1].start() if index + 1 < len(starts) else len(section)
-            block = section[start.start():end]
-            next_item = re.search(r"(?m)^\s*(?:(?:[-+]\s+)?\[[ xX]\]\s+|#{1,6}\s+)",
-                                  block[start.end()-start.start():])
-            if next_item:
-                block = block[:start.end()-start.start()+next_item.start()]
-            if _completed_exception(block.lstrip()):
+        for _, block in _human_exception_blocks(section):
+            if _completed_exception(block):
                 continue
             if all(any(_non_placeholder_lines(m.group(1)) for m in re.finditer(p, block, re.I)) for p in facts):
                 return True
