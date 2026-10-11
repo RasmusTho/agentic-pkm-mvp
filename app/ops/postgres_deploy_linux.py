@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import pwd
 import re
+import signal
 import socket
 import socketserver
 import stat
@@ -29,6 +30,7 @@ from urllib.parse import urlencode, quote
 from app.config.database import credential_free_database_fields, host_database_fields
 from app.ops.bws_secret_reader import BwsReaderConfig, BwsSecretReader
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
+from app.ops.native_web_acceptance import NativeWebRefusal, WEB_PROFILE
 from app.ops.postgres_deploy import (
     DeployJournal, DeployPlan, DeployReceipt, DeployWorker, PostgresDeployError,
     password_authenticate, vm_selected_values,
@@ -1096,6 +1098,99 @@ class LinuxEffects:
     def cleanup_verification(self, operation_id: str, plan: DeployPlan) -> None:
         self._pg_runner(operation_id, plan).cleanup()
 
+    def qualify_web(self, operation_id: str) -> dict[str, Any]:
+        """Fixed optional disposable proof for an already committed native image.
+
+        No plan, command or profile is supplied by the caller. This readback
+        does not rewrite PG, deployment, channel-health or parent acceptance.
+        """
+        from app.ops.native_web_acceptance_runner import NativeWebRunner
+        if self.lock_fd is None or self.operation_id != operation_id:
+            raise NativeWebRefusal('expected_committed_native_operation_required')
+        proof = self._web_admission(operation_id)
+        # Read only the two already-governed selectors. Never forward a channel
+        # env file, its credentials or ambient caller TTS values to the image.
+        runtime_path = _runtime_env_file_path(self.config.runtime_env_file)
+        selectors: dict[str, str] = {}
+        for line in runtime_path.read_text().splitlines():
+            key, separator, value = line.partition('=')
+            if separator and key in {'TTS_ENABLED', 'TTS_HOST_ROOT'}:
+                if key in selectors:
+                    raise NativeWebRefusal('selected_tts_configuration_ambiguous')
+                selectors[key] = value
+        root = Path(selectors.get('TTS_HOST_ROOT', ''))
+        if selectors.get('TTS_ENABLED') != 'true' or not root.is_absolute() or not root.is_dir():
+            raise NativeWebRefusal('selected_local_tts_unavailable')
+        if root.is_relative_to(self.config.root.resolve()) or any(p.is_symlink() for p in (root, *root.parents)):
+            raise NativeWebRefusal('selected_tts_source_unqualified')
+        ensure_candidate_object(self.config, proof['source_sha'])
+        result = NativeWebRunner(self.config.root, self.config.journal.directory,
+                                 sha=proof['source_sha'], digest=proof['image_digest'],
+                                 channel=self.config.channel, operation_id=operation_id, tts_root=root).verify()
+        # Separate derived evidence, deliberately outside the deployment receipt.
+        directory = self.config.journal.directory / 'native-web-results'
+        directory.mkdir(mode=0o700, exist_ok=True)
+        info = directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or directory.is_symlink() or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+            raise NativeWebRefusal('web_evidence_directory_unqualified')
+        path = directory / (self.config.channel + '-' + operation_id + '-' + result['resource_generation'] + '.json')
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, 'w') as stream:
+            json.dump(result, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return result
+
+    def _web_admission(self, operation_id: str) -> dict[str, Any]:
+        from app.ops.pg_acceptance import require_pass
+        if self.config.channel not in {'dev', 'test'} or str(UUID(operation_id)) != operation_id:
+            raise NativeWebRefusal('expected_committed_native_operation_required')
+        receipt = self.config.journal.read()
+        if (receipt is None or receipt.operation_id != operation_id or receipt.terminal_result != 'committed'
+            or receipt.pg_acceptance is None):
+            raise NativeWebRefusal('expected_committed_native_operation_required')
+        proof = receipt.pg_acceptance
+        require_pass(proof, proof['source_sha'], proof['image_digest'], self.config.channel, operation_id)
+        request = _private_json(self.config.journal.directory / (self.config.channel + '.request.json'))
+        raw = request.get('plan', {})
+        plan = DeployPlan(self.config.channel, proof['source_sha'], tuple(raw.get('services', ())),
+                          tuple(raw.get('consumers', ())), False, proof['image_digest'], True)
+        if set(request) != {'operation_id', 'plan', 'bootstrap'} or request['bootstrap'] is not False:
+            raise NativeWebRefusal('native_request_identity_mismatch')
+        self.config.journal.bind_request(operation_id, plan, False)
+        return proof
+
+    def run_web_qualification(self, operation_id: str) -> dict[str, Any]:
+        """Run/recover this fixed proof under the existing exact channel lock."""
+        self._web_admission(operation_id)  # Refuse foreign/prod before any lock/resource effect.
+        self.operation_id = operation_id
+        path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
+        if not path.exists():
+            with self.channel_lock():
+                return self.qualify_web(operation_id)
+        # An abrupt owner exit can retain native admission. Reuse its existing
+        # inode/flock proof; never treat a name/PID or released lock as freeze.
+        with self.failed_reconciliation_lock() as handle:
+            self.lock_fd = handle[3]
+            try:
+                receipt = self.config.journal.read()
+                if (receipt is None or receipt.operation_id != operation_id
+                    or receipt.terminal_result != 'committed' or not self.quiescent()):
+                    raise PostgresDeployError()
+                result = self.qualify_web(operation_id)
+                if result['cleanup'] != 'confirmed':
+                    raise PostgresDeployError()
+                self.retire_reconciled_channel_lock(handle)
+                return result
+            finally:
+                self.lock_fd = None
+
     def _running_one_shots(self) -> bool:
         # Running-only inventory misses a created container that Docker may
         # still start. This census grants no authority to stop any container.
@@ -1557,7 +1652,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=(
         'serve', 'rpc', 'guard', 'cleanup', 'token-push', 'token-push-worker',
-        'token-push-status', 'token-push-inspect',
+        'token-push-status', 'token-push-inspect', 'qualify-web',
     ))
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
     parser.add_argument('operation_id', nargs='?')
@@ -1578,6 +1673,20 @@ def main(argv: list[str] | None = None) -> int:
                 selected,
                 app_root=LinuxConfig.load(args.channel, require_runtime_env=False).root,
             )
+        if args.action == 'qualify-web':
+            if (args.channel not in {'dev', 'test'} or args.operation_id is None
+                or args.attempt_id is not None or args.prior_generation is not None or args.compose_command):
+                raise NativeWebRefusal('fixed_dev_test_invocation_required')
+            effects = LinuxEffects(LinuxConfig.load(args.channel))
+            def interrupted(_signal: int, _frame: Any) -> None:
+                raise KeyboardInterrupt()
+            previous_handler = signal.signal(signal.SIGTERM, interrupted)
+            try:
+                result = effects.run_web_qualification(args.operation_id)
+            finally:
+                signal.signal(signal.SIGTERM, previous_handler)
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result['result'] == 'passed' else 78
         if args.action == 'serve':
             serve(LinuxConfig.load(args.channel))
         elif args.action == 'guard':
@@ -1592,6 +1701,10 @@ def main(argv: list[str] | None = None) -> int:
             result = rpc(args.channel, request)
             print(json.dumps(result, sort_keys=True))
         return 0
+    except NativeWebRefusal as exc:
+        print(json.dumps({'profile_version': WEB_PROFILE, 'result': 'refused', 'reason': exc.reason,
+                          'cleanup': 'not_started'}, sort_keys=True))
+        return 78
     except Exception:
         print('database deployment refused; operation remains pending', file=sys.stderr)
         return 78
