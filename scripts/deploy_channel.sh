@@ -707,6 +707,10 @@ migration_gate() {
   local from_sha="$1" to_sha="$2" receipt_json forward_count migration_output rc
   local har_raw_pending
   local -a migration_paths
+  if [ "${automatic}" = "1" ] && [ "${ack_forward_only}" != "0" ]; then
+    echo "automatic deployment refused inherited migration acknowledgement" >&2
+    return 78
+  fi
   DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING=0
   export DEPLOY_HEIMDAL_RAW_MIGRATION_PENDING
   migration_paths=()
@@ -780,10 +784,6 @@ print("1" if pending else "0")
     return 1
   }
   forward_count="$("${PYTHON}" -c 'import json,sys; print(len(json.loads(sys.stdin.read())["forward_only"]))' <<<"${receipt_json}")"
-  if [ "${automatic}" = "1" ] && { [ "${forward_count}" -gt 0 ] || [ "${ack_forward_only}" != "0" ]; }; then
-    echo "automatic migration gate refused forward-only candidate before channel mutation" >&2
-    return 78
-  fi
   echo "migration gate ok: ${#migration_paths[@]} migration(s), forward_only=${forward_count}"
   MIGRATIONS_CHECKED="${#migration_paths[@]}"
   FORWARD_ONLY_COUNT="${forward_count}"

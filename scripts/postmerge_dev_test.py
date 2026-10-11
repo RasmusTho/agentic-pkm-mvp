@@ -26,6 +26,9 @@ from typing import Any, Callable
 from uuid import NAMESPACE_URL, UUID, uuid5
 from zipfile import ZipFile
 
+if __package__ in {None, ''}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from app.ops.pg_acceptance import require_pass
 
 REPOSITORY = 'RasmusTho/agentic-pkm-mvp'

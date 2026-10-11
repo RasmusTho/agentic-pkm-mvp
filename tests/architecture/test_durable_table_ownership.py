@@ -765,24 +765,15 @@ def test_adopted_tables_are_reachable_from_the_alembic_revision_chain() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# The PG proofs must actually run in a CI lane
+# The PG proofs must run in the native profile and nightly lane
 # --------------------------------------------------------------------------- #
 
-# The two lanes that actually execute `-m "pg"`. Both select files by explicit
-# allow-list, and every other lane runs `-m "not pg"`, so a pg-marked test that
-# is in neither runs in no CI lane at all.
-#
-# `integration-nightly / pg-contracts` triggers on `schedule` + `workflow_dispatch`
-# only. `ci-smoke / index_pg` is the PR-path lane — the same precedent EROJ-01
-# (#4350) set for its own pg-marked mechanism proofs.
+# The shared native profile replaces the PR PG lane after actual coverage
+# handoff. The independently scheduled nightly lane retains its explicit list.
 PG_LANES = (
     (
         REPO_ROOT / ".github" / "workflows" / "integration-nightly.yaml",
         "Bounded PG verification lane",
-    ),
-    (
-        REPO_ROOT / ".github" / "workflows" / "ci-smoke.yaml",
-        "durable table ownership PG surface",
     ),
 )
 HEIMDAL_TRIGGER_OWNERSHIP_SOURCES = (
@@ -869,25 +860,12 @@ def _pytest_invocation_after(workflow: str, step_name_fragment: str) -> str:
 
 
 def test_durable_ownership_pg_targets_run_in_both_pg_lanes() -> None:
-    """The adoption and rekey guards must actually execute in CI, not just exist.
-
-    Most of #4543's and #4560's machine-checkable acceptance criteria are
-    `pg`-marked. If these paths are not inside a pg lane's own pytest
-    invocation, a forward-only migration on a live table is proven once, by
-    hand, and then never again — and the CI-coverage sentence in
-    `docs/DB_SCHEMA.md` becomes false-green evidence. PR #4550 shipped with five
-    of six ACs initially running in no lane at all while its body claimed PG
-    coverage.
-    """
+    """Adoption and rekey guards stay enrolled in native and nightly execution."""
+    missing_native = set(DURABLE_OWNERSHIP_PG_TARGETS) - set(SELECTORS)
+    assert not missing_native, f"PG ownership proofs missing from native profile: {missing_native}"
     for workflow_path, step_fragment in PG_LANES:
         workflow = workflow_path.read_text(encoding="utf-8")
-        if workflow_path.name == "ci-smoke.yaml":
-            steps = yaml.safe_load(workflow)["jobs"]["pr-index-pg-contracts"]["steps"]
-            step = next(row for row in steps if step_fragment in row.get("name", ""))
-            assert "python -m app.ops.pg_acceptance --ci" in step["run"]
-            invocation = " ".join(SELECTORS)
-        else:
-            invocation = _pytest_invocation_after(workflow, step_fragment)
+        invocation = _pytest_invocation_after(workflow, step_fragment)
         missing = [target for target in DURABLE_OWNERSHIP_PG_TARGETS if target not in invocation]
         assert missing == [], (
             f"{missing} are pg-marked but absent from the {step_fragment!r} pytest "
@@ -899,14 +877,22 @@ def test_durable_ownership_pg_targets_run_in_both_pg_lanes() -> None:
 
 
 def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
-    """The PR-path lane is paths-filtered, so its filter must name what it guards.
-
-    Listing the tests in the run step is not enough: `ci-smoke / index_pg` only
-    executes when its paths filter matches, so a change to a migration or to
-    `vault_sync.py` that never touches a listed test file would skip the lane
-    entirely and merge unverified.
-    """
-    workflow = (REPO_ROOT / ".github" / "workflows" / "ci-smoke.yaml").read_text(encoding="utf-8")
+    """Main builds cannot paths-filter away the replacement native PG coverage."""
+    build = yaml.load(
+        (REPO_ROOT / '.github/workflows/app-image-build.yml').read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    push = build['on']['push']
+    assert push['branches'] == ['main']
+    assert 'paths' not in push and 'paths-ignore' not in push
+    assert 'if' not in build['jobs']['build-app-image']
+    postmerge = yaml.load(
+        (REPO_ROOT / '.github/workflows/postmerge-dev-test.yml').read_text(),
+        Loader=yaml.BaseLoader,
+    )
+    assert postmerge['on']['workflow_run'] == {
+        'workflows': ['App Image Build'], 'types': ['completed'], 'branches': ['main'],
+    }
     guarded_sources = (
         f"app/alembic/versions/{_owning_revision_filename(FILE_STATE_OWNING_REVISION)}",
         f"app/alembic/versions/{_owning_revision_filename(OBJECTS_OWNING_REVISION)}",
@@ -955,14 +941,5 @@ def test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards() -> None:
         "tests/architecture/test_multi_vault_projection_inventory.py",
         "tests/architecture/durable_table_classification.json",
     )
-    missing = [
-        source
-        for source in guarded_sources + DURABLE_OWNERSHIP_PG_TARGETS
-        if f"'{source}'" not in workflow
-    ]
-    assert missing == [], (
-        f"{missing} are not in the ci-smoke index_pg paths filter, so editing them "
-        "would skip the PR-path pg lane."
-    )
-    for source in guarded_sources:
-        assert (REPO_ROOT / source).exists(), f"{source} is in the paths filter but missing"
+    for source in guarded_sources + DURABLE_OWNERSHIP_PG_TARGETS:
+        assert (REPO_ROOT / source).exists(), f"guarded PG source is missing: {source}"

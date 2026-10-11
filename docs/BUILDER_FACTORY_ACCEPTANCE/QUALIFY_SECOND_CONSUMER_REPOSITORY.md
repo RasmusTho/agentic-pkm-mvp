@@ -75,10 +75,11 @@ PostgreSQL configuration described in `docs/development/DEV_WORKFLOW.md`. Never 
 The tests prove finite repository conformance, not installation of a real host transport, live
 candidate preparation or a second-consumer delivery. Existing production routing and affected
 admission/read/launch regression suites remain required.
-The existing `pr-index-pg-contracts` CI job selects the validator/test paths and executes this
-module's PostgreSQL cases. Its enrollment is guarded by
-`tests/ops/test_ci_workflow.py::test_pr_index_pg_contracts_run_exact_acceptance_surface`;
-the unchanged 30-minute job budget and a not-pg pass do not replace executed PG evidence.
+The shared native dev/test PostgreSQL acceptance profile retains this module's PostgreSQL cases
+after the PR coverage handoff under #5675. Its enrollment is guarded by
+`tests/ops/test_ci_workflow.py::test_pg_acceptance_handoff_preserves_required_coverage`.
+Matching isolated PG execution receipts are required; a not-pg pass does not replace executed PG
+evidence or qualify a live second-consumer installation.
 
 ## Pilot procedure and receipt validator
 
