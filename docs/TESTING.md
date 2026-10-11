@@ -203,13 +203,21 @@ must not be treated as Markdown checkbox projection coverage.
 
 The active strategy is a lightweight verification and acceptance spine. It is V-model-inspired in the sense that each capability should define intent, implementation slices, verification, and acceptance, but it is intentionally kept practical and lightweight.
 
+The root pytest harness allocates and validates a fresh temporary-root namespace
+for each invocation before collection, so concurrent processes do not share pytest's
+numbered-directory root. Provisioning failure aborts the run before test execution.
+`tests/governance/test_pytest_temp_root_isolation.py` exercises the root hook in
+overlapping subprocesses and injects creation and validation failures before collection.
+The full-suite selection remains `pytest -q -m "not pg"`; host-global execution
+continues to use the lease owned by the development validation baseline.
+
 For environment triage, `scripts/validation_environment_readiness.py` is an opt-in, value-free
 diagnostic that reports interpreter import compatibility, selected helper visibility, and whether
 the PG lane is absent, forbidden, ambiguous, or explicitly disposable. It does not connect to
 Postgres, invoke a provider, or change the execution model. The existing resolver and
 `scripts/run_with_host_lease.py` remain the command and host-global coordination surfaces. Make
-target selection tracked by #5805 and temporary-root isolation tracked by #4009 remain separate
-pending work; this diagnostic neither assumes nor ships either change.
+target selection tracked by #5805 remains separate pending work; the diagnostic does not
+ship or change that selection. Temporary-root isolation is supplied by the root harness above.
 
 | Level | Purpose | Typical scope | Gate posture |
 | --- | --- | --- | --- |

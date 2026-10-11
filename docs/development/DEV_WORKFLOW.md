@@ -151,6 +151,14 @@ ambiguous. Review remains responsible for those cases.
 - Settings/runtime contract changes:
   - `python -m app.cli settings-validate --json`
 
+When the governing Issue requires the full non-PG suite, retain the exact selection
+command `pytest -q -m "not pg"` and run it through the host-global lease. The root
+`conftest.py` provisions and validates a unique `PYTEST_DEBUG_TEMPROOT` namespace
+before collection for every invocation. An inherited debug root supplies the parent
+directory; each process still receives a fresh child namespace. Setup failure aborts
+before tests execute, with no shared-root fallback. Namespaces are retained for
+diagnosis; the harness does not delete another run's temporary artifacts.
+
 ### Validation-readiness diagnostic
 
 Before starting a costly validation lane, an operator may run the bounded, read-only diagnostic:

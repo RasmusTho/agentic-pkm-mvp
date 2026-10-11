@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,24 @@ if str(_COMPANION_APP_ROOT) not in sys.path:
 
 def pytest_configure(config) -> None:
     import os
+
+    # Allocate before collection and tmp_path setup. An inherited debug root is
+    # a parent, never a namespace to reuse (including in nested pytest runs).
+    try:
+        namespace = Path(
+            tempfile.mkdtemp(
+                prefix="agentic-pkm-pytest-",
+                dir=os.environ.get("PYTEST_DEBUG_TEMPROOT") or tempfile.gettempdir(),
+            )
+        ).resolve(strict=True)
+        probe = namespace / ".write-probe"
+        probe.write_bytes(b"pytest temporary-root isolation")
+        if probe.read_bytes() != b"pytest temporary-root isolation":
+            raise OSError("namespace write/read validation failed")
+        probe.unlink()
+    except OSError as exc:
+        raise pytest.UsageError(f"pytest temporary-root isolation failed: {exc}") from exc
+    os.environ["PYTEST_DEBUG_TEMPROOT"] = str(namespace)
 
     # Sanitize vault-related environment variables BEFORE test collection to prevent
     # modules from accessing real vault paths during import. This protects against hangs
