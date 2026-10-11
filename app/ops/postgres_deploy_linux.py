@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -565,8 +566,6 @@ def _raw_representation_migration_pending(config: LinuxConfig, target_revision: 
         name = Path(raw_path).name
         snapshots.append((name, _git_bytes(config.root, 'show', target_revision + ':' + raw_path)))
     receipt = check_migration_snapshots(snapshots)
-    if automatic and receipt['forward_only']:
-        raise PostgresDeployError()
     pending = heimdal_raw_representation_migration_pending(receipt)
     if pending and HEIMDAL_RAW_REPRESENTATION_MIGRATION not in {
         name for name, _content in snapshots
@@ -853,6 +852,176 @@ class LinuxEffects:
         if self.database_running():
             raise PostgresDeployError()
 
+    def _reclaim_image_cache(self, plan: DeployPlan) -> None:
+        """Optional cache recovery inside the existing automatic native lock."""
+        if not plan.automatic or plan.channel not in {'dev', 'test'}:
+            return
+        from app.ops.pg_acceptance import IMAGE_REPOSITORY
+        from scripts.compose_env import compose_env_value
+        import fcntl
+
+        reason = 'native_lock_unproven'
+        image_pattern = r'sha256:[0-9a-f]{64}'
+        container_pattern = r'[0-9a-f]{64}'
+
+        def require_lock() -> None:
+            if self.lock_fd is None or self.config.channel != plan.channel:
+                raise PostgresDeployError()
+            path = self.config.root / 'config/deploy' / (plan.channel + '.env.lock') / 'bws-owner'
+            info, held = path.lstat(), os.fstat(self.lock_fd)
+            if (not stat.S_ISREG(info.st_mode) or path.is_symlink()
+                or (info.st_dev, info.st_ino) != (held.st_dev, held.st_ino)):
+                raise PostgresDeployError()
+            fcntl.flock(self.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        def inspect(ids: tuple[str, ...], kind: str) -> dict[str, dict[str, Any]]:
+            if not ids:
+                return {}
+            if kind == 'container':
+                fields = '{"id":{{json .Id}},"image_id":{{json .Image}},"ref":{{json .Config.Image}}}'
+                keys = {'id', 'image_id', 'ref'}
+                pattern = container_pattern
+            else:
+                fields = '{"id":{{json .Id}},"tags":{{json .RepoTags}},"digests":{{json .RepoDigests}},"created":{{json .Created}}}'
+                keys = {'id', 'tags', 'digests', 'created'}
+                pattern = image_pattern
+            output = _command(['docker', kind, 'inspect', '--format', fields, *ids], timeout=15)
+            rows: dict[str, dict[str, Any]] = {}
+            for line in output.splitlines():
+                row = json.loads(line)
+                if (not isinstance(row, dict) or set(row) != keys
+                    or not isinstance(row['id'], str) or not re.fullmatch(pattern, row['id'])
+                    or row['id'] in rows):
+                    raise PostgresDeployError()
+                if kind == 'container':
+                    if (not isinstance(row['image_id'], str)
+                        or not re.fullmatch(image_pattern, row['image_id'])
+                        or not isinstance(row['ref'], str) or not row['ref']):
+                        raise PostgresDeployError()
+                else:
+                    for key in ('tags', 'digests'):
+                        if row[key] is not None and (not isinstance(row[key], list)
+                            or any(not isinstance(ref, str) for ref in row[key])):
+                            raise PostgresDeployError()
+                    if (not isinstance(row['created'], str)
+                        or datetime.fromisoformat(row['created'].replace('Z', '+00:00')).tzinfo is None):
+                        raise PostgresDeployError()
+                rows[row['id']] = row
+            if set(rows) != set(ids):
+                raise PostgresDeployError()
+            return rows
+
+        def protection() -> tuple[object, set[str]]:
+            digest = plan.image_digest
+            if (not re.fullmatch(r'[0-9a-f]{40}', plan.revision) or not isinstance(digest, str)
+                or not re.fullmatch(image_pattern, digest)):
+                raise PostgresDeployError()
+            protected = {IMAGE_REPOSITORY + ':' + plan.revision,
+                         IMAGE_REPOSITORY + '@' + digest}
+            pins: list[tuple[str, bytes | None]] = []
+            for channel in ('dev', 'test', 'prod'):
+                for suffix in ('.env', '.previous.env', '.migration-pending.env'):
+                    path = self.config.root / 'config/deploy' / (channel + suffix)
+                    try:
+                        info = path.lstat()
+                    except FileNotFoundError:
+                        pins.append((path.name, None))
+                        continue
+                    if not stat.S_ISREG(info.st_mode) or path.is_symlink():
+                        raise PostgresDeployError()
+                    content = path.read_bytes()
+                    pins.append((path.name, content))
+                    values: dict[str, str] = {}
+                    for line in content.decode('utf-8').splitlines():
+                        match = re.match(r'^(?:export\s+)?(APP_IMAGE_REPOSITORY|APP_IMAGE_TAG|APP_IMAGE_DIGEST_SUFFIX|FROM_SHA|TARGET_SHA)=(.*)$', line)
+                        if match:
+                            key, value = match.groups()
+                            if key in values:
+                                raise PostgresDeployError()
+                            values[key] = compose_env_value(value)
+                    if suffix == '.migration-pending.env':
+                        for key in ('FROM_SHA', 'TARGET_SHA'):
+                            value = values[key]
+                            if key == 'FROM_SHA' and value == '__NO_BASELINE__':
+                                continue
+                            if not re.fullmatch(r'[0-9a-f]{40}', value):
+                                raise PostgresDeployError()
+                            protected.add(IMAGE_REPOSITORY + ':' + value)
+                    else:
+                        repository = values.get('APP_IMAGE_REPOSITORY') or IMAGE_REPOSITORY
+                        tag = values['APP_IMAGE_TAG']
+                        digest = values.get('APP_IMAGE_DIGEST_SUFFIX', '')
+                        if (not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', tag)
+                            or (digest and not re.fullmatch('@' + image_pattern, digest))):
+                            raise PostgresDeployError()
+                        protected.add(repository + ':' + tag)
+                        if digest:
+                            protected.add(repository + digest)
+            ids = tuple(sorted(_command(['docker', 'ps', '--all', '--quiet', '--no-trunc'], timeout=15).splitlines()))
+            if len(set(ids)) != len(ids) or any(not re.fullmatch(container_pattern, item) for item in ids):
+                raise PostgresDeployError()
+            containers = inspect(ids, 'container')
+            for row in containers.values():
+                protected.update((row['image_id'], row['ref']))
+            # A Docker census may outlast a pin read. Refuse a mixed snapshot
+            # before using it to prove that an image has no recovery owner.
+            for name, before in pins:
+                path = self.config.root / 'config/deploy' / name
+                try:
+                    info = path.lstat()
+                except FileNotFoundError:
+                    after = None
+                else:
+                    if not stat.S_ISREG(info.st_mode) or path.is_symlink():
+                        raise PostgresDeployError()
+                    after = path.read_bytes()
+                if before != after:
+                    raise PostgresDeployError()
+            return (tuple(pins), containers), protected
+
+        try:
+            require_lock()
+            reason = 'inventory_unproven'
+            snapshot, protected = protection()
+            ids = tuple(sorted(set(_command(['docker', 'image', 'ls', '--all', '--quiet', '--no-trunc'], timeout=15).splitlines())))
+            if any(not re.fullmatch(image_pattern, item) for item in ids):
+                raise PostgresDeployError()
+            images = inspect(ids, 'image')
+            candidates = []
+            for image_id, row in images.items():
+                refs = [*(row['tags'] or []), *(row['digests'] or [])]
+                proved_digest = any(
+                    re.fullmatch(re.escape(IMAGE_REPOSITORY) + '@' + image_pattern, ref)
+                    for ref in (row['digests'] or [])
+                )
+                official = all(
+                    re.fullmatch(re.escape(IMAGE_REPOSITORY) + r':[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}', ref)
+                    or re.fullmatch(re.escape(IMAGE_REPOSITORY) + '@' + image_pattern, ref)
+                    for ref in refs
+                )
+                if proved_digest and official and image_id not in protected and not protected.intersection(refs):
+                    candidates.append((datetime.fromisoformat(row['created'].replace('Z', '+00:00')), image_id))
+            for _, image_id in sorted(candidates)[:8]:
+                reason = 'native_lock_unproven'
+                require_lock()
+                reason = 'inventory_unproven'
+                current, current_protected = protection()
+                if current != snapshot or current_protected != protected:
+                    reason = 'protection_changed'
+                    raise PostgresDeployError()
+                if inspect((image_id,), 'image')[image_id] != images[image_id]:
+                    reason = 'image_changed'
+                    raise PostgresDeployError()
+                reason = 'removal_failed'
+                _command(['docker', 'image', 'rm', image_id], timeout=30)
+        except Exception:
+            # Optional recovery never replaces the ordinary pull/deploy gate.
+            # Only a fixed phase reaches the journal, never Docker output.
+            _emit_native_diagnostic((
+                'PRIORITY=4\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+                f'MESSAGE=optional image cache recovery skipped: reason={reason}\n'
+            ).encode('ascii'))
+
     def activate(self, plan: DeployPlan) -> None:
         if (self.lock_fd is None or set(plan.services) != set(DATABASE_CONSUMERS.values())
             or self.active_consumers is None):
@@ -867,6 +1036,7 @@ class LinuxEffects:
         if receipt is None or receipt.stage != 'activating':
             raise PostgresDeployError()
         env['BWS_DEPLOY_OPERATION_ID'] = receipt.operation_id
+        self._reclaim_image_cache(plan)
         # Only declared consumer bindings are handed to Compose, as private
         # tmpfs env-file handles. No value is copied to this process environment.
         from app.ops.host_secret_contract import load_host_secret_contract

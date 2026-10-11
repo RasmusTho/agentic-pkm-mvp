@@ -155,13 +155,15 @@ Last verified against: app/stores/pg.py + app/alembic/versions/e6c4a2b8d1f3_mvr0
   its MVR-05A0 owner. Every adopted table is reachable by `alembic upgrade head`;
   the exact revision set allowed to reshape each surface is architecture-tested.
 - The adoption, row-survival, rekey, restart and single-vault-equivalence guards for both revisions
-  are `pg`-marked and run in **both** lanes that execute `-m "pg"`: `ci-smoke / index_pg` on the PR
-  path, and `integration-nightly / pg-contracts` nightly. Both select files by explicit allow-list
-  and `index_pg` is additionally paths-filtered, so
+  are `pg`-marked and remain enrolled in the shared native dev/test acceptance profile
+  (`app/ops/pg_acceptance.py::SELECTORS`) and `integration-nightly / pg-contracts`. The profile
+  replaces the PR PG lane after actual coverage handoff under #5675. Main image builds are not
+  paths-filtered; isolated native verification runs against each admitted immutable candidate. Thus
   `tests/architecture/test_durable_table_ownership.py::test_durable_ownership_pg_targets_run_in_both_pg_lanes`
-  pins the allow-lists and
-  `::test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards` pins the paths filter — every
-  other lane runs `-m "not pg"`, so an unlisted `pg`-marked test would execute in no CI lane at all.
+  pins profile/nightly enrollment, and
+  `::test_the_pr_path_pg_lane_is_triggered_by_the_sources_it_guards` guards the unfiltered main
+  build and post-merge trigger. The profile requires successful selected PG results; non-PG CI
+  does not substitute for this execution.
   Test fixtures opt in to create-on-demand via `STORE_SCHEMA_AUTOCREATE=1`
   (`app/db/db.py::_autocreate_migration_owned_schema`); its shape parity with the revisions,
   adoption idempotency, existing-row survival, and bootstrap-origin/Alembic-origin convergence are

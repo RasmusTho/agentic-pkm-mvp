@@ -5,10 +5,11 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-10-10
-Last live runtime verification: 2026-10-03 UTC (read-only `dev`/`test` host, API, and route-configuration checks from Demerzel over VLAN; `prod` was not queried)
+Last reviewed: 2026-10-11
+Last live runtime verification: 2026-10-11 UTC (accepted native DEV/TEST activation, health/version/UI and isolated PostgreSQL verification under #5675; the earlier read-only route checks remain separate, and `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
 Verification update (2026-10-10): repository support includes post-merge image admission and private-host dev/test orchestration under #5922. Deterministic verification establishes the orchestration, digest and migration boundaries; live activation and functional channel acceptance are recorded separately under #5675.
+Verification update (2026-10-11): the accepted full controller flow committed DEV and TEST at one immutable candidate from `main` at `216ef75e9a2ea009e547e96497a0bb2532b9a379`, each 547/547 selected PG tests, with the current shared profile, health/version/UI, matching native/stream envelopes and exact owned cleanup/lock readback. The [actual receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) establishes the PG coverage handoff. Permanent controller installed/loaded source, runtime and checkpoint are recorded separately on #5675 after reviewed-main installation; native PG/smoke does not establish production eligibility.
 Verification update (2026-09-29): BWS-03/#5679's encrypted reader-token push command was delivered by PR #5732 (merge commit `6b0ee40a721c65d7bb792c306eb11fc88e2a4cef`). This establishes repository support only; live VM installation and qualification remain separate gates under #5667.
 
 ## Why this document exists
@@ -163,13 +164,15 @@ candidate/channel operation IDs resume an interrupted call through the existing 
 including a terminal result written before the checkpoint; unknown outcomes are retried with that
 same ID and never silently treated as completed. A failed candidate does not veto later candidates.
 
-Automatic deployment uses existing secrets only and refuses forward-only migrations before runtime
-mutation. Native host and VM locks remain the deployment authority. The
+Automatic deployment uses existing secrets only and follows the ordinary dev/test migration policy:
+forward-only work is classified and recorded without requiring operator acknowledgement. Native
+host and VM locks remain the deployment authority. The
 [fast PR-to-dev/test plan](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) records live activation,
-functional dev/test acceptance and the ten-candidate pilot under #5675. Repository tests prove support,
+functional dev/test acceptance and the ten-candidate measurement under #5675. Repository tests prove support,
 not live enablement. Coordinate an ongoing frozen acceptance run before loading the unit. Current
-PR/PG and nightly checks stay in place until their coverage handoff is verified; production promotion
-remains separately governed.
+PG PR coverage transfers to the shared isolated native profile only after actual equivalent dev/test
+execution is verified under #5675. Non-PG PR and bounded nightly checks remain; production promotion
+is separately governed.
 
 RCA on 2026-06-29 (BuilderOps LearningSignal `lrn_20260629093241_59713bc1`) found that the system had **no deployment source-of-truth**. The observed reality:
 
@@ -472,16 +475,30 @@ existing-secrets-only boundary for `dev` followed by `test`, with the same SHA a
 digest. No new human approval, Actions environment or self-hosted PR runner is required. Deployment
 retains the existing host-controller and VM channel locks, supervised worker, request journal,
 health/readiness/version, fleet and browser UI gates. Before `committed`, the native worker enters
-`verifying` and runs `app.ops.pg_acceptance` with the same selection used by the retained GitHub
-`Index PG contracts` job. Required selector absence, skip/xfail, assertion failure, unavailable
+`verifying` and runs `app.ops.pg_acceptance` with the retained acceptance selection transferred
+from the GitHub PG job. Required selector absence, skip/xfail, assertion failure, unavailable
 dependency, per-test 120-second timeout or the finite 60-minute native aggregate deadline prevents acceptance.
 The aggregate budget is owned by the shared profile and included in its selection hash; there is
 no per-host override. A trusted Docker attach timeout emits only the fixed
 `profile_deadline_exceeded` native journal signal before owned cleanup, without raw command,
 output or credentials. Incomplete output still refuses acceptance. The observed parent run with
 457 passes and no envelope establishes incomplete execution; aggregate expiry was its leading
-inference, not a captured historical exception. Actual equivalent DEV/TEST acceptance remains on #5675.
+inference, not a captured historical exception. Actual equivalent DEV/TEST acceptance is verified by the dated #5675 receipt above.
 Observed selected/pass counts are evidence, not a permanent test-count gate.
+
+Automatic DEV/TEST activation may reclaim at most eight proved unused official application-image
+IDs under the existing native channel lock before the ordinary deployment script runs. The cache
+inventory reads only fixed image/container IDs, references, tags, digests and creation times. Every
+running, stopped or created container image, current/previous and rollback pin, pending-migration
+reference and exact admitted target digest remains protected, including different digests for the
+same source SHA. Reclamation requires an official registry digest in `RepoDigests`; a local tag
+alone does not prove that an image is rebuildable. Images with another-repository aliases or
+unproved provenance are retained. Each
+exact, non-force removal rechecks the protected snapshot and image metadata. Manual and PROD paths
+perform no cache maintenance, and this path never prunes volumes or touches application, database
+or vault data. Unavailable or malformed inventory, changed snapshots or failed removal stop further
+reclamation with a fixed warning, then continue the unchanged pull and deployment gates. This is
+optional recovery of rebuildable image cache, not a capacity or approval prerequisite.
 
 `app.ops.pg_acceptance_runner` creates an operation/channel-owned pgvector container with a
 network-none namespace and tmpfs database storage. The test container shares only that namespace;
@@ -497,8 +514,9 @@ channel, operation ID, resource tree, image ID and report hash. Cleanup inspects
 and matching ownership labels; interrupted verification is reconciled under the same native lock
 and cleans only that operation's resources. Missing/foreign-profile or smoke-only terminal history
 cannot establish PG acceptance. An unclean or indeterminate attempt remains unknown; a known failed
-candidate does not veto a later candidate. These repository mechanics still require actual
-both-channel equivalent-coverage evidence on #5675 before the GitHub PG job can be removed.
+candidate does not veto a later candidate. Actual both-channel equivalent coverage and owned
+cleanup are verified on #5675; that evidence establishes the GitHub PG coverage handoff. Permanent
+controller activation is recorded separately and does not alter production promotion authority.
 
 Automatic requests bind `image_digest`, `automatic=true` and the fixed verification profile into
 the existing native journal.
@@ -508,10 +526,13 @@ and gateways. A failed deployment restores the prior pin's digest where existing
 image compensation; it adds no database rollback. Manual requests retain their original wire
 format when the new fields are absent. See [Compose image references](https://docs.docker.com/reference/compose-file/services/#image).
 
-Before credential materialization or channel mutation, automatic mode refuses forward-only
-migrations and inherited forward-only pending work. It cannot bootstrap secrets, acknowledge a
-migration or deploy production. The existing manual, candidate-specific migration path remains
-available for such a candidate; no BWS admin-writer qualification is added to existing-secret reads.
+Before credential materialization or channel mutation, automatic mode classifies migrations and
+validates any pending work against the exact candidate. Forward-only classification follows the
+ordinary non-production policy and requires no operator acknowledgement in dev or test. Its existing
+failure handling retains the compatible target instead of implying a database rollback. Automatic
+mode cannot bootstrap secrets, supply a migration acknowledgement, inherit an acknowledged request
+or deploy production. PROD keeps its existing target-bound acknowledgement; no BWS admin-writer
+qualification is added to existing-secret reads.
 
 The private mode-0600 checkpoint is a derived attempt cache, not deployment authority. It avoids
 redeploying an already processed build and resumes a dev-verified candidate at test after a host
@@ -539,8 +560,9 @@ The installer generates one host-local LaunchAgent with fixed arguments and no c
 It uses launchd supervision and the controller's existing private state directory; no personal
 paths enter Git. See [Apple's launchd job contract](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html).
 Repository support alone does not prove the unit is loaded or the channels are qualified. Record
-activation, actual channel digests and functional acceptance on #5675. Current PR/PG and nightly
-checks remain until their coverage handoff is evidenced there.
+activation, actual channel digests and functional acceptance on #5675. The PG PR job is retired only
+after actual equivalent isolated PG execution passes in both native channels. Non-PG PR checks and
+the bounded nightly lane remain; ten-candidate measurement follows activation without gating it.
 
 ### PR validation is not artifact publication (current policy)
 
@@ -560,13 +582,13 @@ established Python index digest in both stages.
 | --- | --- |
 | Application Python stages | `mirror.gcr.io/library/python:3.12-slim@sha256:c3d81d25b3154142b0b42eb1e61300024426268edeb5b5a26dd7ddf64d9daf28` |
 | BuilderOps Python base | `mirror.gcr.io/library/python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1` |
-| Index PG contracts service | `mirror.gcr.io/pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a` |
+| Native acceptance pgvector service | `mirror.gcr.io/pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a` |
 | BuilderOps PostgreSQL base | `mirror.gcr.io/library/postgres:16-bookworm@sha256:0ea6700a3b4f0ae6ce746519073558aed4d88a79d8d07622a9a644946c7319c4` |
 | Both Buildx driver images | `mirror.gcr.io/moby/buildkit@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea` |
 | Both QEMU helper images | `mirror.gcr.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0` |
 
 Buildx receives its image through `driver-opts: image=...`; QEMU receives its `image` input.
-The service uses its exact image before checkout, and each Dockerfile declares its base directly.
+The acceptance service uses its exact image inside the native operation, and each Dockerfile declares its base directly.
 A cache miss or pull error fails the affected job: these references add no authentication or Hub
 fallback. Google documents daemon-configured cache use and may evict cached content, so this direct
 source recovery has no permanent availability guarantee.

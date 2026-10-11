@@ -334,10 +334,12 @@ under the native lock/journal and touch only that attempt's resources. A failed 
 veto later candidates. Manual request/receipt compatibility and automatic bootstrap, forward-only
 migration and production refusal remain intact.
 
-Repository delivery does not establish live dev/test parity or production eligibility. Parent
-#5675 owns actual both-channel equivalent-coverage receipts and the later GitHub PG coverage
-handoff; the PG CI job remains in place. The separate nightly PG policy is not an approval gate for
-ordinary automatic dev/test candidates. Physical mechanics are owned by
+The [actual both-channel receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5675#issuecomment-6105991683) under #5675 verifies equivalent native PostgreSQL
+coverage at one admitted immutable candidate, with both stages committed and owned cleanup complete.
+It supports retirement of the duplicated PostgreSQL PR job. Permanent controller activation and
+its installed/loaded source are recorded separately on #5675. Native PG/smoke does not establish
+production eligibility or replace the functional promotion-test receipt. The separate nightly PG
+policy is not an approval gate for ordinary automatic dev/test candidates. Physical mechanics are owned by
 [Deployment and Environments](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#build-once--promote-model).
 
 > **The production phases below describe the _target_ gated model — deferred promotion hardening.** The current prod baseline tracks `main` directly; see [Promotion model](#promotion-model) and [ADR-0040](../adr/ADR-0040-prod-promotion-ref-main-interim.md).
@@ -354,8 +356,23 @@ Promotion is the operation that turns an accepted commit on `main` into the runn
 3. **Verify.** Post-promotion health, status, and smoke checks against the running prod. Health must be green against [HEALTH.md](../HEALTH.md) contracts before the promotion is considered accepted.
 4. **Rollback (conditional).** If verification fails, return `stable` through a governed rollback PR, update prod to the merged `origin/stable` rollback commit, reverse any reversible migrations, and restart. Non-reversible migrations must be flagged during prepare so the operator chooses knowingly.
 
-Production promotion trigger is **manual, single-user**. The operator decides when to promote;
-automatic dev/test PG or smoke results do not create a production promotion-test receipt.
+Production promotion trigger is **manual, single-user**. The operator decides when to promote to production; a PR merge or CI result does not trigger it.
+
+Automatic post-merge non-production verification under #5675 uses the existing private native
+controller to deploy one successful `main` build to dev and then test at the same source SHA and
+immutable image digest. Each stage requires channel health/version/UI checks and the shared
+PostgreSQL acceptance profile. The profile runs candidate tests with disposable operation-scoped
+PostgreSQL resources and a scratch vault; persistent channel databases, vaults and deployment
+credentials are unavailable to that test process. Ordinary dev/test stages and their forward-only
+migration classification require no additional operator acknowledgement. A failed stage prevents
+that candidate from advancing; an interrupted operation is reconciled through its exact native
+identity, and an ordinary failed candidate does not veto later candidates.
+
+This non-production result does not trigger production deployment or alter the production
+promotion contract. A native PG/smoke receipt alone cannot produce the governed
+`ops/test-promotions/` verification receipt; that receipt still requires its existing functional
+verification contract. The PostgreSQL PR job is retired only after actual equivalent native
+execution has passed in both channels. The bounded nightly lane remains separate.
 
 ### Protected-branch promotion invariant
 

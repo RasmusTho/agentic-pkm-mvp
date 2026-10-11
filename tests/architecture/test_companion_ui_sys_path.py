@@ -13,6 +13,7 @@ aborts with ModuleNotFoundError.
 from pathlib import Path
 
 import companion_ui
+import yaml
 
 
 def test_companion_ui_importable_from_any_test_tree() -> None:
@@ -49,9 +50,7 @@ def test_ci_and_compose_use_declared_companion_ui_import_mechanisms() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     ci_source = (repo_root / ".github/workflows/ci-smoke.yaml").read_text(encoding="utf-8")
     compose_source = (repo_root / "docker-compose.yaml").read_text(encoding="utf-8")
-    unit_test_job = ci_source.split("  pr-unit-tests-not-pg:", 1)[1].split(
-        "  pr-index-pg-contracts:", 1
-    )[0]
+    unit_test_job = str(yaml.safe_load(ci_source)['jobs']['pr-unit-tests-not-pg'])
 
     assert "${{ github.workspace }}/companion-ui/companion-app" not in unit_test_job
     assert "PYTHONPATH: /app/companion-ui/companion-app:/app" not in compose_source

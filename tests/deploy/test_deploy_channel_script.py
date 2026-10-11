@@ -1989,20 +1989,56 @@ def _commit_har_raw_migration(root: Path, name: str) -> str:
 
 
 @pytest.mark.parametrize('channel', ['dev', 'test'])
-def test_automatic_deploy_refuses_forward_only_before_mutation(tmp_path: Path, channel: str) -> None:
+def test_automatic_deploy_preflights_forward_only_raw_migration(tmp_path: Path, channel: str) -> None:
     root, env, _sha = _deploy_harness(tmp_path)
     target = _commit_har_raw_migration(root, 'e7b4c9d2a6f1_heimdal_raw_representation.py')
     env['FAKE_SHA'] = target
+    env['FAKE_SECURITY_EVENT_LOG'] = env['FAKE_DEPLOY_EVENT_LOG']
     _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
     pin = root / 'config/deploy' / (channel + '.env')
-    before = pin.read_bytes() if pin.exists() else None
+    digest = 'sha256:' + 'b' * 64
     result = _run_deploy(root, env, target, '--automatic', '--image-digest',
-                         'sha256:' + 'b' * 64, channel=channel)
-    assert result.returncode == 78, result.stdout + result.stderr
-    assert 'automatic migration gate refused' in result.stderr
-    assert (pin.read_bytes() if pin.exists() else None) == before
+                         digest, channel=channel)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'APP_IMAGE_DIGEST_SUFFIX=@' + digest in pin.read_text()
     assert not (root / 'config/deploy' / (channel + '.migration-pending.env')).exists()
+    events = _deploy_events(env)
+    first_secret = events.index('security migrate-primary')
+    first_docker = next(i for i, event in enumerate(events) if event.startswith('docker '))
+    assert first_secret < first_docker
+    receipt = json.loads((root / 'ops/deployments' / (channel + '-latest.json')).read_text())
+    assert receipt['migration_receipt']['forward_only'] == ['e7b4c9d2a6f1_heimdal_raw_representation.py']
+    assert receipt['migration_receipt']['ack_forward_only'] is False
+    assert receipt['image_digest'] == digest and receipt['automatic'] is True
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_automatic_deploy_refuses_inherited_ack_with_empty_migration_delta(
+    tmp_path: Path, channel: str,
+) -> None:
+    root, env, target = _deploy_harness(tmp_path)
+    _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
+    pin = root / 'config/deploy' / (channel + '.env')
+    pin.write_text(f'APP_IMAGE_TAG={target}\n', encoding='utf-8')
+    pin_before = pin.read_bytes()
+    pending = root / 'config/deploy' / (channel + '.migration-pending.env')
+    pending.write_text(
+        f'FROM_SHA={target}\nTARGET_SHA={target}\nACK_FORWARD_ONLY=1\n',
+        encoding='utf-8',
+    )
+    pending_before = pending.read_bytes()
+
+    result = _run_deploy(
+        root, env, target, '--automatic', '--image-digest', 'sha256:' + 'b' * 64,
+        channel=channel,
+    )
+
+    assert result.returncode == 78, result.stdout + result.stderr
+    assert 'refused inherited migration acknowledgement' in result.stderr
+    assert pin.read_bytes() == pin_before
+    assert pending.read_bytes() == pending_before
     assert not any(event.startswith('docker ') for event in _deploy_events(env))
+    assert not (root / 'ops/deployments' / (channel + '-latest.json')).exists()
 
 
 def test_automatic_deploy_preserves_digest_in_pin_receipt_and_recovery(tmp_path: Path) -> None:
@@ -5677,3 +5713,207 @@ def test_full_startup_uses_same_strict_source_summary_parser() -> None:
     script = (REPO_ROOT / "scripts/start_full_system.sh").read_text()
     assert "from app.ops.native_source_bootstrap import source_rebuild_counts" in script
     assert "values = [*source_rebuild_counts(payload), 0]" in script
+
+
+def _cache_activation_harness(tmp_path, monkeypatch, *, channel='test', automatic=True):
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    directory = tmp_path / 'config/deploy'
+    directory.mkdir(parents=True)
+    directory.joinpath(channel + '.env').write_text(
+        f'APP_IMAGE_REPOSITORY={IMAGE_REPOSITORY}\nAPP_IMAGE_TAG={"a" * 40}\n'
+        f'APP_IMAGE_DIGEST_SUFFIX=@sha256:{"4" * 64}\n')
+    directory.joinpath(channel + '.previous.env').write_text(
+        f'APP_IMAGE_TAG={"a" * 40}\nAPP_IMAGE_DIGEST_SUFFIX=@sha256:{"5" * 64}\n')
+    directory.joinpath('prod.previous.env').write_text(f'APP_IMAGE_TAG={6:040x}\n')
+    directory.joinpath(channel + '.migration-pending.env').write_text(
+        f'FROM_SHA={7:040x}\nTARGET_SHA={8:040x}\nACK_FORWARD_ONLY=0\n')
+    journal = DeployJournal(tmp_path / 'journal', channel)
+    operation_id = str(uuid4())
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    source = tmp_path / 'secret-handles'
+    source.mkdir()
+    effects = linux.LinuxEffects(SimpleNamespace(
+        channel=channel, root=tmp_path, journal=journal, source_directory=source))
+    effects.source = SimpleNamespace(verify=lambda: None)
+    effects.environment = lambda: {'HOST_SECRET_PROVIDER': 'bws'}
+    effects.active_consumers = tuple(DATABASE_CONSUMERS)
+    effects.consumer_values = {name: {} for name in
+                              ('heimdal-api-ingress', 'heimdal-capture-watch', 'heimdal-raw-migrate')}
+    plan = DeployPlan(channel, 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      tuple(DATABASE_CONSUMERS), image_digest='sha256:' + '9' * 64,
+                      automatic=automatic)
+    images = {f'sha256:{number:064x}': {
+        'id': f'sha256:{number:064x}', 'tags': [f'{IMAGE_REPOSITORY}:{number:040x}'],
+        'digests': [f'{IMAGE_REPOSITORY}@sha256:{number:064x}'],
+        'created': '2020-01-01T00:00:00Z',
+    } for number in range(1, 16)}
+    # Current, previous and admitted target share one source SHA but have three
+    # different digests. Digest-only previous and target images stay protected.
+    for number in (4, 5, 9):
+        images[f'sha256:{number:064x}']['tags'] = [IMAGE_REPOSITORY + ':' + 'a' * 40] if number == 4 else []
+        images[f'sha256:{number:064x}']['digests'] = [IMAGE_REPOSITORY + '@sha256:' + str(number) * 64]
+    images[f'sha256:{10:064x}']['tags'].append('other.example.invalid/app:retained')
+    images[f'sha256:{11:064x}']['tags'] = ['other.example.invalid/db:retained']
+    images[f'sha256:{12:064x}']['tags'] = []
+    images[f'sha256:{12:064x}']['digests'] = []
+    images[f'sha256:{14:064x}']['tags'] = []
+    images[f'sha256:{15:064x}']['tags'] = [IMAGE_REPOSITORY + ':local-only']
+    images[f'sha256:{15:064x}']['digests'] = []
+    containers = {f'{number + 100:064x}': {
+        'id': f'{number + 100:064x}', 'image_id': f'sha256:{number:064x}',
+        'ref': f'{IMAGE_REPOSITORY}:{number:040x}',
+    } for number in (1, 2, 3)}
+    state = {'images': images, 'containers': containers, 'fault': '', 'ps_reads': 0,
+             'deploy_fails': False, 'deploy_calls': 0}
+    calls, warnings = [], []
+
+    def command(argv, **options):
+        calls.append(tuple(argv))
+        if argv[0] == 'bash':
+            state['deploy_calls'] += 1
+            assert options['pass_fds'] == (effects.lock_fd,)
+            assert all(path.stat().st_mode & 0o777 == 0o600 for path in source.iterdir())
+            if state['deploy_fails']:
+                raise PostgresDeployError()
+            return ''
+        assert argv[0] == 'docker' and 'env' not in options
+        assert not any('.Config.Env' in argument for argument in argv)
+        if argv[1] == 'ps':
+            assert argv == ['docker', 'ps', '--all', '--quiet', '--no-trunc']
+            state['ps_reads'] += 1
+            if state['fault'] == 'census':
+                raise RuntimeError('private-canary-must-not-enter-warning')
+            if state['ps_reads'] == 2:
+                if state['fault'] == 'stale_pin':
+                    directory.joinpath('prod.env').write_text(f'APP_IMAGE_TAG={13:040x}\n')
+                if state['fault'] == 'stale_container':
+                    state['containers'][f'{199:064x}'] = {
+                        'id': f'{199:064x}', 'image_id': f'sha256:{13:064x}',
+                        'ref': f'{IMAGE_REPOSITORY}:{13:040x}',
+                    }
+            return '\n'.join(state['containers'])
+        if argv[1:3] == ['image', 'ls']:
+            return '\n'.join(state['images'])
+        if argv[2] == 'inspect':
+            assert argv[3] == '--format'
+            ids = argv[5:]
+            if state['fault'] == 'malformed' and argv[1] == 'image':
+                return 'private-canary-must-not-enter-warning'
+            if state['fault'] == 'stale_alias' and argv[1] == 'image' and len(ids) == 1:
+                state['images'][ids[0]]['tags'].append('other.example.invalid/app:new-alias')
+            rows = state['containers'] if argv[1] == 'container' else state['images']
+            return '\n'.join(json.dumps(rows[item]) for item in ids)
+        if argv[1:3] == ['image', 'rm']:
+            assert len(argv) == 4 and '--force' not in argv
+            if state['fault'] == 'deletion':
+                raise PostgresDeployError()
+            del state['images'][argv[3]]
+            return ''
+        raise AssertionError('unexpected Docker cache command')
+
+    monkeypatch.setattr(linux, '_command', command)
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', warnings.append)
+    return effects, plan, state, calls, warnings
+
+
+@pytest.mark.parametrize('channel', ['dev', 'test'])
+def test_automatic_cache_cleanup_protects_live_and_recovery_images(tmp_path, monkeypatch, channel):
+    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch, channel=channel)
+    pins = {path.name: path.read_bytes() for path in (tmp_path / 'config/deploy').glob('*.env')}
+    before = set(state['images'])
+    with effects.channel_lock():
+        effects.activate(plan)
+    removed = {f'sha256:{number:064x}' for number in (13, 14)}
+    assert before - set(state['images']) == removed
+    assert {path.name: path.read_bytes() for path in (tmp_path / 'config/deploy').glob('*.env')} == pins
+    assert {f'sha256:{number:064x}' for number in range(1, 13)} <= set(state['images'])
+    assert [call for call in calls if call[:3] == ('docker', 'image', 'rm')] == [
+        ('docker', 'image', 'rm', f'sha256:{number:064x}') for number in (13, 14)]
+    assert calls[-1][0] == 'bash' and state['deploy_calls'] == 1
+    assert not warnings and not list((tmp_path / 'secret-handles').iterdir())
+
+
+@pytest.mark.parametrize('fault', ['census', 'malformed', 'deletion', 'stale_pin', 'stale_container', 'stale_alias'])
+@pytest.mark.parametrize('deploy_fails', [False, True])
+def test_optional_cache_cleanup_failure_does_not_gate_deploy(tmp_path, monkeypatch, capsys, fault, deploy_fails):
+    from app.ops.postgres_deploy import PostgresDeployError
+    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
+    state.update(fault=fault, deploy_fails=deploy_fails)
+    before = set(state['images'])
+    with effects.channel_lock():
+        if deploy_fails:
+            with pytest.raises(PostgresDeployError):
+                effects.activate(plan)
+        else:
+            effects.activate(plan)
+    assert set(state['images']) == before
+    assert state['deploy_calls'] == 1 and calls[-1][0] == 'bash'
+    assert len(warnings) == 1 and warnings[0].startswith(
+        b'PRIORITY=4\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\nMESSAGE=optional image cache recovery skipped: reason=')
+    assert 'private-canary' not in repr(warnings) + repr(capsys.readouterr())
+    assert not list((tmp_path / 'secret-handles').iterdir())
+
+
+@pytest.mark.parametrize('channel,automatic', [('dev', False), ('test', False), ('prod', False), ('prod', True)])
+def test_cache_cleanup_excludes_manual_and_prod_paths(tmp_path, monkeypatch, channel, automatic):
+    effects, plan, state, calls, warnings = _cache_activation_harness(
+        tmp_path, monkeypatch, channel=channel, automatic=automatic)
+    before = set(state['images'])
+    with effects.channel_lock():
+        effects._reclaim_image_cache(plan)
+    assert set(state['images']) == before and calls == [] and warnings == []
+
+
+def test_cache_cleanup_requires_existing_native_lock(tmp_path, monkeypatch):
+    from app.ops.postgres_deploy import PostgresDeployError
+    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
+    before = set(state['images'])
+    effects._reclaim_image_cache(plan)
+    with pytest.raises(PostgresDeployError):
+        effects.activate(plan)
+    assert set(state['images']) == before and calls == []
+    assert len(warnings) == 1 and b'reason=native_lock_unproven' in warnings[0]
+
+
+def test_cache_cleanup_preserves_unproved_local_application_images(tmp_path, monkeypatch):
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
+    # A tag in the digest field also cannot establish a registry-backed image.
+    image_id = f'sha256:{16:064x}'
+    state['images'][image_id] = {
+        'id': image_id, 'tags': [IMAGE_REPOSITORY + ':manual-second'],
+        'digests': [IMAGE_REPOSITORY + ':looks-like-tag'],
+        'created': '2020-01-01T00:00:00Z',
+    }
+    before = set(state['images'])
+    with effects.channel_lock():
+        effects.activate(plan)
+    assert before - set(state['images']) == {f'sha256:{number:064x}' for number in (13, 14)}
+    assert {f'sha256:{number:064x}' for number in (15, 16)} <= set(state['images'])
+    assert state['deploy_calls'] == 1 and calls[-1][0] == 'bash' and not warnings
+
+
+def test_cache_cleanup_caps_exact_nonforce_removal_batch(tmp_path, monkeypatch):
+    from app.ops.pg_acceptance import IMAGE_REPOSITORY
+    effects, plan, state, calls, warnings = _cache_activation_harness(tmp_path, monkeypatch)
+    for number in range(20, 31):
+        image_id = f'sha256:{number:064x}'
+        state['images'][image_id] = {
+            'id': image_id, 'tags': [f'{IMAGE_REPOSITORY}:{number:040x}'],
+            'digests': [f'{IMAGE_REPOSITORY}@sha256:{number:064x}'],
+            'created': '2020-01-01T00:00:00Z',
+        }
+    before = set(state['images'])
+    with effects.channel_lock():
+        effects.activate(plan)
+    expected = {f'sha256:{number:064x}' for number in (13, 14, *range(20, 26))}
+    assert before - set(state['images']) == expected
+    assert len([call for call in calls if call[:3] == ('docker', 'image', 'rm')]) == 8
+    assert calls[-1][0] == 'bash' and not warnings

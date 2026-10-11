@@ -26,9 +26,10 @@ bare skipped success or remove exact AC coverage. Broad contract target sets rem
 owner mapping is demonstrated; a Markdown suffix outside these roots is not documentation proof.
 
 The merge path stays distinct from post-merge runtime feedback. #5922 supplies exact-image admission
-and private-controller `dev` → `test` support; its native smoke checks do not replace current PR/PG
-checks. [`FAST_PR_TO_DEV_TEST_AUTOMATION`](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md) sequences live
-activation, functional coverage handoff and pilot acceptance separately under #5675.
+and private-controller `dev` → `test` support; #5932 adds isolated PostgreSQL acceptance to its native
+verification phase. #5675 transfers the retained PG PR coverage only after actual equivalent native
+execution passes in both channels. [`FAST_PR_TO_DEV_TEST_AUTOMATION`](../plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md)
+records activation and ten-candidate measurement; measurement does not gate ordinary candidates.
 
 ## Current Protection Surface
 
@@ -56,24 +57,17 @@ activation, functional coverage handoff and pilot acceptance separately under #5
   target, marker, required check, assertion and failure handler. The earlier #5922 selection
   reached 98 percent before its old 22-minute ceiling; a larger ceiling is execution margin,
   not a reduction in execution time. Actual duration and coverage handoff are measured separately.
-- The `pr-index-pg-contracts` job has a finite 30-minute execution budget for its full qualified
-  PostgreSQL acceptance surface (#5587). Each test also has the existing pytest-timeout plugin's
+- The shared native PostgreSQL acceptance profile retains the former `pr-index-pg-contracts`
+  surface (#5587), including FCA-06 second-consumer conformance (#5405) and dormant host-candidate
+  admission/history/live-refusal and managed-source proofs (#5593). Each test retains the
+  pytest-timeout plugin's
   120-second thread watchdog; verbose node IDs, unbuffered output, and the slowest 20 durations
-  identify a stalled or slow test before the job ceiling. This preserves test selection,
-  assertions, refusal/skip protections, and required-check rules. The existing
-  `tests/ops/test_ci_workflow.py::test_pr_index_pg_contracts_run_exact_acceptance_surface` guards
-  the budget; delivery still requires an executed successful Index PG check on the final PR head,
-  not a cancelled run or skipped metadata duplicate.
-- FCA-06 (#5405) adds `app/builderops/second_consumer.py` and
-  `tests/builderops/test_standalone_consumer_conformance.py` to that job's path filter and runs
-  the latter module in its existing PG invocation. The same workflow assertion guards selection
-  and execution enrollment; these are finite repository conformance proofs, not live acceptance.
-- Dormant host-candidate support (#5593) enrolls its exact PG admission/history/live-refusal and
-  managed-source Verify nodes in the same job, alongside the existing complete operation, executor
-  and readback modules. Finite CLI/operation/executor/isolation/readback and harness paths trigger
-  it; control-plane and managed-source selectors remain enrolled. The workflow assertion checks
-  both trigger and executed surface, with the same 30-minute budget. Actual final-head PG execution
-  is required; non-PG selection, collected nodes and earlier focused JUnits do not substitute.
+  identify a stalled or slow test. The closed result contract refuses missing selectors, skips,
+  failures and errors; it permits additional coverage without a permanent collected-node count.
+  `tests/ops/test_ci_workflow.py::test_pg_acceptance_handoff_preserves_required_coverage` guards
+  baseline enrollment and the coverage handoff. Actual matching dev/test PG receipts are required;
+  non-PG selection, collected nodes and earlier focused JUnits do not substitute. These finite
+  repository proofs do not establish a second-consumer installation or production eligibility.
 - Pure PR title/body metadata edits are validated by `Issue and PR Governance` while CI Smoke jobs
   remain skipped. An `edited` event carrying `changes.base.ref.from` is a merge-input retarget and
   therefore keeps full CI Smoke enabled. Metadata events use a separate concurrency suffix so a
