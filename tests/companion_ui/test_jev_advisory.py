@@ -33,10 +33,8 @@ def _seed(directory: Path) -> None:
                 item = _observation(state, bound, width)
                 (observations / f"{item['case_id']}-{width}.json").write_text(json.dumps(item))
     suite = ET.Element("testsuite")
-    for name in sorted(runner.ORDINARY_NAMES | runner.KNOWN_NAMES):
-        case = ET.SubElement(suite, "testcase", classname="tests.companion_ui.test_vault_browser_state_runtime", name=name)
-        if name in runner.KNOWN_NAMES:
-            ET.SubElement(case, "skipped", type="pytest.xfail", message="KD-87DEE784B97A")
+    for name in sorted(runner.ORDINARY_NAMES):
+        ET.SubElement(suite, "testcase", classname="tests.companion_ui.test_vault_browser_state_runtime", name=name)
     ET.ElementTree(suite).write(directory / "junit.xml")
 
 
@@ -194,20 +192,46 @@ def test_missing_or_skipped_browser_evidence_remains_blocking(synthetic_runner, 
     assert json.loads(path.read_text())["deterministic"]["status"] == "incomplete_evidence"
 
 
-def test_browser_inventory_accepts_repaired_probes_and_rejects_duplicates(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mutation", ["duplicate", "missing", "failure", "error"])
+def test_browser_inventory_requires_all_cases_and_rejects_duplicates(tmp_path: Path, mutation: str) -> None:
     _seed(tmp_path)
     tree = ET.parse(tmp_path / "junit.xml")
-    for case in tree.getroot():
-        skipped = case.find("skipped")
-        if skipped is not None:
-            case.remove(skipped)
-    tree.write(tmp_path / "junit.xml")
     assert runner._browser_inventory(tmp_path / "junit.xml") == {"passed": 20, "known_defect_xfails": 0}
     cases = list(tree.getroot())
-    cases[0].set("name", cases[1].get("name"))
+    if mutation == "duplicate":
+        cases[0].set("name", cases[1].get("name"))
+    elif mutation == "missing":
+        tree.getroot().remove(cases[0])
+    else:
+        ET.SubElement(cases[0], mutation, message="matrix did not pass")
     tree.write(tmp_path / "junit.xml")
     with pytest.raises(advisory.InvalidObservation):
         runner._browser_inventory(tmp_path / "junit.xml")
+
+
+@pytest.mark.parametrize("viewport", ["desktop", "narrow-pane"])
+@pytest.mark.parametrize("state", ["partial", "error"])
+@pytest.mark.parametrize("skip_type", ["pytest.skip", "pytest.xfail"])
+def test_combined_regression_skip_or_xfail_blocks_advisory_dispatch(
+    synthetic_runner, monkeypatch, viewport: str, state: str, skip_type: str,
+) -> None:
+    root, path = synthetic_runner
+
+    def incomplete(directory, _sha):
+        _seed(directory)
+        tree = ET.parse(directory / "junit.xml")
+        name = f"test_combined_degradation_discloses_identity_unavailable[{viewport}-{state}]"
+        case = next(case for case in tree.getroot() if case.get("name") == name)
+        ET.SubElement(case, "skipped", type=skip_type, message="KD-87DEE784B97A")
+        tree.write(directory / "junit.xml")
+        return 0
+
+    monkeypatch.setattr(runner, "_run_browser", incomplete)
+    monkeypatch.setattr(runner, "_judge_once", lambda *_: pytest.fail("skipped regression was judged"))
+    assert runner.run(root, live_jev=True) == 2
+    report = json.loads(path.read_text())
+    assert report["deterministic"]["status"] == "incomplete_evidence"
+    assert report["jev"]["origin"] == "not-run"
 
 
 def test_attempt_directories_are_synced_before_dispatch(synthetic_runner, monkeypatch) -> None:

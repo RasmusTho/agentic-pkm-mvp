@@ -42,11 +42,11 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   mutating requests. Run locally with
   `COMPANION_UI_BROWSER_TESTS=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest -q tests/companion_ui/test_vault_browser_state_runtime.py`.
   Set `COMPANION_UI_STATE_EVIDENCE_DIR` to retain fixture-only screenshots and
-  traces; CI archives these with JUnit at its exact checkout SHA. Combined
-  partial/error plus unresolved identity currently masks the identity warning
-  (registry `KD-87DEE784B97A`). Only that dedicated missing-notice exception is a
-  strict expected failure; other errors remain blocking and an unexpected pass
-  requires removing the marker with the UI repair. These results prove offline
+  traces; CI archives these with JUnit at its exact checkout SHA. All twenty
+  cases must pass, including the four regressions for simultaneous partial/error
+  and unresolved-identity notices (repaired registry `KD-87DEE784B97A`, #5980).
+  The advisory runner rejects skips, xfails, failed, missing or duplicate cases
+  before any model dispatch. These results prove offline
   browser behavior, not mobile-overlay or deployed dev/test acceptance. Live
   core-flow coverage is separately tracked by Issue #5942.
 - The optional Jev semantic pilot is versioned in `scripts/run_jev_browser_advisory.py`

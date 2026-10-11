@@ -67,9 +67,10 @@ python3 scripts/run_jev_browser_advisory.py --output-dir "${ADVISORY_EVIDENCE_RO
 For live runs, set `ADVISORY_EVIDENCE_ROOT` to a retained absolute directory outside temporary
 worktrees. Use an isolated clean checkout. The runner retains exact source SHA, fixture/rubric versions,
 JUnit, fixture screenshots/traces and a separate `jev-browser-advisory.v1` report. It requires
-all twenty exact browser cases and all sixteen desktop/narrow observation records; ordinary
-skips or missing evidence fail. The four current known-defect probes may only xfail with their
-specific registry reference. When the UI repair removes those markers, passed probes are accepted.
+all twenty exact browser cases to pass and all sixteen desktop/narrow observation records.
+Skips, xfails, failed, missing or duplicate cases fail the deterministic gate before model
+dispatch, including all four regressions for simultaneous partial/error and unresolved-identity
+notices (registry `KD-87DEE784B97A`, repaired by #5980).
 Eight desktop cases supply sixteen independent listing/identity Choice questions. Jev sees only
 synthetic expected facts, visible status prose, any visible identity badge and row counts; no note paths,
 titles, bodies, DOM or screenshots. The pane deliberately hides metadata badges; they are absent evidence, and healthy identity

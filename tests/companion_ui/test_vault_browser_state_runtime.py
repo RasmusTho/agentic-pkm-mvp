@@ -2,8 +2,8 @@
 
 The canonical pane is exercised at desktop and a narrow persistent-pane
 width. Mobile overlay/live-channel acceptance belongs to separate journeys.
-Only the recorded missing-identity notice may be an expected failure; browser
-errors, unsafe requests and lost healthy rows remain ordinary failures.
+Every case is blocking, including simultaneous listing and identity warnings;
+browser errors, unsafe requests and lost healthy rows remain failures.
 """
 
 from __future__ import annotations
@@ -34,19 +34,6 @@ from tests.companion_ui.browser_runtime_harness import (
 pytestmark = pytest.mark.browser_runtime
 
 _NOTE_PATH = "Notes/Readable & café #1?.md"
-_KNOWN_DEFECT = (
-    "KD-87DEE784B97A: list degradation masks unresolved identity; "
-    "https://github.com/RasmusTho/agentic-pkm-mvp/issues/4172#issuecomment-6099201983"
-)
-
-
-class MissingIdentityNotice(AssertionError):
-    """The exact deferred presentation defect, not an arbitrary test failure."""
-
-
-_KNOWN_IDENTITY_OMISSION = pytest.mark.xfail(
-    strict=True, raises=MissingIdentityNotice, reason=_KNOWN_DEFECT
-)
 
 
 @dataclass
@@ -174,11 +161,11 @@ def test_vault_browser_failure_state_matrix(
     _assert_browser_state(observed_browser, list_state, identity_available, primary)
 
 
-@_KNOWN_IDENTITY_OMISSION
 @pytest.mark.parametrize("list_state", ["partial", "error"])
-def test_known_combined_identity_notice_omission(
+def test_combined_degradation_discloses_identity_unavailable(
     observed_browser: ObservedBrowser, list_state: str,
 ) -> None:
+    # Regression for KD-87DEE784B97A, repaired by #5980.
     _assert_browser_state(observed_browser, list_state, False, list_state)
 
 
@@ -195,6 +182,10 @@ def _assert_browser_state(
             expect(surface.get_by_test_id("workspace-vault-browser-state-ready")).to_have_count(0)
         if list_state in {"partial", "error"}:
             expect(surface.get_by_test_id("workspace-vault-browser-state-empty")).to_have_count(0)
+            expected_reason = (
+                "one or more files could not be read" if list_state == "partial" else "connection failed"
+            )
+            expect(surface.get_by_test_id(f"workspace-vault-browser-state-{list_state}")).to_contain_text(expected_reason)
         expect(surface.get_by_test_id("workspace-vault-browser-read-only")).to_have_text("read-only")
         expected_identity = "FixtureVault/test" if identity_available else "unresolved/unknown"
         expect(surface.get_by_test_id("workspace-vault-browser-active-identity")).to_have_text(expected_identity)
@@ -211,11 +202,11 @@ def _assert_browser_state(
                 width=observed.page.viewport_size["width"],
                 source_sha=os.environ["COMPANION_UI_JEV_SOURCE_SHA"], output_dir=Path(advisory_dir),
             )
+        notice = surface.get_by_test_id("workspace-vault-browser-state-identity-unavailable")
+        expect(notice).to_have_count(0 if identity_available else 1)
         if not identity_available:
-            notice = surface.get_by_test_id("workspace-vault-browser-state-identity-unavailable")
-            if notice.count() == 0:
-                raise MissingIdentityNotice(_KNOWN_DEFECT)
             expect(notice).to_be_visible()
+            expect(notice).to_have_text("Vault identity unavailable; browsing context is unresolved.")
 
 
 @pytest.mark.parametrize("list_state", ["populated", "partial"])

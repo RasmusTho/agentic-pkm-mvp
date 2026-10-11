@@ -31,7 +31,10 @@ This is a Builder System workflow; Product/Runtime SBS impact routes via
 1. Identify which subsystems are touched.
 2. Open relevant SoT docs and tests.
 3. Propose a short plan (files, tests, docs).
-   - Before committing to the plan, route capability per `AGENTS.md :: Total Cost of Development`: pick the cheapest acceptable model, reasoning effort, verification, and review for the task. Escalation and de-escalation triggers live there.
+   - Before committing to the plan, route capability per `AGENTS.md :: Total Cost of Development`
+     and `docs/development/TOTAL_COST_OF_DEVELOPMENT.md :: Capability selection`: apply the configured
+     default for the task and the evidence requirements for model escalation, then choose reasoning
+     effort, verification, and review for the lowest expected TCD.
    - When invoked from issue-set coordination, work from the fresh issue context and its minimal
      authority pack. Do not absorb sibling Issue history or implement a non-trivial child inline in
      the coordinator. Use one bounded issue-local helper only when `AGENTS.md :: Parallel-agent

@@ -40,17 +40,21 @@ VERIFICATION_RUN_ID = (
 )
 
 
-def test_selection_intent_resolves_through_codex_and_claude_carrier_adapters() -> None:
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+@pytest.mark.parametrize("selection_intent", ["strong_reasoning", "verification"])
+def test_selection_intent_resolves_through_codex_and_claude_carrier_adapters(
+    channel, selection_intent
+) -> None:
     census = load_provider_census()
 
     coordination = resolve_execution_target_for_intent(
-        census, channel="dev", selection_intent="coordination"
+        census, channel=channel, selection_intent="coordination"
     )
     general_delivery = resolve_execution_target_for_intent(
-        census, channel="dev", selection_intent="general_delivery"
+        census, channel=channel, selection_intent="general_delivery"
     )
     strong_reasoning = resolve_execution_target_for_intent(
-        census, channel="dev", selection_intent="strong_reasoning"
+        census, channel=channel, selection_intent=selection_intent
     )
 
     assert (coordination.model, coordination.reasoning_effort) == (
@@ -62,19 +66,19 @@ def test_selection_intent_resolves_through_codex_and_claude_carrier_adapters() -
         "xhigh",
     )
     assert (strong_reasoning.model, strong_reasoning.reasoning_effort) == (
-        "gpt-6-astra",
+        "gpt-6.1-sol",
         "max",
     )
 
     codex = get_carrier_adapter("codex").bind(
-        strong_reasoning, selection_intent="strong_reasoning"
+        strong_reasoning, selection_intent=selection_intent
     )
     claude = get_carrier_adapter("claude").bind(
-        strong_reasoning, selection_intent="strong_reasoning"
+        strong_reasoning, selection_intent=selection_intent
     )
 
     assert codex.launchable is True
-    assert (codex.provider, codex.model) == ("openai", "gpt-6-astra")
+    assert (codex.provider, codex.model) == ("openai", "gpt-6.1-sol")
     assert claude.launchable is False
     assert claude.provider is None
     assert claude.model is None
@@ -117,7 +121,7 @@ def test_luna_builder_binding_uses_gpt_6_luna_for_all_channels() -> None:
         )
 
 
-def test_explicit_sol_fallback_keeps_model_specific_reasoning() -> None:
+def test_explicit_legacy_sol_fallback_keeps_model_specific_reasoning() -> None:
     target = resolve_execution_target(
         load_provider_census(),
         channel="dev",
@@ -133,6 +137,7 @@ def test_declared_model_aliases_remain_provider_neutral_in_receipts() -> None:
     aliases = capability_aliases_for_channel(load_provider_census(), channel="dev")
 
     assert aliases["gpt-6-astra"] == "sol"
+    assert aliases["gpt-6.1-sol"] == "sol"
     assert aliases["gpt-5.6-sol"] == "sol"
     assert aliases["gpt-6-luna"] == "luna"
 

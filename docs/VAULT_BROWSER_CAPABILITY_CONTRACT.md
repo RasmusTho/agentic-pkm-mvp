@@ -395,6 +395,9 @@ Vault Browser MLP v0 provides:
 - selecting a note loads it into the Companion workspace (read path only)
 - exclusion of files outside the vault root
 - explicit empty / error / identity-unavailable UI states with stable test IDs
+- Identity availability is independent of listing degradation: an unresolved-identity
+  notice accompanies a partial-list or connection-error notice without hiding it.
+  Healthy partial-list rows remain browsable; the identity notice appears exactly once.
 - no mutation path from the browser surface; non-GET methods are rejected
 
 Vault Browser MLP v0 explicitly does **not** provide:

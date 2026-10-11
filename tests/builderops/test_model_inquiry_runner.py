@@ -1193,7 +1193,7 @@ def test_production_inquiry_resolves_provider_free_intent_through_builder_census
     assert result["outcome"] == "single_target_acceptance"
     turns = service.trace("inq_runner_declared")["turns"]
     assert {turn["provider"] for turn in turns} == {"openai"}
-    assert {turn["model"] for turn in turns} == {"gpt-5.6-sol"}
+    assert {turn["model"] for turn in turns} == {"gpt-6.1-sol"}
     assert all(turn["provider_request_id"] for turn in turns)
     assert {call["url"] for call in calls} == {
         "https://api.openai.com/v1/chat/completions",
