@@ -20,8 +20,8 @@ only when the complete Karakeep → Heimdal published handoff → Mimer/KAP path
 
 Run one saved-link journey containing a note and highlight in the logical `test` channel, after the
 Karakeep service host, private route to TEST Heimdal, and governed runtime configuration have been
-qualified through current authorized evidence. The old Mac-mini test-channel instruction is stale;
-the Mac mini is not a qualified Product Runtime TEST host, and local Compose is not TEST evidence. Link the
+qualified through current authorized evidence. The old machine-specific test-channel instruction is
+stale; local Compose is not TEST evidence. Link the
 source item, Heimdal published-evidence identity, Mimer candidate path, both cursors, stage/run
 receipts, and service health; test restart/replay,
 duplicate no-op, WriteGuard refusal, and source-unavailable behavior; audit logs for secret leakage;
