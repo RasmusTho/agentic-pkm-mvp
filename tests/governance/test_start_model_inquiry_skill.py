@@ -269,7 +269,7 @@ else:
     payload = json.loads(result.stdout)
     assert payload["final_state"] == "provider_error"
     assert payload["diagnostic"] == {
-        "adapter_id": "openai-gpt-5.6-sol",
+        "adapter_id": "openai-gpt-6.1-sol",
         "adapter_failure_class": "credential_unavailable",
         "credential_identity_ref": "openai.api-key",
     }
