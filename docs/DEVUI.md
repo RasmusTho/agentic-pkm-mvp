@@ -613,6 +613,15 @@ capability reference whose owning document gives it a stable identity. Focus doe
 provider session, transcript, worker, PR, free-form search result, or CKM-only capability identity
 as its primary subject.
 
+For GitHub Issue subjects, the read projection compares the repository component without case
+while retaining the requested stable subject and exact source receipt lineage. Both owner-ask and
+owner-outcome joins use that identity rule; a different Issue or repository remains unrelated.
+The finite managed browser regression matrix covers complete, readiness-only, ask-only,
+unavailable, invalid-receipt and unrelated-source states at desktop and narrow widths. It proves
+synthetic repository behavior through the existing listener and source transport, without claiming
+live source qualification or owner acceptance. Missing or invalid outcome evidence withdraws that
+claim while the selected Issue and an independently admitted ask remain usable.
+
 Focus presents, in this order:
 
 1. owner intent and why this subject is in view;

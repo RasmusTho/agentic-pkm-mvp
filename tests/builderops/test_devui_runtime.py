@@ -1366,6 +1366,32 @@ def test_managed_focus_preserves_canonical_repository_case(managed_sources, subj
     assert any(row["kind"] == "owner_facts_unavailable" for row in payload["limitations"])
 
 
+@pytest.mark.parametrize("subject", ["github:example/fixture#501", "github:Example/Fixture#501"])
+def test_managed_focus_owner_facts_match_repository_case(managed_sources, monkeypatch, subject) -> None:
+    from tests.builderops.focus_owner_facts_fixture import owner_source
+
+    source = managed_sources
+    _package_managed_shell(source.root)
+    source.environment["DEVUI_REPOSITORY"] = "Example/Fixture"
+    source.gh_mode.write_text("canonical_case")
+    with owner_source(monkeypatch, "mixed-complete") as (collection, calls), source.client() as client:
+        response = client.get("/api/devui/focus", params={"subject": subject})
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["subject"]["stable_id"] == subject
+    assert payload["subject"]["authority_ref"]["locator"] == "https://github.com/Example/Fixture/issues/501"
+    assert not any(row["kind"] == "owner_facts_unavailable" for row in payload["limitations"])
+    for kind in ("owner_trial", "owner_acceptance"):
+        receipt = collection["subjects"][0]["facts"][kind]
+        claim = next(row for row in payload["evidence"] if row["claim_id"].startswith(kind + ":"))
+        assert claim["source_ref"]["source_id"] == receipt["id"]
+        assert claim["source_ref"]["version"] == receipt["hash"]
+        assert any(row["receipt_ref"] == receipt["id"] for row in payload["receipts"])
+    assert any(row["claim_id"].startswith("owner_ask:") for row in payload["evidence"])
+    assert payload["next_legal_step"]["legality"] == "unavailable"
+    assert calls == [("GET", "/v1/receipts/owner-facts/current")]
+
+
 def test_managed_journey_admission_and_typed_query_failure_matrix(managed_sources) -> None:
     source = managed_sources
     _package_managed_shell(source.root)

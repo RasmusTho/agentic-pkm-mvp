@@ -157,7 +157,10 @@ def owner_fact_candidates(provider: Any) -> dict[str, list[dict[str, Any]]]:
 
 
 def append_focus_owner_facts(inputs: dict[str, Any], provider: dict[str, Any]) -> dict[str, Any]:
-    subject = inputs["subject"]["stable_id"]
+    # This caller has validated a GitHub Issue subject. Its repository identity
+    # is case-insensitive, matching the source's canonical lowercase key. Keep
+    # the requested subject and exact receipt lineage unchanged in the view.
+    subject = inputs["subject"]["stable_id"].lower()
     for ask in provider.get("owner_asks", []):
         if ask["subject_ref"] == subject:
             reference = _source_ref(ask, ask["receipt_id"], ask["proposal_hash"])
