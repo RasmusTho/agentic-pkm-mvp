@@ -190,4 +190,3 @@ def test_remember_persistence_failure_is_explicit(
     # failure before exposing the candidate as its in-process context.
     assert runtime.registry.load().last_active_vault_ref == f"path:{vault_b}"
     assert manager.context.active_vault_path == str(vault_a)
-
