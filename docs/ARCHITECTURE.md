@@ -684,7 +684,7 @@ Historical topology, older runtime surfaces, and superseded architecture detail 
 
 ## GitHub Delivery Control Plane (development governance)
 
-GitHub delivery governance is a Builder System concern, not runtime architecture. `AGENTS.md` and `docs/development/` own the task-contract, claim, PR, CI, and verification workflow; their rules must not be inferred from this document.
+GitHub delivery governance is a Builder System concern, not runtime architecture. `GitHub Issues / PRs / CI` remain durable delivery truth; `Dispatcher SQLite` is the volatile coordination primitive; the external BuilderOps Vault provides advisory material; and Project is an optional projection. `AGENTS.md` and `docs/development/` own the task-contract, claim, PR, CI, and verification workflow; their rules must not be inferred from this document.
 
 ## BuilderOps Build Plane
 
