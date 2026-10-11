@@ -176,6 +176,34 @@ def _empty_docker_path(tmp_path: Path) -> str:
     return f"{fake_bin}:{os.environ['PATH']}"
 
 
+def _isolated_native_inventory_helper(tmp_path: Path) -> tuple[Path, Path]:
+    """Run the production CLI with a finite test census of real process identities.
+
+    Docker already has a test census. This replaces only native enumeration,
+    retaining real PID/start/group reads, writer classification and both probes.
+    The declared PID file is reread each probe so actual fixture races remain visible.
+    No production flag or environment-based census bypass is introduced.
+    """
+    pids_path = tmp_path / "fixture-native-pids.json"
+    pids_path.write_text("[]", encoding="utf-8")
+    helper = tmp_path / "fixture_inventory_helper.py"
+    helper.write_text(
+        "import json, os, sys\n"
+        "from pathlib import Path\n"
+        f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
+        "from scripts import instance_state_writer_inventory as inventory\n"
+        "def fixture_processes(*, linux_boot_id=None):\n"
+        "    controller = int(sys.argv[sys.argv.index('--controller-pid') + 1])\n"
+        f"    declared = json.loads(Path({str(pids_path)!r}).read_text())\n"
+        "    pids = sorted({controller, os.getpid(), *declared})\n"
+        "    return [inventory._record_for_pid(pid, linux_boot_id=linux_boot_id) for pid in pids]\n"
+        "inventory._native_processes = fixture_processes\n"
+        "raise SystemExit(inventory.main(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    return helper, pids_path
+
+
 def _controller_token(pid: int, *, env: dict[str, str] | None = None) -> str:
     return subprocess.check_output(
         [
@@ -232,12 +260,13 @@ def _run_quiescence_helper(
     controller_pid: int,
     controller_token: str,
     env: dict[str, str] | None = None,
+    inventory_helper: Path = WRITER_INVENTORY_HELPER,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     output = tmp_path / "inventory.json"
     result = subprocess.run(
         [
             sys.executable,
-            str(WRITER_INVENTORY_HELPER),
+            str(inventory_helper),
             "prove-quiescent",
             "--controller-pid",
             str(controller_pid),
@@ -1749,11 +1778,13 @@ def test_finalizer_rejects_legacy_digest_only_owner_receipt_before_state_mutatio
         controller_pid=controller_pid,
         controller_start_token=controller_token,
     )
+    inventory_helper, _ = _isolated_native_inventory_helper(tmp_path)
     result, quiescence_inventory = _run_quiescence_helper(
         tmp_path,
         controller_pid=controller_pid,
         controller_token=controller_token,
         env=env,
+        inventory_helper=inventory_helper,
     )
     assert result.returncode == 0, result.stderr
     proof = _prove_instance_state_quiescence(
@@ -3030,6 +3061,7 @@ def test_legacy_owner_producer_parses_canonical_quoted_app_local_paths() -> None
 
 
 def test_foreground_controller_inventory_helper_passes_without_self_observation(tmp_path) -> None:
+    inventory_helper, _ = _isolated_native_inventory_helper(tmp_path)
     path = _empty_docker_path(tmp_path)
     controller = tmp_path / "deploy_channel.sh"
     output = tmp_path / "inventory.json"
@@ -3048,7 +3080,7 @@ def test_foreground_controller_inventory_helper_passes_without_self_observation(
             **os.environ,
             "PATH": path,
             "PYTHON": sys.executable,
-            "HELPER": str(WRITER_INVENTORY_HELPER),
+            "HELPER": str(inventory_helper),
             "OUTPUT": str(output),
         },
         capture_output=True,
@@ -3072,18 +3104,21 @@ def test_actual_native_launcher_in_foreign_process_group_blocks(tmp_path) -> Non
     unrelated deployment that does not share the controller's process tree.
     """
 
+    inventory_helper, pids_path = _isolated_native_inventory_helper(tmp_path)
     env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
     controller_pid = os.getpid()
     token = _controller_token(controller_pid, env=env)
     launcher = _start_blocking_launcher(
         _write_blocking_launcher(tmp_path), separate_session=True
     )
+    pids_path.write_text(json.dumps([launcher.pid]), encoding="utf-8")
     try:
         result, output = _run_quiescence_helper(
             tmp_path,
             controller_pid=controller_pid,
             controller_token=token,
             env=env,
+            inventory_helper=inventory_helper,
         )
     finally:
         _stop_blocking_launcher(launcher)
@@ -3100,18 +3135,21 @@ def test_actual_native_launcher_in_controllers_process_group_is_not_a_writer(
     a native writer (Issue #4538).
     """
 
+    inventory_helper, pids_path = _isolated_native_inventory_helper(tmp_path)
     env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
     controller_pid = os.getpid()
     token = _controller_token(controller_pid, env=env)
     launcher = _start_blocking_launcher(
         _write_blocking_launcher(tmp_path), separate_session=False
     )
+    pids_path.write_text(json.dumps([launcher.pid]), encoding="utf-8")
     try:
         result, output = _run_quiescence_helper(
             tmp_path,
             controller_pid=controller_pid,
             controller_token=token,
             env=env,
+            inventory_helper=inventory_helper,
         )
     finally:
         _stop_blocking_launcher(launcher)
@@ -3120,6 +3158,7 @@ def test_actual_native_launcher_in_controllers_process_group_is_not_a_writer(
 
 
 def test_actual_launcher_appearing_between_real_probes_blocks_without_sleep(tmp_path) -> None:
+    inventory_helper, pids_path = _isolated_native_inventory_helper(tmp_path)
     env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
     controller_pid = os.getpid()
     token = _controller_token(controller_pid, env=env)
@@ -3134,7 +3173,7 @@ def test_actual_launcher_appearing_between_real_probes_blocks_without_sleep(tmp_
     helper = subprocess.Popen(
         [
             sys.executable,
-            str(WRITER_INVENTORY_HELPER),
+            str(inventory_helper),
             "prove-quiescent",
             "--controller-pid",
             str(controller_pid),
@@ -3157,6 +3196,7 @@ def test_actual_launcher_appearing_between_real_probes_blocks_without_sleep(tmp_
         launcher = _start_blocking_launcher(
             _write_blocking_launcher(tmp_path), separate_session=True
         )
+        pids_path.write_text(json.dumps([launcher.pid]), encoding="utf-8")
         os.write(continue_w, b"C")
         _, stderr = helper.communicate(timeout=10)
     finally:
@@ -3170,6 +3210,37 @@ def test_actual_launcher_appearing_between_real_probes_blocks_without_sleep(tmp_
     assert helper.returncode != 0
     assert stderr == "host-wide writer inventory is live or racing\n"
     assert not output.exists()
+
+
+def test_isolated_native_inventory_preserves_foreign_writer_detection(tmp_path) -> None:
+    """An unrelated writer cannot contaminate the census; declaring it must refuse proof."""
+    inventory_helper, pids_path = _isolated_native_inventory_helper(tmp_path)
+    env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
+    controller_pid = os.getpid()
+    token = _controller_token(controller_pid, env=env)
+    launcher = _start_blocking_launcher(
+        _write_blocking_launcher(tmp_path), separate_session=True
+    )
+    try:
+        result, output = _run_quiescence_helper(
+            tmp_path, controller_pid=controller_pid, controller_token=token,
+            env=env, inventory_helper=inventory_helper,
+        )
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        assert payload["probe_count"] == 2
+        assert payload["domains"]["native"] == []
+        output.unlink()
+        pids_path.write_text(json.dumps([launcher.pid]), encoding="utf-8")
+        result, output = _run_quiescence_helper(
+            tmp_path, controller_pid=controller_pid, controller_token=token,
+            env=env, inventory_helper=inventory_helper,
+        )
+        assert result.returncode != 0
+        assert result.stderr == "host-wide writer inventory is live or racing\n"
+        assert not output.exists()
+    finally:
+        _stop_blocking_launcher(launcher)
 
 
 def test_docker_enumeration_error_fails_closed_without_proof(tmp_path) -> None:
