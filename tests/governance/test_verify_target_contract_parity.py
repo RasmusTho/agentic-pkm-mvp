@@ -179,7 +179,7 @@ def test_verify_locator_extension_does_not_change_source_anchor_authority() -> N
 
 
 @pytest.mark.parametrize("target", CONTRACT_FORM_EXAMPLES.values(), ids=CONTRACT_FORM_EXAMPLES.keys())
-@pytest.mark.parametrize("joiner", [" + ", " and ", ", "])
+@pytest.mark.parametrize("joiner", [" + ", " and ", ", ", "; "])
 def test_every_verify_form_refuses_a_joined_second_locator(target: str, joiner: str) -> None:
     from scripts.validate_issue_readiness import classify_issue_body
 

@@ -50,14 +50,14 @@ _MARKER_PRESENCE_TARGET = re.compile(
     r"^`(?P<literal>[^`]+)` present in `(?P<path>[^`]+)`(?P<annotation>(?:[,;]?[ \t]+\S.*)?)$"
 )
 _LOCATOR_START = re.compile(r"^`*(?:\.?[A-Za-z0-9_./-]+)\.[A-Za-z0-9_-]+(?=$|[ \t`:;])")
-_TARGET_JOIN = re.compile(r"(?:[ \t]+\+[ \t]+|[ \t]+and[ \t]+|,[ \t]*)", re.I)
+_TARGET_JOIN = re.compile(r"(?:[ \t]+\+[ \t]+|[ \t]+and[ \t]+|[,;][ \t]*)", re.I)
 
 
 def _single_target_text(value: str) -> bool:
     """Annotation/anchor prose cannot append a second locator to any form."""
     for join in _TARGET_JOIN.finditer(value):
         tail = value[join.end():].lstrip()
-        if (tail.startswith(("doc writeback at", "roadmap diff:", "runtime receipt:", "diff of "))
+        if (tail.casefold().startswith(("doc writeback at", "roadmap diff:", "runtime receipt:", "diff of "))
                 or _LOCATOR_START.match(tail) is not None
                 or re.match(r"^`[^`]+` present in\b", tail) is not None):
             return False
