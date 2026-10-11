@@ -125,13 +125,17 @@ container. The passive probe checks existing last-active restore inputs and comp
 identities before a context read can restore selection; a configured registry must already have
 its private lock and canonical rollback export. It refuses initialization, recovery, projection
 repair and missing identities. A settings-rebind record is supported only in settled
-`no_lifecycle` state: applied and reload revisions must equal desired, the candidate registration
+`no_lifecycle` or `committed` state: applied and reload revisions must equal desired, the candidate registration
 must identify the approved physical root, the persisted last-active reference must already match
 that candidate, and its existing private ingress lock must be present. Legacy registrations may
 omit their optional vault ID; a conflicting ID is refused and the initialized source identity is
-still checked against the approved ID. This is the producer's
+still checked against the approved ID. A committed state additionally requires the
+existing private, checksum-valid watcher receipt to report `completed` for the exact
+desired revision, prior binding and candidate binding. This is the producer's
 same-selection/no-reload path; pending transitions remain refused. Then the API's active context is rechecked
-before navigation/effects.
+before navigation/effects. Note clicks use the manifest's navigation budget;
+`request_ms` may be at most 180000 to cover the separately bounded capture and ASK
+operations. A longer budget never acknowledges a write or permits a replay.
 Evidence paths must be canonical and outside the canonical approved vault path.
 This applies independently of capture permission.
 The existing compatibility capture endpoint

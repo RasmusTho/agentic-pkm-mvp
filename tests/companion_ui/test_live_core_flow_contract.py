@@ -741,7 +741,11 @@ def test_native_probe_reads_before_any_provider_initialization(
 
 
 def _settled_rebind_fixture(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, registered_identity: bool = True
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    registered_identity: bool = True,
+    committed: bool = False,
 ) -> tuple[dict[str, Any], Any, Any]:
     from dataclasses import replace
     from app.instance.settings_rebind import SettingsRebindRecord
@@ -768,8 +772,8 @@ def _settled_rebind_fixture(
         schema_revision=1,
         desired_revision=2,
         applied_revision=2,
-        phase="no_lifecycle",
-        lifecycle_posture="no_lifecycle",
+        phase="committed" if committed else "no_lifecycle",
+        lifecycle_posture="watcher" if committed else "no_lifecycle",
         candidate_binding_id="binding-dev",
         reload_revision=2,
         scalar_drain_revision=2,
@@ -784,15 +788,39 @@ def _settled_rebind_fixture(
     monkeypatch.setenv("INSTANCE_VAULT_REGISTRY_PATH", str(store.path))
     monkeypatch.setenv("INSTANCE_OWNERSHIP_ROOT", str(tmp_path / "ownership"))
     monkeypatch.setenv("WATCHER_VAULT_PATH", "")
+    if committed:
+        from app.watcher.settings_rebind import (
+            RebindScanReceipt,
+            SettingsRebindWatcherReceipt,
+            settings_rebind_watcher_receipt_path,
+            _write_receipt,
+        )
+
+        state_dir = tmp_path / "watcher-state"
+        monkeypatch.setenv("WATCHER_STATE_DIR", str(state_dir))
+        monkeypatch.setenv("WATCHER_VAULT_PATH", str(tmp_path))
+        monkeypatch.setenv("WATCHER_ENABLE", "1")
+        observed_at = "2026-10-11T00:00:00Z"
+        receipt = SettingsRebindWatcherReceipt(
+            desired_revision=record.desired_revision,
+            prior_binding_id=record.prior_binding_id,
+            candidate_binding_id=record.candidate_binding_id,
+            stage="completed",
+            buffer=(),
+            acknowledgement=RebindScanReceipt("pre_commit", 2, observed_at, {"ingest": 1}),
+            drain_receipt=RebindScanReceipt("post_commit", 2, observed_at, {"ingest": 2}),
+            resume_ready_at=observed_at,
+        )
+        _write_receipt(settings_rebind_watcher_receipt_path(state_dir, 2), receipt)
     return data, store, record
 
 
-@pytest.mark.parametrize("registered_identity", [True, False])
-def test_settled_no_lifecycle_restore_is_passive(
+def _assert_settled_restore_is_passive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     registered_identity: bool,
+    committed: bool,
 ) -> None:
     import app.stores.pg
     import app.settings.ingestion
@@ -801,7 +829,7 @@ def test_settled_no_lifecycle_restore_is_passive(
     from app.instance.vault_registry import AppLocalSettingsStore
 
     data, store, record = _settled_rebind_fixture(
-        tmp_path, monkeypatch, registered_identity=registered_identity
+        tmp_path, monkeypatch, registered_identity=registered_identity, committed=committed
     )
     note = tmp_path / data["capture_note_path"]
     note.parent.mkdir()
@@ -974,3 +1002,83 @@ def test_open_note_uses_visible_real_browser(tmp_path: Path, landing: str) -> No
             assert len(admissions) == 2
         finally:
             browser.close()
+
+
+def test_note_click_uses_navigation_budget() -> None:
+    observed = []
+    link = SimpleNamespace(
+        get_attribute=lambda _: "/?note_path=fixture.md",
+        click=lambda **kwargs: observed.append(kwargs),
+    )
+    links = SimpleNamespace(count=lambda: 1, nth=lambda _: link)
+    groups = SimpleNamespace(count=lambda: 0)
+    pane = SimpleNamespace(count=lambda: 1, wait_for=lambda **_: None)
+    pane.first = pane
+    pane.get_by_test_id = lambda name: groups if name.endswith("-group") else links
+    page = SimpleNamespace(
+        goto=lambda *a, **k: None,
+        locator=lambda _: pane,
+        get_by_test_id=lambda _: SimpleNamespace(wait_for=lambda **_: None),
+    )
+    runner = SimpleNamespace(
+        d={"ui_url": "http://127.0.0.1:8111/", "navigation_ms": 60000},
+        _admit_navigation=lambda: None,
+    )
+    CoreFlow._open_note(runner, page, "fixture.md")
+    assert observed == [{"timeout": 60000}]
+
+
+@pytest.mark.parametrize("registered_identity", [True, False])
+def test_settled_no_lifecycle_restore_is_passive(
+    tmp_path, monkeypatch, capsys, registered_identity
+):
+    _assert_settled_restore_is_passive(tmp_path, monkeypatch, capsys, registered_identity, False)
+
+
+@pytest.mark.parametrize("registered_identity", [True, False])
+def test_settled_committed_restore_is_passive(tmp_path, monkeypatch, capsys, registered_identity):
+    _assert_settled_restore_is_passive(tmp_path, monkeypatch, capsys, registered_identity, True)
+
+
+@pytest.mark.parametrize("fault", ["missing", "stage", "prior", "candidate", "checksum"])
+def test_committed_receipt_refuses_before_http(tmp_path, monkeypatch, fault):
+    from dataclasses import replace
+    from app.watcher.settings_rebind import (
+        settings_rebind_watcher_receipt_path,
+        load_settings_rebind_watcher_receipt,
+        _write_receipt,
+    )
+
+    data, store, record = _settled_rebind_fixture(tmp_path, monkeypatch, committed=True)
+    path = settings_rebind_watcher_receipt_path(tmp_path / "watcher-state", record.desired_revision)
+    receipt = load_settings_rebind_watcher_receipt(path)
+    if fault == "missing":
+        path.unlink()
+    elif fault == "checksum":
+        payload = json.loads(path.read_text())
+        payload["checksum"] = "bad"
+        path.write_text(json.dumps(payload))
+    else:
+        changes = {
+            "stage": {"stage": "acknowledged", "drain_receipt": None, "resume_ready_at": None},
+            "prior": {"prior_binding_id": "wrong-prior"},
+            "candidate": {"candidate_binding_id": "wrong-candidate"},
+        }
+        _write_receipt(path, replace(receipt, **changes[fault]))
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    runner = _runner(tmp_path / "runner")
+
+    def probe(*_):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(data)))
+        exec(_PROBE, {})
+        pytest.fail("bad completed receipt admitted")
+
+    runner.probe = probe
+    report = runner.run()
+    assert report["steps"][0]["status"] != "passed"
+    assert not runner.page.navigations and report["capture_posts"] == 0
+    assert {
+        p: p.read_bytes()
+        for p in tmp_path.rglob("*")
+        if p.is_file() and not p.is_relative_to(tmp_path / "runner")
+    } == before

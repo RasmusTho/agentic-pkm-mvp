@@ -103,7 +103,9 @@ def test_managed_companion_ui_timeout_reaches_runtime(
     assert handler._client._timeout == expected_timeout
     assert handler._client._base_url == ui_env["COMPANION_API_BASE_URL"]
     assert handler._ask_timeout_seconds == 120.0
-    assert handler._post_timeout_override(handler, "/api/companion/capture") is None
+    assert handler._post_timeout_override(handler, "/api/companion/capture") == (
+        120.0 if channel in {"dev", "test"} else None
+    )
 
 
 def _makefile_target_body(makefile_text: str, target_name: str) -> str | None:

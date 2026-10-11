@@ -660,7 +660,10 @@ The prod gateway keeps its safe default posture (`prod-ui` does not auto-start w
 
 The managed Compose gateway forwards `COMPANION_API_TIMEOUT_SECONDS` to the UI's
 general runtime client. The base default is `2.0` seconds; DEV and TEST overlays
-explicitly set `30.0` seconds for workspace reads and capture transport. ASK uses
+explicitly set `30.0` seconds for workspace reads. Capture has its own optional
+`COMPANION_CAPTURE_TIMEOUT_SECONDS` selector; DEV and TEST default it to `120.0`
+seconds, separately from read and ASK timing. An unset selector retains the general
+client budget; configured values are finite and bounded to 0.25–180 seconds. ASK uses
 its separate `COMPANION_ASK_TIMEOUT_SECONDS` budget (default `120.0` seconds).
 Production keeps the base environment setting until an operator authorizes a
 configuration change through the deployment gate; its distinct production
@@ -673,6 +676,15 @@ A transport timeout can occur after the runtime has written a capture: reconcile
 the material and receipt before deciding whether to retry. The gateway never
 replays the write or converts a timeout into success; a reported post-write
 acknowledgement failure remains `not_acknowledged`.
+
+Native TEST qualification must verify that the configured watcher scope actually
+matches its initialized source material. A scope restricted to an absent capture
+inbox cannot acknowledge a settings rebind merely because other notes exist outside
+that scope. Use the existing vault-wide scope when that is the intended channel
+policy; preserve zero-match degradation and complete selection through the normal
+producer. Model qualification must inspect the selected route and no-inference
+preflight, then prove real generation; a process-level mock default or catalog alone
+does not establish a usable answer path.
 
 ## Deploy procedure
 

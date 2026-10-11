@@ -203,6 +203,7 @@ def test_managed_timeout_admits_bounded_slow_runtime(
     timeout_seconds: str,
     delay_seconds: float,
     capture_status: int,
+    capture_timeout_seconds: str | None = None,
 ) -> None:
     """Real sockets admit slow reads/intake, retain finite deadlines and receipts."""
     from companion_ui.workspace.capture_modal import (
@@ -275,6 +276,10 @@ def test_managed_timeout_admits_bounded_slow_runtime(
     threading.Thread(target=runtime.serve_forever, daemon=True).start()
     monkeypatch.setenv("COMPANION_API_BASE_URL", f"http://127.0.0.1:{runtime.server_port}")
     monkeypatch.setenv("COMPANION_API_TIMEOUT_SECONDS", timeout_seconds)
+    if capture_timeout_seconds is None:
+        monkeypatch.delenv("COMPANION_CAPTURE_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("COMPANION_CAPTURE_TIMEOUT_SECONDS", capture_timeout_seconds)
     monkeypatch.delenv("COMPANION_ASK_TIMEOUT_SECONDS", raising=False)
     config = load_config()
     client = WorkspaceHttpClient(config["api_base_url"], timeout=config["api_timeout_seconds"])
@@ -282,6 +287,7 @@ def test_managed_timeout_admits_bounded_slow_runtime(
         client=client,
         api_base_url=config["api_base_url"],
         ask_timeout_seconds=config["ask_timeout_seconds"],
+        capture_timeout_seconds=config["capture_timeout_seconds"],
         production_profile=True,
     )
     gateway = CompanionThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -298,6 +304,9 @@ def test_managed_timeout_admits_bounded_slow_runtime(
         assert capture_calls == [{"text": "one slow capture"}]
         if float(timeout_seconds) < delay_seconds:
             assert "Can't reach the vault right now" in workspace.text
+        else:
+            assert "This is the note body." in workspace.text
+        if float(capture_timeout_seconds or timeout_seconds) < delay_seconds:
             assert capture.status_code == 502
             assert capture.json()["error"] == "runtime_unavailable"
             assert "timed out" in capture.json()["message"]
@@ -305,7 +314,6 @@ def test_managed_timeout_admits_bounded_slow_runtime(
             assert pending.captures[0].ack is None
             assert pending.captures[0].state == "not_yet_written"
         else:
-            assert "This is the note body." in workspace.text
             assert capture.status_code == capture_status
             if capture_status == 200:
                 assert capture.json() == receipt
@@ -446,6 +454,7 @@ class TestLoadConfig:
             "api_base_url": "http://127.0.0.1:18000",
             "api_timeout_seconds": 2.0,
             "ask_timeout_seconds": 120.0,
+            "capture_timeout_seconds": None,
         }
 
 
@@ -1384,3 +1393,10 @@ class TestBodyEditPanelRendering:
     def test_codemirror_absent_when_flow_disabled(self) -> None:
         html = self._html(update_flow_available=False)
         assert 'id="body-edit-codemirror"' not in html
+
+
+@pytest.mark.parametrize("capture_timeout", ["0.8", "0.25"])
+def test_capture_uses_dedicated_transport_budget(monkeypatch, capture_timeout) -> None:
+    test_managed_timeout_admits_bounded_slow_runtime(
+        monkeypatch, "0.25", 0.4, 200, capture_timeout_seconds=capture_timeout
+    )

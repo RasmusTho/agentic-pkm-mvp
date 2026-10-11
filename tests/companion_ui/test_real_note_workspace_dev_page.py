@@ -29,6 +29,31 @@ from companion_ui.workspace.real_note_workspace_shell import (
 from companion_ui.workspace.workspace_http_client import WorkspaceHttpClient
 
 
+def test_workspace_enrichment_reads_are_concurrent(monkeypatch) -> None:
+    import threading
+
+    client = WorkspaceHttpClient("http://unused.example")
+    barrier = threading.Barrier(2)
+    calls = []
+
+    def read(path, *, params):
+        if path == "/api/companion/workspace":
+            return _workspace_response()
+        if path not in {"/api/companion/vault-browser", "/api/companion/vault-link-index"}:
+            return {}
+        calls.append(path)
+        barrier.wait(timeout=2)
+        if path == "/api/companion/vault-browser":
+            return {"notes": [], "folders": []}
+        return {"note_paths": ["notes/research.md", "notes/linked.md"]}
+
+    monkeypatch.setattr(client, "get", read)
+    state = RealNoteWorkspaceDevPage(client).load(NoteLoadIntent(note_path="notes/research.md"))
+    assert state.error is None
+    assert state.vault_link_index == ["notes/research.md", "notes/linked.md"]
+    assert set(calls) == {"/api/companion/vault-browser", "/api/companion/vault-link-index"}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
