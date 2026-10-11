@@ -285,8 +285,10 @@ def _install_real_product_seams(
         (
             "What felt most important about that?",
             "What will you remember from it?",
+            "What is the clearest next step?",
             "What felt most important in the second reflection?",
             "What changed since the first one?",
+            "What should the addendum preserve?",
         )
     )
     fixed_now = datetime.combine(
@@ -331,7 +333,7 @@ def _install_real_product_seams(
     monkeypatch.setattr(live, "process_journal_reviews_tick", real_review)
 
 
-def test_runner_binds_production_artifacts_and_synthetic_actor(
+def test_runner_contract_binds_artifacts_and_synthetic_actor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest_path, _payload, _vault = _manifest_payload(tmp_path)
@@ -340,7 +342,9 @@ def test_runner_binds_production_artifacts_and_synthetic_actor(
 
     report = live.run_qualified_journey(manifest)
 
-    assert report.feature_acceptance == "PASS", report.as_payload()
+    assert report.feature_acceptance == "PASS", json.dumps(
+        report.as_payload(), indent=2, sort_keys=True
+    )
     assert report.actor_id == live.SYNTHETIC_ACTOR_ID
     assert all(item.outcome == "passed" for item in report.scenarios)
     assert calls == {"assemble": 1, "conversations": 2, "drafts": 2, "review": 1}
@@ -350,7 +354,7 @@ def test_runner_binds_production_artifacts_and_synthetic_actor(
     assert report.artifacts["addendum_candidate_sha256"]
 
 
-def test_current_full_day_context_reports_exact_source_admission_block(
+def test_runner_binds_production_artifacts_and_synthetic_actor(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest_path, _payload, _vault = _manifest_payload(tmp_path)
@@ -360,16 +364,16 @@ def test_current_full_day_context_reports_exact_source_admission_block(
 
     report = live.run_qualified_journey(manifest)
 
-    assert report.feature_acceptance == "FAIL"
-    assert report.limitation is not None
-    assert "JournalDraftBlockedError" in report.limitation
-    assert "provenance_unverified" in report.limitation
-    assert report.effects == {
-        "conversation_sessions": 1,
-        "candidate_writes": 0,
-        "actor_checkbox_writes": 0,
-        "canonical_accepts": 0,
-    }
+    assert report.feature_acceptance == "PASS", json.dumps(
+        report.as_payload(), indent=2, sort_keys=True
+    )
+    assert report.limitation is None
+    assert all(item.outcome == "passed" for item in report.scenarios)
+    assert report.effects == live.REQUIRED_EFFECT_BUDGET
+    assert report.artifacts["acceptance_receipt_id"]
+    assert report.artifacts["canonical_before_sha256"] == report.artifacts[
+        "canonical_after_sha256"
+    ]
 
 
 def test_second_session_proves_primary_never_overwritten(
