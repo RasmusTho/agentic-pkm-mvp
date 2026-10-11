@@ -76,7 +76,7 @@ def test_specialist_defaults_follow_tcd_ladder() -> None:
         "slice-implementer.toml": ("gpt-6-luna", "xhigh"),
         "issue-local-helper.toml": ("gpt-6-luna", "medium"),
         "backlog-contract-maintainer.toml": ("gpt-6-luna", "xhigh"),
-        "verification-closer.toml": ("gpt-6-astra", "max"),
+        "verification-closer.toml": ("gpt-6.1-sol", "max"),
     }
 
     for filename, (model, effort) in expected.items():

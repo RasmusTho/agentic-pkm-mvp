@@ -1,6 +1,6 @@
 name = "verification_closer"
 description = "Verifies a PR against its governing contract, checks CI/review state, and closes delivery through verification-and-closure."
-model = "gpt-6-astra"
+model = "gpt-6.1-sol"
 model_reasoning_effort = "max"
 sandbox_mode = "workspace-write"
 

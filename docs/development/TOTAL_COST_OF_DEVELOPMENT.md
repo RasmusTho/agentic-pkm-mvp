@@ -40,7 +40,15 @@ model is only the backwards-compatible fallback when no selection intent is supp
 that it is always optimal. Skills must declare one of the shared selection intents — `coordination`,
 `general_delivery`, `strong_reasoning`, or `verification` — and must not branch on provider/model
 IDs. The current policy maps coordination to Luna/low, normal delivery to Luna/xhigh, and strong
-reasoning or verification to Astra/max; Sol and Terra remain explicit compatibility/fallback targets.
+reasoning or verification to Sol 6.1/max, including the highest task difficulty. Astra/max is an
+explicit escalation only when task evidence shows Sol 6.1 cannot adequately meet the contract and
+the expected human time, rework, defect, or delay cost it avoids exceeds its incremental cost.
+Record the specific Sol limitation and the TCD rationale in the existing plan or review receipt;
+high difficulty, a protected surface, or a verification role alone does not select Astra. Prior
+comparable evidence may justify escalation without repeating a known inadequate Sol attempt.
+Terra and older Sol models remain explicit compatibility/fallback targets. The configured bindings
+live in `docs/settings/models/providers.yaml :: runtime_channels.builder_execution` and the Codex
+role adapters, not in model-specific skill branches.
 Internal Yggdrasil decisions and external carrier invocations use the same declared census/resolver
 seam; the active carrier is Codex, while the Claude adapter is contract-compatible but inactive.
 An undeclared intent, carrier, or model choice fails closed. A caller may provide an explicit
@@ -48,8 +56,10 @@ provider-neutral `capability_override` such as `terra` for a bounded fallback; t
 receipted and validated against the census, and is never inferred from quota exhaustion or encoded
 as a skill-level provider/model branch.
 
-Escalate after two failed attempts or review rejects, unclear requirements, missing/hard-to-interpret
-tests, high blast radius, non-trivial CI failure, or hard-to-assess residual risk. De-escalate when the
+Reassess capability after two failed attempts or review rejects, unclear requirements,
+missing/hard-to-interpret tests, high blast radius, non-trivial CI failure, or hard-to-assess residual
+risk. Escalate reasoning, context, tools, or review depth as justified; switching from Sol 6.1 to
+Astra still requires the specific inadequacy and expected-cost evidence above. De-escalate when the
 plan is mechanical, a focused test bounds the result, and no hidden correctness risk remains.
 
 For external capacity pressure, follow

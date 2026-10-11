@@ -120,12 +120,12 @@ def test_undeclared_or_unlinked_divergence_fails(tmp_path: Path) -> None:
             (
                 "selection_intents: [strong_reasoning, verification], "
                 "selection_intent_reasoning_efforts: {strong_reasoning: max, verification: max}, "
-                "selection_intent_models: {strong_reasoning: gpt-6-astra, verification: gpt-6-astra}"
+                "selection_intent_models: {strong_reasoning: gpt-6.1-sol, verification: gpt-6.1-sol}"
             ),
             (
                 "selection_intents: [strong_reasoning], "
                 "selection_intent_reasoning_efforts: {strong_reasoning: max}, "
-                "selection_intent_models: {strong_reasoning: gpt-6-astra}"
+                "selection_intent_models: {strong_reasoning: gpt-6.1-sol}"
             ),
         ),
     ],
@@ -288,37 +288,39 @@ def test_builder_execution_profiles_use_tcd_default_ladder() -> None:
         assert profiles["terra"].model == "gpt-5.6-terra"
         assert profiles["terra"].reasoning_effort == "high"
         assert profiles["terra"].selection_intents == []
-        assert profiles["sol"].model == "gpt-5.6-sol"
-        assert profiles["sol"].reasoning_effort == "high"
+        assert profiles["sol"].model == "gpt-6.1-sol"
+        assert profiles["sol"].reasoning_effort == "max"
         assert profiles["sol"].selection_intents == ["strong_reasoning", "verification"]
         assert profiles["sol"].model_reasoning_efforts == {
+            "gpt-6.1-sol": "max",
             "gpt-5.6-sol": "high",
             "gpt-6-astra": "max",
         }
         assert profiles["sol"].selection_intent_models == {
-            "strong_reasoning": "gpt-6-astra",
-            "verification": "gpt-6-astra",
+            "strong_reasoning": "gpt-6.1-sol",
+            "verification": "gpt-6.1-sol",
         }
 
 
-def test_sol_profile_selects_gpt_6_astra_for_explicit_strong_intents() -> None:
+def test_sol_profile_defaults_to_sol_6_1_and_keeps_astra_explicit() -> None:
     census = _census()
     openai = census.provider("openai")
 
     for channel, profiles in census.runtime_channels.builder_execution.items():
         sol = profiles["sol"]
-        assert sol.model == "gpt-5.6-sol"
-        assert sol.selectable_models == ["gpt-5.6-sol", "gpt-6-astra"]
+        assert sol.model == "gpt-6.1-sol"
+        assert sol.selectable_models == ["gpt-6.1-sol", "gpt-6-astra", "gpt-5.6-sol"]
         assert sol.selection_intent_models == {
-            "strong_reasoning": "gpt-6-astra",
-            "verification": "gpt-6-astra",
+            "strong_reasoning": "gpt-6.1-sol",
+            "verification": "gpt-6.1-sol",
         }
+        assert sol.model_reasoning_efforts["gpt-6.1-sol"] == "max"
         assert sol.model_reasoning_efforts["gpt-6-astra"] == "max"
         assert sol.model_reasoning_efforts["gpt-5.6-sol"] == "high"
         assert any(model.id == "gpt-6-astra" for model in openai.models)
 
 
-def test_openai_census_declares_gpt_6_astra_as_strong_reasoning_default() -> None:
+def test_openai_census_keeps_astra_selectable_without_default_routing() -> None:
     census = _census()
     openai = census.provider("openai")
     astra = next(model for model in openai.models if model.id == "gpt-6-astra")
@@ -330,12 +332,16 @@ def test_openai_census_declares_gpt_6_astra_as_strong_reasoning_default() -> Non
     assert all(
         mapping.model != "gpt-6-astra"
         for channel in census.runtime_channels.builder_execution.values()
-        for capability, mapping in channel.items()
-        if capability != "sol"
+        for mapping in channel.values()
+    )
+    assert all(
+        "gpt-6-astra" not in mapping.selection_intent_models.values()
+        for channel in census.runtime_channels.builder_execution.values()
+        for mapping in channel.values()
     )
 
 
-def test_builder_selection_intents_prefer_astra_for_strong_reasoning() -> None:
+def test_builder_selection_intents_prefer_sol_6_1_for_strong_reasoning() -> None:
     census = _census()
 
     assert {
@@ -346,18 +352,18 @@ def test_builder_selection_intents_prefer_astra_for_strong_reasoning() -> None:
         ("dev", "spark", "gpt-5.3-codex-spark"),
         ("dev", "luna", "gpt-6-luna"),
         ("dev", "terra", "gpt-5.6-terra"),
-        ("dev", "sol", "gpt-5.6-sol"),
+        ("dev", "sol", "gpt-6.1-sol"),
         ("test", "spark", "gpt-5.3-codex-spark"),
         ("test", "luna", "gpt-6-luna"),
         ("test", "terra", "gpt-5.6-terra"),
-        ("test", "sol", "gpt-5.6-sol"),
+        ("test", "sol", "gpt-6.1-sol"),
         ("prod", "spark", "gpt-5.3-codex-spark"),
         ("prod", "luna", "gpt-6-luna"),
         ("prod", "terra", "gpt-5.6-terra"),
-        ("prod", "sol", "gpt-5.6-sol"),
+        ("prod", "sol", "gpt-6.1-sol"),
     }
     assert all(
-        profile.selection_intent_models["strong_reasoning"] == "gpt-6-astra"
+        profile.selection_intent_models["strong_reasoning"] == "gpt-6.1-sol"
         for profile in (
             profiles["sol"]
             for profiles in census.runtime_channels.builder_execution.values()
