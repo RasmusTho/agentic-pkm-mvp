@@ -88,7 +88,9 @@ its private lock and canonical rollback export. It refuses initialization, recov
 repair and missing identities. A settings-rebind record is supported only in settled
 `no_lifecycle` state: applied and reload revisions must equal desired, the candidate registration
 must identify the approved physical root, the persisted last-active reference must already match
-that candidate, and its existing private ingress lock must be present. This is the producer's
+that candidate, and its existing private ingress lock must be present. Legacy registrations may
+omit their optional vault ID; a conflicting ID is refused and the initialized source identity is
+still checked against the approved ID. This is the producer's
 same-selection/no-reload path; pending transitions remain refused. Then the API's active context is rechecked
 before navigation/effects.
 Evidence paths must be canonical and outside the canonical approved vault path.

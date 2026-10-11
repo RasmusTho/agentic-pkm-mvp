@@ -212,7 +212,7 @@ if snapshot is not None and snapshot.settings_rebind is not None:
  record=SettingsRebindRecord.from_payload(snapshot.settings_rebind)
  registration=snapshot.registrations.get(record.candidate_binding_id)
  assert record.phase=='no_lifecycle' and record.applied_revision==record.desired_revision and record.reload_revision==record.desired_revision,'fixture_restore_rebind_unsettled'
- assert registration is not None and pathlib.Path(registration.path).resolve(strict=True)==root and registration.vault_id==p['vault_id'],'fixture_restore_rebind_target_mismatch'
+ assert registration is not None and pathlib.Path(registration.path).resolve(strict=True)==root and registration.vault_id in (None,p['vault_id']),'fixture_restore_rebind_target_mismatch'
  assert snapshot.last_active_vault_ref==registration.ref==known.ref,'fixture_restore_rebind_selection_uncommitted'
  ingress=registry_store.path.parent/'settings-rebind-ingress.lock'
  assert ingress.is_file() and not ingress.is_symlink() and stat.S_IMODE(ingress.stat().st_mode)==0o600 and ingress.stat().st_uid==os.geteuid(),'fixture_restore_rebind_lock_missing'

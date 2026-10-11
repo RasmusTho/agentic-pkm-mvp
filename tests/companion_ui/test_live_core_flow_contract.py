@@ -741,7 +741,7 @@ def test_native_probe_reads_before_any_provider_initialization(
 
 
 def _settled_rebind_fixture(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, registered_identity: bool = True
 ) -> tuple[dict[str, Any], Any, Any]:
     from dataclasses import replace
     from app.instance.settings_rebind import SettingsRebindRecord
@@ -756,7 +756,7 @@ def _settled_rebind_fixture(
             "binding-dev",
             "fixture",
             str(tmp_path),
-            vault_id=data["vault_id"],
+            vault_id=data["vault_id"] if registered_identity else None,
             local_instance_id="local-fixture",
         ),
         _capability=STORAGE_MUTATION_CAPABILITY,
@@ -787,8 +787,12 @@ def _settled_rebind_fixture(
     return data, store, record
 
 
+@pytest.mark.parametrize("registered_identity", [True, False])
 def test_settled_no_lifecycle_restore_is_passive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    registered_identity: bool,
 ) -> None:
     import app.stores.pg
     import app.settings.ingestion
@@ -796,7 +800,9 @@ def test_settled_no_lifecycle_restore_is_passive(
     from app.vault.manager import VaultManager
     from app.instance.vault_registry import AppLocalSettingsStore
 
-    data, store, record = _settled_rebind_fixture(tmp_path, monkeypatch)
+    data, store, record = _settled_rebind_fixture(
+        tmp_path, monkeypatch, registered_identity=registered_identity
+    )
     note = tmp_path / data["capture_note_path"]
     note.parent.mkdir()
     note.write_text("---\nuuid: " + data["capture_note_uuid"] + "\n---\n" + data["marker"])
@@ -835,7 +841,9 @@ def test_settled_no_lifecycle_restore_is_passive(
     assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
 
 
-@pytest.mark.parametrize("fault", ["phase", "reload", "last_active", "root", "ingress_lock"])
+@pytest.mark.parametrize(
+    "fault", ["phase", "reload", "last_active", "root", "registered_id", "ingress_lock"]
+)
 def test_unsettled_rebind_refuses_before_http(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fault: str
 ) -> None:
@@ -860,6 +868,9 @@ def test_unsettled_rebind_refuses_before_http(
         other = tmp_path / "other"
         other.mkdir()
         registration = replace(snapshot.registrations["binding-dev"], path=str(other))
+        snapshot = replace(snapshot, registrations={"binding-dev": registration})
+    if fault == "registered_id":
+        registration = replace(snapshot.registrations["binding-dev"], vault_id="another-vault")
         snapshot = replace(snapshot, registrations={"binding-dev": registration})
     store._write_locked(replace(snapshot, settings_rebind=record.as_payload()))
     if fault == "ingress_lock":
