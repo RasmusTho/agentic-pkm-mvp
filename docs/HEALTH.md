@@ -39,6 +39,10 @@ registered extraction routes, so those workloads require `structured_output` eve
 never invokes inference. A typed remote preflight refusal for one capability is reported against
 that capability; other capabilities remain `unknown` when preflight stopped before checking runtime
 readiness.
+Route descriptions preserve an omitted reasoning effort. Health does not invent an explicit
+`low` request for a model without reasoning control; the Product facade applies its compatible
+execution defaults. An explicit incompatible effort remains a refusal under the same model
+capability validation used by completion.
 The Product health route also fails closed for a configured transport that the Product completion
 facade rejects; configuring credentials for a different transport does not make that route healthy.
 
