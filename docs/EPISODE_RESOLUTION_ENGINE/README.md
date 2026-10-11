@@ -3,7 +3,7 @@ Doc role: Capability specification (feature-breakdown lane)
 Temporal class: strategic
 Review cadence: event-driven (task merges, parent-issue lifecycle)
 Source of truth: this directory + the governing ADRs; GitHub issues are execution artifacts, this spec is the contract
-Last reviewed: 2026-07-07
+Last reviewed: 2026-10-11
 
 # Episode Resolution Engine — Specification
 
@@ -46,8 +46,9 @@ The owner requires every input source identified and part of the architecture. T
 | 10 | [LOCATION_STREAM_FUTURE_POSTURE](LOCATION_STREAM_FUTURE_POSTURE.md) | ERE-10 | spec-only posture; no issue until the Heimdal v2 trigger fires |
 | 11 | [REGISTRY_DRIVEN_ADAPTER_DISPATCH](REGISTRY_DRIVEN_ADAPTER_DISPATCH.md) | ERE-11 | implementation receipt #3523 / PR #3727; 4, 9 (owner-optional Product/Runtime refactor) |
 | 12 | [RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE](RECONCILE_LIVE_STREAM_ADAPTER_CORRESPONDENCE.md) | ERE-12 | implementation active in #3524 / PR #3731; 11 (Product/Runtime SIP refactor) |
+| 13 | [QUALIFY_REAL_DAY_TEST_CHANNEL](QUALIFY_REAL_DAY_TEST_CHANNEL.md) | ERE-13 | ERE-09 + #5969 native qualification operation and finite admission/effect/evidence path; profile contract/tests only, real-day receipt remains parent acceptance |
 
-Flat order: 1‖2‖3 → 4 → 5 → 6‖7‖8 → 9. ERE-10 is a declared posture, not a build step. ERE-11 → 12 is an owner-optional Product/Runtime refactor lane, off the critical build path: it generalizes the ingestion seam so the ERE-01 "registry entry + adapter, not an engine change" claim becomes literally true and the Input-source inventory's 1:1 registry-match property becomes fail-loud enforced. It changes no segmentation behavior.
+Flat order: 1‖2‖3 → 4 → 5 → 6‖7‖8 → 9. ERE-10 is a declared posture, not a build step. ERE-13 is the bounded qualification-profile follow-on to ERE-09 and #5969; the actual-day receipt remains parent acceptance, not a child PR test. ERE-11 → 12 is an owner-optional Product/Runtime refactor lane, off the critical build path: it generalizes the ingestion seam so the ERE-01 "registry entry + adapter, not an engine change" claim becomes literally true and the Input-source inventory's 1:1 registry-match property becomes fail-loud enforced. It changes no segmentation behavior.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -98,7 +99,7 @@ Delivered (ERE-06, #3181):
 
 ## Relationship to GitHub issues
 
-Parent feature issue: **#3175** (live validation hub, `agent:blocked`; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). Children: ERE-01 → #3176, ERE-02 → #3177 (Tier 3: migration), ERE-03 → #3178; ERE-04 → #3179, ERE-05 → #3180, ERE-06 → #3181, ERE-07 → #3182, ERE-08 → #3183, ERE-09 → #3184; ERE-10 gets no issue until its trigger. ERE-11 → #3523 is delivered by PR #3727 as a Product/Runtime SIP Tier 2 refactor. ERE-12 → #3524 is active in the same core-runtime lane via PR #3731; it reconciles the registry, flips adapter gaps to fail-loud, and makes `test_engine_consumes_only_registered_streams` drive the production tick and compare actual reads with the live set. The spec is the source of truth; issues track execution state.
+Parent feature issue: **#3175** (live validation hub, `agent:blocked`; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). Children: ERE-01 → #3176, ERE-02 → #3177 (Tier 3: migration), ERE-03 → #3178; ERE-04 → #3179, ERE-05 → #3180, ERE-06 → #3181, ERE-07 → #3182, ERE-08 → #3183, ERE-09 → #3184; ERE-10 gets no issue until its trigger. ERE-13 → #6002 owns the fixed source-authorized real-day qualification profile (after #5969); the actual-day receipt remains on #3175. ERE-11 → #3523 is delivered by PR #3727 as a Product/Runtime SIP Tier 2 refactor. ERE-12 → #3524 is active in the same core-runtime lane via PR #3731; it reconciles the registry, flips adapter gaps to fail-loud, and makes `test_engine_consumes_only_registered_streams` drive the production tick and compare actual reads with the live set. The spec is the source of truth; issues track execution state.
 
 ## Open research carried (not blocking)
 
