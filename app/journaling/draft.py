@@ -1193,6 +1193,26 @@ def _review_state(
     return None
 
 
+def _stricter_review_state(
+    occurrence: ReviewState | None,
+    current: ReviewState | None,
+) -> ReviewState | None:
+    """Preserve the least-authority posture across occurrence and source state."""
+
+    states = (occurrence, current)
+    if ReviewState.REJECTED in states:
+        return ReviewState.REJECTED
+    if ReviewState.REVISED in states:
+        return ReviewState.REVISED
+    if None in states:
+        return None
+    if ReviewState.UNREVIEWED in states:
+        return ReviewState.UNREVIEWED
+    if ReviewState.REVIEWED in states:
+        return ReviewState.REVIEWED
+    return ReviewState.ACCEPTED
+
+
 def _source_review_states(
     vault_root: Path,
     sessions: tuple[_ResolvedSession, ...],
@@ -1207,10 +1227,11 @@ def _source_review_states(
     }
     for item, identity in zip(context_items, context_identities, strict=True):
         path = vault_root / _reference_path(identity.external_id)
-        state: ReviewState | None = None
+        state = item.review_state
         if path.suffix.lower() == ".md":
             frontmatter, _body = load_frontmatter(path.read_text(encoding="utf-8"))
-            state = _review_state(frontmatter, default=None)
+            current = _review_state(frontmatter, default=state)
+            state = _stricter_review_state(state, current)
         states[identity] = state
     return states
 

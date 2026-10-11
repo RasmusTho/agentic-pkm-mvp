@@ -38,6 +38,14 @@ The owner is dyslexic and Swedish/English mixed; every read/type surface works a
 
 A source absent from this table (mood/sentiment analytics, multi-day rollups, auto-publish) is excluded deliberately — see Out of Scope.
 
+Every recognized day-context occurrence carries an explicit least-authority review posture into
+draft admission. Durable commitment and decision-receipt facts default only to unreviewed
+cited-proposal input; captures retain their actual accepted, reviewed, revised, rejected, or
+unreviewed source posture. The posture remains bound to the occurrence-aware typed source identity
+and exact source bytes. A rejected source, unresolved citation, identity collision, changed source,
+or changed admission posture therefore fails closed before candidate replacement; none of these
+inputs becomes accepted human knowledge merely because it is durable or cited.
+
 ## Implementation tasks (execution order)
 
 | # | Task | id | Prereqs |
