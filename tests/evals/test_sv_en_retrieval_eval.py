@@ -7,12 +7,14 @@ Three layers, deliberately separated so the eval is honest about what CI can pro
 2. **Scorecard truth** (always runs, no Ollama): the committed scorecard actually covers the
    committed fixtures — both identities over the full labelled query set, fusion held fixed for the
    identity comparison — and the eval note's recommendation matches the numbers it cites.
-3. **Live reproduction** (skipped without an Ollama host carrying both models): re-runs the harness
-   end to end and re-derives the scorecard's headline finding from live embeddings.
+3. **Live reproduction** (explicit ``eval`` lane with a qualified Product Mac-portal caller):
+   re-runs the harness end to end and re-derives the headline finding from real embeddings.
 
-Layer 3 is what makes the scorecard reproducible rather than asserted. CI has no Ollama host, so it
-skips there and runs on any embedding host (the test-channel host, or any machine with both models
-pulled).
+Layer 3 requires explicit dev/test/manual execution through the shared Product client; local
+Ollama availability does not qualify that caller. Missing paths or models fail loudly. Generic
+main/PR units retain layers 1 and 2; their success does not establish live quality. The retained
+dual-identity execution receipt obligation is described in ``docs/eval.md :: SV/EN live
+reproduction``.
 """
 
 from __future__ import annotations
@@ -30,7 +32,6 @@ from tests.evals.sv_en_retrieval import (
     QUERY_CLASSES,
     RECALL_KS,
     IdentityRun,
-    identities_available,
     load_connect_pairs,
     load_corpus,
     load_query_set,
@@ -302,10 +303,7 @@ def test_eval_note_states_g5_fusion_recommendation() -> None:
 # ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(
-    not identities_available(),
-    reason="needs an Ollama host with both nomic-embed-text and bge-m3 pulled",
-)
+@pytest.mark.eval
 def test_live_run_reproduces_the_cross_lingual_finding() -> None:
     """The scorecard's headline finding re-derives from live embeddings, not from the JSON.
 
@@ -330,10 +328,7 @@ def test_live_run_reproduces_the_cross_lingual_finding() -> None:
     )
 
 
-@pytest.mark.skipif(
-    not identities_available(),
-    reason="needs an Ollama host with both nomic-embed-text and bge-m3 pulled",
-)
+@pytest.mark.eval
 def test_live_corpus_embeds_at_the_declared_dimensions() -> None:
     """Each identity really produces the vector width the scorecard records."""
     scorecard = load_scorecard()
