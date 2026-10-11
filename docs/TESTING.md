@@ -51,7 +51,8 @@ Execution:
 - Live UI smoke (`tests/companion_ui/test_companion_ui_live_smoke.py`) is a separate opt-in check
   against a *running* gateway; it skips unless `COMPANION_UI_SMOKE_URL` is set, so it never gates a PR.
 
-The advisory Jev pilot wraps the existing offline Vault Browser listing/identity matrix:
+The advisory Jev pilot wraps two finite offline browser matrices: Vault Browser listing/identity
+and managed Focus owner facts. The default surface is `vault-browser`.
 
 Install the Chromium version matching the selected Python Playwright package before the first
 local run (CI already performs this setup). Preserve other installed browser versions:
@@ -61,12 +62,14 @@ PLAYWRIGHT_SKIP_BROWSER_GC=1 python3 -m playwright install chromium
 python3 scripts/run_jev_browser_advisory.py --output-dir .codex-tmp/jev-browser-advisory
 # Existing local Mac helper only, after installing the merged direct-tool script:
 python3 scripts/run_jev_browser_advisory.py --output-dir "${ADVISORY_EVIDENCE_ROOT:?set a persistent evidence directory}" --live-jev
+# The separate Focus surface uses the same helper and durable attempt fence:
+python3 scripts/run_jev_browser_advisory.py --surface focus-owner-facts --output-dir "${ADVISORY_EVIDENCE_ROOT:?set a persistent evidence directory}" --live-jev
 ```
 
 For live runs, set `ADVISORY_EVIDENCE_ROOT` to a retained absolute directory outside temporary
 worktrees. Use an isolated clean checkout. The runner retains exact source SHA, fixture/rubric versions,
-JUnit, fixture screenshots/traces and a separate `jev-browser-advisory.v1` report. It requires
-all twenty exact browser cases to pass and all sixteen desktop/narrow observation records.
+JUnit, fixture screenshots/traces and a separate `jev-browser-advisory.v1` report. Vault Browser
+requires all twenty exact browser cases to pass and all sixteen desktop/narrow observation records.
 Skips, xfails, failed, missing or duplicate cases fail the deterministic gate before model
 dispatch, including all four regressions for simultaneous partial/error and unresolved-identity
 notices (registry `KD-87DEE784B97A`, repaired by #5980).
@@ -76,11 +79,26 @@ titles, bodies, DOM or screenshots. The pane deliberately hides metadata badges;
 judgments check for false degradation warnings. Unavailable identity requires explicit visible
 disclosure. Narrow-pane behavior remains covered by exact browser tests.
 
+Focus uses `tests/companion_ui/test_focus_owner_facts_runtime.py`: eight source/subject states
+at two widths, all sixteen mandatory passes. Canonical and mixed-case complete subjects,
+readiness-only, ask-only, unavailable, invalid outcome receipt, unrelated Issue and unrelated
+repository fixtures exercise the production managed listener, shell and receipt transport; only
+external source I/O is synthetic. Assertions preserve exact receipt references and requested
+subject spelling, independent facts, explicit source limitations, GET-only requests and absence of
+browser persistence. A bad outcome receipt must not suppress an independently admitted owner ask.
+The separate `focus-owner-facts-v1` fixture and `focus-owner-facts-truth-v1` rubric require sixteen
+observations and submit eight desktop cases with independent facts/authority questions. Jev sees
+only expected booleans and visible fact, owner-source limitation and legality prose. Receipt IDs,
+proposal hashes, locators, titles, hidden disclosures, DOM and screenshots remain local. The
+existing input, output, sixteen-question and elapsed-time bounds remain unchanged.
+
 Provider input/output uses the existing bounded `jev-direct` command and validator. The installed
 helper must match the checked-out script, including the total deadline repair. Keys remain inside
-the helper. Hosted browser CI runs contract tests and the same exact browser matrix with live Jev
+the helper. Hosted browser CI runs contract tests and both exact browser matrices with live Jev
 disabled; its semantic report is explicitly unassessed. Daily live checks on the current Mac use
-existing access and isolated main checkouts, checking only new relevant changes. Scheduler state
+existing access and isolated main checkouts, checking only new relevant changes for the affected
+surface. Each surface has its own versioned source/rubric report; an existing report or intent is
+never replayed. Unchanged surfaces reuse their last evidence. Scheduler state
 is local operational state; its readback/activation receipt belongs on the governing pilot Issue.
 
 Semantic results are advisory: supported/contradicted judgments, unknown, low confidence (pilot
@@ -491,6 +509,7 @@ Example commands:
 ## Hermetic test environment
 - The test suite clears VAULT_ROOT and PANEL_ACTION_WIRING_PATH by default to prevent accidentally reading a user’s real vault (often iCloud-backed) which can block and hang tests.
 - Tests that require vault wiring overrides must set VAULT_ROOT explicitly (use monkeypatch + temp vault containing System/Config/panel-action-wiring.yaml) or set PANEL_ACTION_WIRING_PATH explicitly.
+- Non-PG API cases reset the in-process memory object, vector and relation stores before and after each test. A prior case's corpus or embedding identity must not change an ask response or health result. This memory-only isolation never truncates database tables or selects a model route; intentional identity mismatches within a case still fail before embedding dispatch. `tests/ci/test_api_memory_store_isolation.py` runs the affected requests after a synthetic prior occupant to guard this boundary.
 
 ## Focused commands
 - Single test:

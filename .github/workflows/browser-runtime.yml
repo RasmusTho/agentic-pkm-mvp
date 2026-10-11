@@ -9,6 +9,7 @@ on:
       - 'app/builderops/**'
       - 'app/web/**'
       - 'tests/companion_ui/**'
+      - 'tests/builderops/focus_owner_facts_fixture.py'
       - '.github/workflows/browser-runtime.yml'
       - 'scripts/run_jev_browser_advisory.py'
       - 'scripts/ygg_jev.py'
@@ -19,6 +20,7 @@ on:
       - 'app/builderops/**'
       - 'app/web/**'
       - 'tests/companion_ui/**'
+      - 'tests/builderops/focus_owner_facts_fixture.py'
       - '.github/workflows/browser-runtime.yml'
       - 'scripts/run_jev_browser_advisory.py'
       - 'scripts/ygg_jev.py'
@@ -387,6 +389,20 @@ jobs:
         with:
           name: vault-browser-state-matrix-${{ github.sha }}
           path: ${{ runner.temp }}/vault-browser-state-matrix
+          if-no-files-found: error
+
+      - name: Run deterministic Focus owner-fact browser regressions
+        run: |
+          python3 scripts/run_jev_browser_advisory.py \
+            --surface focus-owner-facts \
+            --output-dir "${{ runner.temp }}/focus-owner-facts/advisory"
+
+      - name: Retain Focus owner-fact diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: focus-owner-facts-${{ github.sha }}
+          path: ${{ runner.temp }}/focus-owner-facts
           if-no-files-found: error
 
       # NAV-3a (#2639): overlay↔browser-history is real browser behaviour
