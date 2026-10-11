@@ -77,6 +77,28 @@ class _FakeProcess:
         return None
 
 
+
+class _FakeTransportProcess:
+    """Run the real HTTP operation in-process so existing wire assertions survive."""
+    def __init__(self) -> None:
+        self.stdin = io.BytesIO()
+        self.stdout = io.BytesIO()
+        self.returncode: int | None = None
+
+    def communicate(self, *, input: bytes, timeout: float) -> tuple[bytes, None]:
+        assert 0 < timeout <= ygg_jev.REQUEST_TIMEOUT_SECONDS
+        size = int.from_bytes(input[:4], "big")
+        try:
+            raw = ygg_jev._http_request_once(input[4:4 + size], input[4 + size:].decode())
+            self.returncode = 0
+            return raw, None
+        except ygg_jev.ProviderFailure:
+            self.returncode = 1
+            return b"", None
+
+    def poll(self) -> int | None:
+        return self.returncode
+
 class _RunningFakeProcess:
     def __init__(self) -> None:
         read_fd, self.write_fd = os.pipe()
@@ -117,6 +139,9 @@ def test_cli_makes_one_validated_request_without_emitting_credential(
     opener_handlers: list[Any] = []
 
     def fake_secret_run(args: list[str], **kwargs: Any) -> _FakeProcess:
+        if args[0] == sys.executable:
+            assert api_key not in repr(args) + repr(kwargs)
+            return _FakeTransportProcess()
         secret_calls.append((args, kwargs))
         return _FakeProcess(api_key.encode())
 
@@ -226,6 +251,8 @@ def test_invalid_missing_and_ambiguous_requests_are_terminal(
 
     def available_secret_run(args: list[str], **kwargs: Any) -> _FakeProcess:
         nonlocal secret_calls
+        if args[0] == sys.executable:
+            return _FakeTransportProcess()
         secret_calls += 1
         return _FakeProcess(b"synthetic-key-canary")
 
@@ -423,7 +450,7 @@ def test_provider_error_body_is_not_emitted_or_retried(
     monkeypatch.setattr(
         ygg_jev.subprocess,
         "Popen",
-        lambda *args, **kwargs: _FakeProcess(api_key.encode()),
+        lambda args, **kwargs: _FakeTransportProcess() if args[0] == sys.executable else _FakeProcess(api_key.encode()),
     )
     calls = 0
 
@@ -463,3 +490,173 @@ def build_questions() -> dict[str, Any]:
             "criteria": {"a": None, "b": None},
         }
     }
+
+@pytest.fixture
+def provider_fixture(monkeypatch: pytest.MonkeyPatch):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Event, Thread
+    import time
+
+    config: dict[str, Any] = {"mode": "fast", "requests": 0}
+    stopping = Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args: object) -> None:
+            return
+
+        def do_POST(self) -> None:
+            config["requests"] += 1
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            if config["mode"] == "headers":
+                stopping.wait(3)
+            body = _response_bytes()
+            if config["mode"] == "oversized":
+                body = b"x" * (ygg_jev.MAX_RESPONSE_BYTES + 100)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            try:
+                if config["mode"] == "trickle":
+                    for byte in body:
+                        if stopping.is_set():
+                            break
+                        self.wfile.write(bytes([byte]))
+                        self.wfile.flush()
+                        time.sleep(0.015)
+                else:
+                    self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.daemon_threads = True
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    endpoint = f"http://127.0.0.1:{server.server_address[1]}/"
+    # The production transport is unchanged apart from its fixture endpoint.
+    # The override lives only in this child bootstrap, never in the public CLI.
+    worker_code = (
+        "import runpy,sys; f=runpy.run_path(sys.argv[1],run_name='_jev_transport')['_transport_worker']; "
+        f"f.__globals__['API_ENDPOINT']={endpoint!r}; sys.exit(f())"
+    )
+    monkeypatch.setattr(ygg_jev, "API_ENDPOINT", endpoint)
+    monkeypatch.setattr(ygg_jev, "_TRANSPORT_WORKER_CODE", worker_code, raising=False)
+    children: list[subprocess.Popen[bytes]] = []
+    real_popen = subprocess.Popen
+
+    def observe_child(*args: Any, **kwargs: Any):
+        child = real_popen(*args, **kwargs)
+        children.append(child)
+        return child
+
+    monkeypatch.setattr(ygg_jev.subprocess, "Popen", observe_child)
+    try:
+        yield config, children
+    finally:
+        stopping.set()
+        server.shutdown()
+        thread.join(timeout=3)
+        server.server_close()
+
+
+def test_provider_deadline_bounds_slow_trickle(monkeypatch: pytest.MonkeyPatch, provider_fixture) -> None:
+    import time
+
+    config, children = provider_fixture
+    config["mode"] = "trickle"
+    monkeypatch.setattr(ygg_jev, "REQUEST_TIMEOUT_SECONDS", 0.3)
+    started = time.monotonic()
+    with pytest.raises(ygg_jev.ProviderFailure):
+        ygg_jev.send_once(_request_bytes(), "synthetic-key-canary")
+    assert time.monotonic() - started < 1.5
+    assert config["requests"] == 1
+    assert all(child.poll() is not None for child in children)
+
+
+@pytest.mark.parametrize("mode", ["headers", "fast", "oversized"])
+def test_provider_deadline_covers_stalls_and_response_bounds(
+    monkeypatch: pytest.MonkeyPatch, provider_fixture, mode: str,
+) -> None:
+    import time
+
+    config, children = provider_fixture
+    config["mode"] = mode
+    monkeypatch.setattr(ygg_jev, "REQUEST_TIMEOUT_SECONDS", 0.5)
+    started = time.monotonic()
+    if mode == "fast":
+        assert ygg_jev.send_once(_request_bytes(), "synthetic-key-canary") == _response_bytes()
+    else:
+        with pytest.raises(ygg_jev.ProviderFailure):
+            ygg_jev.send_once(_request_bytes(), "synthetic-key-canary")
+    assert time.monotonic() - started < 1.5
+    assert config["requests"] == 1
+    assert all(child.poll() is not None for child in children)
+
+@pytest.mark.parametrize("failure", ["timeout", "interrupt", "spawn", "kill", "oversized", "worker_failure"])
+def test_provider_worker_cleanup_and_redaction(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failure: str,
+) -> None:
+    api_key = "synthetic-key-canary"
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    class Worker:
+        def __init__(self) -> None:
+            self.stdin = io.BytesIO()
+            self.stdout = io.BytesIO()
+            self.returncode: int | None = None
+            self.terminated = False
+            self.killed = False
+
+        def communicate(self, *, input: bytes, timeout: float):
+            assert timeout > 0
+            size = int.from_bytes(input[:4], "big")
+            assert input[4:4 + size] == _request_bytes()
+            assert input[4 + size:].decode() == api_key
+            if failure == "interrupt":
+                raise KeyboardInterrupt()
+            if failure in {"timeout", "kill"}:
+                raise subprocess.TimeoutExpired("private-worker", timeout)
+            self.returncode = 1 if failure == "worker_failure" else 0
+            return b"x" * (ygg_jev.MAX_RESPONSE_BYTES + 1), None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.terminated = True
+            if failure != "kill":
+                self.returncode = -15
+
+        def kill(self) -> None:
+            self.killed = True
+            self.returncode = -9
+
+        def wait(self, timeout: float):
+            if self.returncode is None:
+                raise subprocess.TimeoutExpired("private-worker", timeout)
+            return self.returncode
+
+    worker = Worker()
+
+    def spawn(args: list[str], **kwargs: Any):
+        calls.append((args, kwargs))
+        assert api_key not in repr(args) + repr(kwargs)
+        assert kwargs["stderr"] is subprocess.DEVNULL
+        assert kwargs["close_fds"] is True
+        assert args[1:3] == ["-I", "-c"]
+        if failure == "spawn":
+            raise OSError(api_key + " private startup detail")
+        return worker
+
+    monkeypatch.setattr(ygg_jev.subprocess, "Popen", spawn)
+    expected = KeyboardInterrupt if failure == "interrupt" else ygg_jev.ProviderFailure
+    with pytest.raises(expected):
+        ygg_jev.send_once(_request_bytes(), api_key)
+    assert len(calls) == 1
+    if failure != "spawn":
+        assert worker.poll() is not None
+        assert worker.stdin.closed and worker.stdout.closed
+    if failure == "kill":
+        assert worker.terminated and worker.killed
+    captured = capsys.readouterr()
+    assert api_key not in captured.out + captured.err
