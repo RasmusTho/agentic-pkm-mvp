@@ -68,6 +68,35 @@ provider SDKs or local endpoints.
 - Tests in `tests/eval/test_ask_deepeval.py` load these cases and run DeepEval metrics (e.g., answer relevancy).
 - Thresholds are conservative (e.g., 0.5) and should be revisited as retrieval quality improves; bilingual coverage reflects the English-first + Swedish-important profile.
 
+## SV/EN live reproduction
+
+`tests/evals/test_sv_en_retrieval_eval.py` keeps its ten synthetic fixture, scorecard and
+recommendation checks in the deterministic main/PR lane. Only its two real reproduction tests use
+the existing `eval` marker. Their exact quality and dimension assertions remain required when the
+explicit live lane runs:
+
+```bash
+python -m pytest -q -m "eval" tests/evals/test_sv_en_retrieval_eval.py
+```
+
+Run this command from an already-qualified dev/test or manual Product caller using the shared Mac
+portal. Installing both Ollama models locally does not qualify that caller; missing Product path
+configuration or unavailable models fails loudly through the actual client. Do not use a mock,
+local provider bypass, fake endpoint or always-skip marker to stand in for live execution. Generic
+main/PR success proves deterministic checks and lane classification, not live retrieval quality.
+
+The existing DEV/TEST Model Access qualification owned by Issue #5963 supplies the admitted
+consumer prerequisite. Its capture/browser receipt is not automatically the SV/EN quality receipt.
+Until a matching dual-identity run exists, this additional live reproduction remains **unqualified**.
+Retain a separate execution receipt bound to the exact candidate SHA and qualified channel/consumer,
+both selected and executed test node IDs, synthetic fixture identity, actual Nomic 768 and BGE-M3
+1024 embedding identities, and terminal results. Include JUnit or scorecard artifact hashes. A
+missing-path failure is negative admission evidence; the post-merge PostgreSQL acceptance receipt
+under #5675 is also separate and cannot substitute for the two-model quality result. Issue #5973
+owns this classification correction; the downstream execution obligation remains explicit after
+its code delivery and requires the existing qualification prerequisite rather than new credentials,
+deployment or reset authority.
+
 ## RAG eval (Ragas, seed suite)
 - Seed RAG cases live in `docs/eval/rag_cases.yaml`.
 - Tests in `tests/eval/test_rag_ragas.py` run Ragas metrics (answer relevancy, faithfulness/contextual precision when context is available).
