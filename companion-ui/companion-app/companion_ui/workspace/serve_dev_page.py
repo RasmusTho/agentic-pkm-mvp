@@ -4833,6 +4833,16 @@ def _render_vault_browser(
     identity_html = (
         f'<span data-testid="workspace-vault-browser-active-identity">{_e(identity_label)}</span>'
     )
+    # Identity and listing degradation are independent server-declared axes.
+    # Keep this notice alongside partial/error copy rather than suppressing it.
+    identity_state_html = (
+        '<div class="vault-browser-state" '
+        'data-testid="workspace-vault-browser-state-identity-unavailable">'
+        "Vault identity unavailable; browsing context is unresolved."
+        "</div>"
+        if not identity_available
+        else ""
+    )
     if error:
         # D3 (CUIDR-01): never surface the raw transport error
         # ("Error: Failed to fetch") — it must not appear in the HTML output at
@@ -4872,12 +4882,7 @@ def _render_vault_browser(
             + "</div>"
         )
     elif not identity_available:
-        state_html = (
-            '<div class="vault-browser-state" '
-            'data-testid="workspace-vault-browser-state-identity-unavailable">'
-            "Vault identity unavailable; browsing context is unresolved."
-            "</div>"
-        )
+        state_html = ""
     elif filtered_notes == 0:
         state_html = (
             '<div class="vault-browser-state" data-testid="workspace-vault-browser-state-empty">'
@@ -4972,6 +4977,7 @@ def _render_vault_browser(
           {hidden_html}
           {filters_html}
           {state_html}
+          {identity_state_html}
           {list_html}
           {pagination_html}
           {inspector_html}
