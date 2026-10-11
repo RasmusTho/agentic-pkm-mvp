@@ -227,6 +227,10 @@ class IdentityRun:
         self._prior_docs = get_store().all()
         try:
             self._set_env(
+                # Explicit operator selection wins over a compiled default Product target.
+                # The shared router/client still validate registry identity and admission.
+                LLM_FORCE_PROVIDER="ollama",
+                LLM_FORCE_MODEL=str(self.spec["model"]),
                 EMBED_PRIMARY_PROVIDER="ollama",
                 EMBED_MODEL=str(self.spec["model"]),
                 OLLAMA_EMBED_MODEL=str(self.spec["model"]),

@@ -7,14 +7,18 @@ from types import SimpleNamespace
 import pytest
 
 from app.components import retrieval
+from app.components.llm.router import LLMRouter
 from app.llm import embeddings
 from app.model_access.executor_network_policy import ExecutorNetworkConfigurationError
 from app.retrieval import hybrid, tuning
 from tests.evals import sv_en_retrieval as evaluation
 
+_ACTUAL_PRODUCT_ROUTE = LLMRouter.route
+
 _ENV_KEYS = (
     "EMBED_PRIMARY_PROVIDER", "EMBED_MODEL", "OLLAMA_EMBED_MODEL", "EMBED_DIM",
     "RETRIEVAL_FUSION", "OLLAMA_HOST", "ASK_DOMAIN_SCOPE",
+    "LLM_FORCE_PROVIDER", "LLM_FORCE_MODEL",
 )
 
 
@@ -159,3 +163,70 @@ def test_acquisition_failure_survives_cleanup_failure(monkeypatch, isolated_stat
     assert caught.value.__cause__ is cleanup_error
     _assert_restored(isolated_state)
     assert len(embeddings.embed_text("downstream", normalize=False)) == 4
+
+
+@pytest.mark.parametrize("identity_key", ["nomic", "bge_m3"])
+def test_identity_run_selects_declared_product_requests_under_compiled_target(
+    monkeypatch, isolated_state, product_model_access_gateway, identity_key,
+):
+    """Resolve actual compiled policy and inspect real Product corpus/query request objects."""
+    from app.components.llm.router import LLMRouter
+    from app.settings.models import LLMRoutingSettings, SettingsBundle
+
+    bundle = SettingsBundle(llm_routing=LLMRoutingSettings(
+        default_embedding=LLMRoutingSettings.TaskPolicy(primary=LLMRoutingSettings.RouteTarget(
+            model_id="ollama.embed.nomic_embed_text", provider="ollama",
+            model="nomic-embed-text:latest", profile="default",
+        )),
+    ))
+    monkeypatch.setattr("app.components.llm.router.get_settings_bundle", lambda: bundle)
+    # The gateway fixture normally supplies mock route defaults. Keep the actual
+    # compiled policy method here, while reusing its typed response transport only.
+    monkeypatch.setattr(LLMRouter, "route", _ACTUAL_PRODUCT_ROUTE)
+    spec = evaluation.IDENTITIES[identity_key]
+    query = "synthetic corpus query about mountains"
+    with evaluation.IdentityRun(identity_key, "linear") as run:
+        assert run.resolved_identity.provider == "ollama"
+        assert run.resolved_identity.model == spec["model"]
+        assert run.resolved_identity.dim == spec["dim"]
+        corpus_requests = list(product_model_access_gateway.embedding_requests)
+        assert len(corpus_requests) == len(run.docs)
+        assert [request.input_text for request in corpus_requests] == [doc.text for doc in run.docs]
+        run.ranked(query, k=2)
+        requests = product_model_access_gateway.embedding_requests
+        assert len(requests) == len(corpus_requests) + 1
+        assert requests[-1].input_text == query
+        assert all(request.provider == "ollama" for request in requests)
+        assert all(request.model == spec["model"] for request in requests)
+        assert all(request.dimensions == spec["dim"] for request in requests)
+    _assert_restored(isolated_state)
+
+
+@pytest.mark.parametrize("failed_entry", [False, True])
+def test_identity_run_restores_prior_explicit_product_selection(
+    monkeypatch, isolated_state, failed_entry,
+):
+    monkeypatch.setenv("LLM_FORCE_PROVIDER", "mock")
+    monkeypatch.setenv("LLM_FORCE_MODEL", "caller-prior-model")
+    isolated_state[2].update({
+        "LLM_FORCE_PROVIDER": "mock", "LLM_FORCE_MODEL": "caller-prior-model",
+    })
+    failure = RuntimeError("embedding acquisition failed")
+
+    def embed(texts):
+        assert os.environ["LLM_FORCE_PROVIDER"] == "ollama"
+        assert os.environ["LLM_FORCE_MODEL"] == evaluation.IDENTITIES["nomic"]["model"]
+        if failed_entry:
+            raise failure
+        return _fake_embed(texts)
+
+    monkeypatch.setattr(retrieval, "embed_docs", embed)
+    if failed_entry:
+        with pytest.raises(RuntimeError) as caught:
+            with evaluation.IdentityRun("nomic", "linear"):
+                pytest.fail("failed acquisition must not enter the body")
+        assert caught.value is failure
+    else:
+        with evaluation.IdentityRun("nomic", "linear"):
+            pass
+    _assert_restored(isolated_state)
