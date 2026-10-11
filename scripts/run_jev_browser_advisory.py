@@ -49,17 +49,17 @@ def _fsync_directory(directory: Path) -> None:
 
 
 def _durable_mkdir(directory: Path) -> None:
-    missing = []
+    directory.mkdir(parents=True, exist_ok=True)
+    # A prior/concurrent creator may have died before syncing an entry. Observe
+    # and sync every ancestor on this filesystem, including pre-existing ones.
+    # The host's already mounted filesystem is the durable trust anchor.
+    device = directory.stat().st_dev
     cursor = directory
-    while not cursor.exists():
-        missing.append(cursor)
+    while cursor.stat().st_dev == device:
+        _fsync_directory(cursor)
+        if cursor == cursor.parent:
+            break
         cursor = cursor.parent
-    for path in reversed(missing):
-        try:
-            path.mkdir()
-        except FileExistsError:
-            pass
-        _fsync_directory(path.parent)
 
 
 def _persist(path: Path, report: dict[str, Any], *, exclusive: bool = False) -> None:

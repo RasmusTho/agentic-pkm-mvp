@@ -223,3 +223,49 @@ def test_attempt_directories_are_synced_before_dispatch(synthetic_runner, monkey
     monkeypatch.setattr(runner, "_fsync_directory", sync)
     monkeypatch.setattr(runner, "_judge_once", judge)
     assert runner.run(root, live_jev=True) == 0
+
+
+@pytest.mark.parametrize("preexisting", ["source", "root", "ancestors"])
+def test_preexisting_unsynced_directory_is_repaired_before_dispatch(synthetic_runner, monkeypatch, preexisting) -> None:
+    root, _ = synthetic_runner
+    if preexisting == "ancestors":
+        root = root / "new-ancestor" / "new-root"
+    target = root / f"{SHA}-{advisory.RUBRIC_VERSION}"
+    (target if preexisting == "source" else root).mkdir(parents=True, exist_ok=True)
+    synced = []
+    real_sync = runner._fsync_directory
+    def sync(directory):
+        real_sync(directory)
+        synced.append(directory)
+    def judge(_request):
+        assert root in synced and root.parent in synced and target in synced
+        return {"status": "unassessed", "reason": "synthetic", "results": {}}
+    monkeypatch.setattr(runner, "_fsync_directory", sync)
+    monkeypatch.setattr(runner, "_judge_once", judge)
+    assert runner.run(root, live_jev=True) == 0
+
+
+def test_hidden_identity_is_never_read_as_visible_evidence(tmp_path: Path) -> None:
+    class HiddenIdentity:
+        def is_visible(self):
+            return False
+        def inner_text(self):
+            pytest.fail("hidden text must never enter model evidence")
+    class VisibleLink:
+        def is_visible(self):
+            return True
+    class Items:
+        def __init__(self, items):
+            self.items = items
+        def all(self):
+            return self.items
+    class Surface:
+        def locator(self, _selector):
+            return Items([])
+        def get_by_test_id(self, selector):
+            return HiddenIdentity() if selector.endswith("active-identity") else Items([VisibleLink()])
+    advisory.capture_observation(Surface(), list_state="populated", identity_available=True,
+                                 width=1366, source_sha=SHA, output_dir=tmp_path)
+    observation = json.loads(next(tmp_path.glob("*.json")).read_text())
+    assert observation["observed"]["identity_text"] == ""
+    assert observation["expected"]["identity_available"] is True

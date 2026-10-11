@@ -63,6 +63,7 @@ def capture_observation(surface: Any, *, list_state: str, identity_available: bo
     """Read only visible status prose/badge/count; never DOM, note data or images."""
     messages = surface.locator('[data-testid^="workspace-vault-browser-state-"]')
     links = surface.get_by_test_id("workspace-vault-browser-note-link")
+    identity = surface.get_by_test_id("workspace-vault-browser-active-identity")
     observation = {
         "fixture_version": FIXTURE_VERSION, "source_sha": source_sha,
         "case_id": f"{list_state}-{'bound' if identity_available else 'unbound'}", "width": width,
@@ -70,7 +71,7 @@ def capture_observation(surface: Any, *, list_state: str, identity_available: bo
                      "visible_note_count": int(list_state in {"populated", "partial"})},
         "observed": {
             "messages": [item.inner_text() for item in messages.all() if item.is_visible()],
-            "identity_text": surface.get_by_test_id("workspace-vault-browser-active-identity").inner_text(),
+            "identity_text": identity.inner_text() if identity.is_visible() else "",
             "visible_note_count": sum(item.is_visible() for item in links.all()),
         },
     }
