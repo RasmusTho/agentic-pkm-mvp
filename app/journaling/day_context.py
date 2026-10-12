@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from app.activation.gate import ReviewState
 from app.context_bundles.construction import build_inspectable_bundle
 from app.context_bundles.schema import (
     AuthorityFlags,
@@ -42,6 +43,7 @@ class DayContextItem(BaseModel):
 
     provenance_ref: str
     content: dict[str, object]
+    review_state: ReviewState | None = ReviewState.UNREVIEWED
 
 
 class DayContextSection(BaseModel):
@@ -135,7 +137,13 @@ def _read_commitments(
             "summary": record.summary,
             "changed_at": changed.isoformat(),
         }
-        day_items.append(DayContextItem(provenance_ref=artifact_path, content=content))
+        day_items.append(
+            DayContextItem(
+                provenance_ref=artifact_path,
+                content=content,
+                review_state=ReviewState.UNREVIEWED,
+            )
+        )
         included.append(
             IncludedItem(
                 artifact_id=record.commitment_id,
@@ -175,7 +183,11 @@ def _read_decision_receipts(
         }
         paired.append(
             (
-                DayContextItem(provenance_ref=provenance_ref, content=content),
+                DayContextItem(
+                    provenance_ref=provenance_ref,
+                    content=content,
+                    review_state=ReviewState.UNREVIEWED,
+                ),
                 IncludedItem(
                     artifact_id=f"decision-receipt:{object_id}:{key}",
                     path=receipt_path,
@@ -216,7 +228,11 @@ def _read_captures(
         }
         paired.append(
             (
-                DayContextItem(provenance_ref=artifact_path, content=content),
+                DayContextItem(
+                    provenance_ref=artifact_path,
+                    content=content,
+                    review_state=_review_state(frontmatter),
+                ),
                 IncludedItem(
                     artifact_id=content_identity,
                     path=artifact_path,
@@ -254,6 +270,21 @@ def _parse_timestamp(value: object) -> datetime:
     if parsed.tzinfo is None:
         raise ValueError("timestamp must include a timezone")
     return parsed
+
+
+def _review_state(frontmatter: dict[str, object]) -> ReviewState | None:
+    raw = str(frontmatter.get("review_state") or "").strip().lower()
+    if not raw or raw in {"draft", "provisional", "unreviewed"}:
+        return ReviewState.UNREVIEWED
+    if raw in {"accepted", "protected"}:
+        return ReviewState.ACCEPTED
+    if raw == "reviewed":
+        return ReviewState.REVIEWED
+    if raw == "rejected":
+        return ReviewState.REJECTED
+    if raw == "revised":
+        return ReviewState.REVISED
+    return None
 
 
 __all__ = [

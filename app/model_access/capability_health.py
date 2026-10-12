@@ -100,6 +100,15 @@ def aggregate_capability_health(
             status = observation.get("status")
             observed_at = _parse_observed_at(observation.get("observed_at"))
             reason = _safe_reason(observation.get("reason_code"))
+            if reason == "missing_observation":
+                evaluated.append(
+                    {
+                        "status": "unknown",
+                        "freshness": "unknown",
+                        "reason_code": reason,
+                    }
+                )
+                continue
             if not isinstance(status, str) or status not in _STATUSES or observed_at is None:
                 evaluated.append(
                     {
@@ -176,6 +185,15 @@ def aggregate_transport_health(
         status = observation.get("status")
         observed_at = _parse_observed_at(observation.get("observed_at"))
         reason = _safe_reason(observation.get("reason_code"))
+        if reason == "missing_observation":
+            evaluated.append(
+                {
+                    "status": "unknown",
+                    "freshness": "unknown",
+                    "reason_code": reason,
+                }
+            )
+            continue
         if not isinstance(status, str) or status not in {*_STATUSES, "not_applicable"} or observed_at is None:
             evaluated.append(
                 {

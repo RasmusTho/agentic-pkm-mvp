@@ -1,6 +1,6 @@
 ---
 name: Deploy Karakeep As A Managed Service
-description: Add reproducible mac-mini deployment, health, restart, update, and backup contracts without committed secrets.
+description: Define a reproducible private-service manifest and health, restart, update, and backup contracts without committed secrets.
 task_id: KMA-02
 source_anchor: "docs/audits/APP_MCP_CONNECTIVITY_2026-07-07.md :: §5 B2"
 parent_capability: Karakeep Mimer Acquisition
@@ -13,8 +13,12 @@ can_parallelize_with: [FETCH_KARAKEEP_READING_EVIDENCE]
 
 ## Purpose
 
-Make the selected self-hosted source operable and observable on the mac mini without turning machine-
-specific endpoint or credential values into repo truth.
+Make the selected self-hosted source operable and observable without turning machine-specific endpoint
+or credential values into repo truth. This specification's earlier Mac-mini placement is superseded:
+current environment guidance does not qualify that machine as a Product Runtime TEST host. `test` is the logical
+acceptance channel, but the physical Karakeep host, private route to TEST Heimdal, and runtime
+configuration are not established by the repository or this manifest. Do not treat the Compose file
+or this runbook as evidence of a live installation.
 
 ## What This Task Does
 
@@ -28,6 +32,21 @@ The service is Heimdal's external source dependency; Mimer has no direct Karakee
 A standard service lifecycle can start, stop, inspect, update, and restore Karakeep. Heimdal fetch
 does not run unless health is green; Mimer consumption of already-published evidence remains
 available when the service is down. Logs and rendered configuration are secret-safe.
+
+### Test-channel placement and prerequisites
+
+The committed Compose manifest defines a health-checked, loopback-bound service shape; it does not
+select or qualify a physical host, establish network reachability from the TEST Heimdal worker, or
+authorize a service operation. A live TEST run requires a current authorized topology/operations
+receipt that identifies the host and private service path. Public ingress is prohibited. Do not run
+these commands on the Mac mini or substitute local Compose for the TEST channel.
+
+`config/karakeep.env.example` is a placeholder template, not a provisioned binding. The current
+`config/secrets/host_secret_contract.json` does not declare `KARAKEEP_BASE_URL` or
+`KARAKEEP_API_TOKEN`; no governed TEST binding is established by this repository contract. Do not
+read or create credentials, copy values into an env file, or deploy until an already-authorized
+secret/bootstrap route and the exact logical bindings have been qualified. Endpoint values remain
+operator-owned and must not appear in repo artifacts, logs, or receipts.
 
 ## Why This Matters
 
@@ -57,8 +76,11 @@ reference is absent or health is red, while Mimer replay of already-published ev
 
 ### Backup / update / rollback runbook
 
-All commands run from the repo root on the mac mini with
-`docker compose -f docker-compose.karakeep.yml` (abbreviated `compose` below).
+The following lifecycle commands are usable only after the preceding TEST host, private path, and
+secret-binding prerequisites are qualified and the operator authorizes the specific service
+operation. Run them from the repository root on that exact qualified host with
+`docker compose -f docker-compose.karakeep.yml` (abbreviated `compose` below); this runbook does not
+authorize local or Mac-mini execution as TEST deployment.
 
 - **Backup (durable data):** the durable data is the named volumes `karakeep-data` and
   `karakeep-meilisearch-data`. Snapshot them while the service is stopped or quiescent:

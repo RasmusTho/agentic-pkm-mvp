@@ -1,9 +1,9 @@
-State: FILED — the parent feature issue is live as #3175 (Backlog, agent:blocked validation hub). GitHub is the authoritative backlog/validation surface; this file is the local pointer + drafted body. Children: #3176 (ERE-01, ready), #3177 (ERE-02, ready, Tier 3 migration), #3178 (ERE-03, ready), #3179–#3183 (ERE-04..08, blocked on prerequisites), #3184 (ERE-09, blocked). ERE-10 has no issue by design.
+State: FILED — the parent feature issue is live as #3175 (Backlog, agent:blocked validation hub). GitHub is the authoritative backlog/validation surface; this file is the local pointer + drafted body. Children: #3176 (ERE-01), #3177 (ERE-02), #3178 (ERE-03), #3179–#3183 (ERE-04..08), #3184 (ERE-09), and ERE-13 → #6002 (source-authorized real-day qualification profile; blocked on #5969). ERE-10 has no issue by design. ERE-13 owns the source-authorized qualification profile; #3175 retains the actual-day acceptance receipt.
 Doc role: Parent feature issue draft (feature-breakdown lane)
 Temporal class: operational
 Review cadence: event-driven (issue lifecycle)
 Source of truth: GitHub issue once filed; this file is the draft + local pointer
-Last reviewed: 2026-07-07
+Last reviewed: 2026-10-11
 
 # [Episode Resolution Engine] parent: streams → episodes → episode_ref → closure-driven decay
 
@@ -61,7 +61,7 @@ Per-task `Verify:` targets (each task file couples ACs to `How to Verify (Pre-Me
 
 ## Validation / Acceptance Path
 
-After each child merges: a validation receipt comment here (test run links, tick output). After ERE-06: run the fixture-day end-to-end. After ERE-09: the real-day live validation on the test channel. Acceptance → one owner-doc promotion PR (registry flip + ADR-0054 consequences + semantic-dimensions line) and parent closure; RQ-E1/RQ3 tuning spins off as follow-up issues informed by live data.
+After each child merges: a validation receipt comment here (test run links, tick output). After ERE-06: run the fixture-day end-to-end. After ERE-09 and ERE-13: run the source-authorized profile on the qualified test channel; deterministic synthetic controls do not satisfy the actual-day acceptance. Acceptance → one owner-doc promotion PR (registry flip + ADR-0054 consequences + semantic-dimensions line) and parent closure; RQ-E1/RQ3 tuning spins off as follow-up issues informed by live data.
 
 ## Out of Scope
 

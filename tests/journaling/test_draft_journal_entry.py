@@ -7,13 +7,16 @@ from datetime import date, datetime, timezone
 import hashlib
 import json
 import multiprocessing
+import os
 from pathlib import Path
 import threading
 
 import pytest
 
 import app.journaling.draft as draft_module
+from app.activation.gate import ReviewState
 from app.chat.session_log import SessionLogWriter
+from app.domain.commitments import CommitmentRecord
 from app.journaling.day_context import DayContextBundle, DayContextItem, assemble_day_context
 from app.journaling.draft import (
     JOURNAL_DRAFT_WRITE_ACTION,
@@ -24,7 +27,9 @@ from app.journaling.draft import (
 )
 from app.knowledge_acquisition.candidate_writeback import ARTIFACT_CLASS, DEFAULT_SOURCES_DIR
 from app.proposals.declined_ledger import DeclinedLedger
+from app.receipts.decision_receipt_log import append_decision_receipt
 from app.reasoning.schema import Claim, Inference, ReasoningOutput
+from app.services.commitment_persistence import commitment_artifact_path, persist_commitment
 from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard, WritesBlockedError
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
@@ -112,6 +117,47 @@ session_id: {session_id}
     return root, context, session_id, capture
 
 
+def _seed_full_day_context(
+    tmp_path: Path, *, capture_review_state: str = "draft"
+) -> tuple[Path, VaultContext, str, DayContextBundle]:
+    root, context, session_id, capture = _seed_inputs(tmp_path)
+    if capture_review_state != "draft":
+        capture.write_text(
+            capture.read_text(encoding="utf-8").replace(
+                "review_state: draft",
+                f"review_state: {capture_review_state}",
+            ),
+            encoding="utf-8",
+        )
+    guard = _allowing_guard()
+    commitment = CommitmentRecord(
+        "shared-external-id",
+        "next_action",
+        "done",
+        summary="Finished the full-context task",
+    )
+    persist_commitment(commitment, vault_context=context, write_guard=guard)
+    changed = datetime(2026, 7, 15, 12, tzinfo=timezone.utc)
+    commitment_path = root / commitment_artifact_path(
+        commitment.commitment_id,
+        root,
+    )
+    os.utime(commitment_path, (changed.timestamp(), changed.timestamp()))
+    append_decision_receipt(
+        object_id="shared-external-id",
+        key="review",
+        value={},
+        trace_id="full-context-trace",
+        created_at=changed,
+        vault_root=root,
+        vault_uuid="test-vault",
+    )
+    return root, context, session_id, assemble_day_context(
+        vault_context=context,
+        for_date=DAY,
+    )
+
+
 def _read_result(root: Path, path: str) -> tuple[dict[str, object], str]:
     return load_frontmatter((root / path).read_text(encoding="utf-8"))
 
@@ -138,6 +184,107 @@ Context source
         "source_kind": "note",
         "url": None,
     }
+
+
+def test_full_day_context_sources_are_admitted_only_to_cited_proposal(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, bundle = _seed_full_day_context(tmp_path)
+
+    result = draft_journal_entry(
+        vault_context=context,
+        for_date=DAY,
+        session_id=session_id,
+        day_context=bundle,
+        write_guard=_allowing_guard(),
+        reasoning_fn=_empty_reasoning,
+    )
+
+    frontmatter, _body = _read_result(root, result.path)
+    assert frontmatter["authority_state"] == "proposal"
+    assert [ref.review_state for ref in result.compilation_draft.source_refs] == [
+        "unreviewed",
+        "unreviewed",
+        "unreviewed",
+        "unreviewed",
+    ]
+    assert [ref.role for ref in result.compilation_draft.source_refs] == [
+        "conversation",
+        "system_context",
+        "system_context",
+        "system_context",
+    ]
+
+
+def test_full_day_context_review_posture_is_per_occurrence(tmp_path: Path) -> None:
+    root, _context, _session_id, bundle = _seed_full_day_context(tmp_path)
+    receipt_item = bundle.sections["decision_receipts"].items[0]
+    occurrences = (
+        receipt_item.model_copy(update={"review_state": ReviewState.UNREVIEWED}),
+        receipt_item.model_copy(update={"review_state": ReviewState.REJECTED}),
+    )
+    identities = draft_module._source_identities((), occurrences)
+
+    states = draft_module._source_review_states(root, (), occurrences, identities)
+
+    assert identities[0].external_id == identities[1].external_id
+    assert identities[0].admission_id != identities[1].admission_id
+    assert states == {
+        identities[0]: ReviewState.UNREVIEWED,
+        identities[1]: ReviewState.REJECTED,
+    }
+
+    capture_item = bundle.sections["captures"].items[0]
+    capture_occurrences = (
+        capture_item,
+        capture_item.model_copy(update={"review_state": ReviewState.REVISED}),
+        capture_item.model_copy(update={"review_state": ReviewState.REJECTED}),
+    )
+    capture_identities = draft_module._source_identities((), capture_occurrences)
+
+    capture_states = draft_module._source_review_states(
+        root,
+        (),
+        capture_occurrences,
+        capture_identities,
+    )
+
+    assert capture_states == {
+        capture_identities[0]: ReviewState.UNREVIEWED,
+        capture_identities[1]: ReviewState.REVISED,
+        capture_identities[2]: ReviewState.REJECTED,
+    }
+
+
+def test_rejected_capture_still_blocks_full_day_context_draft(
+    tmp_path: Path,
+) -> None:
+    root, context, session_id, bundle = _seed_full_day_context(
+        tmp_path,
+        capture_review_state="rejected",
+    )
+    cognition_called = False
+
+    def forbidden_cognition(
+        _object_ids: object, *, trace_id: str | None = None
+    ) -> ReasoningOutput:
+        nonlocal cognition_called
+        del trace_id
+        cognition_called = True
+        return ReasoningOutput()
+
+    with pytest.raises(JournalDraftBlockedError, match="contradicted_or_rejected"):
+        draft_journal_entry(
+            vault_context=context,
+            for_date=DAY,
+            session_id=session_id,
+            day_context=bundle,
+            write_guard=_allowing_guard(),
+            reasoning_fn=forbidden_cognition,
+        )
+
+    assert cognition_called is False
+    assert not list(root.glob("**/drafts/journal/*.md"))
 
 
 def test_draft_synthesizes_from_transcript_and_context(tmp_path: Path) -> None:

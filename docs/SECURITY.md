@@ -103,7 +103,15 @@ browser mode; presentation consumer #4836 must reuse this boundary unchanged.
   driver failures are not output. Durable deployment journals and request bindings contain identifiers
   and stages only. The admin credential stays on the designated agent host; VM readers use encrypted
   systemd credentials through a file handle. See `docs/CLOUD_SECRET_PROVISIONING/README.md` for
-  the pending sole-writer, credential-restriction, and live qualification gates on #5667.
+  the accepted normal-writer model and remaining broader live qualification on #5667.
+- The [2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) accepts Demerzel login Keychain custody
+  of the only active admin machine-account token and `scripts/secrets` as the sole supported normal
+  writer. VM accounts remain read-only; the human Organization Owner is break-glass. Deliberate
+  same-user code can retrieve the bearer and write outside the controller: this is an accepted
+  residual, not process isolation or externally fenced parity. No separate writer daemon or shared
+  fencing is required for this one-owner setup. Reassess before extra operators/controllers or prod
+  secrets requiring confidentiality. Locks, parity/history checks, unknown-outcome pending state,
+  and terminal receipts still govern supported operations; broader live qualification remains open.
 
 ## Logs & PII
 - See `docs/PRIVACY.md` for masking policy. Default rule: no raw customer/note text in `extra`.
