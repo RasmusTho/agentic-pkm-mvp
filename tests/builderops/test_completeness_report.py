@@ -111,11 +111,13 @@ def test_completeness_report_recognizes_explicit_terminal_outcome_formats() -> N
     ] + [{"signal_id": "structured-unrelated", "outcome": "already_satisfied"}]
     token_receipt = _retro_receipt(
         "receipt-tokens",
-        target_ids=[*token_ids, "token-sentinel"],
+        target_ids=[*token_ids, "token-pipe", "token-sentinel"],
         receipt_body="Outcomes: " + " ".join(
             f"{signal_id}={outcome}."
             for signal_id, outcome in zip(token_ids, outcomes, strict=True)
-        ) + " unrelated-signal=applied",
+        )
+        + " unrelated-signal=applied\n"
+        + "token-pipe=already_satisfied | evidence: #5607",
     )
     table_rows = "\n".join(
         f"  | `{signal_id}` | `{outcome}` |  "
@@ -167,6 +169,7 @@ def test_completeness_report_recognizes_explicit_terminal_outcome_formats() -> N
     expected = {
         **dict(zip(structured_ids, outcomes, strict=True)),
         **dict(zip(token_ids, outcomes, strict=True)),
+        "token-pipe": "already_satisfied",
         **dict(zip(table_ids, outcomes, strict=True)),
         "pattern-5099": "issue_created",
     }
@@ -381,11 +384,18 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
             "records": [
                 _retro_receipt(
                     "receipt-1",
-                    target_ids=["lrn-table", "lrn-unknown", "lrn-partial", "lrn-conflict"],
+                    target_ids=[
+                        "lrn-table",
+                        "lrn-pipe",
+                        "lrn-unknown",
+                        "lrn-partial",
+                        "lrn-conflict",
+                    ],
                     receipt_body=(
                         "| signal_id | outcome |\n"
                         "| --- | --- |\n"
                         "| lrn-table | already_satisfied |\n"
+                        "lrn-pipe=issue_created | evidence: #5607\n"
                         "lrn-unknown=future_outcome lrn-partial=appl "
                         "lrn-conflict=applied lrn-conflict=discarded_or_superseded "
                         "unrelated-signal=applied"
@@ -417,7 +427,8 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
     assert payload["unprocessed_learning_signals"] == []
     receipt = payload["retrospective_receipts_missing_terminal_outcomes"][0]
     assert receipt["terminal_outcomes"] == [
-        {"signal_id": "lrn-table", "outcome": "already_satisfied"}
+        {"signal_id": "lrn-table", "outcome": "already_satisfied"},
+        {"signal_id": "lrn-pipe", "outcome": "issue_created"},
     ]
     assert receipt["missing_terminal_outcomes"] == [
         "lrn-unknown",

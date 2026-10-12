@@ -196,8 +196,6 @@ def _terminal_outcomes_from_receipt(receipt: Mapping[str, Any]) -> dict[str, str
     body_claims: dict[str, set[str | None]] = {}
     lines = body.splitlines()
     for line in lines:
-        if "|" in line:
-            continue
         for match in SIGNAL_OUTCOME_CLAIM_RE.finditer(_outcome_token_text(line)):
             signal_id = match.group("signal_id")
             outcome = _recognized_outcome_token(match.group("outcome"))
