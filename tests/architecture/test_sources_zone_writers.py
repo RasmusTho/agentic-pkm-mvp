@@ -501,8 +501,12 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                     return True
         return False
 
-    for target, calls in calls_by_function.items():
-        relative, function = function_nodes[target]
+    def scope_writes_source(
+        relative: str,
+        body: list[ast.stmt],
+        env: dict[str, set[str]],
+        calls: list[tuple[set[str], ast.Call]],
+    ) -> bool:
         assignments: list[tuple[list[ast.expr], ast.expr]] = []
 
         class Assignments(ast.NodeVisitor):
@@ -528,32 +532,64 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                 self.generic_visit(node.value)
 
         visitor = Assignments()
-        for statement in function.body:
+        for statement in body:
             visitor.visit(statement)
         source_names: set[str] = set()
         changed = True
         while changed:
             changed = False
             for targets, value in assignments:
-                if is_source_path(relative, value, function_env[target], source_names):
+                if is_source_path(relative, value, env, source_names):
                     for assigned in targets:
                         for child in ast.walk(assigned):
                             if isinstance(child, ast.Name) and child.id not in source_names:
                                 source_names.add(child.id)
                                 changed = True
 
-        if any(
+        return any(
             any(
                 callee in sinks_by_function or function_named(callee, SOURCE_WRITE_SINKS)
                 for callee in callees
             )
             and any(
-                is_source_path(relative, argument, function_env[target], source_names)
+                is_source_path(relative, argument, env, source_names)
                 for argument in (*call.args, *(keyword.value for keyword in call.keywords))
             )
             for callees, call in calls
-        ):
+        )
+
+    for target, calls in calls_by_function.items():
+        relative, function = function_nodes[target]
+        if scope_writes_source(relative, function.body, function_env[target], calls):
             source_write_callers.add((relative, function_display[target]))
+
+    # Module-body calls are production callsites too. Keep this scope shallow: nested
+    # functions/classes belong to their own scopes and use the same one-helper analysis.
+    for relative, tree in trees.items():
+        env = {
+            name: set(values)
+            for name, values in module_targets.get(module_for_relative[relative], {}).items()
+        }
+        calls: list[tuple[set[str], ast.Call]] = []
+
+        class ModuleCalls(ast.NodeVisitor):
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                return
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                return
+
+            def visit_Call(self, node: ast.Call) -> None:
+                calls.append((expression_targets(relative, node.func, env), node))
+                self.generic_visit(node)
+
+        visitor = ModuleCalls()
+        for statement in tree.body:
+            visitor.visit(statement)
+        if scope_writes_source(relative, tree.body, env, calls):
+            source_write_callers.add((relative, "<module>"))
 
     return literals, resolver_callers, source_write_callers
 
@@ -760,6 +796,16 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
             "        return writer()\n"
             "    return producer_layer_3414()\n"
         ),
+        "app/writers/module_producer.py": (
+            "from app.writers import chain_path as make_path, chain_sink as save_path\n"
+            "save_path(make_path())\n"
+        ),
+        "app/writers/unrelated_module.py": (
+            "from app.writers.helpers import build_source_path as make_path\n"
+            "from app.writers.helpers import write_source_path as save_path\n"
+            "make_path()\n"
+            "save_path('unrelated')\n"
+        ),
     }
     for relative, content in files.items():
         target = tmp_path / relative
@@ -781,10 +827,12 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
     assert ("app/writers/producer.py", "nested_local_import_writer_3414") in source_write_callers
     assert ("app/writers/relative.py", "relative_import_writer") in source_write_callers
     assert ("app/writers/producer.py", "producer_layer_3414.writer") in source_write_callers
+    assert ("app/writers/module_producer.py", "<module>") in source_write_callers
     assert ("app/writers/producer.py", "producer_layer_3414.make_path") in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in source_write_callers
     assert ("app/writers/producer.py", "unrelated_path_and_write_calls") not in source_write_callers
+    assert ("app/writers/unrelated_module.py", "<module>") not in source_write_callers
 
 
 def test_writer_inventory_fails_closed_on_unresolved_star_import(tmp_path: Path) -> None:
