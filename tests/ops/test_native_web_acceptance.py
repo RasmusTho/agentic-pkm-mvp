@@ -428,7 +428,19 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     assert companion.get_memory_review_queue().pending_count == 4
     assert {entry.candidate_id for entry in companion._MEMORY_CANDIDATE_REVIEW_QUEUE.pending()} == set(fixture.CANDIDATE_IDS)
     from app.main import app
-    assert next(route.endpoint for route in app.routes if getattr(route, 'path', '') == '/api/companion/memory/review-queue') is companion.get_memory_review_queue
+    producing_queue = companion._MEMORY_CANDIDATE_REVIEW_QUEUE
+    _require_actual_serving_queue(app, producing_queue, fixture.CANDIDATE_IDS, monkeypatch)
+    # An in-place module reload replaces function objects but preserves their
+    # globals dictionary. Actual HTTP consumption, not the function address,
+    # must bind the serving heap to the canonical producer's exact queue.
+    stale_queue = MemoryCandidateReviewQueue()
+    for entry in producing_queue.pending():
+        stale_queue.enqueue(entry.candidate)
+    with monkeypatch.context() as drift:
+        drift.setattr(companion, '_MEMORY_CANDIDATE_REVIEW_QUEUE', stale_queue)
+        # Identical projected IDs/counts cannot substitute another heap.
+        with pytest.raises(AssertionError, match='serving_api_queue_heap_mismatch'):
+            _require_actual_serving_queue(app, producing_queue, fixture.CANDIDATE_IDS, monkeypatch)
     from app.api.routes import capture
     from app.ops.native_web_runtime import AcknowledgedFixtureState, DailySourceFault
     from starlette.requests import Request
@@ -482,6 +494,27 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
         fixture.bootstrap_fixture(tmp_path / 'blocked-vault', str(uuid4()), review_queue=companion._MEMORY_CANDIDATE_REVIEW_QUEUE)
     assert not (tmp_path / 'blocked-vault' / fixture.NOTE_PATH).exists()
     assert companion.get_memory_review_queue().pending_count == 0
+
+
+def _require_actual_serving_queue(app, producing_queue, candidate_ids, monkeypatch):
+    from fastapi.testclient import TestClient
+    observed = []
+    original = producing_queue.pending
+    def pending():
+        observed.append(producing_queue)
+        return original()  # Real queue read/reconciliation stays active.
+    with monkeypatch.context() as probe:
+        probe.setattr(producing_queue, 'pending', pending)
+        client = TestClient(app)
+        try:
+            response = client.get('/api/companion/memory/review-queue')
+        finally:
+            client.close()
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload['pending_count'] == len(candidate_ids)
+    assert {row['candidate_id'] for row in payload['candidates']} == set(candidate_ids)
+    assert len(observed) == 1 and observed[0] is producing_queue, 'serving_api_queue_heap_mismatch'
 
 
 def test_qualification_starts_only_fixed_api_composition(monkeypatch):
