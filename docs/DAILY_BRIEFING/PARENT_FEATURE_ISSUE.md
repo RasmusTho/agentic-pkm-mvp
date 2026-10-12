@@ -1,9 +1,9 @@
-State: FILED — the parent feature issue is live as #3314 (Backlog, agent:blocked validation hub). GitHub is the authoritative backlog/validation surface; this file is the archived draft + local pointer. Children were filed agent:blocked: #3315 (BRIEF-01, dependency-free head — flips to agent:ready when this spec PR merges to main), #3318 (BRIEF-02, blocked until BRIEF-01/#3315 merges), #3317 (BRIEF-03, blocked until BRIEF-01/#3315 merges), #3319 (BRIEF-04, blocked until BRIEF-01/#3315 merges), #3316 (BRIEF-05, blocked until BRIEF-01/#3315 merges and the external ERE-09/#3184 + ERE-02/#3177 prerequisites land).
+State: FILED — #3314 is the live validation hub. Qualified automated TARS TEST acceptance and owner-doc promotion remain pending. GitHub is authoritative for child lifecycle, automation work and evidence; this file is the local contract pointer.
 Doc role: Parent feature issue draft (feature-breakdown lane)
 Temporal class: operational
 Review cadence: event-driven (issue lifecycle)
 Source of truth: GitHub issue #3314; this file is the archived draft + local pointer
-Last reviewed: 2026-07-07
+Last reviewed: 2026-10-11
 
 # [Daily Briefing] parent: compose, schedule, speak, and surface one day-start briefing artifact
 
@@ -21,7 +21,12 @@ This parent is the **live validation hub** once filed: children post validation 
 
 ## Scope
 
-The capability outcome — not one PR: a deterministic composer assembling commitments, CRE picks, and decision receipts into one provenance-cited briefing note written through the governed vault-write path (BRIEF-01); a once-per-day scheduled trigger with an on-first-contact-of-day fallback (BRIEF-02); mixed sv/en per-segment audio rendering via the existing SpeechPlan/TTS pipeline with one-tap listen (BRIEF-03); a companion-UI day-start card surfacing listen + read with zero typing (BRIEF-04); and, once the Episode Resolution Engine's calendar stream lands, a today's-calendar/episodes section (BRIEF-05, blocked on an external prerequisite: ERE-09 / GitHub #3184, and ERE-02).
+The capability outcome — not one PR: a deterministic composer assembling commitments, CRE picks,
+and decision receipts into one provenance-cited note through the governed write path (BRIEF-01);
+once-per-day scheduled/first-contact triggering (BRIEF-02); mixed sv/en one-tap local TTS (BRIEF-03);
+one zero-typing companion-UI day-start card (BRIEF-04); and today's-calendar/episodes through the
+existing ERE calendar/episode interfaces (BRIEF-05). Qualified deployed proof of the composed
+source-selected paths remains required, including failure and idempotency boundaries.
 
 ## Source Anchors
 
@@ -44,7 +49,7 @@ The capability outcome — not one PR: a deterministic composer assembling commi
 - Sync/deployment impact: none beyond a new note family riding existing vault sync (iCloud/git); no migration
 - External boundary impact: local TTS engines only (already-provisioned Piper/Kokoro, `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`); BRIEF-05's calendar section inherits ERE-09's existing read-only CalDAV/ICS boundary, unchanged by this capability
 - New or changed contract: one new vault note family (daily briefing note, companion-note-family pattern); no new domain contract
-- Owner-doc impact: on acceptance — a writeback naming Daily Briefing delivered (target doc decided at promotion time) and a delivered-marker row in the ideation capture
+- Owner-doc impact: after qualified live PASS — `docs/DAILY_BRIEFING/README.md`, the applicable `companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md` contract, and the bounded supported claim in `docs/STATUS.md`; ideation remains grounding history
 - Transition debt impact: reduces (fills the "no distribution surface for Reflect-stage substrate" gap the ideation capture names)
 - Fitness rule impact: no new fitness rule; reuses the existing WriteGuard-at-seam and read-only-projection precedents
 
@@ -54,7 +59,11 @@ The briefing is never a write-authority surface — no task in this capability m
 
 ## Acceptance Criteria
 
-The capability-level ACs in `docs/DAILY_BRIEFING/README.md :: Capability acceptance criteria`, each with its `Verify:` target there — including full-source composition with provenance, fail-legible partial generation, once-per-day idempotent triggering with a first-contact fallback, mixed-language one-tap audio with text-only degrade, a zero-typing day-start card that honestly distinguishes not-yet-generated from degraded from full, the blocked calendar/episodes section, and a real-day live validation receipt.
+The capability-level ACs in `docs/DAILY_BRIEFING/README.md :: Capability acceptance criteria`, each
+with its `Verify:` target there: full-source composition/provenance, named partial failures,
+once-per-day/first-contact idempotency, mixed-language one-tap local TTS and text-only degradation,
+the read-only zero-typing card's pending/degraded/full states, source-selected calendar/episodes,
+and qualified automated TARS TEST proof followed by the concrete owner-doc writeback.
 
 ## Implementation Tasks
 
@@ -66,7 +75,14 @@ Per-task `Verify:` targets (each task file couples ACs to `How to Verify (Pre-Me
 
 ## Validation / Acceptance Path
 
-After each child merges: a validation receipt comment here (test run links, a sample generated briefing). After BRIEF-04: an operator UAT — a real day's briefing generated, heard via one tap, and seen as one card. After BRIEF-05 unblocks and merges: confirm the calendar/episodes section renders against a real CalDAV day. Acceptance → one owner-doc promotion PR (target doc decided at promotion time, per the capability README) and parent closure.
+After each child merges, post its validation receipt on #3314. Execute
+`docs/DAILY_BRIEFING/README.md :: Validation / acceptance path`: qualified automated TARS TEST
+generation → listen → provenance/read journey, isolated synthetic actor/data and source-selected
+TTS/calendar integration, bound to the actual deployed same-SHA/digest candidate. Record each
+required scenario in existing private artifacts; no missing/blocked/skip/xfail result is PASS.
+Missing environment is concrete restore-environment work; missing automation is a bounded Builder
+child. Apply `docs/TESTING.md :: Automated Technical Acceptance` and promote the concrete local
+owners/STATUS only after live PASS. Keep the parent open until every scoped AC is satisfied.
 
 ## Out of Scope
 
@@ -74,7 +90,11 @@ OS push notifications; email delivery; wake-word/always-listening; briefing as a
 
 ## Suggested Validation
 
-`pytest -q -m "not pg" tests/briefing/` per child; `pytest -q tests/companion_ui/test_briefing_listen_affordance.py tests/companion_ui/test_day_start_card.py`; a manual one-day operator UAT (generate → listen → read) posted as a receipt to this issue.
+Run the applicable deterministic briefing/UI/TTS targets and the intended
+`tests/companion_ui/test_live_daily_briefing_contract.py` suite. Execute
+`tests/companion_ui/test_companion_ui_live_daily_briefing.py::test_daily_briefing_live_acceptance`
+only against the qualified TEST fixture/candidate, following the capability acceptance path.
+These intended automation targets remain pending until implemented and actually passed.
 
 ## Source Docs
 

@@ -84,6 +84,15 @@ conditional path (`Issue maintenance -> Agent`), not the hot path.
 - Preserve traceability through `Source Anchors`.
 - Prefer batched maintenance actions for repeated drift patterns; reserve single-item churn for cases where the items genuinely differ.
 - Delivered, repo-verifiable parent scope should not stay open only for future adoption or retro observation.
+- Repair generic live/operator acceptance holds under `docs/TESTING.md :: Automated Technical Acceptance`.
+  Qualified TEST journeys own technical proof. Missing automation is a bounded Builder slice and
+  missing environment is concrete `action:restore-environment`; retain foreign claims, infrastructure
+  ownership and effect gates. A human acceptance exception must name the observable choice,
+  why it cannot be automated, owner and exact `unblocks_when`, rather than a manual test instruction.
+  Put the exception facts in the self-sufficient Issue body. Re-read the latest blocker receipt
+  before label/body repair; carry a genuine legacy comment-only exception into the body instead of
+  treating absent body facts as disproving the human hold. The readiness report grants no effect
+  or lifecycle authority.
 - Before adding or preserving `agent:ready`, run strict
   executable-contract validation on the exact Issue body:
   ```bash
@@ -324,7 +333,9 @@ Parent feature issues are validation hubs, not direct pickup issues. Unless expl
 2. **Use them to track child slice delivery** in comments and body updates, including validation receipts posted by each delivered child
 3. **Optional Project repair:** when explicitly in scope, project durable parent evidence to
    `Epic / Parent`; do not overwrite an existing explicit `Review` card.
-4. **When the parent is fully repo-verifiable and only future observation remains, close it and move that observation to a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work**
+4. **Close only after every scoped AC is satisfied** under `docs/development/PARENT_ISSUE_CLOSURE.md`,
+   including qualified deployed acceptance and owner-doc writeback. Then move future observation
+   to an existing BuilderOps surface or executable follow-up; never hide unmet criteria as adoption.
 
 ### Child Slice Issues
 

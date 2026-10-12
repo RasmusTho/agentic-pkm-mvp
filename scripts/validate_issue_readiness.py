@@ -24,6 +24,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from app.builderops.issue_contract_validation import (  # noqa: E402
+    is_durable_repo_path,
     is_resolvable_verify_target,
 )
 
@@ -136,6 +137,188 @@ HUMAN_ONLY_PATTERNS = tuple(
     for pattern in (r"\bhuman only\b", r"\bmanual only\b", r"\boperator gated\b")
 )
 
+# This is a bounded lint for unsupported acceptance holds, not a judge of
+# human taste or authority. Facts stay in existing Issue sections/receipts.
+_MANUAL_ACCEPTANCE_HOLD = re.compile(
+    r"\b(?:requires?|needs|awaits?|waiting for|blocked (?:by|on|until))\s+"
+    r"(?:an?\s+)?(?:(?:live(?:/operator)?|operator|human|manual)[ -])?(?:acceptance|UAT)\b"
+    r"|\b(?:UAT|(?:live|operator|human|manual)[ -]acceptance(?: test)?)\s+"
+    r"(?:is|are|remains?)\s+(?:required|mandatory|needed)\b"
+    r"|\b(?:human|operator)\s+(?:must|needs to|has to|is required to)\s+"
+    r"(?:run|execute|perform)\s+(?:the\s+|an?\s+)?(?:acceptance(?: test)?|UAT)\b"
+    r"|^\s*(?:[-*]\s*)?(?:Verify:\s*)?(?:manual (?:one-day )?operator UAT|"
+    r"operator UAT|live/operator acceptance|manual QA)\s*[.!]?\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+_ACCEPTANCE_SECTIONS = (
+    "Scope", "Constraints", "Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation",
+)
+_HEADING = re.compile(r"(?m)^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$")
+_HISTORY_HEADING = re.compile(r"^(?:historical|history|previous|archive)\b", re.I)
+_COMPLETED_SCOPE_HEADING = re.compile(
+    r"(?:completed|resolved|closed|settled)\s+(?:human\s+)?(?:decisions?|choices?|exceptions?|acceptance)", re.I,
+)
+_HUMAN_ACCEPTANCE_MARKER = re.compile(
+    r"(?im)^\s*(?:[-+]\s+|\d+[.)]\s+)?(?:\[ \]\s+)?"
+    r"(?P<current>current )?human acceptance exception:\s*\S.*$",
+)
+_INLINE_CODE = re.compile(r"(?<!`)(`+)(?!`)(.*?)(?<!`)\1(?!`)", re.S)
+_COMPLETED_CHOICE_CLAUSE = re.compile(
+    r"(?:(?:(?:the|prior|previous|historical|current)\s+)?"
+    r"(?:(?:cadence\s+)?(?:choice|decision|exception)|cadence)\s+"
+    r"(?:(?:is|was|has been)\s+)?(?:(?:already|now)\s+)?)?"
+    r"(?:completed|resolved|chosen|closed|done|settled)"
+    r"(?:\s+and\s+(?:completed|resolved|chosen|closed|done|settled))*", re.I,
+)
+
+
+def _current_contract_markdown(body: str) -> str:
+    """Retain current section structure; fenced examples/history are context."""
+    unfenced: list[str] = []
+    fence: tuple[str, int] | None = None
+    for raw in body.splitlines():
+        fence_match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", raw)
+        if fence is not None:
+            if (fence_match and fence_match.group(1)[0] == fence[0]
+                    and len(fence_match.group(1)) >= fence[1] and not fence_match.group(2).strip()):
+                fence = None
+            continue
+        if fence_match and not (fence_match.group(1)[0] == "`" and "`" in fence_match.group(2)):
+            fence = fence_match.group(1)[0], len(fence_match.group(1))
+            continue
+        unfenced.append(raw)
+
+    # Immutable history is context even if it quotes a then-current condition.
+    unarchived: list[str] = []
+    history_level: int | None = None
+    for raw in unfenced:
+        heading = _HEADING.fullmatch(raw)
+        if heading:
+            level, title = len(heading.group(1)), _visible_contract_text(heading.group(2))
+            if history_level is not None and level <= history_level:
+                history_level = None
+            if _HISTORY_HEADING.search(title):
+                history_level = level
+        if history_level is not None:
+            continue
+        unarchived.append(raw)
+
+    lines: list[str] = []
+    completed_level: int | None = None
+    for index, raw in enumerate(unarchived):
+        heading = _HEADING.fullmatch(raw)
+        if heading:
+            level, title = len(heading.group(1)), _visible_contract_text(heading.group(2))
+            if completed_level is not None and level <= completed_level:
+                completed_level = None
+            if _COMPLETED_SCOPE_HEADING.fullmatch(title):
+                end = next((later for later in range(index+1, len(unarchived))
+                            if (match := _HEADING.fullmatch(unarchived[later]))
+                            and len(match.group(1)) <= level), len(unarchived))
+                subtree = "\n".join(unarchived[index+1:end])
+                # A full closed-scope declaration is only a default context.
+                # Explicit current/unresolved descendants cannot be erased by it.
+                if not _explicit_current_condition(subtree):
+                    completed_level = level
+        if completed_level is None:
+            lines.append(raw)
+    return "\n".join(lines)
+
+
+def _visible_contract_text(current: str) -> str:
+    """Render the same bounded inline meaning in prose and section titles."""
+    current = re.sub(r"\*{1,3}|(?<!\w)_{1,3}|_{1,3}(?!\w)", "", current)
+    current = re.sub(r"\[([^\]]+)\]\([^)]*\)|\[([^\]]+)\]\[[^\]]*\]",
+                     lambda match: match.group(1) or match.group(2), current)
+    current = re.sub(r"</?(?:strong|em|b|i|code)(?:\s[^>]*)?>", "", current, flags=re.I)
+
+    def inline(match: re.Match[str]) -> str:
+        prefix = current[current.rfind("\n", 0, match.start())+1:match.start()]
+        if re.search(r"\b(?:rejects?|examples?(?: of)?|quoted examples?)\s*[:=]?\s*$", prefix, re.I):
+            return ""
+        return " ".join(match.group(2).split())
+
+    return _INLINE_CODE.sub(inline, current)
+
+
+def _current_contract_text(body: str) -> str:
+    return _visible_contract_text(_current_contract_markdown(body))
+
+
+def _choice_status_values(block: str) -> list[str]:
+    return re.findall(
+        r"(?im)(?:^\s*(?:[-+]\s+|\d+[.)]\s+)?|[;.]\s*)(?:resolution|status):[ \t]*([^;\n]+)", block,
+    )
+
+
+def _completed_exception(block: str) -> bool:
+    """Only a complete choice-status clause can settle the current exception."""
+    marker_description = block.splitlines()[0].partition(":")[2]
+    status_values = _choice_status_values(block)
+    # Explicit current status wins over a topic. Conflicting/unknown declarations
+    # remain held. Without fields, only a full declarative choice clause counts;
+    # adjectives such as 'completed audio sample' are never completion evidence.
+    declarations = status_values or [marker_description]
+    return all(_COMPLETED_CHOICE_CLAUSE.fullmatch(re.split(r"[.;]", value, maxsplit=1)[0].strip())
+               is not None for value in declarations)
+
+
+def _human_exception_blocks(section: str) -> list[tuple[re.Match[str], str]]:
+    starts = list(_HUMAN_ACCEPTANCE_MARKER.finditer(section))
+    blocks = []
+    for index, start in enumerate(starts):
+        end = starts[index+1].start() if index+1 < len(starts) else len(section)
+        block = section[start.start():end]
+        marker_end = start.end()-start.start()
+        boundary = re.search(r"(?m)^\s*(?:(?:[-+]\s+)?\[[ xX]\]\s+|#{1,6}\s+)", block[marker_end:])
+        if boundary:
+            block = block[:marker_end+boundary.start()]
+        blocks.append((start, block.lstrip()))
+    return blocks
+
+
+def _explicit_current_condition(subtree: str) -> bool:
+    visible = _visible_contract_text(subtree)
+    if any(match.group(2).casefold().startswith("current ") for match in _HEADING.finditer(visible)):
+        return True
+    return any(not _completed_exception(block) and (marker.group("current") or _choice_status_values(block))
+               for marker, block in _human_exception_blocks(visible))
+
+
+def _has_human_acceptance_exception(body: str) -> bool:
+    """Bind all facts to one current, unresolved exception in the contract."""
+    sections = extract_sections(_current_contract_text(body))
+    facts = (
+        r"\b(?:observable (?:choice|observation)|observation|choice):[ \t]*(.+)",
+        r"\b(?:why it cannot be automated|cannot (?:be automated|automate) because):[ \t]*(.+)",
+        r"\bowner:[ \t]*(.+)",
+        r"\bunblocks_when:[ \t]*(.+)",
+    )
+    for name in _ACCEPTANCE_SECTIONS:
+        section = sections.get(_normalize_heading(name), "")
+        for _, block in _human_exception_blocks(section):
+            if _completed_exception(block):
+                continue
+            if all(any(_non_placeholder_lines(m.group(1)) for m in re.finditer(p, block, re.I)) for p in facts):
+                return True
+    return False
+
+
+def _has_acceptance_hold(body: str, labels: Sequence[str]) -> bool:
+    sections = extract_sections(_current_contract_text(body))
+    acceptance_text = "\n".join(
+        sections.get(_normalize_heading(name), "")
+        for name in _ACCEPTANCE_SECTIONS
+    )
+    positive_hold = any(
+        not re.search(r"\b(?:no|not|never|without|automated|automatic|scripted)\s*$",
+                      acceptance_text[acceptance_text.rfind('\n', 0, match.start())+1:match.start()], re.I)
+        for match in _MANUAL_ACCEPTANCE_HOLD.finditer(acceptance_text)
+    )
+    return "action:human-acceptance" in labels or positive_hold
+
 
 @dataclass(frozen=True)
 class AcceptanceCriteriaReport:
@@ -175,13 +358,16 @@ def _normalize_heading(value: str) -> str:
 
 def extract_sections(body: str) -> dict[str, str]:
     sections: dict[str, str] = {}
-    heading_pattern = re.compile(r"^#{2,6}\s+(.+?)\s*$", re.MULTILINE)
-    matches = list(heading_pattern.finditer(body))
+    matches = list(_HEADING.finditer(body))
     for index, match in enumerate(matches):
-        title = re.sub(r"\s+\(optional\)\s*$", "", match.group(1).strip(), flags=re.I)
+        title = re.sub(r"\s+\(optional\)\s*$", "", _visible_contract_text(match.group(2)).strip(), flags=re.I)
         start = match.end()
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(body)
-        sections[_normalize_heading(title)] = body[start:end].strip()
+        end = next((later.start() for later in matches[index+1:]
+                    if len(later.group(1)) <= len(match.group(1))), len(body))
+        name = _normalize_heading(title)
+        # Current descendants belong to their ancestor. A repeated section may
+        # add requirements, but cannot overwrite an earlier current condition.
+        sections[name] = "\n".join(filter(None, (sections.get(name, ""), body[start:end].strip())))
     return sections
 
 
@@ -273,6 +459,7 @@ def _is_new_behavioral_test_file_target(target: str, path: str) -> bool:
     return (
         path.startswith("tests/")
         and path.endswith(".py")
+        and is_durable_repo_path(path)
         and is_resolvable_verify_target(target)
     )
 
@@ -331,12 +518,7 @@ def _has_concrete_verify_marker(item: str) -> bool:
     return (
         bool(targets)
         and len(set(targets)) == len(targets)
-        and all(
-            is_resolvable_verify_target(target)
-            or _target_has_existing_file_path(target)
-            or _target_has_missing_file_path(target)
-            for target in targets
-        )
+        and all(is_resolvable_verify_target(target) for target in targets)
     )
 
 
@@ -376,7 +558,7 @@ def _missing_verify_file_paths(item: str) -> list[str]:
     return missing_paths
 
 
-def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport:
+def analyze_acceptance_criteria(section: str | None, *, resolve_files: bool = True) -> AcceptanceCriteriaReport:
     lines = _non_placeholder_lines(section)
     items = _extract_acceptance_items(section)
     malformed = bool(lines) and not items
@@ -387,10 +569,10 @@ def analyze_acceptance_criteria(section: str | None) -> AcceptanceCriteriaReport
     ]
     missing_file_paths = [
         path for item in items for path in _missing_verify_file_paths(item)
-    ]
+    ] if resolve_files else []
     joined_targets = [
         target for item in items for target in _joined_verify_targets(item)
-    ]
+    ] if resolve_files else []
     return AcceptanceCriteriaReport(
         present=bool(items),
         count=len(items),
@@ -489,29 +671,43 @@ def classify_issue_body(
     *,
     issue_number: int | None = None,
     labels: Sequence[str] = (),
+    _resolve_verify_files: bool = True,
 ) -> IssueReadinessReport:
-    sections = extract_sections(body)
+    # The fixed retained-source importer mode preserves its independently
+    # qualified candidate-file evidence. It is not a CLI or Ready-mutation bypass.
+    sections = extract_sections(_current_contract_markdown(body))
     present = [section for section in REQUIRED_SECTIONS if _section_content(sections, section) is not None]
     missing = [section for section in REQUIRED_SECTIONS if section not in present]
     present_normalized = [_normalize_heading(section) for section in present]
 
     source_docs_lines = _non_placeholder_lines(_section_content(sections, "Source Docs"))
     source_docs_present = bool(source_docs_lines)
-    ac_report = analyze_acceptance_criteria(_section_content(sections, "Acceptance Criteria"))
+    ac_report = analyze_acceptance_criteria(
+        _section_content(sections, "Acceptance Criteria"), resolve_files=_resolve_verify_files,
+    )
     label_names = sorted(dict.fromkeys(labels))
+    human_acceptance_exception = _has_human_acceptance_exception(body)
+    # A current human choice never exempts an unrelated generic execution gate.
+    unsupported_acceptance = _has_acceptance_hold(body, ()) or (
+        "action:human-acceptance" in label_names and not human_acceptance_exception
+    )
+    current_prose = _current_contract_text(body)
 
     classification = "ready_candidate"
     human_exception_required = (
+        # Labels can be backed by a canonical receipt outside this body-only
+        # input. Missing body facts do not disprove that existing human hold.
         "agent:needs-human" in label_names
-        or _contains_any(HUMAN_ONLY_PATTERNS, body)
-        or _contains_any(AUTHORITY_RISK_PATTERNS, body)
+        or _contains_any(HUMAN_ONLY_PATTERNS, current_prose)
+        or _contains_any(AUTHORITY_RISK_PATTERNS, current_prose)
+        or human_acceptance_exception
     )
 
     if _unknown_body(body, present_normalized):
         classification = "unknown"
-    elif "agent:needs-human" in label_names or "agent:blocked" in label_names:
+    elif "agent:needs-human" in label_names or "agent:blocked" in label_names or human_acceptance_exception:
         classification = "not_agentable"
-    elif _contains_any(NOT_AGENTABLE_PATTERNS, body):
+    elif _contains_any(NOT_AGENTABLE_PATTERNS, current_prose):
         classification = "not_agentable"
     elif "Source Docs" in missing or not source_docs_present:
         classification = "missing_source_docs"
@@ -519,17 +715,19 @@ def classify_issue_body(
         classification = "missing_required_sections"
     elif not ac_report.present or ac_report.malformed:
         classification = "malformed_acceptance_criteria"
-    elif not ac_report.verify_markers_present:
-        classification = "missing_verify_markers"
     elif ac_report.missing_verify_file_paths:
         classification = "missing_verify_file_paths"
+    elif not ac_report.verify_markers_present:
+        classification = "missing_verify_markers"
     elif _parent_reference_problem(body) is not None:
         classification = "malformed_parent_reference"
     elif admission_contract_problem(body) is not None:
         classification = "admission_contract_conflict"
-    elif _contains_any(AUTHORITY_RISK_PATTERNS, body):
+    elif _contains_any(AUTHORITY_RISK_PATTERNS, current_prose):
         classification = "authority_risk"
-    elif _contains_any(AMBIGUOUS_PATTERNS, body):
+    elif unsupported_acceptance:
+        classification = "ambiguous_intent"
+    elif _contains_any(AMBIGUOUS_PATTERNS, current_prose):
         classification = "ambiguous_intent"
 
     guidance = repair_guidance(
@@ -538,6 +736,23 @@ def classify_issue_body(
         source_docs_present=source_docs_present,
         ac_report=ac_report,
     )
+    if unsupported_acceptance:
+        if human_exception_required:
+            guidance.append(
+                "Re-read the current contract and latest blocker receipt before lifecycle repair. "
+                "Carry a genuine comment-backed human acceptance exception into the Issue body: "
+                "observable choice/observation, why it cannot be automated, owner and exact unblocks_when. "
+                "Missing body facts do not revoke an existing human hold or authorize automated effects. "
+                "Only after source reconciliation, route an unsupported generic hold to Builder work: "
+                "missing environment is action:restore-environment and missing automation is a bounded slice."
+            )
+        else:
+            guidance.append(
+                "Replace generic manual/live/operator acceptance with qualified automated TEST proof. "
+                "Missing environment is action:restore-environment; missing automation is bounded Builder work. "
+                "A human acceptance exception must name the observable choice/observation, why it cannot "
+                "be automated, owner and exact unblocks_when in the Issue body."
+            )
 
     return IssueReadinessReport(
         issue_number=issue_number,

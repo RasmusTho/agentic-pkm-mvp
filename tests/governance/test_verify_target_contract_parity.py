@@ -151,7 +151,67 @@ def test_contract_documents_one_verify_line_per_target() -> None:
         "`<marker>` present in `tests/scripts/test_validate_issue_readiness.py`",
         "`docs/development/DEV_WORKFLOW.md :: later` removed as delivered.",
         "manual QA",
+        "docs/TESTING.md::",
+        "doc writeback at `docs/TESTING.md :: later`",
+        "doc writeback at `docs/TESTING.md :: later` (step 3)",
+        "`docs/TESTING.md::` (step 3)",
+        "`doc writeback at `docs/TESTING.md :: Automated Technical Acceptance``",
+        "`roadmap diff: `docs/ROADMAP.md :: DDO-03``",
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications``",
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications::",
+        "`docs/TESTING.md :: Automated Technical Acceptance` + `docs/DOCS_INDEX.md :: Overview`",
     ],
 )
 def test_grammar_still_rejects_unresolvable_targets(target: str) -> None:
+    from scripts.validate_issue_readiness import classify_issue_body
+
     assert not is_resolvable_verify_target(target)
+    body = (REPO_ROOT / "tests/fixtures/issue_readiness/valid_ready_candidate.md").read_text().replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification != "ready_candidate"
+
+
+@pytest.mark.parametrize("target", [
+    "`doc writeback at docs/TESTING.md :: Automated Technical Acceptance`",
+    "`roadmap diff: docs/ROADMAP.md :: DDO-03`",
+])
+def test_unambiguous_whole_target_code_wrapper_preserves_eligibility(target: str) -> None:
+    from scripts.validate_issue_readiness import classify_issue_body
+
+    assert is_resolvable_verify_target(target)
+    body = (REPO_ROOT / "tests/fixtures/issue_readiness/valid_ready_candidate.md").read_text().replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification == "ready_candidate"
+
+
+@pytest.mark.parametrize("target", [
+    "doc writeback at `docs/development/DEV_WORKFLOW.md :: Acceptance verifiability` (step 3)",
+    "`doc writeback at `docs/development/DEV_WORKFLOW.md :: Acceptance verifiability` (step 3)`",
+    "tests/architecture/test_pr_hot_path_governance.py::test_hot_path_doc_defers_escalation_and_names_direct_repair_contract",
+])
+def test_concrete_legacy_locator_requires_one_complete_target(target: str) -> None:
+    assert is_resolvable_verify_target(target)
+
+
+def test_verify_locator_extension_does_not_change_source_anchor_authority() -> None:
+    from app.builderops.issue_contract_validation import is_durable_repo_path
+
+    assert not is_durable_repo_path("tests/architecture/test_pr_hot_path_governance.py")
+
+
+@pytest.mark.parametrize("target", CONTRACT_FORM_EXAMPLES.values(), ids=CONTRACT_FORM_EXAMPLES.keys())
+@pytest.mark.parametrize("joiner", [" + ", " and ", ", ", "; "])
+def test_every_verify_form_refuses_a_joined_second_locator(target: str, joiner: str) -> None:
+    from scripts.validate_issue_readiness import classify_issue_body
+
+    joined = target + joiner + "`docs/STATUS.md`"
+    assert not is_resolvable_verify_target(joined)
+    body = (REPO_ROOT / "tests/fixtures/issue_readiness/valid_ready_candidate.md").read_text().replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", joined,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification != "ready_candidate"

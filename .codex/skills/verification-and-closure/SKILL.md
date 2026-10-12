@@ -31,15 +31,13 @@ artifact is not a transfer of ownership; do not enqueue it for a session-owned n
 
 ## Inputs
 
-Read the live PR identity, base, head, title/body, complete changed-file list, checks, and actionable
-review feedback once. Read the governing contract and exact closing Issues; use an existing scoped
-context when still current. A governing parent not in the closing set stays open. Issue-free work
-uses the PR's lane or Direct Repair contract. Do not create an Issue after the fact solely for a
-bounded direct repair. Routine BuilderOps evidence may remain in the Issue, PR, or reviewed repo
-artifact; optional record infrastructure is not a verification prerequisite. If it is unavailable,
-report the limitation once and preserve substantial findings in that existing authority. Compare
-source anchors and scope; stop on ambiguous authority or an unresolved substantial finding with no
-durable home.
+Read live PR identity/base/head/title/body, complete files, checks and actionable review once, then the
+governing contract and exact closing Issues; reuse current scoped context. A parent outside the closing
+set stays open. Issue-free work uses its lane/Direct Repair contract; never create an Issue after the
+fact solely for bounded direct repair. Issue/PR/reviewed artifacts may retain BuilderOps evidence;
+optional record infrastructure is not a gate. Report unavailable records once and preserve findings
+in that authority. Compare anchors/scope; ambiguous authority or substantial findings without a
+durable home stop the effect.
 
 Apply `_shared/BLOCKER_ACTION_CONTRACT.md` only when blocker/action labels need reconciliation.
 Apply `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` before publication effects.
@@ -59,25 +57,28 @@ Apply `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` before publicati
   and in-flight receipts, current-head CI, exact review, merge, and closure gates remain mandatory.
 - If acceptance requires a post-merge producer, keep its parent or explicit acceptance Issue open;
   do not pretend a pre-merge test proves the later outcome.
+- Own technical acceptance under `docs/TESTING.md :: Automated Technical Acceptance`: qualified
+  automatic TEST by default, short DEV smoke/warranted scenarios, actual same-candidate SHA/digest and
+  isolated synthetic actor/source proof. Prove every scoped AC before parent closure. Use concrete
+  restore-environment or bounded Builder automation recovery; preserve effect authority and Product
+  intent. Human exceptions need observable choice, why automation cannot prove it, owner and exact
+  `unblocks_when`; generic live/operator acceptance is not a terminal handoff.
 - For pre-API startup failures, read `.codex/skills/verification-and-closure/FULL_PATH.md :: Pre-API startup failure classification`.
 - For a resumed run or owner handoff, read `.codex/skills/verification-and-closure/FULL_PATH.md :: Current SHA truth and scope drift`.
 
 ## Review
 
-Tier 1/2 defaults to self-review and `Final-Review-Rounds: 0`. High-risk changes or an explicit review
-request require one independent current-head review and `Final-Review-Rounds: 1`; read
-`.codex/skills/verification-and-closure/FULL_PATH.md :: Running the local review gate 🤖`, `:: Severity routing`, and
-`:: Re-triggering after a fix` for that review only. These reads do not select executor merge
-mechanics. Keep P0/P1 repairs and fresh independent review mandatory. P2 needs a durable defect
-reference in rolling Known Defects registry Issue #4172 and disposition; P3 is informational. No second consecutive clean review is required.
+Tier 1/2 uses self-review and `Final-Review-Rounds: 0`; high risk or an explicit request requires one
+independent current-head review and `Final-Review-Rounds: 1`. Read `.codex/skills/verification-and-closure/FULL_PATH.md :: Running the local review gate 🤖`,
+`:: Severity routing` and `:: Re-triggering after a fix` for review only, not executor merge mechanics.
+P0/P1 repair and fresh independent review remain mandatory. P2 needs a durable defect reference in Known Defects registry Issue #4172
+and disposition; P3 is informational. No second consecutive clean review is required.
 
-A current-candidate independent review completed before CI may serve the final native review gate
-when the candidate, contract and relevant check configuration are unchanged. Inspect the final CI
-results; a failure invalidates affected conclusions. Do not repeat a clean review merely because
-CI finished. Executor-specific review sequencing remains owned by its full-path contract.
+An independent pre-CI review may serve the final native gate if candidate, contract and relevant check
+configuration are unchanged. Inspect final CI: failures invalidate affected conclusions; completion
+alone never requires another clean review. Executor sequencing stays with its full-path contract.
 
-After two independent change-request rounds apply
-`docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`.
+After two independent change-request rounds apply `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`.
 
 When prior review threads are implicated, retain their original IDs, disposition each finding,
 and re-read those same threads before terminal closure. Do not scan unrelated historical reviews.
@@ -116,12 +117,11 @@ and re-read those same threads before terminal closure. Do not scan unrelated hi
 
 ## Stop and recovery
 
-A failed gate stops its effect, not authorized diagnosis and repair. Follow
-`docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`. Do not waive a
-required check, unresolved protected finding, scope boundary, or operator gate to save tokens.
-For a parent acceptance decision read `docs/development/PARENT_ISSUE_CLOSURE.md`; for executor
-recovery stay in `FULL_PATH.md`. Do not invoke an independent reviewer, owner-doc re-audit, new Issue,
-or full suite merely because the previous stage finished.
+A failed gate stops its effect, not authorized diagnosis/repair. Follow
+`docs/development/GOVERNANCE_PROPORTIONALITY.md :: Delivery budgets and stop-loss`; never waive required
+checks, protected findings, scope boundaries or operator gates. Parent acceptance follows
+`docs/development/PARENT_ISSUE_CLOSURE.md`; executor recovery stays in `FULL_PATH.md`. Do not add an
+independent review, owner-doc re-audit, new Issue or full suite merely because a stage finished.
 
 ## Workflow continuation
 

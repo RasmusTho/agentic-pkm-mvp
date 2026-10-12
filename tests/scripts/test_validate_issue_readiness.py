@@ -588,6 +588,343 @@ def test_explicit_human_evidence_survives_technical_unreadiness(extra, fixture) 
     assert report.human_exception_required is True
 
 
+@pytest.mark.parametrize("hold", [
+    "Requires operator UAT.", "Waiting for live/operator acceptance.", "Needs manual acceptance.",
+    "UAT is required before closure.", "Requires UAT.", "Live acceptance is required.",
+    "A human must run the acceptance test.",
+])
+def test_generic_acceptance_hold_is_builder_repair_not_human_decision(hold: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body = body.replace("## Suggested Validation", f"## Validation / Acceptance Path\n{hold}\n\n## Suggested Validation")
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ambiguous_intent"
+    assert report.human_exception_required is False
+    assert any("qualified automated TEST proof" in item for item in report.repair_guidance)
+
+
+def test_body_only_validator_keeps_human_hold_until_receipt_reconciliation() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.readiness_classification == "not_agentable"
+    assert report.human_exception_required is True
+    assert any("action:restore-environment" in item for item in report.repair_guidance)
+    assert any("latest blocker receipt" in item for item in report.repair_guidance)
+    assert not any("Replace generic" in item for item in report.repair_guidance)
+
+
+_HUMAN_ACCEPTANCE_EXCEPTION = (
+    "\nHuman acceptance exception: personal accessibility preference.\n"
+    "Observable choice: owner selects the comfortable spoken cadence.\n"
+    "Cannot be automated because: only the owner can report their listening experience.\n"
+    "Owner: owner\n"
+    "unblocks_when: the owner records the chosen cadence on this Issue.\n"
+)
+
+
+def _with_current_exception(body: str, exception: str = _HUMAN_ACCEPTANCE_EXCEPTION) -> str:
+    return body.replace("## Acceptance Criteria", exception + "\n## Acceptance Criteria")
+
+
+def test_specific_human_acceptance_exception_preserves_human_gate() -> None:
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text())
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.readiness_classification == "not_agentable"
+    assert report.human_exception_required is True
+    assert not any("Replace generic" in item for item in report.repair_guidance)
+    body += "\n## Validation / Acceptance Path\nRequires human acceptance."
+    assert classify_issue_body(body, labels=["agent:ready"]).readiness_classification == "not_agentable"
+
+
+def test_retained_exception_history_without_a_current_hold_does_not_block_ready() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text() + _HUMAN_ACCEPTANCE_EXCEPTION
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ready_candidate"
+    assert report.human_exception_required is False
+
+
+@pytest.mark.parametrize("missing_fact", _HUMAN_ACCEPTANCE_EXCEPTION.strip().splitlines()[1:])
+def test_incomplete_human_acceptance_exception_requires_concrete_repair(missing_fact: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body = _with_current_exception(body, _HUMAN_ACCEPTANCE_EXCEPTION.replace(missing_fact, ""))
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.human_exception_required is True
+    assert report.readiness_classification == "not_agentable"
+    assert any("observable choice/observation" in item for item in report.repair_guidance)
+
+
+def test_technical_acceptance_lint_does_not_weaken_separate_authority_gate() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text() + "\nRequires an owner decision."
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.human_exception_required is True
+    assert report.readiness_classification == "not_agentable"
+    report = classify_issue_body(body, labels=["action:human-acceptance"])
+    assert report.human_exception_required is True
+    assert report.readiness_classification == "authority_risk"
+
+
+@pytest.mark.parametrize("value", ["", "<name>", "TBD", "none"])
+def test_placeholder_human_exception_fact_requires_body_repair(value: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body = _with_current_exception(body, _HUMAN_ACCEPTANCE_EXCEPTION.replace("Owner: owner", f"Owner: {value}"))
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.human_exception_required is True
+    assert report.readiness_classification == "not_agentable"
+    assert any("Issue body" in item for item in report.repair_guidance)
+
+
+def test_explicit_no_manual_acceptance_default_is_not_rejected() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += "\n## Validation / Acceptance Path\nDoes not require operator UAT."
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ready_candidate"
+    assert report.human_exception_required is False
+
+
+@pytest.mark.parametrize("line", [
+    "Automated UAT is required before closure.", "Scripted UAT is required.",
+    "Requires automated UAT in TEST.", "The checker rejects `Requires UAT` as a bare hold.",
+])
+def test_automatic_uat_and_quoted_examples_are_not_manual_holds(line: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += f"\n## Validation / Acceptance Path\n{line}"
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ready_candidate"
+    assert report.human_exception_required is False
+
+
+def test_human_need_and_automated_acceptance_do_not_create_manual_gate() -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += "\nHuman-need acceptance uses qualified automatic TEST journeys and synthetic actors."
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ready_candidate"
+    assert report.human_exception_required is False
+
+
+@pytest.mark.parametrize("hold", [
+    "Requires **operator UAT** before closure.", "Requires `operator UAT` before closure.",
+    "Requires ``operator UAT`` before closure.", "Requires ```operator UAT``` before closure.",
+    "__UAT__ is required before closure.", "A **human** must run the acceptance test.",
+    "Requires [operator UAT](https://example.test/acceptance) before closure.",
+    "Requires [operator UAT][walkthrough] before closure.",
+    "Requires <strong>operator UAT</strong> before closure.",
+])
+def test_markdown_manual_acceptance_hold_is_not_ready(hold: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += f"\n## Validation / Acceptance Path\n- {hold}"
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ambiguous_intent"
+    assert report.human_exception_required is False
+
+
+@pytest.mark.parametrize("section", [
+    "Scope", "Constraints", "Acceptance Criteria", "Validation / Acceptance Path", "Suggested Validation",
+])
+def test_current_acceptance_descendants_cannot_hide_manual_hold(section: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += f"\n## {section}\n### Required live acceptance\nRequires **operator UAT**."
+    for mode in (True, False):
+        report = classify_issue_body(body, labels=["agent:ready"], _resolve_verify_files=mode)
+        assert report.readiness_classification == "ambiguous_intent"
+        assert report.human_exception_required is False
+
+
+@pytest.mark.parametrize("prefix", ["", "- ", "- [ ] ", "1. "])
+def test_nested_current_human_choice_stays_held_without_labels(prefix: str) -> None:
+    body = _with_current_exception(
+        (FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        "### Current human acceptance\n" + _HUMAN_ACCEPTANCE_EXCEPTION.replace(
+            "Human acceptance exception:", prefix + "Human acceptance exception:"),
+    )
+    for mode in (True, False):
+        report = classify_issue_body(body, labels=["agent:ready"], _resolve_verify_files=mode)
+        assert report.readiness_classification == "not_agentable"
+        assert report.human_exception_required is True
+
+
+@pytest.mark.parametrize("completion", [
+    "- Resolution: cadence chosen and completed.", "* Status: completed.",
+    "Resolution: cadence chosen and completed.",
+    "Human acceptance exception: prior cadence decision resolved and completed.",
+    "Human acceptance exception: cadence selected; Status: completed.",
+])
+def test_completed_exception_format_cannot_supply_current_authority(completion: str) -> None:
+    exception = _HUMAN_ACCEPTANCE_EXCEPTION
+    if completion.startswith("Human acceptance exception:"):
+        exception = exception.replace("Human acceptance exception: personal accessibility preference.", completion)
+    else:
+        exception += completion + "\n"
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(), exception)
+    for mode in (True, False):
+        report = classify_issue_body(body, labels=["agent:ready"], _resolve_verify_files=mode)
+        assert report.readiness_classification == "ready_candidate"
+        assert report.human_exception_required is False
+        held = classify_issue_body(body + "\n## Validation / Acceptance Path\nRequires operator UAT.",
+                                   labels=["agent:ready"], _resolve_verify_files=mode)
+        assert held.readiness_classification == "ambiguous_intent"
+        assert held.human_exception_required is False
+    labelled = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert labelled.readiness_classification == "not_agentable"
+    assert labelled.human_exception_required is True
+
+
+@pytest.mark.parametrize("status", [
+    "- Status: pending until the cadence is chosen; not completed.",
+    "- Status: completed when the owner selects a cadence.",
+])
+def test_current_human_choice_is_not_completed_by_prospective_status(status: str) -> None:
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        _HUMAN_ACCEPTANCE_EXCEPTION + status + "\n")
+    assert classify_issue_body(body).human_exception_required is True
+    assert classify_issue_body(body).readiness_classification == "not_agentable"
+
+
+@pytest.mark.parametrize("topic", [
+    "accessibility preference for a completed audio sample.",
+    "completed audio sample accessibility preference.",
+    "resolved transcript accessibility preference.", "closed audio run accessibility preference.",
+    "done audio sample accessibility preference.", "settled audio cache accessibility preference.",
+])
+def test_completed_sample_does_not_resolve_a_current_human_choice(topic: str) -> None:
+    exception = _HUMAN_ACCEPTANCE_EXCEPTION.replace("personal accessibility preference.",
+                                                   topic).replace("Human acceptance exception:", "Current human acceptance exception:")
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(), exception)
+    for mode in (True, False):
+        report = classify_issue_body(body, labels=["agent:ready"], _resolve_verify_files=mode)
+        assert report.human_exception_required is True
+        assert report.readiness_classification == "not_agentable"
+    closed = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+                                    exception + "- Status: completed.\n")
+    assert classify_issue_body(closed).readiness_classification == "ready_candidate"
+    assert not classify_issue_body(closed).human_exception_required
+    titled = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+                                     "### " + topic + "\n" + exception)
+    assert classify_issue_body(titled).human_exception_required is True
+    assert classify_issue_body(titled).readiness_classification == "not_agentable"
+
+
+def test_conflicting_choice_status_keeps_the_current_human_condition() -> None:
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        _HUMAN_ACCEPTANCE_EXCEPTION + "- Status: unresolved.\n- Resolution: completed.\n")
+    assert classify_issue_body(body).human_exception_required is True
+    assert classify_issue_body(body).readiness_classification == "not_agentable"
+
+
+@pytest.mark.parametrize("heading", [
+    "Completed acceptance samples", "Completed audio samples", "Resolved acceptance examples",
+    "Closed choices snapshots", "Settled exceptions samples", "Completed decisions", "Resolved human acceptance",
+])
+@pytest.mark.parametrize("current_marker", [True, False])
+def test_scope_topic_cannot_erase_explicitly_unresolved_choice(heading: str, current_marker: bool) -> None:
+    exception = _HUMAN_ACCEPTANCE_EXCEPTION.replace("personal accessibility preference.",
+        "completed audio sample accessibility preference.")
+    if current_marker:
+        exception = exception.replace("Human acceptance exception:", "Current human acceptance exception:")
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        f"### {heading}\n" + exception + "- Status: unresolved.\n")
+    for mode in (True, False):
+        report = classify_issue_body(body, labels=["agent:ready"], _resolve_verify_files=mode)
+        assert report.readiness_classification == "not_agentable"
+        assert report.human_exception_required is True
+
+
+def test_closed_scope_cannot_erase_a_current_descendant_requirement() -> None:
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        "### Completed decisions\n#### Current acceptance\nRequires operator UAT.\n")
+    assert classify_issue_body(body).readiness_classification == "ambiguous_intent"
+    assert not classify_issue_body(body).human_exception_required
+
+
+@pytest.mark.parametrize("heading", ["Historical decisions", "Completed decisions", "Resolved human acceptance"])
+def test_true_history_or_closed_choice_scope_remains_context(heading: str) -> None:
+    exception = _HUMAN_ACCEPTANCE_EXCEPTION + "- Status: completed.\n"
+    if heading == "Historical decisions":
+        exception = exception.replace("Human acceptance exception:", "Current human acceptance exception:").replace(
+            "Status: completed", "Status: unresolved")
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text(),
+        f"### {heading}\n" + exception)
+    assert classify_issue_body(body).readiness_classification == "ready_candidate"
+    assert not classify_issue_body(body).human_exception_required
+
+
+@pytest.mark.parametrize("history_heading", ["Historical acceptance", "**Historical acceptance**", "`Historical acceptance`"])
+def test_historical_descendants_and_multi_tick_examples_remain_context(history_heading: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += (f"\n## Validation / Acceptance Path\n### {history_heading}\nRequires ``operator UAT``.\n"
+             "### Current automated acceptance\nThe checker rejects ``Requires operator UAT``.\n"
+             "```markdown\n## Constraints\nRequires operator UAT.\n```\n")
+    assert classify_issue_body(body).readiness_classification == "ready_candidate"
+    assert classify_issue_body(body).human_exception_required is False
+
+
+@pytest.mark.parametrize("target", [
+    "docs/TESTING.md::", "doc writeback at `docs/TESTING.md :: later`",
+    "`docs/TESTING.md::` (step 3)", "doc writeback at `docs/TESTING.md :: later` (step 3)",
+])
+def test_file_locator_never_overrides_missing_or_vague_verify_selector(target: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text().replace(
+        "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification == "missing_verify_markers"
+
+
+@pytest.mark.parametrize("history", [
+    "## Historical decisions\n" + _HUMAN_ACCEPTANCE_EXCEPTION + "Resolution: cadence chosen and completed.",
+    "## Constraints\n" + _HUMAN_ACCEPTANCE_EXCEPTION + "Resolution: cadence chosen and completed.",
+    "## Source Docs\n" + _HUMAN_ACCEPTANCE_EXCEPTION,
+])
+def test_historical_or_completed_exception_does_not_justify_current_manual_hold(history: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    body += "\n## Validation / Acceptance Path\nRequires operator UAT.\n" + history
+    report = classify_issue_body(body, labels=["agent:ready"])
+    assert report.readiness_classification == "ambiguous_intent"
+    assert report.human_exception_required is False
+    assert any("qualified automated TEST proof" in value for value in report.repair_guidance)
+
+
+def test_current_exception_cannot_exempt_another_generic_execution_gate() -> None:
+    body = _with_current_exception((FIXTURE_DIR / "valid_ready_candidate.md").read_text())
+    body += "\n## Validation / Acceptance Path\nRequires operator UAT."
+    report = classify_issue_body(body, labels=["agent:needs-human", "action:human-acceptance"])
+    assert report.readiness_classification == "not_agentable"
+    assert report.human_exception_required is True
+    assert any("unsupported generic hold" in value for value in report.repair_guidance)
+
+
+def test_retained_source_mode_preserves_content_and_separate_file_authority(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts import validate_issue_readiness as readiness
+
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text()
+    def forbidden_file_read(*_args: object) -> bool:
+        raise AssertionError("retained-source classification consulted checkout files")
+    monkeypatch.setattr(readiness, "_target_has_missing_file_path", forbidden_file_read)
+    monkeypatch.setattr(readiness, "_target_has_existing_file_path", forbidden_file_read)
+    assert classify_issue_body(body, _resolve_verify_files=False).readiness_classification == "ready_candidate"
+    held = body + "\n## Validation / Acceptance Path\nRequires **operator UAT**."
+    assert classify_issue_body(held, _resolve_verify_files=False).readiness_classification == "ambiguous_intent"
+
+
+@pytest.mark.parametrize("target", [
+    "doc writeback at `docs/development/DEV_WORKFLOW.md :: Acceptance verifiability` (step 3)",
+    "tests/architecture/test_pr_hot_path_governance.py::test_hot_path_doc_defers_escalation_and_names_direct_repair_contract",
+])
+def test_file_resolution_mode_does_not_change_authority_target_grammar(target: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text().replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications", target,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification == "ready_candidate"
+
+
+@pytest.mark.parametrize("target", ["../outside.md::criterion", "/tmp/criterion.md::criterion"])
+def test_retained_source_mode_does_not_bypass_unsafe_target_shape(target: str) -> None:
+    body = (FIXTURE_DIR / "valid_ready_candidate.md").read_text().replace(
+        "tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications", target,
+    )
+    for mode in (True, False):
+        assert classify_issue_body(body, _resolve_verify_files=mode).readiness_classification != "ready_candidate"
+
+
 def test_cli_observe_only_writes_json_and_markdown(tmp_path: Path) -> None:
     json_path = tmp_path / "readiness.json"
     markdown_path = tmp_path / "readiness.md"
