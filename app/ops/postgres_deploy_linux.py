@@ -1506,6 +1506,10 @@ class DeploymentSupervisor:
         return {'receipt': receipt.payload()}
 
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
+        if data.get('action') in {'karakeep-acquire', 'karakeep-project'}:
+            from app.ops.karakeep_runtime import dispatch
+
+            return dispatch(self.config, data, self._require_current_config)
         if isinstance(data.get('action'), str) and data['action'].startswith('karakeep-'):
             from app.ops.karakeep_deploy import KarakeepEffects, KarakeepSupervisor
 
@@ -1624,7 +1628,7 @@ def rpc(channel: str, request: dict[str, Any]) -> dict[str, Any]:
         raise PostgresDeployError()
     path = Path('/run/yggdrasil/bws-deploy') / (channel + '.sock')
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.settimeout(35)
+        connection.settimeout(170 if request.get('action') in {'karakeep-acquire', 'karakeep-project'} else 35)
         connection.connect(str(path))
         with connection.makefile('rwb') as stream:
             stream.write((json.dumps(request) + '\n').encode())
@@ -1701,6 +1705,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('action', choices=(
         'serve', 'rpc', 'guard', 'cleanup', 'token-push', 'token-push-worker',
         'token-push-status', 'token-push-inspect', 'qualify-web', 'karakeep-boot',
+        'karakeep-acquire', 'karakeep-project',
     ))
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
     parser.add_argument('operation_id', nargs='?')
@@ -1709,6 +1714,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--compose-command')
     args = parser.parse_args(argv)
     try:
+        if args.action in {'karakeep-acquire', 'karakeep-project'}:
+            if args.channel != 'test' or any((args.operation_id, args.attempt_id, args.prior_generation, args.compose_command)):
+                raise PostgresDeployError()
+            from app.ops.karakeep_runtime import remote
+
+            return remote(args.action, args.channel)
         if args.action == 'karakeep-boot':
             from app.ops.karakeep_deploy import boot
 
