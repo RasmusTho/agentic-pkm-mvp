@@ -77,6 +77,16 @@ keys. Account identity and Heimdal's `KARAKEEP_BASE_URL` remain qualified operat
 Git. Karakeep issues the account and API key after service startup; account/issuer automation is not
 implemented by this service module.
 
+For separately authorized setup/recovery, the operator may use public
+`resolve_host_secret_values(channel=<dev|test>, consumer="karakeep-account-setup", provider="bws", ...)`
+with the existing non-prod reader and an admitted check operation. It returns only that consumer's
+logical password value in memory and grants no issuer call or write. Normal BWS writes still use
+`scripts/secrets import --stdin`. Initial setup may keep the generated password in memory, obtain
+issuer success, then import it; API-key issuance/import is separate. Do not use the generic
+`host_secret_bootstrap --provider bws` consumer-launch CLI or direct SDK calls for this operator
+read; that launch remains refused outside its existing MARR exception. This is the finite setup
+consumer's operator path, not another runtime or provider-account administration grant.
+
 For DEV, prepare the two service keys, qualify the existing dev reader/host/config, then run
 `scripts/karakeep-deploy dev --revision <installed-control-checkout-SHA>` from the controller.
 For TEST, independently qualify its host, reader, identities and forwarding route, then use the
