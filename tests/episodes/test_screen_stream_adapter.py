@@ -448,6 +448,12 @@ def test_production_tick_replay_admission_survives_partial_sibling_ack(
     monkeypatch.setattr(segmenter, "read_observations_for_consumer", read_for_consumer)
     monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", advance_for_consumer)
     monkeypatch.setattr(segmenter, "_sync_new_episode_row", lambda *args, **kwargs: None)
+    projection_retries: list[str] = []
+    monkeypatch.setattr(
+        segmenter,
+        "_retry_existing_episode_projection_sync",
+        lambda *, vault_root, rel_path: projection_retries.append(rel_path),
+    )
     state = _stub_tick_io(monkeypatch)
     active_bindings, binding_writes = _install_fake_assignment_ledger(monkeypatch)
     registry = _speech_and_screen_registry(screen_first=screen_first)
@@ -485,6 +491,7 @@ def test_production_tick_replay_admission_survives_partial_sibling_ack(
     assert state["open_segment:work"] == open_before_retry
     assert active_bindings == bindings_before_retry
     assert binding_writes == binding_writes_before_retry
+    assert projection_retries == [f"episodes/{original_note_path.name}"]
     assert cursor_positions == {segmenter.CONSUMER_ID: 4, SCREEN_CONSUMER_ID: 4}
 
     # Exact identity, not timestamp overlap, controls replay admission. A new
@@ -551,6 +558,12 @@ def test_production_tick_replay_recovers_after_note_before_assignment_failure(
     monkeypatch.setattr(segmenter, "read_observations_for_consumer", read_for_consumer)
     monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", advance_for_consumer)
     monkeypatch.setattr(segmenter, "_sync_new_episode_row", lambda *args, **kwargs: None)
+    projection_retries: list[str] = []
+    monkeypatch.setattr(
+        segmenter,
+        "_retry_existing_episode_projection_sync",
+        lambda *, vault_root, rel_path: projection_retries.append(rel_path),
+    )
     state = _stub_tick_io(monkeypatch)
     active_bindings: dict[tuple[str, str], dict[str, str]] = {}
 
@@ -595,6 +608,7 @@ def test_production_tick_replay_recovers_after_note_before_assignment_failure(
         "heimdal.observations:speech-s",
         "screen:screen-a",
     }
+    assert projection_retries == [f"episodes/{first_note.name}"]
     assert cursor_positions == {segmenter.CONSUMER_ID: 4, SCREEN_CONSUMER_ID: 4}
 
 
@@ -661,3 +675,214 @@ def test_production_tick_does_not_ack_when_canonical_episode_evidence_is_invalid
 
     assert advances == []
     assert state == {}
+
+
+def test_production_tick_fails_closed_when_canonical_note_enumeration_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A partial sibling ACK cannot treat a failed canonical scan as an empty index."""
+    rows = _mixed_replay_rows()
+    cursor_positions: dict[str, int] = {}
+    fail_screen_ack_once = True
+
+    def read_for_consumer(consumer_id: str, *, limit: int | None = None) -> Sequence[ObservationRow]:
+        position = cursor_positions.get(consumer_id, 0)
+        unread = [row for row in rows if row.sequence >= position]
+        return unread[:limit] if limit is not None else unread
+
+    def advance_for_consumer(consumer_id: str, consumed_rows: list[ObservationRow]) -> None:
+        nonlocal fail_screen_ack_once
+        if consumer_id == SCREEN_CONSUMER_ID and fail_screen_ack_once:
+            fail_screen_ack_once = False
+            raise RuntimeError("simulated partial sibling cursor commit")
+        if consumed_rows:
+            cursor_positions[consumer_id] = max(row.sequence for row in consumed_rows) + 1
+
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", read_for_consumer)
+    monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", advance_for_consumer)
+    monkeypatch.setattr(segmenter, "_sync_new_episode_row", lambda *args, **kwargs: None)
+    state = _stub_tick_io(monkeypatch)
+    active_bindings, binding_writes = _install_fake_assignment_ledger(monkeypatch)
+    registry = _speech_and_screen_registry()
+
+    with pytest.raises(RuntimeError, match="partial sibling cursor"):
+        segmenter.run_segmentation_tick(
+            vault_root=tmp_path,
+            registry=registry,
+            write_guard=_healthy_guard(),
+        )
+
+    notes_dir = tmp_path / "episodes"
+    assert len(list(notes_dir.glob("ep-*.md"))) == 1
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
+    cursor_before_retry = dict(cursor_positions)
+    state_before_retry = {key: dict(value) for key, value in state.items()}
+    bindings_before_retry = {key: dict(value) for key, value in active_bindings.items()}
+    writes_before_retry = list(binding_writes)
+
+    fold_calls: list[bool] = []
+    proposal_calls: list[bool] = []
+    assignment_calls: list[bool] = []
+    state_writes: list[str] = []
+    state_deletes: list[str] = []
+    original_set_state = segmenter.engine_state.set_state
+    original_delete_state = segmenter.engine_state.delete_state
+    monkeypatch.setattr(
+        segmenter,
+        "fold_signals_into_segments",
+        lambda *args, **kwargs: fold_calls.append(True),
+    )
+    monkeypatch.setattr(
+        segmenter,
+        "_emit_proposals_with_fusion_gate",
+        lambda *args, **kwargs: proposal_calls.append(True),
+    )
+    monkeypatch.setattr(
+        segmenter,
+        "commit_assignment_diff",
+        lambda *args, **kwargs: assignment_calls.append(True),
+    )
+
+    def tracked_set_state(key: str, value: dict[str, object]) -> None:
+        state_writes.append(key)
+        original_set_state(key, value)
+
+    def tracked_delete_state(key: str) -> None:
+        state_deletes.append(key)
+        original_delete_state(key)
+
+    monkeypatch.setattr(segmenter.engine_state, "set_state", tracked_set_state)
+    monkeypatch.setattr(segmenter.engine_state, "delete_state", tracked_delete_state)
+    original_scandir = segmenter.os.scandir
+
+    def fail_canonical_scan(path: str | bytes | Path):
+        if Path(path) == notes_dir:
+            raise PermissionError("simulated canonical note directory denial")
+        return original_scandir(path)
+
+    monkeypatch.setattr(segmenter.os, "scandir", fail_canonical_scan)
+    with pytest.raises(segmenter.EpisodeReplayAdmissionError, match="could not enumerate"):
+        segmenter.run_segmentation_tick(
+            vault_root=tmp_path,
+            registry=registry,
+            write_guard=_healthy_guard(),
+        )
+
+    assert fold_calls == []
+    assert proposal_calls == []
+    assert assignment_calls == []
+    assert state_writes == []
+    assert state_deletes == []
+    assert cursor_positions == cursor_before_retry
+    assert state == state_before_retry
+    assert active_bindings == bindings_before_retry
+    assert binding_writes == writes_before_retry
+
+
+def test_production_tick_retries_projection_after_stale_open_note_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Stale-open retirement requests projection recovery for a durable canonical note."""
+    rows = [_row("screen-a", goal="goal one", sequence=1)]
+    cursor_positions: dict[str, int] = {}
+
+    def read_for_consumer(consumer_id: str, *, limit: int | None = None) -> Sequence[ObservationRow]:
+        position = cursor_positions.get(consumer_id, 0)
+        unread = [row for row in rows if row.sequence >= position]
+        return unread[:limit] if limit is not None else unread
+
+    def advance_for_consumer(consumer_id: str, consumed_rows: list[ObservationRow]) -> None:
+        if consumed_rows:
+            cursor_positions[consumer_id] = max(row.sequence for row in consumed_rows) + 1
+
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", read_for_consumer)
+    monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", advance_for_consumer)
+    monkeypatch.setattr(segmenter, "_sync_new_episode_row", lambda *args, **kwargs: None)
+    state = _stub_tick_io(monkeypatch)
+    registry = _screen_only_registry()
+
+    first = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=registry,
+        write_guard=_healthy_guard(),
+    )
+    assert first["proposed"] == []
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-a"]
+    assert cursor_positions[SCREEN_CONSUMER_ID] == 2
+
+    # B closes A. The canonical note lands, but a later assignment failure
+    # prevents replacement of the stale open state and cursor advancement.
+    rows.append(
+        _row(
+            "screen-b",
+            start="2026-07-11T08:02:00Z",
+            end="2026-07-11T08:02:30Z",
+            goal="goal two",
+            sequence=2,
+        )
+    )
+    fail_assignment_once = True
+
+    def fail_after_note_once(to_insert, to_correct, write_guard=None, vault_root=None):
+        nonlocal fail_assignment_once
+        if fail_assignment_once:
+            fail_assignment_once = False
+            raise RuntimeError("simulated failure after durable note projection failure")
+        return {"pending": len(to_insert), "corrected": len(to_correct)}
+
+    monkeypatch.setattr(segmenter, "commit_assignment_diff", fail_after_note_once)
+    with pytest.raises(RuntimeError, match="after durable note"):
+        segmenter.run_segmentation_tick(
+            vault_root=tmp_path,
+            registry=registry,
+            write_guard=_healthy_guard(),
+        )
+
+    notes_dir = tmp_path / "episodes"
+    note_paths = sorted(notes_dir.glob("ep-*.md"))
+    assert len(note_paths) == 1
+    note_fields = segmenter.parse_validated_episode_note(note_paths[0].read_text(encoding="utf-8"))
+    episode_id = note_fields["episode_id"]
+    assert note_fields["derived_from"] == ["screen:screen-a"]
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-a"]
+    assert cursor_positions[SCREEN_CONSUMER_ID] == 2
+
+    projection_rows: set[str] = set()
+    retry_requests: list[str] = []
+
+    def successful_projection_retry(*, vault_root: Path, rel_path: str) -> None:
+        retry_requests.append(rel_path)
+        projection_rows.add(Path(rel_path).stem)
+
+    monkeypatch.setattr(segmenter, "_retry_existing_episode_projection_sync", successful_projection_retry)
+    import app.episodes.closure as closure_module
+
+    closure_visibility: list[set[str]] = []
+    monkeypatch.setattr(
+        closure_module,
+        "run_closure_tick",
+        lambda **kwargs: (closure_visibility.append(set(projection_rows)) or {"closed": [], "events_emitted": 0}),
+    )
+
+    replay = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=registry,
+        write_guard=_healthy_guard(),
+    )
+    assert replay["proposed"] == []
+    assert retry_requests == [f"episodes/{note_paths[0].name}"]
+    assert episode_id in projection_rows
+    assert len(list(notes_dir.glob("ep-*.md"))) == 1
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
+    assert cursor_positions[SCREEN_CONSUMER_ID] == 3
+
+    # The retry is detached in production; after it succeeds, the next closure
+    # scan can discover the restored projection row.
+    segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=registry,
+        write_guard=_healthy_guard(),
+    )
+    assert closure_visibility[-1] == {episode_id}

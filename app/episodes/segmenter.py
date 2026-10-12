@@ -72,6 +72,7 @@ ADR-0051 commitment 2, ADR-0054 §3):
 from __future__ import annotations
 
 import logging
+import os
 import subprocess
 import sys
 import uuid
@@ -967,6 +968,7 @@ class EpisodeReplayAdmissionError(RuntimeError):
 class _CanonicalEpisodeNoteIndex:
     by_id: Mapping[str, Mapping[str, Any]]
     provenance_by_scope: frozenset[tuple[str, str]]
+    episode_ids_by_scope_provenance: Mapping[tuple[str, str], tuple[str, ...]]
     bounds_by_id: Mapping[str, EpisodeBoundsRecord]
 
 
@@ -980,18 +982,28 @@ def _read_canonical_episode_note_index(*, vault_root: Path) -> _CanonicalEpisode
     decision.
     """
     notes_dir = vault_root / EPISODE_NOTES_DIR
-    empty = _CanonicalEpisodeNoteIndex(by_id={}, provenance_by_scope=frozenset(), bounds_by_id={})
+    empty = _CanonicalEpisodeNoteIndex(
+        by_id={},
+        provenance_by_scope=frozenset(),
+        episode_ids_by_scope_provenance={},
+        bounds_by_id={},
+    )
     try:
-        if not notes_dir.exists():
-            return empty
-        if not notes_dir.is_dir():
-            raise EpisodeReplayAdmissionError(f"canonical episode notes path is not a directory: {notes_dir}")
-        paths = sorted(notes_dir.glob(f"{EPISODE_ID_PREFIX}*.md"))
+        with os.scandir(notes_dir) as entries:
+            paths = sorted(
+                notes_dir / entry.name
+                for entry in entries
+                if entry.name.startswith(EPISODE_ID_PREFIX) and entry.name.endswith(".md")
+            )
+    except FileNotFoundError:
+        # A vault without an Episode-note directory has no canonical notes yet.
+        return empty
     except OSError as exc:
         raise EpisodeReplayAdmissionError(f"could not enumerate canonical episode notes in {notes_dir}") from exc
 
     by_id: dict[str, Mapping[str, Any]] = {}
     provenance: set[tuple[str, str]] = set()
+    episode_ids_by_scope_provenance: dict[tuple[str, str], list[str]] = {}
     bounds_by_id: dict[str, EpisodeBoundsRecord] = {}
     for path in paths:
         try:
@@ -1009,7 +1021,9 @@ def _read_canonical_episode_note_index(*, vault_root: Path) -> _CanonicalEpisode
         scope = fields["scope"]
         derived_from = tuple(fields.get("derived_from") or ())
         for provenance_ref in derived_from:
-            provenance.add((scope, provenance_ref))
+            scope_provenance = (scope, provenance_ref)
+            provenance.add(scope_provenance)
+            episode_ids_by_scope_provenance.setdefault(scope_provenance, []).append(episode_id)
 
         time_fields = fields["time"]
         try:
@@ -1031,6 +1045,9 @@ def _read_canonical_episode_note_index(*, vault_root: Path) -> _CanonicalEpisode
     return _CanonicalEpisodeNoteIndex(
         by_id=by_id,
         provenance_by_scope=frozenset(provenance),
+        episode_ids_by_scope_provenance={
+            key: tuple(episode_ids) for key, episode_ids in episode_ids_by_scope_provenance.items()
+        },
         bounds_by_id=bounds_by_id,
     )
 
@@ -1487,9 +1504,15 @@ def run_segmentation_tick(
     canonical_notes = (
         _read_canonical_episode_note_index(vault_root=root)
         if signals or open_segments
-        else _CanonicalEpisodeNoteIndex(by_id={}, provenance_by_scope=frozenset(), bounds_by_id={})
+        else _CanonicalEpisodeNoteIndex(
+            by_id={},
+            provenance_by_scope=frozenset(),
+            episode_ids_by_scope_provenance={},
+            bounds_by_id={},
+        )
     )
     retired_open_scopes: set[str] = set()
+    projection_retry_episode_ids: set[str] = set()
     for scope, segment in list(open_segments.items()):
         deterministic_id = _deterministic_episode_id(_close(segment))
         note = canonical_notes.by_id.get(deterministic_id)
@@ -1504,6 +1527,22 @@ def run_segmentation_tick(
         # cursor commit succeeds below.
         del open_segments[scope]
         retired_open_scopes.add(scope)
+        projection_retry_episode_ids.add(deterministic_id)
+
+    # Replay admission can bypass _emit_proposal's existing-note convergence
+    # hook. Request the same bounded, detached projection retry for each
+    # canonical note whose exact source identity is being admitted here.
+    for signal in signals:
+        projection_retry_episode_ids.update(
+            canonical_notes.episode_ids_by_scope_provenance.get(
+                (signal.scope, signal.provenance_ref), ()
+            )
+        )
+    for episode_id in sorted(projection_retry_episode_ids):
+        _retry_existing_episode_projection_sync(
+            vault_root=root,
+            rel_path=episode_note_rel_path(episode_id),
+        )
 
     # Calendar deliberately re-polls its fixed window.  Unlike the cursor-backed
     # streams, an event that belonged to a segment deleted after closure has no
