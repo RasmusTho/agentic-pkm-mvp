@@ -516,6 +516,79 @@ the separate PG nightly policy decision or authorize production promotion.
 
 Dedicated PR workflows are path-scoped to the subsystem they validate: PanelAgent live-LLM E2E runs only for panel/promotion/LLM changes, Companion UI browser runtime only for Companion UI/API/web changes, app-image validation only for image inputs, and import-linter only when the import graph or its contract changes. Generic PR pytest excludes opt-in live/provider/browser/UAT/eval markers.
 
+### Fixed disposable Product web qualification
+
+`app.ops.postgres_deploy_linux qualify-web <dev|test> <committed-operation-uuid>` runs the
+fixed `native-web-pilots.v1` envelope separately from `postmerge-pg.v1`. It requires the exact
+committed native journal/request, admitted SHA/digest and read-only Git resource tree. It does
+not change the mandatory PG profile, deployment receipt, controller advancement or channel health.
+Missing pilot wrappers are a technical refusal, so the native envelope can be delivered before
+the Deep Review (#5958) and Daily Briefing (#5959) wrappers.
+
+The candidate runs its baked Product API and Companion UI with an operation-owned pgvector
+database, vault and synthetic configuration. The API child performs canonical vault/source
+bootstrap and fills its own memory review queue before normal startup. The fixed child
+`app.api.native_web_qualification` composes the real API queue and normal capture formatter with
+the lower-layer fixture and acknowledgement observer; `app.ops` never imports interaction routes.
+A private loopback CalDAV service supplies real REPORT responses to the selected reader.
+Fixed read-only snapshots contain
+the already-installed native Playwright 1.63.0/Chromium 1243 and the selected Piper sv-SE/Kokoro
+en-US assets; cache/audio and other mutable data stay disposable. There are no channel credentials,
+persistent channel mounts, host/Docker sockets, arbitrary commands or selectable test profiles.
+Fresh web admission is retained on unknown cleanup or an interrupted/missing result, despite the
+already-committed PG receipt. Only confirmed worker cleanup plus the same directory/owner inode,
+held reconciliation flock and matching operation permit retirement; retries use that existing
+recovery seam. Ordinary PG/Karakeep terminal-lock defaults remain unchanged.
+
+Only the two named live wrappers execute. Each consumes the private `native-web-context.v1`
+readback and calls `app.ops.native_web_runtime.before_effect(pilot, effect)` before a declared
+browser effect. Native validates the original report schemas, exact run/source/image/resource and
+fixture bindings, all original scenario proofs and required effect counts. Each retained original
+trace must be a usable Playwright archive with actual fixed UI navigation; JUnit must contain the
+complete original scenario inventory or the actual successful fixed pytest wrapper. Pytest owns
+the latter artifact when the original helper does not write JUnit itself. No replacement success
+report is generated. The original pilot reports currently admit feature PASS only on `test`.
+Daily runs before Deep in the same operation. Start/end native observations use actual UI process,
+health and baked program/assets; they do not navigate the root/workspace and trigger generation.
+The original Daily preflight must observe its current-day target absent before its first admitted
+normal API first-contact. Later first-contact, Daily navigation and Deep root requests may only
+replay that acknowledged present note without changing bytes. `scheduled_replay()` calls the
+fixed zero-write native hook in the actual API process; a missing note refuses before the normal
+scheduled producer is called. Original first_contact2/navigation4 and all13+8 outcomes remain.
+
+Native readbacks bind API process, image, resources, UI program, configuration and fixture
+identities at start/before-effect/end. A consumed hook binds a declared mutable target version;
+the actual normal request must still have those exact pre-write bytes. Only the normal guarded
+acknowledgement, original receipt and exact permitted post-write bytes advance that version.
+The original report acknowledgement must match the API observer's response hash. The original
+Daily helper receives its pre-existing relative marker and creates current-day sources before
+the native monthly decision append. Its all-vault inventory tracks the two declared Deep-owned
+notes at their acknowledged versions; every other source retains its original hash. Daily source
+degradation/restoration uses two fixed guarded writes to its own synthetic Moment, with all
+Daily-owned source hashes required again at end. Each original degrade_source1/restore_source1
+slot explicitly contains one fixed Moment CAS write and one normal same-day `regenerate_briefing`
+CAS write. The latter preserves the default health guard and adds admitted source/note version
+checks at the normal write seam, so a late internal CAS-token read cannot absorb an intervening
+edit. Both actual receipts and exact pre/post hashes are retained; the final generated note must
+match its healthy generation version. The actual observer advertises these two subcounts/paths
+before reservation, with no new effect class or wrapper-side writer. Missing named Moment
+degradation in the delivered Product reader cannot satisfy the original partial-source outcome.
+A requested write alone cannot excuse drift.
+The mandatory outer consumer independently validates complete hashes for every contact and
+source/derived transition, anchors the first Moment prehash to the admitted seed, and permits
+replays only at the healthy or degraded note versions. Matching original report/observer fields
+cannot excuse missing hashes or a foreign/incomplete healthy-to-degraded-to-restored lineage.
+These observations do not assert an idle freeze of a long-lived channel.
+
+Unavailable assets/OS libraries/selected integrations, wrong ABI/platform, missing wrappers,
+skips/xfails, incomplete scenarios, over-budget effects, unacknowledged drift, interrupted execution
+or uncertain cleanup never produce a feature PASS. Correct the named prerequisite through its
+existing owner, then retry the same admitted native operation; exact owned ID/generation readback
+precedes cleanup and a fresh disposable generation. Real uncached synthesis, WAV decoding and
+browser playback belong to the Daily wrapper. Unit/contract tests prove envelope and refusal
+behavior only. Actual post-merge all-scenario qualification remains on #2443/#3314; repository
+delivery establishes neither their acceptance nor currently healthy deployment.
+
 ### Nightly deterministic acceptance harness
 
 The deterministic Quality Wave acceptance harness belongs in `integration-nightly`, not `release-uat`.

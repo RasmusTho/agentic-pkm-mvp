@@ -565,6 +565,80 @@ activation, actual channel digests and functional acceptance on #5675. The PG PR
 after actual equivalent isolated PG execution passes in both native channels. Non-PG PR checks and
 the bounded nightly lane remain; ten-candidate measurement follows activation without gating it.
 
+### Fixed disposable Product web qualification
+
+Run the fixed native qualifier from reviewed native tooling with the existing installed interpreter:
+
+```sh
+sudo /opt/yggdrasil/bws-deploy-runtime/bin/python -m app.ops.postgres_deploy_linux \
+  qualify-web test <committed-native-operation-uuid>
+```
+
+The only alternate channel is `dev`. The caller supplies no SHA, image, command, profile, vault,
+model path or ingress override. The qualifier re-reads the current committed PG receipt and its
+exact immutable request under the existing native channel lock, then uses that admitted SHA/digest
+and exact Git resources. It starts the actual baked API/UI in a disposable network-none namespace
+sharing only its own tmpfs PostgreSQL server. API/UI/CalDAV ingress is loopback inside that namespace;
+no browser or candidate process receives a host socket or a persistent channel resource.
+
+Browser resources are finite read-only operation snapshots from the existing
+`/opt/yggdrasil/bws-deploy-runtime` package/browser inventory, including its Python 3.12 ABI,
+platform and pinned package identities. TTS snapshots copy only the selected Piper
+`sv_SE-lisa-medium` ONNX/config and Kokoro `kokoro-v1.0.int8.onnx`/`voices-v1.0.bin` from the enabled
+channel's already-governed `TTS_HOST_ROOT`. The original private env file, model/cache/log root and
+supervisor runtime are never mounted. Source ownership/hashes and snapshot hashes are checked at
+start and end; the candidate must actually launch Chromium and resolve the real local voices.
+No dependency/model installation or fallback is performed. Missing payloads, incompatible ABI/OS
+libraries or unavailable selected Product integrations are recovery facts for their existing
+owners, not evidence that a pilot passed.
+The fresh qualification retains channel admission until worker cleanup is confirmed; its older
+committed PG receipt cannot release that admission on unknown cleanup or no result. Retirement
+reuses the exact directory/owner-inode and held-flock reconciliation seam with matching operation
+and quiescence readback. Foreign replacement stays untouched; same-operation recovery owns retry.
+This changes only the fixed web caller, preserving ordinary PG/Karakeep lock-retirement defaults.
+
+The fixed API child `app.api.native_web_qualification` uses the canonical producers and normal
+guards before startup, including its own in-process memory queue. This interaction-layer
+composition supplies that queue and the existing capture formatter to the lower-layer fixture and
+observer, preserving forward-only imports. Its transient identity probe and two fixed guarded
+synthetic source faults belong only to that disposable qualification. They are not a Product controller or a new
+channel authority. A fixed hook grants one exact declared source version; the normal request must
+still match its pre-write bytes, and the actual acknowledgement/original receipt must match the
+exact permitted post-write bytes. The retained original pilot acknowledgement is bound to that
+observed response. The Daily helper creates actual current-day sources before the native monthly
+decision append, using its original relative fixture marker interface. Its all-vault inventory
+retains only the two declared Deep-owned notes at their acknowledged versions; immutable sources
+remain hash-bound and all Daily-owned sources must be restored. Unrelated drift is refused.
+The fixed serial order is Daily then Deep. Native startup/end observes the actual UI health and
+baked resources without root/workspace navigation. The first admitted normal API first-contact
+must bind current-day absence to the canonical generated note; subsequent UI/first-contact and
+fixed scheduled replay calls require its acknowledged version and write nothing. The scheduled
+hook runs the existing configured-hour producer in the same API process only after presence is
+proved. Each original source-fault slot owns exactly one fixed Moment CAS and one existing
+guarded same-day regeneration CAS, with actual receipts and measured versions. An additional
+source/note version check at the normal guard seam preserves the default guard and prevents a
+late CAS-token read from absorbing drift. Original budgets/outcomes remain; final source bytes
+and the healthy generated-note version must be restored. The observer advertises the exact
+subcounts before reservation; missing support is a refusal, not an alternate wrapper writer.
+The outer result consumer also requires complete contact/source/derived hashes, seed-anchored
+Moment restoration and the healthy/degraded/restored note lineage. Agreement between the original
+report and observer cannot supply a missing hash or admit a foreign replay version.
+The finite wrappers retain their original reports/trace/JUnit under private
+`native-web-results/` beside the existing journal, with separate web evidence. Cleanup re-reads
+exact container IDs and matching operation/generation labels and the external owner marker before
+removal. Foreign resources are preserved. Abrupt interruption can be retried only through the
+existing inode/flock channel-lock reconciliation, same committed request and exact owned cleanup;
+unknown cleanup stays unknown.
+
+This result cannot replace PG gates, a deployment receipt, current long-lived channel health or
+production eligibility. The existing native PG contract is unchanged. Live browser/audio/source
+qualification and complete #5958/#5959 scenario execution are post-merge parent evidence on
+#2443/#3314; code/test success alone makes no supported live deployment or parent all-PASS claim.
+See [CI Roles](../TESTING.md#ci-roles) for the fixed wrapper/fixture proof boundary and
+[Local-First TTS](../../companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md) for selected voice semantics.
+Historical Mac mini paths in that TTS contract do not override the current TARS native deployment
+and its governed runtime-env binding.
+
 ### PR validation is not artifact publication (current policy)
 
 The `App Image Build` GitHub workflow has two deliberately different paths:
