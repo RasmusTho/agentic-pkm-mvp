@@ -221,6 +221,7 @@ def test_unacknowledged_service_result_cannot_repeat_from_another_ui_clone(
     from fastapi.testclient import TestClient
     from tests.api._vault_test_helpers import bind_initialized_vault
     import app.panel.confirmation as confirmation
+    import app.agents.panel_agent.runtime as panel_runtime
     from app.api.app import app
     from companion_ui.workspace.serve_dev_page import make_handler
     from companion_ui.workspace.workspace_http_client import WorkspaceClientHTTPError
@@ -250,11 +251,21 @@ def test_unacknowledged_service_result_cannot_repeat_from_another_ui_clone(
         executions.append(event)
         return execute(event)
 
-    def receipt_failure(*args, **kwargs):
-        raise confirmation.PanelReceiptPersistenceError("bounded receipt sink fault")
+    append = confirmation.append_jsonl_outbox_event
+    receipt_attempts = []
+
+    def receipt_failure(path, event, **kwargs):
+        if event.event == "panel.action.logged":
+            receipt_attempts.append(event)
+            raise confirmation.PanelReceiptPersistenceError("bounded receipt sink fault")
+        return append(path, event, **kwargs)
 
     monkeypatch.setattr(confirmation, "execute_panel_intent", observed)
-    monkeypatch.setattr(confirmation, "_emit_projection_event", receipt_failure)
+    # The real graph may persist the logged receipt itself; otherwise the
+    # confirmation service emits it. Fault the same existing JSONL sink at
+    # both imported callsites, without replacing either producer or its result.
+    monkeypatch.setattr(panel_runtime, "append_jsonl_outbox_event", receipt_failure)
+    monkeypatch.setattr(confirmation, "append_jsonl_outbox_event", receipt_failure)
     statuses = []
 
     class Client:
@@ -277,6 +288,7 @@ def test_unacknowledged_service_result_cannot_repeat_from_another_ui_clone(
         thread.join()
         server.server_close()
     assert statuses == [500] and len(executions) == 1
+    assert len(receipt_attempts) == 1
     assert store.get(proposal) is not None and idem.get("key-1") is None
     assert sum(c["options"]["method"] == "POST" for c in result["calls"]) == 1
     assert all(r["disabled"] == "true" and r["html"] is None for r in result["rows"])
