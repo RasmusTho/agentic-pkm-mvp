@@ -1,0 +1,44 @@
+[Unit]
+Description=Yggdrasil host health and alert probe (%i)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+WorkingDirectory=/opt/yggdrasil/host-probe
+EnvironmentFile=/etc/yggdrasil/host-probe/%i.env
+Environment=PYTHONPATH=/opt/yggdrasil/host-probe
+Environment=CREDENTIALS_DIRECTORY=%d
+Environment=BWS_ACCESS_TOKEN_FILE=%d/bws-machine-account-token
+Environment=HOST_SECRET_RUNTIME_DIRECTORY=/run/yggdrasil-host-probe-%i
+LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current
+RuntimeDirectory=yggdrasil-host-probe-%i
+RuntimeDirectoryMode=0700
+StateDirectory=yggdrasil-host-probe-%i
+StateDirectoryMode=0700
+ExecStart=/opt/yggdrasil/bws-deploy-runtime/bin/python3 /opt/yggdrasil/host-probe/ops/host-setup/linux/host_probe_launcher.py --channel %i
+Restart=on-failure
+RestartSec=60
+TimeoutStopSec=30
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadWritePaths=/root/.local/state/yggdrasil/secret-controller
+ReadOnlyPaths=/var/lib/docker/volumes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

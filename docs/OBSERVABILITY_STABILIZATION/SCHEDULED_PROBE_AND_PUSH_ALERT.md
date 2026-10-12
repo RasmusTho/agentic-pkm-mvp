@@ -1,12 +1,12 @@
 ---
 name: Scheduled Probe And Push Alert
 description: >
-  A host launchd job that probes /readyz + /api/health required_ok and emits
+  A Linux systemd host service that probes /readyz + /api/health required_ok and emits
   one down alert on the outage transition, then one recovery signal on the
   first healthy run; relabel verify-*-channel so the name does not imply a
   live probe.
 task_id: OBSSTAB-04
-source_anchor: "ops/host-setup/mac-mini/com.yggdrasil.llm-gateway.plist :: launchd pattern ; Makefile :: verify-prod-channel"
+source_anchor: "config/systemd/yggdrasil-host-probe@.service :: TARS probe service ; Makefile :: check-prod-channel"
 parent_capability: Observability Stabilization
 prerequisites:
   - OBSSTAB-01
@@ -34,8 +34,28 @@ The target shared delivery capability is a private Discord channel managed by He
 `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`. When the external delivery work is enacted, the
 probe remains source/health-owned and Discord remains a one-way secondary warning channel. The
 webhook credential is resolved from the declared host-native secure-store boundary (macOS Keychain
-on Mac, or the approved Linux/Proxmox host-native store on that host); no value is stored in the
+on Mac, or through the declared `heimdal-external-alerts` BWS reader on TARS Linux); no value is stored in the
 repository, Builder Vault, issues, logs, or receipts.
+
+## Production host correction (2026-10-12)
+
+Prod runs on the TARS Linux host, so the supported always-on probe belongs on that host beside
+the runtime and worker heartbeat. The Mac LaunchAgent files remain legacy templates; they are not
+the production deployment target. The Linux unit is
+`config/systemd/yggdrasil-host-probe@.service`, with explicit per-channel endpoints and heartbeat
+paths rendered by `scripts/install_host_probe.py`. The installer prints a plan by default and
+requires `--apply` from the exact clean `origin/main` checkout before writing a host. A merged code
+change or a plan is not evidence that the service has been installed.
+
+The production service reads only the declared `heimdal-external-alerts` BWS binding
+`shared/discord.webhook`; its child receives a short-lived mode-0600 runtime file and never inherits
+the BWS token. Probe state and secret-controller state stay on the host. It has no Docker service
+dependency: it reads the worker heartbeat from the host volume and probes the local API endpoint.
+As checked on 2026-10-12, no Linux host-probe unit is installed on `ygg-prod`; the legacy Mac
+LaunchAgent is loaded but its last observed exit status is 1. Issue #4076 owns live activation,
+disabling the Mac job after Linux prod is active, and the TEST drill. The current BWS webhook
+binding is absent, so enabling the Linux unit before restoring that existing binding would leave
+the probe unable to start.
 
 ## Purpose
 
@@ -46,14 +66,14 @@ unbounded (risk R3).
 
 ## What This Task Does
 
-Add a host launchd plist (modelled on
-`ops/host-setup/mac-mini/com.yggdrasil.llm-gateway.plist`) that runs a small
-probe script under `ops/` on a configurable interval. The script curls
+Run a small host probe on TARS Linux through a systemd service on a configurable interval. The
+shared probe script curls
 `/readyz` and the `/api/health` `required_ok` field (not the top-level `ok`)
 and checks worker-heartbeat staleness; on the first outage transition it dispatches one push
-notification through the configured provider interface, then clears that state after the first
-healthy run so a later distinct outage can alert again. Discord is the target provider once the
-acceptance and external setup in #5506/#4076 are complete.
+notification through Discord after resolving its declared BWS binding, then clears that state
+after the first healthy run so a later distinct outage can alert again. Each alert identifies the
+source system, environment, severity, transition, UTC timestamp, correlation ID, and remediation
+URL. A sustained outage and its recovery share the same correlation ID.
 Relabel the existing Makefile targets
 `verify-prod-channel` (line 210) and `verify-test-channel` (line 204) so their
 names reflect what they actually do — run pytest channel-isolation suites — and
@@ -62,19 +82,12 @@ add a distinct `live-prod-probe` target that invokes the probe script directly.
 ## Concretely
 
 ```
-# Simulate prod down
-docker compose stop api
+# The first end-to-end outage/recovery drill runs in TEST after its BWS reader is configured.
+sudo systemctl is-active yggdrasil-host-probe@test.service
 
-# Within the outage exactly one push is delivered, then one recovery signal
-# lands on the first healthy run.
-# Verify the job is loaded:
-launchctl list | grep yggdrasil
-# → com.yggdrasil.prod-probe   0   com.yggdrasil.prod-probe
-
-# While the outage remains active the alert does not re-fire; after recovery a
-# later distinct outage can alert again:
-docker compose start api
-# (first healthy run sends recovery; later outage re-arms)
+# Verify service and recent delivery outcome without printing credential material:
+sudo systemctl status yggdrasil-host-probe@test.service --no-pager
+sudo journalctl -u yggdrasil-host-probe@test.service --since -10min --no-pager
 
 # Relabelled Makefile targets:
 make check-prod-channel   # was: verify-prod-channel — runs pytest isolation suite
@@ -92,7 +105,7 @@ changing callers.
 
 ## Acceptance Criteria
 
-- [ ] A sustained prod outage results in one down alert, and the first healthy
+- [ ] A sustained TEST outage results in one down alert, and the first healthy
       run sends one recovery signal.
   - Verify: `tests/ops/test_prod_probe_alert_state.py::test_sustained_outage_alerts_once_and_recovers`
 - [ ] A distinct outage after recovery re-alerts.
@@ -100,6 +113,12 @@ changing callers.
 - [ ] The probe evaluates `/api/health` `required_ok`, not the top-level `ok`
       field.
   - Verify: `tests/ops/test_prod_probe_alert_state.py::test_probe_reads_required_ok`
+- [ ] The host installer renders the correct endpoint and heartbeat path for each channel, and
+      the service has no dependency on Docker startup.
+  - Verify: `tests/ops/test_linux_host_probe.py`
+- [ ] BWS launch is limited to Linux TEST/PROD and the `heimdal-external-alerts` consumer; the
+      child receives only the temporary Discord binding.
+  - Verify: `tests/ops/test_host_secret_bootstrap.py::test_bws_probe_launch_is_narrowly_scoped`
 - [ ] `verify-prod-channel` and `verify-test-channel` are relabelled (e.g.
       `check-prod-channel` / `check-test-channel`) and a distinct
       `live-prod-probe` target exists in the Makefile.
@@ -117,8 +136,9 @@ grep -n "live-prod-probe\|check-prod-channel\|check-test-channel" Makefile
 # Confirm old names are gone
 grep -n "verify-prod-channel\|verify-test-channel" Makefile  # should return nothing
 
-# Load the plist (dry-run validation)
-plutil -lint ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist
+# Validate the systemd template and render the production plan without applying it.
+systemd-analyze verify config/systemd/yggdrasil-host-probe@.service
+python3 scripts/install_host_probe.py --channel prod
 ```
 
 ## Out of Scope
@@ -131,7 +151,7 @@ plutil -lint ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist
 
 ## Related Docs
 
-- `ops/host-setup/mac-mini/com.yggdrasil.llm-gateway.plist` — launchd pattern
+- `config/systemd/yggdrasil-host-probe@.service` — TARS Linux host service
 - `Makefile` lines 204-213 — targets being relabelled
 - `docs/OPERATIONS.md`
 - `docs/HEIMDAL/EXTERNAL_SYSTEMS_CONTROL_PLANE.md`

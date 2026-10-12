@@ -1720,6 +1720,128 @@ def test_bws_lookup_uses_scoped_active_identity(
     assert "fixture-machine-token" not in (controller.directory / "operations.jsonl").read_text()
 
 
+def test_interrupted_same_channel_probe_bws_check_is_reconciled_before_retry(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
+    webhook = "https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456"
+    reader, _client, controller = _bws_fixture(
+        tmp_path,
+        project="prod",
+        identity="shared/discord.webhook",
+        value=webhook,
+    )
+    with controller.admit("check", "prod") as interrupted:
+        interrupted_id = interrupted.operation_id
+
+    environment = {
+        "PROBE_ENVIRONMENT": "prod",
+        "PROBE_ALERT_CHANNEL": "discord",
+        "HOST_SECRET_RUNTIME_DIRECTORY": str(tmp_path),
+    }
+    assert host_secret_bootstrap.run_probe_with_bws(
+        channel="prod",
+        consumer="heimdal-external-alerts",
+        environment=environment,
+        bws_reader=reader,
+        controller=controller,
+        runner=lambda _command, _environment: 0,
+    ) == 0
+
+    records = [
+        json.loads(line)
+        for line in (controller.directory / "operations.jsonl").read_text().splitlines()
+    ]
+    assert records[0]["operation_id"] == interrupted_id
+    assert records[0]["stage"] == "prepared"
+    assert records[1] == {
+        "operation_id": interrupted_id,
+        "kind": "check",
+        "target": "prod",
+        "stage": "aborted",
+        "source": "read-complete",
+    }
+    assert records[2]["kind"] == "check"
+    assert records[2]["target"] == "prod"
+    assert records[2]["stage"] == "prepared"
+    assert records[2]["operation_id"] != interrupted_id
+    assert records[3]["stage"] == "committed"
+    assert records[3]["source"] == "read-complete"
+
+
+def test_standalone_bws_check_does_not_reconcile_interrupted_probe_check(tmp_path):
+    reader, client, controller = _bws_fixture(
+        tmp_path,
+        project="prod",
+        identity="shared/discord.webhook",
+        value="https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456",
+    )
+    with controller.admit("check", "prod"):
+        pass
+
+    with pytest.raises(HostSecretBootstrapError):
+        resolve_host_secret_values(
+            channel="prod",
+            consumer="heimdal-external-alerts",
+            provider="bws",
+            bws_reader=reader,
+            controller=controller,
+        )
+
+    assert client.calls == []
+    records = [
+        json.loads(line)
+        for line in (controller.directory / "operations.jsonl").read_text().splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["kind"] == "check"
+    assert records[0]["target"] == "prod"
+    assert records[0]["stage"] == "prepared"
+
+
+@pytest.mark.parametrize(
+    ("pending_kind", "pending_target"),
+    [("deploy", "prod"), ("check", "test")],
+)
+def test_interrupted_bws_check_reconciliation_preserves_other_pending_operation(
+    tmp_path, pending_kind, pending_target, monkeypatch
+):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
+    reader, client, controller = _bws_fixture(
+        tmp_path,
+        project="prod",
+        identity="shared/discord.webhook",
+        value="https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456",
+    )
+    with controller.admit(pending_kind, pending_target):
+        pass
+
+    environment = {
+        "PROBE_ENVIRONMENT": "prod",
+        "PROBE_ALERT_CHANNEL": "discord",
+        "HOST_SECRET_RUNTIME_DIRECTORY": str(tmp_path),
+    }
+    with pytest.raises(HostSecretBootstrapError):
+        host_secret_bootstrap.run_probe_with_bws(
+            channel="prod",
+            consumer="heimdal-external-alerts",
+            environment=environment,
+            bws_reader=reader,
+            controller=controller,
+            runner=lambda _command, _environment: 0,
+        )
+
+    assert client.calls == []
+    records = [
+        json.loads(line)
+        for line in (controller.directory / "operations.jsonl").read_text().splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["kind"] == pending_kind
+    assert records[0]["target"] == pending_target
+    assert records[0]["stage"] == "prepared"
+
+
 def test_bws_lookup_accepts_both_projects_and_fetches_only_selected_item(
     tmp_path, capsys, caplog
 ):
@@ -2481,3 +2603,104 @@ def test_first_use_parent_fsync_failure_prevents_admission(tmp_path, monkeypatch
     with pytest.raises(HostSecretAdmissionError):
         with HostSecretController(tmp_path / "new-state" / "controller").admit("deploy", "dev"):
             pytest.fail("no effect may precede durable directory creation")
+
+
+def test_bws_probe_launch_is_narrowly_scoped(monkeypatch, capsys):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
+    launched: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        host_secret_bootstrap,
+        "run_probe_with_bws",
+        lambda **kwargs: launched.append(kwargs) or 0,
+    )
+
+    result = host_secret_bootstrap.main(
+        [
+            "--provider",
+            "bws",
+            "--channel",
+            "prod",
+            "--consumer",
+            "heimdal-external-alerts",
+            "--run-probe",
+        ]
+    )
+
+    assert result == 0
+    assert launched == [{"channel": "prod", "consumer": "heimdal-external-alerts"}]
+    assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--provider", "bws", "--channel", "dev", "--consumer", "heimdal-external-alerts", "--run-probe"],
+        ["--provider", "bws", "--channel", "prod", "--consumer", "heimdal-api-ingress", "--run-probe"],
+        ["--provider", "keychain", "--channel", "prod", "--consumer", "heimdal-external-alerts", "--run-probe"],
+        ["--provider", "bws", "--channel", "prod", "--consumer", "heimdal-external-alerts", "--run-probe", "--", "arbitrary-command"],
+    ],
+)
+def test_bws_probe_launch_rejects_other_scopes_and_commands(arguments, monkeypatch, capsys):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
+
+    assert host_secret_bootstrap.main(arguments) == 78
+    error = capsys.readouterr().err.lower()
+    assert "host secret" in error or "bws" in error
+
+
+def test_bws_probe_child_receives_only_temporary_webhook_binding(tmp_path, monkeypatch):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
+    webhook_value = "https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456"
+    environment = {
+        "PROBE_ENVIRONMENT": "prod",
+        "PROBE_ALERT_CHANNEL": "discord",
+        "BWS_READER_PROJECT": "prod",
+        "BWS_PROJECT_ID": "9b0e8400-e29b-41d4-a716-446655440000",
+        "BWS_ORGANIZATION_ID": "9b0e8400-e29b-41d4-a716-446655440001",
+        "BWS_ACCESS_TOKEN": "ambient-token-must-not-reach-child",
+        "BWS_ACCESS_TOKEN_FILE": "/run/credentials/bws-token",
+        "CREDENTIALS_DIRECTORY": "/run/credentials",
+        "TELEGRAM_BOT_TOKEN": "unrelated-provider-token-must-not-reach-child",
+        "HOST_SECRET_RUNTIME_DIRECTORY": str(tmp_path),
+    }
+
+    class Reader:
+        def lookup(self, project: str, identity: str) -> str:
+            assert project == "prod"
+            assert identity == "shared/discord.webhook"
+            return webhook_value
+
+    launched: dict[str, object] = {}
+
+    def runner(command: list[str], child_environment: dict[str, str]) -> int:
+        launched["command"] = command
+        launched["environment"] = child_environment
+        secret_file = Path(child_environment[HOST_SECRET_RUNTIME_ENV_FILE])
+        assert stat.S_IMODE(secret_file.stat().st_mode) == 0o600
+        assert secret_file.read_text(encoding="utf-8") == f"DISCORD_WEBHOOK={webhook_value}\n"
+        return 0
+
+    assert host_secret_bootstrap.run_probe_with_bws(
+        channel="prod",
+        consumer="heimdal-external-alerts",
+        environment=environment,
+        bws_reader=Reader(),
+        controller=HostSecretController(tmp_path / "controller"),
+        runner=runner,
+    ) == 0
+
+    command = launched["command"]
+    assert isinstance(command, list)
+    assert command[-1] == "--loop"
+    assert command[1].endswith("/ops/host-setup/mac-mini/prod_probe.py")
+    child_environment = launched["environment"]
+    assert isinstance(child_environment, dict)
+    assert "BWS_ACCESS_TOKEN" not in child_environment
+    assert "BWS_ACCESS_TOKEN_FILE" not in child_environment
+    assert "CREDENTIALS_DIRECTORY" not in child_environment
+    assert "BWS_PROJECT_ID" not in child_environment
+    assert "TELEGRAM_BOT_TOKEN" not in child_environment
+    assert "DISCORD_WEBHOOK" not in child_environment
+    assert "ambient-token-must-not-reach-child" not in repr(child_environment)
+    assert "unrelated-provider-token-must-not-reach-child" not in repr(child_environment)
+    assert not Path(child_environment[HOST_SECRET_RUNTIME_ENV_FILE]).exists()
