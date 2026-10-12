@@ -70,6 +70,10 @@ def hash_json(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def _is_state_hash(value: Any) -> bool:
+    return isinstance(value, str) and re.fullmatch(r'[0-9a-f]{64}', value) is not None
+
+
 def require_reports(reports: Any, binding: dict[str, Any] | None = None) -> None:
     if not isinstance(reports, dict) or set(reports) != set(SCENARIOS):
         raise NativeWebRefusal('pilot_reports_incomplete')
@@ -195,24 +199,22 @@ def require_result(result: Any, expected: dict[str, str], manifest: dict[str, An
             raise NativeWebRefusal('original_guarded_acknowledgement_mismatch')
     daily = result.get('daily_briefing_state')
     faults = result.get('daily_source_acknowledgements')
+    daily_fixture = fixture.get('daily')
     original_daily = result['pilots']['daily-briefing']['diagnostics']
-    if (not isinstance(daily, dict) or daily.get('initial_absent') is not True
-        or daily.get('target') != fixture.get('daily', {}).get('briefing_path')
-        or daily.get('date') != fixture.get('daily', {}).get('date')
-        or re.fullmatch(r'[0-9a-f]{64}', str(daily.get('healthy_version'))) is None
+    if (not isinstance(daily, dict) or not isinstance(daily_fixture, dict)
+        or not isinstance(daily_fixture.get('source_files'), dict)
+        or not _is_state_hash(daily_fixture['source_files'].get(daily_fixture.get('moment_path')))
+        or daily.get('initial_absent') is not True
+        or daily.get('target') != daily_fixture.get('briefing_path')
+        or daily.get('date') != daily_fixture.get('date')
+        or not _is_state_hash(daily.get('healthy_version'))
         or daily.get('version') != daily['healthy_version']
+        or not isinstance(daily.get('contacts'), dict)
         or set(daily.get('contacts', {})) != {'first_contact:1', 'first_contact:2', 'navigation:1', 'navigation:2', 'navigation:3', 'navigation:4'}
         or not isinstance(faults, dict) or set(faults) != {'degrade_source', 'restore_source'}
         or original_daily.get('generation', {}).get('briefing_sha256') != daily['healthy_version']
         or original_daily.get('generation', {}).get('briefing_path') != daily['target']):
         raise NativeWebRefusal('daily_actual_producer_inventory_incomplete')
-    for key, contact in daily['contacts'].items():
-        fresh = key == 'first_contact:1'
-        if (contact.get('target') != daily['target'] or contact.get('date') != daily['date']
-            or contact.get('triggered') is not fresh or contact.get('reason') != ('first_contact' if fresh else 'already_generated_today')
-            or contact.get('pre_sha256') != (None if fresh else contact.get('post_sha256'))
-            or fresh and (contact.get('post_sha256') != daily['healthy_version'] or contact.get('degraded_sections') != [])):
-            raise NativeWebRefusal('daily_actual_generation_or_replay_unknown')
     scheduled = daily.get('scheduled_replay') or {}
     if (scheduled.get('target') != daily['target'] or scheduled.get('date') != daily['date']
         or scheduled.get('triggered') is not False or scheduled.get('reason') != 'already_generated_today'
@@ -220,22 +222,43 @@ def require_result(result: Any, expected: dict[str, str], manifest: dict[str, An
         raise NativeWebRefusal('daily_actual_scheduled_replay_missing')
     for effect, section in (('degrade_source', ['moments']), ('restore_source', [])):
         ack = faults[effect]
+        if not isinstance(ack, dict) or not isinstance(ack.get('regeneration'), dict):
+            raise NativeWebRefusal('daily_actual_source_regeneration_incomplete')
         regeneration = ack.get('regeneration') or {}
         receipt = regeneration.get('receipt') or {}
-        if (ack.get('target') != fixture['daily']['moment_path'] or ack.get('source_writes') != 1
+        if (ack.get('target') != daily_fixture['moment_path'] or ack.get('source_writes') != 1
             or ack.get('regenerations') != 1 or ack.get('receipt', {}).get('locator', {}).get('path') != ack['target']
-            or ack.get('receipt', {}).get('outcome') != 'written' or receipt.get('operation') != 'write_note'
+            or ack.get('receipt', {}).get('outcome') != 'written' or ack.get('receipt', {}).get('operation') != 'write_note'
+            or receipt.get('operation') != 'write_note'
             or receipt.get('outcome') != 'written' or receipt.get('locator', {}).get('path') != daily['target']
             or regeneration.get('target') != daily['target'] or regeneration.get('degraded_sections') != section
+            or any(not _is_state_hash(record.get(field)) for record in (ack, regeneration)
+                   for field in ('pre_sha256', 'post_sha256'))
             or original_daily.get('partial_source' if effect == 'degrade_source' else 'restoration') != ack):
             raise NativeWebRefusal('daily_actual_source_regeneration_incomplete')
     degraded, restored = (faults[key] for key in ('degrade_source', 'restore_source'))
-    if (degraded['regeneration']['pre_sha256'] != daily['healthy_version']
+    seed = daily_fixture['source_files'][daily_fixture['moment_path']]
+    healthy, partial = daily['healthy_version'], degraded['regeneration']['post_sha256']
+    if (degraded['pre_sha256'] != seed or degraded['post_sha256'] == seed or partial == healthy
+        or degraded['regeneration']['pre_sha256'] != healthy
         or restored['regeneration']['pre_sha256'] != degraded['regeneration']['post_sha256']
-        or restored['regeneration']['post_sha256'] != daily['healthy_version']
+        or restored['regeneration']['post_sha256'] != healthy
         or restored['pre_sha256'] != degraded['post_sha256']
-        or restored['post_sha256'] != fixture['daily']['source_files'][fixture['daily']['moment_path']]):
+        or restored['post_sha256'] != seed):
         raise NativeWebRefusal('daily_actual_source_restore_version_mismatch')
+    # Report/observer agreement is insufficient: every replay must name an
+    # actual admitted state in the healthy -> degraded -> restored lineage.
+    for key, contact in daily['contacts'].items():
+        fresh = key == 'first_contact:1'
+        if (not isinstance(contact, dict) or contact.get('target') != daily['target'] or contact.get('date') != daily['date']
+            or contact.get('triggered') is not fresh or contact.get('reason') != ('first_contact' if fresh else 'already_generated_today')
+            or 'pre_sha256' not in contact or not _is_state_hash(contact.get('post_sha256'))
+            or not _is_state_hash(contact.get('response_sha256'))
+            or contact.get('pre_sha256') != (None if fresh else contact['post_sha256'])
+            or contact['post_sha256'] not in {healthy, partial}
+            or contact.get('degraded_sections') != ([] if contact['post_sha256'] == healthy else ['moments'])
+            or fresh and contact['post_sha256'] != healthy):
+            raise NativeWebRefusal('daily_actual_generation_or_replay_unknown')
 
 
 def main(argv: list[str] | None = None) -> int:

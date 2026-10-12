@@ -613,6 +613,9 @@ source/note version check at the normal guard seam preserves the default guard a
 late CAS-token read from absorbing drift. Original budgets/outcomes remain; final source bytes
 and the healthy generated-note version must be restored. The observer advertises the exact
 subcounts before reservation; missing support is a refusal, not an alternate wrapper writer.
+The outer result consumer also requires complete contact/source/derived hashes, seed-anchored
+Moment restoration and the healthy/degraded/restored note lineage. Agreement between the original
+report and observer cannot supply a missing hash or admit a foreign replay version.
 The finite wrappers retain their original reports/trace/JUnit under private
 `native-web-results/` beside the existing journal, with separate web evidence. Cleanup re-reads
 exact container IDs and matching operation/generation labels and the external owner marker before

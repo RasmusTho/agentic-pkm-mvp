@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 from pathlib import Path
 import subprocess
@@ -134,12 +135,13 @@ class WebBoundary(DockerBoundary):
             contacts = {key: {'target': target, 'date': date, 'triggered': key == 'first_contact:1',
                 'reason': 'first_contact' if key == 'first_contact:1' else 'already_generated_today',
                 'pre_sha256': None if key == 'first_contact:1' else 'c' * 64, 'post_sha256': 'c' * 64,
+                'response_sha256': web.hash_json({'date': date, 'triggered': key == 'first_contact:1'}),
                 'degraded_sections': []} for key in ('first_contact:1', 'first_contact:2', 'navigation:1', 'navigation:2', 'navigation:3', 'navigation:4')}
             result['daily_briefing_state'] = {'target': target, 'date': date, 'initial_absent': True,
                 'version': 'c' * 64, 'healthy_version': 'c' * 64, 'contacts': contacts,
                 'scheduled_replay': {'target': target, 'date': date, 'triggered': False, 'reason': 'already_generated_today',
                                      'briefing_sha256': 'c' * 64, 'durable_writes': 0}}
-            faults = {effect: {'target': daily['moment_path'], 'receipt': {'outcome': 'written', 'locator': {'path': daily['moment_path']}},
+            faults = {effect: {'target': daily['moment_path'], 'receipt': {'operation': 'write_note', 'outcome': 'written', 'locator': {'path': daily['moment_path']}},
                 'source_writes': 1, 'regenerations': 1, 'pre_sha256': ('a' if effect == 'degrade_source' else 'd') * 64,
                 'post_sha256': ('d' if effect == 'degrade_source' else 'a') * 64,
                 'regeneration': {'target': target, 'receipt': {'operation': 'write_note', 'outcome': 'written', 'locator': {'path': target}},
@@ -203,6 +205,99 @@ class WebBoundary(DockerBoundary):
                 self.containers[name]['Config']['Entrypoint'] = ['/usr/bin/env']
                 self.containers[name]['Config']['Cmd'] = list(arguments[arguments.index(self.runner.image) + 1:])
         return output
+
+
+def _consumer_result():
+    """Pure schema fixture reaching the mandatory consumer, never live PASS."""
+    identity = web.web_identity('a' * 40, DIGEST, 'test', str(uuid4()))
+    identity['resource_generation'] = str(uuid4())
+    manifest = {**identity, 'app_image_id': IMAGE_ID, 'resource_tree': 'b' * 40,
+                'prerequisites': {'scope': 'pure-consumer-fixture'}, 'files': {
+                    'companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py': 'c' * 64,
+                    'tests/companion_ui/live_deep_review.py': 'd' * 64,
+                    'tests/companion_ui/live_core_flow.py': 'e' * 64}}
+    class ManifestDirectory:
+        def __truediv__(self, _path):
+            return self
+        def read_text(self):
+            return json.dumps(manifest)
+    boundary = object.__new__(WebBoundary)
+    boundary.runner = SimpleNamespace(identity=identity, name='pure-schema', directory=ManifestDirectory())
+    boundary.commands, boundary.fault = [], None
+    boundary.containers = {'pure-schema-tests': {}}
+    result = json.loads(boundary.command('start', '--attach', 'pure-schema').decode().split('=', 1)[1])
+    result['cleanup'] = 'confirmed'
+    return result, identity, manifest
+
+
+def _pair_daily_reports(result):
+    diagnostics = result['pilots']['daily-briefing']['diagnostics']
+    faults = result['daily_source_acknowledgements']
+    diagnostics['partial_source'] = copy.deepcopy(faults['degrade_source'])
+    diagnostics['restoration'] = copy.deepcopy(faults['restore_source'])
+    result['report_hash'] = web.hash_json(result['pilots'])
+
+
+@pytest.mark.parametrize('version', ['healthy', 'degraded'])
+def test_mandatory_consumer_accepts_complete_healthy_and_degraded_replays(version):
+    result, identity, manifest = _consumer_result()
+    daily = result['daily_briefing_state']
+    digest = daily['healthy_version'] if version == 'healthy' else result['daily_source_acknowledgements']['degrade_source']['regeneration']['post_sha256']
+    for key, contact in daily['contacts'].items():
+        if key != 'first_contact:1':
+            contact.update(pre_sha256=digest, post_sha256=digest,
+                           degraded_sections=[] if version == 'healthy' else ['moments'])
+    _pair_daily_reports(result)
+    web.require_result(result, identity, manifest)
+
+
+@pytest.mark.parametrize('fault,reason', [
+    ('foreign_initial_moment_hash', 'daily_actual_source_restore_version_mismatch'),
+    ('missing_replay_hashes', 'daily_actual_generation_or_replay_unknown'),
+    ('non_hash_intermediate_regeneration', 'daily_actual_source_regeneration_incomplete'),
+    ('foreign_replay_version', 'daily_actual_generation_or_replay_unknown'),
+])
+def test_mandatory_consumer_refuses_paired_daily_lineage_counterexamples(fault, reason):
+    result, identity, manifest = _consumer_result()
+    web.require_result(result, identity, manifest)
+    faults = result['daily_source_acknowledgements']
+    contact = result['daily_briefing_state']['contacts']['first_contact:2']
+    if fault == 'foreign_initial_moment_hash':
+        faults['degrade_source']['pre_sha256'] = 'f' * 64
+    elif fault == 'missing_replay_hashes':
+        contact.pop('pre_sha256')
+        contact.pop('post_sha256')
+    elif fault == 'non_hash_intermediate_regeneration':
+        faults['degrade_source']['regeneration']['post_sha256'] = 'not-a-state-hash'
+        faults['restore_source']['regeneration']['pre_sha256'] = 'not-a-state-hash'
+    else:
+        contact.update(pre_sha256='f' * 64, post_sha256='f' * 64)
+    _pair_daily_reports(result)
+    assert result['pilots']['daily-briefing']['diagnostics']['partial_source'] == faults['degrade_source']
+    assert result['pilots']['daily-briefing']['diagnostics']['restoration'] == faults['restore_source']
+    with pytest.raises(web.NativeWebRefusal, match=reason):
+        web.require_result(result, identity, manifest)
+
+
+@pytest.mark.parametrize('key', ['first_contact:1', 'first_contact:2', 'navigation:1', 'navigation:2', 'navigation:3', 'navigation:4'])
+def test_mandatory_consumer_requires_each_contact_version(key):
+    result, identity, manifest = _consumer_result()
+    result['daily_briefing_state']['contacts'][key].pop('post_sha256')
+    _pair_daily_reports(result)
+    with pytest.raises(web.NativeWebRefusal, match='daily_actual_generation_or_replay_unknown'):
+        web.require_result(result, identity, manifest)
+
+
+@pytest.mark.parametrize('effect', ['degrade_source', 'restore_source'])
+@pytest.mark.parametrize('record', ['source', 'regeneration'])
+@pytest.mark.parametrize('field', ['pre_sha256', 'post_sha256'])
+def test_mandatory_consumer_requires_each_source_and_derived_version(effect, record, field):
+    result, identity, manifest = _consumer_result()
+    ack = result['daily_source_acknowledgements'][effect]
+    (ack if record == 'source' else ack['regeneration'])[field] = None
+    _pair_daily_reports(result)
+    with pytest.raises(web.NativeWebRefusal, match='daily_actual_source_regeneration_incomplete'):
+        web.require_result(result, identity, manifest)
 
 
 def _runner(tmp_path, monkeypatch, *, wrappers=True):

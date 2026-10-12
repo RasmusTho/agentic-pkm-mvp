@@ -497,6 +497,10 @@ match its healthy generation version. The actual observer advertises these two s
 before reservation, with no new effect class or wrapper-side writer. Missing named Moment
 degradation in the delivered Product reader cannot satisfy the original partial-source outcome.
 A requested write alone cannot excuse drift.
+The mandatory outer consumer independently validates complete hashes for every contact and
+source/derived transition, anchors the first Moment prehash to the admitted seed, and permits
+replays only at the healthy or degraded note versions. Matching original report/observer fields
+cannot excuse missing hashes or a foreign/incomplete healthy-to-degraded-to-restored lineage.
 These observations do not assert an idle freeze of a long-lived channel.
 
 Unavailable assets/OS libraries/selected integrations, wrong ABI/platform, missing wrappers,
