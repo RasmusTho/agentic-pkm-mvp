@@ -233,6 +233,17 @@ The closure receipt names the outcome for each processed signal. Proposal-only m
 for human review, but once a pass is accepted for execution it must not leave claimed signals in an
 implicit "later" state.
 
+The completeness report recognizes per-signal outcomes in three explicit receipt representations:
+the structured `processed_signal_outcomes` list of `{signal_id, outcome}` mappings, which takes
+precedence when present; complete `signal_id=outcome` tokens in the receipt body; and a Markdown
+table whose two columns are exactly `signal_id` and `outcome`, in that order, followed by a separator
+row. Separator cells contain one or more hyphens and may use leading or trailing colons for column
+alignment. Table cells may have surrounding whitespace, optional outer pipes, and inline-code spans
+wrapped in matching runs of one or more backticks. Every representation uses only the six outcomes
+listed above. Unknown, malformed, partial, or conflicting claims leave the affected signal unresolved;
+arbitrary prose is not an outcome format. This syntax contract does not establish acceptance or
+classification of the unavailable historical receipt corpus.
+
 The observe-only BuilderOps helper `python -m app.builderops builderops retrospective-closure check`
 builds the terminal-outcome ledger used before recording a retrospective completion receipt. It
 reports incomplete passes by listing `unresolved_signals`; it does not mutate BuilderOps records,
