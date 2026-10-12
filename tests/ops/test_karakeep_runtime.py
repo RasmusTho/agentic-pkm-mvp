@@ -462,3 +462,36 @@ def test_admission_preserves_existing_data_and_credential_mounts(admission):
         {'Destination': '/data/tts', 'RW': True, 'Type': 'bind'},
     ])
     assert kr.admitted_runtime(admission.config, 'karakeep-project')[2] is None
+
+
+def test_native_consumer_preserves_selected_sources_override(child_runtime, admission, monkeypatch):
+    api = admission.rows['pkm-test', 'api']
+    api['Config']['Env'].append('VAULT_SOURCES_DIR_REL=ConfiguredSources')
+    forwarded = kr._environment(api)
+    assert forwarded['VAULT_SOURCES_DIR_REL'] == 'ConfiguredSources'
+    environment = {**child_runtime.environment, 'VAULT_SOURCES_DIR_REL': forwarded['VAULT_SOURCES_DIR_REL']}
+    monkeypatch.setenv('VAULT_SOURCES_DIR_REL', forwarded['VAULT_SOURCES_DIR_REL'])
+    selected = kr.child_preflight(environment, 'karakeep-project')
+    monkeypatch.setenv('STORE_BACKEND', 'memory')
+    client, _ = source()
+    kr.run_bound('karakeep-acquire', selected, {'endpoint': ENDPOINT, 'token': TOKEN}, http=client)
+    result = kr.run_bound('karakeep-project', selected, {}, write_guard=WriteGuard(lambda: {'state': 'healthy'}))
+    assert result['status'] == 'complete' and result['written'] == 1 and result['consumer_cursor'] == 1
+    assert len(list((selected.root / 'ConfiguredSources/Reading/Karakeep').glob('*item-native*.md'))) == 1
+    assert not (selected.root / 'Sources').exists()
+
+
+@pytest.mark.parametrize('unsafe', ['', '/outside', '../outside', 'Sources/../outside'])
+def test_invalid_sources_override_refuses_consumer_before_ready_without_gating_producer(
+    child_runtime, monkeypatch, capsys, unsafe
+):
+    from app.heimdal import observation_log
+    monkeypatch.setenv('VAULT_SOURCES_DIR_REL', unsafe)
+    environment = {**child_runtime.environment, 'VAULT_SOURCES_DIR_REL': unsafe}
+    monkeypatch.setattr(kr.sys, 'stdin', StringIO(json.dumps(environment) + '\n'))
+    assert kr.child('karakeep-project', 'test') == 0
+    assert json.loads(capsys.readouterr().out) == {'status': 'refused', 'action': 'karakeep-project', 'channel': 'test'}
+    monkeypatch.setenv('STORE_BACKEND', 'memory')
+    assert not child_runtime.log_reads and get_cursor('mimer.candidate_projector') == 0
+    monkeypatch.setattr(observation_log, 'read_observations_from', lambda *args, **kwargs: [])
+    assert kr.child_preflight(environment, 'karakeep-acquire').vault_binding_id == child_runtime.binding.vault_binding_id

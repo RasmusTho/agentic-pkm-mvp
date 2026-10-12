@@ -29,6 +29,7 @@ _DOCKER = ['docker', '--host', 'unix:///var/run/docker.sock']
 _ENV_KEYS = frozenset({
     'PKM_ENVIRONMENT', 'STORE_BACKEND', 'DATABASE_URL', 'DB_DSN',
     'DATABASE_PASSWORD_FILE', 'VAULT_ROOT', 'VAULT_ROOT_TEST',
+    'VAULT_SOURCES_DIR_REL',
     'INSTANCE_VAULT_REGISTRY_PATH', 'INSTANCE_OWNERSHIP_ROOT', 'VCS_REF',
     'KARAKEEP_RUNTIME_DB_ADDRESS',
 })
@@ -350,7 +351,9 @@ def child_preflight(environment: dict[str, str], action: str) -> Any:
     else:
         from app.heimdal import candidate_projection  # noqa: F401
         from app.heimdal.publish import read_observations_for_consumer
+        from app.vault.paths import get_vault_sources_dir_rel
 
+        get_vault_sources_dir_rel(binding.root)  # validate selected Sources authority before ready/work
         read_observations_for_consumer('mimer.candidate_projector', limit=1)
 
     return binding
