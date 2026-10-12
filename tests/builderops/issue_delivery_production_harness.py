@@ -1372,8 +1372,10 @@ def issue_delivery_production_harness(
             transport=transport,
             prepared_worker=prepared_worker,
             expected_isolation_profile_sha256=launcher.expected_profile_sha256,
-            **({"trusted_workflow_root": workflow_root, "trusted_executor_artifact": workflow_root / EXECUTOR_ARTIFACT,
-                "trusted_worker_isolation_artifact": workflow_root / WORKER_ISOLATION_ARTIFACT,
+            trusted_workflow_root=workflow_root or checkout,
+            trusted_executor_artifact=(workflow_root or checkout) / EXECUTOR_ARTIFACT,
+            trusted_worker_isolation_artifact=(workflow_root or checkout) / WORKER_ISOLATION_ARTIFACT,
+            **({
                 "live_binding_reader": runtime.live_binding_reader} if workflow_root is not None and runtime is not None else {}),
         )
         if runtime is not None:
