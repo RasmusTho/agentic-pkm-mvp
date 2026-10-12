@@ -206,6 +206,10 @@ def test_completeness_report_rejects_ambiguous_outcome_claims() -> None:
         "unknown-producer-outcome",
         "conflicting-producer-outcomes",
         "unrelated-target",
+        "empty-outcome",
+        "valid-after-empty",
+        "hidden-conflict",
+        "malformed-adjacent",
     ]
     receipt = _retro_receipt(
         "receipt-ambiguous",
@@ -215,6 +219,10 @@ def test_completeness_report_rejects_ambiguous_outcome_claims() -> None:
             "suffix=applied.extra conflict=applied "
             "extra-column=already_satisfied unknown-table=applied "
             "bad-separator=discarded_or_superseded other-signal=applied\n"
+            "empty-outcome= valid-after-empty=applied "
+            "unrelated= hidden-conflict=applied "
+            "hidden-conflict=discarded_or_superseded "
+            "malformed-adjacent=unknown=applied\n"
             "| signal_id | outcome |\n"
             "| --- | --- |\n"
             "| conflict | discarded_or_superseded |\n"
@@ -244,10 +252,36 @@ def test_completeness_report_rejects_ambiguous_outcome_claims() -> None:
     assert report["complete"] is False
     assert report["retrospective_receipts_missing_terminal_outcomes"][0][
         "terminal_signal_ids"
+    ] == ["valid-after-empty"]
+    assert report["retrospective_receipts_missing_terminal_outcomes"][0][
+        "missing_terminal_outcomes"
+    ] == [signal_id for signal_id in target_ids if signal_id != "valid-after-empty"]
+    assert report["retrospective_receipts_missing_terminal_outcomes"][0][
+        "terminal_outcomes"
+    ] == [{"signal_id": "valid-after-empty", "outcome": "applied"}]
+
+
+def test_empty_claim_cannot_hide_conflicting_outcomes() -> None:
+    receipt = _retro_receipt(
+        "receipt-hidden-conflict",
+        target_ids=["target"],
+        receipt_body=(
+            "unrelated= target=applied target=discarded_or_superseded"
+        ),
+    )
+
+    report = build_completeness_report(
+        records=[receipt],
+        storage={"available": True, "source": "fixture"},
+    )
+
+    assert report["complete"] is False
+    assert report["retrospective_receipts_missing_terminal_outcomes"][0][
+        "terminal_outcomes"
     ] == []
     assert report["retrospective_receipts_missing_terminal_outcomes"][0][
         "missing_terminal_outcomes"
-    ] == target_ids
+    ] == ["target"]
 
 
 def test_completeness_report_is_read_only_for_supported_formats(tmp_path: Path) -> None:
@@ -406,6 +440,9 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
                         "lrn-unknown",
                         "lrn-partial",
                         "lrn-conflict",
+                        "lrn-empty",
+                        "lrn-after-empty",
+                        "lrn-hidden-conflict",
                     ],
                     receipt_body=(
                         "| signal_id | outcome |\n"
@@ -415,6 +452,9 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
                         "lrn-pipe=issue_created | evidence: #5607\n"
                         "lrn-unknown=future_outcome lrn-partial=appl "
                         "lrn-conflict=applied lrn-conflict=discarded_or_superseded "
+                        "lrn-empty= lrn-after-empty=applied "
+                        "unrelated= lrn-hidden-conflict=applied "
+                        "lrn-hidden-conflict=discarded_or_superseded "
                         "unrelated-signal=applied"
                     ),
                 ),
@@ -447,11 +487,14 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
         {"signal_id": "lrn-table", "outcome": "already_satisfied"},
         {"signal_id": "lrn-short-separator", "outcome": "issue_created"},
         {"signal_id": "lrn-pipe", "outcome": "issue_created"},
+        {"signal_id": "lrn-after-empty", "outcome": "applied"},
     ]
     assert receipt["missing_terminal_outcomes"] == [
         "lrn-unknown",
         "lrn-partial",
         "lrn-conflict",
+        "lrn-empty",
+        "lrn-hidden-conflict",
     ]
     assert records_file.read_bytes() == fixture_bytes
 

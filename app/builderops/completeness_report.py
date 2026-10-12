@@ -18,8 +18,8 @@ RETROSPECTIVE_EVENT_TYPE = "learning_retrospective"
 LEARNING_LOG_ENTRY_RE = re.compile(r"^##\s+\d{4}-\d{2}-\d{2}\s+.+$", re.MULTILINE)
 RETRO_MARKER_RE = re.compile(r"^--- retro \d{4}-\d{2}-\d{2}: applied \d+/\d+ proposals ---$", re.MULTILINE)
 SIGNAL_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]+$")
-SIGNAL_OUTCOME_CLAIM_RE = re.compile(
-    r"(?<![A-Za-z0-9_.:-])(?P<signal_id>[A-Za-z0-9_.:-]+)\s*=\s*(?P<outcome>[^\s,;|]*)"
+SIGNAL_OUTCOME_CLAIM_START_RE = re.compile(
+    r"(?<![A-Za-z0-9_.:=-])(?P<signal_id>[A-Za-z0-9_.:-]+)\s*="
 )
 MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r":?-+:?")
 PATTERN_ROUTING_RECEIPT_PREFIX = "Repeated-pattern routing observe-only report:"
@@ -196,13 +196,34 @@ def _terminal_outcomes_from_receipt(receipt: Mapping[str, Any]) -> dict[str, str
     body_claims: dict[str, set[str | None]] = {}
     lines = body.splitlines()
     for line in lines:
-        for match in SIGNAL_OUTCOME_CLAIM_RE.finditer(_outcome_token_text(line)):
+        token_text = _outcome_token_text(line)
+        for match in SIGNAL_OUTCOME_CLAIM_START_RE.finditer(token_text):
             signal_id = match.group("signal_id")
-            outcome = _recognized_outcome_token(match.group("outcome"))
+            outcome = _outcome_after_claim(token_text, match.end())
             body_claims.setdefault(signal_id, set()).add(outcome)
 
     _add_markdown_table_outcome_claims(lines, body_claims)
     return _unambiguous_terminal_outcomes(body_claims)
+
+
+def _outcome_after_claim(line: str, value_start: int) -> str | None:
+    """Read one outcome value without consuming the next explicit claim."""
+
+    while value_start < len(line) and line[value_start].isspace():
+        value_start += 1
+    if value_start == len(line) or line[value_start] in ",;|":
+        return None
+    if SIGNAL_OUTCOME_CLAIM_START_RE.match(line, value_start):
+        return None
+
+    value_end = value_start
+    while (
+        value_end < len(line)
+        and not line[value_end].isspace()
+        and line[value_end] not in ",;|"
+    ):
+        value_end += 1
+    return _recognized_outcome_token(line[value_start:value_end])
 
 
 def _recognized_outcome_token(value: str) -> str | None:
