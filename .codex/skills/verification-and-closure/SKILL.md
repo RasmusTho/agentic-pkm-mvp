@@ -71,7 +71,7 @@ Apply `.codex/skills/_shared/BRANCH_TRUTH_GATE.md :: Procedure` before publicati
 Tier 1/2 uses self-review and `Final-Review-Rounds: 0`; high risk or an explicit request requires one
 independent current-head review and `Final-Review-Rounds: 1`. Read `.codex/skills/verification-and-closure/FULL_PATH.md :: Running the local review gate 🤖`,
 `:: Severity routing` and `:: Re-triggering after a fix` for review only, not executor merge mechanics.
-P0/P1 repair and fresh independent review remain mandatory. P2 needs a durable #4172 defect reference
+P0/P1 repair and fresh independent review remain mandatory. P2 needs a durable defect reference in Known Defects registry Issue #4172
 and disposition; P3 is informational. No second consecutive clean review is required.
 
 An independent pre-CI review may serve the final native gate if candidate, contract and relevant check
