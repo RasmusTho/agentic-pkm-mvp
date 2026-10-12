@@ -15,9 +15,13 @@ def test_tars_owner_contract_matches_policy_version() -> None:
     assert f"`{POLICY_VERSION}`" in owner_contract
     assert "VM 102" in owner_contract
     assert "24 hours" in owner_contract
+    assert "requires two non-empty distinct engine identities" in normalized_contract
+    assert "refuses recognized credential-bearing evidence" in normalized_contract
+    assert "does not claim universal raw-secret inference" in normalized_contract
+    assert "Issue #5072" not in owner_contract
     assert "recognized secret-key and secret-value patterns" in normalized_contract
-    assert "does not establish that a separate Product engine was supplied or valid" in normalized_contract
-    assert owner_contract.count("Issue #5072") == 2
+    assert "including recognized opaque credential patterns" in normalized_contract
+    assert "`live_qualified` remains `false`" in normalized_contract
     assert "governed live-operations receipt" in normalized_contract
     assert "GPU passthrough" in owner_contract
     assert "test Tailscale" in owner_contract
