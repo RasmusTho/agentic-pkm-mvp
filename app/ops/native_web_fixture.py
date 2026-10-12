@@ -139,8 +139,10 @@ def prepare_daily_sources(fixture: dict[str, Any], resource_version: str) -> dic
         json.dump(admission, stream, sort_keys=True)
     # The original helper's previous-day monthly log must be absent. It runs
     # first at the actual fixture day; native's own normal append follows.
+    from app.briefing.config import BRIEFING_TIMEZONE
+    for_date = datetime.now(ZoneInfo(BRIEFING_TIMEZONE)).date()
     result = _daily_helper().prepare_sources(vault_context=context,
-                 for_date=datetime.now(ZoneInfo('Europe/Stockholm')).date(),
+                 for_date=for_date,
                  run_id=fixture['resource_generation'], marker_path=marker_relative)
     now = datetime.now(UTC)
     shard = decisions_receipts_dir(root) / ('decisions-' + now.strftime('%Y%m') + '.jsonl')
@@ -155,6 +157,8 @@ def prepare_daily_sources(fixture: dict[str, Any], resource_version: str) -> dic
     # every other original helper inventory entry stays byte-exact.
     result['source_files'][shard.relative_to(root).as_posix()] = hashlib.sha256(current).hexdigest()
     fixture['native_seed_receipt'] = receipt
+    from app.briefing.compose import briefing_note_path
+    result.update(date=for_date.isoformat(), briefing_path=briefing_note_path(vault_context=context, for_date=for_date).relative_to(root).as_posix())
     return result
 
 

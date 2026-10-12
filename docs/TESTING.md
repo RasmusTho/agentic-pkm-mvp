@@ -466,6 +466,13 @@ trace must be a usable Playwright archive with actual fixed UI navigation; JUnit
 complete original scenario inventory or the actual successful fixed pytest wrapper. Pytest owns
 the latter artifact when the original helper does not write JUnit itself. No replacement success
 report is generated. The original pilot reports currently admit feature PASS only on `test`.
+Daily runs before Deep in the same operation. Start/end native observations use actual UI process,
+health and baked program/assets; they do not navigate the root/workspace and trigger generation.
+The original Daily preflight must observe its current-day target absent before its first admitted
+normal API first-contact. Later first-contact, Daily navigation and Deep root requests may only
+replay that acknowledged present note without changing bytes. `scheduled_replay()` calls the
+fixed zero-write native hook in the actual API process; a missing note refuses before the normal
+scheduled producer is called. Original first_contact2/navigation4 and all13+8 outcomes remain.
 
 Native readbacks bind API process, image, resources, UI program, configuration and fixture
 identities at start/before-effect/end. A consumed hook binds a declared mutable target version;
@@ -476,7 +483,15 @@ Daily helper receives its pre-existing relative marker and creates current-day s
 the native monthly decision append. Its all-vault inventory tracks the two declared Deep-owned
 notes at their acknowledged versions; every other source retains its original hash. Daily source
 degradation/restoration uses two fixed guarded writes to its own synthetic Moment, with all
-Daily-owned source hashes required again at end. A requested write alone cannot excuse drift.
+Daily-owned source hashes required again at end. Each original degrade_source1/restore_source1
+slot explicitly contains one fixed Moment CAS write and one normal same-day `regenerate_briefing`
+CAS write. The latter preserves the default health guard and adds admitted source/note version
+checks at the normal write seam, so a late internal CAS-token read cannot absorb an intervening
+edit. Both actual receipts and exact pre/post hashes are retained; the final generated note must
+match its healthy generation version. The actual observer advertises these two subcounts/paths
+before reservation, with no new effect class or wrapper-side writer. Missing named Moment
+degradation in the delivered Product reader cannot satisfy the original partial-source outcome.
+A requested write alone cannot excuse drift.
 These observations do not assert an idle freeze of a long-lived channel.
 
 Unavailable assets/OS libraries/selected integrations, wrong ABI/platform, missing wrappers,

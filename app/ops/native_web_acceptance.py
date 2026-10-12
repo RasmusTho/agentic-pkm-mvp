@@ -19,9 +19,13 @@ from app.ops import pg_acceptance
 WEB_PROFILE = 'native-web-pilots.v1'
 WEB_DEADLINE = 1800
 WRAPPERS = (
-    'tests/companion_ui/test_companion_ui_live_deep_review.py::test_deep_review_live_acceptance',
     'tests/companion_ui/test_companion_ui_live_daily_briefing.py::test_daily_briefing_live_acceptance',
+    'tests/companion_ui/test_companion_ui_live_deep_review.py::test_deep_review_live_acceptance',
 )
+PILOT_ORDER = ('daily-briefing', 'deep-review')
+WRAPPER_FOR_PILOT = dict(zip(PILOT_ORDER, WRAPPERS, strict=True))
+DAILY_SOURCE_SUBEFFECTS: dict[str, Any] = {'source_writes_per_effect': 1, 'regenerations_per_effect': 1,
+                         'effects': ['degrade_source', 'restore_source']}
 SCENARIOS = {
     'deep-review': ('native_admission', 'a1_overlay_selection_continuity', 'a1_runtime_resume_position',
                     'b4_all_overlay_focus_escape_return', 'populated_vault_list_and_inspector',
@@ -44,7 +48,8 @@ API_URL = 'http://127.0.0.1:8000'
 UI_URL = 'http://127.0.0.1:8090'
 CALDAV_URL = 'http://127.0.0.1:8870'
 WEB_SELECTION_HASH = hashlib.sha256(json.dumps(
-    [WEB_PROFILE, WRAPPERS, SCENARIOS, EFFECT_LIMITS, WEB_DEADLINE, API_URL, UI_URL, CALDAV_URL],
+    [WEB_PROFILE, WRAPPERS, PILOT_ORDER, DAILY_SOURCE_SUBEFFECTS, SCENARIOS, EFFECT_LIMITS,
+     WEB_DEADLINE, API_URL, UI_URL, CALDAV_URL],
     separators=(',', ':'),
 ).encode()).hexdigest()
 
@@ -188,6 +193,49 @@ def require_result(result: Any, expected: dict[str, str], manifest: dict[str, An
             or re.fullmatch(r'[0-9a-f]{64}', str(ack.get('post_sha256'))) is None
             or ack.get('response_sha256') != hash_json(original[effect])):
             raise NativeWebRefusal('original_guarded_acknowledgement_mismatch')
+    daily = result.get('daily_briefing_state')
+    faults = result.get('daily_source_acknowledgements')
+    original_daily = result['pilots']['daily-briefing']['diagnostics']
+    if (not isinstance(daily, dict) or daily.get('initial_absent') is not True
+        or daily.get('target') != fixture.get('daily', {}).get('briefing_path')
+        or daily.get('date') != fixture.get('daily', {}).get('date')
+        or re.fullmatch(r'[0-9a-f]{64}', str(daily.get('healthy_version'))) is None
+        or daily.get('version') != daily['healthy_version']
+        or set(daily.get('contacts', {})) != {'first_contact:1', 'first_contact:2', 'navigation:1', 'navigation:2', 'navigation:3', 'navigation:4'}
+        or not isinstance(faults, dict) or set(faults) != {'degrade_source', 'restore_source'}
+        or original_daily.get('generation', {}).get('briefing_sha256') != daily['healthy_version']
+        or original_daily.get('generation', {}).get('briefing_path') != daily['target']):
+        raise NativeWebRefusal('daily_actual_producer_inventory_incomplete')
+    for key, contact in daily['contacts'].items():
+        fresh = key == 'first_contact:1'
+        if (contact.get('target') != daily['target'] or contact.get('date') != daily['date']
+            or contact.get('triggered') is not fresh or contact.get('reason') != ('first_contact' if fresh else 'already_generated_today')
+            or contact.get('pre_sha256') != (None if fresh else contact.get('post_sha256'))
+            or fresh and (contact.get('post_sha256') != daily['healthy_version'] or contact.get('degraded_sections') != [])):
+            raise NativeWebRefusal('daily_actual_generation_or_replay_unknown')
+    scheduled = daily.get('scheduled_replay') or {}
+    if (scheduled.get('target') != daily['target'] or scheduled.get('date') != daily['date']
+        or scheduled.get('triggered') is not False or scheduled.get('reason') != 'already_generated_today'
+        or scheduled.get('durable_writes') != 0 or scheduled.get('briefing_sha256') != daily['healthy_version']):
+        raise NativeWebRefusal('daily_actual_scheduled_replay_missing')
+    for effect, section in (('degrade_source', ['moments']), ('restore_source', [])):
+        ack = faults[effect]
+        regeneration = ack.get('regeneration') or {}
+        receipt = regeneration.get('receipt') or {}
+        if (ack.get('target') != fixture['daily']['moment_path'] or ack.get('source_writes') != 1
+            or ack.get('regenerations') != 1 or ack.get('receipt', {}).get('locator', {}).get('path') != ack['target']
+            or ack.get('receipt', {}).get('outcome') != 'written' or receipt.get('operation') != 'write_note'
+            or receipt.get('outcome') != 'written' or receipt.get('locator', {}).get('path') != daily['target']
+            or regeneration.get('target') != daily['target'] or regeneration.get('degraded_sections') != section
+            or original_daily.get('partial_source' if effect == 'degrade_source' else 'restoration') != ack):
+            raise NativeWebRefusal('daily_actual_source_regeneration_incomplete')
+    degraded, restored = (faults[key] for key in ('degrade_source', 'restore_source'))
+    if (degraded['regeneration']['pre_sha256'] != daily['healthy_version']
+        or restored['regeneration']['pre_sha256'] != degraded['regeneration']['post_sha256']
+        or restored['regeneration']['post_sha256'] != daily['healthy_version']
+        or restored['pre_sha256'] != degraded['post_sha256']
+        or restored['post_sha256'] != fixture['daily']['source_files'][fixture['daily']['moment_path']]):
+        raise NativeWebRefusal('daily_actual_source_restore_version_mismatch')
 
 
 def main(argv: list[str] | None = None) -> int:

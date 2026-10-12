@@ -602,6 +602,17 @@ observed response. The Daily helper creates actual current-day sources before th
 decision append, using its original relative fixture marker interface. Its all-vault inventory
 retains only the two declared Deep-owned notes at their acknowledged versions; immutable sources
 remain hash-bound and all Daily-owned sources must be restored. Unrelated drift is refused.
+The fixed serial order is Daily then Deep. Native startup/end observes the actual UI health and
+baked resources without root/workspace navigation. The first admitted normal API first-contact
+must bind current-day absence to the canonical generated note; subsequent UI/first-contact and
+fixed scheduled replay calls require its acknowledged version and write nothing. The scheduled
+hook runs the existing configured-hour producer in the same API process only after presence is
+proved. Each original source-fault slot owns exactly one fixed Moment CAS and one existing
+guarded same-day regeneration CAS, with actual receipts and measured versions. An additional
+source/note version check at the normal guard seam preserves the default guard and prevents a
+late CAS-token read from absorbing drift. Original budgets/outcomes remain; final source bytes
+and the healthy generated-note version must be restored. The observer advertises the exact
+subcounts before reservation; missing support is a refusal, not an alternate wrapper writer.
 The finite wrappers retain their original reports/trace/JUnit under private
 `native-web-results/` beside the existing journal, with separate web evidence. Cleanup re-reads
 exact container IDs and matching operation/generation labels and the external owner marker before

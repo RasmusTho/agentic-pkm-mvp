@@ -21,11 +21,12 @@ from urllib.request import urlopen
 from xml.sax.saxutils import escape
 
 from app.ops.native_web_acceptance import (
-    API_URL, CALDAV_URL, CONTEXT_PATH, EFFECT_LIMITS, NativeWebRefusal, REPORT_DIRECTORY,
+    API_URL, CALDAV_URL, CONTEXT_PATH, DAILY_SOURCE_SUBEFFECTS, EFFECT_LIMITS, NativeWebRefusal, PILOT_ORDER, REPORT_DIRECTORY,
     RequiredWebResults, UI_URL, WRAPPERS, hash_json, require_reports, verify_resources,
 )
 from app.ops.native_web_fixture import SCOPE_ID, bootstrap_fixture, fixture_readback, prepare_daily_sources
 from app.ops.native_web_reports import pilot_manifest, report_binding
+from app.ops.native_web_daily import DailyBriefingState
 
 
 class AcknowledgedFixtureState:
@@ -176,11 +177,13 @@ class AcknowledgedFixtureState:
 class DailySourceFault:
     """Two fixed, guarded synthetic-fixture writes; no arbitrary target/input."""
     def __init__(self, vault: Path, daily: dict[str, Any], effects: dict[str, dict[str, int]],
-                 deep: AcknowledgedFixtureState | None = None) -> None:
+                 deep: AcknowledgedFixtureState | None = None, briefing: DailyBriefingState | None = None) -> None:
         self.vault, self.daily, self.effects = vault, daily, effects
         self.acknowledgements: dict[str, Any] = {}
         self.versions = dict(daily['source_files'])
         self.deep = deep
+        self.briefing = briefing or DailyBriefingState(vault, effects)
+        self.grants: dict[str, dict[str, Any]] = {}
         self.deep_paths = set(deep.versions) if deep is not None else set()
         self.marker = daily.get('fixture_marker')
         if self.marker is not None or deep is not None:
@@ -195,7 +198,7 @@ class DailySourceFault:
             raise NativeWebRefusal('daily_fixture_source_target_unknown')
         self.path = path.as_posix()
 
-    def require_current(self) -> None:
+    def require_sources(self) -> None:
         if self.marker is not None:
             marker = self.vault / self.marker
             if (marker.is_symlink() or not marker.is_file()
@@ -207,11 +210,28 @@ class DailySourceFault:
                 or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected):
                 raise NativeWebRefusal('daily_fixture_source_drift')
 
+    def require_current(self) -> None:
+        self.require_sources()
+        self.briefing.require_current()
+
+    def transition(self) -> dict[str, Any]:
+        return {'moment_path': self.path, 'briefing_path': self.briefing.path, **DAILY_SOURCE_SUBEFFECTS}
+
+    def grant(self, effect: str) -> None:
+        if effect not in DAILY_SOURCE_SUBEFFECTS['effects']:
+            return
+        self.require_current()
+        self.briefing.require_current(present=True)
+        if effect in self.grants or effect in self.acknowledgements:
+            raise NativeWebRefusal('daily_source_grant_replayed')
+        self.grants[effect] = {'moment_sha256': self.versions[self.path], 'briefing_sha256': self.briefing.version}
+
     def expected_versions(self) -> dict[str, str]:
         return {**self.versions, **(self.deep.versions if self.deep is not None else {})}
 
     def require_restored(self) -> None:
         self.require_current()
+        self.briefing.require_restored()
         if any(self.versions[name] != expected for name, expected in self.daily['source_files'].items()
                if name not in self.deep_paths):
             raise NativeWebRefusal('daily_fixture_restore_incomplete')
@@ -225,14 +245,25 @@ class DailySourceFault:
         if restore and 'degrade_source' not in self.acknowledgements:
             raise NativeWebRefusal('daily_source_restore_without_owned_fault')
         self.require_current()
+        grant = self.grants.get(effect)
+        if grant != {'moment_sha256': self.versions[self.path], 'briefing_sha256': self.briefing.version}:
+            raise NativeWebRefusal('daily_source_request_prestate_drift')
         content = self.daily['moment_full_text'] if restore else '---\ninvalid: [\n---\nSynthetic unavailable source.\n'
         receipt = write_note_relative(self.path, content, vault_root=self.vault,
                                       expected_version=self.versions[self.path], writer_identity='synthetic.native-web')
         if receipt.outcome != 'written' or receipt.locator.path != self.path:
             raise NativeWebRefusal('daily_source_fault_not_acknowledged')
         digest = hashlib.sha256((self.vault / self.path).read_bytes()).hexdigest()
+        if digest != hashlib.sha256(content.encode()).hexdigest():
+            raise NativeWebRefusal('daily_source_write_poststate_drift')
         self.versions[self.path] = digest
-        self.acknowledgements[effect] = {'target': self.path, 'receipt': asdict(receipt), 'post_sha256': digest}
+        # Retain the real first subeffect even if the normal regeneration
+        # refuses; an incomplete transition can never satisfy acceptance.
+        self.acknowledgements[effect] = {'target': self.path, 'receipt': asdict(receipt),
+            'pre_sha256': grant['moment_sha256'], 'post_sha256': digest, 'source_writes': 1, 'regenerations': 0}
+        self.require_sources()
+        regeneration = self.briefing.regenerate(self.require_sources)
+        self.acknowledgements[effect].update(regeneration=regeneration, regenerations=1)
         return self.acknowledgements[effect]
 
 
@@ -278,6 +309,17 @@ def before_effect(pilot: str, effect: str) -> None:
         raise NativeWebRefusal('before_effect_identity_drift')
 
 
+def scheduled_replay() -> dict[str, Any]:
+    """Fixed zero-write scheduled producer in the actual API process."""
+    from urllib.request import Request
+    request = Request(API_URL + '/__native_web_fixture/scheduled-replay', data=b'', method='POST')
+    with urlopen(request, timeout=10) as response:
+        result = json.loads(response.read(1024 * 1024))
+    if not isinstance(result, dict):
+        raise NativeWebRefusal('daily_scheduled_result_unknown')
+    return result
+
+
 def _api_app(manifest: dict[str, Any]) -> Any:
     # Source initialization and queue production occur here, in the process
     # which will actually serve app.main:app, before its normal lifespan.
@@ -291,22 +333,31 @@ def _api_app(manifest: dict[str, Any]) -> Any:
     baseline.pop('mutable_readback')
     effects = {pilot: dict.fromkeys(limits, 0) for pilot, limits in EFFECT_LIMITS.items()}
     acknowledged = AcknowledgedFixtureState(vault, fixture, effects)
-    daily_fault = DailySourceFault(vault, fixture['daily'], effects, acknowledged)
+    daily_briefing = DailyBriefingState(vault, effects)
+    daily_fault = DailySourceFault(vault, fixture['daily'], effects, acknowledged, daily_briefing)
 
     @app.middleware('http')
     async def observe_guarded_acknowledgement(request: Any, call_next: Any) -> Any:
         admitted = None
+        daily_admitted = None
+        if request.method == 'POST' and request.url.path == '/api/companion/briefing/first-contact':
+            daily_fault.require_current()
+            daily_admitted = daily_briefing.begin_contact(await request.json())
         if request.method == 'POST' and request.url.path in {'/api/panel/confirm', '/api/companion/capture'}:
             admitted = acknowledged.begin_request(request.url.path, await request.json())
         response = await call_next(request)
-        if request.method != 'POST' or request.url.path not in {'/api/panel/confirm', '/api/companion/capture'} or response.status_code != 200:
+        if admitted is None and daily_admitted is None or response.status_code != 200:
             return response
         from starlette.responses import Response
         chunks = [chunk async for chunk in response.body_iterator]
         raw = b''.join(chunks)
         if len(raw) > 1024 * 1024:
             raise NativeWebRefusal('normal_acknowledgement_over_budget')
-        acknowledged.observe(request.url.path, json.loads(raw), admitted)
+        if daily_admitted is not None:
+            daily_fault.require_sources()
+            daily_briefing.observe_contact(json.loads(raw), daily_admitted)
+        else:
+            acknowledged.observe(request.url.path, json.loads(raw), admitted)
         # Forward the exact Product bytes/status/headers/background unchanged;
         # this observer neither creates a receipt nor fabricates an ack.
         return Response(raw, status_code=response.status_code, headers=dict(response.headers), background=response.background)
@@ -351,9 +402,18 @@ def _api_app(manifest: dict[str, Any]) -> Any:
             effects[pilot][effect] += 1
             if pilot == 'deep-review':
                 acknowledged.grant(effect)
+            else:
+                daily_briefing.grant(effect)
+                daily_fault.grant(effect)
         return {'identity': observed, 'effects': effects, 'acknowledgements': acknowledged.acknowledgements,
                 'mutable_versions': acknowledged.versions, 'daily_source_versions': daily_fault.expected_versions(),
-                'daily_source_acknowledgements': daily_fault.acknowledgements}
+                'daily_source_acknowledgements': daily_fault.acknowledgements,
+                'daily_source_transition': daily_fault.transition(), 'daily_briefing_state': daily_briefing.snapshot()}
+
+    @app.post('/__native_web_fixture/scheduled-replay', include_in_schema=False)
+    def fixed_scheduled_replay() -> dict[str, Any]:
+        daily_fault.require_current()
+        return daily_briefing.scheduled_replay()
 
     @app.post('/__native_web_fixture/degrade-source', include_in_schema=False)
     def degrade_source() -> dict[str, Any]:
@@ -448,13 +508,14 @@ def _observations(manifest: dict[str, Any], api: subprocess.Popen[bytes], ui: su
     version = _get_json(API_URL + '/version')
     if version.get('git_sha') != manifest['source_sha']:
         raise NativeWebRefusal('actual_server_version_mismatch')
-    with urlopen(UI_URL, timeout=5) as response:
-        html = response.read(8 * 1024 * 1024).decode()
-    scripts = re.findall(r'<script\b[^>]*>(.*?)</script>', html, re.DOTALL)
-    if not scripts:
+    # A root/workspace GET invokes normal first-contact. Before Daily's fresh
+    # proof, only the actual non-generating health route may be observed.
+    health = _get_json(UI_URL + '/healthz')
+    if health != {'ok': True, 'service': 'companion-ui'}:
         raise NativeWebRefusal('actual_ui_assets_unavailable')
-    # The served executable scripts, not substituted cards, bind the UI asset
-    # identity; fixture state is read independently from the real API process.
+    # Native-owned process/health and exact baked program/resources are safe
+    # before first contact. Actual root/scripts are served by admitted pilot
+    # navigation, which the original trace and proof also require.
     program = 'companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py'
     if program not in manifest['files']:
         raise NativeWebRefusal('actual_ui_program_identity_unknown')
@@ -508,7 +569,7 @@ def qualify(manifest: dict[str, Any]) -> dict[str, Any]:
             path = Path('/scratch') / (pilot + '-manifest.json')
             _private_json(path, pilot_manifest(pilot, binding))
             os.environ[variable] = str(path)
-        for pilot, wrapper in zip(EFFECT_LIMITS, WRAPPERS, strict=True):
+        for pilot, wrapper in zip(PILOT_ORDER, WRAPPERS, strict=True):
             if pilot == 'daily-briefing':
                 probe = _get_json(API_URL + '/__native_web_identity')
                 # Original all-vault inventory at Daily's actual start: only
@@ -539,13 +600,18 @@ def qualify(manifest: dict[str, Any]) -> dict[str, Any]:
                for pilot in reports):
             raise NativeWebRefusal('before_effect_inventory_incomplete')
         final_source_versions = final_probe['daily_source_versions']
-        if final_source_versions != daily_sources['source_files']:
+        deep_paths = {source['note_path'] for source in context['fixture']['controlled_mutable_sources']}
+        if set(final_probe['mutable_versions']) != deep_paths:
+            raise NativeWebRefusal('source_version_ownership_mismatch')
+        final_expected = {**daily_sources['source_files'], **final_probe['mutable_versions']}
+        if final_source_versions != final_expected:
             raise NativeWebRefusal('daily_fixture_restore_incomplete')
         return {'start': start, 'end': end, 'wrappers': list(WRAPPERS), 'pilots': reports,
                 'report_hash': hash_json(reports), 'calendar_reports': calendar['report_count'],
                 'guarded_acknowledgements': final_probe['acknowledgements'],
                 'mutable_versions': final_probe['mutable_versions'],
-                'daily_source_acknowledgements': final_probe['daily_source_acknowledgements']}
+                'daily_source_acknowledgements': final_probe['daily_source_acknowledgements'],
+                'daily_briefing_state': final_probe['daily_briefing_state']}
 
 
 def main(argv: list[str] | None = None) -> int:

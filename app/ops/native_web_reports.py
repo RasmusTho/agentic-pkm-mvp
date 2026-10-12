@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 import zipfile
 from typing import Any
 
-from app.ops.native_web_acceptance import CONTEXT_PATH, REPORT_DIRECTORY, EFFECT_LIMITS, NativeWebRefusal, SCENARIOS, WRAPPERS, hash_json
+from app.ops.native_web_acceptance import CONTEXT_PATH, REPORT_DIRECTORY, EFFECT_LIMITS, NativeWebRefusal, SCENARIOS, WRAPPER_FOR_PILOT, hash_json
 
 
 def report_binding(manifest: dict[str, Any], start: dict[str, Any]) -> dict[str, Any]:
@@ -142,7 +142,7 @@ def require_artifacts(pilot: str, directory: Path) -> None:
         root = ET.fromstring(xml)
         cases = list(root.iter('testcase'))
         names = [case.get('name') for case in cases]
-        wrapper = WRAPPERS[0 if pilot == 'deep-review' else 1]
+        wrapper = WRAPPER_FOR_PILOT[pilot]
         test_file, function = wrapper.split('::')
         exact_wrapper = (len(cases) == 1 and names == [function]
                          and cases[0].get('classname') == test_file.removesuffix('.py').replace('/', '.'))

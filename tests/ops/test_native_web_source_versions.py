@@ -28,6 +28,7 @@ def sources(tmp_path, monkeypatch):
     monkeypatch.setenv('DESIGN_HANDOFF_APP_LOCAL_SETTINGS', str(tmp_path / 'app-local.md'))
     monkeypatch.setenv('VAULT_ROOT', str(vault))
     monkeypatch.setenv('INDEX_OUTBOX_PATH', str(tmp_path / 'index-outbox.jsonl'))
+    monkeypatch.setenv('PANEL_CONFIRMATION_STATE_DIR', str(tmp_path / 'panel'))
     monkeypatch.setattr(capture, 'INDEX_OUTBOX_PATH', tmp_path / 'index-outbox.jsonl')
     monkeypatch.setattr(manager, '_GLOBAL_MANAGER', None)
     monkeypatch.setattr(companion, '_MEMORY_CANDIDATE_REVIEW_QUEUE', MemoryCandidateReviewQueue())
@@ -40,6 +41,16 @@ def sources(tmp_path, monkeypatch):
     state = AcknowledgedFixtureState(vault, data, effects)
     daily = DailySourceFault(vault, data['daily'], effects, state)
     return vault, data, effects, state, daily
+
+
+def generate_daily(daily, effects):
+    from app.api.routes.companion import trigger_first_contact_briefing
+    effects['daily-briefing']['first_contact'] = 1
+    daily.briefing.grant('first_contact')
+    admitted = daily.briefing.begin_contact({})
+    result = trigger_first_contact_briefing()
+    daily.briefing.observe_contact(result, admitted)
+    return result
 
 
 def _capture():
@@ -99,6 +110,7 @@ def test_serial_original_daily_sources_acknowledgement_fault_restore_and_drift(s
     marker = vault / data['daily']['fixture_marker']
     assert marker.is_file() and marker.stat().st_mode & 0o777 == 0o600
     assert data['capture_note_path'] in data['daily']['source_files']
+    generate_daily(daily, effects)
     monkeypatch.setenv('PANEL_AGENT_DECIDER', 'rule')
     proposal_id = _stage_queue_review_panel_proposal({'note_path': data['review_note_path'], 'artifact_uuid': data['review_note_uuid']})
     confirmation._proposal_store.get(proposal_id).proposed_at = 0.0
@@ -116,9 +128,11 @@ def test_serial_original_daily_sources_acknowledgement_fault_restore_and_drift(s
     state.observe('/api/companion/capture', _capture(), admitted)
     daily.require_current()
     effects['daily-briefing']['degrade_source'] = 1
+    daily.grant('degrade_source')
     daily.write(False)
     daily.require_current()
     effects['daily-briefing']['restore_source'] = 1
+    daily.grant('restore_source')
     daily.write(True)
     daily.require_restored()
     immutable = vault / fixture.NOTE_PATH if immutable_source == 'note' else marker

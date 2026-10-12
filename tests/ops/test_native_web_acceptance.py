@@ -88,6 +88,8 @@ class WebBoundary(DockerBoundary):
                                 'settings_hash': 'a' * 64, 'candidate_ids': list(fixture.CANDIDATE_IDS),
                                 'logical_vault_id': 'synthetic-vault', 'local_clone_id': 'synthetic-clone',
                                 'note_uuid': fixture.NOTE_UUID, 'note_path': fixture.NOTE_PATH,
+                                'daily': {'date': '2026-10-11', 'briefing_path': 'System/briefings/2026-10-11.md',
+                                          'moment_path': 'System/moments/daily.md', 'source_files': {'System/moments/daily.md': 'a' * 64}},
                                 'controlled_mutable_sources': [
                                     {'note_uuid': uid, 'note_path': path, 'effect': effect, 'seed_sha256': 'a' * 64}
                                     for uid, path, effect in ((fixture.REVIEW_NOTE_UUID, fixture.REVIEW_NOTE_PATH, 'panel_confirm'),
@@ -127,6 +129,36 @@ class WebBoundary(DockerBoundary):
             } for source in sources}
             if self.fault == 'report_ack_foreign':
                 result['guarded_acknowledgements']['capture']['response_sha256'] = 'f' * 64
+            daily = api['fixture']['daily']
+            target, date = daily['briefing_path'], daily['date']
+            contacts = {key: {'target': target, 'date': date, 'triggered': key == 'first_contact:1',
+                'reason': 'first_contact' if key == 'first_contact:1' else 'already_generated_today',
+                'pre_sha256': None if key == 'first_contact:1' else 'c' * 64, 'post_sha256': 'c' * 64,
+                'degraded_sections': []} for key in ('first_contact:1', 'first_contact:2', 'navigation:1', 'navigation:2', 'navigation:3', 'navigation:4')}
+            result['daily_briefing_state'] = {'target': target, 'date': date, 'initial_absent': True,
+                'version': 'c' * 64, 'healthy_version': 'c' * 64, 'contacts': contacts,
+                'scheduled_replay': {'target': target, 'date': date, 'triggered': False, 'reason': 'already_generated_today',
+                                     'briefing_sha256': 'c' * 64, 'durable_writes': 0}}
+            faults = {effect: {'target': daily['moment_path'], 'receipt': {'outcome': 'written', 'locator': {'path': daily['moment_path']}},
+                'source_writes': 1, 'regenerations': 1, 'pre_sha256': ('a' if effect == 'degrade_source' else 'd') * 64,
+                'post_sha256': ('d' if effect == 'degrade_source' else 'a') * 64,
+                'regeneration': {'target': target, 'receipt': {'operation': 'write_note', 'outcome': 'written', 'locator': {'path': target}},
+                    'pre_sha256': ('c' if effect == 'degrade_source' else 'e') * 64, 'post_sha256': ('e' if effect == 'degrade_source' else 'c') * 64,
+                    'degraded_sections': ['moments'] if effect == 'degrade_source' else []}} for effect in ('degrade_source', 'restore_source')}
+            result['daily_source_acknowledgements'] = faults
+            self.pilots['daily-briefing']['diagnostics'].update(generation={'briefing_path': target, 'briefing_sha256': 'c' * 64},
+                partial_source=faults['degrade_source'], restoration=faults['restore_source'])
+            if self.fault == 'daily_preexisting':
+                result['daily_briefing_state']['contacts']['first_contact:1']['pre_sha256'] = 'c' * 64
+            if self.fault == 'daily_scheduled_written':
+                result['daily_briefing_state']['scheduled_replay']['durable_writes'] = 1
+            if self.fault == 'daily_missing_regeneration':
+                faults['degrade_source']['regenerations'] = 0
+            if self.fault == 'daily_bad_degradation':
+                faults['degrade_source']['regeneration']['degraded_sections'] = []
+            if self.fault == 'daily_restore_drift':
+                faults['restore_source']['regeneration']['post_sha256'] = 'f' * 64
+            result['report_hash'] = web.hash_json(self.pilots)
             if self.fault == 'fixture_drift':
                 result['end'] = {'service': 'drift'}
             if self.fault == 'missing_scenario':
@@ -308,6 +340,8 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     effects = {pilot: dict.fromkeys(limits, 0) for pilot, limits in web.EFFECT_LIMITS.items()}
     observer = AcknowledgedFixtureState(tmp_path / 'vault', produced, effects)
     daily_monitor = DailySourceFault(tmp_path / 'vault', produced['daily'], effects, observer)
+    from tests.ops.test_native_web_source_versions import generate_daily
+    generate_daily(daily_monitor, effects)
     effects['deep-review']['capture'] = 1
     observer.grant('capture')
     admitted = observer.begin_request('/api/companion/capture', {'text': 'Synthetic guarded capture.'})
@@ -318,8 +352,10 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     observer.require_current(fixture.fixture_readback(tmp_path / 'vault', produced)['mutable_readback'])
     daily_monitor.require_current()
     effects['daily-briefing']['degrade_source'] = 1
+    daily_monitor.grant('degrade_source')
     daily_monitor.write(False)
     effects['daily-briefing']['restore_source'] = 1
+    daily_monitor.grant('restore_source')
     daily_monitor.write(True)
     daily_monitor.require_restored()
     capture_path = tmp_path / 'vault' / produced['capture_note_path']
@@ -331,13 +367,16 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     write_ops.write_note_relative('moment.md', original, vault_root=tmp_path / 'vault')
     daily = {'source_files': {'moment.md': hashlib.sha256(source.read_bytes()).hexdigest()},
              'moment_path': 'moment.md', 'moment_full_text': original}
-    fault = DailySourceFault(tmp_path / 'vault', daily, {pilot: dict.fromkeys(limits, 0) for pilot, limits in web.EFFECT_LIMITS.items()})
+    fault = DailySourceFault(tmp_path / 'vault', daily, {pilot: dict.fromkeys(limits, 0) for pilot, limits in web.EFFECT_LIMITS.items()},
+                             briefing=daily_monitor.briefing)
     with pytest.raises(web.NativeWebRefusal, match='without_budget'):
         fault.write(False)
     fault.effects['daily-briefing']['degrade_source'] = 1
+    fault.grant('degrade_source')
     assert fault.write(False)['receipt']['outcome'] == 'written'
     fault.require_current()
     fault.effects['daily-briefing']['restore_source'] = 1
+    fault.grant('restore_source')
     assert fault.write(True)['post_sha256'] == daily['source_files']['moment.md']
     assert source.read_text() == original
     with pytest.raises(web.NativeWebRefusal, match='fixture_not_fresh'):
@@ -352,7 +391,9 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize('fault', ['sha', 'digest', 'fixture_drift', 'missing_scenario', 'missing_wrapper', 'tts_missing',
                                   'report_missing', 'report_foreign', 'report_zero_effects', 'report_no_proof',
-                                  'report_audio', 'report_native_config', 'report_ack_foreign', 'artifacts_text', 'junit_foreign'])
+                                  'report_audio', 'report_native_config', 'report_ack_foreign', 'artifacts_text', 'junit_foreign',
+                                  'daily_preexisting', 'daily_scheduled_written', 'daily_missing_regeneration',
+                                  'daily_bad_degradation', 'daily_restore_drift'])
 def test_required_identity_and_integrations_cannot_false_green(tmp_path, monkeypatch, fault):
     runner, boundary = _runner(tmp_path, monkeypatch, wrappers=fault != 'missing_wrapper')
     boundary.fault = fault
