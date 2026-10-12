@@ -115,6 +115,17 @@ declared for `dev`, `test`, and `prod` in
 ADR-0064 declared-API-key scope. It declares the credential boundary but does not authorize provider
 selection, calls, CKM access, or fallback.
 
+Karakeep's BWS-only declarations are channel-scoped under `non-prod` on `dev` and `test`:
+`karakeep.session-token` goes only to `karakeep-service-web`, `karakeep.search-token` only to
+that web consumer and `karakeep-service-search`, `karakeep.api-key` only to
+`heimdal-karakeep-fetch`, and the password-kind `karakeep.account-pass` only to
+`karakeep-account-setup`. There is no production, Mimer, unrelated consumer or Keychain fallback
+grant. Service startup selects only the web/search consumers; account/API-key issuance follows
+startup as separately authorized operational work. The finite preparation and ephemeral delivery
+procedure is owned by
+`docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md :: Test-channel placement and prerequisites`.
+These are repository bindings, not live installation or KMA-06 acceptance evidence.
+
 The MARR-only `typesafe.api-key` repository binding resolves the exact
 `dev/typesafe.api-key` identity from the existing non-prod BWS project through the `non-prod-reader`
 identity. The supported normal admin writer reads pre-state and writes this project through

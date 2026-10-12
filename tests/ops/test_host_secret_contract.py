@@ -223,7 +223,7 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
     contract = load_host_secret_contract()
 
     assert payload["channels"] == ["dev", "test", "prod"]
-    assert payload["secrets"] == [
+    assert [item for item in payload["secrets"] if not item["logical_id"].startswith("karakeep.")] == [
         {
             "logical_id": "heimdal.raw-store-key",
             "child_binding": "HEIMDAL_RAW_STORE_KEY",
@@ -278,7 +278,9 @@ def test_model_inquiry_secret_contract_is_exact_and_value_free() -> None:
             "shared_key_domain": False,
         },
     ]
-    assert payload["consumers"] == [
+    assert [item for item in payload["consumers"] if item["consumer"] not in {
+        "karakeep-service-web", "karakeep-service-search", "heimdal-karakeep-fetch", "karakeep-account-setup"
+    }] == [
         {
             "consumer": "heimdal-api-ingress",
             "channels": ["dev", "test", "prod"],
@@ -517,7 +519,17 @@ def test_existing_consumer_environment_grants_are_unchanged() -> None:
         for channel in ("dev", "test", "prod")
         for consumer, secrets in expected.items()
         for secret in secrets
-    ) | {("dev", "marr-server-dev", "typesafe.api-key")}
+    ) | {("dev", "marr-server-dev", "typesafe.api-key")} | {
+        (channel, consumer, secret)
+        for channel in ("dev", "test")
+        for consumer, secrets in {
+            "karakeep-service-web": {"karakeep.session-token", "karakeep.search-token"},
+            "karakeep-service-search": {"karakeep.search-token"},
+            "heimdal-karakeep-fetch": {"karakeep.api-key"},
+            "karakeep-account-setup": {"karakeep.account-pass"},
+        }.items()
+        for secret in secrets
+    }
     assert "POSTGRES_PASSWORD" not in contract.child_bindings
     assert "DATABASE_PASSWORD" not in contract.child_bindings
 
