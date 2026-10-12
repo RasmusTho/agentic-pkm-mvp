@@ -11,6 +11,27 @@ export PKM_EXPORT_OPERATOR_OLLAMA_URL="${OLLAMA_URL:-}"
 export PKM_EXPORT_OPERATOR_OLLAMA_HOST="${OLLAMA_HOST:-}"
 export PKM_EXPORT_OPERATOR_OPENAI_BASE_URL="${OPENAI_BASE_URL:-}"
 
+# Capture presence as well as value before loading defaults. An explicit empty
+# capture selector must stay empty, and inactive provider aliases remain owned
+# by the operator during an unrelated TTS regeneration (#6035).
+operator_runtime_context="$(python3 - <<'OPERATOR_CONTEXT'
+import json
+import os
+import sys
+
+keys = (
+    "EMBED_MAX_INPUT_CHARS", "EMBED_MODEL", "HEIMDAL_CAPTURE_WATCH_DIR",
+    "OLLAMA_EMBED_MODEL", "OLLAMA_HOST", "OLLAMA_MODEL", "OLLAMA_URL",
+)
+context = {key: os.environ[key] for key in keys if key in os.environ}
+for key, value in context.items():
+    if any(separator in value for separator in "\n\r\v\f\x1c\x1d\x1e\x85\u2028\u2029"):
+        print(f"Runtime operator context refused: multiline {key}", file=sys.stderr)
+        raise SystemExit(78)
+print(json.dumps(context))
+OPERATOR_CONTEXT
+)"
+
 source "scripts/lib/load_env_defaults.sh"
 if [ "${HOST_SECRET_PROVIDER:-}" = "bws" ]; then
   # Validate explicit inputs before loading them or creating an output file.
@@ -92,6 +113,28 @@ runtime_env_output_path="$(mktemp "${runtime_env_dir}/.runtime.env.XXXXXX")"
 trap 'rm -f "$runtime_env_output_path"' EXIT
 
 publish_runtime_env() {
+  # Amend only this producer's private candidate. The selected target is still
+  # replaced solely by the existing atomic rename, after successful generation.
+  PKM_EXPORT_OPERATOR_CONTEXT="$operator_runtime_context" python3 - "$runtime_env_output_path" <<'OPERATOR_CONTEXT'
+import json
+import os
+from pathlib import Path
+import re
+import sys
+
+context = json.loads(os.environ["PKM_EXPORT_OPERATOR_CONTEXT"])
+if context:
+    candidate = Path(sys.argv[1])
+    lines = candidate.read_text(encoding="utf-8").splitlines(keepends=True)
+    lines = [line for line in lines if line.partition("=")[0] not in context]
+    for key, value in context.items():
+        # Preserve bounded dotenv parsing of leading quotes, whitespace and
+        # comment-like path text, while keeping ordinary generated values plain.
+        if value != value.strip() or value[:1] in {"'", '"'} or re.search(r"\s+#", value):
+            value = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        lines.append(f"{key}={value}\n")
+    candidate.write_text("".join(lines), encoding="utf-8")
+OPERATOR_CONTEXT
   mv -f "$runtime_env_output_path" "$runtime_env_path"
   trap - EXIT
 }
@@ -406,9 +449,9 @@ if [ "$_is_test_channel" -eq 1 ]; then
   # an absent/empty HEIMDAL_CAPTURE_WATCH_DIR is a fail-loud config error
   # (app.heimdal.capture_runtime.CaptureRuntimeConfig.from_env) -- exactly
   # what crash-looped pkm-test-heimdal-capture-watch-1 for 72h+ (#4362).
-  # Hardcode a test-scoped folder under the same tmp-test artifact root the
-  # other test-channel paths above use, unconditionally, so the service
-  # always has somewhere valid to watch (it will simply stay empty).
+  # Default to the same tmp-test artifact root. publish_runtime_env restores
+  # explicitly supplied operator context, including an empty selector, rather
+  # than enabling or redirecting a watcher during unrelated regeneration.
   printf "%s\n" "HEIMDAL_CAPTURE_WATCH_DIR=/app/tmp-test/heimdal-capture-inbox" >> "$runtime_env_output_path"
 else
   if [ -n "${WATCHER_STATE_DIR:-}" ]; then
