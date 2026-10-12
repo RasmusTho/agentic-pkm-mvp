@@ -42,7 +42,10 @@ def _relative(value: str) -> bool:
     )
 
 
-def load_manifest(path: Path) -> dict[str, Any]:
+def read_private_json(path: Path, *, max_bytes: int = 32768) -> dict[str, Any]:
+    """Read a bounded owner-private regular JSON file without following links."""
+    if max_bytes not in {32768, 1024 * 1024}:
+        raise ValueError("private_json_limit_invalid")
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     try:
         info = os.fstat(fd)
@@ -52,12 +55,23 @@ def load_manifest(path: Path) -> dict[str, Any]:
             or info.st_uid != os.geteuid()
         ):
             raise ValueError("manifest_requires_private_regular_file")
-        raw = os.read(fd, 32769)
+        raw = os.read(fd, max_bytes + 1)
     finally:
         os.close(fd)
-    if len(raw) > 32768:
+    if len(raw) > max_bytes:
         raise ValueError("manifest_too_large")
     d = json.loads(raw)
+    if not isinstance(d, dict):
+        raise ValueError("manifest_fields_invalid")
+    return d
+
+
+def load_manifest(path: Path) -> dict[str, Any]:
+    return validate_manifest(read_private_json(path))
+
+
+def validate_manifest(d: dict[str, Any]) -> dict[str, Any]:
+    """Validate the shared native origin, fixture and private-output boundary."""
     required = {"channel", "ui_url", "api_url", "expected_sha", "run_id", "output_dir"}
     optional = {
         "vault_id",
@@ -175,7 +189,7 @@ def load_manifest(path: Path) -> dict[str, Any]:
 
 # Runs inside the already-running, exact-channel API container. Its input is
 # stdin; note content and credentials never become command arguments/output.
-_PROBE = r"""
+_BINDING_PROBE = r"""
 import hashlib,json,os,pathlib,sys,stat
 from uuid import UUID
 p=json.load(sys.stdin)
@@ -233,8 +247,9 @@ vault_doc=MarkdownSettingsStore().read(root/SETTINGS_DIR_NAME/'vault.md').frontm
 local_doc=MarkdownSettingsStore().read(root/SETTINGS_DIR_NAME/'local.md').frontmatter
 assert vault_doc.get('schema')=='design-handoff.vault.v1' and isinstance(vault_doc.get('vaultId'),str) and vault_doc['vaultId'].strip() and vault_doc['vaultId'].strip()==p['vault_id'],'fixture_restore_identity_missing'
 assert local_doc.get('schema')=='design-handoff.local.v1' and str(local_doc.get('localInstanceId') or '').strip(),'fixture_restore_identity_missing'
-from app.vault.paths import get_vault_capture_note_rel
-assert get_vault_capture_note_rel(root)==p['capture_note_path'],'capture_producer_target_mismatch'
+"""
+
+_NAVIGATION_PROBE = r"""
 # GET / and /workspace trigger first-contact on the server. Admit navigation
 # only when its actual producer is disabled or its dated idempotency file is
 # already present. Do not invoke the trigger, compose a note or construct a
@@ -246,6 +261,12 @@ briefing_safe=not BRIEFING_ENABLED
 if BRIEFING_ENABLED:
  target=briefing_note_path(vault_context=VaultContext(status='selected',active_vault_path=str(root)),for_date=_local_now(None).date())
  briefing_safe=not target.is_symlink() and target.is_file() and target.resolve(strict=True).is_relative_to(root)
+"""
+
+_PROBE = _BINDING_PROBE + r"""
+from app.vault.paths import get_vault_capture_note_rel
+assert get_vault_capture_note_rel(root)==p['capture_note_path'],'capture_producer_target_mismatch'
+""" + _NAVIGATION_PROBE + r"""
 note=root/p['capture_note_path']
 assert not note.is_symlink() and note.resolve(strict=True).is_relative_to(root)
 raw=note.read_bytes();assert len(raw)<=2*1024*1024
@@ -318,17 +339,21 @@ def validate_native_gateway(
         raise Blocked("native_gateway_resolves_another_backend")
 
 
-def native_probe(d: dict[str, Any], marker: str) -> dict[str, Any]:
-    def command(argv: list[str], **kwargs: Any) -> str:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=20, **kwargs)
-        if p.returncode:
-            refusal = re.search(
-                r"^AssertionError: (fixture_restore_[a-z_]+)$", p.stderr, re.MULTILINE
-            )
-            if refusal:
-                raise Blocked("native_read_probe_unavailable:" + refusal.group(1))
-            raise Blocked("native_read_probe_unavailable")
-        return p.stdout
+def native_command(argv: list[str], **kwargs: Any) -> str:
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=20, **kwargs)
+    if result.returncode:
+        refusal = re.search(
+            r"^AssertionError: (fixture_restore_[a-z_]+)$", result.stderr, re.MULTILINE
+        )
+        if refusal:
+            raise Blocked("native_read_probe_unavailable:" + refusal.group(1))
+        raise Blocked("native_read_probe_unavailable")
+    return result.stdout
+
+
+def native_gateway(d: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Inspect the exact native gateway before any potentially impure HTTP read."""
+    command = native_command
 
     project = "pkm-" + d["channel"]
     ids = command(
@@ -375,6 +400,11 @@ def native_probe(d: dict[str, Any], marker: str) -> dict[str, Any]:
         )
     )
     validate_native_gateway(d, row, ui, resolved)
+    return ids[0], row, ui
+
+
+def native_probe(d: dict[str, Any], marker: str) -> dict[str, Any]:
+    api_id, _, _ = native_gateway(d)
     if any(
         not d.get(key)
         for key in (
@@ -399,7 +429,7 @@ def native_probe(d: dict[str, Any], marker: str) -> dict[str, Any]:
     }
     values["marker"] = marker
     evidence = json.loads(
-        command(["docker", "exec", "-i", ids[0], "python", "-c", _PROBE], input=json.dumps(values))
+        native_command(["docker", "exec", "-i", api_id, "python", "-c", _PROBE], input=json.dumps(values))
     )
     evidence["gateway_upstream_verified"] = True
     return evidence
@@ -455,10 +485,16 @@ class CoreFlow:
         d: dict[str, Any],
         browser: Any,
         probe: Callable[[dict[str, Any], str], dict[str, Any]] = native_probe,
+        *,
+        output_created: Callable[[Path], None] | None = None,
     ) -> None:
         self.d, self.browser, self.probe = d, browser, probe
         self.output = Path(d["output_dir"])
         self.output.mkdir(mode=0o700, parents=True, exist_ok=False)
+        # Let the invocation retain ownership when context/tracing startup fails.
+        # Existing callers still receive the same exclusive-output behavior.
+        if output_created is not None:
+            output_created(self.output)
         os.chmod(self.output, 0o700)
         self.context = browser.new_context()
         self.context.tracing.start(screenshots=True, snapshots=True)

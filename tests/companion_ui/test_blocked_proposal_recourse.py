@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from typing import Any
+from tests.companion_ui.rendered_html import elements_with_test_id
 
 from companion_ui.workspace.calm_degraded import (
     BLOCKED_REASON_FALLBACK,
@@ -306,7 +307,7 @@ def test_block_reason_hold_with_staged_status_has_no_active_buttons() -> None:
     # buttons (the rail's confirm buttons use data-testid="workspace-panel-action";
     # the separate act-mode flow uses act-* test-ids and is out of scope).
     assert 'data-testid="workspace-panel-proposal-blocked"' in html
-    assert 'data-testid="workspace-panel-action"' not in html
+    assert not elements_with_test_id(html, "workspace-panel-action")
     assert _text_for_testid(html, "palette-blocked-reason")
     assert _text_for_testid(html, "palette-blocked-recourse")
     # The row's own affordance status is blocked, not active.
@@ -385,6 +386,6 @@ def test_blocked_proposal_stays_calm_non_red() -> None:
         block_reason={"gate": "writeguard"},
     )
     # The held proposal does not re-expose Apply/Discard/Defer action buttons.
-    assert 'data-testid="workspace-panel-action"' not in html
+    assert not elements_with_test_id(html, "workspace-panel-action")
     # Nothing-was-mutated calm posture present; not an error/alarm treatment.
     assert "nothing was mutated" in html.lower()

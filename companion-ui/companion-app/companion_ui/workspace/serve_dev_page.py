@@ -2412,6 +2412,140 @@ def _voice_push_to_talk_script() -> str:
   </script>"""
 
 
+def _resume_view_admitted(orientation: object, fields: dict) -> bool:
+    """Admit a presentation restore from the existing current runtime pointer.
+
+    Geometry never enters the pointer or classification. An unavailable or
+    stale pointer leaves ordinary note opening fully usable.
+    """
+    if not isinstance(orientation, dict):
+        return False
+    scope = _orientation_dict(orientation.get("scope"))
+    leave = _orientation_dict(orientation.get("leave_point"))
+    artifact = _orientation_dict(leave.get("artifact_ref"))
+    return bool(
+        fields.get("runtime_vault_id")
+        and fields.get("runtime_local_instance_id")
+        and fields.get("content_hash")
+        and fields.get("artifact_id")
+        and fields.get("runtime_vault_provenance") in {"settings", "host_root", "selected"}
+        and leave.get("status") == "present"
+        and artifact.get("artifact_uuid") == fields.get("artifact_id")
+        and artifact.get("logical_ref") == fields.get("note_path")
+        and scope.get("vault_id") == fields.get("runtime_vault_name")
+        and scope.get("channel") == fields.get("runtime_vault_channel")
+    )
+
+
+def _resume_workspace_matches_rendered(workspace: object, fields: dict) -> bool:
+    """Refuse an optional restore if orientation crossed a workspace change."""
+    if not isinstance(workspace, dict):
+        return False
+    artifact = _orientation_dict(workspace.get("artifact"))
+    runtime = _orientation_dict(workspace.get("runtime"))
+    identity = _orientation_dict(runtime.get("vault_identity"))
+    return bool(
+        fields.get("runtime_vault_id")
+        and fields.get("runtime_local_instance_id")
+        and all(
+            identity.get(key) == fields.get(field)
+            for key, field in (
+                ("vault_id", "runtime_vault_id"),
+                ("local_instance_id", "runtime_local_instance_id"),
+                ("vault_name", "runtime_vault_name"),
+                ("channel", "runtime_vault_channel"),
+                ("provenance", "runtime_vault_provenance"),
+            )
+        )
+        and all(
+            artifact.get(key) == fields.get(key)
+            for key in ("artifact_id", "note_path", "content_hash")
+        )
+    )
+
+
+def _note_view_position_script(fields: dict | None) -> str:
+    """One bounded, ephemeral view snapshot; no body or runtime cursor writes."""
+    if not fields or not fields.get("runtime_vault_id") or not fields.get("runtime_local_instance_id"):
+        return ""
+    config = {
+        "vault_id": fields.get("runtime_vault_id"),
+        "local_instance_id": fields.get("runtime_local_instance_id"),
+        "channel": fields.get("runtime_vault_channel"),
+        "artifact_id": fields.get("artifact_id"),
+        "note_path": fields.get("note_path"),
+        "content_hash": fields.get("content_hash"),
+        "requested": fields.get("resume_view_requested") is True,
+        "admitted": fields.get("resume_view_admitted") is True,
+    }
+    encoded = json.dumps(config, ensure_ascii=True).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    return """
+  <script>
+  (function () {
+    var config = CONFIG_JSON;
+    var editor = document.getElementById('note-source-editor');
+    var column = editor && editor.closest('.note-body');
+    if (!editor || !column || !config.artifact_id || !config.content_hash) return;
+    var key = 'companion.noteViewPosition.v1';
+    var fields = ['vault_id', 'local_instance_id', 'channel', 'artifact_id', 'note_path', 'content_hash'];
+    var maxAge = 72 * 60 * 60 * 1000;
+    function snapshot() {
+      // Unsaved draft offsets cannot be reused against server source text.
+      // Draft preservation remains owned by the existing explicit draft flow.
+      if (editor.value !== editor.defaultValue) return null;
+      var view = {version: 1, captured_at: Date.now(),
+        mode: editor.hidden ? 'read' : 'edit', start: editor.selectionStart,
+        end: editor.selectionEnd, editor_scroll: editor.scrollTop,
+        reading_scroll: column.scrollTop};
+      fields.forEach(function (name) { view[name] = config[name]; });
+      return view;
+    }
+    function save() {
+      try {
+        var view = snapshot();
+        if (view) window.sessionStorage.setItem(key, JSON.stringify(view));
+        else window.sessionStorage.removeItem(key);
+      } catch (err) { /* local view storage is optional */ }
+    }
+    function valid(view) {
+      var allowed = fields.concat(['version', 'captured_at', 'mode', 'start', 'end', 'editor_scroll', 'reading_scroll']);
+      return view && typeof view === 'object' &&
+        Object.keys(view).length === allowed.length &&
+        Object.keys(view).every(function (name) { return allowed.indexOf(name) !== -1; }) &&
+        fields.every(function (name) { return view[name] === config[name]; }) &&
+        view.version === 1 && ['read', 'edit'].indexOf(view.mode) !== -1 &&
+        Number.isFinite(view.captured_at) && Date.now() >= view.captured_at &&
+        Date.now() - view.captured_at <= maxAge &&
+        Number.isSafeInteger(view.start) && Number.isSafeInteger(view.end) &&
+        view.start >= 0 && view.end >= view.start && view.end <= editor.value.length &&
+        [view.editor_scroll, view.reading_scroll].every(function (value) {
+          return Number.isFinite(value) && value >= 0 && value <= 10000000;
+        });
+    }
+    document.body.dataset.resumePosition = config.requested ? 'unavailable' : 'not_requested';
+    if (config.requested && config.admitted) {
+      try {
+        var raw = window.sessionStorage.getItem(key);
+        var view = raw && raw.length <= 2048 ? JSON.parse(raw) : null;
+        if (valid(view)) {
+          if (view.mode === 'edit' && window.noteEditor) window.noteEditor.start();
+          editor.setSelectionRange(view.start, view.end);
+          editor.scrollTop = view.editor_scroll;
+          column.scrollTop = view.reading_scroll;
+          document.body.dataset.resumePosition = 'restored';
+        } else { document.body.dataset.resumePosition = raw ? 'refused' : 'missing'; }
+      } catch (err) { /* truthful ordinary-note fallback */ }
+    } else if (config.requested) { document.body.dataset.resumePosition = 'refused'; }
+    window.noteViewPosition = {snapshot: snapshot};
+    ['select', 'keyup', 'scroll'].forEach(function (event) { editor.addEventListener(event, save); });
+    column.addEventListener('scroll', save);
+    window.addEventListener('pagehide', save);
+    window.addEventListener('blur', save);
+    document.addEventListener('visibilitychange', function () { if (document.hidden) save(); });
+  }());
+  </script>""".replace("CONFIG_JSON", encoded)
+
+
 def _note_editor_script() -> str:
     """Direct human note editor: Read <-> Edit toggle over a plain textarea.
 
@@ -6697,10 +6831,108 @@ def _render_governed_receipt_card(response: dict) -> str:
         </div>"""
 
 
+def _panel_apply_script() -> str:
+    """Dispatch the existing guarded decision and consume server-rendered state.
+
+    The client does not mint a receipt or decide whether an action executed.
+    The current workspace read projects the confirmation store's actual result.
+    """
+    failure_copy = calm_degraded(
+        "Apply", "no confirmed receipt was received", NOTHING_LOST,
+        "Refresh to inspect the current state",
+    )
+    return """
+  <script>
+  (function () {
+    var inFlight = {};
+    var operationKeys = {};
+    function matchingRow(root, selector, id) {
+      return Array.prototype.find.call(root.querySelectorAll(selector), function (row) {
+        return row.getAttribute('data-proposal-id') === id;
+      });
+    }
+    function calmFailure(button) {
+      button.removeAttribute('aria-disabled');
+      button.setAttribute('data-action-state', 'unavailable');
+      var row = button.closest('[data-proposal-id]');
+      if (!row) return;
+      var status = row.querySelector('[data-panel-action-status]');
+      if (!status) {
+        status = document.createElement('p');
+        status.setAttribute('data-panel-action-status', 'true');
+        row.appendChild(status);
+      }
+      status.textContent = __PANEL_FAILURE_COPY__;
+    }
+    window.panelActions = {
+      submit: function (button) {
+        if (button.getAttribute('aria-disabled') === 'true') return;
+        var id = button.getAttribute('data-proposal-id') || '';
+        var artifact = button.getAttribute('data-artifact-id') || '';
+        var action = button.getAttribute('data-panel-action') || '';
+        var path = button.getAttribute('data-api-path');
+        var editor = document.getElementById('note-source-editor');
+        var notePath = editor && editor.getAttribute('data-note-path');
+        if (!id || !artifact || !notePath || path !== '/api/panel/confirm' ||
+            ['confirm', 'reject'].indexOf(action) === -1) return;
+        if (inFlight[id]) return;
+        inFlight[id] = true;
+        button.setAttribute('aria-disabled', 'true');
+        button.setAttribute('data-action-state', 'pending');
+        var operation = id + ':' + action;
+        var key = operationKeys[operation] || (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID()
+          : 'panel:' + id + ':' + action + ':' + Date.now());
+        operationKeys[operation] = key;
+        var rail = document.querySelector('[data-testid="workspace-agent-rail"]');
+        var scroll = rail ? rail.scrollTop : 0;
+        return fetch(path, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({proposal_id: id, artifact_id: artifact, action: action, idempotency_key: key})
+        }).then(function (response) {
+          if (!response.ok) throw new Error('decision unavailable');
+          // A 200 may be blocked: only the read-side server projection below
+          // can declare the receipt/card state. No optimistic confirmation.
+          return response.json();
+        }).then(function (result) {
+          // A confirmed refusal allows a later new intent after the guard
+          // clears. An unknown transport result retains the same retry key.
+          if (result.status === 'blocked') delete operationKeys[operation];
+          return fetch('/workspace?note_path=' + encodeURIComponent(notePath), {method: 'GET'});
+        }).then(function (response) {
+          if (!response.ok) throw new Error('workspace unavailable');
+          return response.text();
+        }).then(function (html) {
+          var fresh = new DOMParser().parseFromString(html, 'text/html');
+          var response = fresh.querySelector('[data-testid="workspace-panel-confirm-response"]');
+          if (response && response.getAttribute('data-proposal-id') !== id) response = null;
+          var projected = matchingRow(fresh, '[data-testid="workspace-panel-proposal-row"]', id);
+          var rows = document.querySelectorAll('[data-testid="workspace-panel-proposal-row"], [data-testid="palette-proposal-row"]');
+          Array.prototype.forEach.call(rows, function (row) {
+            if (row.getAttribute('data-proposal-id') !== id) return;
+            if (projected) { row.replaceWith(document.importNode(projected, true)); }
+            else if (response) { row.replaceWith(document.importNode(response, true)); }
+            else { calmFailure(button); }
+          });
+          if (rail) rail.scrollTop = scroll;
+        }).catch(function () { calmFailure(button); }).finally(function () { delete inFlight[id]; });
+      }
+    };
+    document.addEventListener('click', function (event) {
+      var button = event.target && event.target.closest
+        ? event.target.closest('[data-testid="workspace-panel-action"]') : null;
+      if (button && button.getAttribute('data-runtime-backed') === 'true') {
+        window.panelActions.submit(button);
+      }
+    });
+  }());
+  </script>""".replace("__PANEL_FAILURE_COPY__", json.dumps(failure_copy))
+
+
 def _render_panel_confirm_response(response: dict) -> str:
     if not response:
         return ""
     status = _e(response.get("status", ""))
+    status_label = _e(humanise_token(response.get("status", "")))
     receipt = response.get("receipt") or {}
     block_reason = response.get("block_reason") or {}
     receipt_html = ""
@@ -6712,8 +6944,8 @@ def _render_panel_confirm_response(response: dict) -> str:
     # pending/staged/blocked/rejected must NOT render it (AC3, AC4).
     if response.get("status") == "executed" and receipt:
         return f"""
-        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response">
-          <span data-testid="workspace-panel-confirm-status">{status}</span>
+        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response" data-proposal-id="{_e(response.get('proposal_id', ''))}">
+          <span data-testid="workspace-panel-confirm-status" data-runtime-status="{status}">{status_label}</span>
           {_render_governed_receipt_card(response)}
         </div>"""
     if status in {"logged"} and receipt:
@@ -6738,9 +6970,10 @@ def _render_panel_confirm_response(response: dict) -> str:
           <div
             class="panel-confirm-receipt"
             data-testid="workspace-panel-receipt"
+            data-receipt-id="{_e(receipt.get('receipt_id', ''))}"
             data-receipt-persistence="durable-runtime-projection">
-            <span data-testid="workspace-panel-receipt-outcome">{_e(receipt.get("outcome") or response.get("outcome") or status)}</span>
-            <span data-testid="workspace-panel-receipt-message">{_e(receipt.get("message") or receipt.get("action_taken") or status)}</span>
+            <span data-testid="workspace-panel-receipt-outcome">{_e(humanise_token(receipt.get("outcome") or response.get("outcome") or status))}</span>
+            <span data-testid="workspace-panel-receipt-message">{_e(receipt.get("message") or "Confirmation recorded.")}</span>
             <span data-testid="workspace-panel-receipt-timestamp">{_e(receipt.get("timestamp") or response.get("timestamp") or "timestamp unavailable")}</span>
             {corrected_badge}
             {inverse_html}
@@ -6771,8 +7004,8 @@ def _render_panel_confirm_response(response: dict) -> str:
             <span data-testid="palette-blocked-recourse">{_e(recourse_text)}</span>
           </div>"""
     return f"""
-        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response">
-          <span data-testid="workspace-panel-confirm-status">{status}</span>
+        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response" data-proposal-id="{_e(response.get('proposal_id', ''))}">
+          <span data-testid="workspace-panel-confirm-status" data-runtime-status="{status}">{status_label}</span>
           {receipt_html}
           {blocked_html}
         </div>"""
@@ -8540,7 +8773,7 @@ def _reentry_resume_affordance(leave: dict, *, stale: bool) -> str:
             return ""
         return (
             f'<a class="reentry-resume" data-testid="reentry-resume" '
-            f'data-intent="entry.resume" href="{_e(href)}">Resume — jump to caret</a>'
+            f'data-intent="entry.resume" href="{_e(href + "&resume=1")}">Resume</a>'
         )
 
     cause = _REENTRY_STALE_CAUSES.get(status, _REENTRY_STALE_CAUSES["stale"])
@@ -15463,6 +15696,7 @@ def render_index_html(
   {_refused_write_draft_restore_script()}
   {overlay_host_script()}
   {capture_modal_script()}
+  {_panel_apply_script()}
   {panel_palette_script()}
   {memory_review_drawer_script()}
   {receipts_history_script()}
@@ -15893,6 +16127,7 @@ def render_index_html(
   {_note_readback_script()}
   {_voice_push_to_talk_script()}
   {_note_editor_script()}
+  {_note_view_position_script(fields)}
   {_refused_write_draft_restore_boot_script()}
   {_note_chrome_script()}
   {_reflection_offer_script()}
@@ -15973,8 +16208,9 @@ def handle_get(
 ) -> str:
     """Parse query string, optionally load a note, and return full page HTML.
 
-    Pure except for one WorkspaceHttpClient read: artifact workspace when
-    note_path is present, otherwise workspace orientation for re-entry.
+    Load the artifact/orientation snapshots through WorkspaceHttpClient.
+    An optional Resume also checks that the rendered workspace binding stayed
+    coherent across the orientation read; failure leaves normal note opening.
     """
     params = parse_qs(query_string)
     note_path = params.get("note_path", [""])[0].strip()
@@ -16021,6 +16257,18 @@ def handle_get(
                 except (WorkspaceClientError, AssertionError):
                     live_orientation = None
                 fields.update(_relocated_orientation_telemetry_fields(live_orientation))
+                fields["resume_view_requested"] = params.get("resume", [""])[0] == "1"
+                fields["resume_view_admitted"] = _resume_view_admitted(live_orientation, fields)
+                if fields["resume_view_requested"] and fields["resume_view_admitted"]:
+                    try:
+                        current_workspace = client.get(
+                            "/api/companion/workspace", params={"note_path": note_path}
+                        )
+                    except (WorkspaceClientError, AssertionError):
+                        current_workspace = None
+                    fields["resume_view_admitted"] = _resume_workspace_matches_rendered(
+                        current_workspace, fields
+                    )
         else:
             error = state.error or "Unknown error"
     else:

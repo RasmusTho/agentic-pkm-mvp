@@ -596,6 +596,9 @@ def panel_palette_script() -> str:
       };
     }
     function postPanelAction(btn) {
+      if (window.panelActions && ['confirm', 'reject'].includes(btn.getAttribute('data-panel-action'))) {
+        return window.panelActions.submit(btn);
+      }
       var path = btn.getAttribute('data-api-path') || '/api/panel/confirm';
       // ST-2 (ui-audit): disable in-flight (no double-submit) and reflect
       // success/error on the button instead of firing blind with no feedback.

@@ -150,6 +150,66 @@ The policy does not require a general operator walkthrough. Preserve any real un
 choice through its existing decision contract and evidence; those choices are distinct from running
 the technical journey. Current-state support remains pending qualified TEST PASS.
 
+### #5958 executable proof and invocation
+
+`tests/companion_ui/test_deep_review_production_wiring.py` exercises the existing
+artifact snapshot, volatile Resume, guarded proposal/confirmation and rendered
+receipt paths. A no-match queue check records a `logged` decision; it is not an
+`executed`/Applied receipt. The original CUIDR-07 positive outcome still requires
+actual execution and its runtime receipt. No extra action or note mutation may
+be introduced merely to force that outcome.
+The live receipt consumer selects the originating rail/proposal slot and matches
+its history link to the exact acknowledged receipt; a hidden palette clone is
+not an additional accepted outcome.
+
+The required offline B4 browser proof uses the existing browser lane and canonical
+host lease. Its five outcomes are Escape, Back, occupant replacement, disconnected
+invoker and stale source. The browser workflow rejects a missing or skipped case;
+ordinary opt-in-disabled collection is not delivery proof:
+
+```bash
+COMPANION_UI_BROWSER_TESTS=1 python3 scripts/run_with_host_lease.py \
+  --resource pytest-not-pg --execution-id 5958:required-focus-proof -- \
+  python3 -m pytest -q \
+  tests/companion_ui/test_deep_review_production_wiring.py::test_overlay_frame_returns_to_original_focus_and_selection
+```
+
+The deployed entry point is
+`tests/companion_ui/test_companion_ui_live_deep_review.py::test_deep_review_live_acceptance`,
+with `COMPANION_UI_LIVE_DEEP_REVIEW=1` and a private
+`COMPANION_UI_DEEP_REVIEW_MANIFEST` from the qualified operation. Run it only through
+the fixed native lifecycle supplied by #5969 after its delivered interface and
+fixture qualification are integrated. The current harness prototype is not proof
+that source/model/TTS/browser prerequisites are available. The delivered native
+envelope supplies `native-web-pilot-manifest.v1` and the private
+`native-web-context.v1` through its fixed caller. Deep consumes those identities,
+uses the declared mutable review note and calls the existing native hook after
+persisting each reservation, before the normal browser request. Its final API,
+effect, acknowledgement/source-version and UI-health readbacks are required for
+acceptance; an absent or changed final identity fails even if prior scenarios ran.
+Daily runs before Deep in the same operation; Deep observes the acknowledged
+present note and retains its original 13 outcomes and seven-effect limit.
+
+The private `companion_ui_deep_review_execution.v1` report records attributable
+outcomes, expected/observed frozen identity, reserved effects, actual acknowledgements
+and available trace/JUnit/screenshot references. Failed or refused invocation
+evidence may support #5958 code-slice delivery only after its mandatory code proof;
+it cannot complete #2443 acceptance. Promote supported-state owner documentation
+and close #2443 only after every required actual TEST outcome passes and its child
+and owner-doc receipts are reconciled.
+Browser context or tracing startup failures retain all 13 blocked outcomes in the
+invocation's newly created, still-empty private output directory. A prior run,
+partial report, pending report snapshot or effect reservation is preserved without
+replacement. Startup evidence cannot pass the live acceptance wrapper.
+An actual opt-in invocation may also refuse before native prepares its manifest
+or context, including the missing delivered Daily source prerequisite. The same
+report boundary retains all 13 blocked outcomes, zero effects, unavailable
+trace/backend observations and explicit expected-identity gaps. Without an
+admitted manifest, that attempt uses a new private directory under the caller's
+Builder `.codex-tmp/`; it does not create a native context or claim qualification.
+The recorded attempt can support the declared code-slice evidence rule after
+mandatory code proof, while every required deployed outcome remains pending.
+
 ## Relationship to GitHub issues
 
 This directory is the source of truth for *what to build*. GitHub owns live execution/lifecycle

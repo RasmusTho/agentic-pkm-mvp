@@ -414,6 +414,40 @@ def overlay_host_script() -> str:
     var DECLARED = (host.getAttribute('data-declared-overlays') || '').split(' ');
     var occupants = {};
     var stack = [];
+    // Volatile presentation only: no cursor, vault, memory or receipt writes.
+    // A replacement carries the original invoker rather than remembering a
+    // soon-to-be-hidden control inside the outgoing overlay.
+    var focusAnchors = {};
+    function captureFocusAnchor() {
+      var el = document.activeElement;
+      if (!el) return null;
+      var attr = function(name) { return el.getAttribute ? el.getAttribute(name) : null; };
+      var column = el.closest ? el.closest('.note-body') : null;
+      return {
+        el: el, column: column, columnScroll: column ? column.scrollTop : 0,
+        scrollTop: el.scrollTop, scrollLeft: el.scrollLeft,
+        start: typeof el.selectionStart === 'number' ? el.selectionStart : null,
+        end: typeof el.selectionEnd === 'number' ? el.selectionEnd : null,
+        direction: el.selectionDirection,
+        notePath: attr('data-note-path'), contentHash: attr('data-content-hash')
+      };
+    }
+    function restoreFocusAnchor(anchor) {
+      var el = anchor && anchor.el;
+      if (!el || !el.isConnected || !el.focus) return;
+      if (el.getAttribute && (el.getAttribute('data-note-path') !== anchor.notePath ||
+          el.getAttribute('data-content-hash') !== anchor.contentHash)) return;
+      try {
+        el.focus({preventScroll: true});
+        if (anchor.start !== null && el.setSelectionRange &&
+            anchor.end <= String(el.value || '').length) {
+          el.setSelectionRange(anchor.start, anchor.end, anchor.direction || 'none');
+        }
+        if (Number.isFinite(anchor.scrollTop)) el.scrollTop = anchor.scrollTop;
+        if (Number.isFinite(anchor.scrollLeft)) el.scrollLeft = anchor.scrollLeft;
+        if (anchor.column && anchor.column.isConnected) anchor.column.scrollTop = anchor.columnScroll;
+      } catch (err) { /* an unavailable view anchor is not Product state */ }
+    }
     // NAV-3a (#2639): overlays participate in browser history. Each mounted
     // overlay pushes exactly ONE history entry carrying an overlay-host
     // marker; browser Back fires `popstate` and dismisses the TOPMOST overlay
@@ -435,7 +469,7 @@ def overlay_host_script() -> str:
       host.setAttribute('data-overlay-stack', stack.join(' '));
       if (scrim) { scrim.setAttribute('data-active', stack.length ? 'true' : 'false'); }
     }
-    function popTopmost() {
+    function popTopmost(restoreFocus) {
       // Shared topmost-pop used by both the programmatic dismiss path and the
       // browser-Back (popstate) path. Updates host bookkeeping and runs the
       // occupant close hook; never navigates and never touches the document
@@ -445,6 +479,9 @@ def overlay_host_script() -> str:
       sync();
       var occ = occupants[id];
       if (occ && occ.close) { occ.close(); }
+      var anchor = focusAnchors[id];
+      delete focusAnchors[id];
+      if (restoreFocus !== false) restoreFocusAnchor(anchor);
       return id;
     }
     window.overlayHost = {
@@ -464,6 +501,7 @@ def overlay_host_script() -> str:
         // desyncs the stack depth from the history position). Only a net-new
         // mount pushes.
         var isNetNew = at === -1;
+        if (isNetNew) focusAnchors[id] = captureFocusAnchor();
         if (at !== -1) { stack.splice(at, 1); }
         stack.push(id);
         sync();
@@ -532,7 +570,9 @@ def overlay_host_script() -> str:
         }
         // Close + pop the current topmost occupant WITHOUT history.back() (no
         // pending traversal to race the swap), then push the destination.
-        popTopmost();
+        var anchor = focusAnchors[stack[stack.length - 1]];
+        popTopmost(false);
+        focusAnchors[id] = anchor;
         stack.push(id);
         sync();
         // Replace the current history entry (the one that represented the old
@@ -570,7 +610,11 @@ def overlay_host_script() -> str:
         // unwind the matching history entry so Back stays in step.
         var at = stack.indexOf(id);
         if (at !== -1) {
+          var wasTopmost = at === stack.length - 1;
+          var anchor = focusAnchors[id];
+          delete focusAnchors[id];
           stack.splice(at, 1); sync();
+          if (wasTopmost) restoreFocusAnchor(anchor);
           try {
             if (!popping && window.history && window.history.back) {
               popping = true;
@@ -612,6 +656,7 @@ def overlay_host_script() -> str:
         var marker = st[HISTORY_MARKER];
         var occ = marker ? occupants[marker] : null;
         if (occ && stack.indexOf(marker) === -1) {
+          focusAnchors[marker] = captureFocusAnchor();
           stack.push(marker);
           sync();
           if (occ.open) { occ.open({}); }

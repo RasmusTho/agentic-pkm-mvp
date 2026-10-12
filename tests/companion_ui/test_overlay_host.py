@@ -426,11 +426,12 @@ def test_overlay_host_replace_swaps_history_entry_at_constant_depth() -> None:
     # runs the occupant close hook and updates host bookkeeping) WITHOUT calling
     # history.back() — the swap leaves no pending history traversal to race a
     # subsequent push (the central NAV-3b fix).
-    assert "popTopmost()" in code, (
+    assert "popTopmost(false)" in code, (
         "replace must close the current topmost occupant via the shared pop"
     )
-    swap_branch_start = code.find("popTopmost();\n        stack.push(id);")
-    assert swap_branch_start != -1, "non-existing-target swap branch must be present"
+    swap = re.search(r"popTopmost\(false\);\s*focusAnchors\[id\] = anchor;\s*stack.push\(id\);", code)
+    assert swap, "replacement must carry the original anchor into the same-depth new occupant"
+    swap_branch_start = swap.start()
     swap_branch = code[swap_branch_start:]
     assert "history.back" not in swap_branch, (
         "replace must NOT call history.back() — that pending traversal is the "
@@ -648,14 +649,17 @@ def test_overlay_cycle_preserves_staged_state() -> None:
     )
     assert full == before
 
-    # Rendered controller: mount/dismiss only touch host bookkeeping — they
-    # never reach into the document column, staged suggestion blocks, or rail.
+    # The host may read a source/context-scoped anchor and restore presentation
+    # geometry; it must not rewrite note content, staged suggestions or rail.
     script = _host_script(_render())
     for forbidden in ("data-suggestion-id", "suggestion-block", "data-rail",
-                      "note-body", "innerHTML"):
+                      "innerHTML", "textContent =", ".value ="):
         assert forbidden not in script, (
             f"host controller must not touch {forbidden} on open/dismiss"
         )
+    assert "el.isConnected" in script
+    assert "el.getAttribute('data-note-path') !== anchor.notePath" in script
+    assert "el.getAttribute('data-content-hash') !== anchor.contentHash" in script
 
 
 # ---------------------------------------------------------------------------

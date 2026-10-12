@@ -277,6 +277,13 @@ mapped, logged, or unhandled runtime path.
 
 Receipt fields:
 
+Confirmed execution requires an actual checked runtime action result with
+`status=triggered`. An empty result or `no_actions_matched` log event cannot
+establish execution. With no triggered action, confirmation uses the existing
+`logged` status/outcome and normal durable receipt path. This records the
+decision without claiming an action executed or adding a mutation to force a
+positive result. Guard, same-turn and idempotency behavior stays unchanged.
+
 | Field | Description |
 |---|---|
 | `action_taken` | The canonical action ID that was executed. |
