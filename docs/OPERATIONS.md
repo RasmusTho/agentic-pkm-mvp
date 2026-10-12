@@ -650,21 +650,34 @@ are evidence only and provide no reactivation or fallback authority.
   read-later source (Heimdal's external source dependency; ADR-0049 §1). It pins the
   `karakeep`/`meilisearch` images, declares the durable `karakeep-data` / `karakeep-meilisearch-data`
   volumes, health-checks both services, and binds to loopback only — there is no public ingress.
-- The manifest does not identify a qualified host or prove that the service is installed or running.
-  Current environment guidance does not qualify the Mac mini as a Product Runtime TEST host; the
-  physical TEST service host and private route to Heimdal remain unqualified.
-- `config/karakeep.env.example` is a placeholder template, not a live binding. The current
-  `config/secrets/host_secret_contract.json` does not declare `KARAKEEP_BASE_URL` or
-  `KARAKEEP_API_TOKEN`; no governed TEST binding is established here. Do not read or create
-  credentials or treat a local env file as deployment authority.
+- `scripts/karakeep-deploy <dev|test> --revision <installed-control-checkout-SHA>` operates the
+  exact existing `ygg-dev` or `ygg-test` role through authenticated SSH and the root-only encrypted
+  BWS reader supervisor. The existing controller qualification and a current redacted #3367
+  operations receipt bind private host/config inputs outside Git. Demerzel is the controller;
+  local Compose on the Mac mini is not TEST deployment. Production is refused before lookup/SSH.
+- Finite dev/test BWS consumers are `karakeep-service-web` (session/search tokens),
+  `karakeep-service-search` (search token), `heimdal-karakeep-fetch` (issuer-created API key), and
+  `karakeep-account-setup` (account password only). `scripts/secrets prepare-karakeep <channel>`
+  creates absent service keys through the normal writer and preserves existing credentials.
+  Service startup does not require the account password or API key. Account/API-key issuance
+  remains subsequent authorized operational work; Mimer receives no source token or endpoint.
+- Projects/volumes are isolated as `karakeep-dev` and `karakeep-test`. Separate root-owned
+  mode-0600 handles under `/run/yggdrasil/karakeep/<channel>` deliver only each service's credentials;
+  boot/restart rehydrates through the existing reader and VM channel lock. The template is reference
+  only; do not create persistent ordinary credential env files. Never print unfiltered Docker
+  inspection or rendered Compose configuration.
+- Activating/unknown receipts retain pending admission and the VM channel lock. Reruns reconcile
+  the same request and require authoritative terminal plus health evidence; a timeout or healthy
+  container cannot authorize a duplicate deployment or report success.
 - Backup / update / rollback steps (and their verification checks) live in
   `docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md :: Restart / Durability Posture`.
-  They may be used only after an authorized host, private route, and secret/bootstrap contract are
-  qualified; do not run them on the Mac mini or a local Compose fallback as TEST deployment.
+  They may be used only after the exact host/private route is qualified. Archive/restore and version
+  upgrades require separate maintenance authority and remain outside this implementation slice.
 - `app.heimdal.karakeep_service.assert_fetch_ready` is the fail-loud gate: Heimdal acquisition is
   refused when a required config reference is absent or service health is red, while Mimer replay of
   already-published evidence is unaffected.
-- Scope note: this ships the deployment manifest/runbook and the fetch-readiness gate only. The live
+- Scope note: repository support does not prove a live installation. TEST installation is separate
+  from KMA-06 acceptance. The live
   acquisition pipeline (Heimdal fetch → published evidence → Mimer candidates) is not accepted as
   shipped until the parent Karakeep acquisition feature (#3367) completes its acceptance slice.
 

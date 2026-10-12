@@ -15,7 +15,7 @@ from pathlib import Path
 import secrets
 import stat
 import time
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid4
 
 from app.config.database import resolve_database_url, normalize_database_url
@@ -26,6 +26,9 @@ from app.ops.host_secret_contract import CHANNEL_PROJECTS, DATABASE_CONSUMERS, l
 from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
 from app.ops.pg_acceptance import PROFILE_VERSION, SELECTION_HASH, require_pass
 from app.ops.secret_admin import SecretAdmin, SecretHistory, _note
+
+if TYPE_CHECKING:
+    from app.ops.karakeep_deploy import KarakeepPlan
 
 
 class PostgresDeployError(RuntimeError):
@@ -173,7 +176,7 @@ class DeployJournal:
                     raise PostgresDeployError()
                 return receipt
 
-    def bind_request(self, operation_id: str, plan: DeployPlan, bootstrap: bool, *, create: bool = False) -> None:
+    def bind_request(self, operation_id: str, plan: DeployPlan | KarakeepPlan, bootstrap: bool, *, create: bool = False) -> None:
         """Bind the same-ID receipt to immutable, value-free request inputs.
 
         Persist before preparing the worker. A partial or missing binding can

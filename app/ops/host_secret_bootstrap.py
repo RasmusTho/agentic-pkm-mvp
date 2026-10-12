@@ -29,6 +29,7 @@ from app.ops.bws_secret_reader import (
 from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
 from app.ops.host_secret_contract import (
     BWS_ONLY_SECRETS,
+    KARAKEEP_SECRETS,
     HostSecretContract,
     load_host_secret_contract,
 )
@@ -270,6 +271,8 @@ def _declared_secrets(
 
 
 def _validate_secret(kind: str, value: str) -> bool:
+    if kind in {"session-token", "search-token"}:
+        return re.fullmatch(r"[A-Za-z0-9_-]{32,128}", value) is not None
     if kind == "raw-store-key":
         return _RAW_STORE_KEY_PATTERN.fullmatch(value) is not None
     # `token` shares the api-key grammar deliberately (#4489): both are opaque
@@ -552,6 +555,14 @@ def resolve_host_secret_values(
     """
     try:
         selected = contract or load_host_secret_contract()
+        # These new identities have BWS custody only. Never create a second
+        # Keychain source for the service or its acquisition token.
+        if provider != "bws" and any(
+            secret in KARAKEEP_SECRETS
+            for ch, name, secret in selected.allowed
+            if ch == channel and name == consumer
+        ):
+            raise HostSecretBootstrapError("host secret provider unavailable")
         if provider == "keychain":
             if any(
                 secret in BWS_ONLY_SECRETS
@@ -653,6 +664,10 @@ def materialize_consumer_environment(
     """Yield one mode-0600 env file containing only the declared values."""
     try:
         selected_contract = contract or load_host_secret_contract()
+        if any(secret in KARAKEEP_SECRETS for secret in _declared_secrets(
+            selected_contract, channel=channel, consumer=consumer
+        )):
+            raise HostSecretBootstrapError("host secret provider unavailable")
         values = _resolve_consumer_environment(
             channel=channel,
             consumer=consumer,

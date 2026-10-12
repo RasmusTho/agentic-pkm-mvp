@@ -190,9 +190,11 @@ class BwsSecretReader:
             self.config.validate(project)
             # Even a direct caller cannot name an identity from a different channel/project.
             prefix, separator, logical_id = identity.partition("/")
-            from app.ops.host_secret_contract import BWS_IDENTITIES, CHANNEL_PROJECTS
+            from app.ops.host_secret_contract import BWS_IDENTITIES, CHANNEL_PROJECTS, KARAKEEP_SECRETS
 
             scope = BWS_IDENTITIES.get(logical_id)
+            if logical_id in KARAKEEP_SECRETS and prefix not in {'dev', 'test'}:
+                raise BwsLookupError()
             valid_channel_identity = (
                 scope == "channel" and CHANNEL_PROJECTS.get(prefix) == project
             )

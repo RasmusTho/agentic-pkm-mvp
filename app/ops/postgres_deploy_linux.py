@@ -1163,7 +1163,7 @@ class LinuxEffects:
             return False
 
     @contextmanager
-    def channel_lock(self) -> Iterator[None]:
+    def channel_lock(self, *, journal: DeployJournal | None = None) -> Iterator[None]:
         import fcntl
         path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
         # Preserve the existing mkdir admission, including old non-BWS callers.
@@ -1178,7 +1178,7 @@ class LinuxEffects:
             self.lock_fd = None
             if descriptor is not None:
                 os.close(descriptor)
-            receipt = self.config.journal.read()
+            receipt = (journal or self.config.journal).read()
             if receipt and receipt.operation_id == self.operation_id and receipt.terminal_result:
                 (path / 'bws-owner').unlink()
                 path.rmdir()
@@ -1324,6 +1324,7 @@ class DeploymentSupervisor:
         self.config = config
         self.operation: SupervisedOperation | None = None
         self.mutex = threading.Lock()
+        self.karakeep: Any = None
 
     def _require_current_config(self) -> None:
         current = LinuxConfig.load(self.config.channel)
@@ -1373,6 +1374,14 @@ class DeploymentSupervisor:
         return {'receipt': receipt.payload()}
 
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(data.get('action'), str) and data['action'].startswith('karakeep-'):
+            from app.ops.karakeep_deploy import KarakeepEffects, KarakeepSupervisor
+
+            self._require_current_config()
+            with self.mutex:
+                if self.karakeep is None:
+                    self.karakeep = KarakeepSupervisor(KarakeepEffects(self.config))
+            return self.karakeep.request(data)
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
         operation_id = str(data['operation_id'])
@@ -1557,7 +1566,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=(
         'serve', 'rpc', 'guard', 'cleanup', 'token-push', 'token-push-worker',
-        'token-push-status', 'token-push-inspect',
+        'token-push-status', 'token-push-inspect', 'karakeep-boot',
     ))
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
     parser.add_argument('operation_id', nargs='?')
@@ -1566,6 +1575,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--compose-command')
     args = parser.parse_args(argv)
     try:
+        if args.action == 'karakeep-boot':
+            from app.ops.karakeep_deploy import boot
+
+            boot(args.channel)
+            return 0
         if args.action.startswith('token-push'):
             from app.ops.bws_token_push import remote_main
 

@@ -5,8 +5,8 @@
 # ADR-0049 §1). This manifest is repo-owned deployment truth: a pinned image,
 # durable volumes, a healthcheck, and restart supervision. It contains NO
 # credential or private-endpoint value -- every secret/endpoint rides the
-# operator-owned env_file (config/karakeep.env, gitignored; see
-# config/karakeep.env.example for the placeholder template).
+# per-consumer ephemeral env_file supplied by the governed lifecycle; see
+# config/karakeep.env.example for binding names only.
 #
 # The service is bound to loopback only (127.0.0.1); there is no public ingress
 # (parent constraint: never expose Karakeep publicly). Mimer never connects to
@@ -20,8 +20,7 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     env_file:
-      # Operator-owned; gitignored. Populated from config/karakeep.env.example.
-      - ./config/karakeep.env
+      - ${KARAKEEP_WEB_ENV_FILE:?governed ephemeral web credentials required}
     environment:
       # Non-secret wiring only. Secrets/endpoints stay in the env_file above.
       MEILI_ADDR: http://karakeep-meilisearch:7700
@@ -46,7 +45,7 @@ services:
     image: getmeili/meilisearch:v1.13.3
     restart: unless-stopped
     env_file:
-      - ./config/karakeep.env
+      - ${KARAKEEP_SEARCH_ENV_FILE:?governed ephemeral search credentials required}
     environment:
       MEILI_NO_ANALYTICS: "true"
     volumes:

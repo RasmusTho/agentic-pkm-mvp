@@ -18,6 +18,7 @@ def run() -> int:
             'token-push-status': 4,
             'token-push-worker': 5,
             'token-push': 6,
+            'karakeep-boot': 3,
         }
         if (
             len(sys.argv) != action_counts.get(sys.argv[1], -1)
