@@ -1160,12 +1160,15 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
   / app-agent content crosses the Sources boundary.
 - **Current enforcement:** `static_test + runtime_test` (proposed) — an exact source inventory
   rejects unreviewed literal/resolver drift and resolves absolute and relative app imports,
-  visible package re-exports, and possible aliases across module, immediate class-body, function,
-  and enclosing lexical scopes. Helper identities retain their full lexical path, and the census
-  follows one value-carrying path-helper/write-helper boundary; star imports fail closed. Synthetic
-  positive and negative cases cover those bindings and unrelated writes. Production producer tests verify
-  selected-root writes and capture-note overlap refusal, while capture, MCP, and panel-agent paths
-  verify exclusion with existing vault notes.
+  visible package re-exports, and possible aliases across module, immediate class-body,
+  function-local class-body, function, and enclosing lexical scopes. Function-local class bodies
+  use enclosing function bindings; class-local bindings do not leak into methods. Helper identities
+  retain their full lexical path, and the census follows one value-carrying path-helper/write-helper
+  boundary; star imports fail closed. A focused callsite proof requires
+  `FsVaultAdapter._classify_target` to forward its resolved `sources_root_rel`; dropping or
+  defaulting that argument fails. Synthetic positive and negative cases cover those bindings and
+  unrelated writes. Production producer tests verify selected-root writes and capture-note overlap
+  refusal, while capture, MCP, and panel-agent paths verify exclusion with existing vault notes.
 - **Eventual test path:** `tests/architecture/test_sources_zone_writers.py`.
 - **Related docs / contracts / ADRs:** `docs/contracts/MIMER_CLIENT_CONTRACT.md` §5;
   `docs/testing/invariant-synthesis-2026-07.md` P-1 registered-list conventions and P-6

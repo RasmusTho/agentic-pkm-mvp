@@ -59,11 +59,10 @@ REGISTERED_SOURCE_WRITERS = {
     ("app/heimdal/meeting_finalization.py", "finalize_session"),
 }
 
-# Bare packaged names remain only in the resolver, read-only sampling, or pure path/classification
-# helpers. These exact occurrences are reviewed exceptions; a new literal must be routed through
-# the selected-vault resolver before it can be added here.
+# Bare packaged names remain only in the resolver or pure path/classification helpers. These exact
+# occurrences are reviewed exceptions; a new literal must be routed through the selected-vault
+# resolver before it can be added here.
 SOURCE_LITERAL_ALLOWLIST = {
-    ("app/cli/alpha_human_flows.py", "_select_sample_files", "Sources"),
     ("app/heimdal/candidate_projection.py", "<module>", "Sources/Heimdal"),
     ("app/heimdal/candidate_projection.py", "<module>", "Sources/Reading/Karakeep"),
     ("app/heimdal/meeting_finalization.py", "<module>", "Sources/Meetings"),
@@ -81,6 +80,7 @@ SOURCE_LITERAL_ALLOWLIST = {
 SOURCE_RESOLVER_CALLERS = {
     ("app/agents/panel_agent/policy.py", "watcher_panel_writeback_allowed"),
     ("app/api/routes/capture.py", "capture_to_inbox"),
+    ("app/cli/alpha_human_flows.py", "_select_sample_files"),
     ("app/heimdal/candidate_projection.py", "write_candidate_note"),
     ("app/heimdal/candidate_projection.py", "write_reading_candidate_note"),
     ("app/heimdal/candidate_projection.py", "project_pending_candidates"),
@@ -130,6 +130,46 @@ def _module_function_for(node_stack: list[ast.AST]) -> str:
     if not names:
         return "<module>"
     return ".".join(names[-2:]) if len(names) > 1 else names[-1]
+
+
+def _fs_adapter_forwards_resolved_sources_root(source: str) -> bool:
+    """Require the filesystem adapter to pass its selected Sources root to classification."""
+    tree = ast.parse(source)
+    adapter = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "FsVaultAdapter"
+        ),
+        None,
+    )
+    if adapter is None:
+        return False
+    method = next(
+        (
+            node
+            for node in adapter.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_classify_target"
+        ),
+        None,
+    )
+    if method is None:
+        return False
+    return any(
+        isinstance(call.func, ast.Name)
+        and call.func.id == "classify_note_in_vault"
+        and any(
+            keyword.arg == "sources_root_rel"
+            and isinstance(keyword.value, ast.Attribute)
+            and keyword.value.attr == "sources_root_rel"
+            and isinstance(keyword.value.value, ast.Name)
+            and keyword.value.value.id == "self"
+            for keyword in call.keywords
+        )
+        for call in ast.walk(method)
+        if isinstance(call, ast.Call)
+    )
 
 
 def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
@@ -615,34 +655,61 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
         ):
             source_write_callers.add((relative, "<module>"))
 
-        class_scopes: list[tuple[ast.ClassDef, dict[str, set[str]], list[ast.ClassDef]]] = []
+        class_scopes: list[tuple[ast.ClassDef, dict[str, set[str]], list[ast.AST]]] = []
 
         class ClassScopes(ast.NodeVisitor):
             def __init__(self) -> None:
-                self.stack: list[ast.ClassDef] = []
+                self.stack: list[ast.AST] = []
                 self.env_stack = [module_env]
 
             def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-                return
+                target = function_by_node.get(id(node))
+                if target is None:
+                    return
+                self.stack.append(node)
+                self.env_stack.append(function_env[target])
+                for statement in node.body:
+                    self.visit(statement)
+                self.env_stack.pop()
+                self.stack.pop()
 
             visit_AsyncFunctionDef = visit_FunctionDef
 
             def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                # Class bodies execute when the class is created, including inside a function.
+                # Their bare-name lookup sees the enclosing function/module bindings and the
+                # class's own bindings, but nested classes and methods do not inherit a class
+                # namespace as a lexical scope.
                 env = child_scope_env(relative, node.body, self.env_stack[-1])
                 self.stack.append(node)
-                self.env_stack.append(env)
                 class_scopes.append((node, env, list(self.stack)))
                 for statement in node.body:
                     self.visit(statement)
-                self.env_stack.pop()
                 self.stack.pop()
 
         class_visitor = ClassScopes()
         for statement in tree.body:
             class_visitor.visit(statement)
         for class_node, env, lexical_classes in class_scopes:
-            label = _module_function_for(list(lexical_classes))
+            lexical_names = [
+                item.name
+                for item in lexical_classes
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            ]
+            label = (
+                ".".join(lexical_names)
+                if any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) for item in lexical_classes)
+                else _module_function_for(lexical_classes)
+            )
             calls = direct_scope_calls(relative, class_node.body, env)
+            if any(
+                any(
+                    function_named(callee, {"get_vault_sources_dir_rel", "resolve_vault_sources_dir_rel"})
+                    for callee in callees
+                )
+                for callees, _call in calls
+            ):
+                resolver_callers.add((relative, label))
             if scope_writes_source(relative, class_node.body, env, calls):
                 source_write_callers.add((relative, label))
 
@@ -736,6 +803,23 @@ def test_zone_resolved_via_settings_not_literal() -> None:
     assert literals == SOURCE_LITERAL_ALLOWLIST
     assert resolver_callers == SOURCE_RESOLVER_CALLERS
     assert source_write_callers == REGISTERED_SOURCE_WRITERS | SOURCE_WRITE_EXCLUSIONS
+    adapter_source = (REPO_ROOT / "app/knowledge/adapters.py").read_text(encoding="utf-8")
+    assert _fs_adapter_forwards_resolved_sources_root(adapter_source)
+
+
+def test_adapter_forwarding_proof_rejects_missing_or_default_sources_root() -> None:
+    adapter_source = (REPO_ROOT / "app/knowledge/adapters.py").read_text(encoding="utf-8")
+    forwarded_argument = "            sources_root_rel=self.sources_root_rel,\n"
+    assert forwarded_argument in adapter_source
+    assert _fs_adapter_forwards_resolved_sources_root(adapter_source)
+
+    without_forwarding = adapter_source.replace(forwarded_argument, "", 1)
+    assert not _fs_adapter_forwards_resolved_sources_root(without_forwarding)
+
+    defaulted_argument = adapter_source.replace(
+        forwarded_argument, '            sources_root_rel="Sources",\n', 1
+    )
+    assert not _fs_adapter_forwards_resolved_sources_root(defaulted_argument)
 
 
 def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: Path) -> None:
@@ -869,6 +953,40 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
             "    make_path()\n"
             "    save_path('unrelated')\n"
         ),
+        "app/writers/function_local_class.py": (
+            "def outer_3414():\n"
+            "    from app.writers.helpers import build_source_path as make_path\n"
+            "    from app.writers.helpers import write_source_path as save_path\n"
+            "    class Example:\n"
+            "        save_path(make_path())\n"
+            "    return Example\n"
+            "outer_3414()\n"
+            "def unrelated_outer_3414():\n"
+            "    from app.writers.helpers import build_source_path as make_path\n"
+            "    from app.writers.helpers import write_source_path as save_path\n"
+            "    class Unrelated:\n"
+            "        make_path()\n"
+            "        save_path('Inbox/unrelated.md')\n"
+            "    return Unrelated\n"
+            "unrelated_outer_3414()\n"
+        ),
+        "app/writers/method_inbox_class_shadow.py": (
+            "from app.writers.helpers import build_source_path as make_path\n"
+            "from app.writers.helpers import write_source_path as save_path\n"
+            "from app.writers.inbox_paths import get_vault_inbox_dir_rel\n"
+            "class InboxClassShadow:\n"
+            "    make_path = get_vault_inbox_dir_rel\n"
+            "    def writer(self):\n"
+            "        return save_path(make_path())\n"
+        ),
+        "app/writers/method_sources_class_shadow.py": (
+            "from app.writers.inbox_paths import get_vault_inbox_dir_rel as make_path\n"
+            "from app.writers.helpers import write_source_path as save_path\n"
+            "class SourcesClassShadow:\n"
+            "    from app.writers.helpers import build_source_path as make_path\n"
+            "    def writer(self):\n"
+            "        return save_path(make_path())\n"
+        ),
     }
     for relative, content in files.items():
         target = tmp_path / relative
@@ -892,6 +1010,11 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
     assert ("app/writers/producer.py", "producer_layer_3414.writer") in source_write_callers
     assert ("app/writers/module_producer.py", "<module>") in source_write_callers
     assert ("app/writers/class_producer.py", "Example") in source_write_callers
+    assert ("app/writers/function_local_class.py", "outer_3414.Example") in source_write_callers
+    assert ("app/writers/function_local_class.py", "outer_3414") not in source_write_callers
+    assert ("app/writers/function_local_class.py", "unrelated_outer_3414.Unrelated") not in source_write_callers
+    assert ("app/writers/method_inbox_class_shadow.py", "InboxClassShadow.writer") in source_write_callers
+    assert ("app/writers/method_sources_class_shadow.py", "SourcesClassShadow.writer") not in source_write_callers
     assert ("app/writers/producer.py", "producer_layer_3414.make_path") in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in source_write_callers
