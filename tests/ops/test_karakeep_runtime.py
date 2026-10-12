@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from io import StringIO
 import json
+import logging
 import os
 from pathlib import Path
 import subprocess
@@ -30,6 +31,17 @@ ROOT = Path(__file__).resolve().parents[2]
 REVISION = 'a' * 40
 TOKEN = 'canary-issued-native-api-key-123456789'
 ENDPOINT = 'http://172.23.0.5:3000'
+
+
+@pytest.fixture(autouse=True)
+def restore_child_process_logging():
+    # Production child() exits its own process. Embedded probes share pytest's
+    # process and must restore that child's deliberate logging containment.
+    previous = logging.root.manager.disable
+    try:
+        yield
+    finally:
+        logging.disable(previous)
 
 
 @pytest.fixture
