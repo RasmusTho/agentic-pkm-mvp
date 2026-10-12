@@ -299,11 +299,17 @@ check-prod-channel:
 		tests/ops/test_release_channel_isolation.py \
 		tests/ops/test_release_channel_startup_targets.py
 
-## live-prod-probe: invoke the prod-down backstop probe once for a manual spot-check
-## This hits the real PROBE_BASE_URL (default localhost:8000); it is NOT a pytest suite.
+## live-prod-probe: invoke the one-shot probe with explicit local prod defaults for a manual spot-check
+## Notification defaults to dry-run; override PROBE_ALERT_CHANNEL only when a host binding is available.
 ## For the channel-isolation pytest suites, use check-prod-channel / check-test-channel.
 live-prod-probe:
-	@$(PYTHON) ops/host-setup/mac-mini/prod_probe.py
+	@PROBE_ENVIRONMENT=prod \
+	PROBE_BASE_URL="$${PROBE_BASE_URL:-http://127.0.0.1:18000}" \
+	WORKER_HEARTBEAT_PATH="$${WORKER_HEARTBEAT_PATH:-$(CURDIR)/tmp/worker_heartbeat.json}" \
+	WORKER_HEARTBEAT_STALE_SECONDS="$${WORKER_HEARTBEAT_STALE_SECONDS:-60}" \
+	PROBE_STATE_FILE="$${PROBE_STATE_FILE:-$(CURDIR)/tmp/prod_probe_alert.state}" \
+	PROBE_ALERT_CHANNEL="$${PROBE_ALERT_CHANNEL:-none}" \
+	$(PYTHON) ops/host-setup/mac-mini/prod_probe.py
 
 ## live-prod-backup-probe: invoke the prod-backup watcher once for a manual spot-check
 ## Checks dump freshness on $$BACKUP_DIR, the FAIL/OK verdict, and status-file staleness.

@@ -140,3 +140,52 @@ def test_probe_reads_required_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert result is False
     channel.send.assert_called_once()
     assert "required_ok" in channel.send.call_args[0][1].lower()
+
+
+def test_probe_uses_explicit_environment_and_correlates_recovery(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_file = tmp_path / "test-probe.state"
+    monkeypatch.setattr(prod_probe, "ALERT_STATE_FILE", state_file)
+    heartbeat = _write_fresh_heartbeat(tmp_path)
+    channel = _make_spy_channel()
+    common = {
+        "base_url": "http://127.0.0.1:18002",
+        "heartbeat_path": str(heartbeat),
+        "heartbeat_stale_seconds": 300.0,
+        "channel": channel,
+        "environment": "test",
+    }
+
+    assert prod_probe.run_probe(**common, http_get=_down_http_get) is False
+    down_subject, down_body = channel.send.call_args.args
+    assert down_subject == "TEST down - Yggdrasil"
+    assert "environment: test" in down_body
+    assert "severity: warning" in down_body
+    assert "transition: down" in down_body
+    assert "timestamp_utc:" in down_body
+    assert "source_system: yggdrasil-host-probe" in down_body
+    assert "remediation: https://github.com/" in down_body
+    correlation_id = json.loads(state_file.read_text())["correlation_id"]
+    assert correlation_id in down_body
+
+    assert prod_probe.run_probe(**common, http_get=_healthy_http_get) is True
+    recovery_subject, recovery_body = channel.send.call_args_list[-1].args
+    assert recovery_subject == "TEST recovered - Yggdrasil"
+    assert "transition: recovered" in recovery_body
+    assert "severity: info" in recovery_body
+    assert correlation_id in recovery_body
+
+
+def test_probe_runtime_refuses_missing_environment_and_target_config(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(prod_probe, "PROBE_ENVIRONMENT", "")
+    monkeypatch.setattr(prod_probe, "PROBE_BASE_URL", "")
+    monkeypatch.setattr(prod_probe, "WORKER_HEARTBEAT_PATH", "")
+    monkeypatch.setattr(prod_probe, "PROBE_ALERT_CHANNEL", "")
+    monkeypatch.delenv("PROBE_STATE_FILE", raising=False)
+    monkeypatch.delenv("PROD_PROBE_STATE_FILE", raising=False)
+
+    assert prod_probe.main([]) == 78
+    assert "PROBE_ENVIRONMENT must be test or prod" in caplog.text
