@@ -13,6 +13,8 @@ dispatch, and role-adapter tests; repository defaults and launcher-command evide
 Last verified against (classification evaluation): Issue #5714, `app/eval/live_classification.py`,
 `tests/eval/test_live_classification_receipt.py`, and the registry/facade/classification tests;
 repository proof only. The opt-in model comparison remains separate acceptance under #3429.
+The dated GPT-5.4 Mini price provenance and GPT-5.6 candidate/default wording are documented in
+Issue #5997; they do not constitute a live comparison receipt or change the Product default.
 Last verified against (BWS PostgreSQL): Issue #5680, `app/ops/postgres_deploy.py`,
 `app/ops/postgres_deploy_linux.py`, `app/config/database.py`, and the focused deploy/DSN tests;
 repository implementation only. The Bash-dependent entrypoint proof belongs to hosted Linux CI;
