@@ -5,6 +5,7 @@ import shutil
 import textwrap
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from app.cli import cli
@@ -53,6 +54,22 @@ def _copy_fixture_vault(tmp_path: Path) -> Path:
     return vault
 
 
+def _write_sources_setting(vault: Path, sources_dir_rel: str) -> None:
+    settings = vault / "settings" / "system-settings.md"
+    settings.parent.mkdir(parents=True, exist_ok=True)
+    settings.write_text(
+        f"---\npaths:\n  sources_dir_rel: {sources_dir_rel}\n---\n",
+        encoding="utf-8",
+    )
+
+
+def _tree_snapshot(root: Path) -> dict[str, bytes | None]:
+    return {
+        path.relative_to(root).as_posix(): None if path.is_dir() else path.read_bytes()
+        for path in sorted(root.rglob("*"))
+    }
+
+
 def _run_cli(vault: Path, tmp_path: Path, extra: list[str] | None = None):
     args = ["alpha-human-flows", "--vault-root", str(vault), "--sample-size", "2"]
     if extra:
@@ -60,6 +77,96 @@ def _run_cli(vault: Path, tmp_path: Path, extra: list[str] | None = None):
     runner = CliRunner()
     env = _base_env(tmp_path)
     return runner.invoke(cli, args, env=env)
+
+
+def test_sampler_uses_resolved_sources_root(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("VAULT_SOURCES_DIR_REL", raising=False)
+
+    configured_vault = tmp_path / "configured-vault"
+    configured_root = configured_vault / "Library" / "Acquisition"
+    configured_root.mkdir(parents=True)
+    configured_note = configured_root / "selected.md"
+    configured_note.write_text("configured source\n", encoding="utf-8")
+    default_decoy = configured_vault / "Sources" / "decoy.md"
+    default_decoy.parent.mkdir(parents=True)
+    default_decoy.write_text("default decoy\n", encoding="utf-8")
+    _write_sources_setting(configured_vault, "Library/Acquisition")
+
+    assert alpha_human_flows_module._select_sample_files(configured_vault, 1) == [
+        configured_note
+    ]
+
+    environment_vault = tmp_path / "environment-vault"
+    settings_root = environment_vault / "VaultSettings" / "Sources"
+    settings_root.mkdir(parents=True)
+    settings_note = settings_root / "settings-note.md"
+    settings_note.write_text("selected-vault source\n", encoding="utf-8")
+    environment_root = environment_vault / "Environment" / "Sources"
+    environment_root.mkdir(parents=True)
+    environment_note = environment_root / "environment-note.md"
+    environment_note.write_text("environment source\n", encoding="utf-8")
+    environment_decoy = environment_vault / "Sources" / "decoy.md"
+    environment_decoy.parent.mkdir(parents=True)
+    environment_decoy.write_text("default decoy\n", encoding="utf-8")
+    _write_sources_setting(environment_vault, "VaultSettings/Sources")
+    monkeypatch.setenv("VAULT_SOURCES_DIR_REL", "Environment/Sources")
+
+    assert alpha_human_flows_module._select_sample_files(environment_vault, 1) == [
+        environment_note
+    ]
+
+
+def test_sampler_preserves_default_sampling_order(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("VAULT_SOURCES_DIR_REL", raising=False)
+    vault = tmp_path / "default-vault"
+    preferred_names = ("Index", "Projects", "Corpus", "Sources", "Ontology")
+    preferred_notes = []
+    for name in preferred_names:
+        note = vault / name / "sample.md"
+        note.parent.mkdir(parents=True, exist_ok=True)
+        note.write_text(f"{name} sample\n", encoding="utf-8")
+        preferred_notes.append(note)
+
+    root_a = vault / "a-root-note.md"
+    root_a.write_text("root fallback A\n", encoding="utf-8")
+    root_z = vault / "z-root-note.md"
+    root_z.write_text("root fallback Z\n", encoding="utf-8")
+
+    assert alpha_human_flows_module._select_sample_files(vault, 3) == preferred_notes[:3]
+    assert alpha_human_flows_module._select_sample_files(vault, 7) == [
+        *preferred_notes,
+        root_a,
+        root_z,
+    ]
+
+
+def test_sampler_is_read_only_and_preserves_resolver_errors(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.delenv("VAULT_SOURCES_DIR_REL", raising=False)
+    vault = tmp_path / "read-only-vault"
+    source_root = vault / "Nested" / "Sources"
+    source_root.mkdir(parents=True)
+    source_note = source_root / "source.md"
+    source_note.write_text("source bytes\n", encoding="utf-8")
+    decoy = vault / "Sources" / "decoy.md"
+    decoy.parent.mkdir(parents=True)
+    decoy.write_text("decoy bytes\n", encoding="utf-8")
+    _write_sources_setting(vault, "Nested/Sources")
+
+    before = _tree_snapshot(vault)
+    assert alpha_human_flows_module._select_sample_files(vault, 1) == [source_note]
+    assert _tree_snapshot(vault) == before
+
+    invalid_vault = tmp_path / "invalid-vault"
+    _write_sources_setting(invalid_vault, "../outside")
+    invalid_decoy = invalid_vault / "Sources" / "decoy.md"
+    invalid_decoy.parent.mkdir(parents=True)
+    invalid_decoy.write_text("invalid config decoy\n", encoding="utf-8")
+    before_invalid = _tree_snapshot(invalid_vault)
+    with pytest.raises(ValueError, match="sources_dir_rel"):
+        alpha_human_flows_module._select_sample_files(invalid_vault, 1)
+    assert _tree_snapshot(invalid_vault) == before_invalid
 
 
 def test_alpha_human_flows_creates_test_note_and_uuid(tmp_path: Path) -> None:
