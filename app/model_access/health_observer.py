@@ -199,7 +199,10 @@ class ProductHealthObserver:
             del self._observations[oldest]
 
 
-PRODUCT_HEALTH_OBSERVER = ProductHealthObserver()
+# The app-wide sampler shares the portal admission boundary with Product
+# requests. Keep one background preflight in flight so liveness refreshes
+# cannot occupy both slots; callers can still use the bounded queue.
+PRODUCT_HEALTH_OBSERVER = ProductHealthObserver(max_workers=1, max_in_flight=1)
 
 
 __all__ = ["PRODUCT_HEALTH_OBSERVER", "ProductHealthObserver"]

@@ -279,6 +279,11 @@ def test_cached_model_health_does_not_schedule_product_preflight(
         empty.json()["checks"]["llm_access"]["capabilities"]["text_generation"]["status"]
         == "unknown"
     )
+    assert (
+        empty.json()["checks"]["llm_access"]["capabilities"]["text_generation"]["freshness"]
+        == "unknown"
+    )
+    assert empty.json()["checks"]["llm_access"]["transport_observation"]["freshness"] == "unknown"
     assert observer.read_calls == 1
     assert observer.observe_calls == 0
 
@@ -316,6 +321,68 @@ def test_cached_model_health_does_not_schedule_product_preflight(
     assert capability["freshness"] == "stale"
     assert observer.read_calls == 3
     assert observer.observe_calls == 0
+
+
+def test_background_health_serializes_product_route_refreshes(
+    monkeypatch, tmp_path
+) -> None:
+    """Background health keeps one Product preflight slot available for callers."""
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    observer = ProductHealthObserver(max_workers=1, max_in_flight=1)
+    monkeypatch.setattr(health_module, "PRODUCT_HEALTH_OBSERVER", observer)
+    monkeypatch.setattr(
+        health_module,
+        "_check_llm_router",
+        lambda: {
+            "ok": True,
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "openai",
+                        "model": "gpt-6-luna",
+                        "transport_id": "codex_cli_tailscale",
+                    },
+                    "intent": {},
+                },
+                "summary": {
+                    "effective": {
+                        "provider": "openai",
+                        "model": "gpt-6-luna-summary",
+                        "transport_id": "codex_cli_tailscale",
+                    },
+                    "intent": {},
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(health_module, "_check_embedding_index", lambda: {"ok": True})
+    started = Event()
+    release = Event()
+
+    def _slow_probe(*_args, **_kwargs):
+        started.set()
+        assert release.wait(2)
+        return {
+            "status": "available",
+            "reason_code": "adapter_ready",
+            "capabilities": {},
+            "transport_observation": {
+                "status": "available",
+                "reason_code": "transport_reachable",
+            },
+        }
+
+    monkeypatch.setattr(health_module, "_probe_selected_route", _slow_probe)
+    try:
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        assert started.wait(1)
+        with observer._lock:
+            assert observer._max_in_flight == 1
+            assert len(observer._in_flight) == 1
+            assert len(observer._pending_cold) + len(observer._pending_refresh) == 1
+    finally:
+        release.set()
 
 
 def test_health_success(monkeypatch, tmp_path) -> None:

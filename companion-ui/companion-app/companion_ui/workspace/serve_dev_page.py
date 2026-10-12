@@ -54,8 +54,6 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 import httpx
 
 
-_PASSIVE_HEALTH_PARAMS = {"model_access_sampling": "cache"}
-
 from companion_ui.renderer import (
     PropertiesRenderer,
     VaultMarkdownDocument,
@@ -175,6 +173,16 @@ from companion_ui.workspace.workspace_posture import (
     vault_posture_chip_suffix,
     vault_state_from_provenance,
 )
+
+_PASSIVE_HEALTH_PARAMS = {"model_access_sampling": "cache"}
+
+
+def _healthz_health_params(*, production_profile: bool) -> dict[str, str]:
+    """Keep production liveness refresh active while dev UI reads stay passive."""
+    if production_profile:
+        return {}
+    return dict(_PASSIVE_HEALTH_PARAMS)
+
 
 _COMPATIBILITY_PRECONDITION_HEADER = "X-Compatibility-Write-Precondition"
 _ACTIVE_CONTEXT_HEADERS = (
@@ -16442,7 +16450,10 @@ def make_handler(
             if parsed.path == "/healthz":
                 try:
                     self._client.get(
-                        "/api/health", params=dict(_PASSIVE_HEALTH_PARAMS)
+                        "/api/health",
+                        params=_healthz_health_params(
+                            production_profile=self._production_profile
+                        ),
                     )
                 except WorkspaceClientError:
                     self._send_json(503, {"ok": False, "upstream": "unreachable"})

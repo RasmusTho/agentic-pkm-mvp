@@ -804,6 +804,19 @@ def _pending_route_observation() -> Dict[str, Any]:
     }
 
 
+def _missing_cached_route_observation() -> Dict[str, Any]:
+    observed_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "status": "unknown",
+        "reason_code": "missing_observation",
+        "observed_at": observed_at,
+        "capabilities": {},
+        "transport_observation": _transport_observation(
+            "unknown", "missing_observation", observed_at
+        ),
+    }
+
+
 def _check_llm_access(
     router_check: Dict[str, Any],
     *,
@@ -874,7 +887,7 @@ def _check_llm_access(
         provider = str(route.get("provider") or "").strip().lower()
         if model_access_sampling == "cache":
             key = _route_health_observation_key(route, intent)
-            probe = PRODUCT_HEALTH_OBSERVER.read(key) or _pending_route_observation()
+            probe = PRODUCT_HEALTH_OBSERVER.read(key) or _missing_cached_route_observation()
         elif model_access_sampling == "background" and provider not in {"", "mock", "deterministic"}:
             key = _route_health_observation_key(route, intent)
             probe = PRODUCT_HEALTH_OBSERVER.observe(

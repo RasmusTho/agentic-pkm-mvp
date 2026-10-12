@@ -34,6 +34,7 @@ _TRANSPORT_REASONS = frozenset(
         "transport_reachable",
         "transport_unavailable",
         "transport_unknown",
+        "missing_observation",
     }
 )
 
