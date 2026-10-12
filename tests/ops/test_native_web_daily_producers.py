@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.ops import native_web_runtime as runtime
+from app.api import native_web_qualification as composition
 from app.ops import native_web_fixture as fixture
 from tests.api.conftest import mock_product_api_routes as mock_product_api_routes
 from tests.ops import native_daily_source_reference
@@ -45,13 +45,13 @@ def actual_api(tmp_path, monkeypatch):
     monkeypatch.setattr(app.router, 'routes', list(app.router.routes))
     monkeypatch.setattr(app, 'user_middleware', list(app.user_middleware))
     monkeypatch.setattr(app, 'middleware_stack', None)
-    original_path = runtime.Path
-    monkeypatch.setattr(runtime, 'Path', lambda value: vault if str(value) == '/scratch/vault' else original_path(value))
+    original_path = composition.Path
+    monkeypatch.setattr(composition, 'Path', lambda value: vault if str(value) == '/scratch/vault' else original_path(value))
     monkeypatch.setattr(fixture, '_daily_helper', lambda: native_daily_source_reference)
     # Only unavailable native boundary preconditions are substituted locally.
     # Normal API routes, source readers, writers, guards and receipts are real.
-    monkeypatch.setattr(runtime, 'verify_resources', lambda _manifest: None)
-    monkeypatch.setattr(runtime, '_asset_readback', lambda _manifest: {'browser_audio_assets_hash': 'local-contract-only'})
+    monkeypatch.setattr(composition, 'verify_resources', lambda _manifest: None)
+    monkeypatch.setattr(composition, '_asset_readback', lambda _manifest: {'browser_audio_assets_hash': 'local-contract-only'})
     from app.tts import config, providers
     monkeypatch.setattr(config, 'load_tts_config', lambda: SimpleNamespace(enabled=True, local_only=True,
         allow_browser_fallback=False, allow_cloud_fallback=False))
@@ -61,10 +61,12 @@ def actual_api(tmp_path, monkeypatch):
     manifest = {'source_sha': 'a' * 40, 'image_digest': 'sha256:' + 'b' * 64, 'app_image_id': 'sha256:' + 'c' * 64,
                 'resource_tree': 'd' * 40, 'resource_generation': str(uuid4())}
     from fastapi.testclient import TestClient
-    client = TestClient(runtime._api_app(manifest), raise_server_exceptions=False)
+    client = TestClient(composition.create_native_web_app(manifest), raise_server_exceptions=False)
     observed = client.get('/__native_web_identity')
     assert observed.status_code == 200, observed.text
     data = observed.json()['identity']['fixture']
+    assert companion.get_memory_review_queue().pending_count == len(fixture.CANDIDATE_IDS)
+    assert {entry.candidate_id for entry in companion._MEMORY_CANDIDATE_REVIEW_QUEUE.pending()} == set(fixture.CANDIDATE_IDS)
     yield client, vault, data
     client.close()
 

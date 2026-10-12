@@ -527,8 +527,11 @@ the Deep Review (#5958) and Daily Briefing (#5959) wrappers.
 
 The candidate runs its baked Product API and Companion UI with an operation-owned pgvector
 database, vault and synthetic configuration. The API child performs canonical vault/source
-bootstrap and fills its own memory review queue before normal startup. A private loopback CalDAV
-service supplies real REPORT responses to the selected reader. Fixed read-only snapshots contain
+bootstrap and fills its own memory review queue before normal startup. The fixed child
+`app.api.native_web_qualification` composes the real API queue and normal capture formatter with
+the lower-layer fixture and acknowledgement observer; `app.ops` never imports interaction routes.
+A private loopback CalDAV service supplies real REPORT responses to the selected reader.
+Fixed read-only snapshots contain
 the already-installed native Playwright 1.63.0/Chromium 1243 and the selected Piper sv-SE/Kokoro
 en-US assets; cache/audio and other mutable data stay disposable. There are no channel credentials,
 persistent channel mounts, host/Docker sockets, arbitrary commands or selectable test profiles.

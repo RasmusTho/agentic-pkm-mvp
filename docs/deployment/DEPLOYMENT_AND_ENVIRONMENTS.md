@@ -592,9 +592,11 @@ No dependency/model installation or fallback is performed. Missing payloads, inc
 libraries or unavailable selected Product integrations are recovery facts for their existing
 owners, not evidence that a pilot passed.
 
-The fixed API child uses the canonical producers and normal guards before startup, including its
-own in-process memory queue. Its transient identity probe and two fixed guarded synthetic source
-faults belong only to that disposable qualification. They are not a Product controller or a new
+The fixed API child `app.api.native_web_qualification` uses the canonical producers and normal
+guards before startup, including its own in-process memory queue. This interaction-layer
+composition supplies that queue and the existing capture formatter to the lower-layer fixture and
+observer, preserving forward-only imports. Its transient identity probe and two fixed guarded
+synthetic source faults belong only to that disposable qualification. They are not a Product controller or a new
 channel authority. A fixed hook grants one exact declared source version; the normal request must
 still match its pre-write bytes, and the actual acknowledgement/original receipt must match the
 exact permitted post-write bytes. The retained original pilot acknowledgement is bound to that

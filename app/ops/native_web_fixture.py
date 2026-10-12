@@ -14,6 +14,7 @@ from typing import Any
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
+from app.agent_memory.review_queue import MemoryCandidateReviewQueue
 from app.ops.native_web_acceptance import NativeWebRefusal, hash_json
 
 NOTE_UUID = '59690000-0000-4000-8000-000000000001'
@@ -26,10 +27,9 @@ SCOPE_ID = 'work'
 CANDIDATE_IDS = tuple('native-web-' + name for name in ('promote', 'reject', 'defer', 'revise'))
 
 
-def bootstrap_fixture(vault_root: Path, generation: str) -> dict[str, Any]:
+def bootstrap_fixture(vault_root: Path, generation: str, *, review_queue: MemoryCandidateReviewQueue) -> dict[str, Any]:
     from app.agent_memory.candidate import MemoryCandidate, MemoryType
     from app.agent_memory.companion_aware import SynthesisCompanion, discover_candidates_from_companions
-    from app.api.routes import companion
     from app.domain.commitments import CommitmentRecord
     from app.episodes.notes import render_episode_note
     from app.knowledge.write_ops import write_note_relative
@@ -40,8 +40,8 @@ def bootstrap_fixture(vault_root: Path, generation: str) -> dict[str, Any]:
 
     if (str(UUID(generation)) != generation or vault_root.is_symlink()
         or (vault_root.exists() and any(vault_root.iterdir()))
-        or companion._MEMORY_CANDIDATE_REVIEW_QUEUE.pending()
-        or companion._MEMORY_CANDIDATE_REVIEW_QUEUE.decided()):
+        or review_queue.pending()
+        or review_queue.decided()):
         raise NativeWebRefusal('fixture_not_fresh')
     manager = get_vault_manager()
     manager.initialize_vault(vault_root, vault_name='Synthetic native web acceptance', machine_role='testNode')
@@ -91,7 +91,7 @@ def bootstrap_fixture(vault_root: Path, generation: str) -> dict[str, Any]:
         source_refs=[ref], derived_from=REVIEW_NOTE_UUID, generated_by='synthetic.native-web',
         scope_id=SCOPE_ID, content='A synthetic proposal awaiting explicit review.',
     ) for candidate_id in CANDIDATE_IDS}
-    queue = companion._MEMORY_CANDIDATE_REVIEW_QUEUE
+    queue = review_queue
     discovered = discover_candidates_from_companions([SynthesisCompanion(
         companion_for=REVIEW_NOTE_UUID, target_path=REVIEW_NOTE_PATH, candidates=candidates,
         generated_by='synthetic.native-web',

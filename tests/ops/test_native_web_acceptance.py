@@ -417,7 +417,7 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
             return _original(*args, **kwargs)
         monkeypatch.setattr(module, name, record)
     generation = str(uuid4())
-    produced = fixture.bootstrap_fixture(tmp_path / 'vault', generation)
+    produced = fixture.bootstrap_fixture(tmp_path / 'vault', generation, review_queue=companion._MEMORY_CANDIDATE_REVIEW_QUEUE)
     from tests.ops import native_daily_source_reference
     monkeypatch.setattr(fixture, '_daily_helper', lambda: native_daily_source_reference)
     produced['daily'] = fixture.prepare_daily_sources(produced, 'a' * 40)
@@ -433,7 +433,7 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     from app.ops.native_web_runtime import AcknowledgedFixtureState, DailySourceFault
     from starlette.requests import Request
     effects = {pilot: dict.fromkeys(limits, 0) for pilot, limits in web.EFFECT_LIMITS.items()}
-    observer = AcknowledgedFixtureState(tmp_path / 'vault', produced, effects)
+    observer = AcknowledgedFixtureState(tmp_path / 'vault', produced, effects, capture_entry=capture._compose_entry)
     daily_monitor = DailySourceFault(tmp_path / 'vault', produced['daily'], effects, observer)
     from tests.ops.test_native_web_source_versions import generate_daily
     generate_daily(daily_monitor, effects)
@@ -475,13 +475,41 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     assert fault.write(True)['post_sha256'] == daily['source_files']['moment.md']
     assert source.read_text() == original
     with pytest.raises(web.NativeWebRefusal, match='fixture_not_fresh'):
-        fixture.bootstrap_fixture(tmp_path / 'vault', generation)
+        fixture.bootstrap_fixture(tmp_path / 'vault', generation, review_queue=companion._MEMORY_CANDIDATE_REVIEW_QUEUE)
     monkeypatch.setattr(companion, '_MEMORY_CANDIDATE_REVIEW_QUEUE', MemoryCandidateReviewQueue())
     monkeypatch.setattr(DEFAULT_WRITE_GUARD, 'snapshot_fn', lambda: {'state': 'safe_mode'})
     with pytest.raises(WritesBlockedError):
-        fixture.bootstrap_fixture(tmp_path / 'blocked-vault', str(uuid4()))
+        fixture.bootstrap_fixture(tmp_path / 'blocked-vault', str(uuid4()), review_queue=companion._MEMORY_CANDIDATE_REVIEW_QUEUE)
     assert not (tmp_path / 'blocked-vault' / fixture.NOTE_PATH).exists()
     assert companion.get_memory_review_queue().pending_count == 0
+
+
+def test_qualification_starts_only_fixed_api_composition(monkeypatch):
+    from contextlib import contextmanager
+    from app.ops import native_web_runtime as runtime
+
+    commands = []
+    monkeypatch.setattr(runtime, '_asset_readback', lambda _manifest: {})
+    monkeypatch.setattr(runtime.subprocess, 'run', lambda *args, **kwargs: None)
+
+    @contextmanager
+    def calendar():
+        yield {}
+
+    @contextmanager
+    def service(command, environment):
+        commands.append(command)
+        # Refuse at this first actual launch boundary; this local test never
+        # substitutes a running Product service or fabricates pilot success.
+        raise web.NativeWebRefusal('test_launch_boundary')
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(runtime, '_caldav', calendar)
+    monkeypatch.setattr(runtime, '_service', service)
+    with pytest.raises(web.NativeWebRefusal, match='test_launch_boundary'):
+        runtime.qualify({})
+    assert commands == [[runtime.sys.executable, '-m', 'app.api.native_web_qualification',
+                         '--api-process', '--manifest', '/native-web-manifest.json']]
 
 
 @pytest.mark.parametrize('fault', ['sha', 'digest', 'fixture_drift', 'missing_scenario', 'missing_wrapper', 'tts_missing',

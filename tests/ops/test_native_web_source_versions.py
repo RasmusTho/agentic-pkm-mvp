@@ -35,10 +35,10 @@ def sources(tmp_path, monkeypatch):
     monkeypatch.setattr(DEFAULT_WRITE_GUARD, 'snapshot_fn', lambda: {'state': 'healthy'})
     monkeypatch.setattr(materialization, 'DEFAULT_MOMENT_RECEIPTS_PATH', tmp_path / 'moments.jsonl')
     monkeypatch.setattr(fixture, '_daily_helper', lambda: native_daily_source_reference)
-    data = fixture.bootstrap_fixture(vault, str(uuid4()))
+    data = fixture.bootstrap_fixture(vault, str(uuid4()), review_queue=companion._MEMORY_CANDIDATE_REVIEW_QUEUE)
     data['daily'] = fixture.prepare_daily_sources(data, 'a' * 40)
     effects = {pilot: dict.fromkeys(limits, 0) for pilot, limits in web.EFFECT_LIMITS.items()}
-    state = AcknowledgedFixtureState(vault, data, effects)
+    state = AcknowledgedFixtureState(vault, data, effects, capture_entry=capture._compose_entry)
     daily = DailySourceFault(vault, data['daily'], effects, state)
     return vault, data, effects, state, daily
 
