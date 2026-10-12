@@ -2,7 +2,7 @@
 name: Companion UI Deep-Review Remediation
 description: Specification directory remediating the 2026-06-22 Claude Design "Deep Design Review" of the Companion UI, across three leverage-ordered waves.
 parent_capability: Companion UI Deep-Review Remediation
-state: Filed — parent feature issue #2443; nine child issues #2444–#2448, #2450–#2453
+state: Filed — parent #2443 is the validation hub; qualified automated TARS TEST acceptance remains pending
 ---
 
 # Companion UI Deep-Review Remediation
@@ -109,8 +109,9 @@ re-cut before creating issues.
 Each task spec names its `Verify:` target per AC: a behavioral AC names the test (path + name); a
 non-behavioral AC names a render-capture diff or doc target. `static` ACs are verified by rendering
 the relevant fixture (server-rendered capture) and diffing/inspecting it; `live` ACs (motion, focus,
-round-trip, caret restore) are flagged for live UAT against the running shell. The split mirrors the
-review's own Verify column.
+round-trip, caret restore) require automated Playwright assertions against the qualified running
+shell. Deterministic browser/contract proof verifies the harness and wiring; it does not complete
+deployed acceptance. The split mirrors the review's own Verify column.
 
 ## Validation / acceptance path (capability level)
 
@@ -119,9 +120,12 @@ supported:
 
 - [ ] Every Wave-1 and Wave-2 task is merged with its `static` ACs verified on a rendered capture.
   - Verify: PR receipts linked on the parent issue; capture diffs attached per task.
-- [ ] The `live` ACs (A1 caret-restore, A2 post-apply state, B4 focus/Esc, populated flows) are
-  exercised in one live UAT pass against the running Companion UI and recorded on the parent issue.
-  - Verify: live UAT receipt comment on the parent feature issue.
+- [ ] The `live` ACs (A1 caret-restore, A2 post-apply state, B4 focus/Esc, populated flows) pass
+  one automated qualified TARS TEST journey against the actual same-SHA/digest Companion UI/API
+  candidate, using an isolated synthetic actor and approved source data. The report records each
+  required scenario; missing/blocked/skip/xfail is not PASS.
+  - Verify: `tests/companion_ui/test_companion_ui_live_deep_review.py::test_deep_review_live_acceptance`
+  - Verify: runtime receipt: parent #2443 qualified TEST scenario report with trace/screenshots and candidate identity
 - [ ] No user-facing surface shows a raw transport error, runtime enum, or internal identifier
   (capability-wide regression scan).
   - Verify: render scan across shell + entry + degraded fixtures.
@@ -131,16 +135,32 @@ supported:
 Owner docs (the Companion UI surface specs) are promoted only once acceptance is met — one owner-doc
 PR at the end, not per task.
 
+Apply `docs/TESTING.md :: Automated Technical Acceptance`: a short same-candidate DEV smoke uses
+the existing core-flow check; additional DEV scenarios need a specific contract/failure reason.
+The intended live entry target above is automation work until implemented and executed. Reuse
+`tests/companion_ui/test_live_deep_review_contract.py` for deterministic fixture/admission/failure
+coverage and the existing core-flow native identity/evidence boundary. Qualify deep-review effects
+separately; an existing passive or capture/ASK manifest does not authorize apply, editing or
+receipt creation. Synthetic interaction exercises existing Product approval paths without
+manufacturing an owner's acknowledgement or deriving classification in the client.
+
+Missing journey automation is a bounded Builder child of #2443. Missing qualified TEST UI/API,
+fixture or source binding is concrete restore-environment work with owner and `unblocks_when`.
+The policy does not require a general operator walkthrough. Preserve any real unresolved E1/E2
+choice through its existing decision contract and evidence; those choices are distinct from running
+the technical journey. Current-state support remains pending qualified TEST PASS.
+
 ## Relationship to GitHub issues
 
-This directory is the source of truth for *what to build*. The GitHub issues are execution
-contracts that reference it. Filed state:
+This directory is the source of truth for *what to build*. GitHub owns live execution/lifecycle
+state and evidence. Original implementation relationships:
 
-- Parent feature issue (validation hub): **#2443** — `companion-ui`, `agent:blocked`.
-- Wave-1 children **#2444–#2448** — `agent:ready` (parallelizable).
-- Wave-2 children **#2450** (CUIDR-06), **#2451** (CUIDR-07), **#2452** (CUIDR-08) — `agent:blocked`
-  until their Wave-1 prerequisites merge.
-- Wave-3 child **#2453** (CUIDR-09) — `agent:needs-human` (open E1/E2 owner decision).
+- Parent feature issue (validation hub): **#2443**; remains open until all scoped ACs pass.
+- Wave-1 children **#2444–#2448**.
+- Wave-2 children **#2450** (CUIDR-06), **#2451** (CUIDR-07), **#2452** (CUIDR-08).
+- Wave-3 child **#2453** (CUIDR-09); recorded E1/E2 decisions remain in its Issue history.
+- The bounded automation child and qualified TEST results are linked from #2443; implementation
+  PR closure is separate from parent acceptance.
 
 [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md) records the live issue numbers and lifecycle
 state.

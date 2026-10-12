@@ -584,12 +584,130 @@ def _import_source(repository="rasmustho/agentic-pkm-mvp", number=501):
     }
 
 
-def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("hold", [
+    "Requires operator UAT.", "Requires **operator UAT**.", "Requires `operator UAT`.",
+    "UAT is required before closure.", "A human must run the acceptance test.",
+])
+def test_issue_source_task_rejects_unsupported_manual_acceptance(hold: str) -> None:
+    from app.builderops.control_plane.client_cli import issue_source_task, _source_contract_ready
+    from scripts.validate_issue_readiness import classify_issue_body
+
+    source = _import_source()
+    source["body"] += f"\n## Validation / Acceptance Path\n{hold}"
+    assert classify_issue_body(source["body"], labels=["agent:ready"]).readiness_classification == "ambiguous_intent"
+    assert not _source_contract_ready(source["body"], ["agent:ready"])
+    with pytest.raises(ValueError, match="readiness"):
+        issue_source_task(source, repository="rasmustho/agentic-pkm-mvp", number=501,
+                          observed_at=source["updated_at"], authority_epoch=1)
+
+
+@pytest.mark.parametrize("case", [
+    "bold", "nested", "double_ticks", "current_choice", "empty_selector", "vague_anchor", "artifact_topic",
+    "joined_diff", "joined_marker", "joined_diff_and", "joined_diff_comma",
+    "malformed_doc_wrapper", "malformed_roadmap_wrapper", "mismatched_target_wrapper",
+    "heading_acceptance_samples", "heading_audio_samples", "heading_acceptance_examples", "heading_choices_snapshots",
+    "heading_exceptions_samples", "heading_completed_decisions", "heading_resolved_acceptance",
+])
+def test_task_import_manual_hold_refuses_before_any_ready_write(tmp_path, monkeypatch, capsys, case):
+    from app.builderops import cockpit_github_plane
+    from app.builderops.control_plane.client import ControlPlaneNotFoundError
+
+    source = _import_source()
+    if case in {"current_choice", "artifact_topic"} or case.startswith("heading_"):
+        choice = ("### Current human acceptance\nHuman acceptance exception: personal accessibility preference.\n"
+            "Observable choice: owner selects the comfortable spoken cadence.\n"
+            "Cannot be automated because: only the owner can report their listening experience.\n"
+            "Owner: owner\nunblocks_when: the owner records the chosen cadence on this Issue.\n")
+        if case == "artifact_topic" or case.startswith("heading_"):
+            choice = choice.replace("Human acceptance exception: personal accessibility preference.",
+                "Current human acceptance exception: completed audio sample accessibility preference.")
+        if case.startswith("heading_"):
+            heading = {
+                "heading_acceptance_samples": "Completed acceptance samples", "heading_audio_samples": "Completed audio samples",
+                "heading_acceptance_examples": "Resolved acceptance examples", "heading_choices_snapshots": "Closed choices snapshots",
+                "heading_exceptions_samples": "Settled exceptions samples", "heading_completed_decisions": "Completed decisions",
+                "heading_resolved_acceptance": "Resolved human acceptance",
+            }[case]
+            choice = choice.replace("### Current human acceptance", f"### {heading}") + "- Status: unresolved.\n"
+        source["body"] = source["body"].replace("## Acceptance Criteria", choice + "\n## Acceptance Criteria")
+    elif case in {"empty_selector", "vague_anchor", "joined_diff", "joined_marker", "joined_diff_and", "joined_diff_comma",
+                  "malformed_doc_wrapper", "malformed_roadmap_wrapper", "mismatched_target_wrapper"}:
+        target = {
+            "empty_selector": "docs/TESTING.md::", "vague_anchor": "doc writeback at `docs/TESTING.md :: later`",
+            "joined_diff": "diff of `docs/TESTING.md` + `docs/STATUS.md`",
+            "joined_marker": "`accepted` present in `docs/TESTING.md` + `docs/STATUS.md`",
+            "joined_diff_and": "diff of `docs/TESTING.md` and `docs/STATUS.md`",
+            "joined_diff_comma": "diff of `docs/TESTING.md`, `docs/STATUS.md`",
+            "malformed_doc_wrapper": "`doc writeback at `docs/TESTING.md :: Automated Technical Acceptance``",
+            "malformed_roadmap_wrapper": "`roadmap diff: `docs/ROADMAP.md :: DDO-03``",
+            "mismatched_target_wrapper": "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications``",
+        }[case]
+        source["body"] = source["body"].replace(
+            "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target)
+    else:
+        condition = {"bold": "Requires **operator UAT**.", "nested": "### Required live acceptance\nRequires **operator UAT**.",
+                     "double_ticks": "Requires ``operator UAT``."}[case]
+        source["body"] += "\n## Validation / Acceptance Path\n" + condition
+    reads = []
+    def source_read(args):
+        reads.append(args)
+        return source
+    monkeypatch.setattr(cockpit_github_plane, "_run_gh", source_read)
+    clients = []
+    class ImportProbe(_RecordingClient):
+        authority_epoch = 1
+        def get_task(self, **address):
+            self.calls.append(("get_task", address))
+            raise ControlPlaneNotFoundError("synthetic absent task")
+        def transition_task(self, **request):
+            self.calls.append(("transition_task", request))
+            return {"result": {}}
+    def factory(config):
+        client = ImportProbe(config)
+        clients.append(client)
+        return client
+    command = ["--delivery-manifest-dir", str(_manifest_dir(tmp_path)), "--task-class", "implementation",
+        "task-import-issue", "--repository", "RasmusTho/agentic-pkm-mvp", "--scope", "issue:501",
+        "--stack", "builderops-control-plane", "--issue", "501"]
+    assert main(command, client_factory=factory) != 0
+    capsys.readouterr()
+    assert reads == [["api", "repos/rasmustho/agentic-pkm-mvp/issues/501"]]
+    assert clients
+    assert all(not client.calls for client in clients), [client.calls for client in clients]
+
+
+@pytest.mark.parametrize("variant", ["canonical", "diff_annotation", "marker_annotation", "wrapped_doc", "wrapped_roadmap",
+                                     "legacy_wrapped_doc", "legacy_wrapped_roadmap",
+                                     "completed_choice", "closed_scope", "history_snapshot"])
+def test_task_import_issue_binds_source_and_replay(tmp_path, monkeypatch, capsys, variant):
     import copy
     from app.builderops import cockpit_github_plane
     from app.builderops.control_plane.client import ControlPlaneNotFoundError
 
     source = _import_source()
+    if variant in {"diff_annotation", "marker_annotation", "wrapped_doc", "wrapped_roadmap",
+                   "legacy_wrapped_doc", "legacy_wrapped_roadmap"}:
+        target = {
+            "diff_annotation": "diff of `docs/TESTING.md` adding a bounded step running `tests/scripts/test_validate_issue_readiness.py`",
+            "marker_annotation": "`accepted` present in `docs/TESTING.md`, checked by the existing readiness fixture",
+            "wrapped_doc": "`doc writeback at docs/TESTING.md :: Automated Technical Acceptance`",
+            "wrapped_roadmap": "`roadmap diff: docs/ROADMAP.md :: DDO-03`",
+            "legacy_wrapped_doc": "`doc writeback at `docs/TESTING.md :: Automated Technical Acceptance` (step 3)`",
+            "legacy_wrapped_roadmap": "`roadmap diff: `docs/ROADMAP.md :: DDO-03` (step 3)`",
+        }[variant]
+        source["body"] = source["body"].replace(
+            "`tests/scripts/test_validate_issue_readiness.py::test_fixture_classifications`", target)
+    elif variant in {"completed_choice", "closed_scope", "history_snapshot"}:
+        choice = ("### Current human acceptance\nCurrent human acceptance exception: completed audio sample accessibility preference.\n"
+            "Observable choice: owner selects the comfortable spoken cadence.\n"
+            "Cannot be automated because: only the owner can report their listening experience.\n"
+            "Owner: owner\nunblocks_when: the owner records the chosen cadence on this Issue.\n- Status: completed.\n")
+        if variant == "closed_scope":
+            choice = choice.replace("### Current human acceptance", "### Completed decisions")
+        elif variant == "history_snapshot":
+            choice = choice.replace("### Current human acceptance", "### Historical decisions").replace(
+                "Status: completed", "Status: unresolved")
+        source["body"] = source["body"].replace("## Acceptance Criteria", choice + "\n## Acceptance Criteria")
     reads, writes = [], []
     row = None
 
