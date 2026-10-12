@@ -129,17 +129,17 @@ def _module_function_for(node_stack: list[ast.AST]) -> str:
     ]
     if not names:
         return "<module>"
-    if len(names) > 1 and isinstance(
-        next(node for node in reversed(node_stack) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))),
-        (ast.FunctionDef, ast.AsyncFunctionDef),
-    ):
-        return ".".join(names[-2:])
-    return names[-1]
+    return ".".join(names[-2:]) if len(names) > 1 else names[-1]
 
 
 def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
     set[tuple[str, str, str]], set[tuple[str, str]], set[tuple[str, str]]
 ]:
+    """Inventory Sources callers with a bounded, scope-aware AST binding model.
+
+    The census follows visible app imports/re-exports and one path-helper -> sink-helper
+    boundary. It deliberately does not evaluate Python or follow arbitrary dynamic calls.
+    """
     literals: set[tuple[str, str, str]] = set()
     resolver_callers: set[tuple[str, str]] = set()
     source_write_callers: set[tuple[str, str]] = set()
@@ -149,27 +149,251 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
         )
         for path in sorted((repo_root / "app").rglob("*.py"))
     }
-    aliases_by_file: dict[str, dict[str, str]] = {}
-    for relative, tree in trees.items():
-        aliases = {}
-        for node in tree.body:
-            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("app."):
-                aliases.update({alias.asname or alias.name: alias.name for alias in node.names})
-        aliases_by_file[relative] = aliases
 
-    def call_name(
-        relative: str, callee: ast.expr, aliases: dict[str, str] | None = None
+    def module_for_file(relative: str) -> str:
+        parts = relative[:-3].split("/")
+        if parts[-1] == "__init__":
+            parts.pop()
+        return ".".join(parts)
+
+    module_for_relative = {relative: module_for_file(relative) for relative in trees}
+    modules = {"app"}
+    for module in module_for_relative.values():
+        parts = module.split(".")
+        modules.update(".".join(parts[:index]) for index in range(1, len(parts) + 1))
+
+    def module_target(module: str) -> str:
+        return f"module:{module}"
+
+    def function_target(module: str, node: ast.AST, qualname: tuple[str, ...]) -> str:
+        return f"function:{module}::{'.'.join(qualname)}@{node.lineno}"
+
+    def module_import_name(
+        node: ast.ImportFrom, current_module: str, relative: str
     ) -> str | None:
-        if isinstance(callee, ast.Name):
-            return (aliases or aliases_by_file[relative]).get(callee.id, callee.id)
-        if isinstance(callee, ast.Attribute):
-            return callee.attr
-        return None
+        if node.level == 0:
+            return node.module
+        current_parts = current_module.split(".")
+        is_package_init = relative.endswith("/__init__.py") or relative == "app/__init__.py"
+        package_parts = current_parts if is_package_init else current_parts[:-1]
+        trim = node.level - 1
+        if trim > len(package_parts):
+            return None
+        base = package_parts[: len(package_parts) - trim]
+        if node.module:
+            base.extend(node.module.split("."))
+        return ".".join(base)
 
-    def function_import_aliases(function: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, str]:
-        aliases: dict[str, str] = {}
+    # Identify every function by its full lexical identity, including source line. The
+    # display labels used by the existing allowlists remain short and stable.
+    function_by_node: dict[int, str] = {}
+    function_nodes: dict[str, tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+    parent_function: dict[str, str | None] = {}
+    function_display: dict[str, str] = {}
+    function_depth: dict[str, int] = {}
+    module_stack: list[ast.AST] = []
 
-        class LocalImports(ast.NodeVisitor):
+    class FunctionIndex(ast.NodeVisitor):
+        def __init__(self, relative: str) -> None:
+            self.relative = relative
+            self.module = module_for_relative[relative]
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            module_stack.append(node)
+            self.generic_visit(node)
+            module_stack.pop()
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            lexical_nodes = [
+                item
+                for item in module_stack
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            ]
+            qualname = tuple(item.name for item in lexical_nodes) + (node.name,)
+            target = function_target(self.module, node, qualname)
+            function_by_node[id(node)] = target
+            function_nodes[target] = (self.relative, node)
+            ancestors = [
+                item
+                for item in module_stack
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            ]
+            parent_function[target] = (
+                function_by_node[id(ancestors[-1])] if ancestors else None
+            )
+            function_depth[target] = len(ancestors)
+            display_stack = [item for item in module_stack if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))]
+            display_stack.append(node)
+            function_display[target] = _module_function_for(display_stack)
+            module_stack.append(node)
+            self.generic_visit(node)
+            module_stack.pop()
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+    for relative, tree in trees.items():
+        module_stack.clear()
+        FunctionIndex(relative).visit(tree)
+
+    module_specs: dict[str, dict[str, list[tuple[str, str]]]] = {
+        module: {} for module in modules
+    }
+    module_targets: dict[str, dict[str, set[str]]] = {module: {} for module in modules}
+
+    def add_binding(table: dict[str, set[str]], name: str, target: str) -> None:
+        table.setdefault(name, set()).add(target)
+
+    class ScopeBindings(ast.NodeVisitor):
+        """Collect one lexical scope, walking branches but stopping at nested scopes."""
+
+        def __init__(self, *, relative: str) -> None:
+            self.relative = relative
+            self.module = module_for_relative[relative]
+            self.bindings: dict[str, set[str]] = {}
+            self.from_specs: dict[str, list[tuple[str, str]]] = {}
+
+        def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+            target = function_by_node.get(id(node))
+            if target:
+                add_binding(self.bindings, node.name, target)
+
+        visit_AsyncFunctionDef = visit_FunctionDef
+
+        def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            return
+
+        def visit_Import(self, node: ast.Import) -> None:
+            for alias in node.names:
+                if not alias.name.startswith("app"):
+                    continue
+                bound_name = alias.asname or alias.name.split(".")[0]
+                bound_module = alias.name if alias.asname else alias.name.split(".")[0]
+                if bound_module in modules:
+                    add_binding(self.bindings, bound_name, module_target(bound_module))
+
+        def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+            base = module_import_name(node, self.module, self.relative)
+            if not base or not (base == "app" or base.startswith("app.")):
+                return
+            for alias in node.names:
+                if alias.name == "*":
+                    raise AssertionError(
+                        f"static Sources census cannot resolve star import in {self.relative}:{node.lineno}; "
+                        "replace it with explicit app imports"
+                    )
+                local_name = alias.asname or alias.name
+                self.from_specs.setdefault(local_name, []).append((base, alias.name))
+
+        def visit_Name(self, node: ast.Name) -> None:
+            if isinstance(node.ctx, ast.Store):
+                add_binding(self.bindings, node.id, "unknown:local-binding")
+
+        def visit_arg(self, node: ast.arg) -> None:
+            add_binding(self.bindings, node.arg, "unknown:local-argument")
+
+    for relative, tree in trees.items():
+        collector = ScopeBindings(relative=relative)
+        for statement in tree.body:
+            collector.visit(statement)
+        table = module_targets[module_for_relative[relative]]
+        for name, values in collector.bindings.items():
+            table.setdefault(name, set()).update(values)
+        for name, specs in collector.from_specs.items():
+            module_specs[module_for_relative[relative]].setdefault(name, []).extend(
+                specs
+            )
+
+    # Resolve package imports/re-exports to a fixed point over the finite app module graph.
+    # Unions preserve all statically possible branch bindings; no execution order is guessed.
+    changed = True
+    while changed:
+        changed = False
+        for module, names in module_specs.items():
+            for local_name, specs in names.items():
+                for base, imported in specs:
+                    before = len(module_targets[module].get(local_name, set()))
+                    child_module = f"{base}.{imported}" if base else imported
+                    if child_module in modules:
+                        add_binding(module_targets[module], local_name, module_target(child_module))
+                    for target in module_targets.get(base, {}).get(imported, set()):
+                        add_binding(module_targets[module], local_name, target)
+                    if len(module_targets[module].get(local_name, set())) != before:
+                        changed = True
+
+    def resolve_import_target(relative: str, base: str, imported: str) -> set[str]:
+        found: set[str] = set()
+        child_module = f"{base}.{imported}" if base else imported
+        if child_module in modules:
+            found.add(module_target(child_module))
+        found.update(module_targets.get(base, {}).get(imported, set()))
+        return found
+
+    def scope_bindings(
+        relative: str, function: ast.FunctionDef | ast.AsyncFunctionDef
+    ) -> dict[str, set[str]]:
+        collector = ScopeBindings(relative=relative)
+        for argument in (
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+            *((function.args.vararg,) if function.args.vararg else ()),
+            *((function.args.kwarg,) if function.args.kwarg else ()),
+        ):
+            collector.visit(argument)
+        for statement in function.body:
+            collector.visit(statement)
+        result = {name: set(values) for name, values in collector.bindings.items()}
+        for name, specs in collector.from_specs.items():
+            for base, imported in specs:
+                result.setdefault(name, set()).update(resolve_import_target(relative, base, imported))
+        return result
+
+    function_env: dict[str, dict[str, set[str]]] = {}
+    for target in sorted(function_nodes, key=lambda item: function_depth[item]):
+        relative, node = function_nodes[target]
+        module = module_for_relative[relative]
+        env = {name: set(values) for name, values in module_targets.get(module, {}).items()}
+        parent = parent_function[target]
+        if parent is not None:
+            env.update({name: set(values) for name, values in function_env[parent].items()})
+        local = scope_bindings(relative, node)
+        env.update(local)
+        function_env[target] = env
+
+    def expression_targets(relative: str, expression: ast.expr, env: dict[str, set[str]]) -> set[str]:
+        if isinstance(expression, ast.Name):
+            if expression.id in env:
+                return set(env[expression.id])
+            if expression.id == "app":
+                return {module_target("app")}
+            return {f"symbol:{expression.id}"}
+        if isinstance(expression, ast.Attribute):
+            result: set[str] = set()
+            for base_target in expression_targets(relative, expression.value, env):
+                if base_target.startswith("module:"):
+                    base = base_target.removeprefix("module:")
+                    result.update(resolve_import_target(relative, base, expression.attr))
+            # Preserve direct attribute calls used by the existing census, including
+            # imported runtime objects whose implementation is outside app/.
+            if expression.attr in SOURCE_PATH_BUILDERS | SOURCE_WRITE_SINKS | {
+                "get_vault_sources_dir_rel",
+                "resolve_vault_sources_dir_rel",
+            }:
+                result.add(f"symbol:{expression.attr}")
+            return result
+        return set()
+
+    def function_named(target: str, names: set[str]) -> bool:
+        if target.startswith("symbol:"):
+            return target.removeprefix("symbol:") in names
+        record = function_nodes.get(target)
+        return bool(record and record[1].name in names)
+
+    calls_by_function: dict[str, list[tuple[set[str], ast.Call]]] = {}
+    for target, (relative, function) in function_nodes.items():
+        calls: list[tuple[set[str], ast.Call]] = []
+
+        class DirectCalls(ast.NodeVisitor):
             def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
                 return
 
@@ -178,24 +402,27 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
             def visit_ClassDef(self, node: ast.ClassDef) -> None:
                 return
 
-            def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-                if (node.module or "").startswith("app."):
-                    aliases.update(
-                        {alias.asname or alias.name: alias.name for alias in node.names}
-                    )
+            def visit_Call(self, node: ast.Call) -> None:
+                calls.append((expression_targets(relative, node.func, function_env[target]), node))
+                self.generic_visit(node)
 
-        visitor = LocalImports()
+        visitor = DirectCalls()
         for statement in function.body:
             visitor.visit(statement)
-        return aliases
+        calls_by_function[target] = calls
+        if any(
+            any(function_named(callee, {"get_vault_sources_dir_rel", "resolve_vault_sources_dir_rel"}) for callee in callees)
+            for callees, _call in calls
+        ):
+            resolver_callers.add((relative, function_display[target]))
 
-    calls_by_function: dict[tuple[str, str], list[tuple[str, ast.Call]]] = {}
-    function_nodes: dict[tuple[str, str], ast.FunctionDef | ast.AsyncFunctionDef] = {}
-    aliases_by_function: dict[tuple[str, str], dict[str, str]] = {}
+    # Preserve literals and module-level resolver calls in the full source walk.
     for relative, tree in trees.items():
+        module = module_for_relative[relative]
+        env = {name: set(values) for name, values in module_targets.get(module, {}).items()}
         stack: list[ast.AST] = []
 
-        class Inventory(ast.NodeVisitor):
+        class SourceFacts(ast.NodeVisitor):
             def visit_ClassDef(self, node: ast.ClassDef) -> None:
                 stack.append(node)
                 self.generic_visit(node)
@@ -203,102 +430,89 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
 
             def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
                 stack.append(node)
-                key = (relative, _module_function_for(stack))
-                function_nodes[key] = node
-                aliases = dict(aliases_by_file[relative])
-                for index, ancestor in enumerate(stack[:-1]):
-                    if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                        ancestor_key = (relative, _module_function_for(stack[: index + 1]))
-                        aliases.update(aliases_by_function.get(ancestor_key, {}))
-                aliases.update(function_import_aliases(node))
-                aliases_by_function[key] = aliases
-                calls: list[tuple[str, ast.Call]] = []
-
-                class DirectCalls(ast.NodeVisitor):
-                    def visit_FunctionDef(self, nested: ast.FunctionDef) -> None:
-                        return
-
-                    visit_AsyncFunctionDef = visit_FunctionDef
-
-                    def visit_Call(self, call: ast.Call) -> None:
-                        name = call_name(relative, call.func, aliases)
-                        if name:
-                            calls.append((name, call))
-                        self.generic_visit(call)
-
-                for statement in node.body:
-                    DirectCalls().visit(statement)
-                calls_by_function[key] = calls
                 self.generic_visit(node)
                 stack.pop()
 
             visit_AsyncFunctionDef = visit_FunctionDef
 
             def visit_Constant(self, node: ast.Constant) -> None:
-                if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                    if node.value == "Sources" or node.value.startswith("Sources/"):
-                        literals.add((relative, _module_function_for(stack), node.value))
+                if isinstance(node.value, str) and (node.value == "Sources" or node.value.startswith("Sources/")):
+                    literals.add((relative, _module_function_for(stack), node.value))
 
             def visit_Call(self, node: ast.Call) -> None:
-                active_function = next(
+                active_target = next(
                     (
-                        (relative, _module_function_for(stack[: index + 1]))
-                        for index in range(len(stack) - 1, -1, -1)
-                        if isinstance(stack[index], (ast.FunctionDef, ast.AsyncFunctionDef))
+                        function_by_node[id(item)]
+                        for item in reversed(stack)
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and id(item) in function_by_node
                     ),
                     None,
                 )
-                aliases = aliases_by_function.get(active_function, aliases_by_file[relative])
-                if call_name(relative, node.func, aliases) in {
-                    "get_vault_sources_dir_rel",
-                    "resolve_vault_sources_dir_rel",
-                }:
-                    resolver_callers.add((relative, _module_function_for(stack)))
+                active_env = function_env.get(active_target, env)
+                if not any(
+                    function_named(callee, {"get_vault_sources_dir_rel", "resolve_vault_sources_dir_rel"})
+                    for callee in expression_targets(relative, node.func, active_env)
+                ):
+                    return self.generic_visit(node)
+                active = function_display[active_target] if active_target else _module_function_for(stack)
+                resolver_callers.add((relative, active))
                 self.generic_visit(node)
 
-        Inventory().visit(tree)
+        SourceFacts().visit(tree)
 
     builders_by_function = {
-        key
-        for key, calls in calls_by_function.items()
-        if any(name in SOURCE_PATH_BUILDERS for name, _call in calls)
+        target
+        for target, calls in calls_by_function.items()
+        if any(
+            any(function_named(callee, SOURCE_PATH_BUILDERS) for callee in callees)
+            for callees, _call in calls
+        )
     }
     sinks_by_function = {
-        key
-        for key, calls in calls_by_function.items()
-        if any(name in SOURCE_WRITE_SINKS for name, _call in calls)
+        target
+        for target, calls in calls_by_function.items()
+        if any(
+            any(function_named(callee, SOURCE_WRITE_SINKS) for callee in callees)
+            for callees, _call in calls
+        )
     }
-    source_write_callers.update(builders_by_function & sinks_by_function)
+    source_write_callers.update(
+        (function_nodes[target][0], function_display[target])
+        for target in builders_by_function & sinks_by_function
+    )
 
-    # Follow one explicit helper boundary: aliases are normalized above, and a path value must
-    # reach a helper containing a sink. This is intentionally not general Python dataflow.
-    path_helper_names = {
-        key[1].split(".")[-1] for key in builders_by_function - sinks_by_function
-    }
-    sink_helper_names = {key[1].split(".")[-1] for key in sinks_by_function}
+    # One explicit helper boundary: builder-containing helpers may feed a sink-containing
+    # helper. Function IDs include full lexical scope and source line, avoiding basename
+    # collisions between unrelated helpers.
+    path_helpers = builders_by_function - sinks_by_function
 
-    def is_source_path(relative: str, expression: ast.AST, names: set[str]) -> bool:
+    def is_source_path(relative: str, expression: ast.AST, env: dict[str, set[str]], names: set[str]) -> bool:
         for child in ast.walk(expression):
             if isinstance(child, ast.Name) and child.id in names:
                 return True
-            if isinstance(child, ast.Call) and call_name(
-                relative, child.func, aliases_by_function.get(key, aliases_by_file[relative])
-            ) in (
-                SOURCE_PATH_BUILDERS | path_helper_names
-            ):
-                return True
+            if isinstance(child, ast.Call):
+                callees = expression_targets(relative, child.func, env)
+                if any(
+                    function_named(callee, SOURCE_PATH_BUILDERS)
+                    or callee in path_helpers
+                    for callee in callees
+                ):
+                    return True
         return False
 
-    for key, calls in calls_by_function.items():
-        function_node = function_nodes[key]
+    for target, calls in calls_by_function.items():
+        relative, function = function_nodes[target]
         assignments: list[tuple[list[ast.expr], ast.expr]] = []
 
         class Assignments(ast.NodeVisitor):
             def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-                if node is function_node:
-                    self.generic_visit(node)
+                return
 
             visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                return
 
             def visit_Assign(self, node: ast.Assign) -> None:
                 assignments.append((list(node.targets), node.value))
@@ -313,28 +527,33 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                 assignments.append(([node.target], node.value))
                 self.generic_visit(node.value)
 
-        Assignments().visit(function_node)
+        visitor = Assignments()
+        for statement in function.body:
+            visitor.visit(statement)
         source_names: set[str] = set()
         changed = True
         while changed:
             changed = False
             for targets, value in assignments:
-                if is_source_path(key[0], value, source_names):
-                    for target in targets:
-                        for child in ast.walk(target):
+                if is_source_path(relative, value, function_env[target], source_names):
+                    for assigned in targets:
+                        for child in ast.walk(assigned):
                             if isinstance(child, ast.Name) and child.id not in source_names:
                                 source_names.add(child.id)
                                 changed = True
 
         if any(
-            name in sink_helper_names
+            any(
+                callee in sinks_by_function or function_named(callee, SOURCE_WRITE_SINKS)
+                for callee in callees
+            )
             and any(
-                is_source_path(key[0], argument, source_names)
+                is_source_path(relative, argument, function_env[target], source_names)
                 for argument in (*call.args, *(keyword.value for keyword in call.keywords))
             )
-            for name, call in calls
+            for callees, call in calls
         ):
-            source_write_callers.add(key)
+            source_write_callers.add((relative, function_display[target]))
 
     return literals, resolver_callers, source_write_callers
 
@@ -431,10 +650,17 @@ def test_zone_resolved_via_settings_not_literal() -> None:
 def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: Path) -> None:
     files = {
         "app/__init__.py": "",
-        "app/writers/__init__.py": "",
+        "app/writers/__init__.py": (
+            "from .exports import package_path as chain_path\n"
+            "from .exports import package_sink as chain_sink\n"
+        ),
         "app/writers/paths.py": (
             "def get_vault_sources_dir_rel():\n"
             "    return 'configured-sources'\n"
+        ),
+        "app/writers/inbox_paths.py": (
+            "def get_vault_inbox_dir_rel():\n"
+            "    return 'Inbox'\n"
         ),
         "app/writers/sinks.py": "def write_note_relative(path):\n    return path\n",
         "app/writers/helpers.py": (
@@ -445,12 +671,49 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
             "def write_source_path(path):\n"
             "    return persist_note(path)\n"
         ),
+        "app/writers/exports/__init__.py": (
+            "from ..helpers import build_source_path as package_path\n"
+            "from ..helpers import write_source_path as package_sink\n"
+        ),
+        "app/writers/relative.py": (
+            "from . import helpers as helper_api\n"
+            "from .sinks import write_note_relative as relative_sink\n"
+            "def relative_sink_wrapper(path):\n"
+            "    return relative_sink(path)\n"
+            "def relative_import_writer():\n"
+            "    path = helper_api.build_source_path()\n"
+            "    return relative_sink_wrapper(path)\n"
+        ),
         "app/writers/producer.py": (
             "from app.writers.helpers import build_source_path as make_path\n"
             "from app.writers.helpers import write_source_path as save_path\n"
+            "from app.writers import chain_path, chain_sink\n"
+            "from app.writers.paths import get_vault_sources_dir_rel as factory_resolve\n"
+            "from app.writers.sinks import write_note_relative as factory_persist\n"
+            "try:\n"
+            "    from app.writers.helpers import build_source_path as try_path\n"
+            "except ImportError:\n"
+            "    from app.writers.helpers import build_source_path as try_path\n"
+            "try:\n"
+            "    from app.writers.helpers import write_source_path as try_sink\n"
+            "except ImportError:\n"
+            "    from app.writers.helpers import write_source_path as try_sink\n"
             "def newly_added_writer():\n"
             "    path = make_path()\n"
             "    return save_path(path)\n"
+            "def package_reexport_writer():\n"
+            "    path = chain_path()\n"
+            "    return chain_sink(path)\n"
+            "def try_import_writer():\n"
+            "    path = try_path()\n"
+            "    return try_sink(path)\n"
+            "def branched_alias_writer(use_sources):\n"
+            "    if use_sources:\n"
+            "        from app.writers.paths import get_vault_sources_dir_rel as resolve_branch\n"
+            "    else:\n"
+            "        from app.writers.inbox_paths import get_vault_inbox_dir_rel as resolve_branch\n"
+            "    from app.writers.sinks import write_note_relative as persist_branch\n"
+            "    return persist_branch(f'{resolve_branch()}/branch.md')\n"
             "def unrelated_path_and_write_calls():\n"
             "    path = make_path()\n"
             "    return save_path('unrelated')\n"
@@ -466,6 +729,32 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
             "    def persist_path_3414(path):\n"
             "        return persist_3414(path)\n"
             "    return persist_path_3414(make_path_3414())\n"
+            "def shadowed_enclosing_resolver_3414():\n"
+            "    from app.writers.paths import get_vault_sources_dir_rel as resolve_shadowed\n"
+            "    from app.writers.sinks import write_note_relative as persist_shadowed\n"
+            "    def write_inbox():\n"
+            "        def resolve_shadowed():\n"
+            "            return 'Inbox'\n"
+            "        return persist_shadowed(resolve_shadowed())\n"
+            "    return write_inbox()\n"
+            "def factory_a_3414():\n"
+            "    def make_path():\n"
+            "        return f'{factory_resolve()}/a.md'\n"
+            "    def persist_path(path):\n"
+            "        return factory_persist(path)\n"
+            "    def writer():\n"
+            "        path = make_path()\n"
+            "        return persist_path(path)\n"
+            "    return writer()\n"
+            "def factory_b_3414():\n"
+            "    def make_path():\n"
+            "        return 'Inbox/b.md'\n"
+            "    def persist_path(path):\n"
+            "        return path\n"
+            "    def writer():\n"
+            "        path = make_path()\n"
+            "        return persist_path(path)\n"
+            "    return writer()\n"
         ),
     }
     for relative, content in files.items():
@@ -481,9 +770,26 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
         "nested_local_import_writer_3414.make_path_3414",
     ) in resolver_callers
     assert ("app/writers/producer.py", "newly_added_writer") in source_write_callers
+    assert ("app/writers/producer.py", "package_reexport_writer") in source_write_callers
+    assert ("app/writers/producer.py", "try_import_writer") in source_write_callers
+    assert ("app/writers/producer.py", "branched_alias_writer") in source_write_callers
     assert ("app/writers/producer.py", "local_import_writer") in source_write_callers
     assert ("app/writers/producer.py", "nested_local_import_writer_3414") in source_write_callers
+    assert ("app/writers/relative.py", "relative_import_writer") in source_write_callers
+    assert ("app/writers/producer.py", "factory_a_3414.writer") in source_write_callers
+    assert ("app/writers/producer.py", "factory_b_3414.writer") not in source_write_callers
+    assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in resolver_callers
+    assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in source_write_callers
     assert ("app/writers/producer.py", "unrelated_path_and_write_calls") not in source_write_callers
+
+
+def test_writer_inventory_fails_closed_on_unresolved_star_import(tmp_path: Path) -> None:
+    target = tmp_path / "app" / "writers.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("from app.helpers import *\n", encoding="utf-8")
+
+    with pytest.raises(AssertionError, match="cannot resolve star import"):
+        _source_code_inventory(tmp_path)
 
 
 def test_only_registered_writers_target_sources_zone(
