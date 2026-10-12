@@ -55,6 +55,7 @@ REGISTERED_SOURCE_WRITERS = {
     ("app/knowledge_acquisition/source_frames.py", "capture_source_frames"),
     ("app/heimdal/candidate_projection.py", "write_candidate_note"),
     ("app/heimdal/candidate_projection.py", "write_reading_candidate_note"),
+    ("app/heimdal/candidate_projection.py", "project_pending_candidates"),
     ("app/heimdal/meeting_finalization.py", "finalize_session"),
 }
 
@@ -136,25 +137,49 @@ def _module_function_for(node_stack: list[ast.AST]) -> str:
     return names[-1]
 
 
-def _source_code_inventory() -> tuple[
+def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
     set[tuple[str, str, str]], set[tuple[str, str]], set[tuple[str, str]]
 ]:
     literals: set[tuple[str, str, str]] = set()
     resolver_callers: set[tuple[str, str]] = set()
     source_write_callers: set[tuple[str, str]] = set()
-    for path in sorted((REPO_ROOT / "app").rglob("*.py")):
-        relative = path.relative_to(REPO_ROOT).as_posix()
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=relative)
+    trees = {
+        path.relative_to(repo_root).as_posix(): ast.parse(
+            path.read_text(encoding="utf-8"), filename=path.relative_to(repo_root).as_posix()
+        )
+        for path in sorted((repo_root / "app").rglob("*.py"))
+    }
+    aliases_by_file: dict[str, dict[str, str]] = {}
+    for relative, tree in trees.items():
+        aliases = {}
+        for node in tree.body:
+            if isinstance(node, ast.ImportFrom):
+                aliases.update({alias.asname or alias.name: alias.name for alias in node.names})
+        aliases_by_file[relative] = aliases
+
+    def call_name(relative: str, callee: ast.expr) -> str | None:
+        if isinstance(callee, ast.Name):
+            return aliases_by_file[relative].get(callee.id, callee.id)
+        if isinstance(callee, ast.Attribute):
+            return callee.attr
+        return None
+
+    calls_by_function: dict[tuple[str, str], list[tuple[str, ast.Call]]] = {}
+    function_nodes: dict[tuple[str, str], ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    for relative, tree in trees.items():
         stack: list[ast.AST] = []
 
         class Inventory(ast.NodeVisitor):
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                stack.append(node)
+                self.generic_visit(node)
+                stack.pop()
+
             def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-                self._visit_function(node)
-
-            visit_AsyncFunctionDef = visit_FunctionDef
-
-            def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-                calls: set[str] = set()
+                stack.append(node)
+                key = (relative, _module_function_for(stack))
+                function_nodes[key] = node
+                calls: list[tuple[str, ast.Call]] = []
 
                 class DirectCalls(ast.NodeVisitor):
                     def visit_FunctionDef(self, nested: ast.FunctionDef) -> None:
@@ -163,38 +188,110 @@ def _source_code_inventory() -> tuple[
                     visit_AsyncFunctionDef = visit_FunctionDef
 
                     def visit_Call(self, call: ast.Call) -> None:
-                        if isinstance(call.func, ast.Name):
-                            calls.add(call.func.id)
-                        elif isinstance(call.func, ast.Attribute):
-                            calls.add(call.func.attr)
+                        name = call_name(relative, call.func)
+                        if name:
+                            calls.append((name, call))
                         self.generic_visit(call)
 
                 for statement in node.body:
                     DirectCalls().visit(statement)
-                if SOURCE_WRITE_SINKS.intersection(calls) and SOURCE_PATH_BUILDERS.intersection(calls):
-                    source_write_callers.add((relative, node.name))
-
-                stack.append(node)
+                calls_by_function[key] = calls
                 self.generic_visit(node)
                 stack.pop()
 
-            def generic_visit(self, node: ast.AST) -> None:
-                if isinstance(node, ast.ClassDef):
-                    stack.append(node)
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Constant(self, node: ast.Constant) -> None:
                 if isinstance(node, ast.Constant) and isinstance(node.value, str):
                     if node.value == "Sources" or node.value.startswith("Sources/"):
                         literals.add((relative, _module_function_for(stack), node.value))
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id in {"get_vault_sources_dir_rel", "resolve_vault_sources_dir_rel"}
-                ):
+
+            def visit_Call(self, node: ast.Call) -> None:
+                if call_name(relative, node.func) in {
+                    "get_vault_sources_dir_rel",
+                    "resolve_vault_sources_dir_rel",
+                }:
                     resolver_callers.add((relative, _module_function_for(stack)))
-                super().generic_visit(node)
-                if isinstance(node, ast.ClassDef):
-                    stack.pop()
+                self.generic_visit(node)
 
         Inventory().visit(tree)
+
+    builders_by_function = {
+        key
+        for key, calls in calls_by_function.items()
+        if any(name in SOURCE_PATH_BUILDERS for name, _call in calls)
+    }
+    sinks_by_function = {
+        key
+        for key, calls in calls_by_function.items()
+        if any(name in SOURCE_WRITE_SINKS for name, _call in calls)
+    }
+    source_write_callers.update(builders_by_function & sinks_by_function)
+
+    # Follow one explicit helper boundary: aliases are normalized above, and a path value must
+    # reach a helper containing a sink. This is intentionally not general Python dataflow.
+    path_helper_names = {
+        key[1].split(".")[-1] for key in builders_by_function - sinks_by_function
+    }
+    sink_helper_names = {key[1].split(".")[-1] for key in sinks_by_function}
+
+    def is_source_path(relative: str, expression: ast.AST, names: set[str]) -> bool:
+        for child in ast.walk(expression):
+            if isinstance(child, ast.Name) and child.id in names:
+                return True
+            if isinstance(child, ast.Call) and call_name(relative, child.func) in (
+                SOURCE_PATH_BUILDERS | path_helper_names
+            ):
+                return True
+        return False
+
+    for key, calls in calls_by_function.items():
+        function_node = function_nodes[key]
+        assignments: list[tuple[list[ast.expr], ast.expr]] = []
+
+        class Assignments(ast.NodeVisitor):
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                if node is function_node:
+                    self.generic_visit(node)
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_Assign(self, node: ast.Assign) -> None:
+                assignments.append((list(node.targets), node.value))
+                self.generic_visit(node.value)
+
+            def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+                if node.value is not None:
+                    assignments.append(([node.target], node.value))
+                    self.generic_visit(node.value)
+
+            def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+                assignments.append(([node.target], node.value))
+                self.generic_visit(node.value)
+
+        Assignments().visit(function_node)
+        source_names: set[str] = set()
+        changed = True
+        while changed:
+            changed = False
+            for targets, value in assignments:
+                if is_source_path(key[0], value, source_names):
+                    for target in targets:
+                        for child in ast.walk(target):
+                            if isinstance(child, ast.Name) and child.id not in source_names:
+                                source_names.add(child.id)
+                                changed = True
+
+        if any(
+            name in sink_helper_names
+            and any(
+                is_source_path(key[0], argument, source_names)
+                for argument in (*call.args, *(keyword.value for keyword in call.keywords))
+            )
+            for name, call in calls
+        ):
+            source_write_callers.add(key)
+
     return literals, resolver_callers, source_write_callers
 
 
@@ -285,6 +382,46 @@ def test_zone_resolved_via_settings_not_literal() -> None:
     assert literals == SOURCE_LITERAL_ALLOWLIST
     assert resolver_callers == SOURCE_RESOLVER_CALLERS
     assert source_write_callers == REGISTERED_SOURCE_WRITERS | SOURCE_WRITE_EXCLUSIONS
+
+
+def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: Path) -> None:
+    files = {
+        "app/__init__.py": "",
+        "app/writers/__init__.py": "",
+        "app/writers/paths.py": (
+            "def get_vault_sources_dir_rel():\n"
+            "    return 'configured-sources'\n"
+        ),
+        "app/writers/sinks.py": "def write_note_relative(path):\n    return path\n",
+        "app/writers/helpers.py": (
+            "import app.writers.paths as path_api\n"
+            "from app.writers.sinks import write_note_relative as persist_note\n"
+            "def build_source_path():\n"
+            "    return path_api.get_vault_sources_dir_rel()\n"
+            "def write_source_path(path):\n"
+            "    return persist_note(path)\n"
+        ),
+        "app/writers/producer.py": (
+            "from app.writers.helpers import build_source_path as make_path\n"
+            "from app.writers.helpers import write_source_path as save_path\n"
+            "def newly_added_writer():\n"
+            "    path = make_path()\n"
+            "    return save_path(path)\n"
+            "def unrelated_path_and_write_calls():\n"
+            "    path = make_path()\n"
+            "    return save_path('unrelated')\n"
+        ),
+    }
+    for relative, content in files.items():
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+
+    _literals, resolver_callers, source_write_callers = _source_code_inventory(tmp_path)
+
+    assert ("app/writers/helpers.py", "build_source_path") in resolver_callers
+    assert ("app/writers/producer.py", "newly_added_writer") in source_write_callers
+    assert ("app/writers/producer.py", "unrelated_path_and_write_calls") not in source_write_callers
 
 
 def test_only_registered_writers_target_sources_zone(
