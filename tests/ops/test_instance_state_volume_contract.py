@@ -204,6 +204,23 @@ def _isolated_native_inventory_helper(tmp_path: Path) -> tuple[Path, Path]:
     return helper, pids_path
 
 
+def _persistent_native_error_inventory_helper(tmp_path: Path) -> Path:
+    """Run the production CLI with a persistent native enumeration failure."""
+    helper = tmp_path / "persistent_native_error_inventory_helper.py"
+    helper.write_text(
+        "import sys\n"
+        f"sys.path.insert(0, {str(REPO_ROOT)!r})\n"
+        "from scripts import instance_state_writer_inventory as inventory\n"
+        "def fail_native(*, linux_boot_id=None):\n"
+        "    del linux_boot_id\n"
+        "    raise inventory.InventoryError('native process enumeration failed')\n"
+        "inventory._native_processes = fail_native\n"
+        "raise SystemExit(inventory.main(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    return helper
+
+
 def _controller_token(pid: int, *, env: dict[str, str] | None = None) -> str:
     return subprocess.check_output(
         [
@@ -3268,47 +3285,15 @@ def test_native_process_enumeration_error_fails_closed_without_proof(tmp_path) -
     output = tmp_path / "inventory.json"
     if sys.platform.startswith("linux"):
         env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
-        ready_r, ready_w = os.pipe()
-        continue_r, continue_w = os.pipe()
-        env |= {
-            "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_READY_FD": str(ready_w),
-            "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_CONTINUE_FD": str(continue_r),
-        }
-        launcher = _start_blocking_launcher(
-            _write_blocking_launcher(tmp_path), separate_session=True
-        )
-        helper = subprocess.Popen(
-            [
-                sys.executable,
-                str(WRITER_INVENTORY_HELPER),
-                "prove-quiescent",
-                "--controller-pid",
-                str(controller_pid),
-                "--controller-start-token",
-                controller_token,
-                "--output",
-                str(output),
-            ],
+        result, _ = _run_quiescence_helper(
+            tmp_path,
+            controller_pid=controller_pid,
+            controller_token=controller_token,
             env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            pass_fds=(ready_w, continue_r),
-            text=True,
+            inventory_helper=_persistent_native_error_inventory_helper(tmp_path),
         )
-        os.close(ready_w)
-        os.close(continue_r)
-        try:
-            assert os.read(ready_r, 1) == b"R"
-            _stop_blocking_launcher(launcher)
-            os.write(continue_w, b"C")
-            _, stderr = helper.communicate(timeout=10)
-        finally:
-            os.close(ready_r)
-            os.close(continue_w)
-            _stop_blocking_launcher(launcher)
-            if helper.poll() is None:
-                helper.kill()
-                helper.wait(timeout=5)
+        stderr = result.stderr
+        helper = None
     else:
         fake_bin = tmp_path / "native-bin"
         fake_bin.mkdir()
@@ -3336,6 +3321,283 @@ def test_native_process_enumeration_error_fails_closed_without_proof(tmp_path) -
     assert (helper.returncode if helper is not None else result.returncode) != 0
     assert "native process enumeration failed" in stderr
     assert not output.exists()
+
+
+def _install_fake_linux_proc_listing(
+    monkeypatch, pids: list[int], *, pids_by_read: list[list[int]] | None = None
+) -> list[int]:
+    real_path = writer_inventory.Path
+    proc_list_reads: list[int] = []
+
+    class FakeProcDirectory:
+        def iterdir(self):
+            read_index = len(proc_list_reads)
+            proc_list_reads.append(1)
+            listed_pids = (
+                pids_by_read[read_index]
+                if pids_by_read is not None and read_index < len(pids_by_read)
+                else pids
+            )
+            return [type("ProcEntry", (), {"name": str(pid)})() for pid in listed_pids]
+
+    def path_factory(value, *parts):
+        if str(value) == "/proc" and not parts:
+            return FakeProcDirectory()
+        return real_path(value, *parts)
+
+    monkeypatch.setattr(writer_inventory, "Path", path_factory)
+    return proc_list_reads
+
+
+def test_prove_quiescent_retries_disappearing_linux_pid_with_complete_new_census(
+    monkeypatch, tmp_path
+) -> None:
+    """A raced census is discarded before the shipped proof path retries it."""
+
+    controller = writer_inventory.ProcessRecord(
+        pid=900,
+        ppid=1,
+        pgid=900,
+        start_token="linux:" + "a" * 64,
+        argv=("deploy_channel.sh",),
+    )
+    proc_list_reads = _install_fake_linux_proc_listing(
+        monkeypatch, [901], pids_by_read=[[901], [], []]
+    )
+    stat = _linux_stat_fixture(901)
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[FileNotFoundError()] * 3 + [stat, stat, stat, stat],
+        cmdlines=[b"/usr/bin/sleep\0", b"/usr/bin/sleep\0"],
+        gone=True,
+    )
+    monkeypatch.setattr(writer_inventory.sys, "platform", "linux")
+    monkeypatch.setattr(writer_inventory, "_read_linux_boot_id", lambda: "boot-fixture")
+    monkeypatch.setattr(writer_inventory, "_record_for_pid", lambda *args, **kwargs: controller)
+    monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
+    output = tmp_path / "inventory.json"
+
+    assert (
+        writer_inventory.main(
+            [
+                "prove-quiescent",
+                "--controller-pid",
+                str(controller.pid),
+                "--controller-start-token",
+                controller.start_token,
+                "--output",
+                str(output),
+            ]
+        )
+        == 0
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["probe_count"] == 2
+    assert payload["domains"] == {"dev": [], "native": [], "prod": [], "test": []}
+    assert payload["snapshot_digests"][0] == payload["snapshot_digests"][1]
+    assert len(proc_list_reads) == 3
+
+
+def test_prove_quiescent_cli_refuses_controller_loss_after_census_retry(
+    monkeypatch, tmp_path
+) -> None:
+    """A retried census cannot prove quiescence after its controller disappears."""
+
+    controller = writer_inventory.ProcessRecord(
+        pid=900,
+        ppid=1,
+        pgid=900,
+        start_token="linux:" + "a" * 64,
+        argv=("deploy_channel.sh",),
+    )
+    proc_list_reads = _install_fake_linux_proc_listing(
+        monkeypatch, [], pids_by_read=[[], [900], []]
+    )
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[FileNotFoundError()] * 3,
+        cmdlines=[],
+        gone=True,
+    )
+    monkeypatch.setattr(writer_inventory.sys, "platform", "linux")
+    monkeypatch.setattr(writer_inventory, "_read_linux_boot_id", lambda: "boot-fixture")
+    controller_reads: list[int] = []
+
+    def controller_record(pid, *, linux_boot_id):
+        del linux_boot_id
+        controller_reads.append(pid)
+        if len(controller_reads) == 4:
+            raise InventoryError("controller process identity is unavailable")
+        return controller
+
+    monkeypatch.setattr(writer_inventory, "_record_for_pid", controller_record)
+    monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
+    output = tmp_path / "inventory.json"
+
+    assert (
+        writer_inventory.main(
+            [
+                "prove-quiescent",
+                "--controller-pid",
+                str(controller.pid),
+                "--controller-start-token",
+                controller.start_token,
+                "--output",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    assert len(controller_reads) == 4
+    assert len(proc_list_reads) == 3
+    assert not output.exists()
+
+
+def test_linux_record_permission_error_stays_terminal_when_pid_vanishes(monkeypatch) -> None:
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[PermissionError(), FileNotFoundError(), FileNotFoundError()],
+        cmdlines=[],
+        gone=True,
+    )
+
+    with pytest.raises(InventoryError) as exc_info:
+        writer_inventory._linux_record(
+            901,
+            "boot-fixture",
+            fail_closed_on_gone=True,
+        )
+
+    assert type(exc_info.value) is InventoryError
+    assert str(exc_info.value) == "native process enumeration failed"
+
+
+def test_linux_record_malformed_identity_stays_terminal_when_pid_vanishes(monkeypatch) -> None:
+    _install_linux_proc_fixture(
+        monkeypatch,
+        stats=[
+            "901 (fixture) malformed",
+            FileNotFoundError(),
+            FileNotFoundError(),
+        ],
+        cmdlines=[],
+        gone=True,
+    )
+
+    with pytest.raises(InventoryError) as exc_info:
+        writer_inventory._linux_record(
+            901,
+            "boot-fixture",
+            fail_closed_on_gone=True,
+        )
+
+    assert type(exc_info.value) is InventoryError
+    assert str(exc_info.value) == "native process identity is malformed"
+
+
+def test_prove_quiescent_exhausted_census_churn_writes_no_proof(monkeypatch, tmp_path) -> None:
+    proc_list_reads = _install_fake_linux_proc_listing(monkeypatch, [901])
+    monkeypatch.setattr(writer_inventory.sys, "platform", "linux")
+    monkeypatch.setattr(writer_inventory, "_read_linux_boot_id", lambda: "boot-fixture")
+    monkeypatch.setattr(
+        writer_inventory,
+        "_record_for_pid",
+        lambda *args, **kwargs: writer_inventory.ProcessRecord(
+            pid=900,
+            ppid=1,
+            pgid=900,
+            start_token="linux:" + "a" * 64,
+            argv=("deploy_channel.sh",),
+        ),
+    )
+    monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
+    calls: list[int] = []
+
+    def persistent_churn(pid, boot_id, *, fail_closed_on_gone=False):
+        del boot_id, fail_closed_on_gone
+        calls.append(pid)
+        raise writer_inventory._LinuxCensusIncomplete(
+            "native process enumeration failed"
+        )
+
+    monkeypatch.setattr(writer_inventory, "_linux_record", persistent_churn)
+    output = tmp_path / "inventory.json"
+
+    assert (
+        writer_inventory.main(
+            [
+                "prove-quiescent",
+                "--controller-pid",
+                "900",
+                "--controller-start-token",
+                "linux:" + "a" * 64,
+                "--output",
+                str(output),
+            ]
+        )
+        == 1
+    )
+    assert len(calls) == writer_inventory.LINUX_CENSUS_ATTEMPTS
+    assert len(proc_list_reads) == writer_inventory.LINUX_CENSUS_ATTEMPTS
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("refusal", ["live", "unclassified", "permission", "controller"])
+def test_prove_quiescent_census_retry_preserves_refusal_matrix(
+    monkeypatch, tmp_path, refusal: str
+) -> None:
+    proc_list_reads = _install_fake_linux_proc_listing(monkeypatch, [901])
+    monkeypatch.setattr(writer_inventory.sys, "platform", "linux")
+    monkeypatch.setattr(writer_inventory, "_read_linux_boot_id", lambda: "boot-fixture")
+    controller = writer_inventory.ProcessRecord(
+        pid=900,
+        ppid=1,
+        pgid=900,
+        start_token="linux:" + "a" * 64,
+        argv=("deploy_channel.sh",),
+    )
+    if refusal == "controller":
+        def changed_controller(*args, **kwargs):
+            raise InventoryError("deployment controller identity changed")
+
+        monkeypatch.setattr(writer_inventory, "_record_for_pid", changed_controller)
+    else:
+        monkeypatch.setattr(writer_inventory, "_record_for_pid", lambda *args, **kwargs: controller)
+    monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
+    calls: list[int] = []
+
+    def refusal_record(pid, boot_id, *, fail_closed_on_gone=False):
+        del boot_id, fail_closed_on_gone
+        calls.append(pid)
+        if refusal == "permission":
+            raise InventoryError("native process enumeration failed")
+        argv = {
+            "live": ("uvicorn", "app.api.app:app"),
+            "unclassified": ("python", "-m", "app.future.writer"),
+        }[refusal]
+        return writer_inventory.ProcessRecord(
+            pid=pid,
+            ppid=1,
+            pgid=pid,
+            start_token="linux:" + "b" * 64,
+            argv=argv,
+        )
+
+    monkeypatch.setattr(writer_inventory, "_linux_record", refusal_record)
+    output = tmp_path / "inventory.json"
+
+    with pytest.raises(InventoryError):
+        writer_inventory.prove_quiescent(
+            controller_pid=controller.pid,
+            controller_start_token=controller.start_token,
+            output=output,
+        )
+
+    assert not output.exists()
+    expected_census_calls = 0 if refusal == "controller" else 1 if refusal == "permission" else 2
+    assert len(calls) == expected_census_calls
+    assert len(proc_list_reads) == expected_census_calls
 
 
 def test_linux_and_macos_process_identity_parsers_are_strict() -> None:

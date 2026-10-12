@@ -1050,7 +1050,12 @@ because its auth producers are the same processes MVR-01B already fences:
 1. The wrapper installs the durable restart fence (`deployment-begin`) and stops `api`,
    `worker`, `watcher`, `heimdal-capture-watch`.
 2. `scripts/instance_state_writer_inventory.py prove-quiescent` probes production truth twice
-   and `deployment-prove` binds the proof to the channel lease.
+   and `deployment-prove` binds the proof to the channel lease. On Linux, a census whose
+   listed PID disappears or whose identity does not stabilize is discarded and retried from a
+   fresh `/proc` PID list at most three times. An incomplete census never becomes an empty
+   snapshot; persistent permission or malformed identity failures, live or unclassified writers,
+   and controller changes still refuse without proof. The proof still requires two complete, stable
+   snapshots with the real controller identity.
 3. `principal-cutover` performs the floor and role stages in one runtime process. It requires
    the lease in `proved` phase for this channel and nonce, consumes the quiescence proof plus
    the drained legacy-owner inventory, enumerates `docker-compose.yaml` (failing closed on any
