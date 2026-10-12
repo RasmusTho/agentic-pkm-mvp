@@ -22,9 +22,9 @@ Forward-looking plan lives in `docs/ROADMAP.md`. Historical snapshots are no lon
 
 ## Target-State Architecture Reference
 
-`docs/ARCHITECTURE.md` owns current runtime architecture and current-vs-planned status. The target System Breakdown Structure is owned by `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`; its operationalization is owned by `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`.
+`docs/ARCHITECTURE.md` owns current runtime architecture and current-vs-planned status. Target decomposition is owned by `docs/SYSTEM_BREAKDOWN_STRUCTURE.md`; its operationalization by `docs/architecture/SBS_OPERATIONALIZATION_PLAN.md`; the structural system-of-systems view by `docs/MODULAR_ARCHITECTURE.md`; and the semantic map by `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`. `docs/architecture/system-context-overlay.md` supplies the context vocabulary, while `docs/plans/V60_ARCHITECTURE_TARGET.md` is historical/plan context rather than current-runtime authority.
 
-Current architecture and target architecture may intentionally differ during transition. Major changes should classify SBS impact, update the relevant target contract/register when needed, and avoid claiming target-state boundaries as shipped behavior unless `docs/STATUS.md` and runtime evidence support the claim.
+Current and target architecture may intentionally differ during transition. Do not read a target boundary as shipped unless `docs/STATUS.md` and runtime evidence support it.
 
 This architecture focuses on the runtime and data model for the Mimer module (the Obsidian vault + ingestion/indexing/agents) within the broader Yggdrasil system.
 
@@ -668,88 +668,15 @@ Treat these as post-v5.6 follow-up or specialized-reference topics owned by:
 
 <!-- layered-cognitive-runtime-architecture -->
 
-This section describes the intended v6 direction. It does not override the locked v5.5 baseline or the delivered v5.6 contracts.
-
-The v6 direction explicitly distinguishes four layers so they can evolve and be reviewed independently without collapsing authority:
-
-- **Human cognitive surfaces** — the vault, Panel, Chat canvas, and other places where humans produce, read, and decide. The vault is the primary durable human cognitive surface; see `docs/HUMAN-FLOWS.md :: vault-first human surface`.
-- **Governance / semantic authority** — policies, admissibility rules, provenance, approval, capability contracts, and the authority boundaries owned by `docs/CAPABILITY_CONTRACT_MODEL.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/`, and the governance layer below. This layer decides what is allowed to mean what and what is allowed to mutate.
-- **Runtime orchestration** — deterministic execution of bounded work: state progression, tool invocation, event emission, retry, checkpointing, and effector control. This is where LangGraph lives today and where any future Deep Agents harness would sit. See `LangGraph runtime substrate` and `Deep Agents runtime exploration` below.
-- **Infrastructure / runtime services** — persistence backends, transport, provider calls, process boundaries, and observability. Detailed in `docs/INFRASTRUCTURE.md` and `docs/OPERATIONS.md`.
-
-These layers compose in one direction: human cognitive surfaces and governance own meaning and authority; runtime orchestration and infrastructure are the substrate that carries bounded execution under that authority. Runtime layers must not silently become the semantic center of the system.
-
-- Interaction is the primary organizing concern for the user-facing architecture; cognition and reusable capabilities support those interaction surfaces, while foundational capabilities such as ingestion and indexing remain first-class elsewhere in the system.
-- The architecture is organized around five distinct concerns: interaction, cognition, execution, memory, and governance.
-
-<!-- langgraph-runtime-substrate -->
-
-- **LangGraph is runtime/execution substrate, not canonical cognition or semantic authority.** It is the current and planned control-plane mechanism for deterministic orchestration and explicit runtime state progression — bounded state machines, tool selection within an agent's control flow, retries, checkpoints, and event emission. LangGraph state is operational orchestration state; it does not redefine artifact meaning, does not own capability semantics, and does not become the canonical record of human cognition. Capability contracts (`docs/CAPABILITY_CONTRACT_MODEL.md`), the event envelope, governance/admission, and the vault remain authoritative; LangGraph carries execution under those contracts.
-
-<!-- deep-agents-runtime-substrate -->
-
-- **Deep Agents are an optional future operational harness/runtime layer for cognition.** They are introduced only after structural separation is in place, only inside an explicitly read-only Chat slice initially, and only as an execution/orchestration substrate for planning, decomposition, and multi-step reasoning. Like LangGraph, a Deep Agents harness is runtime substrate: it does not own semantic authority, does not become the canonical cognitive surface (the vault remains that), and cannot mutate state outside the governed execution layer. Deep Agents are not currently shipped; the forward-line framing lives in `docs/ROADMAP.md :: Deep Agents runtime exploration`.
-
-<!-- runtime-state-vs-canonical-cognition -->
-
-- **Runtime state is not canonical cognition.** Orchestration state inside LangGraph, future Deep Agents harnesses, the Orchestrator, the Reasoning seam, or the event/outbox layer is operational and rebuildable. It exists to coordinate bounded work safely. The canonical human cognitive surface is the vault, and the canonical semantic record is the human vault note. The system-owned companion note is a system-plane identity/continuity pair to that vault note — it carries stable identity, lineage, and continuity metadata, not human meaning (see the three-surface artifact model above and `docs/CONCEPTS/COMPANION_NOTE_CONTRACT.md`). Rich context lives in the vault note and the runtime DB; the companion must not be read or written as the authoritative record of what the human means. Runtime state may inform recovery and observability, but it must not be treated as the authoritative record of what the human means, decided, or committed to.
-- The capability layer provides reusable functions such as retrieval, reranking, and context building. Capabilities are shared building blocks, not conceptual centers of the system.
-- Retrieval is now exposed as an explicit typed capability contract (RetrievalRequest/RetrievalResponse) with surface-independent provenance and temporal-validity metadata; ASK remains a consumer of this seam. Minimal read-only runtime seams for orientation (`app/orientation/runtime.py`) and resurfacing (`app/resurfacing/runtime.py`) are delivered as bounded additive capability seams consuming derived signals only; no durable salience field is stored. These are accepted capability boundaries per the FINDING_AND_REORIENTING contracts (#392); relation-aware ranking, full interaction-surface integration (Panel/Chat), and resurfacing-triggered mutations remain future work.
-- The execution layer contains controlled effectors only. Reasoning must not directly mutate notes or trigger execution.
-- The memory/persistence layer is the three-surface model plus backing runtime stores: human vault
-  artifacts, system companion/continuity artifacts, and rebuildable runtime projections/indexes.
-  Historical `AMG`/`SetDB` language is lineage only and must not be revived as the canonical
-  persistence substrate.
-- The governance layer enforces policies, admissibility, provenance, approval, and auditability across mutation-capable paths.
-- This structure treats Yggdrasil as a system-of-systems so the layers can evolve independently without collapsing authority boundaries.
+The v6 direction is non-baseline and does not override the locked v5.5 baseline or delivered v5.6 contracts. Its layers, capability boundaries, and future runtime posture are owned by the target-state documents named above, `docs/CAPABILITY_CONTRACT_MODEL.md`, `docs/INTERACTION_SURFACES_AND_AUTHORITY/`, and `docs/ROADMAP.md`. Current runtime claims remain in this document and `docs/STATUS.md`.
 
 ## Interaction Surfaces
 
-Panel and Chat should both be treated as valid user-intent surfaces; their distinction is
-interaction structure (command-oriented vs canvas/co-authoring), not whether intent is
-authoritative.
-
-The compatibility details for reading Panel as the primary command surface without making it the
-exclusive intent surface live in
-`docs/INTERACTION_SURFACES_AND_AUTHORITY/DEFINE_PANEL_AS_THE_PRIMARY_COMMAND_SURFACE.md`; future
-hybrid Chat/Panel crossings are bounded by
-`docs/INTERACTION_SURFACES_AND_AUTHORITY/HYBRID_CHAT_INTEGRATION_SCHEMA.md`.
-
-### Panel
-
-- Embedded in note.
-- Driven by explicit intent.
-- Produces structured outputs such as actions and proposals.
-- Is one important governed mutation surface in the planned model.
-- May use richer cognition later, but execution still flows through policy, validation, and the event pipeline.
-- Should be read as a command and intent-capture surface, not as a generic chat surface.
-
-### Chat
-
-- External to note.
-- Optimized for exploratory reasoning.
-- May span multi-note context.
-- The early Deep Agent rollout starts in a read-only Chat slice because it isolates cognition from execution risk.
-- Chat itself is a canvas-shaped interaction surface, not permanently read-only; future Chat-originated mutations must still pass through the governed policy, validation, and event pipeline.
-- Should be read as an exploratory cognition surface first, not as a settled UI embodiment or unrestricted execution path.
-
-### Vault Browser
-
-- The Vault Browser is the human-first navigation and orientation projection over the vault hosted in Companion UI.
-- It is a projection layer, not authority: Markdown/frontmatter remains the human control surface; stores/DB remain machine mirrors.
-- Read-only browsing, UI-only state, bounded system writes, governance writes, agent proposals, and blocked actions are kept as distinct action modes; the browser renders server-declared modes and never reclassifies locally.
-- Current shipped Companion UI behavior is `Vault Browser MLP v0` plus the System Entry Point shell substrate: server-declared entry state, latency-ladder re-entry treatments, a unified topbar/shared overlay host, and shipped overlay occupants for Panel command palette, governed capture, memory candidate review, read-only receipts history, system map, opt-in guidance, settings, and read-only commitment surfacing. The final state-gallery validation harness closed parent #1782 through #1795; source-peek presentation, posture emphasis switching, and the context lane / place band remain unshipped follow-ups. The long-term vault-browser capability contract — concepts, action modes, MLP-vs-future scope, non-goals — is owned by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; entry/shell composition is owned by `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`.
+Current interaction-surface implementation status is stated in the System Context and `docs/STATUS.md`. Authority and future Panel/Chat crossings are owned by `docs/INTERACTION_SURFACES_AND_AUTHORITY/`; Vault Browser action modes and scope by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; and Companion entry/shell composition by `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`. These pointers do not promote future interaction work to the baseline.
 
 ## Capability Model
 
-- Retrieval is a capability, not an agent.
-- Retrieval must be reusable across Panel, Chat, and future cognition surfaces without creating another agent-specific control center.
-- The shipped retrieval capability boundary preserves current hybrid retrieval behavior and result ordering; additive relation/provenance inputs and stale/partial-view diagnostics are observable metadata, not ranking authority. Response metadata now includes explicit provenance and temporal-validity flags as part of the retrieval capability contract. Orientation and resurfacing are distinct capability seams with their own contracts; they are not retrieval variants and do not share a result-set or explanation shape with retrieval.
-- Capabilities are reusable, composable, and testable.
-- Agents and orchestration layers invoke capabilities through explicit planning and state transitions.
-- ASK remains functional as a consumer of the extracted retrieval capability seam; this is a runtime
-  wiring extraction, not a full Chat rollout.
-- ASK remains a valid current runtime/API surface in the v5.x line, but it is deprecated as the architectural center for v6 direction. New design work should not rebuild retrieval around a special central agent, even if bounded agents remain common elsewhere in the system.
+Current capability wiring and its runtime status are stated in the System Context. Reusable capability and target-state composition are owned by `docs/CAPABILITY_CONTRACT_MODEL.md`, the relevant capability contracts, and the target-state owner documents; they do not turn a planned interaction model into shipped runtime.
 
 ## Historical Material
 
@@ -757,165 +684,20 @@ Historical topology, older runtime surfaces, and superseded architecture detail 
 
 ## GitHub Delivery Control Plane (development governance)
 
-This section governs development-time delivery control in GitHub. It does not define runtime/system-agent behavior.
-Runtime/system semantics remain owned by the existing architecture, agent, concept, and settings documents.
-
-Development control model:
-
-- Docs define intent, contracts, and owner boundaries.
-- GitHub Issues are the canonical task contract for implementation work.
-- GitHub Project v2 is an optional legacy projection, not a pickup gate.
-- Dispatcher SQLite is the active volatile coordination primitive for claim ordering, leases,
-  heartbeats, and completion; GitHub Issues / PRs / CI remain durable delivery truth.
-- The external BuilderOps Vault stores durable BuilderOps Markdown artifacts plus shared TTL-based
-  advisory claim signals. It does not contain dispatcher SQLite or authoritative leases; advisory
-  files provide visibility only and never distributed-lock semantics.
-- Coding agents are the execution layer that implement bounded Issues.
-- Pull requests are the implementation artifact.
-- CI/test workflows are the validation loop.
-- Outcomes feed back into docs, Issues, and Project state.
-
-Canonical delivery sequence:
-
-`Docs -> Issue -> issue-to-code claim + implementation -> PR -> CI -> Verification -> Feedback`
-
-Required Issue contract:
-
-- `Context`
-- `Scope`
-- `Source Anchors`
-- `Constraints`
-- `Acceptance Criteria`
-- `Out of Scope`
-- `Suggested Validation`
-- `Source Docs`
-
-Acceptance criteria must include inline `Verify:` targets so the validation path is concrete before
-an Issue is marked `agent:ready`.
-
-Required label ontology:
-
-- type: `type:task`, `type:bug`, `type:refactor`
-- priority: `prio:high`, `prio:med`, `prio:low`
-- agent qualifiers: `agent:ready`, `agent:blocked`, `agent:needs-human`
-
-Optional legacy Project projection states:
-
-- `Backlog -> Ready -> In Progress -> Review -> Done`
-
-Optional Project field:
-
-- `Agent State`: `Idle`, `Running`, `Waiting`
-
-Guardrails for builder agents:
-
-- A strictly validated `agent:ready` label is the external pickup qualifier.
-- Project Status is a rebuildable projection and does not gate pickup.
-- Issue/PR state is authoritative throughout implementation and review; the optional Project
-  automation may mirror open/draft/non-draft state.
-- Existing-PR publication revalidates live contract and rejected-review authority before push;
-  issue-backed work binds its governing Issue, issue-free docs/governance/direct-repair binds one
-  hosted-parser-equivalent PR-body lane, and the candidate must contain the canonical base. The
-  detailed fail-closed contract is owned by
-  `docs/development/AUTONOMOUS_REVIEW_REPAIR_GATE_CONTRACTS.md :: PR-Level Scope Revalidation Gate`.
-- Closed or delivered work must not retain `agent:*` labels.
-- Agents only pick Issues with a strictly validated `agent:ready` label and no conflicting dispatcher claim.
-- Agents must stay within the linked Issue scope.
-- Agents must respect the linked Issue constraints.
-- Agents must satisfy the linked Issue acceptance criteria before claiming completion.
-- No architecture-breaking or boundary-breaking work proceeds without an Issue.
-- No free-form tasks are canonical; GitHub Issues are the source of truth for delivery tasks.
-
-This GitHub control plane is a development governance layer around the repo-first/docs-as-code workflow.
-It must not be confused with the runtime agent architecture described elsewhere in this document.
+GitHub delivery governance is a Builder System concern, not runtime architecture. `GitHub Issues / PRs / CI` remain durable delivery truth; `Dispatcher SQLite` is the volatile coordination primitive; the external BuilderOps Vault provides advisory material; and Project is an optional projection. `AGENTS.md` and `docs/development/` own the task-contract, claim, PR, CI, and verification workflow; their rules must not be inferred from this document.
 
 ## BuilderOps Build Plane
 
 <!-- builderops-build-plane -->
 
-BuilderOps Vault is the build-plane operating surface for builder-agent work. The following
-components are shipped under `app/builderops/` as build-plane infrastructure:
-
-- **BuilderOps store** — local SQLite store for creating, reading, listing, and lease-protected
-  state transitions for BuilderOps records (`AgentWorklog`, `LearningSignal`, `PromotionIntent`,
-  `DocsFreshnessRecord`, `RoadmapExecutionItem`, `BuilderOpsReceipt`).
-- **BuilderOps CLI** — typed CLI commands under `app/cli/builderops.py` for all record types,
-  lease management, and state transitions.
-- **BuilderOps API/tool boundary** — controlled HTTP API (`/api/builderops/*`) and MCP-style tool
-  boundary (`mcp.builderops.*`) for agent-safe record creation and listing.
-- **BuilderOps promotion gateway** — explicit `PromotionIntent` proposal, dry-run, receipt, and
-  state-transition mechanics. The gateway renders proposals; it does not silently write repo or
-  GitHub authority surfaces.
-- **BuilderOps generated projections** — Markdown projection generator for `learning-summary`,
-  `docs-freshness`, `roadmap-execution`, and `promotion-queue` views over BuilderOps Vault records.
-- **Model Inquiry bridge** — the repository provides a fail-closed remote launcher contract and
-  repository-declared provider-API adapters for independent Fable and GPT/Codex turns. Neutral
-  `xhigh` intent resolves through the Builder provider census and host-secret contract; a missing or
-  malformed Keychain credential reaches the runner as a value-free logical identifier so it can
-  persist a typed terminal receipt before any adapter call. Subscription CLIs remain interactive
-  tools and are not reachable from headless entrypoints. Host credential values and deployment
-  remain operator configuration outside Git. See `docs/BUILDEROPS_MODEL_INQUIRY/`; the current
-  remote-host deployment is tracked separately in #3586.
-
-### Authority boundary (BuilderOps non-authority rule)
-
-BuilderOps records and projections are **not product/runtime truth**. The repository remains the
-authority surface for code, tests, product/runtime contracts, ADRs, canonical architecture docs,
-and current-state owner docs.
-
-- BuilderOps governs the building system; repo governs product/runtime truth.
-- Generated projections are non-authoritative views. Editing a projection does not update BuilderOps
-  Vault and must not be treated as an authority transfer.
-- Promotion across authority classes is explicit and gated. A `PromotionIntent` record is staged
-  material, not an executed mutation.
-- No product/runtime contract changes without the repo authority gate (PR review, ADR, owner-doc
-  writeback).
-
-The authoritative decision document is `docs/adr/ADR-0010-builderops-vault-authority-boundary.md`.
-Detailed mechanics for each subsystem live in `docs/builderops/`.
+BuilderOps is the Builder System operating plane, not product/runtime authority. Its authority boundary is owned by `docs/adr/ADR-0010-builderops-vault-authority-boundary.md`; BuilderOps mechanics by `docs/builderops/`. Repository owner documents remain authoritative for runtime truth.
 
 ## Release Channel Identity
 
 <!-- release-channel-identity -->
 
-### Product Runtime placement boundary
+Release-channel identity is implemented by `app/config/channel.py`; its current capability contract and channel model are owned by [`docs/RELEASE_CHANNELS/README.md`](RELEASE_CHANNELS/README.md), with [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md) as its subordinate target-state task specification. Deployment and environment posture, qualification, and current placement are owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` and `docs/ENVIRONMENTS.md`; this section makes no additional live-placement claim.
 
-The intended Product Runtime placement for `dev`, `test`, and `prod` is the TARS-hosted Linux VM
-topology. Exact channel identity and qualification evidence are supplied by the redaction-safe
-`product_tars_channel_topology.v1` contract; this architecture reference does not claim live TARS
-qualification or deployment. Demerzel/Mac mini remains control/development/client/operator
-infrastructure, local Compose/Colima remains a fallback, and TARS VM `bob-1` (VM ID `102`, formerly
-`vm102`) remains the separate Builder System / Dev System target, running guest/system
-`builder-system`. Provider/model selection remains capability- and
-configuration-resolved rather than encoded by placement.
+## Companion UI design handoff reference
 
-A release channel is a named operational build identified by four mandatory properties.
-The channel layer is orthogonal to the existing `dev`/`prod` environment layer:
-- **environment** (`PKM_ENVIRONMENT`) selects the code-execution path and settings profile.
-- **channel** names the operational build and its storage/artifact roots.
-
-### Canonical channels
-
-| Channel  | Code ref    | DB name    | Vault root                  | Runtime artifact dir |
-|----------|-------------|------------|-----------------------------|----------------------|
-| `stable` | `stable`    | `pkm_prod` | operator-configured         | `tmp`                |
-| `dev`    | `main`      | `pkm_dev`  | `vault-dev`                 | `tmp-dev`            |
-| `test`   | `<worktree>`| `pkm_test` | `vault-test`                | `tmp-test`           |
-
-### Identity contract
-
-- All four properties are mandatory and non-empty for a valid channel definition.
-- Channel identity is inspectable without reading code: `python -m app.cli status` and `python -m app.cli settings-explain` must report the active channel including all four properties.
-- The contract is implemented in `app/config/channel.py`. `ChannelIdentity` validates all four properties at construction time; invalid definitions raise `ValueError` with an operator-readable message.
-- Downstream features (promotion, rollback, DB isolation) resolve channel identity through `app.config.channel` rather than scattering individual env-var lookups.
-
-See [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md) for the full contract spec.
-
-## Companion UI design handoff reference (2026-05-03)
-
-A new Companion UI converse-surface design handoff was added at `companion-ui/design_handoff/2026-05-03-converse/`.
-This handoff remains a design reference package (wireframe HTML, style tokens, and prototype JSX), and a bounded implementation now exists in `companion-ui/companion-app/` covering rail-state geometry, thread/composer states, the staged suggestion moment, the session-drawer/portrait-sheet interaction slices, the real-note workspace shell, and confirm-response refresh (delivered by PRs #745, #746, #750, #762, #1069, and #1070). The companion UI still remains a client/runtime seam rather than production runtime code by itself; the supporting runtime endpoints now include `GET /api/artifacts/note` (PR #1068) and `POST /api/panel/confirm` (PR #1056) over the existing FastAPI runtime.
-Architecture boundary reminder:
-- the companion UI remains a client of the existing FastAPI runtime,
-- vault markdown remains the durable source of truth,
-- chat/session/suggestion durability should continue to map to vault-compatible markdown contracts.
+Companion UI is a client/projection of the runtime; it does not replace the vault as the durable human authority. Its entry/shell contract is `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`, its interaction authority is in `docs/INTERACTION_SURFACES_AND_AUTHORITY/`, and its Vault Browser scope is in `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`. Dated design handoffs are supporting material, not architecture authority.

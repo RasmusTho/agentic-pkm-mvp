@@ -39,7 +39,8 @@ import pytest
 from tests.companion_ui.live_smoke_contract import (
     assert_gateway_identity,
     assert_operator_channel,
-    assert_operator_health,
+    parse_finite_timeout_ms,
+    wait_for_real_required_health,
 )
 
 _SMOKE_URL = os.environ.get("COMPANION_UI_SMOKE_URL")
@@ -53,6 +54,15 @@ if not _SMOKE_URL:
         "Set COMPANION_UI_SMOKE_URL=<gateway root URL> to run the live UI smoke.",
         allow_module_level=True,
     )
+
+_SMOKE_HEALTH_WAIT_MS = parse_finite_timeout_ms(
+    os.environ.get("COMPANION_UI_SMOKE_HEALTH_WAIT_MS"),
+    name="COMPANION_UI_SMOKE_HEALTH_WAIT_MS",
+)
+_SMOKE_NAVIGATION_TIMEOUT_MS = parse_finite_timeout_ms(
+    os.environ.get("COMPANION_UI_SMOKE_NAVIGATION_MS"),
+    name="COMPANION_UI_SMOKE_NAVIGATION_MS",
+)
 
 try:
     from playwright.sync_api import sync_playwright  # type: ignore[import-not-found]
@@ -79,13 +89,13 @@ def test_live_gateway_is_healthy_and_not_in_error_state() -> None:
         browser = playwright.chromium.launch()
         try:
             page = browser.new_page()
+            page.set_default_navigation_timeout(_SMOKE_NAVIGATION_TIMEOUT_MS)
 
             # (a) the gateway can reach its backend: the health proxy is ok.
-            health = page.request.get(urljoin(base, "api/operator/health"))
-            assert health.ok, f"health proxy HTTP {health.status}"
-            payload = health.json()
-            assert_operator_health(
-                payload,
+            payload = wait_for_real_required_health(
+                page.request,
+                urljoin(base, "api/operator/health"),
+                timeout_ms=_SMOKE_HEALTH_WAIT_MS,
                 allow_embedding_rebuild_required=(
                     _ALLOW_EMBEDDING_REBUILD_REQUIRED
                 ),
@@ -97,7 +107,11 @@ def test_live_gateway_is_healthy_and_not_in_error_state() -> None:
                 )
 
             # (b) the rendered entry surface is not stuck in an error state.
-            response = page.goto(base, wait_until="domcontentloaded")
+            response = page.goto(
+                base,
+                wait_until="domcontentloaded",
+                timeout=_SMOKE_NAVIGATION_TIMEOUT_MS,
+            )
             assert response is not None and response.ok, (
                 f"gateway root HTTP {getattr(response, 'status', 'n/a')}"
             )

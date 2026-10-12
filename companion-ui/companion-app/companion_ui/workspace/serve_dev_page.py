@@ -178,10 +178,15 @@ _PASSIVE_HEALTH_PARAMS = {"model_access_sampling": "cache"}
 
 
 def _healthz_health_params(*, production_profile: bool) -> dict[str, str]:
-    """Keep production liveness refresh active while dev UI reads stay passive."""
-    if production_profile:
-        return {}
-    return dict(_PASSIVE_HEALTH_PARAMS)
+    """Keep the periodic gateway liveness producer active in every profile.
+
+    Server-rendered entry/operator health uses ``_PASSIVE_HEALTH_PARAMS`` below.
+    The gateway's ordinary ``/healthz`` check is the existing bounded producer
+    used by the runtime healthcheck, so it must keep the default API sampling
+    behavior in development, test, and production.
+    """
+    del production_profile
+    return {}
 
 
 _COMPATIBILITY_PRECONDITION_HEADER = "X-Compatibility-Write-Precondition"

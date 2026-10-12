@@ -53,6 +53,10 @@ BWS_IDENTITIES = {
     "github.token": "shared",
     "discord.webhook": "shared",
     "typesafe.api-key": "channel",
+    "karakeep.session-token": "channel",
+    "karakeep.search-token": "channel",
+    "karakeep.api-key": "channel",
+    "karakeep.account-pass": "channel",
 }
 BWS_MACHINE_ACCOUNTS = {
     "admin": ["non-prod", "prod"],
@@ -79,6 +83,13 @@ _ENVIRONMENT_GRANTS = {
 }
 _KEYCHAIN_ONLY_SECRETS: frozenset[str] = frozenset()
 _KEYCHAIN_ONLY_GRANTS: frozenset[tuple[str, str, str]] = frozenset()
+KARAKEEP_GRANTS = {
+    "karakeep-service-web": {"karakeep.session-token", "karakeep.search-token"},
+    "karakeep-service-search": {"karakeep.search-token"},
+    "heimdal-karakeep-fetch": {"karakeep.api-key"},
+    "karakeep-account-setup": {"karakeep.account-pass"},
+}
+KARAKEEP_SECRETS = frozenset(secret for secrets in KARAKEEP_GRANTS.values() for secret in secrets)
 
 
 class UndeclaredSecretConsumerError(ValueError):
@@ -234,6 +245,8 @@ def _validated_unique_string_list(
 
 
 def _expected_child_binding(logical_id: str) -> str:
+    if logical_id == "karakeep.api-key":
+        return "KARAKEEP_API_TOKEN"
     return logical_id.replace(".", "_").replace("-", "_").upper()
 
 
@@ -274,7 +287,8 @@ def load_host_secret_contract(path: Path = DEFAULT_CONTRACT_PATH) -> HostSecretC
             not _is_identifier(logical_id, _LOGICAL_SECRET_PATTERN)
             or not _is_identifier(child_binding, _CHILD_BINDING_PATTERN)
             or not _is_identifier(kind, _KIND_PATTERN)
-            or logical_id.rsplit(".", maxsplit=1)[1] != kind
+            or ("password" if logical_id == "karakeep.account-pass"
+                else logical_id.rsplit(".", maxsplit=1)[1]) != kind
             or child_binding != _expected_child_binding(logical_id)
             # `type(...) is not bool` rather than isinstance: bool is a subclass
             # of int, and a truthy 1 must not smuggle in an optional or
@@ -385,7 +399,12 @@ def _validate_bws_contract(
         for channel in CHANNEL_PROJECTS
         for consumer, secrets in _ENVIRONMENT_GRANTS.items()
         for secret in secrets
-    } | {("dev", "marr-server-dev", "typesafe.api-key")}
+    } | {("dev", "marr-server-dev", "typesafe.api-key")} | {
+        (channel, consumer, secret)
+        for channel in ("dev", "test")
+        for consumer, secrets in KARAKEEP_GRANTS.items()
+        for secret in secrets
+    }
     expected_bws = {
         "channel_projects": CHANNEL_PROJECTS,
         "machine_accounts": BWS_MACHINE_ACCOUNTS,

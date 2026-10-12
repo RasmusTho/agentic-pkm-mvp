@@ -1258,30 +1258,56 @@ class LinuxEffects:
             return False
 
     @contextmanager
-    def channel_lock(self) -> Iterator[None]:
+    def channel_lock(self, *, journal: DeployJournal | None = None,
+                     owner_marker: dict[str, str] | None = None) -> Iterator[None]:
         import fcntl
         path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
+        if owner_marker is not None:
+            if (journal is None or journal.channel != self.config.channel
+                or self.config.channel not in {'dev', 'test'}
+                or set(owner_marker) != {'kind', 'channel', 'operation_id'}
+                or owner_marker['kind'] not in {'karakeep-deploy', 'karakeep-boot'}
+                or owner_marker['channel'] != self.config.channel
+                or owner_marker['operation_id'] != self.operation_id
+                or str(UUID(owner_marker['operation_id'])) != owner_marker['operation_id']):
+                raise PostgresDeployError()
         # Preserve the existing mkdir admission, including old non-BWS callers.
         path.mkdir(mode=0o700)
         descriptor = None
         try:
             descriptor = os.open(path / 'bws-owner', os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if owner_marker is not None:
+                raw = (json.dumps(owner_marker, sort_keys=True) + '\n').encode()
+                if os.write(descriptor, raw) != len(raw):
+                    raise PostgresDeployError()
+                os.fsync(descriptor)
+                for directory in (path, path.parent):
+                    opened = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        os.fsync(opened)
+                    finally:
+                        os.close(opened)
             self.lock_fd = descriptor
             yield
         finally:
             self.lock_fd = None
             if descriptor is not None:
                 os.close(descriptor)
-            receipt = self.config.journal.read()
+            receipt = (journal or self.config.journal).read()
             if receipt and receipt.operation_id == self.operation_id and receipt.terminal_result:
-                (path / 'bws-owner').unlink()
-                path.rmdir()
+                if owner_marker is not None:
+                    with self.failed_reconciliation_lock(expected_owner=owner_marker) as handle:
+                        self.retire_reconciled_channel_lock(handle, expected_owner=owner_marker)
+                else:
+                    (path / 'bws-owner').unlink()
+                    path.rmdir()
             # Pending or unreadable state retains the mkdir lock as a durable
             # admission refusal. Never clear it merely because this thread ended.
 
     @contextmanager
-    def failed_reconciliation_lock(self) -> Iterator[tuple[Path, int, int, int]]:
+    def failed_reconciliation_lock(self, *, expected_owner: dict[str, str] | None = None
+                                   ) -> Iterator[tuple[Path, int, int, int]]:
         """Acquire the existing BWS channel lock without creating or changing it."""
         import fcntl
 
@@ -1305,6 +1331,11 @@ class LinuxEffects:
                 or stat.S_IMODE(lock_info.st_mode) != 0o600 or lock_info.st_nlink != 1):
                 raise PostgresDeployError()
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            raw_owner = os.pread(lock_fd, 4097, 0)
+            if (expected_owner is None and raw_owner) or (
+                expected_owner is not None and raw_owner != (json.dumps(expected_owner, sort_keys=True) + '\n').encode()
+            ):
+                raise PostgresDeployError()
             if set(os.listdir(directory_fd)) != {'bws-owner'}:
                 raise PostgresDeployError()
             yield path, parent_fd, directory_fd, lock_fd
@@ -1318,6 +1349,7 @@ class LinuxEffects:
     @staticmethod
     def retire_reconciled_channel_lock(
         handle: tuple[Path, int, int, int],
+        *, expected_owner: dict[str, str] | None = None,
     ) -> None:
         """Atomically release admission, then remove the detached lock directory."""
         path, parent_fd, directory_fd, lock_fd = handle
@@ -1325,6 +1357,11 @@ class LinuxEffects:
         opened = os.fstat(directory_fd)
         marker = os.stat('bws-owner', dir_fd=directory_fd, follow_symlinks=False)
         held = os.fstat(lock_fd)
+        raw_owner = os.pread(lock_fd, 4097, 0)
+        if (expected_owner is None and raw_owner) or (
+            expected_owner is not None and raw_owner != (json.dumps(expected_owner, sort_keys=True) + '\n').encode()
+        ):
+            raise PostgresDeployError()
         if ((current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino)
             or (marker.st_dev, marker.st_ino) != (held.st_dev, held.st_ino)
             or set(os.listdir(directory_fd)) != {'bws-owner'}):
@@ -1419,6 +1456,7 @@ class DeploymentSupervisor:
         self.config = config
         self.operation: SupervisedOperation | None = None
         self.mutex = threading.Lock()
+        self.karakeep: Any = None
 
     def _require_current_config(self) -> None:
         current = LinuxConfig.load(self.config.channel)
@@ -1468,6 +1506,16 @@ class DeploymentSupervisor:
         return {'receipt': receipt.payload()}
 
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
+        if isinstance(data.get('action'), str) and data['action'].startswith('karakeep-'):
+            from app.ops.karakeep_deploy import KarakeepEffects, KarakeepSupervisor
+
+            with self.mutex:
+                if self.karakeep is None:
+                    self.karakeep = KarakeepSupervisor(KarakeepEffects(self.config), self._require_current_config)
+            # Karakeep retains this same guard at admission/effect boundaries,
+            # inside durable refusal handling for new deploy IDs. Other
+            # operations keep the existing fail-closed configuration gate.
+            return self.karakeep.request(data)
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
         operation_id = str(data['operation_id'])
@@ -1652,7 +1700,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=(
         'serve', 'rpc', 'guard', 'cleanup', 'token-push', 'token-push-worker',
-        'token-push-status', 'token-push-inspect', 'qualify-web',
+        'token-push-status', 'token-push-inspect', 'qualify-web', 'karakeep-boot',
     ))
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
     parser.add_argument('operation_id', nargs='?')
@@ -1661,6 +1709,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--compose-command')
     args = parser.parse_args(argv)
     try:
+        if args.action == 'karakeep-boot':
+            from app.ops.karakeep_deploy import boot
+
+            boot(args.channel)
+            return 0
         if args.action.startswith('token-push'):
             from app.ops.bws_token_push import remote_main
 

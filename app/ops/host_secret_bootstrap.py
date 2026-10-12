@@ -26,9 +26,15 @@ from app.ops.bws_secret_reader import (
     BwsReaderConfig,
     BwsSecretReader,
 )
-from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
+from app.ops.host_secret_controller import (
+    HostSecretAdmissionError,
+    HostSecretController,
+    HostSecretOperation,
+    TerminalEvidence,
+)
 from app.ops.host_secret_contract import (
     BWS_ONLY_SECRETS,
+    KARAKEEP_SECRETS,
     HostSecretContract,
     load_host_secret_contract,
 )
@@ -270,6 +276,8 @@ def _declared_secrets(
 
 
 def _validate_secret(kind: str, value: str) -> bool:
+    if kind in {"session-token", "search-token"}:
+        return re.fullmatch(r"[A-Za-z0-9_-]{32,128}", value) is not None
     if kind == "raw-store-key":
         return _RAW_STORE_KEY_PATTERN.fullmatch(value) is not None
     # `token` shares the api-key grammar deliberately (#4489): both are opaque
@@ -552,6 +560,14 @@ def resolve_host_secret_values(
     """
     try:
         selected = contract or load_host_secret_contract()
+        # These new identities have BWS custody only. Never create a second
+        # Keychain source for the service or its acquisition token.
+        if provider != "bws" and any(
+            secret in KARAKEEP_SECRETS
+            for ch, name, secret in selected.allowed
+            if ch == channel and name == consumer
+        ):
+            raise HostSecretBootstrapError("host secret provider unavailable")
         if provider == "keychain":
             if any(
                 secret in BWS_ONLY_SECRETS
@@ -597,6 +613,30 @@ def resolve_host_secret_values(
             return resolved
     except Exception:
         raise HostSecretBootstrapError("host secret lookup failed for declared consumer") from None
+
+
+def _reconcile_interrupted_probe_check(
+    controller: HostSecretController, channel: str
+) -> None:
+    """Retire only a stale probe read before admitting a new probe BWS check.
+
+    A check cannot prepare a remote mutation. Acquiring the controller lock inside
+    reconcile also proves no prior check still owns the admission lock. Other
+    operation kinds, targets, and malformed journals remain fail-closed; the next
+    admission below is still the authority when no matching pending check exists.
+    """
+    try:
+        controller.reconcile(
+            lambda operation_id, kind, target: TerminalEvidence(
+                operation_id, kind, target, "aborted", "read-complete"
+            ),
+            expected=("check", channel, None),
+        )
+    except HostSecretAdmissionError:
+        # No pending check for this exact target, a live/invalid controller state,
+        # or a different pending operation. The following `admit` rechecks under
+        # the same lock and remains responsible for refusing the latter cases.
+        pass
 
 
 def _resolve_bws_consumer_values(
@@ -646,19 +686,48 @@ def materialize_consumer_environment(
     *,
     channel: str,
     consumer: str,
+    provider: str = "keychain",
     keychain_lookup: KeychainLookup = _security_keychain_lookup,
     contract: HostSecretContract | None = None,
+    bws_reader: BwsSecretReader | None = None,
+    controller: HostSecretController | None = None,
+    environment: Mapping[str, str] | None = None,
     directory: Path | None = None,
 ) -> Iterator[Path]:
     """Yield one mode-0600 env file containing only the declared values."""
     try:
         selected_contract = contract or load_host_secret_contract()
-        values = _resolve_consumer_environment(
-            channel=channel,
-            consumer=consumer,
-            contract=selected_contract,
-            keychain_lookup=keychain_lookup,
-        )
+        if any(secret in KARAKEEP_SECRETS for secret in _declared_secrets(
+            selected_contract, channel=channel, consumer=consumer
+        )):
+            raise HostSecretBootstrapError("host secret provider unavailable")
+        if provider == "keychain":
+            values = _resolve_consumer_environment(
+                channel=channel,
+                consumer=consumer,
+                contract=selected_contract,
+                keychain_lookup=keychain_lookup,
+            )
+        elif provider == "bws":
+            _require_linux_probe_scope(channel=channel, consumer=consumer)
+            selected_environment = os.environ if environment is None else environment
+            selected_reader = bws_reader or BwsSecretReader(
+                BwsReaderConfig.from_environment(selected_environment)
+            )
+            secret_values = resolve_host_secret_values(
+                channel=channel,
+                consumer=consumer,
+                provider="bws",
+                contract=selected_contract,
+                bws_reader=selected_reader,
+                controller=controller,
+            )
+            values = {
+                selected_contract.binding_for(secret): value
+                for secret, value in secret_values.items()
+            }
+        else:
+            raise HostSecretBootstrapError("host secret provider unavailable")
     except HostSecretBootstrapError:
         raise
     except Exception as exc:
@@ -893,6 +962,85 @@ def run_marr_server_without_provider_key(
         raise HostSecretBootstrapError("host secret provider unavailable") from None
 
 
+def _require_linux_probe_scope(*, channel: str, consumer: str) -> None:
+    if (
+        sys.platform != "linux"
+        or channel not in {"test", "prod"}
+        or consumer != "heimdal-external-alerts"
+    ):
+        raise HostSecretBootstrapError("BWS probe launch is outside its declared scope")
+
+
+def run_probe_with_bws(
+    *,
+    channel: str,
+    consumer: str,
+    environment: Mapping[str, str] | None = None,
+    contract: HostSecretContract | None = None,
+    bws_reader: BwsSecretReader | None = None,
+    controller: HostSecretController | None = None,
+    runner: CommandRunner = _subprocess_runner,
+) -> int:
+    """Launch only the fixed Linux probe with one declared BWS secret."""
+    _require_linux_probe_scope(channel=channel, consumer=consumer)
+    try:
+        selected_contract = contract or load_host_secret_contract()
+        selected_environment = os.environ if environment is None else environment
+        if (
+            selected_environment.get("PROBE_ENVIRONMENT") != channel
+            or selected_environment.get("PROBE_ALERT_CHANNEL") != "discord"
+        ):
+            raise HostSecretBootstrapError(
+                "BWS probe configuration is outside its declared scope"
+            )
+        active_controller = controller or HostSecretController()
+        _reconcile_interrupted_probe_check(active_controller, channel)
+        runtime_directory = selected_environment.get("HOST_SECRET_RUNTIME_DIRECTORY")
+        probe_path = (
+            Path(__file__).resolve().parents[2]
+            / "ops"
+            / "host-setup"
+            / "mac-mini"
+            / "prod_probe.py"
+        )
+        command = [sys.executable, str(probe_path), "--loop"]
+        with materialize_consumer_environment(
+            channel=channel,
+            consumer=consumer,
+            provider="bws",
+            contract=selected_contract,
+            bws_reader=bws_reader,
+            controller=active_controller,
+            environment=selected_environment,
+            directory=Path(runtime_directory) if runtime_directory else None,
+        ) as env_file:
+            child_env = _clean_child_environment(
+                selected_contract, environment=selected_environment
+            )
+            for name in (
+                "BWS_READER_PROJECT",
+                "BWS_PROJECT_ID",
+                "BWS_ORGANIZATION_ID",
+                "NTFY_TOPIC",
+                "NTFY_SERVER",
+                "TELEGRAM_BOT_TOKEN",
+                "TELEGRAM_CHAT_ID",
+                "SMTP_HOST",
+                "SMTP_PORT",
+                "SMTP_FROM",
+                "SMTP_TO",
+            ):
+                child_env.pop(name, None)
+            child_env[HOST_SECRET_RUNTIME_ENV_FILE] = str(env_file)
+            child_env[HOST_SECRET_BOOTSTRAP_CHANNEL] = channel
+            child_env[HOST_SECRET_BOOTSTRAP_CONSUMER] = consumer
+            return runner(command, child_env)
+    except HostSecretBootstrapError:
+        raise
+    except Exception:
+        raise HostSecretBootstrapError("host secret provider unavailable") from None
+
+
 def _clean_child_environment(
     contract: HostSecretContract,
     *,
@@ -936,6 +1084,11 @@ def _parser() -> argparse.ArgumentParser:
             "API credential is unavailable"
         ),
     )
+    parser.add_argument(
+        "--run-probe",
+        action="store_true",
+        help="run only the fixed Linux probe with its declared BWS webhook binding",
+    )
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser
 
@@ -949,6 +1102,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.provider not in {"keychain", "bws"}:
             raise HostSecretBootstrapError("explicit host secret provider required")
         if args.check:
+            if args.run_probe:
+                raise HostSecretBootstrapError("probe launch cannot be combined with secret check")
             if command:
                 raise HostSecretBootstrapError("secret check does not launch commands")
             resolve_host_secret_values(
@@ -965,6 +1120,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else None,
             )
             return 0
+        if args.run_probe:
+            if args.provider != "bws" or command:
+                raise HostSecretBootstrapError("BWS probe launch accepts no arbitrary command")
+            return run_probe_with_bws(
+                channel=args.channel,
+                consumer=args.consumer,
+            )
         if args.provider == "bws":
             if (sys.platform, args.channel, args.consumer) == (
                 "darwin", "dev", "marr-server-dev"

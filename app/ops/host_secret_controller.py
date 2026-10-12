@@ -361,7 +361,7 @@ class HostSecretController:
         self,
         readback: Callable[[str, str, str], TerminalEvidence],
         *,
-        expected: tuple[str, str, bool] | None = None,
+        expected: tuple[str, str, bool | None] | None = None,
     ) -> None:
         """Read authoritative operation-specific terminal evidence under the host lock.
 

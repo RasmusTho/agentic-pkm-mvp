@@ -650,21 +650,40 @@ are evidence only and provide no reactivation or fallback authority.
   read-later source (Heimdal's external source dependency; ADR-0049 §1). It pins the
   `karakeep`/`meilisearch` images, declares the durable `karakeep-data` / `karakeep-meilisearch-data`
   volumes, health-checks both services, and binds to loopback only — there is no public ingress.
-- The manifest does not identify a qualified host or prove that the service is installed or running.
-  Current environment guidance does not qualify the Mac mini as a Product Runtime TEST host; the
-  physical TEST service host and private route to Heimdal remain unqualified.
-- `config/karakeep.env.example` is a placeholder template, not a live binding. The current
-  `config/secrets/host_secret_contract.json` does not declare `KARAKEEP_BASE_URL` or
-  `KARAKEEP_API_TOKEN`; no governed TEST binding is established here. Do not read or create
-  credentials or treat a local env file as deployment authority.
+- `scripts/karakeep-deploy <dev|test> --revision <installed-control-checkout-SHA>` operates the
+  exact existing `ygg-dev` or `ygg-test` role through authenticated SSH and the root-only encrypted
+  BWS reader supervisor. The existing controller qualification and a current redacted #3367
+  operations receipt bind private host/config inputs outside Git. Demerzel is the controller;
+  local Compose on the Mac mini is not TEST deployment. Production is refused before lookup/SSH.
+- Finite dev/test BWS consumers are `karakeep-service-web` (session/search tokens),
+  `karakeep-service-search` (search token), `heimdal-karakeep-fetch` (issuer-created API key), and
+  `karakeep-account-setup` (account password only). `scripts/secrets prepare-karakeep <channel>`
+  creates absent service keys through the normal writer and preserves existing credentials.
+  Service startup does not require the account password or API key. Account/API-key issuance
+  remains subsequent authorized operational work; Mimer receives no source token or endpoint.
+- Projects/volumes are isolated as `karakeep-dev` and `karakeep-test`. Separate root-owned
+  mode-0600 handles under `/run/yggdrasil/karakeep/<channel>` deliver only each service's credentials;
+  boot/restart rehydrates through the existing reader and VM channel lock. The template is reference
+  only; do not create persistent ordinary credential env files. Never print unfiltered Docker
+  inspection or rendered Compose configuration.
+- The governed unit admits Docker-daemon/VM startup; containers use crash-only `on-failure`,
+  not daemon auto-start. Missing reader keys or pending journals therefore cannot be bypassed by
+  retained container environments. Actual container restart policy is part of topology preflight.
+- Activating/unknown receipts retain pending admission and the VM channel lock. Reruns reconcile
+  the same request and require authoritative terminal plus health evidence; a timeout or healthy
+  container cannot authorize a duplicate deployment or report success.
+- A deployment sent after read-only preflight may race with boot admission. Known pre-effect
+  refusal is durable in the same DeployJournal's finite refusal namespace; exact-ID status returns
+  `aborted` without replacing installation/boot proof, borrowing their lock, or replaying effects.
 - Backup / update / rollback steps (and their verification checks) live in
   `docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md :: Restart / Durability Posture`.
-  They may be used only after an authorized host, private route, and secret/bootstrap contract are
-  qualified; do not run them on the Mac mini or a local Compose fallback as TEST deployment.
+  They may be used only after the exact host/private route is qualified. Archive/restore and version
+  upgrades require separate maintenance authority and remain outside this implementation slice.
 - `app.heimdal.karakeep_service.assert_fetch_ready` is the fail-loud gate: Heimdal acquisition is
   refused when a required config reference is absent or service health is red, while Mimer replay of
   already-published evidence is unaffected.
-- Scope note: this ships the deployment manifest/runbook and the fetch-readiness gate only. The live
+- Scope note: repository support does not prove a live installation. TEST installation is separate
+  from KMA-06 acceptance. The live
   acquisition pipeline (Heimdal fetch → published evidence → Mimer candidates) is not accepted as
   shipped until the parent Karakeep acquisition feature (#3367) completes its acceptance slice.
 
@@ -696,34 +715,46 @@ Task-specific operator walkthroughs live in `docs/runbooks/`.
 
 ## Prod probe and push alert (scheduled backstop)
 
-`ops/host-setup/mac-mini/prod_probe.py` is the hard-down backstop probe installed as
-a launchd job (`com.yggdrasil.prod-probe`) on the mac mini. It runs on a configurable
-interval (default 60 s), curls `/readyz` and `/api/health` `required_ok` (NOT the
-top-level `ok`), checks worker-heartbeat staleness, and dispatches one push alert on
-the first outage transition. Once the probe sees the first healthy run after that
-outage, it emits one recovery signal and clears the outage state so a later distinct
-outage can alert again. The configured channel remains pluggable (ntfy / Telegram / mail / none /
-host-secret-bound Discord — channel choice is an operator decision set via `PROD_PROBE_CHANNEL`).
-Both probes use the shared `ops/host-setup/mac-mini/notification_channels.py` transport module.
-The Discord implementation is one-way code-path support only: provider/account/server/channel/
-webhook enactment and live delivery remain external Heimdal work tracked by #5506 and #4076.
+`ops/host-setup/mac-mini/prod_probe.py` is the shared probe entrypoint. The supported production
+host is TARS Linux: `config/systemd/yggdrasil-host-probe@.service` runs it every 60 seconds with
+explicit environment, endpoint, heartbeat path, and state path. The probe checks `/readyz`,
+`/api/health` `required_ok` (not top-level `ok`), and worker-heartbeat staleness. It sends one
+down alert on the first outage transition and one recovery signal on the first healthy run; both
+messages carry the same correlation ID. Alerts include source system, environment, severity, UTC
+timestamp, and remediation URL.
+
+The Linux service uses the `heimdal-external-alerts` BWS consumer and the `discord.webhook`
+binding. The BWS token is read through systemd credentials and is removed from the probe child's
+environment; only a short-lived mode-0600 runtime file carries the declared webhook binding.
+The service has no Docker startup dependency and reads the worker heartbeat from the host volume.
+The prior Mac LaunchAgent and plist remain legacy templates. The installer
+`scripts/install_host_probe.py` prints a plan by default; host writes require `--apply` from a clean
+checkout at the exact `origin/main` head. As checked on 2026-10-12, no Linux probe unit is installed
+on `ygg-prod`; live installation and the TEST outage/recovery drill remain tracked by #4076.
+The prod `/readyz` check returned HTTP 200 while `/api/health.required_ok` was false, so an active
+probe should report prod down until the underlying health issue is repaired.
 
 **Two distinct Makefile targets — do not confuse them:**
 
 | Target | What it does |
 | --- | --- |
-| `make live-prod-probe` | Invokes the real probe script against `PROBE_BASE_URL` (default `localhost:8000`) — a live spot-check of the actual prod stack. Exits 0 if healthy, 1 if prod is down. |
+| `make live-prod-probe` | Runs one local spot-check against `http://127.0.0.1:18000` by default, with notifications disabled by default. Set `PROBE_BASE_URL`, `WORKER_HEARTBEAT_PATH`, and `PROBE_STATE_FILE` to explicit local values as needed. Exits 0 if healthy, 1 if prod is down, 78 for missing/invalid configuration. |
 | `make check-prod-channel` | Runs the pytest channel-isolation suites (`tests/ops/test_release_channel_isolation.py`, `tests/ops/test_release_channel_startup_targets.py`) to confirm that prod and test channels are correctly isolated. No live network calls to the running stack. |
 | `make check-test-channel` | Same channel-isolation suites plus the test-channel preflight (`tests/release_channels/test_channel_isolation_preflight.py`). |
 
 **Transition / recovery guarantee:** A sustained outage sends one down alert, repeated
 down probes suppress while the outage remains active, and the first healthy run sends one
 recovery signal and clears the outage state. A later distinct outage alerts again.
-The state marker (`PROD_PROBE_STATE_FILE`, default `/tmp/yggdrasil-prod-probe.state`)
-is rebuildable; delete it to reset the transition state manually.
+The state marker (`PROBE_STATE_FILE`) is channel-specific and host-local. Delete it only when
+intentionally re-arming notifications; the installed Linux state path is under
+`/var/lib/yggdrasil-host-probe-<channel>/`.
 
-**Install:** See `ops/host-setup/mac-mini/install.sh` for how to register the launchd
-job. The plist is at `ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist`.
+**Install:** `python3 scripts/install_host_probe.py --channel test` prints the TEST plan;
+`--apply` writes the host from the exact merged `origin/main` checkout. Production installation
+uses `--channel prod`. The installer is deliberately separate from the TEST outage/recovery drill;
+the parent Issue #4076 owns both live host operations and disabling the legacy Mac LaunchAgent after
+the Linux production service is active. On 2026-10-12, the Mac job was loaded with last observed
+exit status 1, while no Linux probe unit was installed.
 
 ## Prod backup watcher (stale or failed nightly dump)
 
