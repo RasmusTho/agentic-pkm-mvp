@@ -67,8 +67,38 @@ duplicate.
 
 ## How to Verify (Pre-Merge)
 
+- Repository-native wiring is exposed only as `scripts/karakeep-acquire test` and
+  `scripts/karakeep-project test`. Each uses the existing authenticated SSH/root-only encrypted
+  reader supervisor, then a separate fixed child in the selected TEST Product image. DEV, PROD,
+  unknown actions and extra arguments refuse before lookup or work. Ordinary supervisor/boot
+  imports do not require Product packages in the BWS Python runtime. The generic BWS consumer
+  launcher remains denied for `heimdal-karakeep-fetch`.
+- Before a live invocation, main must install the reviewed control code/launcher and qualify the
+  selected exact-SHA TEST Product image, existing `app_test` PG endpoint and password-file protocol,
+  channel-owned vault, active initialized binding/GOV authority, instance-state/ownership mounts
+  and shared TEST runtime volume. Admission checks actual container/code/mount identities; the
+  child proves PG server/database and migration-owned store availability in its own namespace and
+  revalidates the existing binding under its shared effect lease. Missing inputs refuse without
+  selecting or repairing a vault, database or credential.
+- Acquisition additionally requires an observed existing route to Karakeep in that namespace:
+  a matching shared Docker network, or the host namespace with loopback port 3000. Missing topology
+  refuses; this slice does not connect networks or grant egress. The saved service `server_url` is
+  the Mac's SSH-forwarded client route and is never a worker endpoint. Only the producer resolves
+  `test/karakeep.api-key` for `heimdal-karakeep-fetch`, delivered through stdin in memory; Mimer
+  receives neither that key nor an endpoint and can replay while Karakeep is down.
+- Every invocation holds an OS flock for its own constituent through work/acknowledgement.
+  The two locks are independent. Process interruption or lost acknowledgement reports `pending`,
+  never completion; retry reconstructs full published lineage and deliberately rescans page one.
+  Mimer advances only its existing `mimer.candidate_projector` durable prefix. Receipts contain
+  closed statuses and counts, no upstream pagination token, private path/endpoint or raw errors.
+- Installing a newer control checkout does not reauthorize the retained exact-revision service
+  boot request. Main performs explicit service lifecycle re-admission separately after merge.
+  Fixture verification of Issue #6025 proves this native wiring only. Actual installation and the
+  following PG/source-to-candidate, replay, negative-path and secret-audit receipts remain required
+  on open parent #3367 before live acceptance or owner-doc supported-truth promotion.
 - Run the KMA-02 health procedure on the test channel.
-- Trigger one bounded KMA-05 run and collect receipt ids.
+- Run `scripts/karakeep-acquire test`, then separately `scripts/karakeep-project test`; collect
+  their bounded outcomes and durable source/log/candidate/cursor linkage in the parent receipt.
 - Stop/restart service, Heimdal producer, and Mimer consumer independently; replay published evidence
   in Mimer with source access disabled.
 - Repeat identical acquisition; verify no-op and unchanged candidate count/path.

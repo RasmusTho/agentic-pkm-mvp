@@ -682,6 +682,20 @@ are evidence only and provide no reactivation or fallback authority.
 - `app.heimdal.karakeep_service.assert_fetch_ready` is the fail-loud gate: Heimdal acquisition is
   refused when a required config reference is absent or service health is red, while Mimer replay of
   already-published evidence is unaffected.
+- `scripts/karakeep-acquire test` and `scripts/karakeep-project test` admit separate fixed
+  TEST Product-image children through the existing root-only supervisor. The producer alone
+  receives the finite `heimdal-karakeep-fetch` grant over stdin; generic BWS launch remains denied.
+  Mimer receives no source key/endpoint and replays independently. Actual admission requires
+  matching installed control/selected Product-image SHA, existing TEST PG/store/vault and active
+  initialized binding authority, qualified mounts and per-constituent process locks. The worker
+  endpoint comes from observed execution-namespace topology, never the Mac's saved forwarding URL.
+  Missing topology/binding refuses without repair. Outcomes are `complete`, `partial`, `blocked`,
+  `gated`, `failed`, `refused`, `overlap` or `pending`; loss after work admission is not completion.
+  Restart deliberately rescans source page one and reconstructs full published lineage; Mimer
+  retains its existing durable-prefix acknowledgement and first-write-wins candidates.
+  Main owns post-merge runtime qualification and explicit service re-admission when the installed
+  control revision changes. The full separate live acceptance procedure remains in
+  `docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md :: How to Verify (Pre-Merge)`.
 - Scope note: repository support does not prove a live installation. TEST installation is separate
   from KMA-06 acceptance. The live
   acquisition pipeline (Heimdal fetch → published evidence → Mimer candidates) is not accepted as
