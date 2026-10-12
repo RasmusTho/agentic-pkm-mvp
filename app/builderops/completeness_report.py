@@ -22,6 +22,9 @@ SIGNAL_OUTCOME_CLAIM_RE = re.compile(
     r"(?<![A-Za-z0-9_.:-])(?P<signal_id>[A-Za-z0-9_.:-]+)\s*=\s*(?P<outcome>[^\s,;|]*)"
 )
 MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r":?-{3,}:?")
+PATTERN_ROUTING_RECEIPT_PREFIX = "Repeated-pattern routing observe-only report:"
+ROUTES_SECTION_RE = re.compile(r";\s*routes\s*:")
+TERMINAL_OUTCOMES_SECTION_RE = re.compile(r"\bterminal_outcomes\s*:")
 
 
 def build_completeness_report(
@@ -195,7 +198,7 @@ def _terminal_outcomes_from_receipt(receipt: Mapping[str, Any]) -> dict[str, str
     for line in lines:
         if "|" in line:
             continue
-        for match in SIGNAL_OUTCOME_CLAIM_RE.finditer(line):
+        for match in SIGNAL_OUTCOME_CLAIM_RE.finditer(_outcome_token_text(line)):
             signal_id = match.group("signal_id")
             outcome = _recognized_outcome_token(match.group("outcome"))
             body_claims.setdefault(signal_id, set()).add(outcome)
@@ -209,6 +212,20 @@ def _recognized_outcome_token(value: str) -> str | None:
     # while rejecting recognized prefixes such as "applied.extra".
     token = value[:-1] if value.endswith((".", "!", "?")) else value
     return token if token in TERMINAL_LEARNING_EVALUATION_OUTCOMES else None
+
+
+def _outcome_token_text(line: str) -> str:
+    """Ignore the pattern-routing producer's explicitly named route metadata."""
+
+    if not line.startswith(PATTERN_ROUTING_RECEIPT_PREFIX):
+        return line
+    routes = ROUTES_SECTION_RE.search(line)
+    if routes is None:
+        return line
+    terminal_outcomes = TERMINAL_OUTCOMES_SECTION_RE.search(line, routes.end())
+    if terminal_outcomes is None:
+        return line[:routes.start()]
+    return line[:routes.start()] + " " + line[terminal_outcomes.end():]
 
 
 def _unambiguous_terminal_outcomes(

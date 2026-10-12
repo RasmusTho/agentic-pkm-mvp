@@ -9,6 +9,7 @@ from click.testing import CliRunner
 from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.completeness_report import build_completeness_report
 from app.builderops.epic_run_state import TERMINAL_LEARNING_EVALUATION_OUTCOMES
+from app.builderops.pattern_routing import build_pattern_routing_report
 
 
 def _learning_signal(signal_id: str, summary: str) -> dict[str, object]:
@@ -129,9 +130,30 @@ def test_completeness_report_recognizes_explicit_terminal_outcome_formats() -> N
             f"{table_rows}"
         ),
     )
+    producer_report = build_pattern_routing_report(
+        {
+            "patterns": [
+                {
+                    "id": "pattern-5099",
+                    "route": "issue_candidate",
+                    "summary": "A repeated review pattern.",
+                    "repeat_count": 2,
+                    "source_refs": [{"ref_type": "github_issue", "ref": "#5099"}],
+                    "target_ref": "#5607",
+                    "terminal_outcome": "issue_created",
+                    "recommendation": "Create the bounded follow-up issue.",
+                }
+            ]
+        }
+    )
+    producer_receipt = _retro_receipt(
+        "receipt-pattern-routing-producer",
+        target_ids=["pattern-5099", "pattern-sentinel"],
+        receipt_body=producer_report["receipt_body"],
+    )
 
     report = build_completeness_report(
-        records=[structured, token_receipt, table_receipt],
+        records=[structured, token_receipt, table_receipt, producer_receipt],
         storage={"available": True, "source": "fixture"},
     )
 
@@ -146,12 +168,18 @@ def test_completeness_report_recognizes_explicit_terminal_outcome_formats() -> N
         **dict(zip(structured_ids, outcomes, strict=True)),
         **dict(zip(token_ids, outcomes, strict=True)),
         **dict(zip(table_ids, outcomes, strict=True)),
+        "pattern-5099": "issue_created",
     }
     assert reported == expected
     assert {
         tuple(receipt["missing_terminal_outcomes"])
         for receipt in report["retrospective_receipts_missing_terminal_outcomes"]
-    } == {("structured-sentinel",), ("token-sentinel",), ("table-sentinel",)}
+    } == {
+        ("structured-sentinel",),
+        ("token-sentinel",),
+        ("table-sentinel",),
+        ("pattern-sentinel",),
+    }
 
 
 def test_completeness_report_rejects_ambiguous_outcome_claims() -> None:
@@ -163,6 +191,8 @@ def test_completeness_report_rejects_ambiguous_outcome_claims() -> None:
         "extra-column",
         "unknown-table",
         "bad-separator",
+        "unknown-producer-outcome",
+        "conflicting-producer-outcomes",
         "unrelated-target",
     ]
     receipt = _retro_receipt(
@@ -181,6 +211,13 @@ def test_completeness_report_rejects_ambiguous_outcome_claims() -> None:
             "signal_id | outcome\n"
             "| -- | --- |\n"
             "| bad-separator | applied |"
+            "\nRepeated-pattern routing observe-only report: patterns=1; "
+            "routes: unknown-producer-outcome=issue_candidate; "
+            "terminal_outcomes: unknown-producer-outcome=future_outcome."
+            "\nRepeated-pattern routing observe-only report: patterns=1; "
+            "routes: conflicting-producer-outcomes=issue_candidate; "
+            "terminal_outcomes: conflicting-producer-outcomes=issue_created, "
+            "conflicting-producer-outcomes=discarded_or_superseded."
         ),
     )
 
@@ -342,14 +379,16 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
     records_file.write_text(
         json.dumps({
             "records": [
-                _learning_signal("lrn-1", "Processed"),
                 _retro_receipt(
                     "receipt-1",
-                    target_ids=["lrn-1"],
+                    target_ids=["lrn-table", "lrn-unknown", "lrn-partial", "lrn-conflict"],
                     receipt_body=(
                         "| signal_id | outcome |\n"
                         "| --- | --- |\n"
-                        "| lrn-1 | already_satisfied |"
+                        "| lrn-table | already_satisfied |\n"
+                        "lrn-unknown=future_outcome lrn-partial=appl "
+                        "lrn-conflict=applied lrn-conflict=discarded_or_superseded "
+                        "unrelated-signal=applied"
                     ),
                 ),
             ],
@@ -357,6 +396,7 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
         }),
         encoding="utf-8",
     )
+    fixture_bytes = records_file.read_bytes()
 
     result = CliRunner().invoke(
         builderops_standalone_root,
@@ -373,9 +413,18 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["complete"] is True
+    assert payload["complete"] is False
     assert payload["unprocessed_learning_signals"] == []
-    assert payload["retrospective_receipts_missing_terminal_outcomes"] == []
+    receipt = payload["retrospective_receipts_missing_terminal_outcomes"][0]
+    assert receipt["terminal_outcomes"] == [
+        {"signal_id": "lrn-table", "outcome": "already_satisfied"}
+    ]
+    assert receipt["missing_terminal_outcomes"] == [
+        "lrn-unknown",
+        "lrn-partial",
+        "lrn-conflict",
+    ]
+    assert records_file.read_bytes() == fixture_bytes
 
 
 def test_completeness_report_cli_reads_evidence_bridge_candidate_fixture(
