@@ -13,7 +13,8 @@ import re
 import runpy
 import stat
 import subprocess
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from typing import Any
 import xml.etree.ElementTree as ET
 
@@ -181,8 +182,18 @@ def _private_manifest(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
     return path, d
 
 
-def _playwright_fixture(monkeypatch: pytest.MonkeyPatch, browser: Any) -> None:
-    monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: nullcontext(SimpleNamespace(chromium=SimpleNamespace(launch=lambda: browser))))
+def _playwright_fixture(monkeypatch: pytest.MonkeyPatch, browser: Any) -> ModuleType:
+    # Fault injection traverses the actual constructor/import boundary without
+    # requiring the optional browser package in the ordinary unit lane. These
+    # invocation-local modules are test data, never native/browser qualification.
+    package = ModuleType("playwright")
+    package.__path__ = []
+    sync_api = ModuleType("playwright.sync_api")
+    sync_api.sync_playwright = lambda: nullcontext(SimpleNamespace(chromium=SimpleNamespace(launch=lambda: browser)))
+    package.sync_api = sync_api
+    monkeypatch.setitem(sys.modules, "playwright", package)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api)
+    return sync_api
 
 
 @pytest.mark.parametrize("fault", ["launch", "context", "tracing"])
@@ -192,13 +203,13 @@ def test_actual_constructor_startup_failure_retains_inventory_and_fails_wrapper(
     path, d = _private_manifest(tmp_path)
     browser = _Browser(d)
     browser.close = lambda: None
-    _playwright_fixture(monkeypatch, browser)
+    sync_api = _playwright_fixture(monkeypatch, browser)
 
     def fail(*args: Any, **kwargs: Any) -> None:
         raise RuntimeError("bounded constructor fault")
 
     if fault == "launch":
-        monkeypatch.setattr("playwright.sync_api.sync_playwright", lambda: nullcontext(SimpleNamespace(chromium=SimpleNamespace(launch=fail))))
+        monkeypatch.setattr(sync_api, "sync_playwright", lambda: nullcontext(SimpleNamespace(chromium=SimpleNamespace(launch=fail))))
     elif fault == "context":
         browser.new_context = fail
     else:

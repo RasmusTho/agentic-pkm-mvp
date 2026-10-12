@@ -12,9 +12,7 @@ from types import SimpleNamespace
 from typing import Any, Iterator
 
 import pytest
-from fastapi.testclient import TestClient
 
-from tests.api._vault_test_helpers import bind_initialized_vault
 from tests.companion_ui.test_overlay_host import _fields
 
 
@@ -50,6 +48,8 @@ def _served_html(html: str) -> Iterator[str]:
 def test_governed_proposal_projection_and_apply_use_existing_guarded_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product_model_access_gateway: Any,
 ) -> None:
+    from fastapi.testclient import TestClient
+    from tests.api._vault_test_helpers import bind_initialized_vault
     import app.api.routes.companion as companion
     import app.panel.confirmation as confirmation
     from app.api.app import app
@@ -154,6 +154,8 @@ def test_panel_confirmation_requires_actual_triggered_action_for_execution(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str,
 ) -> None:
     """Typed-result classification proof; it is not a live execution claim."""
+    from fastapi.testclient import TestClient
+    from tests.api._vault_test_helpers import bind_initialized_vault
     import app.panel.confirmation as confirmation
     from app.agents.panel_agent.runtime import PanelRuntimeResult
     from app.api.app import app
@@ -386,6 +388,8 @@ def test_reentry_resume_uses_runtime_admitted_artifact(fault: str | None) -> Non
 def test_optional_scope_identity_is_bound_to_actual_workspace_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product_model_access_gateway: Any, case: str,
 ) -> None:
+    from fastapi.testclient import TestClient
+    from tests.api._vault_test_helpers import bind_initialized_vault
     from dataclasses import replace
     import shutil
     import app.api.routes.companion as companion
@@ -469,6 +473,8 @@ def test_optional_scope_identity_is_bound_to_actual_workspace_snapshot(
 def test_resume_render_refuses_workspace_change_across_orientation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product_model_access_gateway: Any, change: str | None,
 ) -> None:
+    from fastapi.testclient import TestClient
+    from tests.api._vault_test_helpers import bind_initialized_vault
     import app.api.routes.companion as companion
     from app.api.app import app
     from companion_ui.workspace.serve_dev_page import handle_get
