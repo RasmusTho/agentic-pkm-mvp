@@ -132,8 +132,11 @@ force/retry override or automatic compensation.
 - **Restart / boot:** an explicit controller rerun re-resolves service keys and preserves data.
   The installed `yggdrasil-karakeep-<channel>.service` boot unit calls the existing reader supervisor
   to rehydrate `/run` handles after tmpfs loss. Boot requires a committed prior installation and
-  its unchanged request/check-out binding, then creates a new journaled operation under the same VM
-  channel lock. It reuses the approved persisted route and does not require daily requalification
+  its unchanged request/check-out binding. Attempts use a separate boot namespace of the same
+  existing DeployJournal protocol and the same VM channel lock. Boot outcomes never replace the
+  installation request or terminal ID needed after a lost controller acknowledgment. A pre-effect
+  refusal remains retryable once contention clears; a pending boot refuses another boot or
+  installation mutation. Boot reuses the approved persisted route and does not require daily requalification
   of that unchanged boot input. Missing keys, pending operations and competing channel locks refuse
   service mutation. Verify the new terminal receipt and both service health states after restart.
 - **Backup:** separately authorize maintenance on the exact host and acquire the existing channel

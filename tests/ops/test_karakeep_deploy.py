@@ -11,8 +11,8 @@ import pytest
 import yaml
 
 from app.ops import karakeep_deploy as kd
-from app.ops.bws_secret_admin import SecretAdminError, SecretCopy
-from app.ops.bws_secret_reader import BwsItemAbsent
+from app.ops.bws_secret_admin import BwsAdminConfig, BwsSecretAdmin, SecretAdminError, SecretCopy
+from app.ops.bws_secret_reader import BwsItemAbsent, BwsLookupError, BwsReaderConfig, BwsSecretReader
 from app.ops.host_secret_bootstrap import HostSecretBootstrapError, resolve_host_secret_values
 from app.ops.host_secret_contract import KARAKEEP_GRANTS, load_host_secret_contract
 from app.ops.host_secret_controller import HostSecretAdmissionError, HostSecretController
@@ -73,10 +73,12 @@ def runtime(tmp_path, monkeypatch):
                 'qualified_at': datetime.now(timezone.utc).isoformat()}
     monkeypatch.setattr(kd, '_private_json', lambda path: settings if 'request' not in path.name
                         else json.loads(path.read_text()))
-    state = SimpleNamespace(running=False, calls=[], fail=False, inspected=[])
+    state = SimpleNamespace(running=False, calls=[], fail=False, inspected=[], filesystem='tmpfs')
 
     def command(argv, *, env=None, timeout=30):
         state.calls.append((argv, env))
+        if argv[0] == 'stat':
+            return state.filesystem
         if argv[0] == 'git':
             return REVISION + '\n' if argv[-2:] == ['rev-parse', 'HEAD'] else manifest
         if 'info' in argv:
@@ -221,11 +223,12 @@ def test_secret_delivery_is_scoped_ephemeral_and_rehydrated(runtime, monkeypatch
     web.unlink()
     search.unlink()
     monkeypatch.setattr(kd, '_require_vm_root', lambda: None)
-    monkeypatch.setattr(kd, 'DeployJournal', lambda directory, channel: runtime.effects.journal)
+    monkeypatch.setattr(kd, '_installation_journal', lambda channel: runtime.effects.journal)
     monkeypatch.setattr(kd, 'rpc', lambda channel, request: runtime.supervisor.request(request))
     kd.boot('dev')  # actual unit call-site flow, not just a worker-method assertion
     assert SESSION in web.read_text() and search.read_text() == 'MEILI_MASTER_KEY=' + SEARCH + '\n'
-    latest = runtime.effects.journal.read()
+    assert runtime.effects.journal.read() == first
+    latest = runtime.effects.boot_journal.read()
     assert latest.terminal_result == 'committed' and latest.operation_id != first.operation_id
     assert not (runtime.effects.config.root / 'config/deploy/dev.env.lock').exists()
 
@@ -262,19 +265,26 @@ def test_boot_refuses_busy_channel_lock_without_compose_or_lock_retirement(runti
     first = deploy(runtime)
     other = LinuxEffects(runtime.effects.config)
     monkeypatch.setattr(kd, '_require_vm_root', lambda: None)
-    monkeypatch.setattr(kd, 'DeployJournal', lambda directory, channel: runtime.effects.journal)
+    monkeypatch.setattr(kd, '_installation_journal', lambda channel: runtime.effects.journal)
     monkeypatch.setattr(kd, 'rpc', lambda channel, request: runtime.supervisor.request(request))
     # A live Mimer deploy/token refresh owns this same mkdir/flock admission.
-    with other.channel_lock():
+    mimer = DeployJournal(runtime.effects.journal.directory / 'mimer-fixture', 'dev')
+    other.operation_id = str(uuid4())
+    with other.channel_lock(journal=mimer):
         before = sum('up' in argv for argv, _ in runtime.state.calls)
         with pytest.raises(kd.KarakeepDeployError):
             kd.boot('dev')
         assert before == sum('up' in argv for argv, _ in runtime.state.calls)
         assert (runtime.effects.config.root / 'config/deploy/dev.env.lock/bws-owner').exists()
-    # Other owner has no terminal receipt; Karakeep cannot retire its lock.
-    assert (runtime.effects.config.root / 'config/deploy/dev.env.lock').exists()
-    assert runtime.effects.journal.read().operation_id != first.operation_id
-    assert runtime.effects.journal.read().terminal_result == 'aborted'
+        # Only the other owner's own terminal evidence retires its lock.
+        for stage in ('prepared', 'preflighted', 'materialized', 'activating', 'committed'):
+            mimer.write(other.operation_id, stage)
+    assert not (runtime.effects.config.root / 'config/deploy/dev.env.lock').exists()
+    assert runtime.effects.journal.read() == first
+    assert runtime.effects.boot_journal.read().terminal_result == 'aborted'
+    kd.boot('dev')  # contention cleared: approved installation is still bootable
+    assert runtime.effects.journal.read() == first
+    assert runtime.effects.boot_journal.read().terminal_result == 'committed'
 
 
 def test_controller_prepares_only_absent_service_keys_and_never_invents_api_token(tmp_path, capsys):
@@ -354,7 +364,7 @@ def test_production_callers_bound_persistent_immediate_pending_without_replay(ru
     for stage in ('prepared', 'preflighted', 'materialized', 'activating', 'committed'):
         journal.write(other_id, stage)
     monkeypatch.setattr(kd, '_require_vm_root', lambda: None)
-    monkeypatch.setattr(kd, 'DeployJournal', lambda directory, channel: journal)
+    monkeypatch.setattr(kd, '_installation_journal', lambda channel: journal)
     boot_requests = []
     def pending_rpc(channel, data):
         boot_requests.append(data)
@@ -362,5 +372,90 @@ def test_production_callers_bound_persistent_immediate_pending_without_replay(ru
     monkeypatch.setattr(kd, 'rpc', pending_rpc)
     with pytest.raises(kd.KarakeepOperationPending):
         kd.boot('dev')
-    assert [request['action'] for request in boot_requests] == ['karakeep-boot'] + ['karakeep-status'] * 3
+    assert [request['action'] for request in boot_requests] == ['karakeep-boot'] + ['karakeep-boot-status'] * 3
     assert len({request['operation_id'] for request in boot_requests}) == 1
+
+
+def test_lost_install_ack_remains_reconcilable_after_successful_boot(runtime, monkeypatch):
+    request = runtime.remote.request
+    def lose_ack(action, operation_id, plan):
+        response = request(action, operation_id, plan)
+        if action == 'karakeep-deploy':
+            assert response['receipt']['terminal_result'] == 'committed'
+            raise OSError(API)
+        return response
+    monkeypatch.setattr(runtime.remote, 'request', lose_ack)
+    with pytest.raises(kd.KarakeepDeployError):
+        deploy(runtime)
+    installed = runtime.effects.journal.read()
+    binding = (runtime.effects.journal.directory / 'dev.request.json').read_bytes()
+    with pytest.raises(HostSecretAdmissionError):
+        runtime.admin.controller.admit('check', 'dev').__enter__()
+    monkeypatch.setattr(kd, '_require_vm_root', lambda: None)
+    monkeypatch.setattr(kd, '_installation_journal', lambda channel: runtime.effects.journal)
+    monkeypatch.setattr(kd, 'rpc', lambda channel, data: runtime.supervisor.request(data))
+    for path in runtime.effects.runtime.iterdir():
+        path.unlink()
+    kd.boot('dev')
+    assert runtime.effects.journal.read() == installed
+    assert (runtime.effects.journal.directory / 'dev.request.json').read_bytes() == binding
+    assert runtime.effects.boot_journal.read().terminal_result == 'committed'
+    recovered = deploy(runtime, operation_id=installed.operation_id)
+    assert recovered == installed
+    assert runtime.admin.check('dev', kd.SERVICE_CONSUMERS) == [
+        {'secret': 'karakeep.search-token', 'status': 'ok'},
+        {'secret': 'karakeep.session-token', 'status': 'ok'},
+    ]
+    assert sum('up' in argv for argv, _ in runtime.state.calls) == 2
+
+
+def test_unknown_boot_preserves_install_authority_and_blocks_all_replay(runtime, monkeypatch):
+    installed = deploy(runtime)
+    monkeypatch.setattr(kd, '_require_vm_root', lambda: None)
+    monkeypatch.setattr(kd, '_installation_journal', lambda channel: runtime.effects.journal)
+    monkeypatch.setattr(kd, 'rpc', lambda channel, data: runtime.supervisor.request(data))
+    runtime.state.fail = True
+    with pytest.raises(kd.KarakeepDeployError):
+        kd.boot('dev')
+    pending = runtime.effects.boot_journal.read()
+    assert pending.stage == 'activating' and pending.terminal_result is None
+    assert runtime.effects.journal.read() == installed
+    before = sum('up' in argv for argv, _ in runtime.state.calls)
+    with pytest.raises(kd.KarakeepDeployError):
+        kd.boot('dev')
+    with pytest.raises(kd.KarakeepDeployError):
+        deploy(runtime)
+    assert before == sum('up' in argv for argv, _ in runtime.state.calls)
+    assert runtime.effects.journal.read() == installed
+    assert (runtime.effects.config.root / 'config/deploy/dev.env.lock').exists()
+    lost = kd.KarakeepSupervisor(runtime.effects)
+    assert lost.request({'action': 'karakeep-boot-status', 'operation_id': pending.operation_id,
+                         'plan': runtime.plan.payload()}) == {'unknown': True}
+
+
+def test_non_tmpfs_preflight_refuses_before_lookup_or_runtime_write(runtime):
+    runtime.state.filesystem = 'ext4'
+    with pytest.raises(kd.KarakeepDeployError):
+        runtime.effects.preflight(runtime.plan)
+    assert not runtime.provider.calls
+    assert not runtime.effects.runtime.exists()
+    assert not runtime.effects.journal.directory.exists()
+
+
+def test_bws_provider_boundaries_refuse_all_karakeep_prod_identities_before_auth(tmp_path, monkeypatch):
+    from app.ops import bws_secret_reader
+    auth = []
+    monkeypatch.setattr(bws_secret_reader, '_read_token', lambda config: auth.append('token') or API)
+    credentials = tmp_path / 'credentials'
+    reader = BwsSecretReader(BwsReaderConfig('prod', str(uuid4()), str(uuid4()), credentials,
+                                             credentials / 'bws-machine-account-token'),
+                             client_factory=lambda: auth.append('reader-auth'))
+    admin = BwsSecretAdmin(BwsAdminConfig(str(uuid4()), str(uuid4()), str(uuid4())),
+                           token_reader=lambda: auth.append('admin-token') or API,
+                           client_factory=lambda: auth.append('admin-auth'))
+    for secret in ('karakeep.session-token', 'karakeep.search-token', 'karakeep.api-key', 'karakeep.account-pass'):
+        with pytest.raises(BwsLookupError):
+            reader.lookup('prod', 'prod/' + secret)
+        with pytest.raises(SecretAdminError):
+            admin.read('prod', 'prod/' + secret)
+    assert auth == []

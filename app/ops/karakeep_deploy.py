@@ -106,7 +106,7 @@ def _valid_request(data: dict[str, Any], channel: str) -> tuple[str, KarakeepPla
         if str(UUID(data['prior_operation_id'])) != data['prior_operation_id']:
             raise KarakeepDeployError()
     if set(data) != fields or data['action'] not in {
-        'karakeep-preflight', 'karakeep-deploy', 'karakeep-status', 'karakeep-boot'
+        'karakeep-preflight', 'karakeep-deploy', 'karakeep-status', 'karakeep-boot', 'karakeep-boot-status'
     }:
         raise KarakeepDeployError()
     operation_id = data['operation_id']
@@ -135,6 +135,22 @@ class KarakeepEffects:
     @property
     def project(self) -> str:
         return 'karakeep-' + self.config.channel
+
+    @property
+    def boot_journal(self) -> DeployJournal:
+        # Same existing operation protocol, separate attempt namespace. Boot
+        # must never replace installation or host-reconciliation authority.
+        return DeployJournal(self.journal.directory / 'boot', self.config.channel)
+
+    def require_tmpfs(self) -> None:
+        for parent in (self.runtime, *self.runtime.parents):
+            if parent.is_symlink():
+                raise KarakeepDeployError()
+        existing = self.runtime
+        while not existing.exists():
+            existing = existing.parent
+        if not existing.is_dir() or _command(['stat', '-f', '-c', '%T', str(existing)]).strip() != 'tmpfs':
+            raise KarakeepDeployError()
 
     def _containers(self) -> list[dict[str, Any]]:
         ids = _command([*_DOCKER, 'ps', '-aq', '--filter',
@@ -177,6 +193,7 @@ class KarakeepEffects:
     def preflight(self, plan: KarakeepPlan, *, boot: bool = False) -> dict[str, dict[str, str]]:
         plan.validate()
         cfg = self.config
+        self.require_tmpfs()  # before request persistence or secret resolution
         if plan.channel != cfg.channel or socket.gethostname().split('.')[0] != 'ygg-' + plan.channel:
             raise KarakeepDeployError()
         if _command(['git', '-c', 'safe.directory=' + str(cfg.root), '-C', str(cfg.root),
@@ -244,6 +261,7 @@ class KarakeepEffects:
             raise KarakeepDeployError()
         directory = HostSecretController._durable_directory(self.runtime)
         try:
+            self.require_tmpfs()  # check the actual materialization filesystem too
             info = os.fstat(directory)
             if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
                 raise KarakeepDeployError()
@@ -311,7 +329,7 @@ class KarakeepSupervisor:
         self.finished = threading.Event()
 
     def _deploy(self, operation_id: str, plan: KarakeepPlan, boot: bool = False) -> None:
-        journal = self.effects.journal
+        journal = self.effects.boot_journal if boot else self.effects.journal
         lock = LinuxEffects(self.effects.config)
         lock.operation_id = operation_id
         try:
@@ -347,38 +365,47 @@ class KarakeepSupervisor:
         operation_id, plan = _valid_request(data, self.effects.config.channel)
         action = data['action']
         with self.mutex:
-            previous = self.effects.journal.read()
+            journal = self.effects.boot_journal if action in {'karakeep-boot', 'karakeep-boot-status'} else self.effects.journal
+            previous = journal.read()
             if action == 'karakeep-preflight':
-                if previous and previous.terminal_result is None:
+                boot_previous = self.effects.boot_journal.read()
+                if ((previous and previous.terminal_result is None)
+                    or (boot_previous and boot_previous.terminal_result is None)):
                     raise KarakeepDeployError()
                 self.effects.preflight(plan)
                 return {'ready': True}
             if action == 'karakeep-boot':
-                if (not previous or previous.operation_id != data['prior_operation_id']
-                    or previous.terminal_result != 'committed' or operation_id == previous.operation_id):
+                installed = self.effects.journal.read()
+                if (not installed or installed.operation_id != data['prior_operation_id']
+                    or installed.terminal_result != 'committed' or operation_id == installed.operation_id
+                    or (previous and previous.terminal_result is None)
+                    or (self.worker and self.worker.is_alive())):
                     raise KarakeepDeployError()
-                self.effects.journal.bind_request(previous.operation_id, plan, False)
+                self.effects.journal.bind_request(installed.operation_id, plan, False)
                 self.effects.preflight(plan, boot=True)
-                self.effects.journal.bind_request(operation_id, plan, False, create=True)
-                self.effects.journal.write(operation_id, 'prepared')
+                journal.bind_request(operation_id, plan, False, create=True)
+                journal.write(operation_id, 'prepared')
                 self.finished.clear()
                 self.worker = threading.Thread(target=self._deploy, args=(operation_id, plan, True), daemon=True)
                 self.worker.start()
             elif previous and previous.operation_id == operation_id:
-                self.effects.journal.bind_request(operation_id, plan, False)
+                journal.bind_request(operation_id, plan, False)
                 if previous.terminal_result is not None:
                     if previous.terminal_result == 'committed':
                         self.effects.verify()
                     return {'receipt': previous.payload()}
                 # Never recreate a worker after supervisor loss.
             elif action == 'karakeep-deploy':
-                if (previous and previous.terminal_result is None) or (self.worker and self.worker.is_alive()):
+                boot_previous = self.effects.boot_journal.read()
+                if ((previous and previous.terminal_result is None)
+                    or (boot_previous and boot_previous.terminal_result is None)
+                    or (self.worker and self.worker.is_alive())):
                     raise KarakeepDeployError()
                 # Validate all host and selected credential inputs before the
                 # first durable request mutation, not only inside the worker.
                 self.effects.preflight(plan)
-                self.effects.journal.bind_request(operation_id, plan, False, create=True)
-                self.effects.journal.write(operation_id, 'prepared')
+                journal.bind_request(operation_id, plan, False, create=True)
+                journal.write(operation_id, 'prepared')
                 self.finished.clear()
                 self.worker = threading.Thread(target=self._deploy, args=(operation_id, plan), daemon=True)
                 self.worker.start()
@@ -386,7 +413,7 @@ class KarakeepSupervisor:
                 raise KarakeepDeployError()
         if self.worker and self.worker.is_alive():
             self.finished.wait(25)
-        current = self.effects.journal.read()
+        current = journal.read()
         if not current or current.operation_id != operation_id:
             raise KarakeepDeployError()
         if current.terminal_result is None:
@@ -467,11 +494,15 @@ def _require_vm_root() -> None:
         raise KarakeepDeployError()
 
 
+def _installation_journal(channel: str) -> DeployJournal:
+    return DeployJournal(Path('/var/lib/yggdrasil/karakeep'), channel)
+
+
 def boot(channel: str) -> None:
     if channel not in {'dev', 'test'}:
         raise KarakeepDeployError()
     _require_vm_root()
-    journal = DeployJournal(Path('/var/lib/yggdrasil/karakeep'), channel)
+    journal = _installation_journal(channel)
     previous = journal.read()
     if not previous or previous.terminal_result != 'committed':
         raise KarakeepDeployError()
@@ -483,7 +514,7 @@ def boot(channel: str) -> None:
                'prior_operation_id': previous.operation_id, 'plan': settings['plan']}
     response = rpc(channel, request)
     response = _observe_terminal(response, lambda: rpc(channel, {
-        'action': 'karakeep-status', 'operation_id': operation_id, 'plan': settings['plan']
+        'action': 'karakeep-boot-status', 'operation_id': operation_id, 'plan': settings['plan']
     }))
     if set(response) != {'receipt'}:
         raise KarakeepDeployError()
