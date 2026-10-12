@@ -314,8 +314,7 @@ def child_preflight(environment: dict[str, str], action: str) -> Any:
         or environment.get('INSTANCE_OWNERSHIP_ROOT') != '/app/instance-ownership'):
         raise RuntimeRefused()
     from app.config.database import credential_free_database_fields
-    from app.db.dsn import resolve_dsn
-    import psycopg
+    from app.ops.postgres_deploy import require_test_database_identity
 
     urls = [value for name in ('DATABASE_URL', 'DB_DSN') if (value := environment.get(name))]
     if not urls or not environment.get('DATABASE_PASSWORD_FILE') or any(
@@ -340,11 +339,7 @@ def child_preflight(environment: dict[str, str], action: str) -> Any:
         raise RuntimeRefused()
     # A real connection proves database identity in this namespace. Schema
     # checks are the existing migration-owned store gates, with autocreate off.
-    with psycopg.connect(resolve_dsn(urls[0]), connect_timeout=5, autocommit=True) as conn:
-        if conn.execute('SELECT current_database(), inet_server_addr()::text').fetchone() != (
-            'app_test', environment.get('KARAKEEP_RUNTIME_DB_ADDRESS')
-        ):
-            raise RuntimeRefused()
+    require_test_database_identity(urls[0], environment.get('KARAKEEP_RUNTIME_DB_ADDRESS', ''))
     # Fail early if the selected immutable Product image lacks this invocation's
     # library dependencies; never qualify them by importing into the BWS daemon.
     if action == 'karakeep-acquire':

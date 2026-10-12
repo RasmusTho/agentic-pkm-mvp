@@ -17,6 +17,7 @@ import pytest
 
 from app.ops import karakeep_runtime as kr
 from app.ops.postgres_deploy_linux import DeploymentSupervisor, LinuxConfig
+from app.ops.postgres_deploy import PostgresDeployError
 from app.heimdal.observation_log import read_observations_from, reset_memory_observation_log
 from app.heimdal.cursor_store import get_cursor, reset_memory_cursor_store
 from app.instance.scalar_binding_runtime import resolve_scalar_binding_runtime
@@ -326,7 +327,7 @@ def test_child_preflight_checks_actual_pg_server_before_log_or_work(child_runtim
     assert state.log_reads == [('mimer.candidate_projector', {'limit': 1})]
     state.log_reads.clear()
     state.actual[1] = '172.24.0.4'
-    with pytest.raises(kr.RuntimeRefused):
+    with pytest.raises(PostgresDeployError):
         kr.child_preflight(state.environment, 'karakeep-acquire')
     assert not state.log_reads  # wrong server refuses before publication or candidate work
 
