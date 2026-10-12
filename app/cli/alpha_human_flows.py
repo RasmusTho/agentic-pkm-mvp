@@ -19,6 +19,7 @@ from app.observability.log import with_trace_id
 from app.search.service import ingest_object as index_ingest_object
 from app.services.companion_note import companion_path
 from app.stores import get_object_store
+from app.vault.paths import get_vault_sources_dir_rel
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 ALPHA_TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
@@ -51,7 +52,7 @@ def _select_sample_files(vault_root: Path, sample_size: int) -> List[Path]:
         "Corpus",
         "Workspace",
         "Domains",
-        "Sources",
+        None,  # Resolve the Sources root only when its existing priority is reached.
         "Ontology",
         "Canon",
         "Archive",
@@ -59,19 +60,18 @@ def _select_sample_files(vault_root: Path, sample_size: int) -> List[Path]:
     ]
     candidates: List[Path] = []
     for name in preferred:
-        root = vault_root / name
-        if root.exists() and root.is_dir():
-            files = sorted(root.rglob("*.md"))
-            first = files[0] if files else None
-            if first:
-                candidates.append(first)
-                if len(candidates) >= sample_size:
-                    return candidates[:sample_size]
+        root = vault_root / (
+            get_vault_sources_dir_rel(vault_root) if name is None else name
+        )
+        files = sorted(root.rglob("*.md")) if root.is_dir() else []
+        if files:
+            candidates.append(files[0])
+            if len(candidates) >= sample_size:
+                return candidates[:sample_size]
     if len(candidates) < sample_size:
         root_level = sorted(p for p in vault_root.glob("*.md") if p.is_file())
         for path in root_level:
-            if path not in candidates:
-                candidates.append(path)
+            candidates.append(path)
             if len(candidates) >= sample_size:
                 break
     return candidates[:sample_size]
