@@ -738,23 +738,27 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
             "        return persist_shadowed(resolve_shadowed())\n"
             "    return write_inbox()\n"
             "def factory_a_3414():\n"
-            "    def make_path():\n"
-            "        return f'{factory_resolve()}/a.md'\n"
-            "    def persist_path(path):\n"
-            "        return factory_persist(path)\n"
-            "    def writer():\n"
-            "        path = make_path()\n"
-            "        return persist_path(path)\n"
-            "    return writer()\n"
+            "    def producer_layer_3414():\n"
+            "        def make_path():\n"
+            "            return f'{factory_resolve()}/a.md'\n"
+            "        def persist_path(path):\n"
+            "            return factory_persist(path)\n"
+            "        def writer():\n"
+            "            path = make_path()\n"
+            "            return persist_path(path)\n"
+            "        return writer()\n"
+            "    return producer_layer_3414()\n"
             "def factory_b_3414():\n"
-            "    def make_path():\n"
-            "        return 'Inbox/b.md'\n"
-            "    def persist_path(path):\n"
-            "        return path\n"
-            "    def writer():\n"
-            "        path = make_path()\n"
-            "        return persist_path(path)\n"
-            "    return writer()\n"
+            "    def producer_layer_3414():\n"
+            "        def make_path():\n"
+            "            return 'Inbox/b.md'\n"
+            "        def persist_path(path):\n"
+            "            return path\n"
+            "        def writer():\n"
+            "            path = make_path()\n"
+            "            return persist_path(path)\n"
+            "        return writer()\n"
+            "    return producer_layer_3414()\n"
         ),
     }
     for relative, content in files.items():
@@ -776,8 +780,8 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
     assert ("app/writers/producer.py", "local_import_writer") in source_write_callers
     assert ("app/writers/producer.py", "nested_local_import_writer_3414") in source_write_callers
     assert ("app/writers/relative.py", "relative_import_writer") in source_write_callers
-    assert ("app/writers/producer.py", "factory_a_3414.writer") in source_write_callers
-    assert ("app/writers/producer.py", "factory_b_3414.writer") not in source_write_callers
+    assert ("app/writers/producer.py", "producer_layer_3414.writer") in source_write_callers
+    assert ("app/writers/producer.py", "producer_layer_3414.make_path") in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in source_write_callers
     assert ("app/writers/producer.py", "unrelated_path_and_write_calls") not in source_write_callers
