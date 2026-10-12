@@ -65,6 +65,7 @@ def test_sustained_outage_alerts_once_and_recovers(
         heartbeat_stale_seconds=300.0,
         channel=channel,
         http_get=_down_http_get,
+        environment="test",
     )
     healthy_kwargs: dict[str, Any] = dict(
         base_url="http://localhost:9999",
@@ -72,6 +73,7 @@ def test_sustained_outage_alerts_once_and_recovers(
         heartbeat_stale_seconds=300.0,
         channel=channel,
         http_get=_healthy_http_get,
+        environment="test",
     )
 
     assert prod_probe.run_probe(**down_kwargs) is False
@@ -104,6 +106,7 @@ def test_distinct_outage_realerts_after_recovery(
         heartbeat_stale_seconds=300.0,
         channel=channel,
         http_get=_down_http_get,
+        environment="test",
     )
 
     assert prod_probe.run_probe(**common_kwargs) is False
@@ -140,6 +143,119 @@ def test_probe_reads_required_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert result is False
     channel.send.assert_called_once()
     assert "required_ok" in channel.send.call_args[0][1].lower()
+
+
+@pytest.mark.parametrize("heartbeat_payload", [[], None, 1, "heartbeat"])
+def test_non_object_heartbeat_json_still_sends_down_alert(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    heartbeat_payload: Any,
+) -> None:
+    state_file = tmp_path / "probe.state"
+    monkeypatch.setattr(prod_probe, "ALERT_STATE_FILE", state_file)
+    heartbeat = tmp_path / "worker_heartbeat.json"
+    heartbeat.write_text(json.dumps(heartbeat_payload))
+    channel = _make_spy_channel()
+
+    result = prod_probe.run_probe(
+        base_url="http://127.0.0.1:18000",
+        heartbeat_path=str(heartbeat),
+        heartbeat_stale_seconds=300.0,
+        channel=channel,
+        http_get=_required_ok_false_http_get,
+        environment="prod",
+    )
+
+    assert result is False
+    channel.send.assert_called_once()
+    assert "worker heartbeat malformed: expected an object" in channel.send.call_args.args[1]
+    assert json.loads(state_file.read_text())["environment"] == "prod"
+
+
+@pytest.mark.parametrize(
+    "invalid_state",
+    [
+        {"status": "down"},
+        {
+            "status": "down",
+            "ts": True,
+            "environment": "prod",
+            "correlation_id": "89e3b9b9-5869-4f74-91ef-446d99b63295",
+            "failures": ["health down"],
+        },
+        {
+            "status": "down",
+            "ts": 1,
+            "environment": "prod",
+            "correlation_id": "not-a-uuid",
+            "failures": ["health down"],
+        },
+        {
+            "status": "down",
+            "ts": 1,
+            "environment": "prod",
+            "correlation_id": "89e3b9b9-5869-4f74-91ef-446d99b63295",
+            "failures": "health down",
+        },
+    ],
+)
+def test_invalid_saved_alert_state_does_not_suppress_down_alert(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalid_state: dict[str, Any],
+) -> None:
+    state_file = tmp_path / "probe.state"
+    state_file.write_text(json.dumps(invalid_state))
+    monkeypatch.setattr(prod_probe, "ALERT_STATE_FILE", state_file)
+    heartbeat = _write_fresh_heartbeat(tmp_path)
+    channel = _make_spy_channel()
+
+    assert prod_probe.run_probe(
+        base_url="http://127.0.0.1:18000",
+        heartbeat_path=str(heartbeat),
+        heartbeat_stale_seconds=300.0,
+        channel=channel,
+        http_get=_required_ok_false_http_get,
+        environment="prod",
+    ) is False
+
+    channel.send.assert_called_once()
+    saved_state = json.loads(state_file.read_text())
+    assert saved_state["status"] == "down"
+    assert saved_state["environment"] == "prod"
+    assert saved_state["correlation_id"] in channel.send.call_args.args[1]
+
+
+def test_alert_state_from_other_environment_does_not_suppress_down_alert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_file = tmp_path / "probe.state"
+    state_file.write_text(
+        json.dumps(
+            {
+                "status": "down",
+                "ts": 1,
+                "environment": "test",
+                "correlation_id": "89e3b9b9-5869-4f74-91ef-446d99b63295",
+                "failures": ["test health down"],
+            }
+        )
+    )
+    monkeypatch.setattr(prod_probe, "ALERT_STATE_FILE", state_file)
+    heartbeat = _write_fresh_heartbeat(tmp_path)
+    channel = _make_spy_channel()
+
+    assert prod_probe.run_probe(
+        base_url="http://127.0.0.1:18000",
+        heartbeat_path=str(heartbeat),
+        heartbeat_stale_seconds=300.0,
+        channel=channel,
+        http_get=_required_ok_false_http_get,
+        environment="prod",
+    ) is False
+
+    channel.send.assert_called_once()
+    assert "PROD down" in channel.send.call_args.args[0]
 
 
 def test_probe_uses_explicit_environment_and_correlates_recovery(

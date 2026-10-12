@@ -78,6 +78,7 @@ def test_plan_uses_the_shared_protected_secret_controller_state() -> None:
 
     assert plan["controller_state_directory"] == CONTROLLER_STATE_DIRECTORY
     assert CONTROLLER_STATE_DIRECTORY.endswith("/secret-controller")
+    assert plan["configuration"] == "/etc/yggdrasil/host-probe/prod.env"
 
 
 def test_mac_installer_keeps_the_old_production_probe_as_legacy_only() -> None:

@@ -82,7 +82,7 @@ def installation_plan(channel: str, head: str) -> dict[str, object]:
         "source_commit": head,
         "install_directory": INSTALL_ROOT,
         "unit": f"yggdrasil-host-probe@{channel}.service",
-        "configuration": f"config/host-probe/{channel}.env",
+        "configuration": f"/etc/yggdrasil/host-probe/{channel}.env",
         "controller_state_directory": CONTROLLER_STATE_DIRECTORY,
         "secret_binding": "heimdal-external-alerts / discord.webhook via BWS reader",
         "apply_required": True,

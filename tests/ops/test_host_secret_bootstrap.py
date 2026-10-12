@@ -1720,7 +1720,10 @@ def test_bws_lookup_uses_scoped_active_identity(
     assert "fixture-machine-token" not in (controller.directory / "operations.jsonl").read_text()
 
 
-def test_interrupted_same_channel_bws_check_is_reconciled_before_retry(tmp_path):
+def test_interrupted_same_channel_probe_bws_check_is_reconciled_before_retry(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
     webhook = "https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456"
     reader, _client, controller = _bws_fixture(
         tmp_path,
@@ -1731,13 +1734,19 @@ def test_interrupted_same_channel_bws_check_is_reconciled_before_retry(tmp_path)
     with controller.admit("check", "prod") as interrupted:
         interrupted_id = interrupted.operation_id
 
-    assert resolve_host_secret_values(
+    environment = {
+        "PROBE_ENVIRONMENT": "prod",
+        "PROBE_ALERT_CHANNEL": "discord",
+        "HOST_SECRET_RUNTIME_DIRECTORY": str(tmp_path),
+    }
+    assert host_secret_bootstrap.run_probe_with_bws(
         channel="prod",
         consumer="heimdal-external-alerts",
-        provider="bws",
+        environment=environment,
         bws_reader=reader,
         controller=controller,
-    ) == {"discord.webhook": webhook}
+        runner=lambda _command, _environment: 0,
+    ) == 0
 
     records = [
         json.loads(line)
@@ -1760,20 +1769,14 @@ def test_interrupted_same_channel_bws_check_is_reconciled_before_retry(tmp_path)
     assert records[3]["source"] == "read-complete"
 
 
-@pytest.mark.parametrize(
-    ("pending_kind", "pending_target"),
-    [("deploy", "prod"), ("check", "test")],
-)
-def test_interrupted_bws_check_reconciliation_preserves_other_pending_operation(
-    tmp_path, pending_kind, pending_target
-):
+def test_standalone_bws_check_does_not_reconcile_interrupted_probe_check(tmp_path):
     reader, client, controller = _bws_fixture(
         tmp_path,
         project="prod",
         identity="shared/discord.webhook",
         value="https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456",
     )
-    with controller.admit(pending_kind, pending_target):
+    with controller.admit("check", "prod"):
         pass
 
     with pytest.raises(HostSecretBootstrapError):
@@ -1783,6 +1786,49 @@ def test_interrupted_bws_check_reconciliation_preserves_other_pending_operation(
             provider="bws",
             bws_reader=reader,
             controller=controller,
+        )
+
+    assert client.calls == []
+    records = [
+        json.loads(line)
+        for line in (controller.directory / "operations.jsonl").read_text().splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["kind"] == "check"
+    assert records[0]["target"] == "prod"
+    assert records[0]["stage"] == "prepared"
+
+
+@pytest.mark.parametrize(
+    ("pending_kind", "pending_target"),
+    [("deploy", "prod"), ("check", "test")],
+)
+def test_interrupted_bws_check_reconciliation_preserves_other_pending_operation(
+    tmp_path, pending_kind, pending_target, monkeypatch
+):
+    monkeypatch.setattr(host_secret_bootstrap.sys, "platform", "linux")
+    reader, client, controller = _bws_fixture(
+        tmp_path,
+        project="prod",
+        identity="shared/discord.webhook",
+        value="https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456",
+    )
+    with controller.admit(pending_kind, pending_target):
+        pass
+
+    environment = {
+        "PROBE_ENVIRONMENT": "prod",
+        "PROBE_ALERT_CHANNEL": "discord",
+        "HOST_SECRET_RUNTIME_DIRECTORY": str(tmp_path),
+    }
+    with pytest.raises(HostSecretBootstrapError):
+        host_secret_bootstrap.run_probe_with_bws(
+            channel="prod",
+            consumer="heimdal-external-alerts",
+            environment=environment,
+            bws_reader=reader,
+            controller=controller,
+            runner=lambda _command, _environment: 0,
         )
 
     assert client.calls == []

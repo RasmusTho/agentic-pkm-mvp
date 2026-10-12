@@ -590,7 +590,6 @@ def resolve_host_secret_values(
             operation.require_active(channel)
             return _resolve_bws_consumer_values(channel, consumer, selected, bws_reader)
         active_controller = controller or HostSecretController()
-        _reconcile_interrupted_read_check(active_controller, channel)
         with active_controller.admit("check", channel) as check_operation:
             try:
                 resolved = _resolve_bws_consumer_values(channel, consumer, selected, bws_reader)
@@ -605,10 +604,10 @@ def resolve_host_secret_values(
         raise HostSecretBootstrapError("host secret lookup failed for declared consumer") from None
 
 
-def _reconcile_interrupted_read_check(
+def _reconcile_interrupted_probe_check(
     controller: HostSecretController, channel: str
 ) -> None:
-    """Retire only a stale read-only check before admitting a new BWS check.
+    """Retire only a stale probe read before admitting a new probe BWS check.
 
     A check cannot prepare a remote mutation. Acquiring the controller lock inside
     reconcile also proves no prior check still owns the admission lock. Other
@@ -979,6 +978,8 @@ def run_probe_with_bws(
             raise HostSecretBootstrapError(
                 "BWS probe configuration is outside its declared scope"
             )
+        active_controller = controller or HostSecretController()
+        _reconcile_interrupted_probe_check(active_controller, channel)
         runtime_directory = selected_environment.get("HOST_SECRET_RUNTIME_DIRECTORY")
         probe_path = (
             Path(__file__).resolve().parents[2]
@@ -994,7 +995,7 @@ def run_probe_with_bws(
             provider="bws",
             contract=selected_contract,
             bws_reader=bws_reader,
-            controller=controller,
+            controller=active_controller,
             environment=selected_environment,
             directory=Path(runtime_directory) if runtime_directory else None,
         ) as env_file:

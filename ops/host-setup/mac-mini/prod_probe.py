@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from notification_channels import (
     NotificationChannel,
@@ -78,11 +78,37 @@ def _load_alert_state() -> dict[str, Any] | None:
         payload = json.loads(ALERT_STATE_FILE.read_text())
     except Exception:
         return None
-    return payload if isinstance(payload, dict) else None
+    if not isinstance(payload, dict):
+        return None
+    if (
+        payload.get("status") != "down"
+        or payload.get("environment") not in {"test", "prod"}
+        or not isinstance(payload.get("ts"), int)
+        or isinstance(payload.get("ts"), bool)
+        or payload["ts"] <= 0
+        or not isinstance(payload.get("failures"), list)
+        or not payload["failures"]
+        or any(not isinstance(item, str) or not item for item in payload["failures"])
+    ):
+        return None
+    correlation_id = payload.get("correlation_id")
+    if not isinstance(correlation_id, str):
+        return None
+    try:
+        UUID(correlation_id)
+    except (ValueError, AttributeError):
+        return None
+    return payload
 
 
-def _outage_state_is_active(state: dict[str, Any] | None) -> bool:
-    return bool(state and state.get("status") == "down")
+def _outage_state_is_active(
+    state: dict[str, Any] | None, *, environment: str
+) -> bool:
+    return bool(
+        state
+        and state.get("status") == "down"
+        and state.get("environment") == environment
+    )
 
 
 def _record_outage_state(
@@ -281,6 +307,8 @@ def _probe_worker_heartbeat(
         hb = json.loads(path.read_text())
     except Exception as exc:
         return False, f"worker heartbeat malformed: {exc}"
+    if not isinstance(hb, dict):
+        return False, "worker heartbeat malformed: expected an object"
     # The real worker heartbeat (app/runtime/worker_heartbeat.py) writes the epoch
     # timestamp under "ts"; accept "timestamp" only as a legacy fallback.
     ts = hb.get("ts")
@@ -344,7 +372,7 @@ def run_probe(
             reason_hb,
         )
         state = _load_alert_state()
-        if _outage_state_is_active(state):
+        if _outage_state_is_active(state, environment=selected_environment):
             _send_recovery_alert(channel, state or {}, environment=selected_environment)
         elif state is not None:
             _clear_alert_state()
@@ -352,7 +380,7 @@ def run_probe(
 
     # Something is down — suppress duplicate alerts while the outage remains active.
     state = _load_alert_state()
-    if _outage_state_is_active(state):
+    if _outage_state_is_active(state, environment=selected_environment):
         log.info(
             "probe-down detected but outage already recorded; suppressing duplicate alert. environment=%s",
             selected_environment,
