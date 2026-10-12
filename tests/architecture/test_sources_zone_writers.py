@@ -563,16 +563,12 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
         if scope_writes_source(relative, function.body, function_env[target], calls):
             source_write_callers.add((relative, function_display[target]))
 
-    # Module-body calls are production callsites too. Keep this scope shallow: nested
-    # functions/classes belong to their own scopes and use the same one-helper analysis.
-    for relative, tree in trees.items():
-        env = {
-            name: set(values)
-            for name, values in module_targets.get(module_for_relative[relative], {}).items()
-        }
+    def direct_scope_calls(
+        relative: str, body: list[ast.stmt], env: dict[str, set[str]]
+    ) -> list[tuple[set[str], ast.Call]]:
         calls: list[tuple[set[str], ast.Call]] = []
 
-        class ModuleCalls(ast.NodeVisitor):
+        class DirectScopeCalls(ast.NodeVisitor):
             def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
                 return
 
@@ -585,11 +581,70 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                 calls.append((expression_targets(relative, node.func, env), node))
                 self.generic_visit(node)
 
-        visitor = ModuleCalls()
-        for statement in tree.body:
+        visitor = DirectScopeCalls()
+        for statement in body:
             visitor.visit(statement)
-        if scope_writes_source(relative, tree.body, env, calls):
+        return calls
+
+    def child_scope_env(
+        relative: str, body: list[ast.stmt], parent_env: dict[str, set[str]]
+    ) -> dict[str, set[str]]:
+        collector = ScopeBindings(relative=relative)
+        for statement in body:
+            collector.visit(statement)
+        local = {name: set(values) for name, values in collector.bindings.items()}
+        for name, specs in collector.from_specs.items():
+            for base, imported in specs:
+                local.setdefault(name, set()).update(
+                    resolve_import_target(relative, base, imported)
+                )
+        env = {name: set(values) for name, values in parent_env.items()}
+        env.update(local)
+        return env
+
+    # Module and immediately executed class-body calls are production callsites too.
+    # Nested functions/classes remain separate lexical scopes and use this same bounded
+    # one-helper classifier, without evaluating arbitrary Python execution.
+    for relative, tree in trees.items():
+        module_env = {
+            name: set(values)
+            for name, values in module_targets.get(module_for_relative[relative], {}).items()
+        }
+        if scope_writes_source(
+            relative, tree.body, module_env, direct_scope_calls(relative, tree.body, module_env)
+        ):
             source_write_callers.add((relative, "<module>"))
+
+        class_scopes: list[tuple[ast.ClassDef, dict[str, set[str]], list[ast.ClassDef]]] = []
+
+        class ClassScopes(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.stack: list[ast.ClassDef] = []
+                self.env_stack = [module_env]
+
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                return
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                env = child_scope_env(relative, node.body, self.env_stack[-1])
+                self.stack.append(node)
+                self.env_stack.append(env)
+                class_scopes.append((node, env, list(self.stack)))
+                for statement in node.body:
+                    self.visit(statement)
+                self.env_stack.pop()
+                self.stack.pop()
+
+        class_visitor = ClassScopes()
+        for statement in tree.body:
+            class_visitor.visit(statement)
+        for class_node, env, lexical_classes in class_scopes:
+            label = _module_function_for(list(lexical_classes))
+            calls = direct_scope_calls(relative, class_node.body, env)
+            if scope_writes_source(relative, class_node.body, env, calls):
+                source_write_callers.add((relative, label))
 
     return literals, resolver_callers, source_write_callers
 
@@ -806,6 +861,14 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
             "make_path()\n"
             "save_path('unrelated')\n"
         ),
+        "app/writers/class_producer.py": (
+            "from app.writers import chain_path as make_path, chain_sink as save_path\n"
+            "class Example:\n"
+            "    save_path(make_path())\n"
+            "class Unrelated:\n"
+            "    make_path()\n"
+            "    save_path('unrelated')\n"
+        ),
     }
     for relative, content in files.items():
         target = tmp_path / relative
@@ -828,11 +891,13 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
     assert ("app/writers/relative.py", "relative_import_writer") in source_write_callers
     assert ("app/writers/producer.py", "producer_layer_3414.writer") in source_write_callers
     assert ("app/writers/module_producer.py", "<module>") in source_write_callers
+    assert ("app/writers/class_producer.py", "Example") in source_write_callers
     assert ("app/writers/producer.py", "producer_layer_3414.make_path") in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in source_write_callers
     assert ("app/writers/producer.py", "unrelated_path_and_write_calls") not in source_write_callers
     assert ("app/writers/unrelated_module.py", "<module>") not in source_write_callers
+    assert ("app/writers/class_producer.py", "Unrelated") not in source_write_callers
 
 
 def test_writer_inventory_fails_closed_on_unresolved_star_import(tmp_path: Path) -> None:

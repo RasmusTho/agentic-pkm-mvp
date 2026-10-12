@@ -1160,10 +1160,10 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
   / app-agent content crosses the Sources boundary.
 - **Current enforcement:** `static_test + runtime_test` (proposed) — an exact source inventory
   rejects unreviewed literal/resolver drift and resolves absolute and relative app imports,
-  visible package re-exports, and possible aliases across module, function, and enclosing lexical
-  scopes. Helper identities retain their full lexical path, and the census follows one
-  value-carrying path-helper/write-helper boundary; star imports fail closed. Synthetic positive
-  and negative cases cover those bindings and unrelated writes. Production producer tests verify
+  visible package re-exports, and possible aliases across module, immediate class-body, function,
+  and enclosing lexical scopes. Helper identities retain their full lexical path, and the census
+  follows one value-carrying path-helper/write-helper boundary; star imports fail closed. Synthetic
+  positive and negative cases cover those bindings and unrelated writes. Production producer tests verify
   selected-root writes and capture-note overlap refusal, while capture, MCP, and panel-agent paths
   verify exclusion with existing vault notes.
 - **Eventual test path:** `tests/architecture/test_sources_zone_writers.py`.
