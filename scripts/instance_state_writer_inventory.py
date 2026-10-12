@@ -93,12 +93,17 @@ ENV_ASSIGNMENT_RE = re.compile(r"^(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]
 PYTHON_RE = re.compile(r"^python(?:3(?:\.\d+)*)?$")
 PF_KTHREAD = 0x00200000
 LINUX_PROCESS_READ_ATTEMPTS = 3
+LINUX_CENSUS_ATTEMPTS = 3
 LINUX_DEAD_STATES = frozenset({"X", "x", "Z"})
 LINUX_PROCESS_STATES = frozenset({"D", "I", "K", "P", "R", "S", "T", "W", "X", "Z", "t", "x"})
 
 
 class InventoryError(RuntimeError):
     """Enumeration or proof construction was incomplete or unsafe."""
+
+
+class _LinuxCensusIncomplete(InventoryError):
+    """One Linux census could not obtain a complete, stable PID identity."""
 
 
 def _effective_uid() -> int:
@@ -504,7 +509,7 @@ def _linux_gone_result(
     if strict_controller:
         raise InventoryError("controller process identity is unavailable")
     if fail_closed_on_gone:
-        raise InventoryError("native process enumeration failed")
+        raise _LinuxCensusIncomplete("native process enumeration failed")
     return None
 
 
@@ -518,13 +523,16 @@ def _linux_record(
     """Read one PID without binding argv across exit, exec, or PID reuse races."""
 
     last_error = InventoryError("native process enumeration did not stabilize")
+    terminal_error: InventoryError | None = None
     for attempt in range(LINUX_PROCESS_READ_ATTEMPTS):
         final_attempt = attempt == LINUX_PROCESS_READ_ATTEMPTS - 1
+        retryable_failure = False
         try:
             stat_before_raw = _read_linux_stat(pid)
         except (FileNotFoundError, ProcessLookupError):
             last_error = InventoryError("native process enumeration failed")
-            if final_attempt and _linux_pid_is_gone(pid):
+            retryable_failure = True
+            if final_attempt and terminal_error is None and _linux_pid_is_gone(pid):
                 return _linux_gone_result(
                     strict_controller=strict_controller,
                     fail_closed_on_gone=fail_closed_on_gone,
@@ -532,29 +540,22 @@ def _linux_record(
             continue
         except (PermissionError, OSError):
             last_error = InventoryError("native process enumeration failed")
-            if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(
-                    strict_controller=strict_controller,
-                    fail_closed_on_gone=fail_closed_on_gone,
-                )
+            terminal_error = last_error
             continue
 
         try:
             before = _parse_linux_stat(pid, stat_before_raw)
         except InventoryError as exc:
             last_error = exc
-            if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(
-                    strict_controller=strict_controller,
-                    fail_closed_on_gone=fail_closed_on_gone,
-                )
+            terminal_error = exc
             continue
 
         try:
             cmdline_raw = _read_linux_cmdline(pid)
         except (FileNotFoundError, ProcessLookupError):
             last_error = InventoryError("native process enumeration failed")
-            if final_attempt and _linux_pid_is_gone(pid):
+            retryable_failure = True
+            if final_attempt and terminal_error is None and _linux_pid_is_gone(pid):
                 return _linux_gone_result(
                     strict_controller=strict_controller,
                     fail_closed_on_gone=fail_closed_on_gone,
@@ -562,11 +563,7 @@ def _linux_record(
             continue
         except (PermissionError, OSError):
             last_error = InventoryError("native process enumeration failed")
-            if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(
-                    strict_controller=strict_controller,
-                    fail_closed_on_gone=fail_closed_on_gone,
-                )
+            terminal_error = last_error
             continue
 
         executable_hint: str | None = None
@@ -578,7 +575,8 @@ def _linux_record(
                 confirmed_executable = _normalize_linux_exe(_read_linux_exe(pid))
             except (FileNotFoundError, ProcessLookupError):
                 last_error = InventoryError("native process executable identity is unavailable")
-                if final_attempt and _linux_pid_is_gone(pid):
+                retryable_failure = True
+                if final_attempt and terminal_error is None and _linux_pid_is_gone(pid):
                     return _linux_gone_result(
                         strict_controller=strict_controller,
                         fail_closed_on_gone=fail_closed_on_gone,
@@ -586,19 +584,11 @@ def _linux_record(
                 continue
             except (PermissionError, OSError):
                 last_error = InventoryError("native process executable identity is unavailable")
-                if final_attempt and _linux_pid_is_gone(pid):
-                    return _linux_gone_result(
-                        strict_controller=strict_controller,
-                        fail_closed_on_gone=fail_closed_on_gone,
-                    )
+                terminal_error = last_error
                 continue
             except InventoryError as exc:
                 last_error = exc
-                if final_attempt and _linux_pid_is_gone(pid):
-                    return _linux_gone_result(
-                        strict_controller=strict_controller,
-                        fail_closed_on_gone=fail_closed_on_gone,
-                    )
+                terminal_error = exc
                 continue
             exec_pair_changed = (
                 cmdline_raw != confirmed_cmdline
@@ -609,7 +599,8 @@ def _linux_record(
             stat_after_raw = _read_linux_stat(pid)
         except (FileNotFoundError, ProcessLookupError):
             last_error = InventoryError("native process enumeration failed")
-            if final_attempt and _linux_pid_is_gone(pid):
+            retryable_failure = True
+            if final_attempt and terminal_error is None and _linux_pid_is_gone(pid):
                 return _linux_gone_result(
                     strict_controller=strict_controller,
                     fail_closed_on_gone=fail_closed_on_gone,
@@ -617,33 +608,27 @@ def _linux_record(
             continue
         except (PermissionError, OSError):
             last_error = InventoryError("native process enumeration failed")
-            if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(
-                    strict_controller=strict_controller,
-                    fail_closed_on_gone=fail_closed_on_gone,
-                )
+            terminal_error = last_error
             continue
 
         try:
             after = _parse_linux_stat(pid, stat_after_raw)
         except InventoryError as exc:
             last_error = exc
-            if final_attempt and _linux_pid_is_gone(pid):
-                return _linux_gone_result(
-                    strict_controller=strict_controller,
-                    fail_closed_on_gone=fail_closed_on_gone,
-                )
+            terminal_error = exc
             continue
 
         before_start = before[4]
         state, flags, ppid, pgid, after_start = after
         if before_start != after_start:
             last_error = InventoryError("native process identity changed during enumeration")
+            retryable_failure = True
             continue
         if exec_pair_changed:
             last_error = InventoryError(
                 "native process exec identity changed during enumeration"
             )
+            retryable_failure = True
             continue
         if _linux_inert(state, flags):
             if strict_controller:
@@ -651,9 +636,11 @@ def _linux_record(
             return None
         if not cmdline_raw:
             last_error = InventoryError("native process argv is unavailable")
+            terminal_error = last_error
             continue
         if not cmdline_raw.endswith(b"\0"):
             last_error = InventoryError("native process argv is malformed")
+            terminal_error = last_error
             continue
 
         # Remove exactly the procfs record terminator. Empty arguments before it
@@ -668,11 +655,20 @@ def _linux_record(
             executable_hint=executable_hint,
         )
 
-    if _linux_pid_is_gone(pid):
-        return _linux_gone_result(
-            strict_controller=strict_controller,
-            fail_closed_on_gone=fail_closed_on_gone,
-        )
+    if terminal_error is not None:
+        if not fail_closed_on_gone and _linux_pid_is_gone(pid):
+            return _linux_gone_result(
+                strict_controller=strict_controller,
+                fail_closed_on_gone=False,
+            )
+        raise terminal_error
+    if fail_closed_on_gone and retryable_failure:
+        if _linux_pid_is_gone(pid):
+            return _linux_gone_result(
+                strict_controller=strict_controller,
+                fail_closed_on_gone=fail_closed_on_gone,
+            )
+        raise _LinuxCensusIncomplete(str(last_error))
     raise last_error
 
 
@@ -1624,20 +1620,34 @@ def _test_sync(ready_name: str, continue_name: str) -> None:
 
 
 def _enumerate_linux(*, boot_id: str) -> list[ProcessRecord]:
-    try:
-        pids = sorted(int(item.name) for item in Path("/proc").iterdir() if item.name.isdigit())
-    except OSError as exc:
-        raise InventoryError("native process enumeration failed") from exc
+    last_error: _LinuxCensusIncomplete | None = None
     _test_sync(
         "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_READY_FD",
         "INSTANCE_STATE_INVENTORY_TEST_PROC_LIST_CONTINUE_FD",
     )
-    records: list[ProcessRecord] = []
-    for pid in pids:
-        record = _linux_record(pid, boot_id, fail_closed_on_gone=True)
-        if record is not None:
-            records.append(record)
-    return records
+    for _attempt in range(LINUX_CENSUS_ATTEMPTS):
+        try:
+            pids = sorted(
+                int(item.name) for item in Path("/proc").iterdir() if item.name.isdigit()
+            )
+        except OSError as exc:
+            raise InventoryError("native process enumeration failed") from exc
+        records: list[ProcessRecord] = []
+        try:
+            for pid in pids:
+                record = _linux_record(pid, boot_id, fail_closed_on_gone=True)
+                if record is not None:
+                    records.append(record)
+        except _LinuxCensusIncomplete as exc:
+            # The records collected so far belong to an incomplete PID list.
+            # Never return them as a partial snapshot; the next attempt starts
+            # from a freshly enumerated /proc list.
+            last_error = exc
+            continue
+        return records
+    if last_error is not None:
+        raise last_error
+    raise InventoryError("native process enumeration failed")
 
 
 def _enumerate_macos() -> list[ProcessRecord]:
@@ -1842,6 +1852,9 @@ def _snapshot(*, controller_pid: int, controller_start_token: str) -> dict[str, 
     ):
         domain = str(writer.pop("domain"))
         domains[domain].append(writer)
+    controller_after = _record_for_pid(controller_pid, linux_boot_id=linux_boot_id)
+    if controller_after.start_token != controller_start_token:
+        raise InventoryError("deployment controller identity changed")
     for domain in domains:
         domains[domain].sort(
             key=lambda item: (str(item["role"]), int(item["pid"]), str(item["start_token"]))

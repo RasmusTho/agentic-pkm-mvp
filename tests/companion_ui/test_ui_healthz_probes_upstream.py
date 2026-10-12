@@ -94,7 +94,7 @@ def test_healthz_503_when_upstream_down() -> None:
     assert driver.status_code == 503
     assert driver.payload == {"ok": False, "upstream": "unreachable"}
     # Confirm the handler actually attempted the upstream probe.
-    assert client.get_calls == [("/api/health", {})]
+    assert client.get_calls == [("/api/health", {"model_access_sampling": "cache"})]
 
 
 def test_healthz_200_when_upstream_ok() -> None:
@@ -113,16 +113,16 @@ def test_healthz_200_when_upstream_ok() -> None:
     assert driver.status_code == 200
     assert driver.payload == {"ok": True, "service": "companion-ui"}
     # Confirm the handler actually probed upstream before returning 200.
-    assert client.get_calls == [("/api/health", {})]
+    assert client.get_calls == [("/api/health", {"model_access_sampling": "cache"})]
 
 
 def test_prod_handler_healthz_probes_upstream() -> None:
-    """Production handler (make_handler(production_profile=True)) has the same probe behaviour.
+    """Production liveness keeps the active upstream health refresh.
 
     The production server (serve_production_page.py) calls the shared
     ``make_handler`` factory, so no source change to that file is needed.
-    This test confirms the shared factory applies the upstream-aware probe
-    regardless of ``production_profile``.
+    The production healthcheck is an active cache refresher; passive page
+    rendering still uses the cache-only selector.
 
     Acceptance Criterion: AC3 of #2618.
     Verify: test_prod_handler_healthz_probes_upstream

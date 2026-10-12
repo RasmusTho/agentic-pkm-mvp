@@ -68,6 +68,7 @@ from app.governance.governed_write import (
     GovernedWriteGrant,
 )
 from app.knowledge.write_ops import append_note_relative
+from app.model_access.catalog import CatalogError
 from app.outbox.events import INDEX_OUTBOX_PATH
 from app.services.outbox import (
     EVENT_ID_FINGERPRINT,
@@ -225,7 +226,7 @@ def _offer_question_registration_proposal(
             vault_root=vault_root,
             trace_id=trace_id,
         )
-    except (OSError, WritesBlockedError):
+    except (CatalogError, OSError, WritesBlockedError):
         logger.warning("standing-question proposal pass degraded trace_id=%s", trace_id, exc_info=True)
         return None
 

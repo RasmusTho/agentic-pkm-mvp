@@ -752,7 +752,7 @@ class TestHandleGet:
             ("/api/companion/orientation", {}),
             # OBSSTAB-08 (#2615): entry-state path also fetches live health for
             # the ambient operator-health glyph.
-            ("/api/health", {}),
+            ("/api/health", {"model_access_sampling": "cache"}),
             ("/api/companion/vault-browser", {"q": "", "limit": 250}),
         ]
         assert 'data-testid="workspace-orientation-vault-entry"' in html

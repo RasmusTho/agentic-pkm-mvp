@@ -38,6 +38,14 @@ The owner is dyslexic and Swedish/English mixed; every read/type surface works a
 
 A source absent from this table (mood/sentiment analytics, multi-day rollups, auto-publish) is excluded deliberately — see Out of Scope.
 
+Every recognized day-context occurrence carries an explicit least-authority review posture into
+draft admission. Durable commitment and decision-receipt facts default only to unreviewed
+cited-proposal input; captures retain their actual accepted, reviewed, revised, rejected, or
+unreviewed source posture. The posture remains bound to the occurrence-aware typed source identity
+and exact source bytes. A rejected source, unresolved citation, identity collision, changed source,
+or changed admission posture therefore fails closed before candidate replacement; none of these
+inputs becomes accepted human knowledge merely because it is durable or cited.
+
 ## Implementation tasks (execution order)
 
 | # | Task | id | Prereqs |
@@ -73,8 +81,33 @@ If any of these seams could not be given an invariant, the slice boundaries woul
 - [ ] The agent opens the conversation informed by the day-context bundle, asks a small number of reflective questions, follows up on answers, and can be stopped by the owner at any point while still producing a usable transcript. Verify: `tests/journaling/test_lead_reflection_conversation.py::test_conversation_opens_informed_by_day_context`, `tests/journaling/test_lead_reflection_conversation.py::test_owner_can_stop_conversation_at_any_turn` (JRNL-02)
 - [ ] A ghost-written journal entry drafts from the conversation plus day context, staged as a candidate-class governed write, one per day, idempotent under a repeated same-day session; every fact folded into the first-person draft carries a distinguishable provenance (owner's words vs. system-derived context). Verify: `tests/journaling/test_draft_journal_entry.py::test_draft_is_idempotent_same_day`, `tests/journaling/test_draft_journal_entry.py::test_draft_preserves_provenance_separation` (JRNL-03)
 - [ ] The owner reviews the draft with zero typing required to accept; edit-then-accept and dismiss are both available; acceptance promotes the entry to the day's canonical journal note and produces a receipt; the engine never overwrites an already-accepted entry (a later same-day session only produces a reviewable addendum candidate). Verify: `tests/journaling/test_review_accept_journal.py::test_accept_requires_no_typing`, `tests/journaling/test_review_accept_journal.py::test_engine_cannot_overwrite_accepted_entry` (JRNL-04)
-- [ ] Live validation: a real evening conversation produces a transcript, a drafted entry, and an owner-accepted journal note — receipt posted to the parent issue once filed. Verify: parent-issue validation receipt (operator channel)
+- [ ] Automated qualified TEST validation: an explicitly synthetic evening conversation produces a durable transcript, provenance-bearing candidate, and test-actor accepted note through the existing guarded review processor; a second same-day session produces an addendum candidate while the accepted primary bytes remain unchanged. The attributable receipt identifies automation and never presents the test actor as real-owner acknowledgement. Verify: `tests/journaling/test_conversational_journaling_live_acceptance.py::test_conversational_journaling_live_acceptance` plus the `conversational_journaling_execution.v1` receipt posted to parent #3347
 - [ ] Owner-doc promotion only after acceptance: a writeback naming Conversational Journaling as a delivered capability (candidate target: `docs/HUMAN-FLOWS.md` or `docs/STATUS.md`, decided at promotion time) and a delivered-marker row in `docs/research/yggdrasil-closed-loops-ideation.md`. Verify: doc writeback at the target chosen at promotion time (not pre-decided here)
+
+### Automated technical acceptance path
+
+The fixed opt-in runner lives at
+`tests/journaling/test_conversational_journaling_live_acceptance.py` and consumes a private manifest
+from the operation-owned qualified dev/test boundary. Before the first Product write it binds the
+exact source SHA and image digest, disposable synthetic fixture, fixed synthetic actor, and finite
+effect budget. Its deterministic contract tests may verify refusal and evidence behavior, but mocks,
+fixtures, local runs, skipped prerequisites, and failed or blocked invocations cannot produce feature
+acceptance.
+
+The all-PASS journey uses the shipped seams in order: day-context assembly →
+`ReflectionConversationService` → durable transcript → `draft_journal_entry` proposal → the fixed
+test actor checks the existing primary acceptance affordance → `process_journal_reviews_tick`
+materializes the receipt-bound test note → a second conversation produces an addendum candidate.
+The final invariant compares the accepted primary bytes before and after that second session. The
+public receipt is redaction-safe and identifies the actor as automation; private conversation and
+artifact evidence stays with the qualified operation.
+
+Only a `conversational_journaling_execution.v1` receipt with every required scenario passed may
+satisfy parent #3347. A refused or failed receipt is a technical recovery fact, not acceptance.
+After all-PASS evidence, the parent owner performs the still-gated delivered-capability writeback in
+`docs/HUMAN-FLOWS.md` or `docs/STATUS.md` and the delivered-marker update in
+`docs/research/yggdrasil-closed-loops-ideation.md`, then closes the validation hub. The runner does
+not own channel promotion, production effects, credentials, or that owner-doc promotion.
 
 ## Out of Scope (capability level)
 
@@ -99,6 +132,11 @@ This capability composes with four sibling capabilities without depending on any
 ## Relationship to GitHub issues
 
 **Filed 2026-07-07.** Parent feature issue: **#3347** (Backlog, `agent:blocked` live validation hub; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). All four children were filed `agent:blocked`: JRNL-01 → **#3348** (the dependency-free head — flips to `agent:ready` once this spec PR merges to `main`); JRNL-02 → **#3350** (stays `agent:blocked` until JRNL-01/#3348 merges); JRNL-03 → **#3349** (stays `agent:blocked` until JRNL-01/#3348 and JRNL-02/#3350 merge); JRNL-04 → **#3351** (stays `agent:blocked` until JRNL-03/#3349 merges). The spec is the source of truth; issues track pickup state.
+
+The four implementation children are delivered. **#5988** owns only the automated qualified TEST
+scenario and evidence contract added by the 2026-10-11 acceptance-routing revision; it does not
+reopen or redeliver JRNL-01..04. Parent #3347 remains the all-PASS validation and post-acceptance
+owner-doc promotion authority.
 
 ## Related Docs
 

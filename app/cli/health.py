@@ -9,7 +9,7 @@ import subprocess
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 from urllib.parse import urlsplit
 
 from app.api.v6_seams import check_v6_seams
@@ -48,6 +48,7 @@ from app.stores.db_health import ping_postgres, resolve_dsn
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 _BACKGROUND_MODEL_ACCESS_PROBE_TIMEOUT_SECONDS = 30.0
+HealthSamplingMode = Literal["synchronous", "background", "cache"]
 
 def _result(ok: bool, detail: str, *, data: Dict[str, Any] | None = None) -> Dict[str, Any]:
     out: Dict[str, Any] = {"ok": ok, "detail": detail}
@@ -803,10 +804,23 @@ def _pending_route_observation() -> Dict[str, Any]:
     }
 
 
+def _missing_cached_route_observation() -> Dict[str, Any]:
+    observed_at = datetime.now(timezone.utc).isoformat()
+    return {
+        "status": "unknown",
+        "reason_code": "missing_observation",
+        "observed_at": observed_at,
+        "capabilities": {},
+        "transport_observation": _transport_observation(
+            "unknown", "missing_observation", observed_at
+        ),
+    }
+
+
 def _check_llm_access(
     router_check: Dict[str, Any],
     *,
-    background_probes: bool = False,
+    model_access_sampling: HealthSamplingMode = "synchronous",
 ) -> Dict[str, Any]:
     """Aggregate configured text-route readiness as logical capabilities."""
     policies = router_check.get("route_policies") or {}
@@ -871,7 +885,10 @@ def _check_llm_access(
         required.update(route_required)
         route = effective if isinstance(effective, dict) else {}
         provider = str(route.get("provider") or "").strip().lower()
-        if background_probes and provider not in {"", "mock", "deterministic"}:
+        if model_access_sampling == "cache":
+            key = _route_health_observation_key(route, intent)
+            probe = PRODUCT_HEALTH_OBSERVER.read(key) or _missing_cached_route_observation()
+        elif model_access_sampling == "background" and provider not in {"", "mock", "deterministic"}:
             key = _route_health_observation_key(route, intent)
             probe = PRODUCT_HEALTH_OBSERVER.observe(
                 key,
@@ -1222,9 +1239,14 @@ def _settings_ingestion_status() -> Dict[str, Any]:
 def run_health(
     *,
     trace_id: str | None = None,
-    background_model_access_probes: bool = False,
+    model_access_sampling: HealthSamplingMode = "synchronous",
+    background_model_access_probes: bool | None = None,
     **kwargs: Any,
 ) -> Dict[str, Any]:
+    if background_model_access_probes is not None:
+        model_access_sampling = (
+            "background" if background_model_access_probes else "synchronous"
+        )
     trace_id = with_trace_id(trace_id)
     checks = {
         "ffmpeg": _annotate_required(_check_ffmpeg(), required=False),
@@ -1240,7 +1262,7 @@ def run_health(
     checks["llm_router"] = _annotate_required(_check_llm_router(), required=False)
     llm_access = _check_llm_access(
         checks["llm_router"],
-        background_probes=background_model_access_probes,
+        model_access_sampling=model_access_sampling,
     )
     checks["llm_access"] = _annotate_required(llm_access, required=True)
     checks["llm_task_routes"] = _annotate_required(

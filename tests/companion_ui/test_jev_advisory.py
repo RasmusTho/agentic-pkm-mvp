@@ -10,8 +10,93 @@ import pytest
 
 from scripts import run_jev_browser_advisory as runner
 from tests.companion_ui import jev_advisory as advisory
+from tests.companion_ui import focus_jev_advisory as focus_advisory
+from tests.companion_ui import focus_state_jev_advisory as state_advisory
 
 SHA = "a" * 40
+
+
+def _seed_focus_state(directory: Path) -> None:
+    observations = directory / "observations"
+    observations.mkdir(parents=True)
+    for case in state_advisory.CASES:
+        for width in state_advisory.WIDTHS:
+            value = {"fixture_version": state_advisory.FIXTURE_VERSION, "source_sha": SHA,
+                "case_id": case, "width": width, "expected": state_advisory.expected(case),
+                "observed": {"state": "Synthetic state", "facts": [], "warnings": [], "next_step": "Legality unavailable"}}
+            (observations / f"{case}-{width}.json").write_text(json.dumps(value))
+    suite = ET.Element("testsuite")
+    for name in sorted(runner.FOCUS_STATE_NAMES):
+        ET.SubElement(suite, "testcase", classname="tests.companion_ui.test_focus_evidence_state_runtime", name=name)
+    ET.ElementTree(suite).write(directory / "junit.xml")
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "failure", "error", "skip", "xfail", "classname", "stale", "private_field", "numeric_boolean", "private_value", "invalid_id", "watermark", "oversized"])
+def test_focus_state_advisory_requires_complete_passing_evidence(tmp_path, monkeypatch, mutation) -> None:
+    monkeypatch.setattr(runner.subprocess, "check_output", lambda args, **kwargs: SHA if "rev-parse" in args else "")
+    def browser(directory, sha, surface):
+        assert surface == "focus-evidence-state" and sha == SHA
+        _seed_focus_state(directory)
+        assert runner._browser_inventory(directory / "junit.xml", surface) == {"passed": 16, "known_defect_xfails": 0}
+        tree = ET.parse(directory / "junit.xml"); first = tree.getroot()[0]
+        if mutation == "missing":
+            tree.getroot().remove(first)
+        elif mutation == "duplicate":
+            tree.getroot().append(ET.fromstring(ET.tostring(first)))
+        elif mutation in {"failure", "error", "skip", "xfail"}:
+            ET.SubElement(first, "skipped" if mutation in {"skip", "xfail"} else mutation, type=mutation)
+        elif mutation == "classname":
+            first.set("classname", "tests.companion_ui.test_focus_owner_facts_runtime")
+        else:
+            path = next((directory / "observations").glob("*.json")); value = json.loads(path.read_text())
+            if mutation == "stale":
+                value["source_sha"] = "b" * 40
+            elif mutation == "private_field":
+                value["observed"]["source_ref"] = "private-canary"
+            elif mutation == "numeric_boolean":
+                value["expected"]["warning"] = int(value["expected"]["warning"])
+            elif mutation == "invalid_id":
+                value["case_id"] = ["unhashable"]
+            else:
+                value["observed"]["facts"] = ["F" * 64 if mutation == "private_value" else "fixture-scope:0" if mutation == "watermark" else "oversized" * 100]
+            path.write_text(json.dumps(value))
+        tree.write(directory / "junit.xml")
+        return 0
+    monkeypatch.setattr(runner, "_run_browser", browser)
+    monkeypatch.setattr(runner, "_judge_once", lambda *_: pytest.fail("incomplete/private state evidence was judged"))
+    assert runner.run(tmp_path, live_jev=True, surface="focus-evidence-state") == 2
+    report = json.loads(next(tmp_path.glob("*/report.json")).read_text())
+    assert report["deterministic"]["status"] == "incomplete_evidence" and report["jev"]["origin"] == "not-run"
+
+
+@pytest.mark.parametrize("result", ["supported", "contradicted", "unknown", "interrupted"])
+def test_focus_state_advisory_attempt_is_fenced_and_never_replayed(tmp_path, monkeypatch, result) -> None:
+    monkeypatch.setattr(runner.subprocess, "check_output", lambda args, **kwargs: SHA if "rev-parse" in args else "")
+    def browser(directory, sha, surface):
+        assert surface == "focus-evidence-state" and sha == SHA
+        _seed_focus_state(directory)
+        return 0
+    monkeypatch.setattr(runner, "_run_browser", browser)
+    monkeypatch.setattr(runner, "_helper_status", lambda: None)
+    path = tmp_path / f"{SHA}-{state_advisory.RUBRIC_VERSION}" / "report.json"
+    calls = []
+    def judge(request):
+        report = json.loads(path.read_text())
+        assert report["jev"]["reason"] == "attempt_started" and report["jev"]["origin"] == "live"
+        assert report["deterministic"]["passed"] == 16
+        assert set(request["questions"]) == {f"{case}.{axis}" for case in state_advisory.CASES for axis in ("state", "authority")}
+        assert set(request["state"]) == {"cases", "rubric"}
+        calls.append(request)
+        if result == "interrupted":
+            raise KeyboardInterrupt()
+        return {"status": "completed", **advisory.assessed_answers(_response(request, choice=result), request)}
+    monkeypatch.setattr(runner, "_judge_once", judge)
+    if result == "interrupted":
+        with pytest.raises(KeyboardInterrupt):
+            runner.run(tmp_path, live_jev=True, surface="focus-evidence-state")
+    else:
+        assert runner.run(tmp_path, live_jev=True, surface="focus-evidence-state") == 0
+    assert runner.run(tmp_path, live_jev=True, surface="focus-evidence-state") == 0 and len(calls) == 1
 
 
 def _observation(state: str, bound: bool, width: int = 1366) -> dict[str, Any]:
@@ -35,6 +120,21 @@ def _seed(directory: Path) -> None:
     suite = ET.Element("testsuite")
     for name in sorted(runner.ORDINARY_NAMES):
         ET.SubElement(suite, "testcase", classname="tests.companion_ui.test_vault_browser_state_runtime", name=name)
+    ET.ElementTree(suite).write(directory / "junit.xml")
+
+
+def _seed_focus(directory: Path) -> None:
+    observations = directory / "observations"
+    observations.mkdir(parents=True)
+    for case in focus_advisory.CASES:
+        for width in focus_advisory.WIDTHS:
+            value = {"fixture_version": focus_advisory.FIXTURE_VERSION, "source_sha": SHA,
+                "case_id": case, "width": width, "expected": focus_advisory.expected(case),
+                "observed": {"facts": ["Synthetic owner fact."], "limitations": [], "next_step": "Legality unavailable"}}
+            (observations / f"{case}-{width}.json").write_text(json.dumps(value))
+    suite = ET.Element("testsuite")
+    for name in sorted(runner.FOCUS_NAMES):
+        ET.SubElement(suite, "testcase", classname="tests.companion_ui.test_focus_owner_facts_runtime", name=name)
     ET.ElementTree(suite).write(directory / "junit.xml")
 
 
@@ -80,6 +180,86 @@ def test_observation_allowlist_and_complete_inventory(tmp_path: Path) -> None:
     path.unlink()
     with pytest.raises(advisory.InvalidObservation):
         advisory.load_observations(tmp_path / "observations", SHA)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "failure", "error", "skip", "xfail", "classname", "stale", "private_field", "numeric_boolean"])
+def test_focus_advisory_surface_requires_complete_passing_evidence(tmp_path, monkeypatch, mutation) -> None:
+    monkeypatch.setattr(runner.subprocess, "check_output", lambda args, **kwargs: SHA if "rev-parse" in args else "")
+    def browser(directory, sha, surface):
+        assert surface == "focus-owner-facts" and sha == SHA
+        _seed_focus(directory)
+        assert runner._browser_inventory(directory / "junit.xml", surface) == {"passed": 16, "known_defect_xfails": 0}
+        tree = ET.parse(directory / "junit.xml")
+        first = tree.getroot()[0]
+        if mutation == "missing":
+            tree.getroot().remove(first)
+        elif mutation == "duplicate":
+            tree.getroot().append(ET.fromstring(ET.tostring(first)))
+        elif mutation in {"failure", "error", "skip", "xfail"}:
+            tag = "skipped" if mutation in {"skip", "xfail"} else mutation
+            ET.SubElement(first, tag, type="pytest.xfail" if mutation == "xfail" else mutation)
+        elif mutation == "classname":
+            first.set("classname", "tests.companion_ui.test_vault_browser_state_runtime")
+        else:
+            path = next((directory / "observations").glob("*.json"))
+            value = json.loads(path.read_text())
+            if mutation == "stale":
+                value["source_sha"] = "b" * 40
+            elif mutation == "private_field":
+                value["observed"]["receipt_id"] = "private-canary"
+            else:
+                value["expected"]["trial"] = int(value["expected"]["trial"])
+            path.write_text(json.dumps(value))
+        tree.write(directory / "junit.xml")
+        return 0
+    monkeypatch.setattr(runner, "_run_browser", browser)
+    monkeypatch.setattr(runner, "_judge_once", lambda *_: pytest.fail("incomplete Focus evidence was judged"))
+    assert runner.run(tmp_path, live_jev=True, surface="focus-owner-facts") == 2
+    report = json.loads(next(tmp_path.glob("*/report.json")).read_text())
+    assert report["surface"] == "focus-owner-facts"
+    assert report["deterministic"]["status"] == "incomplete_evidence"
+    assert report["jev"]["origin"] == "not-run"
+
+
+@pytest.mark.parametrize("result", ["supported", "contradicted", "unknown", "interrupted"])
+def test_focus_advisory_attempt_is_fenced_and_never_replayed(tmp_path, monkeypatch, result) -> None:
+    monkeypatch.setattr(runner.subprocess, "check_output", lambda args, **kwargs: SHA if "rev-parse" in args else "")
+    def browser(directory, sha, surface):
+        assert surface == "focus-owner-facts" and sha == SHA
+        _seed_focus(directory)
+        return 0
+    monkeypatch.setattr(runner, "_run_browser", browser)
+    monkeypatch.setattr(runner, "_helper_status", lambda: None)
+    path = tmp_path / f"{SHA}-{focus_advisory.RUBRIC_VERSION}" / "report.json"
+    calls = []
+    def judge(request):
+        report = json.loads(path.read_text())
+        assert report["jev"]["reason"] == "attempt_started" and report["jev"]["origin"] == "live"
+        assert report["deterministic"] == {"status": "passed", "exit_code": 0, "passed": 16, "known_defect_xfails": 0}
+        assert len(request["questions"]) == 16
+        assert set(request["questions"]) == {f"{case}.{axis}" for case in focus_advisory.CASES for axis in ("facts", "authority")}
+        for index, row in enumerate(report["observations"]):
+            for axis in ("facts", "authority"):
+                question = request["questions"][f"{row['case_id']}.{axis}"]
+                assert f"rubric.{axis}" in question["instructions"]
+                assert f"cases[{index}].observed" in question["instructions"]
+        assert not {"receipt_id", "locator", "source_ref", "title", "raw_dom", "screenshot"} & set(request["state"])
+        calls.append(request)
+        if result == "interrupted":
+            raise KeyboardInterrupt()
+        return {"status": "completed", **advisory.assessed_answers(_response(request, choice=result), request)}
+    monkeypatch.setattr(runner, "_judge_once", judge)
+    if result == "interrupted":
+        with pytest.raises(KeyboardInterrupt):
+            runner.run(tmp_path, live_jev=True, surface="focus-owner-facts")
+    else:
+        assert runner.run(tmp_path, live_jev=True, surface="focus-owner-facts") == 0
+    assert runner.run(tmp_path, live_jev=True, surface="focus-owner-facts") == 0
+    assert len(calls) == 1
+    report = json.loads(path.read_text())
+    if result != "interrupted":
+        wanted = "unassessed" if result == "unknown" else result
+        assert {row["status"] for row in report["jev"]["results"].values()} == {wanted}
 
 
 @pytest.mark.parametrize("mutation", ["stale", "duplicate", "long_text", "bad_count", "extra_note"])

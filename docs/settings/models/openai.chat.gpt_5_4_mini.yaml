@@ -4,3 +4,10 @@ kind: chat
 provider: openai
 model: gpt-5.4-mini
 notes: Current lower-latency OpenAI chat default for everyday ask, QA, and classification flows.
+pricing:
+  standard_input_usd_per_million_tokens: 0.75
+  standard_cached_input_usd_per_million_tokens: 0.075
+  standard_output_usd_per_million_tokens: 4.5
+  source_urls:
+    - https://developers.openai.com/api/docs/models/gpt-5.4-mini
+  retrieved_on: 2026-10-11

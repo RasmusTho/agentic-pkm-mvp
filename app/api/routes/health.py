@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter
 from starlette.concurrency import run_in_threadpool
@@ -34,6 +34,7 @@ _TRANSPORT_REASONS = frozenset(
         "transport_reachable",
         "transport_unavailable",
         "transport_unknown",
+        "missing_observation",
     }
 )
 
@@ -139,10 +140,12 @@ def _sanitize_health_value(value: Any, *, parent_key: str | None = None) -> Any:
 
 
 @router.get("/health")
-async def health() -> dict[str, Any]:
+async def health(
+    model_access_sampling: Literal["background", "cache"] = "background",
+) -> dict[str, Any]:
     payload = await run_in_threadpool(
         run_health,
-        background_model_access_probes=True,
+        model_access_sampling=model_access_sampling,
     )
     if isinstance(payload, dict):
         payload = _neutralize_llm_diagnostics(payload)

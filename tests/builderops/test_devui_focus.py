@@ -286,6 +286,28 @@ def test_focus_preserves_independent_evidence_axes() -> None:
     assert result["evidence"][0]["source_ref"] == claims[0]["source_ref"]
 
 
+def test_focus_fresh_empty_is_ready() -> None:
+    claim = _claim("measured-empty", claim="No receipts exist in the measured subject scope.",
+                   cardinality="measured_empty", read_watermark="receipt-seq:0")
+    before = deepcopy(claim)
+    result = _compose(evidence=[claim])
+    assert result["state"] == "focus_ready"
+    assert result["evidence"] == [{**before, "owner_state": "measured_empty"}]
+    assert claim == before
+    assert result["next_legal_step"] == _compose()["next_legal_step"]
+
+
+@pytest.mark.parametrize("freshness", ["stale", "unknown"])
+def test_focus_nonfresh_empty_is_partial(freshness: str) -> None:
+    claim = _claim("measured-empty", cardinality="measured_empty", read_watermark="receipt-seq:0",
+                   freshness=freshness)
+    result = _compose(evidence=[claim])
+    assert result["state"] == "focus_partial"
+    assert result["evidence"][0]["freshness"] == freshness
+    assert result["evidence"][0]["cardinality"] == "measured_empty"
+    assert result["evidence"][0]["read_watermark"] == "receipt-seq:0"
+
+
 def test_focus_never_infers_execution_correlation() -> None:
     linked = _observation(status="linked", method="explicit_receipt")
     unlinked = _observation(status="unlinked", method="none")
