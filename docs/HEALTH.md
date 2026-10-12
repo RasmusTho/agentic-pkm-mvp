@@ -70,10 +70,11 @@ malformed, or stale cache remains unknown or degraded, so required health fails 
 `/api/health` calls keep the default bounded background sampling, `/api/operator/health` remains an
 explicit health probe, and the synchronous CLI keeps its existing behavior. The selector changes
 sampling only; the sanitized projection and upstream connectivity result remain unchanged. The
-development UI `/healthz` read is passive, while the production-profile `/healthz` liveness check
-keeps its active refresh so the Compose healthcheck remains a cache producer. The process-local
-observer serializes background route refreshes and queues the remaining bounded work, leaving a
-portal slot available for an ordinary Product request.
+periodic Companion UI `/healthz` liveness check keeps its active refresh in development, test, and
+production, so the Compose healthcheck remains a cache producer in every gateway profile.
+Server-rendered entry and operator health reads stay passive and use the cache selector. The
+process-local observer serializes background route refreshes and queues the remaining bounded work,
+leaving a portal slot available for an ordinary Product request.
 Changes to the selected route, executor policy, policy-referenced host environment values, or
 referenced authentication files create a new configuration generation.
 The API aggregates raw observations on every request using their completion time and the existing

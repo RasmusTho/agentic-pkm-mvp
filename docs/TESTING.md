@@ -50,6 +50,11 @@ Execution:
   The existing smoke gates must not install browser binaries or depend on this job.
 - Live UI smoke (`tests/companion_ui/test_companion_ui_live_smoke.py`) is a separate opt-in check
   against a *running* gateway; it skips unless `COMPANION_UI_SMOKE_URL` is set, so it never gates a PR.
+  Before opening the entry surface, the smoke polls the ordinary read-only operator health route
+  for a real healthy observation within a finite 60-second budget. Set
+  `COMPANION_UI_SMOKE_HEALTH_WAIT_MS` to use a shorter positive budget. Entry navigation uses the
+  same finite 60-second default through `COMPANION_UI_SMOKE_NAVIGATION_MS`; zero, unbounded, and
+  values above 60 seconds are rejected. These checks do not synthesize freshness or healthy state.
 
 The advisory Jev pilot wraps three finite offline browser matrices: Vault Browser listing/identity,
 managed Focus owner facts and Focus evidence state. The default surface is `vault-browser`.

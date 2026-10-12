@@ -1,7 +1,106 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import time
 from typing import Any
+
+
+_MAX_SMOKE_TIMEOUT_MS = 60_000
+_HEALTH_READINESS_DEADLINE_ERROR = (
+    "operator health readiness budget expired before a valid observation"
+)
+
+
+def parse_finite_timeout_ms(
+    raw_value: str | None,
+    *,
+    default: int = _MAX_SMOKE_TIMEOUT_MS,
+    maximum: int = _MAX_SMOKE_TIMEOUT_MS,
+    name: str = "timeout",
+) -> int:
+    """Parse a positive, bounded millisecond timeout for native smoke work."""
+    if raw_value is None or not raw_value.strip():
+        value = default
+    else:
+        try:
+            value = int(raw_value)
+        except ValueError as exc:
+            raise ValueError(f"{name} must be a finite integer in milliseconds") from exc
+    if value <= 0 or value > maximum:
+        raise ValueError(
+            f"{name} must be between 1 and {maximum} milliseconds"
+        )
+    return value
+
+
+def wait_for_real_required_health(
+    request: Any,
+    url: str,
+    *,
+    timeout_ms: int,
+    allow_embedding_rebuild_required: bool,
+    poll_interval_ms: int = 500,
+    clock: Any = time.monotonic,
+    sleeper: Any = time.sleep,
+) -> Mapping[str, Any]:
+    """Wait for an actual healthy operator observation within a finite budget.
+
+    Each request is read-only and is accepted only through the existing health
+    contract. Unknown, stale, unavailable, or malformed observations therefore
+    remain failures until a real healthy response arrives or the deadline is
+    reached; each request and response must complete before that deadline, and
+    no synthetic freshness or healthy state is introduced.
+    """
+    timeout_ms = parse_finite_timeout_ms(
+        str(timeout_ms), name="health readiness timeout"
+    )
+    poll_interval_ms = parse_finite_timeout_ms(
+        str(poll_interval_ms), name="health poll interval"
+    )
+    deadline = clock() + timeout_ms / 1000
+    last_failure: AssertionError | None = None
+    while True:
+        remaining = deadline - clock()
+        remaining_ms = remaining * 1000
+        if remaining_ms <= 0:
+            if last_failure is None:
+                raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR)
+            raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR) from last_failure
+
+        try:
+            try:
+                response = request.get(url, timeout=min(remaining_ms, 10_000))
+            except Exception as exc:
+                if clock() >= deadline:
+                    raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR) from exc
+                raise
+            if clock() >= deadline:
+                if last_failure is None:
+                    raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR)
+                raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR) from last_failure
+            if not response.ok:
+                raise AssertionError(f"health proxy HTTP {response.status}")
+            payload = response.json()
+            if not isinstance(payload, Mapping):
+                raise AssertionError("operator health response must be an object")
+            assert_operator_health(
+                payload,
+                allow_embedding_rebuild_required=allow_embedding_rebuild_required,
+            )
+            if clock() >= deadline:
+                if last_failure is None:
+                    raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR)
+                raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR) from last_failure
+            return payload
+        except AssertionError as exc:
+            if str(exc) == _HEALTH_READINESS_DEADLINE_ERROR:
+                raise
+            last_failure = exc
+
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR) from last_failure
+        sleeper(min(poll_interval_ms / 1000, remaining))
 
 
 def assert_operator_channel(
