@@ -672,7 +672,7 @@ The v6 direction is non-baseline and does not override the locked v5.5 baseline 
 
 ## Interaction Surfaces
 
-Current interaction-surface implementation status is stated in the System Context and `docs/STATUS.md`. Authority, future Panel/Chat crossings, and action modes are owned by `docs/INTERACTION_SURFACES_AND_AUTHORITY/`; Vault Browser scope by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; and Companion entry/shell composition by `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`. These pointers do not promote future interaction work to the baseline.
+Current interaction-surface implementation status is stated in the System Context and `docs/STATUS.md`. Authority and future Panel/Chat crossings are owned by `docs/INTERACTION_SURFACES_AND_AUTHORITY/`; Vault Browser action modes and scope by `docs/VAULT_BROWSER_CAPABILITY_CONTRACT.md`; and Companion entry/shell composition by `companion-ui/docs/SYSTEM_ENTRY_POINT_SPEC.md`. These pointers do not promote future interaction work to the baseline.
 
 ## Capability Model
 
@@ -696,7 +696,7 @@ BuilderOps is the Builder System operating plane, not product/runtime authority.
 
 <!-- release-channel-identity -->
 
-Release-channel identity is implemented by `app/config/channel.py`; its contract is owned by [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md). Deployment and environment posture, qualification, and current placement are owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` and `docs/ENVIRONMENTS.md`; this section makes no additional live-placement claim.
+Release-channel identity is implemented by `app/config/channel.py`; its current capability contract and channel model are owned by [`docs/RELEASE_CHANNELS/README.md`](RELEASE_CHANNELS/README.md), with [`docs/RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md`](RELEASE_CHANNELS/DEFINE_CHANNEL_IDENTITY.md) as its subordinate target-state task specification. Deployment and environment posture, qualification, and current placement are owned by `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md` and `docs/ENVIRONMENTS.md`; this section makes no additional live-placement claim.
 
 ## Companion UI design handoff reference
 
