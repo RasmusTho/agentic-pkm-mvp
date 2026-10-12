@@ -237,8 +237,9 @@ The completeness report recognizes per-signal outcomes in three explicit receipt
 the structured `processed_signal_outcomes` list of `{signal_id, outcome}` mappings, which takes
 precedence when present; complete `signal_id=outcome` tokens in the receipt body; and a Markdown
 table whose two columns are exactly `signal_id` and `outcome`, in that order, followed by a separator
-row. Table cells may have surrounding whitespace, optional outer pipes, alignment markers in the
-separator, and inline-code wrappers around values. Every representation uses only the six outcomes
+row. Separator cells contain one or more hyphens and may use leading or trailing colons for column
+alignment. Table cells may have surrounding whitespace, optional outer pipes, and inline-code spans
+wrapped in matching runs of one or more backticks. Every representation uses only the six outcomes
 listed above. Unknown, malformed, partial, or conflicting claims leave the affected signal unresolved;
 arbitrary prose is not an outcome format. This syntax contract does not establish acceptance or
 classification of the unavailable historical receipt corpus.

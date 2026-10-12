@@ -100,6 +100,7 @@ def test_completeness_report_recognizes_explicit_terminal_outcome_formats() -> N
     structured_ids = [f"structured-{index}" for index in range(len(outcomes))]
     token_ids = [f"token-{index}" for index in range(len(outcomes))]
     table_ids = [f"table-{index}" for index in range(len(outcomes))]
+    short_separator_id = "table-short-separator"
     structured = _retro_receipt(
         "receipt-structured",
         target_ids=[*structured_ids, "structured-sentinel"],
@@ -120,16 +121,22 @@ def test_completeness_report_recognizes_explicit_terminal_outcome_formats() -> N
         + "token-pipe=already_satisfied | evidence: #5607",
     )
     table_rows = "\n".join(
-        f"  | `{signal_id}` | `{outcome}` |  "
-        for signal_id, outcome in zip(table_ids, outcomes, strict=True)
+        f"  | {fence}{signal_id}{fence} | {fence}{outcome}{fence} |  "
+        for index, (signal_id, outcome) in enumerate(
+            zip(table_ids, outcomes, strict=True)
+        )
+        for fence in ("`" * (index % 3 + 1),)
     )
     table_receipt = _retro_receipt(
         "receipt-table",
-        target_ids=[*table_ids, "table-sentinel"],
+        target_ids=[*table_ids, short_separator_id, "table-sentinel"],
         receipt_body=(
             "signal_id | outcome\n"
             ":--- | ---:\n"
-            f"{table_rows}"
+            f"{table_rows}\n\n"
+            "signal_id | outcome\n"
+            ":-: | ---:\n"
+            f"{short_separator_id} | already_satisfied"
         ),
     )
     producer_report = build_pattern_routing_report(
@@ -171,6 +178,7 @@ def test_completeness_report_recognizes_explicit_terminal_outcome_formats() -> N
         **dict(zip(token_ids, outcomes, strict=True)),
         "token-pipe": "already_satisfied",
         **dict(zip(table_ids, outcomes, strict=True)),
+        short_separator_id: "already_satisfied",
         "pattern-5099": "issue_created",
     }
     assert reported == expected
@@ -194,6 +202,7 @@ def test_completeness_report_rejects_ambiguous_outcome_claims() -> None:
         "extra-column",
         "unknown-table",
         "bad-separator",
+        "bad-wrapper",
         "unknown-producer-outcome",
         "conflicting-producer-outcomes",
         "unrelated-target",
@@ -211,8 +220,11 @@ def test_completeness_report_rejects_ambiguous_outcome_claims() -> None:
             "| conflict | discarded_or_superseded |\n"
             "| extra-column | applied | extra |\n"
             "| unknown-table | future_outcome |\n\n"
+            "| signal_id | outcome |\n"
+            "| --- | --- |\n"
+            "| bad-wrapper | ``applied` |\n\n"
             "signal_id | outcome\n"
-            "| -- | --- |\n"
+            "| :-x: | --- |\n"
             "| bad-separator | applied |"
             "\nRepeated-pattern routing observe-only report: patterns=1; "
             "routes: unknown-producer-outcome=issue_candidate; "
@@ -253,7 +265,10 @@ def test_completeness_report_is_read_only_for_supported_formats(tmp_path: Path) 
         _retro_receipt(
             "receipt-table",
             target_ids=["table"],
-            receipt_body="| signal_id | outcome |\n| --- | --- |\n| table | issue_created |",
+            receipt_body=(
+                "| signal_id | outcome |\n:-: | ---:\n"
+                "| ``table`` | ``issue_created`` |"
+            ),
         ),
     ]
     records[0]["processed_signal_outcomes"] = [
@@ -386,6 +401,7 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
                     "receipt-1",
                     target_ids=[
                         "lrn-table",
+                        "lrn-short-separator",
                         "lrn-pipe",
                         "lrn-unknown",
                         "lrn-partial",
@@ -393,8 +409,9 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
                     ],
                     receipt_body=(
                         "| signal_id | outcome |\n"
-                        "| --- | --- |\n"
-                        "| lrn-table | already_satisfied |\n"
+                        ":-: | ---:\n"
+                        "| ``lrn-table`` | ``already_satisfied`` |\n"
+                        "lrn-short-separator | issue_created\n"
                         "lrn-pipe=issue_created | evidence: #5607\n"
                         "lrn-unknown=future_outcome lrn-partial=appl "
                         "lrn-conflict=applied lrn-conflict=discarded_or_superseded "
@@ -428,6 +445,7 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
     receipt = payload["retrospective_receipts_missing_terminal_outcomes"][0]
     assert receipt["terminal_outcomes"] == [
         {"signal_id": "lrn-table", "outcome": "already_satisfied"},
+        {"signal_id": "lrn-short-separator", "outcome": "issue_created"},
         {"signal_id": "lrn-pipe", "outcome": "issue_created"},
     ]
     assert receipt["missing_terminal_outcomes"] == [

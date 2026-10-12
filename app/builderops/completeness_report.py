@@ -21,7 +21,7 @@ SIGNAL_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]+$")
 SIGNAL_OUTCOME_CLAIM_RE = re.compile(
     r"(?<![A-Za-z0-9_.:-])(?P<signal_id>[A-Za-z0-9_.:-]+)\s*=\s*(?P<outcome>[^\s,;|]*)"
 )
-MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r":?-{3,}:?")
+MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r":?-+:?")
 PATTERN_ROUTING_RECEIPT_PREFIX = "Repeated-pattern routing observe-only report:"
 ROUTES_SECTION_RE = re.compile(r";\s*routes\s*:")
 TERMINAL_OUTCOMES_SECTION_RE = re.compile(r"\bterminal_outcomes\s*:")
@@ -297,8 +297,12 @@ def _markdown_table_cells(line: str) -> list[str] | None:
 def _markdown_cell_value(cell: str) -> tuple[str, bool]:
     value = cell.strip()
     if value.startswith("`") or value.endswith("`"):
-        if len(value) >= 2 and value.startswith("`") and value.endswith("`") and "`" not in value[1:-1]:
-            return value[1:-1].strip(), True
+        opening_fence = len(value) - len(value.lstrip("`"))
+        closing_fence = len(value) - len(value.rstrip("`"))
+        if opening_fence and opening_fence == closing_fence:
+            content = value[opening_fence:-closing_fence]
+            if "`" not in content:
+                return content.strip(), True
         return value.strip("`").strip(), False
     return value, True
 
