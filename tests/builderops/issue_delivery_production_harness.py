@@ -61,6 +61,7 @@ from app.builderops.issue_delivery_worker_isolation import (
     file_sha256,
 )
 from app.builderops.epic_dispatch import CodexIssueSessionLauncher
+from app.builderops.issue_delivery_effect_executor import FRESH_EXECUTION_DEPENDENCIES
 from app.dispatcher.verification_github import GitHubProtectedRepositoryAuthority
 
 REPOSITORY = "rasmustho/agentic-pkm-mvp"
@@ -1099,7 +1100,7 @@ def issue_delivery_production_harness(
         # its real checkout before creating the pinned base commit; a host
         # live-binding reader may verify those bytes rather than trusting the
         # coordinator checkout or a substituted artifact map.
-        for artifact in (() if bifrost else REQUIRED_WORKFLOW_ARTIFACTS):
+        for artifact in (() if bifrost else FRESH_EXECUTION_DEPENDENCIES):
             source = REPO_ROOT / artifact
             destination_path = checkout / artifact
             destination_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1172,7 +1173,7 @@ def issue_delivery_production_harness(
             subprocess.run(["git", "init", "--initial-branch=main", str(workflow_root)], check=True, capture_output=True)
             for key, val in (("user.email", "test@example.com"), ("user.name", "Host Test")):
                 subprocess.run(["git", "-C", str(workflow_root), "config", key, val], check=True)
-            for path in (CANDIDATE_ARTIFACTS if host_candidate else REQUIRED_WORKFLOW_ARTIFACTS):
+            for path in FRESH_EXECUTION_DEPENDENCIES:
                 target = workflow_root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(REPO_ROOT / path, target)
@@ -1371,8 +1372,10 @@ def issue_delivery_production_harness(
             transport=transport,
             prepared_worker=prepared_worker,
             expected_isolation_profile_sha256=launcher.expected_profile_sha256,
-            **({"trusted_workflow_root": workflow_root, "trusted_executor_artifact": workflow_root / EXECUTOR_ARTIFACT,
-                "trusted_worker_isolation_artifact": workflow_root / WORKER_ISOLATION_ARTIFACT,
+            trusted_workflow_root=workflow_root or checkout,
+            trusted_executor_artifact=(workflow_root or checkout) / EXECUTOR_ARTIFACT,
+            trusted_worker_isolation_artifact=(workflow_root or checkout) / WORKER_ISOLATION_ARTIFACT,
+            **({
                 "live_binding_reader": runtime.live_binding_reader} if workflow_root is not None and runtime is not None else {}),
         )
         if runtime is not None:

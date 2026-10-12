@@ -102,6 +102,7 @@ _WORKER_RESERVED_HOST_EFFECT_FIELDS = frozenset(
 )
 
 
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -450,15 +451,19 @@ def observe_issue_delivery_operation(
 
 def _verify_workflow_root(approval: Mapping[str, Any], root: Path | None) -> list[dict[str, str]]:
     """Independently authenticate the protected hub checkout and pinned Git bytes."""
-    from app.builderops.issue_delivery_effect_executor import _repository_from_remote
+    from app.builderops.issue_delivery_effect_executor import _repository_from_remote, _verify_executing_authority_code
 
     if root is None or not root.is_absolute() or root.is_symlink():
         raise IssueDeliveryOperationRefused("explicit protected workflow root is required")
     root = root.resolve(strict=True)
+    try:
+        source_bytes = _verify_executing_authority_code(approval, root)
+    except ValueError as exc:
+        raise IssueDeliveryOperationRefused(str(exc)) from exc
     workflow = approval["workflow"]
 
     def git(*args: str) -> bytes:
-        result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+        result = subprocess.run(["git", "--no-replace-objects", "-C", str(root), *args], capture_output=True, check=False)
         if result.returncode:
             raise IssueDeliveryOperationRefused("trusted workflow Git identity is unavailable")
         return result.stdout
@@ -471,11 +476,10 @@ def _verify_workflow_root(approval: Mapping[str, Any], root: Path | None) -> lis
     artifacts = []
     for artifact in workflow["artifacts"]:
         path = root / artifact["path"]
-        tree = git("ls-tree", workflow["source_revision"], "--", artifact["path"]).decode()
-        if (not tree.startswith("100644 blob ") or not path.is_file() or path.is_symlink()
+        if (artifact["path"] not in source_bytes or not path.is_file() or path.is_symlink()
             or any(parent.is_symlink() for parent in path.parents if parent != root)):
             raise IssueDeliveryOperationRefused("trusted workflow artifact is non-regular or unavailable")
-        digest = hashlib.sha256(git("show", f"{workflow['source_revision']}:{artifact['path']}")).hexdigest()
+        digest = hashlib.sha256(source_bytes[artifact["path"]]).hexdigest()
         if digest != artifact["sha256"] or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise IssueDeliveryOperationRefused("trusted workflow artifact differs from immutable pin")
         artifacts.append({"path": artifact["path"], "sha256": digest})
@@ -875,6 +879,12 @@ class IssueDeliveryOperationAdapter:
         # checked by the authenticated persistence owner instead.
         if not include_current_facts:
             return expected_base
+        if self.require_protected_composition:
+            executor = _require_protected_host_executor(self.protected_executor)
+            try:
+                executor.verify_workflow(self.approval)
+            except ValueError as exc:
+                raise IssueDeliveryOperationRefused(str(exc)) from exc
         for raw_name, frozen_name in (("checkout", "resolved_checkout"), ("worktree", "resolved_worktree")):
             try:
                 current_identity = Path(str(destination[raw_name])).resolve()
@@ -939,6 +949,12 @@ class IssueDeliveryOperationAdapter:
         return expected
 
     def _authority(self, effect: str, *, target: Mapping[str, Any] | None = None) -> dict[str, Any]:
+        if self.require_protected_composition:
+            executor = _require_protected_host_executor(self.protected_executor)
+            try:
+                executor.verify_workflow(self.approval)
+            except ValueError as exc:
+                raise IssueDeliveryOperationRefused(str(exc)) from exc
         if effect not in PERMITTED_EFFECTS:
             raise IssueDeliveryOperationRefused(f"effect is not permitted: {effect}")
         bound = self._validate_effect_target(effect, target)

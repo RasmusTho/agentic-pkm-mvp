@@ -210,6 +210,26 @@ Those instructions require the worker to self-claim and perform `issue-to-code`,
 not an edit-only worker. Agent reasoning and bounded execution remain permitted under DP-02C;
 neither deterministic orchestration nor full DDO is a universal M2 prerequisite.
 
+**Fresh execution and compatibility.** FCA-ID-B validates the actual executing workflow bytes,
+including `issue_delivery_operation.py` and its approval/live-binding/effect helpers, against the
+immutable approved Git source before reservation, attempt persistence, or a fresh protected effect.
+Source-object reads disable Git replacement objects so local replacement refs cannot substitute
+authority code while the approved commit ID remains unchanged.
+The manifest-bound host executor authenticates the source commit, every directory tree, and each
+dependency blob against its Git object ID before trusting those bytes; an object pathname alone
+is not immutable-source evidence. The fresh CLI verifies this boundary before constructing the
+destination adapter.
+The fresh dependency boundary also includes the delegated outbox fence and verification authority
+helpers; it is separate from each immutable version's closed artifact manifest.
+It also validates those bytes in the trusted workflow root. For v1 the pin is `source.revision`;
+for v2/v3 it is `workflow.source_revision`. Stored v1/v2 approval manifests and hashes remain
+unchanged: their closed artifact lists are not extended. A legacy approval whose pinned source
+does not contain these dependencies, or whose executing bytes differ, refuses fresh execution.
+Changing the manifest requires an explicitly versioned approval; v3 already names these workflow
+artifacts. Historical observation, terminal receipts, and readback retain the original approval
+without requiring current executable bytes. These repository checks do not activate a host,
+perform a candidate trial, or establish owner acceptance.
+
 The #5551 admitted adapter must restore that call chain only with a frozen plan containing exactly one selected
 Issue/context pack, no canary/fallback route and an independently retained `expected_plan_hash`.
 `dispatch_issue_sessions` still accepts broader plans for non-delivery callers; the adapter enforces
