@@ -678,16 +678,16 @@ deployment, credential, network, or firewall authority.
 The fixed Bob-1 BuilderOps isolation baseline is: VM ID `102`, Proxmox VM name `bob-1`, guest/system
 hostname `builder-system`, two cores,
 4096 MiB memory, 60 GiB disk, `vmbr0`, VLAN tag `42`, and network scope `guest-vlan-42`. The
-candidate evaluator requires a non-empty BuilderOps engine identifier that does not equal the
-supplied Product engine identifier, no `pkm-*` Product Compose project, and no production
-credential, vault, or network-identity references on Bob-1 (VM ID `102`). It does not establish that a separate
-Product engine was supplied or valid; that admission defect is governed by Issue #5072.
+candidate evaluator requires two non-empty distinct engine identities: a BuilderOps engine
+identifier and a supplied Product engine identifier that do not equal each other. It also requires
+no `pkm-*` Product Compose project and no production credential, vault, or network-identity
+references on Bob-1 (VM ID `102`).
 
 Candidate evidence is accepted only when it is no more than 24 hours old and fingerprint-verifiable.
-The evaluator redacts recognized secret-key and secret-value patterns, and refuses evidence it
-recognizes as secret-bearing. It does not yet prove universal raw-secret exclusion for opaque
-credential-like fields; that admission defect is governed by Issue #5072. A passing candidate result
-is still not live qualification: `live_qualified` remains `false` until a separate governed
+The evaluator redacts recognized secret-key and secret-value patterns, and refuses recognized
+credential-bearing evidence, including recognized opaque credential patterns. This is a
+recognized-pattern check and does not claim universal raw-secret inference. A passing candidate
+result is still not live qualification: `live_qualified` remains `false` until a separate governed
 live-operations receipt exists.
 
 GPU passthrough and test Tailscale are deliberately not qualification prerequisites. Repository
