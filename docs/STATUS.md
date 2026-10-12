@@ -110,8 +110,13 @@ host/VM secret checks, durable same-ID receipts, file-only PostgreSQL credential
 password authentication bound to the effective runtime DSN before client activation. A stopped
 initialized database may be started alone by the journaled authentication probe. This is repository
 support only: BWS-03/#5679's encrypted reader-token push command is delivered by PR #5732; actual
-live VM token installation, existing-host credential/data migration, the designated-writer/
-credential-restriction or shared-fencing gate, and live channel qualification remain unfulfilled.
+live VM token installation, existing-host credential/data migration, and live channel qualification
+remain separately gated. The [2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) supersedes the earlier
+writer gate by accepting Demerzel login Keychain custody plus `scripts/secrets` as the sole supported
+normal writer, with human break-glass and deliberate same-user bearer use as an accepted residual.
+No separate writer daemon or shared fencing is required for this one-owner setup; reassess before
+extra operators/controllers or prod secrets requiring confidentiality. This resolves the writer
+model only and does not establish broader BWS deployment/runtime qualification.
 Neither the implementation nor its fake-adapter/static-render proof changes the live runtime
 posture. The detailed contract remains in `docs/CLOUD_SECRET_PROVISIONING/README.md` and
 `docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md :: Linux channel secret provisioning`.

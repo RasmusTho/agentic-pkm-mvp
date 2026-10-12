@@ -2,6 +2,76 @@
   "invariant": "INV-EF1",
   "rows": [
     {
+      "artifact": "docs/CLOUD_SECRET_PROVISIONING/ADMINISTER_SECRETS_VALUE_FREE.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
+      "artifact": "docs/CLOUD_SECRET_PROVISIONING/DEPLOY_POSTGRES_WITH_COMPOSE_SECRETS.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
+      "artifact": "docs/CLOUD_SECRET_PROVISIONING/PARENT_FEATURE_ISSUE.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
+      "artifact": "docs/CLOUD_SECRET_PROVISIONING/README.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
+      "artifact": "docs/CLOUD_SECRET_PROVISIONING/RESOLVE_BWS_CHANNEL_SECRETS.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
+      "artifact": "docs/LOCAL_SECRET_PROVISIONING/README.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
+      "artifact": "docs/SECURITY.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
+      "artifact": "docs/TYPESAFE_SYSTEM_ONE/README.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
+      "artifact": "docs/TYPESAFE_SYSTEM_ONE/USE_BWS_FOR_TYPESAFE_SERVER_KEY.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
+      "artifact": "docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md",
+      "category": "iii",
+      "why_load_bearing": "The accepted #5667 normal-writer decision identifies Demerzel as the admin-token custody host; this bounded documentation reference records host custody and its accepted residual, without an address, endpoint or credential.",
+      "disposition": "stay",
+      "issue": "#6013"
+    },
+    {
       "artifact": "tests/builderops/bootstrap_fixtures.py",
       "category": "iv",
       "why_load_bearing": "The authenticated bootstrap fixture names the public governed Bifrost constituent used by existing delivery proofs, not personal vault data.",

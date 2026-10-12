@@ -18,7 +18,7 @@ Owner direction selects Bitwarden Secrets Manager as the source for the TypeSafe
 
 ## Purpose
 
-Keep the rotated TypeSafe provider key in Bitwarden and let only the existing MARR development server read it at runtime. The designated admin controller can read pre-state and write the item under its sole-writer gate. Product and Builder remain independent callers and never receive either the provider key or the BWS reader token.
+Keep the rotated TypeSafe provider key in Bitwarden and let only the existing MARR development server read it at runtime. The designated admin controller can read pre-state and write the item under the accepted normal-writer model in `docs/CLOUD_SECRET_PROVISIONING/README.md :: Fixed constraints`. Product and Builder remain independent callers and never receive either the provider key or the BWS reader token.
 
 ## What This Task Does
 
@@ -30,8 +30,8 @@ Keep the rotated TypeSafe provider key in Bitwarden and let only the existing MA
 - Preserve the independent Product and Builder policies, authenticated caller credentials, pinned owner profiles, SDK pin, typed judgment contract, and exact provider/model provenance. Model release versions remain independent of the TypeSafe SDK/package version; SDK changes stay in the adapter and its conformance tests.
 - Use fake Keychain and BWS clients for repository proof. Tests must assert exact project and identity selection, exact provider/model provenance, and that credentials never appear in logs, argv, environment passed to callers, or receipts.
 - The existing BWS topology remains two projects and three machine accounts. This MARR binding adds no project or account requirement. Verify the existing reader/admin qualification before live setup; do not purchase or upgrade a plan under this task.
-- The existing #5667 sole-admin-writer and credential-restriction gate remains required before live project/account or permission changes. Live setup, token installation, and the already separately authorized one-synthetic-attempt-per-caller dev acceptance remain on parent #5764 / BWS parent #5667 and must not be represented as CI proof.
-- The `typesafe.api-key` item reported by #5778 in the shared `non-prod` project is now the repository's selected BWS identity for this MARR binding. Any live import or retirement remains behind the #5667 writer gate. TSO-06 direct-agent acceptance is outside this Product/Builder delivery scope.
+- The #5667 [2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) accepts Demerzel login Keychain custody and `scripts/secrets` as the sole supported normal writer, with human break-glass and deliberate same-user bearer use as an accepted residual. No separate writer daemon or shared fencing is required for this one-owner setup; reassess before extra operators/controllers or prod secrets requiring confidentiality. Live project/account or permission changes still require their own authority and qualification evidence. Live setup, token installation, and the already separately authorized one-synthetic-attempt-per-caller dev acceptance remain on parent #5764 / BWS parent #5667 and must not be represented as CI proof.
+- The `typesafe.api-key` item reported by #5778 in the shared `non-prod` project is now the repository's selected BWS identity for this MARR binding. Any live import or retirement remains governed by the accepted #5667 normal-writer model and its operation-specific safety and authorization gates. TSO-06 direct-agent acceptance is outside this Product/Builder delivery scope.
 
 ## Acceptance Criteria
 

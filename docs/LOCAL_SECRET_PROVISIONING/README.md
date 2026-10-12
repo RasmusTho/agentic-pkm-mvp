@@ -44,16 +44,23 @@ ingress transport only; it is never a secret store or raw-audio archive.
 Linux explicitly selects `HOST_SECRET_PROVIDER=bws`; failed or missing BWS access never falls back
 to Keychain. The reader uses the explicitly selected project for channel lookup and resolves only
 code-declared consumer bindings. The existing reader identities may access both projects under the
-accepted store-level policy; dev/test still select non-prod and prod selects prod. BWS administration stays on the designated agent host with its
-Keychain-backed admin identity; a VM receives only its reader's encrypted systemd credential.
+accepted store-level policy; dev/test still select non-prod and prod selects prod. BWS administration uses `scripts/secrets` on Demerzel with the admin token in its login
+Keychain; a VM receives only its reader's encrypted systemd credential. The
+[2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) accepts this sole supported normal writer,
+retains the human Organization Owner as break-glass, and accepts deliberate same-user bearer use
+outside the controller as a residual. No separate writer daemon or shared fencing is required for
+this one-owner setup. Reassess before extra operators/controllers or prod secrets requiring
+confidentiality; this is host custody and normal-path policy, not executable confinement.
 BWS-03 / #5679 owns installation of that encrypted source and remains a separate delivery gate.
 
 The BWS-04 supervisor unit uses
 `LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current`
 and `BWS_ACCESS_TOKEN_FILE=%d/bws-machine-account-token`. It admits a value-free request only after
 the host controller's selected-consumer parity check. Same-ID retries join the existing worker;
-a missing durable terminal receipt leaves admission pending. The owner-approved sole-admin-writer
-and credential-restriction receipt on #5667 is required before any live deployment.
+a missing durable terminal receipt leaves admission pending. The normal-writer decision on #5667
+is accepted; bootstrap still requires the existing local qualification receipt described by the
+deployment owner. The owner decision does not supply that local file or complete live deployment
+qualification. Explicit `--existing-secrets-only` deployment retains its read-only qualification exception.
 
 PostgreSQL alone uses file delivery: a root-owned `0440` source, group `LOCAL_GID`, under root-only
 `0700` tmpfs is mounted into the six authorized database services. Direct DSNs must be credential-free;
@@ -110,8 +117,9 @@ selection, calls, CKM access, or fallback.
 
 The MARR-only `typesafe.api-key` repository binding resolves the exact
 `dev/typesafe.api-key` identity from the existing non-prod BWS project through the `non-prod-reader`
-identity. The existing admin writer can read pre-state and write this project only through the
-designated controller after the #5667 gate. The non-prod and prod reader project scope is an accepted
+identity. The supported normal admin writer reads pre-state and writes this project through
+Demerzel's designated controller under the accepted #5667 model; the same-user residual above
+remains explicit. The non-prod and prod reader project scope is an accepted
 one-operator store risk; code-level channel selection and the MARR consumer allowlist remain explicit.
 The BWS reader token remains a separate Keychain bootstrap credential under service
 `yggdrasil.bws-reader`, account `non-prod-reader.token`; it is not an admin credential and stays on

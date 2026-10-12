@@ -801,7 +801,11 @@ BWS-04 adds a governed Linux adapter around the existing channel deploy, migrati
 pin machinery. It does not authorize a live deploy or replace promotion/migration acknowledgement.
 Mac Keychain deployment remains unchanged. BWS-03 / #5679's repository token-push command was
 delivered by PR #5732; parent #5667 stays open for live VM installation, existing-host migration,
-owner-approved sole-writer/credential-restriction or shared-fencing evidence, and channel qualification.
+and channel qualification. The [2026-10-11 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) separately accepts
+Demerzel login Keychain admin-token custody plus `scripts/secrets` as the sole supported normal
+writer, with human Organization Owner break-glass and deliberate same-user bearer use as an accepted
+residual. No separate writer daemon or shared fencing is required for this one-owner setup; reassess
+before extra operators/controllers or prod secrets requiring confidentiality.
 
 ### Proposed dev/test producer and bootstrap qualification map (Issue #5855)
 
@@ -812,7 +816,7 @@ prove BWS permissions, token installation, host cleanup, deployment, or live cha
 | Journey stage | Actual producer / entrypoint | Required preconditions and coupling | Checked-in evidence and remaining gap |
 | --- | --- | --- | --- |
 | Identity and selected-consumer preflight | `scripts/secrets check <dev\|test> --consumer <name>`; `python3 -m app.ops.host_secret_bootstrap --provider bws --check --channel <dev\|test> --consumer <name>` | Explicit channel and provider; `config/secrets/host_secret_contract.json` allowlist; reader credential at the declared systemd credential path; selected project/consumer binding; no child command for `--check`. | `tests/ops/test_secret_admin.py` selected-set/optional/malformed checks and `tests/ops/test_host_secret_bootstrap.py` scoped identity, token-file, redaction, and lock tests. Live reader permissions and MARR binding remain #5667. |
-| Normal writer / missing-copy recovery | `scripts/secrets import <channel> <secret> --stdin`; `SecretAdmin.import_stdin` through `HostSecretController` | Value arrives only on stdin; the controller lock is held; both project pre-states or absence tombstones and the prepared operation record are fsynced before the first provider write; shared values are read back before terminal commit. | `tests/ops/test_secret_admin.py` stdin, parity, history, partial-failure, and unknown-outcome tests. The one-normal-writer restriction and human-admin boundary require the #5667 owner decision and redacted live evidence. |
+| Normal writer / missing-copy recovery | `scripts/secrets import <channel> <secret> --stdin`; `SecretAdmin.import_stdin` through `HostSecretController` | Value arrives only on stdin; the controller lock is held; both project pre-states or absence tombstones and the prepared operation record are fsynced before the first provider write; shared values are read back before terminal commit. | `tests/ops/test_secret_admin.py` stdin, parity, history, partial-failure, and unknown-outcome tests. The normal-writer and human break-glass model is accepted by the 2026-10-11 #5667 owner receipt; operation-specific live evidence remains required. |
 | VM reader-token recovery | `scripts/secrets push-token <vm>`; the `bws_token_push` actions (`token-push-inspect`, `token-push`, `token-push-worker`, `token-push-status`) via the installed `yggdrasil-bws-deploy` launcher | Existing target mapping; root-owned supervised launcher and systemd credential contract; stdin-only token handoff; same operation ID, generation, per-channel lock, and durable remote terminal receipt; no SSH-session ownership assumption. | `tests/deploy/test_secret_token_push.py` covers stdin/redaction, generation, lock, worker, systemd binding, and terminality. Live encrypted credential installation and VM qualification remain #5667. |
 | Existing-password dev/test deployment | `python3 -m app.ops.postgres_deploy_host <channel> <revision> --existing-secrets-only` | Existing selected PostgreSQL password must pass host and VM checks before remote or local mutation; request mode is journal-bound before RPC; no BWS bootstrap is allowed; promotion/migration acknowledgement and target identity still come from this document and release-channel owners. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover preflight ordering, file-backed secret use, and target coupling. Live VM/Compose readiness remains #4913 and #5667. |
 | Interrupted existing-secrets-only deployment | `python3 -m app.ops.postgres_deploy_host <channel> <exact-request-revision> --existing-secrets-only --reconcile-pending [--ack-forward-only]` | Use the revision and forward-only acknowledgement from the exact persisted request. The authenticated same-ID RPC refuses a live worker, mismatched request or receipt, held channel lock, malformed lock state, or non-quiescent Compose state, including a still-running `migrate` or `instance-state-init` one-shot. It records `failed` only after the worker ended and the existing lock is acquired; reconciliation changes no pin, migration marker, container, database, vault, or BWS value. | `tests/deploy/test_deploy_channel_script.py::test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescence`, `::test_failed_bws_activation_reconciliation_preserves_ambiguous_state`, `::test_linux_quiescence_waits_for_one_shot_compose_services`, and `::test_host_reconciles_matching_failed_bws_deploy_receipt` cover the receipt and refusal boundaries. |
@@ -820,7 +824,7 @@ prove BWS permissions, token installation, host cleanup, deployment, or live cha
 | Channel wrapper / end-to-end acceptance | `scripts/deploy_channel.sh <channel>` with `scripts/export_runtime_env.sh` and the BWS guard | Request-bound candidate and migration acknowledgement; explicit channel environment; `/etc/yggdrasil/bws-deploy/<channel>.json`; selected capture-watch/raw-migration consumers; BWS guard before temporary state, pin, or Docker mutation; first healthy release and rollback receipts remain authoritative. | `tests/deploy/test_deploy_channel_script.py` and `tests/deploy/test_deploy_channel.py` cover ordering and failure isolation. Startup receipt and immutable target coupling remain #4913; TARS host/executor qualification remains #5052. |
 
 The concrete qualification follow-ups are therefore existing authorities: #5667 owns BWS
-entitlement, live permissions, credential restriction or shared fencing, VM token installation, and
+entitlement, live permissions, the accepted normal-writer residual and reassessment triggers, VM token installation, and
 channel qualification; #4913 owns startup/target receipt gating and first-healthy-release/rollback
 acceptance; #5052 owns the TARS host and Linux executor boundary. No new registry, dashboard, or
 duplicate implementation issue is needed. The request-bound migration acknowledgment at
@@ -836,7 +840,20 @@ deployment does not require the BWS writer-qualification receipt. If first-init 
 explicitly allowed and the password is missing, the owner-installed `qualification.json` remains
 required before the first RPC; it must be owner-only (`0600`) and record the exact `controller` path,
 `sole_writer_approved: true`, `credentials_restricted: true`, and a `live_receipt` comment on #5667.
-No CLI flag creates this approval. The admin token remains on the agent host.
+The `controller` is the exact `HostSecretController.directory` path, not an executable identity.
+For this accepted one-owner setup, the existing `credentials_restricted` field records Demerzel
+login Keychain custody and the supported normal-writer policy; it does not attest executable
+confinement or an inability of same-user code to retrieve the bearer. The `live_receipt` may cite the
+2026-10-11 owner normal-writer acceptance above for the writer model; that comment does not create
+or install the local file or supply target/action qualification. The four-field schema carries no
+channel or action scope: read the referenced receipt's actual scope and the separate deployment
+authority together. In particular, the [2026-10-07 receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6047225237)
+was scoped to one DEV deployment and must not be treated as TEST qualification. An operational
+DEV/TEST receipt must bind the actual authorized target/action before its evidence reference is
+updated; a schema-valid boolean or comment URL alone is not that proof. No CLI flag creates this
+approval. The admin token remains on Demerzel. Retain locks, parity
+checks, history, pending unknown outcomes and matching terminal receipts; this acceptance does not
+complete broader deployment/runtime qualification.
 
 After a host session restart, the same invocation recovers missing `BWS_ORGANIZATION_ID`,
 `BWS_NON_PROD_PROJECT_ID`, and `BWS_PROD_PROJECT_ID` from the installed canonical
