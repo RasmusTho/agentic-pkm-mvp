@@ -58,6 +58,17 @@ class _TimedRequest(_Request):
         return response
 
 
+class _DeadlineTimeoutRequest:
+    def __init__(self, elapsed: list[float]) -> None:
+        self._elapsed = elapsed
+        self.calls: list[tuple[str, float]] = []
+
+    def get(self, url: str, *, timeout: float) -> _Response:
+        self.calls.append((url, timeout))
+        self._elapsed[0] += timeout / 1000
+        raise TimeoutError("request deadline")
+
+
 def test_smoke_waits_for_real_required_health_within_budget() -> None:
     """A cold observation is retried until the gateway returns real health."""
     request = _Request([_Response({"ok": False}), _Response({"ok": True})])
@@ -157,6 +168,27 @@ def test_smoke_health_readiness_rejects_late_healthy_without_prior_failure() -> 
     """A first healthy response that arrives late fails with the deadline error."""
     elapsed = [0.0]
     request = _TimedRequest([_Response({"ok": True})], elapsed, [101])
+
+    with pytest.raises(
+        AssertionError,
+        match="operator health readiness budget expired before a valid observation",
+    ):
+        wait_for_real_required_health(
+            request,
+            "http://gateway/api/operator/health",
+            timeout_ms=100,
+            allow_embedding_rebuild_required=False,
+            clock=lambda: elapsed[0],
+            sleeper=lambda _: None,
+        )
+
+    assert request.calls == [("http://gateway/api/operator/health", 100)]
+
+
+def test_smoke_health_readiness_normalizes_get_timeout_at_deadline() -> None:
+    """A bounded GET timeout at the deadline remains a truthful assertion."""
+    elapsed = [0.0]
+    request = _DeadlineTimeoutRequest(elapsed)
 
     with pytest.raises(
         AssertionError,

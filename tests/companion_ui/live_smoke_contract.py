@@ -68,7 +68,12 @@ def wait_for_real_required_health(
             raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR) from last_failure
 
         try:
-            response = request.get(url, timeout=min(remaining_ms, 10_000))
+            try:
+                response = request.get(url, timeout=min(remaining_ms, 10_000))
+            except Exception as exc:
+                if clock() >= deadline:
+                    raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR) from exc
+                raise
             if clock() >= deadline:
                 if last_failure is None:
                     raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR)
