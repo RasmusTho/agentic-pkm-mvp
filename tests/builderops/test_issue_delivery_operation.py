@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import hashlib
 import shutil
+import zlib
 from pathlib import Path
 import subprocess
 import sys
@@ -618,12 +619,12 @@ def _recovered_candidate_adapter(harness: _ProductionHarness) -> IssueDeliveryOp
 @pytest.mark.pg
 @pytest.mark.parametrize("bifrost", [False, True], ids=["v1", "v2"])
 @pytest.mark.parametrize("caller", ["dispatcher", "cli"])
-@pytest.mark.parametrize("drift", ["trusted-root", "executing-root", "missing-source", "git-replace"])
+@pytest.mark.parametrize("drift", ["trusted-root", "executing-root", "missing-source", "git-replace", "git-object-blob", "git-object-tree", "git-object-commit"])
 @pytest.mark.parametrize("name", ["app/builderops/issue_delivery_operation.py", "app/dispatcher/verification_merge.py"])
 def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
     issue_delivery_production_harness, monkeypatch, tmp_path, bifrost, caller, drift, name,
 ):
-    from app.builderops import issue_delivery_operation as operation
+    from app.builderops import issue_delivery_effect_executor as effect_executor
     from tests.builderops.issue_delivery_production_harness import _production_client
 
     harness = issue_delivery_production_harness(bifrost=bifrost)
@@ -635,13 +636,13 @@ def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
         item["path"]: hashlib.sha256((root / item["path"]).read_bytes()).hexdigest()
         for item in approval["workflow"]["artifacts"]
     }
-    if drift in {"executing-root", "git-replace"}:
+    if drift in {"executing-root", "git-replace"} or drift.startswith("git-object-"):
         executing = tmp_path / "executing"
-        for artifact in operation.FRESH_EXECUTION_DEPENDENCIES:
+        for artifact in effect_executor.FRESH_EXECUTION_DEPENDENCIES:
             target = executing / artifact
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(root / artifact, target)
-        monkeypatch.setattr(operation, "__file__", str(executing / "app/builderops/issue_delivery_operation.py"))
+        monkeypatch.setattr(effect_executor, "__file__", str(executing / "app/builderops/issue_delivery_effect_executor.py"))
         target = executing / name
     else:
         target = root / name
@@ -649,18 +650,38 @@ def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
         target.unlink()
     else:
         target.write_text(target.read_text() + "\n# unapproved adapter bytes\n")
-    if drift == "git-replace":
-        # Keep HEAD, approval and legacy artifact hashes unchanged while Git's
-        # default object reader presents an attacker-controlled dependency blob.
+    if drift == "git-replace" or drift.startswith("git-object-"):
+        # Preserve HEAD and legacy manifest hashes while default Git readers
+        # present a different unmanifested dependency under the approved OID.
+        def git(*args):
+            return subprocess.check_output(["git", "--no-replace-objects", "-C", str(root), *args])
+        approved_commit = head.decode().strip()
+        original_tree = git("rev-parse", f"{approved_commit}^{{tree}}").decode().strip()
+        original_blob = git("rev-parse", f"{approved_commit}:{name}").decode().strip()
         shutil.copyfile(target, root / name)
-        subprocess.run(["git", "-C", str(root), "add", name], check=True)
-        tree = subprocess.check_output(["git", "-C", str(root), "write-tree"], text=True).strip()
-        replacement = subprocess.check_output(
-            ["git", "-C", str(root), "commit-tree", tree, "-p", head.decode().strip(), "-m", "Replacement source"],
-            text=True).strip()
-        subprocess.run(["git", "-C", str(root), "replace", head.decode().strip(), replacement], check=True)
-        assert subprocess.check_output(["git", "-C", str(root), "show", f"{head.decode().strip()}:{name}"]) == target.read_bytes()
-        assert subprocess.check_output(["git", "--no-replace-objects", "-C", str(root), "show", f"{head.decode().strip()}:{name}"]) != target.read_bytes()
+        git("add", name)
+        tree = git("write-tree").decode().strip()
+        replacement = git("commit-tree", tree, "-p", approved_commit, "-m", "Replacement source").decode().strip()
+        if drift == "git-replace":
+            git("replace", approved_commit, replacement)
+            assert git("show", f"{approved_commit}:{name}") != target.read_bytes()
+        else:
+            kind = drift.removeprefix("git-object-")
+            original = {"blob": original_blob, "tree": original_tree, "commit": approved_commit}[kind]
+            substitute = {"blob": git("rev-parse", f"{replacement}:{name}").decode().strip(),
+                          "tree": tree, "commit": replacement}[kind]
+            data = git("cat-file", kind, substitute)
+            common = Path(git("rev-parse", "--git-common-dir").decode().strip())
+            if not common.is_absolute():
+                common = root / common
+            object_file = common / "objects" / original[:2] / original[2:]
+            assert object_file.is_file()
+            object_file.unlink()
+            object_file.write_bytes(zlib.compress(f"{kind} {len(data)}".encode() + b"\0" + data))
+            assert git("show", f"{approved_commit}:{name}") == target.read_bytes()
+            with pytest.raises(ValueError, match="object bytes do not match approved immutable identity"):
+                harness.executor.verify_workflow(approval)
+        assert subprocess.check_output(["git", "-C", str(root), "show", f"{approved_commit}:{name}"]) == target.read_bytes()
     assert subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"]) == head
     assert manifest_digests == {
         item["path"]: hashlib.sha256((root / item["path"]).read_bytes()).hexdigest()
@@ -693,7 +714,9 @@ def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
         if result.exit_code == 0:
             assert json.loads(result.output)["stopped_reason"] == "session-launch-failed"
         else:
-            assert result.exit_code == 1 and "authority code" in result.output, (result.output, result.exception)
+            safe_earlier_gate = (not bifrost and drift == "git-object-commit"
+                                 and "destination Git identity is not exact" in result.output)
+            assert result.exit_code == 1 and ("authority code" in result.output or safe_earlier_gate), (result.output, result.exception)
     assert harness.approval == approval
     assert harness.worker_transport.calls == 0
     assert harness.transport.apply_calls == 0

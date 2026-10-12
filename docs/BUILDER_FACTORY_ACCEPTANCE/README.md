@@ -215,6 +215,10 @@ including `issue_delivery_operation.py` and its approval/live-binding/effect hel
 immutable approved Git source before reservation, attempt persistence, or a fresh protected effect.
 Source-object reads disable Git replacement objects so local replacement refs cannot substitute
 authority code while the approved commit ID remains unchanged.
+The manifest-bound host executor authenticates the source commit, every directory tree, and each
+dependency blob against its Git object ID before trusting those bytes; an object pathname alone
+is not immutable-source evidence. The fresh CLI verifies this boundary before constructing the
+destination adapter.
 The fresh dependency boundary also includes the delegated outbox fence and verification authority
 helpers; it is separate from each immutable version's closed artifact manifest.
 It also validates those bytes in the trusted workflow root. For v1 the pin is `source.revision`;

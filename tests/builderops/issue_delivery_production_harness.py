@@ -61,7 +61,7 @@ from app.builderops.issue_delivery_worker_isolation import (
     file_sha256,
 )
 from app.builderops.epic_dispatch import CodexIssueSessionLauncher
-from app.builderops.issue_delivery_operation import FRESH_EXECUTION_DEPENDENCIES
+from app.builderops.issue_delivery_effect_executor import FRESH_EXECUTION_DEPENDENCIES
 from app.dispatcher.verification_github import GitHubProtectedRepositoryAuthority
 
 REPOSITORY = "rasmustho/agentic-pkm-mvp"

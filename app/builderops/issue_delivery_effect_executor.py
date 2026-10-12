@@ -44,6 +44,127 @@ from app.dispatcher.verification_merge import (
     ProtectedDeliveryManifest,
 )
 
+# Fresh execution dependencies are source-commit pins, not additions to any
+# immutable versioned manifest. Include the host's delegated authority/fence
+# owners as well as its local adapter modules.
+FRESH_EXECUTION_DEPENDENCIES = frozenset({
+    "app/builderops/cli.py",
+    "app/builderops/epic_dispatch.py",
+    "app/builderops/issue_delivery_effect_executor.py",
+    "app/builderops/issue_delivery_worker_isolation.py",
+    ".codex/agents/slice-implementer.toml",
+    ".codex/skills/issue-to-code/SKILL.md",
+    ".codex/skills/publish-pr/SKILL.md",
+    ".codex/skills/verification-and-closure/SKILL.md",
+    "app/builderops/control_plane/issue_delivery.py",
+    "app/builderops/control_plane/service.py",
+    "app/builderops/control_plane/client.py",
+    "app/builderops/control_plane/store.py",
+    "app/builderops/issue_delivery_operation.py",
+    "app/builderops/issue_delivery_readback.py",
+    "app/builderops/devui_sources.py",
+    "app/builderops/control_plane/models.py",
+    "app/builderops/control_plane/routing.py",
+    "app/builderops/control_plane/auth.py",
+    "app/dispatcher/verification_merge.py",
+    "app/dispatcher/verification_github.py",
+    "app/dispatcher/verification_contract.py",
+    "app/dispatcher/verification_dispatch.py",
+    "app/dispatcher/verified_merge.py",
+})
+
+
+def _verify_executing_authority_code(approval: Mapping[str, Any], root: Path | None) -> dict[str, bytes]:
+    """Authenticate the complete Git object chain and actual executing bytes.
+
+    The checker and dependency boundary live in this legacy-manifest-bound
+    module. Git object filenames and replacement refs are not byte authority.
+    Only this invocation caches authenticated immutable objects; historical
+    readback never calls this fresh-effect check.
+    """
+    def refuse(detail: str) -> ValueError:
+        return ValueError(f"trusted Issue-delivery artifact changed: authority code {detail}")
+
+    if root is None or not root.is_absolute() or root.is_symlink():
+        raise refuse("requires an explicit protected workflow root")
+    version = approval.get("contract_version")
+    if version == "fca-issue-delivery.v1":
+        revision = approval["source"]["revision"]
+    elif version in {"fca-issue-delivery.v2", "fca-issue-delivery.v3"}:
+        revision = approval["workflow"]["source_revision"]
+    else:
+        raise refuse("has an unsupported approval version")
+    objects: dict[tuple[str, str], bytes] = {}
+    trees: dict[str, dict[bytes, tuple[bytes, str]]] = {}
+
+    def read_object(kind: str, oid: str) -> bytes:
+        if re.fullmatch(r"[0-9a-f]{40}", oid) is None:
+            raise refuse("has an invalid approved object identity")
+        key = (kind, oid)
+        if key not in objects:
+            result = subprocess.run(
+                ["git", "--no-replace-objects", "-C", str(root), "cat-file", kind, oid],
+                capture_output=True, check=False,
+            )
+            data = result.stdout
+            # The existing approval format pins SHA-1 Git OIDs. Authenticate
+            # Git's exact type/length/NUL header as well as the raw payload.
+            header = f"{kind} {len(data)}".encode("ascii") + b"\0"
+            if result.returncode or hashlib.sha1(header + data).hexdigest() != oid:
+                raise refuse("object bytes do not match approved immutable identity")
+            objects[key] = data
+        return objects[key]
+
+    def read_tree(oid: str) -> dict[bytes, tuple[bytes, str]]:
+        if oid not in trees:
+            data = read_object("tree", oid)
+            entries: dict[bytes, tuple[bytes, str]] = {}
+            offset = 0
+            while offset < len(data):
+                space = data.find(b" ", offset)
+                nul = data.find(b"\0", space + 1)
+                if space < offset or nul <= space + 1 or nul + 21 > len(data):
+                    raise refuse("approved directory tree is malformed")
+                mode, name = data[offset:space], data[space + 1:nul]
+                if name in entries:
+                    raise refuse("approved directory tree has duplicate entries")
+                entries[name] = (mode, data[nul + 1:nul + 21].hex())
+                offset = nul + 21
+            trees[oid] = entries
+        return trees[oid]
+
+    commit = read_object("commit", str(revision))
+    tree_header = commit.split(b"\n", 1)[0]
+    if not tree_header.startswith(b"tree "):
+        raise refuse("approved commit has no directory tree")
+    try:
+        root_tree = tree_header[5:].decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise refuse("approved commit tree identity is malformed") from exc
+    executing_root = Path(__file__).absolute().parents[2]
+    source_bytes: dict[str, bytes] = {}
+    for name in sorted(FRESH_EXECUTION_DEPENDENCIES):
+        oid = root_tree
+        parts = name.split("/")
+        for index, part in enumerate(parts):
+            entry = read_tree(oid).get(part.encode("utf-8"))
+            expected_mode = b"100644" if index == len(parts) - 1 else b"40000"
+            if entry is None or entry[0] != expected_mode:
+                raise refuse("is absent or non-regular in approved immutable source")
+            oid = entry[1]
+        data = read_object("blob", oid)
+        expected = hashlib.sha256(data).digest()
+        for base in (root, executing_root):
+            path = base / name
+            try:
+                regular = path.is_file() and not any(parent.is_symlink() for parent in (path, *path.parents))
+                if not regular or hashlib.sha256(path.read_bytes()).digest() != expected:
+                    raise refuse("differs from approved immutable source")
+            except OSError as exc:
+                raise refuse("is unavailable") from exc
+        source_bytes[name] = data
+    return source_bytes
+
 CONTRACT = "builderops.issue-delivery-effect.v1"
 WORKER_BINDING_CONTRACT: Literal["builderops.issue-delivery-worker-binding.v1"] = (
     "builderops.issue-delivery-worker-binding.v1"
@@ -1219,6 +1340,10 @@ class IssueDeliveryHostExecutor:
             raise ValueError("completed worker receipt profile differs from host pin")
         self._worker_isolation = binding
 
+    def verify_workflow(self, approval: Mapping[str, Any]) -> None:
+        """Authenticate fresh execution independently of the unbound adapter."""
+        _verify_executing_authority_code(approval, self.trusted_workflow_root)
+
     def live_binding(self, approval: Mapping[str, Any], *, post_merge_observation: bool = False) -> Mapping[str, Any]:
         """Return fresh destination/source/profile facts for FCA-ID-B admission.
 
@@ -1771,13 +1896,7 @@ class IssueDeliveryHostExecutor:
         workflow: Mapping[str, Any],
     ) -> None:
         artifacts = workflow.get("artifacts")
-        from app.builderops.issue_delivery_operation import (
-            IssueDeliveryOperationRefused, _verify_executing_authority_code,
-        )
-        try:
-            _verify_executing_authority_code(request.approval, self.trusted_workflow_root)
-        except IssueDeliveryOperationRefused as exc:
-            raise ValueError(f"trusted Issue-delivery artifact changed: {exc}") from exc
+        self.verify_workflow(request.approval)
         if delivery_source_pair(request.approval):
             from app.builderops.issue_delivery_operation import _verify_workflow_root
             _verify_workflow_root(request.approval, self.trusted_workflow_root)

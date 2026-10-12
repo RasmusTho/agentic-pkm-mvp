@@ -34,7 +34,6 @@ from app.builderops.control_plane.issue_delivery import (
     delivery_source_pair,
     CANDIDATE_CONTRACT_VERSION, TWO_SOURCE_VERSIONS,
     tracking_repository,
-    CANDIDATE_WORKFLOW_ARTIFACTS,
 )
 from app.builderops.control_plane.models import EnvelopeValidationError, canonical_repository
 from app.builderops.epic_dispatch import CodexIssueSessionLauncher, IssueSessionLauncher
@@ -101,19 +100,7 @@ _RECORD_STATES = {
 _WORKER_RESERVED_HOST_EFFECT_FIELDS = frozenset(
     {"effect_receipts", "host_effect_refs"}
 )
-# Fresh execution dependencies are source-commit pins, not additions to any
-# immutable versioned manifest. Include the host's delegated authority/fence
-# owners as well as its local adapter modules.
-FRESH_EXECUTION_DEPENDENCIES = CANDIDATE_WORKFLOW_ARTIFACTS | frozenset({
-    "app/builderops/control_plane/models.py",
-    "app/builderops/control_plane/routing.py",
-    "app/builderops/control_plane/auth.py",
-    "app/dispatcher/verification_merge.py",
-    "app/dispatcher/verification_github.py",
-    "app/dispatcher/verification_contract.py",
-    "app/dispatcher/verification_dispatch.py",
-    "app/dispatcher/verified_merge.py",
-})
+
 
 
 def _utc_now() -> str:
@@ -462,48 +449,17 @@ def observe_issue_delivery_operation(
     )
 
 
-def _verify_executing_authority_code(approval: Mapping[str, Any], root: Path | None) -> None:
-    """Bind executing workflow dependencies to the approval's immutable Git source.
-
-    Legacy manifests remain closed and unchanged. Their source commit must
-    contain these dependencies; absence is a refusal, never an inferred grant.
-    Historical observation deliberately does not call this fresh-effect check.
-    """
-    if root is None or not root.is_absolute() or root.is_symlink():
-        raise IssueDeliveryOperationRefused("explicit protected workflow root is required")
-    revision = (approval["workflow"]["source_revision"]
-                if delivery_source_pair(approval) else approval["source"]["revision"])
-    executing_root = Path(__file__).absolute().parents[2]
-    for name in sorted(FRESH_EXECUTION_DEPENDENCIES):
-        result = subprocess.run(
-            ["git", "--no-replace-objects", "-C", str(root), "show", f"{revision}:{name}"],
-            capture_output=True, check=False,
-        )
-        tree = subprocess.run(
-            ["git", "--no-replace-objects", "-C", str(root), "ls-tree", revision, "--", name],
-            capture_output=True, check=False,
-        )
-        if result.returncode or tree.returncode or not tree.stdout.startswith(b"100644 blob "):
-            raise IssueDeliveryOperationRefused("authority code is absent from approved immutable source")
-        expected = hashlib.sha256(result.stdout).digest()
-        for base in (root, executing_root):
-            path = base / name
-            try:
-                regular = path.is_file() and not any(parent.is_symlink() for parent in (path, *path.parents))
-                if not regular or hashlib.sha256(path.read_bytes()).digest() != expected:
-                    raise IssueDeliveryOperationRefused("executing authority code differs from approved immutable source")
-            except OSError as exc:
-                raise IssueDeliveryOperationRefused("executing authority code is unavailable") from exc
-
-
 def _verify_workflow_root(approval: Mapping[str, Any], root: Path | None) -> list[dict[str, str]]:
     """Independently authenticate the protected hub checkout and pinned Git bytes."""
-    from app.builderops.issue_delivery_effect_executor import _repository_from_remote
+    from app.builderops.issue_delivery_effect_executor import _repository_from_remote, _verify_executing_authority_code
 
     if root is None or not root.is_absolute() or root.is_symlink():
         raise IssueDeliveryOperationRefused("explicit protected workflow root is required")
     root = root.resolve(strict=True)
-    _verify_executing_authority_code(approval, root)
+    try:
+        source_bytes = _verify_executing_authority_code(approval, root)
+    except ValueError as exc:
+        raise IssueDeliveryOperationRefused(str(exc)) from exc
     workflow = approval["workflow"]
 
     def git(*args: str) -> bytes:
@@ -520,11 +476,10 @@ def _verify_workflow_root(approval: Mapping[str, Any], root: Path | None) -> lis
     artifacts = []
     for artifact in workflow["artifacts"]:
         path = root / artifact["path"]
-        tree = git("ls-tree", workflow["source_revision"], "--", artifact["path"]).decode()
-        if (not tree.startswith("100644 blob ") or not path.is_file() or path.is_symlink()
+        if (artifact["path"] not in source_bytes or not path.is_file() or path.is_symlink()
             or any(parent.is_symlink() for parent in path.parents if parent != root)):
             raise IssueDeliveryOperationRefused("trusted workflow artifact is non-regular or unavailable")
-        digest = hashlib.sha256(git("show", f"{workflow['source_revision']}:{artifact['path']}")).hexdigest()
+        digest = hashlib.sha256(source_bytes[artifact["path"]]).hexdigest()
         if digest != artifact["sha256"] or hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise IssueDeliveryOperationRefused("trusted workflow artifact differs from immutable pin")
         artifacts.append({"path": artifact["path"], "sha256": digest})
@@ -926,7 +881,10 @@ class IssueDeliveryOperationAdapter:
             return expected_base
         if self.require_protected_composition:
             executor = _require_protected_host_executor(self.protected_executor)
-            _verify_executing_authority_code(self.approval, executor.trusted_workflow_root)
+            try:
+                executor.verify_workflow(self.approval)
+            except ValueError as exc:
+                raise IssueDeliveryOperationRefused(str(exc)) from exc
         for raw_name, frozen_name in (("checkout", "resolved_checkout"), ("worktree", "resolved_worktree")):
             try:
                 current_identity = Path(str(destination[raw_name])).resolve()
@@ -993,7 +951,10 @@ class IssueDeliveryOperationAdapter:
     def _authority(self, effect: str, *, target: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if self.require_protected_composition:
             executor = _require_protected_host_executor(self.protected_executor)
-            _verify_executing_authority_code(self.approval, executor.trusted_workflow_root)
+            try:
+                executor.verify_workflow(self.approval)
+            except ValueError as exc:
+                raise IssueDeliveryOperationRefused(str(exc)) from exc
         if effect not in PERMITTED_EFFECTS:
             raise IssueDeliveryOperationRefused(f"effect is not permitted: {effect}")
         bound = self._validate_effect_target(effect, target)
