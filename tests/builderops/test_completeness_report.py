@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from click.testing import CliRunner
 
 from app.builderops.__main__ import _root as builderops_standalone_root
 from app.builderops.completeness_report import build_completeness_report
+from app.builderops.epic_run_state import TERMINAL_LEARNING_EVALUATION_OUTCOMES
 
 
 def _learning_signal(signal_id: str, summary: str) -> dict[str, object]:
@@ -90,6 +92,166 @@ def test_completeness_report_identifies_receipts_without_terminal_outcomes() -> 
             "missing_terminal_outcomes": ["lrn-1"],
         }
     ]
+
+
+def test_completeness_report_recognizes_explicit_terminal_outcome_formats() -> None:
+    outcomes = list(TERMINAL_LEARNING_EVALUATION_OUTCOMES)
+    structured_ids = [f"structured-{index}" for index in range(len(outcomes))]
+    token_ids = [f"token-{index}" for index in range(len(outcomes))]
+    table_ids = [f"table-{index}" for index in range(len(outcomes))]
+    structured = _retro_receipt(
+        "receipt-structured",
+        target_ids=[*structured_ids, "structured-sentinel"],
+        receipt_body="structured-0=discarded_or_superseded",
+    )
+    structured["processed_signal_outcomes"] = [
+        {"signal_id": signal_id, "outcome": outcome}
+        for signal_id, outcome in zip(structured_ids, outcomes, strict=True)
+    ] + [{"signal_id": "structured-unrelated", "outcome": "already_satisfied"}]
+    token_receipt = _retro_receipt(
+        "receipt-tokens",
+        target_ids=[*token_ids, "token-sentinel"],
+        receipt_body="Outcomes: " + " ".join(
+            f"{signal_id}={outcome}."
+            for signal_id, outcome in zip(token_ids, outcomes, strict=True)
+        ) + " unrelated-signal=applied",
+    )
+    table_rows = "\n".join(
+        f"  | `{signal_id}` | `{outcome}` |  "
+        for signal_id, outcome in zip(table_ids, outcomes, strict=True)
+    )
+    table_receipt = _retro_receipt(
+        "receipt-table",
+        target_ids=[*table_ids, "table-sentinel"],
+        receipt_body=(
+            "signal_id | outcome\n"
+            ":--- | ---:\n"
+            f"{table_rows}"
+        ),
+    )
+
+    report = build_completeness_report(
+        records=[structured, token_receipt, table_receipt],
+        storage={"available": True, "source": "fixture"},
+    )
+
+    assert report["complete"] is False
+    assert report["unprocessed_learning_signals"] == []
+    reported = {
+        item["signal_id"]: item["outcome"]
+        for receipt in report["retrospective_receipts_missing_terminal_outcomes"]
+        for item in receipt["terminal_outcomes"]
+    }
+    expected = {
+        **dict(zip(structured_ids, outcomes, strict=True)),
+        **dict(zip(token_ids, outcomes, strict=True)),
+        **dict(zip(table_ids, outcomes, strict=True)),
+    }
+    assert reported == expected
+    assert {
+        tuple(receipt["missing_terminal_outcomes"])
+        for receipt in report["retrospective_receipts_missing_terminal_outcomes"]
+    } == {("structured-sentinel",), ("token-sentinel",), ("table-sentinel",)}
+
+
+def test_completeness_report_rejects_ambiguous_outcome_claims() -> None:
+    target_ids = [
+        "unknown",
+        "partial",
+        "suffix",
+        "conflict",
+        "extra-column",
+        "unknown-table",
+        "bad-separator",
+        "unrelated-target",
+    ]
+    receipt = _retro_receipt(
+        "receipt-ambiguous",
+        target_ids=target_ids,
+        receipt_body=(
+            "unknown=not_a_terminal_outcome partial=appl "
+            "suffix=applied.extra conflict=applied "
+            "extra-column=already_satisfied unknown-table=applied "
+            "bad-separator=discarded_or_superseded other-signal=applied\n"
+            "| signal_id | outcome |\n"
+            "| --- | --- |\n"
+            "| conflict | discarded_or_superseded |\n"
+            "| extra-column | applied | extra |\n"
+            "| unknown-table | future_outcome |\n\n"
+            "signal_id | outcome\n"
+            "| -- | --- |\n"
+            "| bad-separator | applied |"
+        ),
+    )
+
+    report = build_completeness_report(
+        records=[receipt],
+        storage={"available": True, "source": "fixture"},
+    )
+
+    assert report["complete"] is False
+    assert report["retrospective_receipts_missing_terminal_outcomes"][0][
+        "terminal_signal_ids"
+    ] == []
+    assert report["retrospective_receipts_missing_terminal_outcomes"][0][
+        "missing_terminal_outcomes"
+    ] == target_ids
+
+
+def test_completeness_report_is_read_only_for_supported_formats(tmp_path: Path) -> None:
+    records = [
+        _retro_receipt(
+            "receipt-structured",
+            target_ids=["structured"],
+            receipt_body="unused prose",
+        ),
+        _retro_receipt(
+            "receipt-token",
+            target_ids=["token"],
+            receipt_body="token=already_satisfied",
+        ),
+        _retro_receipt(
+            "receipt-table",
+            target_ids=["table"],
+            receipt_body="| signal_id | outcome |\n| --- | --- |\n| table | issue_created |",
+        ),
+    ]
+    records[0]["processed_signal_outcomes"] = [
+        {"signal_id": "structured", "outcome": "applied"}
+    ]
+    before = deepcopy(records)
+    report = build_completeness_report(
+        records=records,
+        storage={"available": True, "source": "fixture"},
+    )
+
+    assert report["complete"] is True
+    assert report["mutations_performed"] is False
+    assert records == before
+
+    fixture = tmp_path / "records.json"
+    fixture.write_text(json.dumps({"records": records}), encoding="utf-8")
+    fixture_bytes = fixture.read_bytes()
+    database = tmp_path / "must-not-be-created.sqlite3"
+    result = CliRunner().invoke(
+        builderops_standalone_root,
+        [
+            "builderops",
+            "--db-path",
+            str(database),
+            "completeness-report",
+            "check",
+            "--records-file",
+            str(fixture),
+            "--json",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["complete"] is True
+    assert fixture.read_bytes() == fixture_bytes
+    assert not database.exists()
 
 
 def test_completeness_report_handles_unavailable_storage_honestly() -> None:
@@ -184,7 +346,11 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
                 _retro_receipt(
                     "receipt-1",
                     target_ids=["lrn-1"],
-                    receipt_body="Retrospective complete; outcomes: lrn-1=already_satisfied.",
+                    receipt_body=(
+                        "| signal_id | outcome |\n"
+                        "| --- | --- |\n"
+                        "| lrn-1 | already_satisfied |"
+                    ),
                 ),
             ],
             "learning_evaluation_candidates": [],
@@ -209,6 +375,7 @@ def test_completeness_report_cli_reads_fixture_file(tmp_path: Path) -> None:
     payload = json.loads(result.output)
     assert payload["complete"] is True
     assert payload["unprocessed_learning_signals"] == []
+    assert payload["retrospective_receipts_missing_terminal_outcomes"] == []
 
 
 def test_completeness_report_cli_reads_evidence_bridge_candidate_fixture(

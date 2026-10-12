@@ -17,6 +17,11 @@ from app.builderops.store import SqliteBuilderOpsStore
 RETROSPECTIVE_EVENT_TYPE = "learning_retrospective"
 LEARNING_LOG_ENTRY_RE = re.compile(r"^##\s+\d{4}-\d{2}-\d{2}\s+.+$", re.MULTILINE)
 RETRO_MARKER_RE = re.compile(r"^--- retro \d{4}-\d{2}-\d{2}: applied \d+/\d+ proposals ---$", re.MULTILINE)
+SIGNAL_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]+$")
+SIGNAL_OUTCOME_CLAIM_RE = re.compile(
+    r"(?<![A-Za-z0-9_.:-])(?P<signal_id>[A-Za-z0-9_.:-]+)\s*=\s*(?P<outcome>[^\s,;|]*)"
+)
+MARKDOWN_TABLE_SEPARATOR_RE = re.compile(r":?-{3,}:?")
 
 
 def build_completeness_report(
@@ -167,22 +172,120 @@ def _retrospective_receipt_report(receipt: Mapping[str, Any]) -> dict[str, Any]:
 def _terminal_outcomes_from_receipt(receipt: Mapping[str, Any]) -> dict[str, str]:
     structured = receipt.get("processed_signal_outcomes")
     if isinstance(structured, list):
-        outcomes: dict[str, str] = {}
+        structured_claims: dict[str, set[str | None]] = {}
         for item in structured:
             if not isinstance(item, Mapping):
                 continue
             signal_id = item.get("signal_id")
             outcome = item.get("outcome")
-            if isinstance(signal_id, str) and outcome in TERMINAL_LEARNING_EVALUATION_OUTCOMES:
-                outcomes[signal_id] = outcome
-        return outcomes
+            if isinstance(signal_id, str) and signal_id:
+                structured_claims.setdefault(signal_id, set()).add(
+                    outcome
+                    if isinstance(outcome, str)
+                    and outcome in TERMINAL_LEARNING_EVALUATION_OUTCOMES
+                    else None
+                )
+        return _unambiguous_terminal_outcomes(structured_claims)
 
     body = receipt.get("receipt_body")
     if not isinstance(body, str):
         return {}
-    allowed = "|".join(re.escape(outcome) for outcome in TERMINAL_LEARNING_EVALUATION_OUTCOMES)
-    pattern = re.compile(rf"([A-Za-z0-9_.:-]+)=({allowed})")
-    return {match.group(1): match.group(2) for match in pattern.finditer(body)}
+    body_claims: dict[str, set[str | None]] = {}
+    lines = body.splitlines()
+    for line in lines:
+        if "|" in line:
+            continue
+        for match in SIGNAL_OUTCOME_CLAIM_RE.finditer(line):
+            signal_id = match.group("signal_id")
+            outcome = _recognized_outcome_token(match.group("outcome"))
+            body_claims.setdefault(signal_id, set()).add(outcome)
+
+    _add_markdown_table_outcome_claims(lines, body_claims)
+    return _unambiguous_terminal_outcomes(body_claims)
+
+
+def _recognized_outcome_token(value: str) -> str | None:
+    # Permit one ordinary sentence-ending punctuation mark after a complete token,
+    # while rejecting recognized prefixes such as "applied.extra".
+    token = value[:-1] if value.endswith((".", "!", "?")) else value
+    return token if token in TERMINAL_LEARNING_EVALUATION_OUTCOMES else None
+
+
+def _unambiguous_terminal_outcomes(
+    claims: Mapping[str, set[str | None]],
+) -> dict[str, str]:
+    resolved: dict[str, str] = {}
+    for signal_id, outcomes in claims.items():
+        if len(outcomes) != 1:
+            continue
+        outcome = next(iter(outcomes))
+        if outcome is not None:
+            resolved[signal_id] = outcome
+    return resolved
+
+
+def _add_markdown_table_outcome_claims(
+    lines: list[str],
+    claims: dict[str, set[str | None]],
+) -> None:
+    for line_index, line in enumerate(lines):
+        header = _markdown_table_cells(line)
+        if header is None:
+            continue
+        header_values = [_markdown_cell_value(cell) for cell in header]
+        if (
+            len(header_values) != 2
+            or not all(valid for _, valid in header_values)
+            or [value for value, _ in header_values] != ["signal_id", "outcome"]
+        ):
+            continue
+
+        separator_index = line_index + 1
+        separator = (
+            _markdown_table_cells(lines[separator_index])
+            if separator_index < len(lines)
+            else None
+        )
+        valid_separator = bool(
+            separator is not None
+            and len(separator) == 2
+            and all(MARKDOWN_TABLE_SEPARATOR_RE.fullmatch(cell) for cell in separator)
+        )
+        row_index = separator_index + 1 if valid_separator else separator_index
+        while row_index < len(lines) and "|" in lines[row_index] and lines[row_index].strip():
+            cells = _markdown_table_cells(lines[row_index])
+            if cells:
+                signal_id, signal_cell_valid = _markdown_cell_value(cells[0])
+                if not signal_cell_valid:
+                    signal_id = signal_id.strip("`")
+                if SIGNAL_ID_PATTERN.fullmatch(signal_id):
+                    outcome: str | None = None
+                    if valid_separator and len(cells) == 2 and signal_cell_valid:
+                        outcome_cell, outcome_cell_valid = _markdown_cell_value(cells[1])
+                        if outcome_cell_valid and outcome_cell in TERMINAL_LEARNING_EVALUATION_OUTCOMES:
+                            outcome = outcome_cell
+                    claims.setdefault(signal_id, set()).add(outcome)
+            row_index += 1
+
+
+def _markdown_table_cells(line: str) -> list[str] | None:
+    stripped = line.strip()
+    if "|" not in stripped:
+        return None
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    return [cell.strip() for cell in stripped.split("|")]
+
+
+def _markdown_cell_value(cell: str) -> tuple[str, bool]:
+    value = cell.strip()
+    if value.startswith("`") or value.endswith("`"):
+        if len(value) >= 2 and value.startswith("`") and value.endswith("`") and "`" not in value[1:-1]:
+            return value[1:-1].strip(), True
+        return value.strip("`").strip(), False
+    return value, True
 
 
 def _target_signal_ids(receipt: Mapping[str, Any]) -> list[str]:
