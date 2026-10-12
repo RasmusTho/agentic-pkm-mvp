@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Installed to ~/Library/LaunchAgents/ by install.sh (see install.sh for sed substitution).
+<!-- LEGACY: production now runs this probe on the TARS Linux host. Retained
+     for diagnosis/rollback; mac-mini/install.sh no longer registers it.
+     If used manually, substitute __PYTHON__, __PROBE__, and __HEARTBEAT__.
      Replaces __PYTHON__ with the absolute path to the venv python interpreter and
      __PROBE__ with the absolute path to prod_probe.py.
      Runs the prod-down backstop probe on a configurable interval (default 60 s).
