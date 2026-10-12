@@ -78,6 +78,10 @@ def test_governed_proposal_projection_and_apply_use_existing_guarded_path(
     proposals = state["panel"]["proposals"]
     assert len(proposals) == 1 and proposals[0]["proposal_id"] == proposal_id
     assert proposals[0]["artifact_id"] == state["artifact"]["artifact_id"]
+    from datetime import UTC, datetime
+    stored_time = datetime.fromtimestamp(store.get(proposal_id).proposed_at, UTC).isoformat().replace("+00:00", "Z")
+    assert proposals[0]["created_at"] == stored_time
+    assert api.get("/api/companion/workspace", params={"note_path": "note.md"}).json()["panel"]["proposals"][0]["created_at"] == stored_time
 
     body = {"proposal_id": proposal_id, "artifact_id": state["artifact"]["artifact_id"], "action": "confirm", "idempotency_key": "synthetic-confirm"}
     # The real same-turn boundary still refuses the first immediate Apply.
@@ -143,7 +147,7 @@ def test_governed_proposal_projection_and_apply_use_existing_guarded_path(
     elements.feed(rendered)
     assert "workspace-panel-proposal-row" not in elements.testids
     assert 'window.panelActions.submit(button)' in rendered
-    assert "response.getAttribute('data-proposal-id') !== id" in rendered
+    assert "own.getAttribute('data-proposal-id') !== id" in rendered
     assert "return window.panelActions.submit(btn)" in rendered
     outbox = [json.loads(line) for line in (tmp_path / "outbox.jsonl").read_text().splitlines()]
     assert any(row.get("event_id") == ack["receipt"]["receipt_id"] for row in outbox)
@@ -208,6 +212,74 @@ def test_panel_confirmation_requires_actual_triggered_action_for_execution(
     assert any(event.get("event_id") == ack["receipt"]["receipt_id"] for event in records)
     html = _render_panel_confirm_response(ack)
     assert ('data-receipt-state="applied"' in html) is (case == "triggered")
+
+
+def test_unacknowledged_service_result_cannot_repeat_from_another_ui_clone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, product_model_access_gateway: Any,
+) -> None:
+    """Actual route/service/proxy proof; no qualified live execution is claimed."""
+    from fastapi.testclient import TestClient
+    from tests.api._vault_test_helpers import bind_initialized_vault
+    import app.panel.confirmation as confirmation
+    from app.api.app import app
+    from companion_ui.workspace.serve_dev_page import make_handler
+    from companion_ui.workspace.workspace_http_client import WorkspaceClientHTTPError
+    from tests.companion_ui.test_panel_apply_acknowledgement import _consume
+
+    vault = tmp_path / "synthetic-vault"
+    vault.mkdir()
+    bind_initialized_vault(monkeypatch, vault, channel="test")
+    (vault / "note.md").write_text("---\nuuid: 11111111-1111-4111-8111-111111111111\n---\n# Synthetic\n")
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    store = confirmation.ProposalStore(tmp_path / "panel.sqlite3")
+    idem = confirmation.ConfirmIdempotencyStore(tmp_path / "panel.sqlite3")
+    monkeypatch.setattr(confirmation, "_proposal_store", store)
+    monkeypatch.setattr(confirmation, "_idempotency_store", idem)
+    monkeypatch.setattr(confirmation, "_service", confirmation.PanelConfirmationService(store, idem))
+    api = TestClient(app)
+    queued = api.post("/api/companion/vault-browser/actions/queue-review", json={"note_path": "note.md"})
+    assert queued.status_code == 200
+    proposal = queued.json()["proposal_id"]
+    artifact = store.get(proposal).artifact_id
+    later = confirmation.time.time() + 6
+    monkeypatch.setattr(confirmation.time, "time", lambda: later)
+    execute = confirmation.execute_panel_intent
+    executions = []
+
+    def observed(event):
+        executions.append(event)
+        return execute(event)
+
+    def receipt_failure(*args, **kwargs):
+        raise confirmation.PanelReceiptPersistenceError("bounded receipt sink fault")
+
+    monkeypatch.setattr(confirmation, "execute_panel_intent", observed)
+    monkeypatch.setattr(confirmation, "_emit_projection_event", receipt_failure)
+    statuses = []
+
+    class Client:
+        def post(self, path, **kwargs):
+            response = api.post(path, json=kwargs["json"])
+            statuses.append(response.status_code)
+            assert response.json()["detail"]["error"] == "authority_receipt_persistence_failed"
+            raise WorkspaceClientHTTPError(response.status_code, response.text)
+
+    server = HTTPServer(("127.0.0.1", 0), make_handler(client=Client(), api_base_url="http://127.0.0.1:18002"))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        # Only staged identity seeds the DOM; the actual HTTP failure provides
+        # no acknowledgement, receipt, or executed/no-match classification.
+        row = {"proposal_id": proposal, "artifact_id": artifact, "idempotency_key": "key-1", "status": "blocked", "receipt": None}
+        result = _consume([{"ack": row, "header": None}], repeat=True, base_url=f"http://127.0.0.1:{server.server_port}")
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+    assert statuses == [500] and len(executions) == 1
+    assert store.get(proposal) is not None and idem.get("key-1") is None
+    assert sum(c["options"]["method"] == "POST" for c in result["calls"]) == 1
+    assert all(r["disabled"] == "true" and r["html"] is None for r in result["rows"])
 
 
 @pytest.mark.parametrize("case", ["escape", "back", "replace", "disconnected", "stale"])

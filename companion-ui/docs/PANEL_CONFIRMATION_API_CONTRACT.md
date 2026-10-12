@@ -284,6 +284,21 @@ establish execution. With no triggered action, confirmation uses the existing
 decision without claiming an action executed or adding a mutation to force a
 positive result. Guard, same-turn and idempotency behavior stays unchanged.
 
+The existing Companion page proxy can carry a derived confirmation fragment in
+the optional `X-Companion-Panel-Confirmation` response header. It uses the existing
+Python renderer for the exact POST acknowledgement, matched to proposal,
+artifact and idempotency key. The ASCII encoded header is bounded to 8192 bytes;
+the original response status and JSON body remain unchanged. This is UI
+presentation, not a Product response field, receipt authority or read store.
+
+The served Apply controller keeps its own matched fragment across workspace
+refreshes; an artifact-wide latest response cannot replace another proposal's
+acknowledgement. An unknown POST outcome or missing, invalid or mismatched
+presentation holds every current clone of that proposal without another POST.
+A matched runtime `blocked` response may permit a later intent through the
+existing guard path. This hold is transient page state; it adds no durable
+exactly-once guarantee or new runtime classification.
+
 | Field | Description |
 |---|---|
 | `action_taken` | The canonical action ID that was executed. |

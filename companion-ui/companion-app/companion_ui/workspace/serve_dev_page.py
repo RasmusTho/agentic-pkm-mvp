@@ -6564,11 +6564,11 @@ def _render_panel_proposal_rows(
         # Provenance line: agent · ISO-timestamp · confidence N (AC4)
         prov_agent = _e(str(proposal.get("agent") or proposal.get("author") or "agent"))
         prov_ts_raw = str(proposal.get("created_at") or proposal.get("timestamp") or "")
-        prov_ts = _e(prov_ts_raw[:16]) if prov_ts_raw else _e(datetime.now().strftime("%Y-%m-%dT%H:%M"))
+        prov_time = f"&nbsp;&middot;&nbsp;{_e(prov_ts_raw[:16])}" if prov_ts_raw else ""
         prov_conf = _e(str(proposal.get("confidence") or "—"))
         provenance_html = (
             f'<div class="panel-section-provenance" data-testid="workspace-panel-provenance">'
-            f"{prov_agent}&nbsp;&middot;&nbsp;{prov_ts}&nbsp;&middot;&nbsp;confidence&nbsp;{prov_conf}"
+            f"{prov_agent}{prov_time}&nbsp;&middot;&nbsp;confidence&nbsp;{prov_conf}"
             f"</div>"
         )
         # Server-declared proposal-scoped origin attribution (CHAT-PANEL-HANDOFF-02).
@@ -6831,6 +6831,34 @@ def _render_governed_receipt_card(response: dict) -> str:
         </div>"""
 
 
+_PANEL_CONFIRMATION_HEADER = "X-Companion-Panel-Confirmation"
+_PANEL_CONFIRMATION_HEADER_LIMIT = 8192
+
+
+def _panel_confirmation_presentation(response: object, request: object) -> str | None:
+    """Derive bounded UI markup without changing the runtime acknowledgement."""
+    if not isinstance(response, dict) or not isinstance(request, dict):
+        return None
+    for field in ("proposal_id", "artifact_id", "idempotency_key"):
+        value = request.get(field)
+        if not isinstance(value, str) or not value or response.get(field) != value:
+            return None
+    status = response.get("status")
+    if not isinstance(status, str) or status not in {"executed", "logged", "blocked", "rejected"}:
+        return None
+    if status in {"executed", "logged"}:
+        receipt = response.get("receipt")
+        if not isinstance(receipt, dict) or not receipt.get("receipt_id"):
+            return None
+    try:
+        encoded = quote(_render_panel_confirm_response(response), safe="")
+    except Exception:
+        # Optional presentation failure must not change the original status or
+        # JSON acknowledgement, including an already completed action.
+        return None
+    return encoded if len(encoded) <= _PANEL_CONFIRMATION_HEADER_LIMIT else None
+
+
 def _panel_apply_script() -> str:
     """Dispatch the existing guarded decision and consume server-rendered state.
 
@@ -6846,23 +6874,32 @@ def _panel_apply_script() -> str:
   (function () {
     var inFlight = {};
     var operationKeys = {};
+    var held = {};
     function matchingRow(root, selector, id) {
       return Array.prototype.find.call(root.querySelectorAll(selector), function (row) {
         return row.getAttribute('data-proposal-id') === id;
       });
     }
     function calmFailure(button) {
-      button.removeAttribute('aria-disabled');
+      var id = button.getAttribute('data-proposal-id');
+      held[id] = true;
+      button.setAttribute('aria-disabled', 'true');
       button.setAttribute('data-action-state', 'unavailable');
-      var row = button.closest('[data-proposal-id]');
-      if (!row) return;
-      var status = row.querySelector('[data-panel-action-status]');
-      if (!status) {
-        status = document.createElement('p');
-        status.setAttribute('data-panel-action-status', 'true');
-        row.appendChild(status);
-      }
-      status.textContent = __PANEL_FAILURE_COPY__;
+      Array.prototype.forEach.call(document.querySelectorAll(
+        '[data-testid="workspace-panel-proposal-row"], [data-testid="palette-proposal-row"]'), function (row) {
+        if (row.getAttribute('data-proposal-id') !== id) return;
+        Array.prototype.forEach.call(row.querySelectorAll('[data-panel-action]'), function (clone) {
+          clone.setAttribute('aria-disabled', 'true');
+          clone.setAttribute('data-action-state', 'unavailable');
+        });
+        var status = row.querySelector('[data-panel-action-status]');
+        if (!status) {
+          status = document.createElement('p');
+          status.setAttribute('data-panel-action-status', 'true');
+          row.appendChild(status);
+        }
+        status.textContent = __PANEL_FAILURE_COPY__;
+      });
     }
     window.panelActions = {
       submit: function (button) {
@@ -6875,7 +6912,7 @@ def _panel_apply_script() -> str:
         var notePath = editor && editor.getAttribute('data-note-path');
         if (!id || !artifact || !notePath || path !== '/api/panel/confirm' ||
             ['confirm', 'reject'].indexOf(action) === -1) return;
-        if (inFlight[id]) return;
+        if (inFlight[id] || held[id]) return;
         inFlight[id] = true;
         button.setAttribute('aria-disabled', 'true');
         button.setAttribute('data-action-state', 'pending');
@@ -6885,17 +6922,65 @@ def _panel_apply_script() -> str:
         operationKeys[operation] = key;
         var rail = document.querySelector('[data-testid="workspace-agent-rail"]');
         var scroll = rail ? rail.scrollTop : 0;
+        var acknowledged = null;
+        var resultStatus = null;
+        function show(node) {
+          var proposals = Array.prototype.slice.call(document.querySelectorAll(
+            '[data-testid="workspace-panel-proposal-row"], [data-testid="palette-proposal-row"]'));
+          var responses = Array.prototype.slice.call(document.querySelectorAll(
+            '[data-testid="workspace-panel-confirm-response"]'));
+          var surfaces = [];
+          proposals.concat(responses).forEach(function (row) {
+            if (row.getAttribute('data-proposal-id') !== id) return;
+            var surface = row.closest('[data-testid="workspace-agent-rail"], [data-overlay-key], [data-overlay-id]') || row.parentElement;
+            if (surfaces.indexOf(surface) !== -1) row.remove();
+            else {
+              surfaces.push(surface);
+              row.replaceWith(document.importNode(node, true));
+            }
+          });
+          if (rail) rail.scrollTop = scroll;
+        }
         return fetch(path, {
           method: 'POST', headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({proposal_id: id, artifact_id: artifact, action: action, idempotency_key: key})
         }).then(function (response) {
           if (!response.ok) throw new Error('decision unavailable');
-          // A 200 may be blocked: only the read-side server projection below
-          // can declare the receipt/card state. No optimistic confirmation.
-          return response.json();
+          var encoded = response.headers.get(__PANEL_HEADER_NAME__);
+          if (!encoded || encoded.length > __PANEL_HEADER_LIMIT__ || !/^[\x20-\x7e]+$/.test(encoded)) {
+            throw new Error('confirmation presentation unavailable');
+          }
+          return response.json().then(function (result) {
+            if (result.proposal_id !== id || result.artifact_id !== artifact || result.idempotency_key !== key ||
+                !['executed', 'logged', 'blocked', 'rejected'].includes(result.status)) {
+              throw new Error('confirmation identity unavailable');
+            }
+            var fresh = new DOMParser().parseFromString(decodeURIComponent(encoded), 'text/html');
+            var matches = fresh.querySelectorAll('[data-testid="workspace-panel-confirm-response"]');
+            if (matches.length !== 1) throw new Error('confirmation presentation unavailable');
+            var own = matches[0];
+            var status = own.querySelector('[data-testid="workspace-panel-confirm-status"]');
+            if (own.getAttribute('data-proposal-id') !== id || own.getAttribute('data-artifact-id') !== artifact ||
+                own.getAttribute('data-idempotency-key') !== key || !status ||
+                status.getAttribute('data-runtime-status') !== result.status) {
+              throw new Error('confirmation presentation identity unavailable');
+            }
+            if (result.receipt) {
+              var receipt = own.querySelector('[data-testid="workspace-panel-receipt-link-to-history"], [data-testid="workspace-panel-receipt"]');
+              if (!receipt || receipt.getAttribute('data-receipt-id') !== result.receipt.receipt_id) {
+                throw new Error('confirmation receipt identity unavailable');
+              }
+            }
+            acknowledged = own;
+            resultStatus = result.status;
+            // This is already server-classified markup. Never derive execution
+            // from events, an artifact-wide latest response or local optimism.
+            held[id] = result.status !== 'blocked';
+            show(acknowledged);
+            return result;
+          });
         }).then(function (result) {
-          // A confirmed refusal allows a later new intent after the guard
-          // clears. An unknown transport result retains the same retry key.
+          // Only a matched acknowledged refusal permits a later new intent.
           if (result.status === 'blocked') delete operationKeys[operation];
           return fetch('/workspace?note_path=' + encodeURIComponent(notePath), {method: 'GET'});
         }).then(function (response) {
@@ -6903,18 +6988,12 @@ def _panel_apply_script() -> str:
           return response.text();
         }).then(function (html) {
           var fresh = new DOMParser().parseFromString(html, 'text/html');
-          var response = fresh.querySelector('[data-testid="workspace-panel-confirm-response"]');
-          if (response && response.getAttribute('data-proposal-id') !== id) response = null;
           var projected = matchingRow(fresh, '[data-testid="workspace-panel-proposal-row"]', id);
-          var rows = document.querySelectorAll('[data-testid="workspace-panel-proposal-row"], [data-testid="palette-proposal-row"]');
-          Array.prototype.forEach.call(rows, function (row) {
-            if (row.getAttribute('data-proposal-id') !== id) return;
-            if (projected) { row.replaceWith(document.importNode(projected, true)); }
-            else if (response) { row.replaceWith(document.importNode(response, true)); }
-            else { calmFailure(button); }
-          });
-          if (rail) rail.scrollTop = scroll;
-        }).catch(function () { calmFailure(button); }).finally(function () { delete inFlight[id]; });
+          show(resultStatus === 'blocked' && projected ? projected : acknowledged);
+        }).catch(function () {
+          if (acknowledged) show(acknowledged);
+          else calmFailure(button);
+        }).finally(function () { delete inFlight[id]; });
       }
     };
     document.addEventListener('click', function (event) {
@@ -6925,7 +7004,9 @@ def _panel_apply_script() -> str:
       }
     });
   }());
-  </script>""".replace("__PANEL_FAILURE_COPY__", json.dumps(failure_copy))
+  </script>""".replace("__PANEL_FAILURE_COPY__", json.dumps(failure_copy)).replace(
+        "__PANEL_HEADER_NAME__", json.dumps(_PANEL_CONFIRMATION_HEADER),
+    ).replace("__PANEL_HEADER_LIMIT__", str(_PANEL_CONFIRMATION_HEADER_LIMIT))
 
 
 def _render_panel_confirm_response(response: dict) -> str:
@@ -6944,7 +7025,7 @@ def _render_panel_confirm_response(response: dict) -> str:
     # pending/staged/blocked/rejected must NOT render it (AC3, AC4).
     if response.get("status") == "executed" and receipt:
         return f"""
-        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response" data-proposal-id="{_e(response.get('proposal_id', ''))}">
+        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response" data-proposal-id="{_e(response.get('proposal_id', ''))}" data-artifact-id="{_e(response.get('artifact_id', ''))}" data-idempotency-key="{_e(response.get('idempotency_key', ''))}">
           <span data-testid="workspace-panel-confirm-status" data-runtime-status="{status}">{status_label}</span>
           {_render_governed_receipt_card(response)}
         </div>"""
@@ -7004,7 +7085,7 @@ def _render_panel_confirm_response(response: dict) -> str:
             <span data-testid="palette-blocked-recourse">{_e(recourse_text)}</span>
           </div>"""
     return f"""
-        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response" data-proposal-id="{_e(response.get('proposal_id', ''))}">
+        <div class="panel-confirm-response" data-testid="workspace-panel-confirm-response" data-proposal-id="{_e(response.get('proposal_id', ''))}" data-artifact-id="{_e(response.get('artifact_id', ''))}" data-idempotency-key="{_e(response.get('idempotency_key', ''))}">
           <span data-testid="workspace-panel-confirm-status" data-runtime-status="{status}">{status_label}</span>
           {receipt_html}
           {blocked_html}
@@ -16389,11 +16470,13 @@ def make_handler(
         _capture_timeout_seconds = capture_timeout_seconds
         _devui_enabled = _resolved_devui_enabled
 
-        def _send_json(self, status_code: int, payload: object) -> None:
+        def _send_json(self, status_code: int, payload: object, *, confirmation_header: str | None = None) -> None:
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            if confirmation_header is not None:
+                self.send_header(_PANEL_CONFIRMATION_HEADER, confirmation_header)
             self.end_headers()
             self.wfile.write(body)
 
@@ -17289,7 +17372,11 @@ def make_handler(
                     api_base_url=self._api_base_url,
                     note_path=str(payload.get("note_path") or ""),
                 )
-            self._send_json(200, data)
+            presentation = _panel_confirmation_presentation(data, payload) if parsed.path == "/api/panel/confirm" else None
+            if presentation is not None:
+                self._send_json(200, data, confirmation_header=presentation)
+            else:
+                self._send_json(200, data)
 
         def do_DELETE(self) -> None:
             parsed = urlparse(self.path)

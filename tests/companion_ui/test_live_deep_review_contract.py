@@ -12,7 +12,6 @@ from pathlib import Path
 import re
 import runpy
 import stat
-import subprocess
 import sys
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -102,42 +101,15 @@ class _StrictDOMLocator:
 
 
 def _actual_apply_dom(ack: dict[str, Any], projected: dict[str, Any]) -> _StrictDOMLocator:
-    """Run the shipped Apply consumer with a synthetic transport, never an action."""
-    from companion_ui.workspace.serve_dev_page import _panel_apply_script, _render_panel_confirm_response
+    """Exercise the proxy-derived own acknowledgement, never an executed action."""
+    from tests.companion_ui.test_panel_apply_acknowledgement import _consume, _proxy_reply
 
-    html = _render_panel_confirm_response(projected)
-    attrs = ET.fromstring(html).attrib
-    inputs = json.dumps({"ack": ack, "html": html, "attrs": attrs})
-    script = _panel_apply_script().removeprefix("\n  <script>").removesuffix("\n  </script>")
-    setup = "const input=" + inputs + ";" + r"""
-const calls=[];
-const rows=['rail','palette'].map(surface => ({surface, html:null,
-  getAttribute: name => name === 'data-proposal-id' ? 'synthetic-proposal' : null,
-  replaceWith: node => { rows.find(row => row.surface === surface).html=node.html; }}));
-const rail={scrollTop:7};
-const editor={getAttribute: () => 'note.md'};
-const response={html:input.html,getAttribute: name => input.attrs[name]};
-global.window={crypto:{randomUUID: () => 'synthetic-operation'}};
-global.document={getElementById: () => editor,querySelector: () => rail,
-  querySelectorAll: () => rows,importNode: node => ({html:node.html}),addEventListener: () => {}};
-global.DOMParser=class {parseFromString() {
-  return {querySelector: () => response,querySelectorAll: () => []}; }};
-global.fetch=async (path, options) => {
-  calls.push({path,options});
-  return {ok:true,json:async () => input.ack,text:async () => input.html}; };
-const attributes={'data-proposal-id':'synthetic-proposal','data-artifact-id':'synthetic-artifact',
-  'data-panel-action':'confirm','data-api-path':'/api/panel/confirm'};
-const button={getAttribute: name => attributes[name],
-  setAttribute: (name,value) => {attributes[name]=value;},removeAttribute: name => {delete attributes[name];},
-  closest: () => null};
-"""
-    ending = "\nwindow.panelActions.submit(button).then(() => console.log(JSON.stringify({rows,calls,scroll:rail.scrollTop})));"
-    result = subprocess.run(["node", "-e", setup + script + ending], check=True, capture_output=True, text=True, timeout=10)
-    observed = json.loads(result.stdout)
+    observed = _consume([_proxy_reply(ack)], latest=projected)
+    html = observed["rows"][0]["html"]
+    assert html and all(row["html"] == html for row in observed["rows"])
     assert [call["options"]["method"] for call in observed["calls"]] == ["POST", "GET"]
     assert observed["scroll"] == 7
-    assert all(row["html"] == html for row in observed["rows"])
-    tree = ET.fromstring('<page><rail data-testid="workspace-agent-rail">' + observed["rows"][0]["html"] + '</rail><palette hidden="true">' + observed["rows"][1]["html"] + '</palette></page>')
+    tree = ET.fromstring('<page><rail data-testid="workspace-agent-rail">' + html + '</rail><palette hidden="true">' + html + '</palette></page>')
     return _StrictDOMLocator([tree])
 
 
@@ -149,6 +121,7 @@ def test_actual_apply_consumer_binds_unique_rail_and_acknowledged_receipt(
     ack = {
         "proposal_id": "synthetic-proposal", "artifact_id": "synthetic-artifact",
         "status": "logged" if fault == "logged" else "executed", "outcome": "logged" if fault == "logged" else "success",
+        "idempotency_key": "key-1",
         "receipt": {"receipt_id": "synthetic-receipt", "outcome": "logged" if fault == "logged" else "success", "timestamp": "2026-10-12T00:00:00Z"},
     }
     projected = deepcopy(ack)
@@ -162,7 +135,7 @@ def test_actual_apply_consumer_binds_unique_rail_and_acknowledged_receipt(
     runner.proposal_id = ack["proposal_id"]
     if fault:
         with pytest.raises(AssertionError, match="strict_locator_count:0" if fault == "logged" else "receipt_link_identity_mismatch"):
-            runner._acknowledged_rail_receipt(ack["receipt"]["receipt_id"])
+            runner._acknowledged_rail_receipt("another-receipt" if fault == "wrong_receipt" else ack["receipt"]["receipt_id"])
     else:
         assert len(dom.get_by_test_id("workspace-panel-receipt-card").roots) == 2
         applied = runner._acknowledged_rail_receipt(ack["receipt"]["receipt_id"])

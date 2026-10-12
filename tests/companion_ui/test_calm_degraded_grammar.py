@@ -261,21 +261,22 @@ def test_apply_transport_failure_uses_canonical_visible_copy() -> None:
     script = _panel_apply_script().removeprefix("\n  <script>").removesuffix("\n  </script>")
     setup = r"""
 let status=null;
-const row={querySelector:()=>status,appendChild:e=>{status=e;}};
+const row={getAttribute:()=> 'synthetic-proposal',querySelector:()=>status,
+  querySelectorAll:()=>[button],appendChild:e=>{status=e;}};
 const attributes={'data-proposal-id':'synthetic-proposal','data-artifact-id':'synthetic-note',
   'data-panel-action':'confirm','data-api-path':'/api/panel/confirm'};
 const button={getAttribute:n=>attributes[n],setAttribute:(n,v)=>{attributes[n]=v;},
   removeAttribute:n=>{delete attributes[n];},closest:()=>row};
 global.window={crypto:{randomUUID:()=> 'synthetic-intent'}};
 global.document={getElementById:()=>({getAttribute:()=> 'synthetic.md'}),
-  querySelector:()=>({scrollTop:7}),addEventListener:()=>{},
+  querySelector:()=>({scrollTop:7}),querySelectorAll:()=>[row],addEventListener:()=>{},
   createElement:tag=>({tag,setAttribute:()=>{},textContent:''})};
 global.fetch=()=>Promise.reject(new Error('HTTP 500 private transport payload'));
 """
     finish = "\nwindow.panelActions.submit(button).then(()=>console.log(JSON.stringify({tag:status.tag,copy:status.textContent,state:attributes['data-action-state'],disabled:attributes['aria-disabled']||null})));"
     result = subprocess.run(["node", "-e", setup + script + finish], capture_output=True, text=True, check=True, timeout=10)
     visible = json.loads(result.stdout)
-    assert visible["tag"] == "p" and visible["state"] == "unavailable" and visible["disabled"] is None
+    assert visible["tag"] == "p" and visible["state"] == "unavailable" and visible["disabled"] == "true"
     assert visible["copy"] == calm_degraded("Apply", "no confirmed receipt was received", NOTHING_LOST,
                                           "Refresh to inspect the current state")
     assert "HTTP 500" not in visible["copy"]

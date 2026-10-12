@@ -2673,11 +2673,19 @@ def _panel_state(
             continue
         intent = proposal.intent_event
         actions = [action for action in intent.payload.actions if action.checked]
+        created_at: str | None
+        try:
+            created_at = datetime.datetime.fromtimestamp(
+                proposal.proposed_at, tz=datetime.timezone.utc,
+            ).isoformat().replace("+00:00", "Z")
+        except (TypeError, ValueError, OverflowError, OSError):
+            created_at = None
         proposal_rows.append({
             "proposal_id": proposal_id,
             "artifact_id": proposal.artifact_id,
             "description": "; ".join(action.label for action in actions) or intent.payload.panel.instruction,
             "status": "staged",
+            "created_at": created_at,
             "lane": "governed",
             "governed": True,
             "proposal_origin": proposal.proposal_origin,

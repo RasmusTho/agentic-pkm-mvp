@@ -162,6 +162,19 @@ The live receipt consumer selects the originating rail/proposal slot and matches
 its history link to the exact acknowledged receipt; a hidden palette clone is
 not an additional accepted outcome.
 
+Apply uses the existing page proxy's bounded, server-rendered presentation of
+its own authoritative POST acknowledgement. The optional ASCII response header
+leaves the original JSON/status unchanged for native observation. Concurrent
+proposals and later workspace responses cannot substitute an artifact's latest
+receipt for the submitted proposal. Unknown outcomes or unavailable/mismatched
+presentation remain held across current UI clones; no immediate POST retry is
+offered after a possible effect. This is volatile presentation state, not a new
+receipt store or a durable execution guarantee.
+
+Staged proposal provenance carries the existing stored `proposed_at` time as
+`created_at`. Refreshing a proposal does not change its displayed creation time;
+missing or invalid timestamps remain absent instead of using the render clock.
+
 The required offline B4 browser proof uses the existing browser lane and canonical
 host lease. Its five outcomes are Escape, Back, occupant replacement, disconnected
 invoker and stale source. The browser workflow rejects a missing or skipped case;
