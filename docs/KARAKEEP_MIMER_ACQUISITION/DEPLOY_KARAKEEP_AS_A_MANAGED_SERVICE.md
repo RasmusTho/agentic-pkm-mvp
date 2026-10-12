@@ -139,6 +139,14 @@ failure and releases the caller's lock handle without clearing durable admission
 request can still join the same operation. Unknown state requires authoritative recovery of that original operation; there is no
 force/retry override or automatic compensation.
 
+The existing `bws-owner` lock marker durably binds Karakeep's finite deploy/boot actor, channel and
+operation ID. After a terminal receipt, status/retry reconciles only that actor's free matching
+lock with the existing Linux reconciliation/atomic-retirement helpers before returning terminal
+success or replacing its proof. A live kernel holder, pending operation, foreign marker or
+malformed marker refuses reconciliation. PostgreSQL's legacy empty-marker reconciliation cannot
+borrow a Karakeep or token-push marker. A crash after canonical lock retirement may leave a detached
+value-free tombstone; it cannot occupy the admission slot or become another actor's authority.
+
 - **Restart / boot:** an explicit controller rerun re-resolves service keys and preserves data.
   The installed `yggdrasil-karakeep-<channel>.service` boot unit calls the existing reader supervisor
   to rehydrate `/run` handles after tmpfs loss. Boot requires a committed prior installation and

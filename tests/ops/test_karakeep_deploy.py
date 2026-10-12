@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from io import StringIO
 import json
+import fcntl
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -16,7 +18,7 @@ from app.ops.bws_secret_reader import BwsItemAbsent, BwsLookupError, BwsReaderCo
 from app.ops.host_secret_bootstrap import HostSecretBootstrapError, resolve_host_secret_values
 from app.ops.host_secret_contract import KARAKEEP_GRANTS, load_host_secret_contract
 from app.ops.host_secret_controller import HostSecretAdmissionError, HostSecretController
-from app.ops.postgres_deploy import DeployJournal
+from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
 from app.ops.postgres_deploy_linux import LinuxConfig, LinuxEffects, DeploymentSupervisor
 from app.ops.secret_admin import SecretAdmin, main as secrets_main
 
@@ -71,7 +73,7 @@ def runtime(tmp_path, monkeypatch):
     settings = {'channel': 'dev', 'server_url': 'http://127.0.0.1:13000',
                 'qualification_ref': 'https://github.com/RasmusTho/agentic-pkm-mvp/issues/3367#issuecomment-1',
                 'qualified_at': datetime.now(timezone.utc).isoformat()}
-    monkeypatch.setattr(kd, '_private_json', lambda path: settings if 'request' not in path.name
+    monkeypatch.setattr(kd, '_private_json', lambda path: settings if path.name == 'dev.json'
                         else json.loads(path.read_text()))
     state = SimpleNamespace(running=False, calls=[], fail=False, inspected=[], filesystem='tmpfs')
 
@@ -281,7 +283,7 @@ def test_boot_refuses_busy_channel_lock_without_compose_or_lock_retirement(runti
             mimer.write(other.operation_id, stage)
     assert not (runtime.effects.config.root / 'config/deploy/dev.env.lock').exists()
     assert runtime.effects.journal.read() == first
-    assert runtime.effects.boot_journal.read().terminal_result == 'aborted'
+    assert runtime.effects.boot_journal.read() is None
     kd.boot('dev')  # contention cleared: approved installation is still bootable
     assert runtime.effects.journal.read() == first
     assert runtime.effects.boot_journal.read().terminal_result == 'committed'
@@ -459,3 +461,157 @@ def test_bws_provider_boundaries_refuse_all_karakeep_prod_identities_before_auth
         with pytest.raises(SecretAdminError):
             admin.read('prod', 'prod/' + secret)
     assert auth == []
+
+
+def _interrupt_boot_cleanup(runtime, monkeypatch):
+    installed = deploy(runtime)
+    retire = LinuxEffects.retire_reconciled_channel_lock
+    def interrupted(handle, **options):
+        raise OSError('fixture cleanup interruption')
+    monkeypatch.setattr(LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(interrupted))
+    monkeypatch.setattr(kd, '_require_vm_root', lambda: None)
+    monkeypatch.setattr(kd, '_installation_journal', lambda channel: runtime.effects.journal)
+    monkeypatch.setattr(kd, 'rpc', lambda channel, request: runtime.supervisor.request(request))
+    with pytest.raises(kd.KarakeepDeployError):
+        kd.boot('dev')
+    if runtime.supervisor.worker:
+        runtime.supervisor.worker.join(1)
+    receipt = runtime.effects.boot_journal.read()
+    assert receipt.terminal_result == 'committed'
+    marker = runtime.effects.config.root / 'config/deploy/dev.env.lock/bws-owner'
+    assert json.loads(marker.read_text()) == runtime.effects.lock_owner(receipt.operation_id, boot=True)
+    assert runtime.effects.journal.read() == installed
+    runtime.supervisor = kd.KarakeepSupervisor(runtime.effects)  # actual supervisor loss/restart
+    return installed, receipt, marker, retire
+
+
+def test_terminal_boot_cleanup_crash_reconciles_prior_id_before_next_boot(runtime, monkeypatch):
+    installed, prior, marker, retire = _interrupt_boot_cleanup(runtime, monkeypatch)
+    request = {'action': 'karakeep-boot-status', 'operation_id': prior.operation_id,
+               'plan': runtime.plan.payload()}
+    # A continued retirement failure cannot become terminal success or erase
+    # the prior proof by preparing another attempt.
+    with pytest.raises(kd.KarakeepDeployError):
+        runtime.supervisor.request(request)
+    with pytest.raises(kd.KarakeepDeployError):
+        kd.boot('dev')
+    assert runtime.effects.boot_journal.read() == prior and marker.exists()
+    monkeypatch.setattr(LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(retire))
+    assert runtime.supervisor.request(request) == {'receipt': prior.payload()}
+    assert not marker.parent.exists()
+    assert runtime.effects.boot_journal.read() == prior
+    for path in runtime.effects.runtime.iterdir():
+        path.unlink()
+    kd.boot('dev')
+    assert runtime.effects.journal.read() == installed
+    assert runtime.effects.boot_journal.read().terminal_result == 'committed'
+    assert runtime.effects.boot_journal.read().operation_id != prior.operation_id
+    assert SESSION in (runtime.effects.runtime / 'web.env').read_text()
+    assert not marker.parent.exists()
+
+
+def test_terminal_install_cleanup_crash_reconciles_host_without_duplicate_deploy(runtime, monkeypatch):
+    retire = LinuxEffects.retire_reconciled_channel_lock
+    def interrupted(handle, **options):
+        raise OSError('fixture cleanup interruption')
+    monkeypatch.setattr(LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(interrupted))
+    with pytest.raises(kd.KarakeepDeployError):
+        deploy(runtime)
+    if runtime.supervisor.worker:
+        runtime.supervisor.worker.join(1)
+    installed = runtime.effects.journal.read()
+    marker = runtime.effects.config.root / 'config/deploy/dev.env.lock/bws-owner'
+    assert installed.terminal_result == 'committed' and marker.exists()
+    monkeypatch.setattr(LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(retire))
+    restarted = kd.KarakeepSupervisor(runtime.effects)
+    monkeypatch.setattr(runtime.remote, 'request', lambda action, operation_id, plan:
+                        restarted.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()}))
+    assert deploy(runtime, operation_id=installed.operation_id) == installed
+    assert not marker.parent.exists()
+    assert sum('up' in argv for argv, _ in runtime.state.calls) == 1
+    assert runtime.admin.check('dev', kd.SERVICE_CONSUMERS)[0]['status'] == 'ok'
+
+
+def test_detached_terminal_cleanup_loss_does_not_block_fresh_boot(runtime, monkeypatch):
+    installed = deploy(runtime)
+    monkeypatch.setattr(kd, '_require_vm_root', lambda: None)
+    monkeypatch.setattr(kd, '_installation_journal', lambda channel: runtime.effects.journal)
+    monkeypatch.setattr(kd, 'rpc', lambda channel, request: runtime.supervisor.request(request))
+    lock = runtime.effects.config.root / 'config/deploy/dev.env.lock'
+    unlink = os.unlink
+    detached = []
+    def lose_detached_cleanup(path, *args, **options):
+        if path == 'bws-owner':
+            assert not lock.exists()
+            assert runtime.effects.boot_journal.read().terminal_result == 'committed'
+            detached.append(True)
+            raise OSError('fixture loss after canonical retirement')
+        return unlink(path, *args, **options)
+    monkeypatch.setattr(os, 'unlink', lose_detached_cleanup)
+    kd.boot('dev')
+    assert detached and not lock.exists()
+    assert list(lock.parent.glob('dev.env.lock.reconciled-*'))
+    monkeypatch.setattr(os, 'unlink', unlink)
+    for path in runtime.effects.runtime.iterdir():
+        path.unlink()
+    kd.boot('dev')
+    assert runtime.effects.journal.read() == installed
+    assert runtime.effects.boot_journal.read().terminal_result == 'committed'
+    assert SESSION in (runtime.effects.runtime / 'web.env').read_text()
+    assert not lock.exists()
+
+
+@pytest.mark.parametrize('obstruction', ['live', 'foreign-operation', 'token-push', 'malformed', 'hardlink'])
+def test_terminal_status_refuses_live_foreign_or_malformed_lock_without_losing_proof(runtime, monkeypatch, obstruction):
+    _installed, prior, marker, retire = _interrupt_boot_cleanup(runtime, monkeypatch)
+    monkeypatch.setattr(LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(retire))
+    descriptor = None
+    if obstruction == 'live':
+        descriptor = os.open(marker, os.O_RDWR | os.O_NOFOLLOW)
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    elif obstruction == 'foreign-operation':
+        marker.write_text(json.dumps(runtime.effects.lock_owner(str(uuid4()), boot=True)) + '\n')
+    elif obstruction == 'token-push':
+        marker.write_text(json.dumps({'kind': 'token-push', 'operation_id': str(uuid4()), 'attempt_id': str(uuid4())}) + '\n')
+    elif obstruction == 'malformed':
+        marker.write_text(SESSION)
+    else:
+        (runtime.effects.runtime / 'fixture-marker-link').hardlink_to(marker)
+    before = marker.read_bytes()
+    try:
+        with pytest.raises(kd.KarakeepDeployError) as error:
+            runtime.supervisor.request({'action': 'karakeep-boot-status', 'operation_id': prior.operation_id,
+                                        'plan': runtime.plan.payload()})
+        assert SESSION not in str(error.value)
+        assert marker.read_bytes() == before and runtime.effects.boot_journal.read() == prior
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+@pytest.mark.parametrize('actor', ['postgres', 'karakeep-deploy', 'karakeep-boot', 'token-push'])
+def test_postgres_failed_reconciliation_cannot_borrow_another_actor_lock(runtime, monkeypatch, actor):
+    journal = DeployJournal(runtime.effects.journal.directory / 'postgres-fixture', 'dev')
+    operation_id = str(uuid4())
+    plan = DeployPlan('dev', REVISION, ('db',), ('postgres-db',))
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating', 'failed'):
+        journal.write(operation_id, stage)
+    path = runtime.effects.config.root / 'config/deploy/dev.env.lock'
+    path.mkdir(mode=0o700)
+    marker = path / 'bws-owner'
+    value = '' if actor == 'postgres' else json.dumps({'kind': actor, 'channel': 'dev', 'operation_id': str(uuid4())}) + '\n'
+    marker.write_text(value)
+    marker.chmod(0o600)
+    owner = DeploymentSupervisor(SimpleNamespace(channel='dev', root=runtime.effects.config.root, journal=journal))
+    monkeypatch.setattr(owner, '_require_current_config', lambda: None)
+    monkeypatch.setattr(LinuxEffects, 'quiescent', lambda self: True)
+    request = {'action': 'reconcile-failed', 'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': False}
+    if actor == 'postgres':
+        assert owner.request(request)['receipt']['terminal_result'] == 'failed'
+        assert not path.exists()
+    else:
+        with pytest.raises(PostgresDeployError):
+            owner.request(request)
+        assert marker.read_text() == value
+        assert journal.read().operation_id == operation_id and journal.read().stage == 'failed'

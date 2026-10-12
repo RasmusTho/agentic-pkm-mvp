@@ -142,6 +142,39 @@ class KarakeepEffects:
         # must never replace installation or host-reconciliation authority.
         return DeployJournal(self.journal.directory / 'boot', self.config.channel)
 
+    def lock_owner(self, operation_id: str, *, boot: bool) -> dict[str, str]:
+        return {'kind': 'karakeep-boot' if boot else 'karakeep-deploy',
+                'channel': self.config.channel, 'operation_id': operation_id}
+
+    def reconcile_terminal_lock(self) -> None:
+        """Retire only a free lock bound to our still-retained terminal proof."""
+        try:
+            self._reconcile_terminal_lock()
+        except Exception:
+            raise KarakeepDeployError() from None
+
+    def _reconcile_terminal_lock(self) -> None:
+        path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return
+        if not stat.S_ISDIR(info.st_mode):
+            raise KarakeepDeployError()
+        owner = _private_json(path / 'bws-owner')
+        for journal, boot in ((self.journal, False), (self.boot_journal, True)):
+            receipt = journal.read()
+            if (receipt is None or receipt.terminal_result is None
+                or owner != self.lock_owner(receipt.operation_id, boot=boot)):
+                continue
+            effects = LinuxEffects(self.config)
+            with effects.failed_reconciliation_lock(expected_owner=owner) as handle:
+                if journal.read() != receipt:
+                    raise KarakeepDeployError()
+                effects.retire_reconciled_channel_lock(handle, expected_owner=owner)
+            return
+        raise KarakeepDeployError()
+
     def require_tmpfs(self) -> None:
         for parent in (self.runtime, *self.runtime.parents):
             if parent.is_symlink():
@@ -333,7 +366,7 @@ class KarakeepSupervisor:
         lock = LinuxEffects(self.effects.config)
         lock.operation_id = operation_id
         try:
-            with lock.channel_lock(journal=journal):
+            with lock.channel_lock(journal=journal, owner_marker=self.effects.lock_owner(operation_id, boot=boot)):
                 try:
                     values = self.effects.preflight(plan, boot=boot)
                     journal.write(operation_id, 'preflighted')
@@ -383,6 +416,7 @@ class KarakeepSupervisor:
                     raise KarakeepDeployError()
                 self.effects.journal.bind_request(installed.operation_id, plan, False)
                 self.effects.preflight(plan, boot=True)
+                self.effects.reconcile_terminal_lock()
                 journal.bind_request(operation_id, plan, False, create=True)
                 journal.write(operation_id, 'prepared')
                 self.finished.clear()
@@ -391,6 +425,7 @@ class KarakeepSupervisor:
             elif previous and previous.operation_id == operation_id:
                 journal.bind_request(operation_id, plan, False)
                 if previous.terminal_result is not None:
+                    self.effects.reconcile_terminal_lock()
                     if previous.terminal_result == 'committed':
                         self.effects.verify()
                     return {'receipt': previous.payload()}
@@ -404,6 +439,7 @@ class KarakeepSupervisor:
                 # Validate all host and selected credential inputs before the
                 # first durable request mutation, not only inside the worker.
                 self.effects.preflight(plan)
+                self.effects.reconcile_terminal_lock()
                 journal.bind_request(operation_id, plan, False, create=True)
                 journal.write(operation_id, 'prepared')
                 self.finished.clear()
@@ -420,6 +456,9 @@ class KarakeepSupervisor:
             if not self.worker or not self.worker.is_alive():
                 return {'unknown': True}
             return {'pending': True}
+        self.effects.reconcile_terminal_lock()
+        if current.terminal_result == 'committed':
+            self.effects.verify()
         return {'receipt': current.payload()}
 
 
