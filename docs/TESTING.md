@@ -535,6 +535,10 @@ Fixed read-only snapshots contain
 the already-installed native Playwright 1.63.0/Chromium 1243 and the selected Piper sv-SE/Kokoro
 en-US assets; cache/audio and other mutable data stay disposable. There are no channel credentials,
 persistent channel mounts, host/Docker sockets, arbitrary commands or selectable test profiles.
+Fresh web admission is retained on unknown cleanup or an interrupted/missing result, despite the
+already-committed PG receipt. Only confirmed worker cleanup plus the same directory/owner inode,
+held reconciliation flock and matching operation permit retirement; retries use that existing
+recovery seam. Ordinary PG/Karakeep terminal-lock defaults remain unchanged.
 
 Only the two named live wrappers execute. Each consumes the private `native-web-context.v1`
 readback and calls `app.ops.native_web_runtime.before_effect(pilot, effect)` before a declared

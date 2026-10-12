@@ -1171,20 +1171,35 @@ class LinuxEffects:
         self._web_admission(operation_id)  # Refuse foreign/prod before any lock/resource effect.
         self.operation_id = operation_id
         path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
+        result: dict[str, Any] | None = None
+        fresh_identity = None
         if not path.exists():
-            with self.channel_lock():
-                return self.qualify_web(operation_id)
+            # The committed PG receipt predates this disposable attempt; it
+            # cannot retire admission after unknown cleanup or no web result.
+            with self.channel_lock(retire_terminal=False):
+                if self.lock_fd is None:
+                    raise PostgresDeployError()
+                directory, owner = path.lstat(), os.fstat(self.lock_fd)
+                fresh_identity = (directory.st_dev, directory.st_ino, owner.st_dev, owner.st_ino)
+                result = self.qualify_web(operation_id)
+                if not isinstance(result, dict) or result.get('cleanup') != 'confirmed':
+                    raise PostgresDeployError()
         # An abrupt owner exit can retain native admission. Reuse its existing
         # inode/flock proof; never treat a name/PID or released lock as freeze.
         with self.failed_reconciliation_lock() as handle:
             self.lock_fd = handle[3]
             try:
+                if fresh_identity is not None:
+                    directory, owner = os.fstat(handle[2]), os.fstat(handle[3])
+                    if fresh_identity != (directory.st_dev, directory.st_ino, owner.st_dev, owner.st_ino):
+                        raise PostgresDeployError()
                 receipt = self.config.journal.read()
                 if (receipt is None or receipt.operation_id != operation_id
                     or receipt.terminal_result != 'committed' or not self.quiescent()):
                     raise PostgresDeployError()
-                result = self.qualify_web(operation_id)
-                if result['cleanup'] != 'confirmed':
+                if result is None:
+                    result = self.qualify_web(operation_id)
+                if not isinstance(result, dict) or result.get('cleanup') != 'confirmed':
                     raise PostgresDeployError()
                 self.retire_reconciled_channel_lock(handle)
                 return result
@@ -1259,7 +1274,8 @@ class LinuxEffects:
 
     @contextmanager
     def channel_lock(self, *, journal: DeployJournal | None = None,
-                     owner_marker: dict[str, str] | None = None) -> Iterator[None]:
+                     owner_marker: dict[str, str] | None = None,
+                     retire_terminal: bool = True) -> Iterator[None]:
         import fcntl
         path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
         if owner_marker is not None:
@@ -1295,7 +1311,7 @@ class LinuxEffects:
             if descriptor is not None:
                 os.close(descriptor)
             receipt = (journal or self.config.journal).read()
-            if receipt and receipt.operation_id == self.operation_id and receipt.terminal_result:
+            if retire_terminal and receipt and receipt.operation_id == self.operation_id and receipt.terminal_result:
                 if owner_marker is not None:
                     with self.failed_reconciliation_lock(expected_owner=owner_marker) as handle:
                         self.retire_reconciled_channel_lock(handle, expected_owner=owner_marker)

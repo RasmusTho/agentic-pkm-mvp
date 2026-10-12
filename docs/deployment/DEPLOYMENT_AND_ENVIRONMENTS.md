@@ -591,6 +591,11 @@ start and end; the candidate must actually launch Chromium and resolve the real 
 No dependency/model installation or fallback is performed. Missing payloads, incompatible ABI/OS
 libraries or unavailable selected Product integrations are recovery facts for their existing
 owners, not evidence that a pilot passed.
+The fresh qualification retains channel admission until worker cleanup is confirmed; its older
+committed PG receipt cannot release that admission on unknown cleanup or no result. Retirement
+reuses the exact directory/owner-inode and held-flock reconciliation seam with matching operation
+and quiescence readback. Foreign replacement stays untouched; same-operation recovery owns retry.
+This changes only the fixed web caller, preserving ordinary PG/Karakeep lock-retirement defaults.
 
 The fixed API child `app.api.native_web_qualification` uses the canonical producers and normal
 guards before startup, including its own in-process memory queue. This interaction-layer
