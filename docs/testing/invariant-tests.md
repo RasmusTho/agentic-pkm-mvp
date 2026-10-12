@@ -1159,9 +1159,10 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
   producer writes outside the configured root, an unregistered producer targets Sources, or capture
   / app-agent content crosses the Sources boundary.
 - **Current enforcement:** `static_test + runtime_test` (proposed) — an exact source inventory
-  rejects unreviewed literal/resolver drift and follows imported aliases plus one value-carrying
-  path-helper/write-helper boundary; production producer tests verify selected-root writes and
-  capture-note overlap refusal, while capture, MCP, and panel-agent paths verify exclusion.
+  rejects unreviewed literal/resolver drift and follows module-level and function-local app import
+  aliases plus one value-carrying path-helper/write-helper boundary; production producer tests
+  verify selected-root writes and capture-note overlap refusal, while capture, MCP, and panel-agent
+  paths verify exclusion with existing vault notes.
 - **Eventual test path:** `tests/architecture/test_sources_zone_writers.py`.
 - **Related docs / contracts / ADRs:** `docs/contracts/MIMER_CLIENT_CONTRACT.md` §5;
   `docs/testing/invariant-synthesis-2026-07.md` P-1 registered-list conventions and P-6

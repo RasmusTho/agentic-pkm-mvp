@@ -153,19 +153,45 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
     for relative, tree in trees.items():
         aliases = {}
         for node in tree.body:
-            if isinstance(node, ast.ImportFrom):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("app."):
                 aliases.update({alias.asname or alias.name: alias.name for alias in node.names})
         aliases_by_file[relative] = aliases
 
-    def call_name(relative: str, callee: ast.expr) -> str | None:
+    def call_name(
+        relative: str, callee: ast.expr, aliases: dict[str, str] | None = None
+    ) -> str | None:
         if isinstance(callee, ast.Name):
-            return aliases_by_file[relative].get(callee.id, callee.id)
+            return (aliases or aliases_by_file[relative]).get(callee.id, callee.id)
         if isinstance(callee, ast.Attribute):
             return callee.attr
         return None
 
+    def function_import_aliases(function: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+
+        class LocalImports(ast.NodeVisitor):
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                return
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                return
+
+            def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+                if (node.module or "").startswith("app."):
+                    aliases.update(
+                        {alias.asname or alias.name: alias.name for alias in node.names}
+                    )
+
+        visitor = LocalImports()
+        for statement in function.body:
+            visitor.visit(statement)
+        return aliases
+
     calls_by_function: dict[tuple[str, str], list[tuple[str, ast.Call]]] = {}
     function_nodes: dict[tuple[str, str], ast.FunctionDef | ast.AsyncFunctionDef] = {}
+    aliases_by_function: dict[tuple[str, str], dict[str, str]] = {}
     for relative, tree in trees.items():
         stack: list[ast.AST] = []
 
@@ -179,6 +205,9 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                 stack.append(node)
                 key = (relative, _module_function_for(stack))
                 function_nodes[key] = node
+                aliases = dict(aliases_by_file[relative])
+                aliases.update(function_import_aliases(node))
+                aliases_by_function[key] = aliases
                 calls: list[tuple[str, ast.Call]] = []
 
                 class DirectCalls(ast.NodeVisitor):
@@ -188,7 +217,7 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                     visit_AsyncFunctionDef = visit_FunctionDef
 
                     def visit_Call(self, call: ast.Call) -> None:
-                        name = call_name(relative, call.func)
+                        name = call_name(relative, call.func, aliases)
                         if name:
                             calls.append((name, call))
                         self.generic_visit(call)
@@ -207,7 +236,16 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                         literals.add((relative, _module_function_for(stack), node.value))
 
             def visit_Call(self, node: ast.Call) -> None:
-                if call_name(relative, node.func) in {
+                active_function = next(
+                    (
+                        (relative, _module_function_for(stack[: index + 1]))
+                        for index in range(len(stack) - 1, -1, -1)
+                        if isinstance(stack[index], (ast.FunctionDef, ast.AsyncFunctionDef))
+                    ),
+                    None,
+                )
+                aliases = aliases_by_function.get(active_function, aliases_by_file[relative])
+                if call_name(relative, node.func, aliases) in {
                     "get_vault_sources_dir_rel",
                     "resolve_vault_sources_dir_rel",
                 }:
@@ -239,7 +277,9 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
         for child in ast.walk(expression):
             if isinstance(child, ast.Name) and child.id in names:
                 return True
-            if isinstance(child, ast.Call) and call_name(relative, child.func) in (
+            if isinstance(child, ast.Call) and call_name(
+                relative, child.func, aliases_by_function.get(key, aliases_by_file[relative])
+            ) in (
                 SOURCE_PATH_BUILDERS | path_helper_names
             ):
                 return True
@@ -410,6 +450,10 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
             "def unrelated_path_and_write_calls():\n"
             "    path = make_path()\n"
             "    return save_path('unrelated')\n"
+            "def local_import_writer():\n"
+            "    from app.writers.paths import get_vault_sources_dir_rel as resolve\n"
+            "    from app.writers.sinks import write_note_relative as persist\n"
+            "    return persist(f'{resolve()}/rogue.md')\n"
         ),
     }
     for relative, content in files.items():
@@ -421,6 +465,7 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
 
     assert ("app/writers/helpers.py", "build_source_path") in resolver_callers
     assert ("app/writers/producer.py", "newly_added_writer") in source_write_callers
+    assert ("app/writers/producer.py", "local_import_writer") in source_write_callers
     assert ("app/writers/producer.py", "unrelated_path_and_write_calls") not in source_write_callers
 
 
@@ -641,6 +686,20 @@ def test_capture_and_sources_zone_mutually_excluded(
         )
     assert not mcp_vault.exists()
 
+    source_note = vault_root / CONFIGURED_SOURCES / "panel.md"
+    source_note.parent.mkdir(parents=True, exist_ok=True)
+    source_note.write_text("existing Sources note\n", encoding="utf-8")
+    permitted_note = vault_root / "Inbox" / "panel.md"
+    permitted_note.parent.mkdir(parents=True, exist_ok=True)
+    permitted_note.write_text("existing permitted note\n", encoding="utf-8")
+
     assert watcher_panel_writeback_allowed(
-        f"{CONFIGURED_SOURCES}/panel.md", vault_root=vault_root
+        f"{CONFIGURED_SOURCES}/panel.md",
+        vault_root=vault_root,
+        sources_root_rel=CONFIGURED_SOURCES,
     ) is False
+    assert watcher_panel_writeback_allowed(
+        "Inbox/panel.md",
+        vault_root=vault_root,
+        sources_root_rel=CONFIGURED_SOURCES,
+    ) is True
