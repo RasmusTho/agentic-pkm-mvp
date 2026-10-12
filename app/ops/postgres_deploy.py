@@ -274,6 +274,21 @@ def vm_selected_values(plan: DeployPlan, reader: Any) -> dict[str, dict[str, str
         raise PostgresDeployError() from None
 
 
+def require_test_database_identity(conninfo: str, expected_address: str) -> None:
+    """Bounded read-only native TEST identity probe, within the PG adapter."""
+    import psycopg
+    from app.db.dsn import resolve_dsn
+
+    try:
+        with psycopg.connect(resolve_dsn(conninfo), connect_timeout=5, autocommit=True) as connection:
+            if connection.execute('SELECT current_database(), inet_server_addr()::text').fetchone() != (
+                'app_test', expected_address
+            ):
+                raise PostgresDeployError()
+    except Exception:
+        raise PostgresDeployError() from None
+
+
 def password_authenticate(environment: Mapping[str, str], *, connect: Callable[..., Any] | None = None) -> None:
     """Require successful libpq password authentication, never trust/peer/readiness.
 

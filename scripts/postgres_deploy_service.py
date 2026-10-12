@@ -19,10 +19,13 @@ def run() -> int:
             'token-push-worker': 5,
             'token-push': 6,
             'karakeep-boot': 3,
+            'karakeep-acquire': 3,
+            'karakeep-project': 3,
         }
         if (
             len(sys.argv) != action_counts.get(sys.argv[1], -1)
             or sys.argv[2] not in {'dev', 'test', 'prod'}
+            or (sys.argv[1] in {'karakeep-acquire', 'karakeep-project'} and sys.argv[2] != 'test')
         ):
             return 78
         path = Path('/etc/yggdrasil/bws-deploy') / (sys.argv[2] + '.json')
