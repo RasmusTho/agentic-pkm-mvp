@@ -295,7 +295,7 @@ require_action('karakeep-project', 'test')
 def child_runtime(binding, admission, monkeypatch, tmp_path):
     import psycopg
     from app.instance import scalar_binding_runtime as scalar
-    from app.heimdal import publish
+    from app.heimdal import publish, cursor_store, observation_log
 
     environment = {**admission.environment, 'VAULT_ROOT': str(binding.root), 'VAULT_ROOT_TEST': str(binding.root),
                    'KARAKEEP_RUNTIME_DB_ADDRESS': '172.23.0.4'}
@@ -321,7 +321,14 @@ def child_runtime(binding, admission, monkeypatch, tmp_path):
         return resolve_scalar_binding_runtime(vault_root=vault_root)
     monkeypatch.setattr(scalar, 'resolve_scalar_binding_runtime', mounted_binding)
     production_consumer_read = publish.read_observations_for_consumer
-    monkeypatch.setattr(publish, 'read_observations_for_consumer', lambda consumer, **kw: log_reads.append((consumer, kw)) or [])
+    # Keep the public reader real even during a cold projector import. Isolate
+    # its backing stores, not a facade alias the projector captures at import.
+    def read_cursor(consumer):
+        log_reads.append(consumer)
+        return cursor_store._MEMORY_CURSORS.get(consumer)
+    monkeypatch.setattr(cursor_store, '_backend', lambda: SimpleNamespace(
+        get=read_cursor, set=cursor_store._MEMORY_CURSORS.set))
+    monkeypatch.setattr(observation_log, '_backend', lambda: observation_log._MEMORY_LOG)
     for key in (*environment, 'STORE_SCHEMA_AUTOCREATE'):
         monkeypatch.setenv(key, os.environ.get(key, ''))
     return SimpleNamespace(environment=environment, queries=queries, connections=connections,
@@ -336,7 +343,7 @@ def test_child_preflight_checks_actual_pg_server_before_log_or_work(child_runtim
     assert state.queries == ['SELECT current_database(), inet_server_addr()::text']
     assert state.connections[0][1] == {'connect_timeout': 5, 'autocommit': True}
     assert 'fixture-only-db-password' in state.connections[0][0]  # file-aware in-memory resolver
-    assert state.log_reads == [('mimer.candidate_projector', {'limit': 1})]
+    assert state.log_reads == ['mimer.candidate_projector']
     state.log_reads.clear()
     state.actual[1] = '172.24.0.4'
     with pytest.raises(PostgresDeployError):
