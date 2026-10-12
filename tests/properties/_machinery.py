@@ -881,6 +881,28 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "port's own guard as defense-in-depth (#3329). This is the sole production "
         "write seam for Standing Questions Question notes."
     ),
+    ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1): (
+        "guarded_by_port: bootstrap_fixture writes the synthetic primary source "
+        "through write_note_relative without a caller-side WriteGuard assertion; "
+        "the shared port checks its guard before path resolution or I/O (#6027)."
+    ),
+    ("app/ops/native_web_fixture.py", "bootstrap_fixture", 2): (
+        "guarded_by_port: bootstrap_fixture writes its synthetic review/capture "
+        "seed through write_note_relative without a caller-side WriteGuard "
+        "assertion; the shared port checks its guard before path resolution or "
+        "I/O (#6027)."
+    ),
+    ("app/ops/native_web_fixture.py", "bootstrap_fixture", 3): (
+        "guarded_by_port: bootstrap_fixture writes the synthetic episode artifact "
+        "through write_note_relative without a caller-side WriteGuard assertion; "
+        "the shared port checks its guard before path resolution or I/O (#6027)."
+    ),
+    ("app/ops/native_web_runtime.py", "DailySourceFault.write", 1): (
+        "guarded_by_port: DailySourceFault.write checks its synthetic effect "
+        "budget, owned fault, current state, and grant/prestate before the "
+        "expected_version rewrite, but does not assert WriteGuard itself; the "
+        "shared port supplies that guard check (#6027)."
+    ),
 }
 
 # VMW create-intent census. This is deliberately separate from the existing
@@ -919,6 +941,15 @@ WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
     ),
     ("app/mcp/vault_tools.py", "append_note", 1): (
         "append_only: next-available note allocation preserves every earlier MCP artifact."
+    ),
+    ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1): (
+        "create_once: the synthetic primary source preserves an existing fixture target."
+    ),
+    ("app/ops/native_web_fixture.py", "bootstrap_fixture", 2): (
+        "create_once: the synthetic review/capture seed preserves an existing fixture target."
+    ),
+    ("app/ops/native_web_fixture.py", "bootstrap_fixture", 3): (
+        "create_once: the fixed synthetic episode seed preserves an existing fixture target."
     ),
 }
 
