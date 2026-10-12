@@ -14,7 +14,7 @@ from ipaddress import ip_address
 import json
 import logging
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import selectors
 import signal
@@ -33,6 +33,16 @@ _ENV_KEYS = frozenset({
     'KARAKEEP_RUNTIME_DB_ADDRESS',
 })
 _STATES = frozenset({'complete', 'partial', 'blocked', 'gated', 'failed', 'refused', 'overlap', 'pending'})
+# These are data surfaces already mounted by the channel Compose producers.
+# Everything else below the fixed import/work root must come from the image.
+_IMAGE_DATA_MOUNTS = tuple(PurePosixPath(path) for path in (
+    '/app/vault', '/app/instance-state', '/app/instance-ownership',
+    '/app/tmp', '/app/tmp-test', '/app/runtime/dispatcher',
+))
+_EXECUTION_SURFACES = tuple(PurePosixPath(path) for path in (
+    '/usr/local', '/usr/bin', '/bin', '/usr/lib', '/lib', '/lib64',
+    '/etc/ld.so.cache', '/etc/ld.so.preload',
+))
 
 
 class RuntimeRefused(RuntimeError):
@@ -98,6 +108,25 @@ def _mount(row: dict[str, Any], path: str, *, volume: str | None = None) -> dict
     return matches[0]
 
 
+def _require_image_mounts(row: dict[str, Any]) -> None:
+    """Exclude ancestors and descendants of the actual import/execution paths."""
+    app_root = PurePosixPath('/app')
+    for mount in row['Mounts']:
+        destination = mount['Destination']
+        path = PurePosixPath(destination)
+        if not path.is_absolute() or '..' in path.parts or str(path) != destination:
+            raise RuntimeRefused()
+        if path == app_root or path in app_root.parents:
+            raise RuntimeRefused()
+        if app_root in path.parents and not any(
+            path == data or data in path.parents for data in _IMAGE_DATA_MOUNTS
+        ):
+            raise RuntimeRefused()
+        if any(path == surface or path in surface.parents or surface in path.parents
+               for surface in _EXECUTION_SURFACES):
+            raise RuntimeRefused()
+
+
 def admitted_runtime(config: Any, action: str) -> tuple[dict[str, Any], dict[str, str], str | None]:
     """Read actual engine/container/code/mount topology before opening the reader."""
     require_action(action, config.channel)
@@ -112,6 +141,7 @@ def admitted_runtime(config: Any, action: str) -> tuple[dict[str, Any], dict[str
                             qualification['qualification_ref'])):
         raise RuntimeRefused()
     row = _container('pkm-test', 'api')
+    _require_image_mounts(row)
     environment = _environment(row)
     revision = environment.get('VCS_REF', '')
     git = ['git', '-c', 'safe.directory=' + str(config.root), '-C', str(config.root)]
@@ -127,7 +157,7 @@ def admitted_runtime(config: Any, action: str) -> tuple[dict[str, Any], dict[str
     pin = config.root / 'config/deploy/test.env'
     tags = [compose_env_value(line.split('=', 1)[1]) for line in pin.read_text().splitlines()
             if line.startswith('APP_IMAGE_TAG=')]
-    if tags != [revision] or any(item['Destination'] == '/app' for item in row['Mounts']):
+    if tags != [revision]:
         raise RuntimeRefused()
     root = environment.get('VAULT_ROOT_TEST') or environment.get('VAULT_ROOT', '')
     if not root or (environment.get('VAULT_ROOT') and environment['VAULT_ROOT'] != root):
@@ -208,9 +238,9 @@ def dispatch(config: Any, data: dict[str, Any], require_current_config: Any) -> 
         # env -i prevents inherited provider/ingress/source keys reaching either
         # constituent. Runtime configuration and producer input travel over stdin.
         process = subprocess.Popen(
-            [*_DOCKER, 'exec', '-i', '--user', f'{config.uid}:{config.gid}', row['Id'],
-             'env', '-i', 'PATH=/usr/local/bin:/usr/bin:/bin', 'PYTHONUNBUFFERED=1',
-             'python', '-m', 'app.ops.karakeep_runtime', 'child', action, 'test'],
+            [*_DOCKER, 'exec', '-i', '--user', f'{config.uid}:{config.gid}', '--workdir', '/app', row['Id'],
+             '/usr/bin/env', '-i', 'PATH=/usr/local/bin:/usr/bin:/bin',
+             '/usr/local/bin/python', '-s', '-u', '-m', 'app.ops.karakeep_runtime', 'child', action, 'test'],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, bufsize=1, env={'PATH': '/usr/local/bin:/usr/bin:/bin'},
         )
@@ -315,16 +345,19 @@ def child_preflight(environment: dict[str, str], action: str) -> Any:
             'app_test', environment.get('KARAKEEP_RUNTIME_DB_ADDRESS')
         ):
             raise RuntimeRefused()
-    from app.heimdal.publish import read_observations_for_consumer
-
     # Fail early if the selected immutable Product image lacks this invocation's
     # library dependencies; never qualify them by importing into the BWS daemon.
     if action == 'karakeep-acquire':
         from app.heimdal import karakeep_ingest  # noqa: F401
+        from app.heimdal.observation_log import read_observations_from
+
+        read_observations_from(0, limit=1)
     else:
         from app.heimdal import candidate_projection  # noqa: F401
+        from app.heimdal.publish import read_observations_for_consumer
 
-    read_observations_for_consumer('mimer.candidate_projector', limit=1)
+        read_observations_for_consumer('mimer.candidate_projector', limit=1)
+
     return binding
 
 
@@ -420,6 +453,8 @@ def remote(action: str, channel: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = argv if argv is not None else sys.argv[1:]
+    invoked = False
+    action = ''
     try:
         if len(args) == 3 and args[:1] == ['child']:
             return child(args[1], args[2])
@@ -427,19 +462,23 @@ def main(argv: list[str] | None = None) -> int:
             raise RuntimeRefused()
         action, channel = args
         require_action(action, channel)  # before SSH, credential access or child launch
+        invoked = True  # no local transport failure can prove a remote pre-effect refusal
         result = subprocess.run([
             '/usr/bin/ssh', '-T', '-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes',
             '-o', 'ConnectTimeout=10', '-o', 'ClearAllForwardings=yes', '-o', 'PermitLocalCommand=no',
             '--', 'ygg-test', 'sudo', '-n', '/usr/local/libexec/yggdrasil-bws-deploy', action, channel],
             env={key: os.environ[key] for key in ('PATH', 'HOME', 'SSH_AUTH_SOCK') if key in os.environ},
             capture_output=True, text=True, timeout=180, check=False)
-        if result.returncode or len(result.stdout) > 65536:
+        if len(result.stdout) > 65536:
             raise RuntimeRefused()
         receipt = validate_receipt(json.loads(result.stdout), action)
+        if result.returncode and receipt['status'] != 'refused':
+            raise RuntimeRefused()
         print(json.dumps(receipt, sort_keys=True))
         return 0 if receipt['status'] == 'complete' else 78
     except Exception:
-        print(json.dumps({'status': 'refused', 'channel': 'test'}))
+        print(json.dumps({'status': 'pending', 'action': action, 'channel': 'test'} if invoked
+                         else {'status': 'refused', 'channel': 'test'}))
         return 78
 
 

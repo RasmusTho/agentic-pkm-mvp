@@ -76,10 +76,16 @@ duplicate.
 - Before a live invocation, main must install the reviewed control code/launcher and qualify the
   selected exact-SHA TEST Product image, existing `app_test` PG endpoint and password-file protocol,
   channel-owned vault, active initialized binding/GOV authority, instance-state/ownership mounts
-  and shared TEST runtime volume. Admission checks actual container/code/mount identities; the
+  and shared TEST runtime volume. Admission rejects mounts over code, interpreter or dependency
+  surfaces (including nested overlays), preserves the existing data/credential mounts, and fixes
+  the child workdir to `/app` with the image's `/usr/local/bin/python` and user-site imports disabled.
+  The existing Product Dockerfile supplies that interpreter; no Product dependencies are added
+  to the BWS daemon runtime. Admission checks actual container/code/mount identities; the
   child proves PG server/database and migration-owned store availability in its own namespace and
   revalidates the existing binding under its shared effect lease. Missing inputs refuse without
   selecting or repairing a vault, database or credential.
+  Producer preflight checks only its published log/schema; Mimer's consumer cursor/read check
+  belongs solely to the consumer invocation, so an isolated cursor fault does not stop publication.
 - Acquisition additionally requires an observed existing route to Karakeep in that namespace:
   a matching shared Docker network, or the host namespace with loopback port 3000. Missing topology
   refuses; this slice does not connect networks or grant egress. The saved service `server_url` is
@@ -89,6 +95,8 @@ duplicate.
 - Every invocation holds an OS flock for its own constituent through work/acknowledgement.
   The two locks are independent. Process interruption or lost acknowledgement reports `pending`,
   never completion; retry reconstructs full published lineage and deliberately rescans page one.
+  The outer SSH caller also retains `pending` for a started invocation with timeout, nonzero exit
+  or malformed/missing response; only an actually received valid refusal establishes refusal.
   Mimer advances only its existing `mimer.candidate_projector` durable prefix. Receipts contain
   closed statuses and counts, no upstream pagination token, private path/endpoint or raw errors.
 - Installing a newer control checkout does not reauthorize the retained exact-revision service

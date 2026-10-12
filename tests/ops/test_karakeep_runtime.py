@@ -176,7 +176,9 @@ def test_native_producer_uses_scoped_key_and_published_handoff_only(binding, adm
     assert result['status'] == 'complete' and result['published'] == 1
     assert reads == [('non-prod', 'test/karakeep.api-key')]
     assert TOKEN not in repr(launches) and ENDPOINT not in repr(launches)
-    assert 'env' in launches[0][0] and '-i' in launches[0][0]
+    assert '/usr/bin/env' in launches[0][0] and '-i' in launches[0][0]
+    assert launches[0][0][launches[0][0].index('--workdir') + 1] == '/app'
+    assert '/usr/local/bin/python' in launches[0][0] and '-s' in launches[0][0]
     assert all(TOKEN == request.headers.get('authorization', '').removeprefix('Bearer ')
                for request in requests if request.url.path.startswith('/api/'))
     assert len(read_observations_from(0)) == 1 and not list(binding.root.rglob('*item-native*.md'))
@@ -276,7 +278,8 @@ require_action('karakeep-project', 'test')
     assert result.returncode == 0, result.stderr
 
 
-def test_child_preflight_checks_actual_pg_server_before_log_or_work(binding, admission, monkeypatch, tmp_path):
+@pytest.fixture
+def child_runtime(binding, admission, monkeypatch, tmp_path):
     import psycopg
     from app.instance import scalar_binding_runtime as scalar
     from app.heimdal import publish
@@ -304,20 +307,58 @@ def test_child_preflight_checks_actual_pg_server_before_log_or_work(binding, adm
         os.environ['INSTANCE_OWNERSHIP_ROOT'] = str(binding.ownership_ledger.root)
         return resolve_scalar_binding_runtime(vault_root=vault_root)
     monkeypatch.setattr(scalar, 'resolve_scalar_binding_runtime', mounted_binding)
+    production_consumer_read = publish.read_observations_for_consumer
     monkeypatch.setattr(publish, 'read_observations_for_consumer', lambda consumer, **kw: log_reads.append((consumer, kw)) or [])
     for key in (*environment, 'STORE_SCHEMA_AUTOCREATE'):
         monkeypatch.setenv(key, os.environ.get(key, ''))
-    selected = kr.child_preflight(environment, 'karakeep-project')
-    assert selected.vault_binding_id == binding.vault_binding_id
-    assert queries == ['SELECT current_database(), inet_server_addr()::text']
-    assert connections[0][1] == {'connect_timeout': 5, 'autocommit': True}
-    assert 'fixture-only-db-password' in connections[0][0]  # file-aware in-memory resolver
-    assert log_reads == [('mimer.candidate_projector', {'limit': 1})]
-    log_reads.clear()
-    actual[1] = '172.24.0.4'
+    return SimpleNamespace(environment=environment, queries=queries, connections=connections,
+                           log_reads=log_reads, actual=actual, binding=binding,
+                           production_consumer_read=production_consumer_read)
+
+
+def test_child_preflight_checks_actual_pg_server_before_log_or_work(child_runtime):
+    state = child_runtime
+    selected = kr.child_preflight(state.environment, 'karakeep-project')
+    assert selected.vault_binding_id == state.binding.vault_binding_id
+    assert state.queries == ['SELECT current_database(), inet_server_addr()::text']
+    assert state.connections[0][1] == {'connect_timeout': 5, 'autocommit': True}
+    assert 'fixture-only-db-password' in state.connections[0][0]  # file-aware in-memory resolver
+    assert state.log_reads == [('mimer.candidate_projector', {'limit': 1})]
+    state.log_reads.clear()
+    state.actual[1] = '172.24.0.4'
     with pytest.raises(kr.RuntimeRefused):
-        kr.child_preflight(environment, 'karakeep-acquire')
-    assert not log_reads  # wrong server refuses before publication or candidate work
+        kr.child_preflight(state.environment, 'karakeep-acquire')
+    assert not state.log_reads  # wrong server refuses before publication or candidate work
+
+
+def test_producer_preflight_and_publication_survive_isolated_mimer_cursor_fault(child_runtime, monkeypatch, capsys):
+    from app.heimdal import observation_log, publish
+    from app.heimdal.cursor_store import ObservationCursorSchemaMissingError
+
+    # Recover the production public consumer function masked by the fixture's
+    # driver adapter, then inject the actual get_cursor seam it consults.
+    monkeypatch.setattr(publish, 'read_observations_for_consumer', child_runtime.production_consumer_read)
+    producer_reads, cursor_reads = [], []
+    monkeypatch.setattr(observation_log, 'read_observations_from',
+                        lambda sequence, **kw: producer_reads.append((sequence, kw)) or [])
+    def unavailable_cursor(consumer):
+        cursor_reads.append(consumer)
+        raise ObservationCursorSchemaMissingError(TOKEN)
+    monkeypatch.setattr(publish, 'get_cursor', unavailable_cursor)
+    selected = kr.child_preflight(child_runtime.environment, 'karakeep-acquire')
+    assert selected.vault_binding_id == child_runtime.binding.vault_binding_id
+    assert producer_reads == [(0, {'limit': 1})] and not cursor_reads
+    # Actual producer scheduling/adapter/publish path remains usable; the
+    # fixture store does not substitute for the PG preflight above.
+    monkeypatch.setenv('STORE_BACKEND', 'memory')
+    client, _ = source()
+    result = kr.run_bound('karakeep-acquire', selected, {'endpoint': ENDPOINT, 'token': TOKEN}, http=client)
+    assert result['status'] == 'complete' and result['published'] == 1 and not cursor_reads
+    # The consumer must report the isolated cursor fault honestly before ready.
+    monkeypatch.setattr(kr.sys, 'stdin', StringIO(json.dumps(child_runtime.environment) + '\n'))
+    assert kr.child('karakeep-project', 'test') == 0
+    assert json.loads(capsys.readouterr().out) == {'status': 'refused', 'action': 'karakeep-project', 'channel': 'test'}
+    assert cursor_reads == ['mimer.candidate_projector']
 
 
 def test_publication_and_writeback_lost_ack_replay_existing_durable_boundaries(binding, monkeypatch):
@@ -359,3 +400,64 @@ def test_container_discovery_reads_closed_selected_fields(admission, monkeypatch
     monkeypatch.setattr(kr, '_command', lambda argv: 'b' * 64 + '\n' + 'c' * 64)
     with pytest.raises(kr.RuntimeRefused):
         kr._container('pkm-test', 'api')
+
+
+@pytest.mark.parametrize('fault', ['timeout', 'nonzero', 'malformed', 'oversized', 'invalid_receipt'])
+def test_main_preserves_pending_after_started_ssh_loses_ack(fault, monkeypatch, capsys):
+    # Production outer caller: the remote may have durably worked in every case.
+    calls = []
+    def invoke(argv, **kwargs):
+        calls.append((argv, kwargs))
+        if fault == 'timeout':
+            raise subprocess.TimeoutExpired(argv, 180, output=TOKEN, stderr=ENDPOINT)
+        if fault == 'nonzero':
+            return SimpleNamespace(returncode=255, stdout='', stderr=TOKEN)
+        if fault == 'malformed':
+            return SimpleNamespace(returncode=0, stdout=TOKEN, stderr=ENDPOINT)
+        if fault == 'oversized':
+            return SimpleNamespace(returncode=0, stdout=TOKEN * 65536, stderr='')
+        return SimpleNamespace(returncode=0, stdout=json.dumps({'status': 'complete', 'action': 'sh',
+            'channel': 'test', 'error': TOKEN}), stderr='')
+    monkeypatch.setattr(kr.subprocess, 'run', invoke)
+    assert kr.main(['karakeep-acquire', 'test']) == 78
+    assert json.loads(capsys.readouterr().out) == {'status': 'pending', 'action': 'karakeep-acquire', 'channel': 'test'}
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('returncode', [0, 78])
+def test_main_retains_received_refusal_and_rejects_before_ssh(returncode, monkeypatch, capsys):
+    receipt = {'status': 'refused', 'action': 'karakeep-project', 'channel': 'test'}
+    calls = []
+    monkeypatch.setattr(kr.subprocess, 'run', lambda *args, **kwargs: calls.append(args)
+        or SimpleNamespace(returncode=returncode, stdout=json.dumps(receipt), stderr=TOKEN))
+    assert kr.main(['karakeep-project', 'prod']) == 78
+    assert json.loads(capsys.readouterr().out) == {'status': 'refused', 'channel': 'test'}
+    assert not calls
+    assert kr.main(['karakeep-project', 'test']) == 78
+    assert json.loads(capsys.readouterr().out) == receipt
+
+
+@pytest.mark.parametrize('destination', [
+    '/', '/app', '/app/app', '/app/app/ops/karakeep_runtime.py', '/app/mimer_runtime', '/app/schemas',
+    '/app/config', '/app/import_shadow.py', '/usr', '/usr/local', '/usr/local/bin/python',
+    '/usr/local/lib/python3.12/site-packages', '/usr/local/lib/python3.12/os.py',
+    '/usr/bin/env', '/bin', '/lib/x86_64-linux-gnu', '/etc/ld.so.preload',
+])
+def test_admission_rejects_code_interpreter_and_dependency_overlays_before_launch(admission, destination, monkeypatch):
+    admission.rows['pkm-test', 'api']['Mounts'].append(
+        {'Destination': destination, 'Type': 'bind', 'Source': '/fixture-overlay', 'RW': False})
+    effects = []
+    monkeypatch.setattr(kr.subprocess, 'Popen', lambda *args, **kwargs: effects.append('launch'))
+    monkeypatch.setattr(LinuxConfig, 'reader', lambda self: effects.append('reader'))
+    result = kr.dispatch(admission.config, {'action': 'karakeep-acquire', 'channel': 'test'}, lambda: None)
+    assert result['status'] == 'refused' and effects == []
+
+
+def test_admission_preserves_existing_data_and_credential_mounts(admission):
+    admission.rows['pkm-test', 'api']['Mounts'].extend([
+        {'Destination': '/run/secrets/postgres', 'RW': False, 'Type': 'bind'},
+        {'Destination': '/app/runtime/dispatcher', 'RW': True, 'Type': 'bind'},
+        {'Destination': '/app/tmp', 'RW': True, 'Type': 'volume', 'Name': 'pkm-test_runtime-tmp'},
+        {'Destination': '/data/tts', 'RW': True, 'Type': 'bind'},
+    ])
+    assert kr.admitted_runtime(admission.config, 'karakeep-project')[2] is None

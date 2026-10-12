@@ -688,6 +688,11 @@ are evidence only and provide no reactivation or fallback authority.
   Mimer receives no source key/endpoint and replays independently. Actual admission requires
   matching installed control/selected Product-image SHA, existing TEST PG/store/vault and active
   initialized binding authority, qualified mounts and per-constituent process locks. The worker
+  refuses nested code/interpreter/dependency overlays and uses a fixed `/app` workdir and image
+  interpreter with user-site imports disabled. Producer admission checks its log/schema without
+  Mimer's cursor; the consumer alone checks that cursor. A started SSH invocation with lost or
+  invalid acknowledgement reports `pending`; a received valid refusal remains `refused`.
+  The worker
   endpoint comes from observed execution-namespace topology, never the Mac's saved forwarding URL.
   Missing topology/binding refuses without repair. Outcomes are `complete`, `partial`, `blocked`,
   `gated`, `failed`, `refused`, `overlap` or `pending`; loss after work admission is not completion.
