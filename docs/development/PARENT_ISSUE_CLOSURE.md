@@ -35,9 +35,10 @@ Close the parent issue when all of the following are true:
   Neither gap is a generic human-acceptance gate.
 - A human acceptance exception must name the observable choice/observation, why it cannot be
   automated, its owner and exact `unblocks_when`; preserve genuine Product intent/authority gates.
-- If every scoped AC is proven and only future observation or follow-up learning remains, close
-  the parent and move that future work out. Do not relabel an unmet AC as adoption, delete it from
-  scope, or promote owner docs before qualified live PASS.
+- If the delivered scope is complete and the remaining work is only observation or follow-up learning, close the parent
+  and move that future work out. Complete scope means every scoped AC is proven, including required
+  qualified live acceptance. Do not relabel an unmet AC as adoption, delete it from scope, or promote
+  owner docs before qualified live PASS.
 - The final child must include a parent-closure handoff or create/link an explicit parent-closure issue.
 
 ## Closure Receipt
