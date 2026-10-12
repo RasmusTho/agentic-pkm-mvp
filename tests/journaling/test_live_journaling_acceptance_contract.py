@@ -424,4 +424,3 @@ def test_manifest_refuses_non_dev_test_channels(
     _private_json(manifest_path, payload)
     with pytest.raises(live.QualificationRefused, match="only_dev_and_test"):
         live.load_manifest(manifest_path, today=DAY)
-
