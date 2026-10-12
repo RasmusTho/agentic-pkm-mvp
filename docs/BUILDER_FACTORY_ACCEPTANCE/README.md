@@ -213,6 +213,8 @@ neither deterministic orchestration nor full DDO is a universal M2 prerequisite.
 **Fresh execution and compatibility.** FCA-ID-B validates the actual executing workflow bytes,
 including `issue_delivery_operation.py` and its approval/live-binding/effect helpers, against the
 immutable approved Git source before reservation, attempt persistence, or a fresh protected effect.
+The fresh dependency boundary also includes the delegated outbox fence and verification authority
+helpers; it is separate from each immutable version's closed artifact manifest.
 It also validates those bytes in the trusted workflow root. For v1 the pin is `source.revision`;
 for v2/v3 it is `workflow.source_revision`. Stored v1/v2 approval manifests and hashes remain
 unchanged: their closed artifact lists are not extended. A legacy approval whose pinned source

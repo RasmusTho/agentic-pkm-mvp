@@ -101,6 +101,19 @@ _RECORD_STATES = {
 _WORKER_RESERVED_HOST_EFFECT_FIELDS = frozenset(
     {"effect_receipts", "host_effect_refs"}
 )
+# Fresh execution dependencies are source-commit pins, not additions to any
+# immutable versioned manifest. Include the host's delegated authority/fence
+# owners as well as its local adapter modules.
+FRESH_EXECUTION_DEPENDENCIES = CANDIDATE_WORKFLOW_ARTIFACTS | frozenset({
+    "app/builderops/control_plane/models.py",
+    "app/builderops/control_plane/routing.py",
+    "app/builderops/control_plane/auth.py",
+    "app/dispatcher/verification_merge.py",
+    "app/dispatcher/verification_github.py",
+    "app/dispatcher/verification_contract.py",
+    "app/dispatcher/verification_dispatch.py",
+    "app/dispatcher/verified_merge.py",
+})
 
 
 def _utc_now() -> str:
@@ -461,7 +474,7 @@ def _verify_executing_authority_code(approval: Mapping[str, Any], root: Path | N
     revision = (approval["workflow"]["source_revision"]
                 if delivery_source_pair(approval) else approval["source"]["revision"])
     executing_root = Path(__file__).absolute().parents[2]
-    for name in sorted(CANDIDATE_WORKFLOW_ARTIFACTS):
+    for name in sorted(FRESH_EXECUTION_DEPENDENCIES):
         result = subprocess.run(
             ["git", "-C", str(root), "show", f"{revision}:{name}"],
             capture_output=True, check=False,

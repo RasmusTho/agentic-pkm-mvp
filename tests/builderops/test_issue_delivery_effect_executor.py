@@ -694,8 +694,8 @@ def _executor(tmp_path: Path, *, effect_kind: str = "claim", parent: bool = Fals
     shutil.copyfile(source_root / EXECUTOR_ARTIFACT, executor_artifact)
     shutil.copyfile(source_root / WORKER_ISOLATION_ARTIFACT, isolation_artifact)
     workflow_root = tmp_path / "workflow-root"
-    from app.builderops.control_plane.issue_delivery import CANDIDATE_WORKFLOW_ARTIFACTS
-    for artifact_path in CANDIDATE_WORKFLOW_ARTIFACTS:
+    from app.builderops.issue_delivery_operation import FRESH_EXECUTION_DEPENDENCIES
+    for artifact_path in FRESH_EXECUTION_DEPENDENCIES:
         trusted_artifact = workflow_root / artifact_path
         trusted_artifact.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source_root / artifact_path, trusted_artifact)

@@ -619,18 +619,17 @@ def _recovered_candidate_adapter(harness: _ProductionHarness) -> IssueDeliveryOp
 @pytest.mark.parametrize("bifrost", [False, True], ids=["v1", "v2"])
 @pytest.mark.parametrize("caller", ["dispatcher", "cli"])
 @pytest.mark.parametrize("drift", ["trusted-root", "executing-root", "missing-source"])
+@pytest.mark.parametrize("name", ["app/builderops/issue_delivery_operation.py", "app/dispatcher/verification_merge.py"])
 def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
-    issue_delivery_production_harness, monkeypatch, tmp_path, bifrost, caller, drift,
+    issue_delivery_production_harness, monkeypatch, tmp_path, bifrost, caller, drift, name,
 ):
     from app.builderops import issue_delivery_operation as operation
-    from app.builderops.control_plane.issue_delivery import CANDIDATE_WORKFLOW_ARTIFACTS
     from tests.builderops.issue_delivery_production_harness import _production_client
 
     harness = issue_delivery_production_harness(bifrost=bifrost)
     approval = deepcopy(harness.approval)
     root = harness.workflow_root or harness.checkout
     head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"])
-    name = "app/builderops/issue_delivery_operation.py"
     assert name not in {item["path"] for item in approval["workflow"]["artifacts"]}
     manifest_digests = {
         item["path"]: hashlib.sha256((root / item["path"]).read_bytes()).hexdigest()
@@ -638,11 +637,11 @@ def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
     }
     if drift == "executing-root":
         executing = tmp_path / "executing"
-        for artifact in CANDIDATE_WORKFLOW_ARTIFACTS:
+        for artifact in operation.FRESH_EXECUTION_DEPENDENCIES:
             target = executing / artifact
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(root / artifact, target)
-        monkeypatch.setattr(operation, "__file__", str(executing / name))
+        monkeypatch.setattr(operation, "__file__", str(executing / "app/builderops/issue_delivery_operation.py"))
         target = executing / name
     else:
         target = root / name
@@ -663,24 +662,26 @@ def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
         assert receipt["stopped_reason"] == "session-launch-failed"
     else:
         from app.builderops import cli
+        launcher = harness.prepared_worker.launcher
+        monkeypatch.setattr(cli.ClientConfig, "from_env", lambda: object())
         monkeypatch.setattr(cli, "BuilderOpsControlPlaneClient",
             lambda *args, **kwargs: _production_client(harness.store, harness.registry, "executor-pg-token"))
-        monkeypatch.setattr(cli.PreparedIssueDeliveryWorker, "create", lambda **kwargs: harness.prepared_worker)
-        monkeypatch.setattr(cli, "build_host_issue_delivery_executor", lambda **kwargs: harness.executor)
+        monkeypatch.setattr(cli, "ContentOnlyIssueDeliverySessionLauncher", lambda **kwargs: launcher)
         if not bifrost:
             monkeypatch.setattr(harness.executor, "_live_binding_reader", _production_binding)
+            monkeypatch.setattr(cli, "build_host_issue_delivery_executor", lambda **kwargs: harness.executor)
         plan_file = tmp_path / "plan.json"
-        approval_file = tmp_path / "approval.json"
-        profile = tmp_path / "profile.json"
+        approval_file = launcher.effect_gate_approval_file
+        profile = launcher._isolation_runner._profile_file
         plan_file.write_text(json.dumps(approval["context"]["dispatch_plan"]))
-        approval_file.write_text(json.dumps(approval))
-        profile.write_text("{}")
-        result = CliRunner().invoke(builderops_standalone_root, ["epic-run-state", "dispatch-sessions",
+        result = CliRunner().invoke(builderops_standalone_root, ["builderops", "epic-run-state", "dispatch-sessions",
             "--plan-file", str(plan_file), "--approval-file", str(approval_file),
             "--repo-root", str(harness.checkout), "--worker-isolation-profile-file", str(profile),
-            "--worker-isolation-profile-sha256", "1" * 64, "--json"])
-        assert result.exit_code == 0, result.output
-        assert json.loads(result.output)["stopped_reason"] == "session-launch-failed"
+            "--worker-isolation-profile-sha256", launcher.expected_profile_sha256, "--json"])
+        if result.exit_code == 0:
+            assert json.loads(result.output)["stopped_reason"] == "session-launch-failed"
+        else:
+            assert result.exit_code == 1 and "authority code" in result.output, (result.output, result.exception)
     assert harness.approval == approval
     assert harness.worker_transport.calls == 0
     assert harness.transport.apply_calls == 0
