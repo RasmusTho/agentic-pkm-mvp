@@ -7,6 +7,9 @@ from copy import deepcopy
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import json
+import hashlib
+import shutil
+import zlib
 from pathlib import Path
 import subprocess
 import sys
@@ -611,6 +614,120 @@ def _recovered_candidate_adapter(harness: _ProductionHarness) -> IssueDeliveryOp
     return IssueDeliveryOperationAdapter(harness.approval, client=harness.client,
         repo_root=harness.worktree, protected_executor=executor,
         live_binding_reader=executor.live_binding, require_protected_composition=True)
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("bifrost", [False, True], ids=["v1", "v2"])
+@pytest.mark.parametrize("caller", ["dispatcher", "cli"])
+@pytest.mark.parametrize("drift", ["trusted-root", "executing-root", "missing-source", "git-replace", "git-object-blob", "git-object-tree", "git-object-commit"])
+@pytest.mark.parametrize("name", ["app/builderops/issue_delivery_operation.py", "app/dispatcher/verification_merge.py"])
+def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
+    issue_delivery_production_harness, monkeypatch, tmp_path, bifrost, caller, drift, name,
+):
+    from app.builderops import issue_delivery_effect_executor as effect_executor
+    from tests.builderops.issue_delivery_production_harness import _production_client
+
+    harness = issue_delivery_production_harness(bifrost=bifrost)
+    approval = deepcopy(harness.approval)
+    root = harness.workflow_root or harness.checkout
+    head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"])
+    assert name not in {item["path"] for item in approval["workflow"]["artifacts"]}
+    manifest_digests = {
+        item["path"]: hashlib.sha256((root / item["path"]).read_bytes()).hexdigest()
+        for item in approval["workflow"]["artifacts"]
+    }
+    if drift in {"executing-root", "git-replace"} or drift.startswith("git-object-"):
+        executing = tmp_path / "executing"
+        for artifact in effect_executor.FRESH_EXECUTION_DEPENDENCIES:
+            target = executing / artifact
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(root / artifact, target)
+        monkeypatch.setattr(effect_executor, "__file__", str(executing / "app/builderops/issue_delivery_effect_executor.py"))
+        target = executing / name
+    else:
+        target = root / name
+    if drift == "missing-source":
+        target.unlink()
+    else:
+        target.write_text(target.read_text() + "\n# unapproved adapter bytes\n")
+    if drift == "git-replace" or drift.startswith("git-object-"):
+        # Preserve HEAD and legacy manifest hashes while default Git readers
+        # present a different unmanifested dependency under the approved OID.
+        def git(*args):
+            return subprocess.check_output(["git", "--no-replace-objects", "-C", str(root), *args])
+        approved_commit = head.decode().strip()
+        original_tree = git("rev-parse", f"{approved_commit}^{{tree}}").decode().strip()
+        original_blob = git("rev-parse", f"{approved_commit}:{name}").decode().strip()
+        shutil.copyfile(target, root / name)
+        git("add", name)
+        tree = git("write-tree").decode().strip()
+        replacement = git("commit-tree", tree, "-p", approved_commit, "-m", "Replacement source").decode().strip()
+        if drift == "git-replace":
+            git("replace", approved_commit, replacement)
+            assert git("show", f"{approved_commit}:{name}") != target.read_bytes()
+        else:
+            kind = drift.removeprefix("git-object-")
+            original = {"blob": original_blob, "tree": original_tree, "commit": approved_commit}[kind]
+            substitute = {"blob": git("rev-parse", f"{replacement}:{name}").decode().strip(),
+                          "tree": tree, "commit": replacement}[kind]
+            data = git("cat-file", kind, substitute)
+            common = Path(git("rev-parse", "--git-common-dir").decode().strip())
+            if not common.is_absolute():
+                common = root / common
+            object_file = common / "objects" / original[:2] / original[2:]
+            assert object_file.is_file()
+            object_file.unlink()
+            object_file.write_bytes(zlib.compress(f"{kind} {len(data)}".encode() + b"\0" + data))
+            assert git("show", f"{approved_commit}:{name}") == target.read_bytes()
+            with pytest.raises(ValueError, match="object bytes do not match approved immutable identity"):
+                harness.executor.verify_workflow(approval)
+        assert subprocess.check_output(["git", "-C", str(root), "show", f"{approved_commit}:{name}"]) == target.read_bytes()
+    assert subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"]) == head
+    assert manifest_digests == {
+        item["path"]: hashlib.sha256((root / item["path"]).read_bytes()).hexdigest()
+        for item in approval["workflow"]["artifacts"]
+    }
+    if caller == "dispatcher":
+        receipt = dispatch_issue_sessions(
+            approval["context"]["dispatch_plan"], _production_adapter(harness),
+            expected_plan_hash=approval["context"]["expected_plan_hash"],
+        )
+        assert receipt["stopped_reason"] == "session-launch-failed"
+    else:
+        from app.builderops import cli
+        launcher = harness.prepared_worker.launcher
+        monkeypatch.setattr(cli.ClientConfig, "from_env", lambda: object())
+        monkeypatch.setattr(cli, "BuilderOpsControlPlaneClient",
+            lambda *args, **kwargs: _production_client(harness.store, harness.registry, "executor-pg-token"))
+        monkeypatch.setattr(cli, "ContentOnlyIssueDeliverySessionLauncher", lambda **kwargs: launcher)
+        if not bifrost:
+            monkeypatch.setattr(harness.executor, "_live_binding_reader", _production_binding)
+            monkeypatch.setattr(cli, "build_host_issue_delivery_executor", lambda **kwargs: harness.executor)
+        plan_file = tmp_path / "plan.json"
+        approval_file = launcher.effect_gate_approval_file
+        profile = launcher._isolation_runner._profile_file
+        plan_file.write_text(json.dumps(approval["context"]["dispatch_plan"]))
+        result = CliRunner().invoke(builderops_standalone_root, ["builderops", "epic-run-state", "dispatch-sessions",
+            "--plan-file", str(plan_file), "--approval-file", str(approval_file),
+            "--repo-root", str(harness.checkout), "--worker-isolation-profile-file", str(profile),
+            "--worker-isolation-profile-sha256", launcher.expected_profile_sha256, "--json"])
+        if result.exit_code == 0:
+            assert json.loads(result.output)["stopped_reason"] == "session-launch-failed"
+        else:
+            safe_earlier_gate = (not bifrost and drift == "git-object-commit"
+                                 and "destination Git identity is not exact" in result.output)
+            assert result.exit_code == 1 and ("authority code" in result.output or safe_earlier_gate), (result.output, result.exception)
+    assert harness.approval == approval
+    assert harness.worker_transport.calls == 0
+    assert harness.transport.apply_calls == 0
+    for kind in ("reservation", "attempt", "entry", "terminal"):
+        with pytest.raises(ControlPlaneNotFoundError):
+            harness.owner.issue_delivery_operation_record_read(
+                repository=approval["repository"], record_id=f"issue-delivery-{kind}:{approval['operation_key']}")
+    # The host effect boundary independently refuses the same unbound bytes.
+    from types import SimpleNamespace
+    with pytest.raises(ValueError, match="authority code"):
+        harness.executor._validate_artifacts(SimpleNamespace(approval=approval), approval["workflow"])
 
 
 @pytest.mark.pg

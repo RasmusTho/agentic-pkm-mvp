@@ -46,7 +46,7 @@ def test_service_manifest_is_pinned_persistent_and_health_checked() -> None:
     assert tag and tag != "latest"
 
     # Restart supervision.
-    assert karakeep["restart"] == "unless-stopped"
+    assert karakeep["restart"] == "on-failure"
 
     # Healthcheck present with an executable test.
     healthcheck = karakeep.get("healthcheck") or {}
@@ -145,7 +145,8 @@ def test_service_manifest_is_health_checked_and_secret_free() -> None:
 
     # Secret-free committed manifest: secrets/endpoints ride the env_file, never
     # a literal value in the compose file.
-    assert "./config/karakeep.env" in manifest_text
+    assert "KARAKEEP_WEB_ENV_FILE:?" in manifest_text
+    assert "KARAKEEP_SEARCH_ENV_FILE:?" in manifest_text
     lowered = manifest_text.lower()
     for secret_marker in ("nextauth_secret:", "meili_master_key:", "karakeep_api_token:"):
         assert secret_marker not in lowered, f"{secret_marker} must not carry a literal value in the manifest"

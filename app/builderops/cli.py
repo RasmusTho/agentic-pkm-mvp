@@ -2629,6 +2629,7 @@ def dispatch_sessions(
                 client=client,
                 prepared=prepared,
             )
+            protected_executor.verify_workflow(approval)
             adapter = IssueDeliveryOperationAdapter(
                 approval,
                 client=client,

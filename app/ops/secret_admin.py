@@ -11,6 +11,8 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 import json
 import os
+import secrets
+from io import StringIO
 from pathlib import Path
 import sys
 from typing import Any, Never, TextIO
@@ -22,7 +24,7 @@ from app.ops.bws_secret_admin import (
 from app.ops.bws_token_push import TokenPushAdmin, load_token_push_targets
 from app.ops.host_secret_bootstrap import validate_secret_value
 from app.ops.host_secret_contract import (
-    BWS_IDENTITIES, CHANNEL_PROJECTS, DATABASE_CONSUMERS, HostSecretContract,
+    BWS_IDENTITIES, CHANNEL_PROJECTS, DATABASE_CONSUMERS, KARAKEEP_SECRETS, HostSecretContract,
     load_host_secret_contract,
 )
 from app.ops.host_secret_controller import (
@@ -133,6 +135,8 @@ class SecretAdmin:
             raise SecretAdminError()
         if secret == 'typesafe.api-key' and channel != 'dev':
             raise SecretAdminError()
+        if secret in KARAKEEP_SECRETS and channel not in {'dev', 'test'}:
+            raise SecretAdminError()
         if BWS_IDENTITIES[secret] == 'shared':
             return 'shared/' + secret, ('non-prod', 'prod')
         return channel + '/' + secret, (CHANNEL_PROJECTS[channel],)
@@ -214,6 +218,13 @@ class SecretAdmin:
                     attempt = str(uuid4())
                     common = dict(operation_id=operation.operation_id, attempt_id=attempt, identity=identity)
                     previous = {p: self.provider.read(p, identity) for p in projects}
+                    # Service keys are first-init identities. Even an explicit
+                    # import may not silently replace retained session/search keys.
+                    if secret in {'karakeep.session-token', 'karakeep.search-token'} and any(
+                        copy is not None and copy.value != value for copy in previous.values()
+                    ):
+                        operation.finish(_evidence(operation, 'aborted'))
+                        raise SecretAdminError()
                     for project, copy in previous.items():
                         record: dict[str, Any] = dict(common, event='snapshot', project=project,
                                                       previous_state='present' if copy else 'absent')
@@ -282,6 +293,27 @@ class SecretAdmin:
 
     rotate = generate
 
+    def prepare_karakeep(self, channel: str) -> None:
+        """Create only missing non-prod service keys through the normal writer.
+
+        Each absence check and import has normal controller admission. The import
+        rechecks under its own lock and refuses a changed retained key, so another
+        cooperating writer between these calls cannot be overwritten.
+        """
+        for secret in ('karakeep.session-token', 'karakeep.search-token'):
+            identity, projects = self._identity(channel, secret)
+            with self.controller.admit('check', channel) as operation:
+                try:
+                    copy = self.provider.read(projects[0], identity)
+                    if copy is not None and not validate_secret_value(self._kind(secret), copy.value):
+                        raise SecretAdminError()
+                except Exception:
+                    operation.finish(_evidence(operation, 'aborted'))
+                    raise SecretAdminError() from None
+                operation.finish(_evidence(operation, 'committed'))
+            if copy is None:
+                self.import_stdin(channel, secret, StringIO(secrets.token_urlsafe(48)))
+
 
 class _ValueFreeParser(argparse.ArgumentParser):
     def error(self, message: str) -> Never:
@@ -300,6 +332,8 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
         check.add_argument('--consumer', action='append', required=True)
         token_push = sub.add_parser('push-token')
         token_push.add_argument('vm')
+        prepare = sub.add_parser('prepare-karakeep')
+        prepare.add_argument('channel', choices=('dev', 'test'))
         for command in ('import', 'generate', 'rotate'):
             cmd = sub.add_parser(command)
             cmd.add_argument('channel', choices=tuple(CHANNEL_PROJECTS))
@@ -319,14 +353,20 @@ def main(argv: Sequence[str] | None = None, *, admin: SecretAdmin | None = None,
             }, sort_keys=True))
             return 0
         selected = admin or SecretAdmin(configured_admin())
+        if args.command == 'prepare-karakeep':
+            selected.prepare_karakeep(args.channel)
+            print(json.dumps({'status': 'prepared'}))
+            return 0
         if args.command == 'check':
             statuses = selected.check(args.channel, args.consumer)
             print(json.dumps(statuses, sort_keys=True))
             return 0 if all(s['status'] in {'ok', 'skipped'} for s in statuses) else 1
         if args.command == 'import':
             selected.import_stdin(args.channel, args.secret, stdin or sys.stdin)
-        else:
+        elif args.command == 'generate':
             selected.generate(args.channel, args.secret)
+        else:
+            selected.rotate(args.channel, args.secret)
         # A write receipt is constant: neither stdin nor caller arguments flow
         # into output. Consumer checks separately report canonical logical IDs.
         print(json.dumps({'status': 'imported'}))

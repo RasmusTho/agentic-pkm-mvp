@@ -15,7 +15,7 @@ from uuid import UUID
 from app.ops.bws_secret_reader import _sdk_client
 from app.ops.host_secret_bootstrap import _security_framework_keychain_lookup
 from app.ops.host_secret_contract import (
-    BWS_IDENTITIES, CHANNEL_PROJECTS,
+    BWS_IDENTITIES, CHANNEL_PROJECTS, KARAKEEP_SECRETS,
 )
 
 
@@ -113,6 +113,8 @@ class BwsSecretAdmin:
     def _scope(self, project: str, identity: str) -> str:
         prefix, _, logical = identity.partition('/')
         scope = BWS_IDENTITIES.get(logical)
+        if logical in KARAKEEP_SECRETS and prefix not in {'dev', 'test'}:
+            raise SecretAdminError()
         configured_projects = self.config.projects()
         if scope == 'shared':
             allowed = prefix == 'shared' and project in {'non-prod', 'prod'}
