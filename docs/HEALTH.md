@@ -64,6 +64,12 @@ The API starts refresh after 15 seconds, allows at most two active probes and 64
 and prioritizes cold-route probes over cached refreshes. It passes a 30-second timeout to the Model
 Access client. That is a per-operation transport timeout, not a wall-clock deadline for the full
 preflight; active probes remain capped at two until their operations return.
+Passive Companion UI health reads use `/api/health?model_access_sampling=cache`. This selector reads
+the existing process-local observer cache without starting or queueing a sampler. An empty, missing,
+malformed, or stale cache remains unknown or degraded, so required health fails closed. Ordinary
+`/api/health` calls keep the default bounded background sampling, `/api/operator/health` remains an
+explicit health probe, and the synchronous CLI keeps its existing behavior. The selector changes
+sampling only; the sanitized projection and `/healthz` liveness contract remain unchanged.
 Changes to the selected route, executor policy, policy-referenced host environment values, or
 referenced authentication files create a new configuration generation.
 The API aggregates raw observations on every request using their completion time and the existing

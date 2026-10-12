@@ -92,6 +92,15 @@ class ProductHealthObserver:
                         self._queue_locked(key, sampler, cold=observation is None)
             return deepcopy(observation) if observation is not None else None
 
+    def read(self, key: str) -> dict[str, Any] | None:
+        """Return a cached observation without submitting or queueing a sampler."""
+        with self._lock:
+            observation = self._observations.get(key)
+            if observation is None:
+                return None
+            self._observations.move_to_end(key)
+            return deepcopy(observation)
+
     def _submit_locked(
         self,
         key: str,

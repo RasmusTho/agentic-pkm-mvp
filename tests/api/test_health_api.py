@@ -4,6 +4,7 @@ import json
 import time
 import asyncio
 import importlib
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -220,6 +221,101 @@ def test_health_model_preflight_pending_is_fast_and_fails_closed(
         assert response.json()["required_ok"] is True
     finally:
         release.set()
+
+
+def test_cached_model_health_does_not_schedule_product_preflight(
+    monkeypatch, tmp_path
+) -> None:
+    """Cache-only health never submits a sampler and fails closed for stale data."""
+    client = _health_client(monkeypatch, tmp_path, worker_enabled=False)
+    monkeypatch.setattr(
+        health_module,
+        "_check_llm_router",
+        lambda: {
+            "ok": True,
+            "route_policies": {
+                "qa": {
+                    "effective": {
+                        "provider": "openai",
+                        "model": "gpt-6-luna",
+                        "transport_id": "codex_cli_tailscale",
+                        "reasoning_effort": "low",
+                    },
+                    "intent": {},
+                }
+            },
+        },
+    )
+    monkeypatch.setattr(health_module, "_check_embedding_index", lambda: {"ok": True})
+
+    class _CacheOnlyObserver:
+        def __init__(self) -> None:
+            self.observation: dict[str, object] | None = None
+            self.read_calls = 0
+            self.observe_calls = 0
+
+        def read(self, _key: str) -> dict[str, object] | None:
+            self.read_calls += 1
+            return self.observation
+
+        def observe(self, _key: str, _sampler) -> dict[str, object] | None:
+            self.observe_calls += 1
+            raise AssertionError("cache-only health must not schedule a sampler")
+
+    observer = _CacheOnlyObserver()
+    monkeypatch.setattr(health_module, "PRODUCT_HEALTH_OBSERVER", observer)
+    monkeypatch.setattr(
+        health_module,
+        "_probe_selected_route",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cache-only health must not preflight")
+        ),
+    )
+
+    empty = client.get("/api/health?model_access_sampling=cache")
+    assert empty.status_code == 200
+    assert empty.json()["required_ok"] is False
+    assert (
+        empty.json()["checks"]["llm_access"]["capabilities"]["text_generation"]["status"]
+        == "unknown"
+    )
+    assert observer.read_calls == 1
+    assert observer.observe_calls == 0
+
+    observer.observation = {
+        "status": "available",
+        "reason_code": "adapter_ready",
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+        "capabilities": {},
+        "transport_observation": {
+            "status": "available",
+            "reason_code": "transport_reachable",
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+    fresh = client.get("/api/health?model_access_sampling=cache")
+    assert fresh.status_code == 200
+    assert fresh.json()["required_ok"] is True
+    assert (
+        fresh.json()["checks"]["llm_access"]["capabilities"]["text_generation"]["status"]
+        == "available"
+    )
+    for route_identity in ("openai", "gpt-6-luna", "codex_cli_tailscale"):
+        assert route_identity not in fresh.text
+    assert observer.read_calls == 2
+    assert observer.observe_calls == 0
+
+    observer.observation["observed_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=31)
+    ).isoformat()
+    stale = client.get("/api/health?model_access_sampling=cache")
+    assert stale.status_code == 200
+    assert stale.json()["required_ok"] is False
+    capability = stale.json()["checks"]["llm_access"]["capabilities"]["text_generation"]
+    assert capability["status"] == "unknown"
+    assert capability["freshness"] == "stale"
+    assert observer.read_calls == 3
+    assert observer.observe_calls == 0
 
 
 def test_health_success(monkeypatch, tmp_path) -> None:

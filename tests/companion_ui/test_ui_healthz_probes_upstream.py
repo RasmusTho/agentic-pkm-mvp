@@ -94,7 +94,7 @@ def test_healthz_503_when_upstream_down() -> None:
     assert driver.status_code == 503
     assert driver.payload == {"ok": False, "upstream": "unreachable"}
     # Confirm the handler actually attempted the upstream probe.
-    assert client.get_calls == [("/api/health", {})]
+    assert client.get_calls == [("/api/health", {"model_access_sampling": "cache"})]
 
 
 def test_healthz_200_when_upstream_ok() -> None:
@@ -113,7 +113,7 @@ def test_healthz_200_when_upstream_ok() -> None:
     assert driver.status_code == 200
     assert driver.payload == {"ok": True, "service": "companion-ui"}
     # Confirm the handler actually probed upstream before returning 200.
-    assert client.get_calls == [("/api/health", {})]
+    assert client.get_calls == [("/api/health", {"model_access_sampling": "cache"})]
 
 
 def test_prod_handler_healthz_probes_upstream() -> None:
@@ -139,7 +139,7 @@ def test_prod_handler_healthz_probes_upstream() -> None:
 
     assert down_driver.status_code == 503
     assert down_driver.payload == {"ok": False, "upstream": "unreachable"}
-    assert down_client.get_calls == [("/api/health", {})]
+    assert down_client.get_calls == [("/api/health", {"model_access_sampling": "cache"})]
 
     # Verify 200 path in prod profile.
     up_client = _FakeClient(get_responses={"/api/health": {"ok": True}})
@@ -153,4 +153,4 @@ def test_prod_handler_healthz_probes_upstream() -> None:
 
     assert up_driver.status_code == 200
     assert up_driver.payload == {"ok": True, "service": "companion-ui"}
-    assert up_client.get_calls == [("/api/health", {})]
+    assert up_client.get_calls == [("/api/health", {"model_access_sampling": "cache"})]

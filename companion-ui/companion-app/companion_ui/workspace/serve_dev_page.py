@@ -53,6 +53,9 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlparse
 
 import httpx
 
+
+_PASSIVE_HEALTH_PARAMS = {"model_access_sampling": "cache"}
+
 from companion_ui.renderer import (
     PropertiesRenderer,
     VaultMarkdownDocument,
@@ -16021,7 +16024,7 @@ def handle_get(
         # must never break the page render, so this catches broadly rather than
         # only WorkspaceClientError.
         try:
-            health = client.get("/api/health", params={})
+            health = client.get("/api/health", params=dict(_PASSIVE_HEALTH_PARAMS))
         except Exception:
             health = None
         try:
@@ -16438,7 +16441,9 @@ def make_handler(
                 return
             if parsed.path == "/healthz":
                 try:
-                    self._client.get("/api/health", params={})
+                    self._client.get(
+                        "/api/health", params=dict(_PASSIVE_HEALTH_PARAMS)
+                    )
                 except WorkspaceClientError:
                     self._send_json(503, {"ok": False, "upstream": "unreachable"})
                     return
@@ -16677,7 +16682,9 @@ def make_handler(
                         return None, str(exc)
 
                 status_payload, status_error = _op_get("/api/status")
-                health_payload, health_error = _op_get("/api/health")
+                health_payload, health_error = _op_get(
+                    "/api/health", dict(_PASSIVE_HEALTH_PARAMS)
+                )
                 settings_payload, settings_error = _op_get("/api/settings/validate")
                 events_qp = parse_qs(parsed.query)
                 events_params: dict = {}
