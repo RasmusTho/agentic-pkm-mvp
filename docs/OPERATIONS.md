@@ -715,34 +715,46 @@ Task-specific operator walkthroughs live in `docs/runbooks/`.
 
 ## Prod probe and push alert (scheduled backstop)
 
-`ops/host-setup/mac-mini/prod_probe.py` is the hard-down backstop probe installed as
-a launchd job (`com.yggdrasil.prod-probe`) on the mac mini. It runs on a configurable
-interval (default 60 s), curls `/readyz` and `/api/health` `required_ok` (NOT the
-top-level `ok`), checks worker-heartbeat staleness, and dispatches one push alert on
-the first outage transition. Once the probe sees the first healthy run after that
-outage, it emits one recovery signal and clears the outage state so a later distinct
-outage can alert again. The configured channel remains pluggable (ntfy / Telegram / mail / none /
-host-secret-bound Discord — channel choice is an operator decision set via `PROD_PROBE_CHANNEL`).
-Both probes use the shared `ops/host-setup/mac-mini/notification_channels.py` transport module.
-The Discord implementation is one-way code-path support only: provider/account/server/channel/
-webhook enactment and live delivery remain external Heimdal work tracked by #5506 and #4076.
+`ops/host-setup/mac-mini/prod_probe.py` is the shared probe entrypoint. The supported production
+host is TARS Linux: `config/systemd/yggdrasil-host-probe@.service` runs it every 60 seconds with
+explicit environment, endpoint, heartbeat path, and state path. The probe checks `/readyz`,
+`/api/health` `required_ok` (not top-level `ok`), and worker-heartbeat staleness. It sends one
+down alert on the first outage transition and one recovery signal on the first healthy run; both
+messages carry the same correlation ID. Alerts include source system, environment, severity, UTC
+timestamp, and remediation URL.
+
+The Linux service uses the `heimdal-external-alerts` BWS consumer and the `discord.webhook`
+binding. The BWS token is read through systemd credentials and is removed from the probe child's
+environment; only a short-lived mode-0600 runtime file carries the declared webhook binding.
+The service has no Docker startup dependency and reads the worker heartbeat from the host volume.
+The prior Mac LaunchAgent and plist remain legacy templates. The installer
+`scripts/install_host_probe.py` prints a plan by default; host writes require `--apply` from a clean
+checkout at the exact `origin/main` head. As checked on 2026-10-12, no Linux probe unit is installed
+on `ygg-prod`; live installation and the TEST outage/recovery drill remain tracked by #4076.
+The prod `/readyz` check returned HTTP 200 while `/api/health.required_ok` was false, so an active
+probe should report prod down until the underlying health issue is repaired.
 
 **Two distinct Makefile targets — do not confuse them:**
 
 | Target | What it does |
 | --- | --- |
-| `make live-prod-probe` | Invokes the real probe script against `PROBE_BASE_URL` (default `localhost:8000`) — a live spot-check of the actual prod stack. Exits 0 if healthy, 1 if prod is down. |
+| `make live-prod-probe` | Runs one local spot-check against `http://127.0.0.1:18000` by default, with notifications disabled by default. Set `PROBE_BASE_URL`, `WORKER_HEARTBEAT_PATH`, and `PROBE_STATE_FILE` to explicit local values as needed. Exits 0 if healthy, 1 if prod is down, 78 for missing/invalid configuration. |
 | `make check-prod-channel` | Runs the pytest channel-isolation suites (`tests/ops/test_release_channel_isolation.py`, `tests/ops/test_release_channel_startup_targets.py`) to confirm that prod and test channels are correctly isolated. No live network calls to the running stack. |
 | `make check-test-channel` | Same channel-isolation suites plus the test-channel preflight (`tests/release_channels/test_channel_isolation_preflight.py`). |
 
 **Transition / recovery guarantee:** A sustained outage sends one down alert, repeated
 down probes suppress while the outage remains active, and the first healthy run sends one
 recovery signal and clears the outage state. A later distinct outage alerts again.
-The state marker (`PROD_PROBE_STATE_FILE`, default `/tmp/yggdrasil-prod-probe.state`)
-is rebuildable; delete it to reset the transition state manually.
+The state marker (`PROBE_STATE_FILE`) is channel-specific and host-local. Delete it only when
+intentionally re-arming notifications; the installed Linux state path is under
+`/var/lib/yggdrasil-host-probe-<channel>/`.
 
-**Install:** See `ops/host-setup/mac-mini/install.sh` for how to register the launchd
-job. The plist is at `ops/host-setup/mac-mini/com.yggdrasil.prod-probe.plist`.
+**Install:** `python3 scripts/install_host_probe.py --channel test` prints the TEST plan;
+`--apply` writes the host from the exact merged `origin/main` checkout. Production installation
+uses `--channel prod`. The installer is deliberately separate from the TEST outage/recovery drill;
+the parent Issue #4076 owns both live host operations and disabling the legacy Mac LaunchAgent after
+the Linux production service is active. On 2026-10-12, the Mac job was loaded with last observed
+exit status 1, while no Linux probe unit was installed.
 
 ## Prod backup watcher (stale or failed nightly dump)
 
