@@ -279,10 +279,13 @@ side-effect authority. A platform wrapper may execute only already-authorized in
 execution evidence; it cannot approve a credential scope, choose a target, rotate a secret, grant
 access, or treat a local lock as a global writer fence.
 
-The proposed model remains preparation-only until #5667 records one concrete owner choice: approve
-the designated normal writer with retained human administration and credential-restriction evidence,
-or require shared/distributed fencing before BWS administration, first-init bootstrap, and parity
-qualification. `--existing-secrets-only` remains a read/validate path where its own preconditions
+The [2026-10-11 #5667 owner receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5667#issuecomment-6114787299) accepts Demerzel login Keychain custody
+plus `scripts/secrets` as the sole supported normal writer, with the human Organization Owner as
+break-glass and deliberate same-user bearer use outside the controller as an accepted residual.
+No separate writer daemon or shared/distributed fencing is required for this one-owner setup;
+reassess before extra operators/controllers or prod secrets requiring confidentiality. The existing
+bootstrap qualification-file contract remains in the deployment owner; this decision does not
+install that file or establish executable confinement, externally fenced parity or full live qualification. `--existing-secrets-only` remains a read/validate path where its own preconditions
 pass. No preparation receipt in this document claims live access, token installation, deployment,
 first healthy release, rollback, host cleanup, or channel qualification; those effects require their
 existing deployment, security, release, and operator gates.
