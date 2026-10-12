@@ -7,6 +7,7 @@ import fcntl
 import os
 from pathlib import Path
 from types import SimpleNamespace
+import threading
 from uuid import uuid4
 
 import pytest
@@ -75,7 +76,7 @@ def runtime(tmp_path, monkeypatch):
                 'qualified_at': datetime.now(timezone.utc).isoformat()}
     monkeypatch.setattr(kd, '_private_json', lambda path: settings if path.name == 'dev.json'
                         else json.loads(path.read_text()))
-    state = SimpleNamespace(running=False, calls=[], fail=False, inspected=[], filesystem='tmpfs')
+    state = SimpleNamespace(running=False, calls=[], fail=False, inspected=[], filesystem='tmpfs', restart='on-failure')
 
     def command(argv, *, env=None, timeout=30):
         state.calls.append((argv, env))
@@ -93,6 +94,7 @@ def runtime(tmp_path, monkeypatch):
             state.inspected.append(argv)
             return '\n'.join(json.dumps({
                 'service': service, 'image': image,
+                'restart': {'Name': state.restart, 'MaximumRetryCount': 0},
                 'ports': {'3000/tcp': [{'HostIp': '127.0.0.1', 'HostPort': '3000'}]} if service == 'karakeep' else {},
                 'mounts': [{'Type': 'volume', 'Name': effects.project + '_' + (
                     'karakeep-data' if service == 'karakeep' else 'karakeep-meilisearch-data')}],
@@ -615,3 +617,172 @@ def test_postgres_failed_reconciliation_cannot_borrow_another_actor_lock(runtime
             owner.request(request)
         assert marker.read_text() == value
         assert journal.read().operation_id == operation_id and journal.read().stage == 'failed'
+
+
+@pytest.mark.parametrize('refusal', ['missing-key', 'reader-unavailable', 'pending-boot'])
+def test_daemon_start_cannot_bypass_governed_boot_admission(runtime, monkeypatch, refusal):
+    installed = deploy(runtime)
+    shape = yaml.safe_load((runtime.effects.config.root / 'docker-compose.karakeep.yml').read_text())
+    # Docker's documented on-failure policy supervises crashes, but does not
+    # start retained containers when the daemon starts. The actual production
+    # preflight below also checks the resolved container policy, not Config.Env.
+    assert {service['restart'] for service in shape['services'].values()} == {'on-failure'}
+    unit = next(runtime.effects.unit_directory.iterdir()).read_text()
+    assert 'WantedBy=multi-user.target docker.service' in unit
+    assert 'PartOf=docker.service' in unit
+    runtime.state.running = False
+    for path in runtime.effects.runtime.iterdir():
+        path.unlink()
+    if refusal == 'missing-key':
+        runtime.provider.values.pop(('non-prod', 'dev/karakeep.search-token'))
+    elif refusal == 'reader-unavailable':
+        monkeypatch.setattr(LinuxConfig, 'reader', lambda self: (_ for _ in ()).throw(BwsLookupError()))
+    else:
+        operation_id = str(uuid4())
+        journal = runtime.effects.boot_journal
+        journal.bind_request(operation_id, runtime.plan, False, create=True)
+        journal.write(operation_id, 'prepared')
+    monkeypatch.setattr(kd, '_require_vm_root', lambda: None)
+    monkeypatch.setattr(kd, '_installation_journal', lambda channel: runtime.effects.journal)
+    monkeypatch.setattr(kd, 'rpc', lambda channel, request: runtime.supervisor.request(request))
+    before = sum('up' in argv for argv, _ in runtime.state.calls)
+    with pytest.raises((kd.KarakeepDeployError, BwsLookupError)):
+        kd.boot('dev')
+    assert before == sum('up' in argv for argv, _ in runtime.state.calls)
+    assert runtime.effects.journal.read() == installed
+    assert not list(runtime.effects.runtime.iterdir())
+
+
+def test_retained_autostart_container_policy_refused_before_secret_lookup(runtime):
+    deploy(runtime)
+    runtime.state.restart = 'unless-stopped'
+    runtime.provider.calls.clear()
+    before = sum('up' in argv for argv, _ in runtime.state.calls)
+    with pytest.raises(kd.KarakeepDeployError):
+        runtime.effects.preflight(runtime.plan, boot=True)
+    assert not runtime.provider.calls
+    assert before == sum('up' in argv for argv, _ in runtime.state.calls)
+
+
+@pytest.mark.parametrize('interruption', ['none', 'ack-lost', 'binding-only', 'prepared-only'])
+def test_sent_deploy_refused_by_concurrent_boot_remains_reconcilable(runtime, monkeypatch, interruption):
+    installed = deploy(runtime)
+    binding = (runtime.effects.journal.directory / 'dev.request.json').read_bytes()
+    entered, release = threading.Event(), threading.Event()
+    failures, identifiers = [], []
+    materialize = runtime.effects.materialize
+    def pause_boot(values):
+        entered.set()
+        assert release.wait(5)
+        materialize(values)
+    monkeypatch.setattr(runtime.effects, 'materialize', pause_boot)
+    monkeypatch.setattr(kd, '_require_vm_root', lambda: None)
+    monkeypatch.setattr(kd, '_installation_journal', lambda channel: runtime.effects.journal)
+    monkeypatch.setattr(kd, 'rpc', lambda channel, request: runtime.supervisor.request(request))
+    def run_boot():
+        try:
+            kd.boot('dev')
+        except Exception as error:
+            failures.append(type(error).__name__)
+    boot_worker = threading.Thread(target=run_boot)
+    request = runtime.remote.request
+    def race(action, operation_id, plan):
+        response = request(action, operation_id, plan)
+        if action == 'karakeep-preflight':
+            boot_worker.start()
+            assert entered.wait(2)
+        elif action == 'karakeep-deploy':
+            identifiers.append(operation_id)
+            assert response['receipt']['terminal_result'] == 'aborted'
+            if interruption == 'ack-lost':
+                raise OSError('fixture acknowledgement loss')
+        return response
+    monkeypatch.setattr(runtime.remote, 'request', race)
+    write = DeployJournal.write
+    injected = []
+    def interrupted_write(journal, operation_id, stage, *args, **options):
+        if (journal.directory == runtime.effects.journal.directory / 'refused'
+            and not injected and stage == {'binding-only': 'prepared', 'prepared-only': 'aborted'}.get(interruption)):
+            injected.append(True)
+            identifiers.append(operation_id)
+            raise OSError('fixture receipt boundary interruption')
+        return write(journal, operation_id, stage, *args, **options)
+    monkeypatch.setattr(DeployJournal, 'write', interrupted_write)
+    try:
+        if interruption == 'none':
+            refused = deploy(runtime)
+        else:
+            with pytest.raises(kd.KarakeepDeployError):
+                deploy(runtime)
+            # Same production host caller resumes status only; no duplicate RPC.
+            restarted = kd.KarakeepSupervisor(runtime.effects)
+            monkeypatch.setattr(runtime.remote, 'request', lambda action, operation_id, plan:
+                                restarted.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()}))
+            refused = deploy(runtime)
+        assert refused.terminal_result == 'aborted' and refused.operation_id == identifiers[0]
+        assert runtime.effects.journal.read() == installed
+        assert (runtime.effects.journal.directory / 'dev.request.json').read_bytes() == binding
+        pending = runtime.effects.boot_journal.read()
+        assert pending.terminal_result is None
+        marker = runtime.effects.config.root / 'config/deploy/dev.env.lock/bws-owner'
+        assert json.loads(marker.read_text()) == runtime.effects.lock_owner(pending.operation_id, boot=True)
+        # Replaying the rejected ID cannot acquire effects, even if admission
+        # later becomes free. A changed binding cannot borrow its terminality.
+        retry = {'action': 'karakeep-deploy', 'operation_id': refused.operation_id, 'plan': runtime.plan.payload()}
+        assert runtime.supervisor.request(retry) == {'receipt': refused.payload()}
+        with pytest.raises((kd.KarakeepDeployError, PostgresDeployError)):
+            runtime.supervisor.request({**retry, 'plan': kd.KarakeepPlan('dev', 'b' * 40).payload()})
+        assert sum('up' in argv for argv, _ in runtime.state.calls) == 1
+        assert runtime.admin.check('dev', kd.SERVICE_CONSUMERS)[0]['status'] == 'ok'
+    finally:
+        release.set()
+        if boot_worker.ident:
+            boot_worker.join(3)
+    assert not failures and not boot_worker.is_alive()
+    assert runtime.effects.journal.read() == installed
+    assert runtime.effects.boot_journal.read().terminal_result == 'committed'
+    monkeypatch.setattr(runtime.effects, 'materialize', materialize)
+    monkeypatch.setattr(runtime.remote, 'request', request)
+    assert deploy(runtime).terminal_result == 'committed'
+    assert sum('up' in argv for argv, _ in runtime.state.calls) == 3
+    assert runtime.supervisor.request(retry) == {'receipt': refused.payload()}
+    assert sum('up' in argv for argv, _ in runtime.state.calls) == 3
+
+
+@pytest.mark.parametrize('race', ['credential-removed', 'qualification-stale', 'foreign-lock'])
+def test_sent_deploy_rechecks_inputs_and_durably_refuses_before_effects(runtime, monkeypatch, race):
+    installed = deploy(runtime)
+    binding = (runtime.effects.journal.directory / 'dev.request.json').read_bytes()
+    request = runtime.remote.request
+    marker = runtime.effects.config.root / 'config/deploy/dev.env.lock/bws-owner'
+    def change_after_preflight(action, operation_id, plan):
+        response = request(action, operation_id, plan)
+        if action == 'karakeep-preflight':
+            if race == 'credential-removed':
+                runtime.provider.values.pop(('non-prod', 'dev/karakeep.search-token'))
+            elif race == 'qualification-stale':
+                runtime.settings['qualified_at'] = '2000-01-01T00:00:00+00:00'
+            else:
+                marker.parent.mkdir(mode=0o700)
+                marker.write_text(json.dumps({'kind': 'token-push', 'operation_id': str(uuid4()), 'attempt_id': str(uuid4())}) + '\n')
+                marker.chmod(0o600)
+        elif action == 'karakeep-deploy':
+            assert response['receipt']['terminal_result'] == 'aborted'
+            raise OSError('fixture acknowledgement loss')
+        return response
+    monkeypatch.setattr(runtime.remote, 'request', change_after_preflight)
+    with pytest.raises(kd.KarakeepDeployError):
+        deploy(runtime)
+    before = marker.read_bytes() if marker.exists() else None
+    restarted = kd.KarakeepSupervisor(runtime.effects)
+    monkeypatch.setattr(runtime.remote, 'request', lambda action, operation_id, plan:
+                        restarted.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()}))
+    refused = deploy(runtime)
+    assert refused.terminal_result == 'aborted'
+    assert runtime.effects.journal.read() == installed
+    assert (runtime.effects.journal.directory / 'dev.request.json').read_bytes() == binding
+    assert (marker.read_bytes() if marker.exists() else None) == before
+    assert sum('up' in argv for argv, _ in runtime.state.calls) == 1
+    # Missing authority is never synthesized into an aborted/success receipt.
+    with pytest.raises(kd.KarakeepDeployError):
+        restarted.request({'action': 'karakeep-status', 'operation_id': str(uuid4()), 'plan': runtime.plan.payload()})

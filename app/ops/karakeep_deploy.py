@@ -142,6 +142,13 @@ class KarakeepEffects:
         # must never replace installation or host-reconciliation authority.
         return DeployJournal(self.journal.directory / 'boot', self.config.channel)
 
+    @property
+    def refused_journal(self) -> DeployJournal:
+        # One cooperating host controller can have one unresolved request.
+        # Known pre-effect refusals must not replace installation/boot proof.
+        # This namespace has no worker or service-effect transition.
+        return DeployJournal(self.journal.directory / 'refused', self.config.channel)
+
     def lock_owner(self, operation_id: str, *, boot: bool) -> dict[str, str]:
         return {'kind': 'karakeep-boot' if boot else 'karakeep-deploy',
                 'channel': self.config.channel, 'operation_id': operation_id}
@@ -192,7 +199,8 @@ class KarakeepEffects:
             return []
         # Never retrieve Config.Env: the Docker metadata itself contains app keys.
         template = ('{"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
-                    '"image":{{json .Config.Image}},"ports":{{json .HostConfig.PortBindings}},'
+                    '"image":{{json .Config.Image}},"restart":{{json .HostConfig.RestartPolicy}},'
+                    '"ports":{{json .HostConfig.PortBindings}},'
                     '"mounts":{{json .Mounts}},"state":{{json .State}}}')
         return [json.loads(line) for line in _command(
             [*_DOCKER, 'inspect', '--format', template, *ids]
@@ -206,7 +214,8 @@ class KarakeepEffects:
             for row in rows:
                 service = row['service']
                 volume = 'karakeep-data' if service == 'karakeep' else 'karakeep-meilisearch-data'
-                if row['image'] != IMAGES[service] or not any(
+                if (row['image'] != IMAGES[service]
+                    or row.get('restart') != {'Name': 'on-failure', 'MaximumRetryCount': 0}) or not any(
                     mount.get('Type') == 'volume' and mount.get('Name') == self.project + '_' + volume
                     for mount in row['mounts']
                 ):
@@ -253,7 +262,8 @@ class KarakeepEffects:
         if (set(services) != set(IMAGES) or set(shape['volumes']) != {'karakeep-data', 'karakeep-meilisearch-data'}
             or services['karakeep']['ports'] != ['127.0.0.1:3000:3000']
             or 'ports' in services['karakeep-meilisearch']
-            or any(services[name]['image'] != image for name, image in IMAGES.items())):
+            or any(services[name]['image'] != image or services[name].get('restart') != 'on-failure'
+                   for name, image in IMAGES.items())):
             raise KarakeepDeployError()
         _command([*_DOCKER, 'info', '--format', '{{.ID}}'])
         version = _command([*_DOCKER, 'compose', 'version', '--short']).strip().removeprefix('v')
@@ -330,10 +340,11 @@ class KarakeepEffects:
         unit = ('[Unit]\nDescription=Private Karakeep ' + self.config.channel + '\n'
                 'Requires=docker.service yggdrasil-bws-deploy@' + self.config.channel + '.service\n'
                 'After=docker.service yggdrasil-bws-deploy@' + self.config.channel + '.service\n'
+                'PartOf=docker.service\n'
                 '[Service]\nType=oneshot\nRemainAfterExit=yes\n'
                 'Restart=on-failure\nRestartSec=5\nTimeoutStartSec=690\n'
                 'ExecStart=/usr/local/libexec/yggdrasil-bws-deploy karakeep-boot ' + self.config.channel + '\n'
-                'StandardOutput=null\nStandardError=null\n[Install]\nWantedBy=multi-user.target\n')
+                'StandardOutput=null\nStandardError=null\n[Install]\nWantedBy=multi-user.target docker.service\n')
         path = self.unit_directory / ('yggdrasil-karakeep-' + self.config.channel + '.service')
         if path.exists():
             if path.is_symlink() or path.read_text() != unit:
@@ -360,6 +371,30 @@ class KarakeepSupervisor:
         self.mutex = threading.Lock()
         self.worker: threading.Thread | None = None
         self.finished = threading.Event()
+
+    def _refused(self, operation_id: str, plan: KarakeepPlan, *, create: bool = False) -> DeployReceipt | None:
+        """Durable pre-effect refusal; never an installation/boot worker input.
+
+        A binding persisted in this namespace proves that this ID was rejected
+        before installation admission. Status may finish interrupted prepared
+        evidence, but cannot invent a refusal from absence or replay effects.
+        """
+        journal = self.effects.refused_journal
+        if not create:
+            path = journal.directory / (plan.channel + '.request.json')
+            if not path.exists():
+                return None
+            if _private_json(path).get('operation_id') != operation_id:
+                return None
+        journal.bind_request(operation_id, plan, False, create=create)
+        previous = journal.read()
+        if previous is None or previous.operation_id != operation_id:
+            previous = journal.write(operation_id, 'prepared')
+        if previous.stage == 'prepared' and previous.terminal_result is None:
+            previous = journal.write(operation_id, 'aborted')
+        if previous.terminal_result != 'aborted':
+            raise KarakeepDeployError()
+        return previous
 
     def _deploy(self, operation_id: str, plan: KarakeepPlan, boot: bool = False) -> None:
         journal = self.effects.boot_journal if boot else self.effects.journal
@@ -398,6 +433,10 @@ class KarakeepSupervisor:
         operation_id, plan = _valid_request(data, self.effects.config.channel)
         action = data['action']
         with self.mutex:
+            if action in {'karakeep-deploy', 'karakeep-status'}:
+                refused = self._refused(operation_id, plan)
+                if refused is not None:
+                    return {'receipt': refused.payload()}
             journal = self.effects.boot_journal if action in {'karakeep-boot', 'karakeep-boot-status'} else self.effects.journal
             previous = journal.read()
             if action == 'karakeep-preflight':
@@ -432,14 +471,20 @@ class KarakeepSupervisor:
                 # Never recreate a worker after supervisor loss.
             elif action == 'karakeep-deploy':
                 boot_previous = self.effects.boot_journal.read()
-                if ((previous and previous.terminal_result is None)
-                    or (boot_previous and boot_previous.terminal_result is None)
-                    or (self.worker and self.worker.is_alive())):
-                    raise KarakeepDeployError()
-                # Validate all host and selected credential inputs before the
-                # first durable request mutation, not only inside the worker.
-                self.effects.preflight(plan)
-                self.effects.reconcile_terminal_lock()
+                try:
+                    if ((previous and previous.terminal_result is None)
+                        or (boot_previous and boot_previous.terminal_result is None)
+                        or (self.worker and self.worker.is_alive())):
+                        raise KarakeepDeployError()
+                    # Admission can change after the host's read-only preflight.
+                    # Check again before binding an installation or any effects.
+                    self.effects.preflight(plan)
+                    self.effects.reconcile_terminal_lock()
+                except Exception:
+                    refused = self._refused(operation_id, plan, create=True)
+                    if refused is None:
+                        raise KarakeepDeployError()
+                    return {'receipt': refused.payload()}
                 journal.bind_request(operation_id, plan, False, create=True)
                 journal.write(operation_id, 'prepared')
                 self.finished.clear()

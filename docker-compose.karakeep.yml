@@ -14,7 +14,8 @@
 services:
   karakeep:
     image: ghcr.io/karakeep-app/karakeep:0.28.0
-    restart: unless-stopped
+    # Crash-only supervision: daemon/VM startup belongs to the governed unit.
+    restart: on-failure
     # Loopback bind only -- reachable by the Heimdal adapter on the host, never
     # published to a public interface.
     ports:
@@ -43,7 +44,7 @@ services:
 
   karakeep-meilisearch:
     image: getmeili/meilisearch:v1.13.3
-    restart: unless-stopped
+    restart: on-failure
     env_file:
       - ${KARAKEEP_SEARCH_ENV_FILE:?governed ephemeral search credentials required}
     environment:

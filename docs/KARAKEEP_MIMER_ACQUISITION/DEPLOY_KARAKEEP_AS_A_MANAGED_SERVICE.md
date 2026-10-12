@@ -116,7 +116,12 @@ container lifecycle.
 The repo-owned manifest is [`docker-compose.karakeep.yml`](../../docker-compose.karakeep.yml): a
 pinned image (`ghcr.io/karakeep-app/karakeep:<version>`), the durable named volumes `karakeep-data`
 (bookmarks/assets) and `karakeep-meilisearch-data` (search index), a web-root healthcheck, and
-`restart: unless-stopped`. Compose uses projects `karakeep-dev` and `karakeep-test`, so actual volume
+`restart: on-failure` for crashes within an admitted runtime. Docker does not start these containers
+when its daemon restarts ([Docker restart policy](https://docs.docker.com/engine/containers/start-containers-automatically/)).
+The governed unit alone admits daemon/VM startup after reader and journal checks. Its Docker
+dependency/restart binding and Docker/multi-user enablement ensure rehydration is not bypassed by
+retained container environments. Preflight also rejects a retained autonomous-restart policy.
+Compose uses projects `karakeep-dev` and `karakeep-test`, so actual volume
 names have the corresponding project prefix. The web and search env handles are distinct root-owned
 mode-0600 files in mode-0700 `/run/yggdrasil/karakeep/<channel>`; no persistent ordinary env file is
 filled from [`config/karakeep.env.example`](../../config/karakeep.env.example). The standard Docker
@@ -138,6 +143,15 @@ worker. Caller observation has a ten-minute window with backoff; expiry returns 
 failure and releases the caller's lock handle without clearing durable admission. A later status
 request can still join the same operation. Unknown state requires authoritative recovery of that original operation; there is no
 force/retry override or automatic compensation.
+
+A boot may start between the host's read-only preflight and its durable sent deployment request.
+Known refusals before installation admission are bound and fsynced in a finite `refused` namespace
+of the same DeployJournal, without changing installation/boot receipts or their locks. This
+namespace has no worker or service-effect transition. Exact-ID status finishes interrupted refusal
+evidence and returns `aborted`; a lost acknowledgment therefore clears host admission without
+replaying deployment. Absence of such a bound request never proves rejection. A refused ID cannot
+later become a deployment, and a changed plan cannot borrow its receipt. One cooperating host
+controller has at most one unresolved request; no additional writer or authority registry is added.
 
 The existing `bws-owner` lock marker durably binds Karakeep's finite deploy/boot actor, channel and
 operation ID. After a terminal receipt, status/retry reconciles only that actor's free matching

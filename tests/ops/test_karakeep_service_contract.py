@@ -46,7 +46,7 @@ def test_service_manifest_is_pinned_persistent_and_health_checked() -> None:
     assert tag and tag != "latest"
 
     # Restart supervision.
-    assert karakeep["restart"] == "unless-stopped"
+    assert karakeep["restart"] == "on-failure"
 
     # Healthcheck present with an executable test.
     healthcheck = karakeep.get("healthcheck") or {}

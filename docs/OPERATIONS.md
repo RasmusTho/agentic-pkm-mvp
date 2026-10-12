@@ -666,9 +666,15 @@ are evidence only and provide no reactivation or fallback authority.
   boot/restart rehydrates through the existing reader and VM channel lock. The template is reference
   only; do not create persistent ordinary credential env files. Never print unfiltered Docker
   inspection or rendered Compose configuration.
+- The governed unit admits Docker-daemon/VM startup; containers use crash-only `on-failure`,
+  not daemon auto-start. Missing reader keys or pending journals therefore cannot be bypassed by
+  retained container environments. Actual container restart policy is part of topology preflight.
 - Activating/unknown receipts retain pending admission and the VM channel lock. Reruns reconcile
   the same request and require authoritative terminal plus health evidence; a timeout or healthy
   container cannot authorize a duplicate deployment or report success.
+- A deployment sent after read-only preflight may race with boot admission. Known pre-effect
+  refusal is durable in the same DeployJournal's finite refusal namespace; exact-ID status returns
+  `aborted` without replacing installation/boot proof, borrowing their lock, or replaying effects.
 - Backup / update / rollback steps (and their verification checks) live in
   `docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md :: Restart / Durability Posture`.
   They may be used only after the exact host/private route is qualified. Archive/restore and version
