@@ -119,13 +119,13 @@ clients. The host contract and settings are the durable, in-repo authority; the 
 | 1 | [DEFINE_SCREEN_OBSERVATION_CONTRACT](DEFINE_SCREEN_OBSERVATION_CONTRACT.md) | SCREEN-01 | — | this repo |
 | 2 | [DERIVE_ACTIVITY_OBSERVATIONS](DERIVE_ACTIVITY_OBSERVATIONS.md) | SCREEN-02 | SCREEN-01 | this repo |
 | 3 | [BUILD_MACOS_OBSERVER_CLIENT](BUILD_MACOS_OBSERVER_CLIENT.md) | SCREEN-03 | SCREEN-01, SCREEN-06 (∥ SCREEN-02) | **Bifrost #72**; Heimdal #3341 tracks validation |
-| 4 | [REGISTER_SCREEN_STREAM_WITH_ERE](REGISTER_SCREEN_STREAM_WITH_ERE.md) | SCREEN-04 | SCREEN-02; **BLOCKED on ERE stream registry #3176** | this repo |
+| 4 | [REGISTER_SCREEN_STREAM_WITH_ERE](REGISTER_SCREEN_STREAM_WITH_ERE.md) | SCREEN-04 | SCREEN-02 (#3344) + ERE-01 (#3176), both delivered | this repo |
 | 5 | [PROJECT_TIME_SPEND_ANALYSIS](PROJECT_TIME_SPEND_ANALYSIS.md) | SCREEN-05 | SCREEN-02 (∥ SCREEN-03, SCREEN-06) | this repo |
 | 6 | [CONTROL_SURFACE_AND_EXCLUSIONS](CONTROL_SURFACE_AND_EXCLUSIONS.md) | SCREEN-06 | SCREEN-01 (∥ SCREEN-02) | this repo; settings consumed by Bifrost #72 |
 
-Dependencies: **01 → {02, 06}; {01, 06} → 03; 02 → 05; {02, #3176} → 04.** SCREEN-04 is externally
-blocked on the ERE stream registry (#3176) regardless of internal readiness; it is the parent-closure
-child once #3176 lands.
+Dependencies: **01 → {02, 06}; {01, 06} → 03; 02 → 05; {02, #3176} → 04.** SCREEN-04's
+prerequisites SCREEN-02 (#3344) and ERE-01 (#3176) are delivered. #3346 owns the registry/adapter
+implementation; #3340 remains open for the broader capability validation and acceptance path.
 
 ## Cross-Task Invariants / Interaction Safety
 
@@ -213,9 +213,11 @@ declared once and settings-governed (SETTINGS_SPINE posture, SCREEN-06), tuned a
 - [ ] Live validation on the test channel: ≥1 real at-computer session on the operator's machine
       produces recognizable activity spans + a time-spend rollup; receipt posted to the parent issue.
       Verify: parent-issue validation receipt (mac mini test channel)
-- [ ] Owner-doc promotion only after acceptance: `docs/HEIMDAL/` modality note + the ERE registry flip
-      (`future`→`live`) + a Heimdal STATUS line updated to delivered truth. Verify: doc writeback at
-      `docs/EPISODE_RESOLUTION_ENGINE/README.md :: Input-source inventory` (screen row → live)
+- [ ] SCREEN-04 implementation writeback: the ERE registry entry and inventory row move from `future`
+      to `live` with the #3346 implementation PR. This does not start capture, alter consent, or claim
+      parent capability acceptance. Verify: `docs/EPISODE_RESOLUTION_ENGINE/README.md :: Input-source inventory`
+- [ ] Parent acceptance writeback after the qualified capability validation: the Heimdal modality note
+      and Heimdal STATUS line reflect delivered truth. Verify: parent-issue validation receipt on #3340.
 
 ## Relationship to GitHub issues
 
@@ -226,7 +228,7 @@ declared once and settings-governed (SETTINGS_SPINE posture, SCREEN-06), tuned a
 - Child issue mapping: SCREEN-01 → **#3343**; SCREEN-02 → **#3344**; SCREEN-06 → **#3342**; native
   SCREEN-03 implementation → [Bifrost #72](https://github.com/RasmusTho/bifrost/issues/72), with Heimdal
   **#3341** as the validation pointer; SCREEN-05 → **#3345**; SCREEN-04 → **#3346**. Bifrost #72 depends
-  on #3343 and #3342; #3346 also depends on the ERE stream registry #3176.
+  on #3343 and #3342; #3346's prerequisites #3176 and #3344 are delivered.
 
 The spec is the source of truth; issues track pickup state.
 

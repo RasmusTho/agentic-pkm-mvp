@@ -75,7 +75,7 @@ import logging
 import subprocess
 import sys
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final, Mapping, Protocol, Sequence, runtime_checkable
@@ -112,6 +112,14 @@ from app.episodes.calendar_stream import (
 from app.episodes.ids import EPISODE_ID_PREFIX
 from app.episodes.notes import episode_note_rel_path, parse_validated_episode_note
 from app.episodes.store import write_episode_note
+from app.episodes.screen_stream import (
+    SCREEN_CONSUMER_ID,
+    SCREEN_STREAM_ID,
+    ScreenSignalContractError,
+    observation_modality,
+    screen_dimensions,
+    screen_observation_to_signal_contract,
+)
 from app.jobs.episodes_projection import EPISODES_TABLE, row_tuple
 from app.knowledge.write_ops import read_create_once_winner_relative, write_note_relative
 from app.knowledge.errors import KnowledgeWriteConflict
@@ -227,6 +235,9 @@ class ReadResult:
 
     rows: Sequence[Any]
     degraded: Sequence[str] = ()
+    #: Rows whose positions must be acknowledged even when the adapter filters
+    #: them from its normalized stream (e.g. a modality-filtered Heimdal cursor).
+    advance_rows: Sequence[Any] | None = None
 
 
 @runtime_checkable
@@ -311,6 +322,9 @@ class SegmentationSignal:
     observed_at_end: datetime | None = None
     protagonists: tuple[str, ...] = ()
     goal: tuple[str, ...] = ()
+    #: Original screen dimensions are retained on the normalized signal as
+    #: evidence. The segmentation core does not reinterpret app/window values.
+    screen_dimensions: Mapping[str, str] = field(default_factory=dict)
     #: ADR-0054 seam: Heimdal's per-session boundary hint.
     heimdal_session_id: str | None = None
     causal_break: bool = False
@@ -608,6 +622,9 @@ def _signal_from_heimdal_row(row: ObservationRow) -> SegmentationSignal | None:
     unreachable for schema-validated observations)."""
     payload = row.envelope.get("payload")
     payload = payload if isinstance(payload, Mapping) else {}
+    modality = payload.get("modality")
+    if modality not in (None, "speech"):
+        return None
     observation_id = _observation_id_of(row, payload)
 
     observed_at = _parse_observation_time(payload.get("observed_at_start"))
@@ -651,6 +668,45 @@ def _signal_from_heimdal_row(row: ObservationRow) -> SegmentationSignal | None:
         goal=(),
         heimdal_session_id=session_id,
         causal_break=causal_break,
+    )
+
+
+def _signal_from_screen_row(row: ObservationRow) -> SegmentationSignal | None:
+    """Normalize one already-published screen span without merging boundaries."""
+    contract = screen_observation_to_signal_contract(row)
+    if contract is None:
+        return None
+    payload = row.envelope.get("payload")
+    assert isinstance(payload, Mapping)
+    values = screen_dimensions(row)
+    scope = contract.scope_binding.scope if contract.scope_binding is not None else _DEFAULT_SCOPE
+    observed_at = _parse_dt(contract.observed_at_start)
+    observed_at_end = _parse_dt(contract.observed_at_end) if contract.observed_at_end else None
+    attributions = payload.get("attributions")
+    protagonists = tuple(
+        sorted(
+            {
+                str(item["mention_id"])
+                for item in (attributions if isinstance(attributions, list) else [])
+                if isinstance(item, Mapping)
+                and item.get("resolution") == "resolved"
+                and item.get("mention_id")
+            }
+        )
+    )
+    goal = (values["goal"],) if values.get("goal") else ()
+    supersedes = payload.get("supersedes")
+    return SegmentationSignal(
+        stream_id=SCREEN_STREAM_ID,
+        signal_id=contract.signal_id,
+        observed_at=observed_at,
+        observed_at_end=observed_at_end,
+        scope=scope,
+        provenance_ref=contract.provenance_ref,
+        protagonists=protagonists,
+        goal=goal,
+        screen_dimensions=dict(values),
+        causal_break=isinstance(supersedes, str) and bool(supersedes.strip()),
     )
 
 
@@ -770,7 +826,9 @@ def _signal_from_calendar_row(
 
 class _HeimdalStreamAdapter:
     def read(self, ctx: TickContext) -> ReadResult:
-        return ReadResult(read_observations_for_consumer(ctx.consumer_id, limit=ctx.limit))
+        batch = read_observations_for_consumer(ctx.consumer_id, limit=ctx.limit)
+        rows = [row for row in batch if observation_modality(row) in (None, "speech")]
+        return ReadResult(rows=rows, advance_rows=batch)
 
     def normalize(self, row: Any, ctx: TickContext) -> SegmentationSignal | None:
         return _signal_from_heimdal_row(row)
@@ -778,6 +836,35 @@ class _HeimdalStreamAdapter:
     def advance_cursor(self, rows: Sequence[Any], ctx: TickContext) -> None:
         if rows:
             advance_cursor_for_consumer(ctx.consumer_id, list(rows))
+
+
+class _ScreenStreamAdapter:
+    def read(self, ctx: TickContext) -> ReadResult:
+        batch = read_observations_for_consumer(SCREEN_CONSUMER_ID, limit=ctx.limit)
+        rows: list[ObservationRow] = []
+        degraded: list[str] = []
+        for row in batch:
+            try:
+                contract = screen_observation_to_signal_contract(row)
+            except ScreenSignalContractError as exc:
+                payload = row.envelope.get("payload")
+                payload = payload if isinstance(payload, Mapping) else {}
+                observation_id = _observation_id_of(
+                    row,
+                    payload,
+                )
+                degraded.append(f"screen:{observation_id}:refused:{exc.reason}")
+                continue
+            if contract is not None:
+                rows.append(row)
+        return ReadResult(rows=rows, degraded=degraded, advance_rows=batch)
+
+    def normalize(self, row: Any, ctx: TickContext) -> SegmentationSignal | None:
+        return _signal_from_screen_row(row)
+
+    def advance_cursor(self, rows: Sequence[Any], ctx: TickContext) -> None:
+        if rows:
+            advance_cursor_for_consumer(SCREEN_CONSUMER_ID, list(rows))
 
 
 class _VaultActivityStreamAdapter:
@@ -826,6 +913,7 @@ def _calendar_consumed_signal_key(scope: str, signal_id: str) -> str:
 
 _STREAM_ADAPTERS: Final[Mapping[str, StreamAdapter]] = {
     HEIMDAL_STREAM_ID: _HeimdalStreamAdapter(),
+    SCREEN_STREAM_ID: _ScreenStreamAdapter(),
     VAULT_ACTIVITY_STREAM_ID: _VaultActivityStreamAdapter(),
     CALENDAR_STREAM_ID: _CalendarStreamAdapter(),
 }
@@ -1298,6 +1386,7 @@ def run_segmentation_tick(
         assert adapter is not None  # narrowed by the fail-loud correspondence guard above
         read_result = adapter.read(ctx)
         rows = list(read_result.rows)
+        advance_rows = list(read_result.advance_rows if read_result.advance_rows is not None else rows)
         consumed[entry.stream_id] = len(rows)
         degraded.extend(read_result.degraded)
         for row in rows:
@@ -1308,7 +1397,7 @@ def run_segmentation_tick(
                 )
             else:
                 signals.append(signal)
-        pending_cursor_advances.append((adapter, rows))
+        pending_cursor_advances.append((adapter, advance_rows))
 
     open_state = engine_state.all_state_with_prefix(_OPEN_SEGMENT_KEY_PREFIX)
     open_segments = {

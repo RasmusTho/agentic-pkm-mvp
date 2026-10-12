@@ -1,10 +1,10 @@
 ---
 name: Register Screen Stream With ERE
-description: Register the screen modality as a live ERE stream per the signal contract — flip screen from future to live in the stream registry, mapping coalesced spans to the five-dimension signal shape; blocked on ERE stream registry delivery (#3176)
+description: Register the screen modality as a live ERE stream per the signal contract — flip screen from future to live in the stream registry, mapping coalesced spans to the five-dimension signal shape; ERE-01 and SCREEN-02 prerequisites are delivered
 task_id: SCREEN-04
 source_anchor: docs/EPISODE_RESOLUTION_ENGINE/STREAM_REGISTRY_AND_SIGNAL_CONTRACT.md :: seeded inventory (future -> live)
 parent_capability: Heimdal Screen Stream
-prerequisites: [SCREEN-02]
+prerequisites: [ERE-01, SCREEN-02]
 depends_on: [DERIVE_ACTIVITY_OBSERVATIONS.md]
 can_parallelize_with: []
 ---
@@ -21,21 +21,23 @@ the ERE normalized signal shape. It is the exact `future`→`live` transition
 `LOCATION_STREAM_FUTURE_POSTURE.md` describes for its modality, applied to `screen` now that the
 capture + derivation legs exist.
 
-## Blocked status
+## Prerequisite status
 
-**BLOCKED on the ERE stream registry (ERE-01, issue #3176).** The registry, the signal contract, and
-the "engine consumes only registered streams" enforcement are ERE-01's deliverables; there is nothing
-to register into until they merge. Mark `agent:blocked`, prerequisite **#3176** named. Do not pick this
-up before #3176 is delivered.
+ERE-01 (#3176) and SCREEN-02 (#3344) are delivered, so the prerequisites for this bounded slice are
+met. The `screen` registry entry remains `future` until SCREEN-04 (#3346) lands. This slice registers
+already-published observations; it does not start screen capture, change a consent grant, or promote
+observations to authoritative knowledge.
 
-## What This Task Does (when unblocked)
+## What This Task Does
 
 1. **Flip the registry entry.** `screen` moves from `status: future` to `status: live` in the
    markdown-first stream registry, with: `transport: observation_log cursor (modality-filtered)`,
-   `consent_class: heimdal_gated` (the standing `screen_always_on` grant, D-CONSENT lineage),
-   `owner_constituent: heimdal`, `cadence: continuous`, `dimensions_fed: { time: high, protagonist:
-   high, goal: high, causation: medium, space: low }` (per-axis, never scalar — screen strongly
-   evidences what/when/who-context; space only weakly, via app/location text).
+   `consent_class: heimdal_gated`, `owner_constituent: heimdal`, `cadence: continuous`, and
+   `dimensions_fed: [time, space, protagonist, goal, causation]` (declared per axis; its design
+   strengths are high for time/protagonist/goal, medium for causation, and low for space). The
+   registry declares supported axes as the existing ERE contract requires; each normalized signal
+   carries observation-derived `ConfidenceScore`s. The consent class describes the existing
+   published-observation gate; registering the stream does not grant consent.
 2. **Signal adaptation.** A screen span observation maps to the ERE normalized signal shape:
    `stream_id: screen`, `signal_id` (idempotency = observation_id), `observed_at` (span start;
    `emitted_at` separate — bitemporal, mirroring `heimdal.observation.published`), `dimensions_fed`
@@ -54,7 +56,7 @@ up before #3176 is delivered.
 ```
 $ python -m app.cli episodes streams --json | jq '.streams[] | select(.stream_id=="screen") | .status'
 "live"
-$ python -m app.cli episodes tick --json     # a day of screen spans now segments into episodes
+$ python -m app.cli episodes tick --json     # consumes already-published screen observations through the registry
 {"proposed_episodes": 6, "streams_consumed": ["screen", "vault.activity", "calendar", ...]}
 ```
 
@@ -85,10 +87,16 @@ via contract" invariant intact; a bespoke screen consumer would silently reshape
 ```
 ruff check app tests && mypy app
 pytest -q tests/episodes/test_stream_registry.py tests/episodes/test_screen_stream_adapter.py
-pytest -q -m "not pg"
 ```
 
-Requires ERE-01 (#3176) merged: the registry + signal contract + `test_stream_registry.py` must exist.
+The PR test selector adds the focused subsystem suite for changed runtime paths. This bounded Tier 2
+slice does not prescribe the repository-wide `pytest -q -m "not pg"` lane; run broader coverage only
+when a named failure mode or the current selector requires it, per
+`GOVERNANCE_PROPORTIONALITY.md :: Evidence reuse and stop rule` and
+`TEST_STRATEGY_HOT_PATH.md :: Runtime / Code PRs`.
+
+ERE-01 (#3176) is already delivered; this slice uses its registry, signal contract, and
+`test_stream_registry.py` enforcement.
 
 ## Out of Scope
 
@@ -110,4 +118,4 @@ ERE cursor's durability is ERE-01/04's posture; this task adds a source, not a s
 
 ## Related GitHub Issues
 
-One issue: `[Heimdal Screen Stream] register-screen-stream: flip screen from future to live in the ERE registry`. **Blocked on ERE stream registry #3176** and on SCREEN-02. Likely **sonnet-tier** (registry entry + span→signal adapter; the hard design lives in ERE-01 and SCREEN-02). This is the parent-closure child once #3176 lands and the stream is live. See scratchpad draft.
+One issue: #3346 `[Heimdal Screen Stream] register-screen-stream: flip screen from future to live in the ERE registry`. Its prerequisites ERE-01 (#3176) and SCREEN-02 (#3344) are delivered. This is the bounded implementation child of the still-open parent validation hub #3340; live capture and broader capability acceptance remain outside this slice.
