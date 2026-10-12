@@ -476,11 +476,11 @@ def _verify_executing_authority_code(approval: Mapping[str, Any], root: Path | N
     executing_root = Path(__file__).absolute().parents[2]
     for name in sorted(FRESH_EXECUTION_DEPENDENCIES):
         result = subprocess.run(
-            ["git", "-C", str(root), "show", f"{revision}:{name}"],
+            ["git", "--no-replace-objects", "-C", str(root), "show", f"{revision}:{name}"],
             capture_output=True, check=False,
         )
         tree = subprocess.run(
-            ["git", "-C", str(root), "ls-tree", revision, "--", name],
+            ["git", "--no-replace-objects", "-C", str(root), "ls-tree", revision, "--", name],
             capture_output=True, check=False,
         )
         if result.returncode or tree.returncode or not tree.stdout.startswith(b"100644 blob "):
@@ -507,7 +507,7 @@ def _verify_workflow_root(approval: Mapping[str, Any], root: Path | None) -> lis
     workflow = approval["workflow"]
 
     def git(*args: str) -> bytes:
-        result = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+        result = subprocess.run(["git", "--no-replace-objects", "-C", str(root), *args], capture_output=True, check=False)
         if result.returncode:
             raise IssueDeliveryOperationRefused("trusted workflow Git identity is unavailable")
         return result.stdout

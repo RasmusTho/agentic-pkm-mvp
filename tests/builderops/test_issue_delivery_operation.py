@@ -618,7 +618,7 @@ def _recovered_candidate_adapter(harness: _ProductionHarness) -> IssueDeliveryOp
 @pytest.mark.pg
 @pytest.mark.parametrize("bifrost", [False, True], ids=["v1", "v2"])
 @pytest.mark.parametrize("caller", ["dispatcher", "cli"])
-@pytest.mark.parametrize("drift", ["trusted-root", "executing-root", "missing-source"])
+@pytest.mark.parametrize("drift", ["trusted-root", "executing-root", "missing-source", "git-replace"])
 @pytest.mark.parametrize("name", ["app/builderops/issue_delivery_operation.py", "app/dispatcher/verification_merge.py"])
 def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
     issue_delivery_production_harness, monkeypatch, tmp_path, bifrost, caller, drift, name,
@@ -635,7 +635,7 @@ def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
         item["path"]: hashlib.sha256((root / item["path"]).read_bytes()).hexdigest()
         for item in approval["workflow"]["artifacts"]
     }
-    if drift == "executing-root":
+    if drift in {"executing-root", "git-replace"}:
         executing = tmp_path / "executing"
         for artifact in operation.FRESH_EXECUTION_DEPENDENCIES:
             target = executing / artifact
@@ -649,6 +649,18 @@ def test_fresh_legacy_approval_rejects_unbound_adapter_drift(
         target.unlink()
     else:
         target.write_text(target.read_text() + "\n# unapproved adapter bytes\n")
+    if drift == "git-replace":
+        # Keep HEAD, approval and legacy artifact hashes unchanged while Git's
+        # default object reader presents an attacker-controlled dependency blob.
+        shutil.copyfile(target, root / name)
+        subprocess.run(["git", "-C", str(root), "add", name], check=True)
+        tree = subprocess.check_output(["git", "-C", str(root), "write-tree"], text=True).strip()
+        replacement = subprocess.check_output(
+            ["git", "-C", str(root), "commit-tree", tree, "-p", head.decode().strip(), "-m", "Replacement source"],
+            text=True).strip()
+        subprocess.run(["git", "-C", str(root), "replace", head.decode().strip(), replacement], check=True)
+        assert subprocess.check_output(["git", "-C", str(root), "show", f"{head.decode().strip()}:{name}"]) == target.read_bytes()
+        assert subprocess.check_output(["git", "--no-replace-objects", "-C", str(root), "show", f"{head.decode().strip()}:{name}"]) != target.read_bytes()
     assert subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"]) == head
     assert manifest_digests == {
         item["path"]: hashlib.sha256((root / item["path"]).read_bytes()).hexdigest()
