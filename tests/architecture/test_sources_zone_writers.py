@@ -206,6 +206,10 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                 key = (relative, _module_function_for(stack))
                 function_nodes[key] = node
                 aliases = dict(aliases_by_file[relative])
+                for index, ancestor in enumerate(stack[:-1]):
+                    if isinstance(ancestor, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        ancestor_key = (relative, _module_function_for(stack[: index + 1]))
+                        aliases.update(aliases_by_function.get(ancestor_key, {}))
                 aliases.update(function_import_aliases(node))
                 aliases_by_function[key] = aliases
                 calls: list[tuple[str, ast.Call]] = []
@@ -454,6 +458,14 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
             "    from app.writers.paths import get_vault_sources_dir_rel as resolve\n"
             "    from app.writers.sinks import write_note_relative as persist\n"
             "    return persist(f'{resolve()}/rogue.md')\n"
+            "def nested_local_import_writer_3414():\n"
+            "    from app.writers.paths import get_vault_sources_dir_rel as resolve_3414\n"
+            "    from app.writers.sinks import write_note_relative as persist_3414\n"
+            "    def make_path_3414():\n"
+            "        return f'{resolve_3414()}/nested.md'\n"
+            "    def persist_path_3414(path):\n"
+            "        return persist_3414(path)\n"
+            "    return persist_path_3414(make_path_3414())\n"
         ),
     }
     for relative, content in files.items():
@@ -464,8 +476,13 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
     _literals, resolver_callers, source_write_callers = _source_code_inventory(tmp_path)
 
     assert ("app/writers/helpers.py", "build_source_path") in resolver_callers
+    assert (
+        "app/writers/producer.py",
+        "nested_local_import_writer_3414.make_path_3414",
+    ) in resolver_callers
     assert ("app/writers/producer.py", "newly_added_writer") in source_write_callers
     assert ("app/writers/producer.py", "local_import_writer") in source_write_callers
+    assert ("app/writers/producer.py", "nested_local_import_writer_3414") in source_write_callers
     assert ("app/writers/producer.py", "unrelated_path_and_write_calls") not in source_write_callers
 
 
