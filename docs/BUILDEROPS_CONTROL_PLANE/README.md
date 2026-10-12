@@ -250,8 +250,11 @@ observation time, and constructs the native `TaskRecord` fields from those sourc
 no caller-supplied Issue facts or arbitrary payload. A generic initial task creation, fixture,
 model narration or hand-written TaskRecord cannot establish this provenance.
 
-Structural readiness reuses the canonical section, AC/Verify grammar, parent and admission
-predicates. It does not infer source-file availability from the validator's checkout. Source owners
+Structural readiness calls the same `classify_issue_body` current-contract eligibility verdict as
+ordinary pickup, including scope/authority, current human holds and formatted technical-acceptance
+requirements. It does not maintain a separate subset of those predicates. The importer's fixed
+internal retained-source mode does not infer source-file availability from the validator's checkout;
+it is not an exposed CLI/Ready-mutation bypass or file-availability authority. Source owners
 and the independently observed candidate document manifest must establish that availability; missing
 documents still refuse the observation.
 

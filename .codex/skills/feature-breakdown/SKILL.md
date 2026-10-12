@@ -253,14 +253,20 @@ creating issues.
   - matching issue-pointer header/body state
   - `README.md` state/status lines
   - `README.md` relationship-to-GitHub-issues section and the acceptance checklist for the matching source level
-- Record post-merge validation as issue-body checklist progress or issue comments with links to runs, receipts, and operator notes.
+- Record post-merge validation as issue-body checklist progress or issue comments with links to
+  runs and existing artifacts/receipts. Apply `docs/TESTING.md :: Automated Technical Acceptance`:
+  qualified TEST journeys execute technical acceptance by default; human need does not imply
+  manual execution. Cut missing automation into a bounded Builder child and missing environment
+  into concrete restore-environment work, preserving infrastructure ownership and effect gates.
 - Keep owner docs stable while evidence is still accumulating.
 - Open or update an owner-doc PR only when acceptance changes the supported truth the repo claims.
 - Keep implementation tasks independently mergeable. If a task cannot be verified on its own, the breakdown is still too coarse.
 - Explain a practical delivery order while keeping independent slices independently ready. A preferred
   flat schedule is not a dependency contract; require a concrete reason for each blocking edge.
 - One task specification can map to many GitHub issues. The spec is the source of truth, not the issue.
-- Parent issues are validation hubs during delivery. After child delivery and repo-verifiable acceptance, close the parent and split future observation into a BuilderOps `LearningSignal`, `PromotionIntent`, discard/supersession receipt, or a follow-up GitHub Issue when it is executable work.
+- Parent issues are validation hubs during delivery. Follow `docs/development/PARENT_ISSUE_CLOSURE.md`
+  only after every scoped AC passes, including deployed proof and owner-doc writeback. Split future
+  observation into an existing BuilderOps surface or executable follow-up without hiding unmet ACs.
 
 ## When to trigger
 
@@ -349,7 +355,10 @@ Feature issue guidance:
 - `Acceptance Criteria` define what must be true before the feature outcome can be claimed as supported. Each AC carries a `Verify:` marker — test pointer (behavioral) or doc/receipt target (non-behavioral).
 - `Implementation Tasks` links to the specification directory and lists the bounded task files with their intended order.
 - `Verification Path` defines the task-level proof surfaces.
-- `Validation / Acceptance Path` defines the post-merge evidence, operator checks, and owner-doc promotion trigger.
+- `Validation / Acceptance Path` defines automated qualified TEST proof, the short DEV smoke and
+  warranted DEV scenarios, existing evidence paths and owner-doc promotion trigger. A genuine
+  human acceptance exception states its observable choice, why it cannot be automated, owner and
+  exact `unblocks_when`; generic live/operator acceptance is not a stop condition.
 - In live use, keep validation evidence in the parent issue itself rather than reopening owner docs for every rerun.
 
 ## GitHub issue requirements for implementation tasks

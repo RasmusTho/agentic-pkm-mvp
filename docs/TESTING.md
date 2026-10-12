@@ -8,7 +8,8 @@ Authority: Canonical testing and validation strategy for the active baseline, in
 - Integration testing: component boundaries such as API ↔ stores ↔ services, routing compilation, and outbox/store interactions.
 - System / bootstrap testing: end-to-end runtime flows such as note → ingest → index → ASK, watcher → panel → promotion chains, and clean-state local startup/bootstrap verification.
 - Scripted UAT: seeded-vault checks that assert operator-visible outcomes on the canonical local test path.
-- Real-vault acceptance: bounded verification against a real vault or real operator workflow when the capability claims operator-facing support.
+- Deployed technical acceptance: automated journeys against a qualified non-production candidate with isolated synthetic actors/data, proving the claimed user outcome and failure boundaries.
+- Human acceptance exception: a specific human observation or reserved choice that cannot be automated; it is separate from technical test execution.
 - System integration testing (SIT): opt-in flows that exercise multiple runtime systems or external dependencies together, such as live LLM/provider wiring and full startup/runtime verification.
 - LLM eval (DeepEval/Ragas): opt-in `@pytest.mark.eval` tests for ASK/retrieval quality (see `docs/eval.md`).
 - Property-based ingest invariants: `tests/ingest/test_normalize_properties.py` ensures normalize outputs Core-6 fields robustly.
@@ -265,7 +266,7 @@ ship or change that selection. Temporary-root isolation is supplied by the root 
 | Integration | Prove backend/runtime seams | pg-backed stores, queue wiring, API/store seams, CLI/service boundaries | PR-blocking for touched seams or nightly |
 | System / bootstrap | Prove the canonical runtime and clean-state bootstrap chain works | watcher/runtime loop, ingest→index→ASK, docker/runtime smoke, `make test-bootstrap` slices | PR smoke plus broader nightly |
 | Scripted UAT | Prove the seeded-vault operator path works | seeded vault, receipts/intents, rerun idempotence, status/health assertions | release/UAT gate |
-| Real-vault acceptance | Prove the claimed operator-facing capability works in a realistic bounded environment | real vaults, bounded operator flows, acceptance walkthroughs | explicit acceptance gate for capabilities that claim it |
+| Deployed technical acceptance | Prove the claimed user outcome works on the deployed candidate | qualified TEST journeys, isolated synthetic fixtures, actual required integrations | feature/parent acceptance gate |
 
 ## Testing, Verification, Validation, And Acceptance
 
@@ -276,7 +277,7 @@ Use these terms distinctly in both docs and execution:
 - Scenario acceptance = whether the human outcome and failure boundaries described in the Scenario Acceptance Matrix are met.
 - Feature validation = proof that the composed user-facing outcome works across its required capabilities, surfaces, integrations, and subsystems, sometimes after merge.
 - Capability validation = proof that a reusable function meets its typed contract and belongs coherently to its named subsystem; it does not replace scenario or feature acceptance.
-- Acceptance = the explicit decision that the repo can now claim and support the feature outcome or capability contract in owner docs.
+- Acceptance = the evidence-backed conclusion that the repo can now claim and support the scoped feature outcome or capability contract in owner docs, with any genuine human exception resolved.
 
 Real-life evidence rule:
 - PRs should carry slice verification evidence.
@@ -284,6 +285,73 @@ Real-life evidence rule:
 - Owner docs should change when the accepted support claim changes, not for every rerun or post-merge observation.
 
 This keeps docs stable while still allowing truthful post-merge validation.
+
+### Automated Technical Acceptance
+
+This section owns Builder System technical acceptance policy. A human need describes the outcome
+to prove; it does not assign the test execution to a human. Technical acceptance is automated by
+default in **TEST**, including client interaction, composed feature flows and their failure paths.
+Use a short **DEV** smoke for the deployed candidate and add DEV scenarios only when a DEV-specific
+contract or unresolved failure requires them. TEST acceptance supplements relevant pre-merge
+verification; neither a merged child nor green unit tests prove a composed deployed outcome.
+
+Qualified acceptance requires:
+
+- **Actual candidate identity.** Bind the observed running UI/backend and required producer to the
+  intended channel and immutable source SHA/image digest using the existing channel/native
+  receipts. A configured ref, healthy endpoint, test double or result from another candidate is
+  insufficient. Reuse the same-candidate DEV/TEST deployment evidence; do not deploy or migrate
+  merely because this policy requests proof.
+- **Isolated actors and data.** Use a qualified synthetic test actor, source binding and fixtures
+  within the existing non-production authority. Preserve admission, WriteGuard, locks, credential
+  isolation and Product human-intent guards. Qualify each scenario's effects before execution;
+  synthetic approval exercises that actor's permitted path and never records an actual owner's
+  acknowledgement. The passive core-flow admission does not authorize additional writes.
+- **Observable journeys.** Map every scoped AC to executable assertions of the user outcome,
+  provenance and failure boundaries. Use the source-selected integration when the outcome claims
+  it, including real TTS/provider or calendar paths; deterministic doubles prove wiring and refusal,
+  not the claimed live integration. Client motion, focus, caret restore and playback require real
+  browser execution. Keep future/non-baseline scenarios distinct under the dual validation model.
+- **Complete proof.** Every required scenario must actually pass. Missing, blocked, failed, skipped,
+  xfailed or excluded required tests cannot count as PASS. An opt-in suite skipped in ordinary PR CI
+  remains pending acceptance. Required source-selected integration unavailability may prove graceful
+  degradation while leaving the successful integration AC unmet.
+- **Existing evidence and ownership.** Keep the scenario inventory, results, candidate identity,
+  timings and relevant trace/screenshots/receipts in existing private artifacts and link the outcome
+  from the parent or explicit acceptance Issue. Reuse valid evidence and rerun affected scenarios
+  only; do not replay an uncertain write. `verification-and-closure` owns the acceptance check,
+  parent reconciliation and PR-specific owner-doc result. This policy adds no registry or state.
+
+Missing proof is executable Builder work. An unavailable qualified environment uses
+`agent:blocked` / `action:restore-environment` with the named channel/service, recovery owner and
+exact `unblocks_when`. Missing scenario automation becomes one bounded implementation child with
+meaningful `Verify:` targets; the parent stays a validation hub. Existing infrastructure ownership,
+release/deployment authority, normal non-production migration policy and production/operator gates
+continue to govern the effects. A generic "live/operator acceptance" stop adds no authority gate.
+
+Use `agent:needs-human` / `action:human-acceptance` only for a **human acceptance exception** that
+names the observable choice or observation, why it cannot be automated, the owner, and an exact
+`unblocks_when`. Put these facts in the self-sufficient **Issue body**, which readiness callers
+receive; the existing blocker receipt links that contract and records its current action. For a
+legacy comment-only exception, read the latest receipt and repair the body before lifecycle
+reconciliation. Missing body facts do not disprove or revoke a genuine human hold. No separate
+approval ceremony is required. Taste, accessibility experience or a reserved product choice may need a human;
+running a browser, listening for an audio response, missing automation and missing environment are
+not sufficient reasons by themselves. Route genuinely missing authorization/access through their
+existing human action subtype. Resolve technical work first and retain the remaining exact choice.
+
+Keep the four facts together beside the current unresolved condition in the existing Scope,
+Constraints, AC or acceptance-path text. Completed/historical decisions and quoted examples remain
+context; they cannot justify a new current technical hold. A current human choice also cannot exempt
+an unrelated generic operator-UAT execution requirement. Ordinary inline Markdown formatting must
+preserve the requirement's meaning. All Builder eligibility consumers use the canonical classifier;
+the retained-source importer alone leaves candidate-file availability to its independently collected
+source-owner/document evidence, while ordinary CLI and Ready mutations retain strict file checks.
+
+Close a parent only when **every scoped AC**, including required deployed acceptance and owner-doc
+writeback, is satisfied under `docs/development/PARENT_ISSUE_CLOSURE.md`. Move future observation or
+adoption to a separate follow-up only after that proof; moving an unmet AC out of the checklist
+cannot manufacture completion. Promote current-state claims only from qualified live PASS.
 
 ## Dual Validation Model
 
@@ -306,6 +374,8 @@ This distinction is intentional. It prevents the current architecture from becom
 ### Human-Need Acceptance Track
 
 Human-need acceptance scenarios should be written from the user-facing contract first, not from the current runtime decomposition.
+Their technical execution follows `Automated Technical Acceptance`; `human_uat` names the intended
+human outcome, not a manual execution requirement.
 
 They should:
 - derive from `docs/HUMAN-FLOWS.md` first and `docs/plans/SCENARIO_ACCEPTANCE_MATRIX.md` second

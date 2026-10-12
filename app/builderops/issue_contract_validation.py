@@ -45,10 +45,23 @@ _RUNTIME_RECEIPT_TARGET = re.compile(
 _PLACEHOLDER = re.compile(r"<[^>]+>")
 _AUTHORITY_TOKEN = re.compile(r"[A-Za-z0-9]+")
 _ANNOTATED_TARGET = re.compile(r"^`(?P<inner>[^`]+)` (?P<annotation>\S.*)$")
-_DIFF_OF_TARGET = re.compile(r"^diff of `(?P<path>[^`]+)`(?: \S.*)?$")
+_DIFF_OF_TARGET = re.compile(r"^diff of `(?P<path>[^`]+)`(?P<annotation>(?:[,;]?[ \t]+\S.*)?)$")
 _MARKER_PRESENCE_TARGET = re.compile(
-    r"^`(?P<literal>[^`]+)` present in `(?P<path>[^`]+)`(?:[,;]? \S.*)?$"
+    r"^`(?P<literal>[^`]+)` present in `(?P<path>[^`]+)`(?P<annotation>(?:[,;]?[ \t]+\S.*)?)$"
 )
+_LOCATOR_START = re.compile(r"^`*(?:\.?[A-Za-z0-9_./-]+)\.[A-Za-z0-9_-]+(?=$|[ \t`:;])")
+_TARGET_JOIN = re.compile(r"(?:[ \t]+\+[ \t]+|[ \t]+and[ \t]+|[,;][ \t]*)", re.I)
+
+
+def _single_target_text(value: str) -> bool:
+    """Annotation/anchor prose cannot append a second locator to any form."""
+    for join in _TARGET_JOIN.finditer(value):
+        tail = value[join.end():].lstrip()
+        if (tail.casefold().startswith(("doc writeback at", "roadmap diff:", "runtime receipt:", "diff of "))
+                or _LOCATOR_START.match(tail) is not None
+                or re.match(r"^`[^`]+` present in\b", tail) is not None):
+            return False
+    return True
 
 
 def _contains_vague_authority_token(value: str) -> bool:
@@ -59,7 +72,9 @@ def _contains_vague_authority_token(value: str) -> bool:
 
 
 def _strip_backtick_pair(value: str) -> str:
-    if len(value) >= 2 and value.startswith("`") and value.endswith("`"):
+    """Remove isolated outer ticks without splitting a delimiter run."""
+    if (len(value) >= 2 and value.startswith("`") and value.endswith("`")
+            and not value.startswith("``") and not value.endswith("``")):
         return value[1:-1]
     return value
 
@@ -105,16 +120,48 @@ def is_durable_repo_anchor(value: str) -> bool:
     )
 
 
+def _is_concrete_verify_path(value: str) -> bool:
+    """A Verify filename can contain 'path'; a placeholder path component cannot.
+
+    Availability remains independent evidence. Source-anchor validation keeps
+    its existing stricter token contract; this predicate is only Verify grammar.
+    """
+    if _REPO_PATH.fullmatch(value) is None or _PLACEHOLDER.search(value) is not None:
+        return False
+    return all(part not in {".", ".."} and part.rsplit(".", 1)[0].casefold() not in VAGUE_AUTHORITY_TOKENS
+               for part in value.split("/"))
+
+
+def _is_verify_repo_anchor(value: str) -> bool:
+    match = _REPO_ANCHOR.fullmatch(value)
+    return (match is not None and _is_concrete_verify_path(match.group("path"))
+            and is_durable_anchor(match.group("anchor")) and _single_target_text(match.group("anchor")))
+
+
 def _is_canonical_backticked_inner(inner: str) -> bool:
-    """Whether one unquoted segment is a standalone canonical target."""
+    """Validate the complete unquoted target, including selector/anchor."""
 
     test_target = _TEST_VERIFY_TARGET.fullmatch(inner)
     if test_target is not None:
-        return is_durable_repo_path(test_target.group("path"))
-    if is_durable_repo_anchor(inner):
+        return (_is_concrete_verify_path(test_target.group("path"))
+                and all(selector.split("[", 1)[0].casefold() not in VAGUE_AUTHORITY_TOKENS
+                        for selector in test_target.group("selectors").split("::")[1:]))
+    if _is_verify_repo_anchor(inner):
         return True
     repo_path, separator, selector = inner.partition("::")
-    return bool(separator and selector and is_durable_repo_path(repo_path))
+    if repo_path.startswith(("tests/", "companion-ui/companion-app/tests/")) and repo_path.endswith(".py"):
+        return False
+    return bool(separator and "::" not in selector and _is_concrete_verify_path(repo_path)
+                and is_durable_anchor(selector) and _single_target_text(selector))
+
+
+def _unwrap_annotated_anchor(value: str) -> str:
+    annotated = _ANNOTATED_TARGET.fullmatch(value)
+    if annotated is not None:
+        if not _single_target_text(" " + annotated.group("annotation")):
+            return ""
+        return annotated.group("inner")
+    return _strip_backtick_pair(value)
 
 
 def is_resolvable_verify_target(value: str) -> bool:
@@ -131,46 +178,37 @@ def is_resolvable_verify_target(value: str) -> bool:
     if annotated is not None and _is_canonical_backticked_inner(
         annotated.group("inner")
     ):
-        return True
+        return _single_target_text(" " + annotated.group("annotation"))
     diff_target = _DIFF_OF_TARGET.fullmatch(target)
     if diff_target is not None:
-        return is_durable_repo_path(diff_target.group("path"))
+        return (_is_concrete_verify_path(diff_target.group("path"))
+                and _single_target_text(diff_target.group("annotation")))
     presence_target = _MARKER_PRESENCE_TARGET.fullmatch(target)
     if presence_target is not None:
-        return is_durable_repo_path(presence_target.group("path"))
+        return (_is_concrete_verify_path(presence_target.group("path"))
+                and _single_target_text(presence_target.group("annotation")))
 
-    unquoted_target = _strip_backtick_pair(target)
-    if unquoted_target != target and "`" in unquoted_target:
-        return False
-    target = unquoted_target
+    target = _strip_backtick_pair(target)
 
-    test_target = _TEST_VERIFY_TARGET.fullmatch(target)
-    if test_target is not None:
-        return is_durable_repo_path(test_target.group("path"))
-
-    if is_durable_repo_anchor(target):
-        return True
-
-    repo_path, separator, selector = target.partition("::")
-    if separator and selector and is_durable_repo_path(repo_path):
+    if _is_canonical_backticked_inner(target):
         return True
 
     doc_prefix = "doc writeback at "
     if target.startswith(doc_prefix):
-        repo_anchor = _strip_backtick_pair(target.removeprefix(doc_prefix))
+        repo_anchor = _unwrap_annotated_anchor(target.removeprefix(doc_prefix))
         return (
             repo_anchor.startswith(("docs/", ".codex/"))
-            and is_durable_repo_anchor(repo_anchor)
+            and _is_verify_repo_anchor(repo_anchor)
         )
 
     roadmap_prefix = "roadmap diff: "
     if target.startswith(roadmap_prefix):
-        repo_anchor = _strip_backtick_pair(
+        repo_anchor = _unwrap_annotated_anchor(
             target.removeprefix(roadmap_prefix)
         )
         return (
             repo_anchor.startswith("docs/")
-            and is_durable_repo_anchor(repo_anchor)
+            and _is_verify_repo_anchor(repo_anchor)
         )
 
     runtime_receipt = _RUNTIME_RECEIPT_TARGET.fullmatch(target)

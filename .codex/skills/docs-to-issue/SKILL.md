@@ -139,6 +139,13 @@ observable outcomes and sourced boundaries; label internal design/test/path choi
 defaults. Resolve ordinary technical choices under TCD instead of adding an owner-decision AC.
 Before creating a blocked item, try bounded contract repair and verify its actual prerequisite.
 
+Apply `docs/TESTING.md :: Automated Technical Acceptance` when drafting acceptance paths. Default
+technical proof to qualified automated TEST journeys and a short DEV smoke; preserve same-candidate
+identity and synthetic actor/source boundaries. Missing automation is bounded executable Builder
+work; an unavailable qualified environment names restore-environment recovery. Reserve human
+acceptance for a named non-automatable observation/choice with owner and exact `unblocks_when`.
+Do not turn a human-need outcome or generic live/operator UAT into a manual-execution gate.
+
 Skill-specific rule: if an AC cannot carry a resolvable `Verify:` target, the AC is not crisp enough — refine the AC, split the Issue, or route the docs item through `feature-breakdown` before marking it `agent:ready`.
 
 `Source Anchors` rules:
