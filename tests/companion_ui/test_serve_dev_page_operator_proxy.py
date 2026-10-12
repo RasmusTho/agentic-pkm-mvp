@@ -301,6 +301,29 @@ def test_operator_overlay_route_calls_all_four_get_endpoints() -> None:
     assert "VAULT_MISSING" in html  # settings issue rendered
 
 
+def test_operator_render_uses_cached_model_health() -> None:
+    """Passive overlay health reads use cache-only sampling; explicit proxy health does not."""
+    client = _FakeClient(
+        get_responses={
+            "/api/status": {"sot_version": "v5.5"},
+            "/api/health": {"ok": True, "checks": {}},
+            "/api/settings/validate": {"ok": True, "issues": []},
+            "/api/events/tail": {"events": []},
+        }
+    )
+    handler_cls = make_handler(client=client, api_base_url="http://127.0.0.1:18001")  # type: ignore[arg-type]
+
+    overlay = _GetDriver(handler_cls, "/operator")
+    overlay.run_get()
+    assert overlay.status_code == 200
+    assert ("/api/health", {"model_access_sampling": "cache"}) in client.get_calls
+
+    explicit = _GetDriver(handler_cls, "/api/operator/health")
+    explicit.run_get()
+    assert explicit.status_code == 200
+    assert client.get_calls[-1] == ("/api/health", {})
+
+
 def test_operator_overlay_route_degrades_gracefully_on_partial_failure() -> None:
     """GET /operator still renders all panels even when some endpoints fail."""
     from companion_ui.workspace.workspace_http_client import WorkspaceClientNetworkError
