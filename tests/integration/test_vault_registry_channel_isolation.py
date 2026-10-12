@@ -6,6 +6,7 @@ import json
 import os
 import fcntl
 import traceback
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
@@ -50,7 +51,7 @@ from app.instance.vault_registry import (
     TransferLineage,
     VaultRegistration,
 )
-from app.vault.manager import VaultManager, _initial_settings_files, iter_vault_markdown_files
+from app.vault.manager import REQUIRED_SETTINGS_FILES, VaultManager, _initial_settings_files, iter_vault_markdown_files
 from app.vault.markdown_settings import MarkdownSettingsStore
 from tests._mvr_default_vault_harness import activate
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
@@ -1308,6 +1309,9 @@ def test_authenticated_legacy_identity_completion_covers_admitted_matching_produ
     if producer == "active-existing-root":
         activate(runtime, registration, tmp_path)
     else:
+        # Complete in the source's proved ownership view, then consume the
+        # retained identities through the receipt-authenticated namespace.
+        assert _legacy_identity_preflight(runtime) == 0
         original = ownership_module.resolve_filesystem_root_identity
 
         def remounted(value):
@@ -1317,6 +1321,7 @@ def test_authenticated_legacy_identity_completion_covers_admitted_matching_produ
             return identity
 
         monkeypatch.setattr(ownership_module, "resolve_filesystem_root_identity", remounted)
+        monkeypatch.setattr(runtime_module, "resolve_filesystem_root_identity", remounted)
     before = runtime.registry.load()
     source_before = _source_and_owner_bytes(runtime, root)
     if producer == "remount":
@@ -1330,7 +1335,7 @@ def test_authenticated_legacy_identity_completion_covers_admitted_matching_produ
         extensions = {**extensions, "scalarRollback": {
             **extensions["scalarRollback"], "forkRegistryRevision": before.revision + 1,
         }}
-    assert after == replace(before, revision=before.revision + 1,
+    assert after == replace(before, revision=before.revision + (producer != "remount"),
                             registrations={registration.vault_binding_id: expected}, extensions=extensions)
     assert _source_and_owner_bytes(runtime, root) == source_before
 
@@ -1338,6 +1343,7 @@ def test_authenticated_legacy_identity_completion_covers_admitted_matching_produ
 @pytest.mark.parametrize("failure", [
     "foreign-owner", "missing-owner", "unproven-root", "vault-conflict", "local-conflict",
     "settings-alias", "identity-alias", "stale-registry", "stale-owner",
+    *[f"required-alias:{filename}" for filename in REQUIRED_SETTINGS_FILES],
 ])
 def test_authenticated_legacy_identity_completion_refuses_conflicts_and_stale_state(
     tmp_path, monkeypatch, failure,
@@ -1365,6 +1371,12 @@ def test_authenticated_legacy_identity_completion_refuses_conflicts_and_stale_st
     elif failure == "identity-alias":
         (root / "settings/local.md").rename(tmp_path / "foreign-local.md")
         (root / "settings/local.md").symlink_to(tmp_path / "foreign-local.md")
+    elif failure.startswith("required-alias:"):
+        filename = failure.split(":", 1)[1]
+        path = root / "settings" / filename
+        foreign = tmp_path / f"foreign-{filename}"
+        path.rename(foreign)
+        path.symlink_to(foreign)
     elif failure == "stale-owner":
         original = runtime.ledger.recover_or_require_active
 
@@ -1386,8 +1398,12 @@ def test_authenticated_legacy_identity_completion_refuses_conflicts_and_stale_st
             return original_update(candidate, **kwargs)
 
         monkeypatch.setattr(runtime.registry, "update_registration", race_before_update)
-    with pytest.raises((RegistryError, LedgerError)):
+    with pytest.raises((RegistryError, LedgerError)) as exc:
         runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    if failure.startswith("required-alias:"):
+        output = "".join(traceback.format_exception(exc.type, exc.value, exc.tb))
+        assert str(root) not in output and str(foreign) not in output
+        assert "vault-retained-source" not in output and "local-retained-source" not in output
     assert runtime.registry.load() == (newer or before)
     if failure == "stale-registry":
         assert newer is not None
@@ -1404,12 +1420,33 @@ def test_authenticated_legacy_identity_completion_refuses_conflicts_and_stale_st
 @pytest.mark.parametrize("shape", [
     "missing-settings", "missing-vault-id", "missing-local-id",
     "missing-identities-and-schema", "provisional", "ordinary",
+    "remount-namespace", "remount-replacement",
 ])
 def test_authenticated_legacy_identity_completion_preserves_uninitialized_compatibility(
     tmp_path, monkeypatch, shape,
 ) -> None:
     runtime, root, registration = _authenticated_legacy_identity_fixture(tmp_path, monkeypatch)
-    if shape == "missing-settings":
+    if shape == "remount-replacement":
+        retained = tmp_path / "original-source"
+        root.rename(retained)
+        shutil.copytree(retained, root)
+        for filename, field, schema in (("vault.md", "vaultId", "vault"), ("local.md", "localInstanceId", "local")):
+            MarkdownSettingsStore().write_frontmatter(root / "settings" / filename, {
+                "schema": f"design-handoff.{schema}.v1", field: "foreign-source-identity",
+            })
+        assert VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "validator.md")).validate_vault(root).status == "selected"
+    elif shape == "remount-namespace":
+        original = ownership_module.resolve_filesystem_root_identity
+
+        def remounted(value):
+            identity = original(value)
+            if Path(value).resolve() == root.resolve():
+                return FilesystemRootIdentity(identity.canonical_path, identity.device, identity.inode + 1)
+            return identity
+
+        monkeypatch.setattr(ownership_module, "resolve_filesystem_root_identity", remounted)
+        monkeypatch.setattr(runtime_module, "resolve_filesystem_root_identity", remounted)
+    elif shape == "missing-settings":
         (root / "settings/paths.md").unlink()
     elif shape == "missing-identities-and-schema":
         for filename in ("vault.md", "local.md"):
@@ -1424,6 +1461,12 @@ def test_authenticated_legacy_identity_completion_preserves_uninitialized_compat
             "provenance": "first_open_existing" if shape == "provisional" else "legacy_env_bootstrap",
         })
         runtime.registry.update_registration(registration, _capability=STORAGE_MUTATION_CAPABILITY)
+    if shape.startswith("remount-"):
+        def unproved_source_read(*args):
+            pytest.fail("receipt-only admission must not read unproved source identities")
+
+        monkeypatch.setattr(runtime_module, "_read_vault_identity", unproved_source_read)
+        monkeypatch.setattr("app.settings.locations.read_settings_mapping", unproved_source_read)
     before = _runtime_state_bytes(tmp_path, runtime)
     source_before = _source_and_owner_bytes(runtime, root)
     assert _legacy_identity_preflight(runtime) == 0

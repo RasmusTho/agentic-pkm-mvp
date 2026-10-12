@@ -317,12 +317,19 @@ Receipt-only materialization may retain an initialized `authenticated_legacy_own
 registration without `vault_id` or `local_instance_id`. Once the already-owned selected source is
 visible to a runtime consumer, matching `preflight`/`bootstrap_env_binding` (ordinary root or
 receipt-authenticated remount) and active existing-root `production_register` complete only those
-absent fields. They read the existing owner-native source identities after checking the required
-settings and vault/local schemas; they never initialize settings or mint identities. The producer
+absent fields when the visible physical source authenticates against the active ownership lease.
+They read the existing owner-native source identities after checking containment of every required
+settings artifact and the vault/local schemas; they never initialize settings or mint identities. The producer
 lock and ownership lock cover source inspection and the expected-revision registry update.
 Established identities, binding/root/ref, default/history, provenance, authority and runtime floors
 remain intact, as do source, key and ownership bytes. The existing registry transaction advances its
 revision and rollback-export checkpoint normally; repeating completion is a no-op.
+
+The host receipt alone preserves remount admission; it does not authenticate new IDs read from a
+different visible inode or a replacement directory at the same path. Such a consumer retains
+unresolved metadata without a new startup failure. An already-owned source-visible producer can
+complete the identities in its proved physical ownership view; subsequent remount admission reuses
+that retained metadata without reading or rewriting the source.
 
 Incomplete settings or missing source identities retain the existing unresolved, read-only
 compatibility posture. Other provisional and first-vault registrations still require their existing

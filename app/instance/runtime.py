@@ -755,13 +755,20 @@ class InstanceRegistryRuntime:
                     )
                 if not admitted:
                     raise RegistryError("authenticated legacy identity ownership refused")
+                if host_owner is not None and not self.ledger._matches_materialized_root(lease, source_root, key):
+                    # The receipt admits the retained host binding, but does not
+                    # authenticate content at a different local inode. Preserve
+                    # unresolved metadata until a source-owning producer completes it.
+                    return registration
                 try:
                     identity = resolve_filesystem_root_identity(source_root)
                     # Missing settings or source IDs remain an unresolved legacy entry,
                     # preserving read-before-initialize and ordinary startup compatibility.
                     shared = resolve_settings_file(source_root, "vault.md")
                     local = resolve_settings_file(source_root, "local.md")
-                    if not identity.materialized or not _first_vault_content_complete(source_root):
+                    if not identity.materialized or not _first_vault_content_complete(
+                        source_root, require_contained_paths=True,
+                    ):
                         return registration
                     shared_metadata = read_settings_mapping(shared)
                     local_metadata = read_settings_mapping(local)
@@ -1095,7 +1102,7 @@ class InstanceRegistryRuntime:
         )
 
 
-def _first_vault_content_complete(path: Path) -> bool:
+def _first_vault_content_complete(path: Path, *, require_contained_paths: bool = False) -> bool:
     """Detect owner-native completion without importing the API route."""
 
     settings = Path(path).expanduser().resolve(strict=False) / "settings"
@@ -1107,7 +1114,13 @@ def _first_vault_content_complete(path: Path) -> bool:
         "companion-ui.md",
         "local.md",
     )
-    return settings.is_dir() and all((settings / filename).is_file() for filename in required)
+    if not settings.is_dir():
+        return False
+    if require_contained_paths:
+        from app.settings.locations import resolve_settings_file
+
+        return all(resolve_settings_file(path, filename).is_file() for filename in required)
+    return all((settings / filename).is_file() for filename in required)
 
 
 def _load_active_registry_runtime(
