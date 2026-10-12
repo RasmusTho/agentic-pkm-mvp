@@ -27,9 +27,9 @@ class _Request:
         self._responses = iter(responses)
         self._last_response = responses[-1]
         self._repeat_last = repeat_last
-        self.calls: list[tuple[str, int]] = []
+        self.calls: list[tuple[str, float]] = []
 
-    def get(self, url: str, *, timeout: int) -> _Response:
+    def get(self, url: str, *, timeout: float) -> _Response:
         self.calls.append((url, timeout))
         try:
             return next(self._responses)
@@ -52,7 +52,7 @@ class _TimedRequest(_Request):
         self._elapsed = elapsed
         self._durations = iter(durations_ms)
 
-    def get(self, url: str, *, timeout: int) -> _Response:
+    def get(self, url: str, *, timeout: float) -> _Response:
         response = super().get(url, timeout=timeout)
         self._elapsed[0] += next(self._durations) / 1000
         return response
@@ -148,7 +148,8 @@ def test_smoke_health_readiness_respects_total_deadline() -> None:
             sleeper=sleep,
         )
 
-    assert [timeout for _, timeout in request.calls] == [100, 30]
+    timeouts = [timeout for _, timeout in request.calls]
+    assert timeouts == pytest.approx([100, 30])
     assert elapsed[0] == 0.13
 
 
@@ -201,6 +202,32 @@ def test_smoke_health_readiness_supports_sub_poll_budget() -> None:
     assert request.calls == [("http://gateway/api/operator/health", 100)]
     assert sleeps == [0.1]
     assert elapsed[0] == 0.1
+
+
+def test_smoke_health_readiness_supports_one_ms_budget() -> None:
+    """A positive fractional remainder remains a bounded request timeout."""
+    elapsed = [0.0]
+    request = _TimedRequest([_Response({"ok": True})], elapsed, [0.8])
+    clock_calls = 0
+
+    def clock() -> float:
+        nonlocal clock_calls
+        clock_calls += 1
+        if clock_calls == 2:
+            elapsed[0] += 0.0001
+        return elapsed[0]
+
+    payload = wait_for_real_required_health(
+        request,
+        "http://gateway/api/operator/health",
+        timeout_ms=1,
+        allow_embedding_rebuild_required=False,
+        clock=clock,
+        sleeper=lambda _: None,
+    )
+
+    assert payload == {"ok": True}
+    assert request.calls[0][1] == pytest.approx(0.9)
 
 
 def test_smoke_navigation_uses_configured_finite_budget() -> None:

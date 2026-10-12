@@ -61,7 +61,7 @@ def wait_for_real_required_health(
     last_failure: AssertionError | None = None
     while True:
         remaining = deadline - clock()
-        remaining_ms = int(remaining * 1000)
+        remaining_ms = remaining * 1000
         if remaining_ms <= 0:
             if last_failure is None:
                 raise AssertionError(_HEALTH_READINESS_DEADLINE_ERROR)
