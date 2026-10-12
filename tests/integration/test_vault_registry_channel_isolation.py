@@ -4,6 +4,8 @@ import hashlib
 import inspect
 import json
 import os
+import fcntl
+import traceback
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
@@ -11,8 +13,10 @@ from uuid import uuid4
 import pytest
 
 import app.instance.runtime as runtime_module
+import app.instance.ownership_ledger as ownership_module
 
 from app.instance.filesystem_identity import (
+    FilesystemRootIdentity,
     resolve_filesystem_root_identity,
     same_filesystem_root,
 )
@@ -39,13 +43,16 @@ from app.instance.runtime import (
     _prove_instance_state_quiescence,
 )
 from app.instance.vault_registry import (
+    AppLocalSettingsStore,
     CapabilityNotReadyError,
     RegistryError,
     RemovalTombstone,
     TransferLineage,
     VaultRegistration,
 )
-from app.vault.manager import iter_vault_markdown_files
+from app.vault.manager import VaultManager, _initial_settings_files, iter_vault_markdown_files
+from app.vault.markdown_settings import MarkdownSettingsStore
+from tests._mvr_default_vault_harness import activate
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
 
 
@@ -1173,3 +1180,305 @@ def test_uninitialized_env_upgrade_preserves_read_only_binding_without_writes(tm
     )
     assert initialized.vault_binding_id == registration.vault_binding_id
     assert initialized.vault_id == "vault-personal"
+
+
+def _authenticated_legacy_identity_fixture(tmp_path, monkeypatch):
+    """Reproduce the real materializer's initialized, identity-less registration."""
+
+    root = tmp_path / "owned-source"
+    root.mkdir()
+    store = MarkdownSettingsStore()
+    for filename, frontmatter, body in _initial_settings_files(
+        vault_id="vault-retained-source",
+        vault_name="Retained source",
+        local_instance_id="local-retained-source",
+        machine_role="testNode",
+    ):
+        store.write_frontmatter(root / "settings" / filename, frontmatter, body=body)
+    (root / "retained-note.md").write_text("Existing human content\n", encoding="utf-8")
+    runtime = _runtime(tmp_path, "test", tmp_path / "host-global")
+    identity = resolve_filesystem_root_identity(root)
+    ancestors = tuple(f"path:{parent}" for parent in root.resolve().parents)
+    owner_row = {
+        "channel_id": "test", "vault_binding_id": "binding-retained", "root": str(root),
+    }
+    source_evidence = {
+        "docker": [], "config": [], "owners": [owner_row],
+        "owner_identities": [{
+            "channel_id": "test", "root": str(root),
+            "identity": f"inode:{identity.device}:{identity.inode}",
+            "ancestor_identities": sorted(ancestors),
+        }],
+    }
+    receipt = {
+        "schema": "agentic-pkm.legacy-owner-inventory.v1",
+        "inventory_complete": True, "writers_drained": True,
+        "source_probe_count": 2, "validated_after_quiescence": True,
+        "source_digest": runtime_module._canonical_json_digest(source_evidence),
+        "source_evidence": source_evidence, "owners": [owner_row],
+    }
+    receipt["receipt_digest"] = runtime_module._legacy_owner_receipt_digest(receipt)
+    owner = LegacyOwner(
+        "test", "binding-retained", root,
+        f"inode:{identity.device}:{identity.inode}", ancestors,
+        receipt_digest=receipt["receipt_digest"],
+    )
+    runtime.ledger.bootstrap_legacy_owners(
+        [owner], inventory_complete=True, writers_drained=True,
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    receipt_path = runtime.ledger.root / "legacy-owner-inventory.json"
+    receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+    receipt_path.chmod(0o600)
+    snapshot = runtime_module._materialize_authenticated_channel_registrations(
+        channel="test", registry=runtime.registry, ledger=runtime.ledger, owners=(owner,),
+    )
+    registration = snapshot.registrations["binding-retained"]
+    assert registration.vault_id is None and registration.local_instance_id is None
+    runtime.registry.set_instance_default(
+        registration.vault_binding_id, _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    with runtime.registry._locked():
+        snapshot = runtime.registry._read_current_locked(recover=True)
+        runtime.registry._write_locked(replace(
+            snapshot, last_active_vault_ref=registration.ref,
+            extensions={**snapshot.extensions, "runtimeFloors": {
+                "minimumRuntimeSchema": "mvr05-binding-keyed-v1",
+            }},
+        ))
+    monkeypatch.setenv("VAULT_ROOT", str(root))
+    monkeypatch.setenv("VAULT_ROOT_TEST", str(root))
+    monkeypatch.setenv("WATCHER_VAULT_PATH", str(root))
+    with runtime.first_vault_bootstrap_lock():
+        pass
+    return runtime, root, registration
+
+
+def _legacy_identity_preflight(runtime):
+    return runtime_module.main([
+        "preflight", "--channel", "test",
+        "--instance-state-root", str(runtime.layout.root.parent),
+        "--host-global-root", str(runtime.ledger.root), "--consumer", "api",
+    ])
+
+
+def _source_and_owner_bytes(runtime, root):
+    return {
+        **{path: path.read_bytes() for path in root.rglob("*") if path.is_file()},
+        **{path: path.read_bytes() for path in runtime.ledger.root.rglob("*") if path.is_file()},
+    }
+
+
+@pytest.mark.parametrize("established", ["neither", "vault", "local", "both"])
+def test_authenticated_legacy_identity_completion_preserves_binding_and_authority(
+    tmp_path, monkeypatch, established,
+) -> None:
+    runtime, root, registration = _authenticated_legacy_identity_fixture(tmp_path, monkeypatch)
+    registration = replace(
+        registration,
+        vault_id="vault-retained-source" if established in {"vault", "both"} else None,
+        local_instance_id="local-retained-source" if established in {"local", "both"} else None,
+    )
+    runtime.registry.update_registration(registration, _capability=STORAGE_MUTATION_CAPABILITY)
+    before = runtime.registry.load()
+    source_before = _source_and_owner_bytes(runtime, root)
+    context = VaultManager(app_local_store=AppLocalSettingsStore(tmp_path / "validator.md")).validate_vault(root)
+    assert context.status == "selected"
+    assert context.active_vault_id == "vault-retained-source"
+    assert context.local_instance_id == "local-retained-source"
+    assert _legacy_identity_preflight(runtime) == 0
+    expected = replace(registration, vault_id=context.active_vault_id, local_instance_id=context.local_instance_id)
+    after = runtime.registry.load()
+    assert after == replace(
+        before, revision=before.revision + (established != "both"),
+        registrations={registration.vault_binding_id: expected},
+    )
+    assert runtime.require_initialized(registration.vault_binding_id) == expected
+    assert _source_and_owner_bytes(runtime, root) == source_before
+    state_after = _runtime_state_bytes(tmp_path, runtime)
+    assert _legacy_identity_preflight(runtime) == 0
+    assert _runtime_state_bytes(tmp_path, runtime) == state_after
+
+
+@pytest.mark.parametrize("producer", ["remount", "active-existing-root"])
+def test_authenticated_legacy_identity_completion_covers_admitted_matching_producers(
+    tmp_path, monkeypatch, producer,
+) -> None:
+    runtime, root, registration = _authenticated_legacy_identity_fixture(tmp_path, monkeypatch)
+    if producer == "active-existing-root":
+        activate(runtime, registration, tmp_path)
+    else:
+        original = ownership_module.resolve_filesystem_root_identity
+
+        def remounted(value):
+            identity = original(value)
+            if Path(value).resolve() == root.resolve():
+                return FilesystemRootIdentity(identity.canonical_path, identity.device, identity.inode + 1)
+            return identity
+
+        monkeypatch.setattr(ownership_module, "resolve_filesystem_root_identity", remounted)
+    before = runtime.registry.load()
+    source_before = _source_and_owner_bytes(runtime, root)
+    if producer == "remount":
+        assert _legacy_identity_preflight(runtime) == 0
+    else:
+        runtime.production_register(root, producer="api")
+    expected = replace(registration, vault_id="vault-retained-source", local_instance_id="local-retained-source")
+    after = runtime.registry.load()
+    extensions = before.extensions
+    if producer == "active-existing-root":
+        extensions = {**extensions, "scalarRollback": {
+            **extensions["scalarRollback"], "forkRegistryRevision": before.revision + 1,
+        }}
+    assert after == replace(before, revision=before.revision + 1,
+                            registrations={registration.vault_binding_id: expected}, extensions=extensions)
+    assert _source_and_owner_bytes(runtime, root) == source_before
+
+
+@pytest.mark.parametrize("failure", [
+    "foreign-owner", "missing-owner", "unproven-root", "vault-conflict", "local-conflict",
+    "settings-alias", "identity-alias", "stale-registry", "stale-owner",
+])
+def test_authenticated_legacy_identity_completion_refuses_conflicts_and_stale_state(
+    tmp_path, monkeypatch, failure,
+) -> None:
+    runtime, root, registration = _authenticated_legacy_identity_fixture(tmp_path, monkeypatch)
+    if failure in {"foreign-owner", "missing-owner"}:
+        with runtime.ledger._locked():
+            key = runtime.ledger._load_or_create_key_locked(allow_create=False)
+            ledger = runtime.ledger._load_or_create_ledger_locked(key, allow_create=False)
+            leases = {} if failure == "missing-owner" else {
+                registration.vault_binding_id: replace(ledger.leases[registration.vault_binding_id], channel_id="dev"),
+            }
+            runtime.ledger._write_ledger_locked(replace(ledger, leases=leases), key)
+    elif failure == "unproven-root":
+        root.rename(tmp_path / "retained-source")
+        root.mkdir()
+    elif failure.endswith("-conflict"):
+        registration = replace(registration, **{
+            "vault_id" if failure == "vault-conflict" else "local_instance_id": "conflicting-retained-identity",
+        })
+        runtime.registry.update_registration(registration, _capability=STORAGE_MUTATION_CAPABILITY)
+    elif failure == "settings-alias":
+        (root / "settings").rename(tmp_path / "foreign-settings")
+        (root / "settings").symlink_to(tmp_path / "foreign-settings", target_is_directory=True)
+    elif failure == "identity-alias":
+        (root / "settings/local.md").rename(tmp_path / "foreign-local.md")
+        (root / "settings/local.md").symlink_to(tmp_path / "foreign-local.md")
+    elif failure == "stale-owner":
+        original = runtime.ledger.recover_or_require_active
+
+        def retire_after_admission(*args, **kwargs):
+            lease = original(*args, **kwargs)
+            runtime.ledger.release_to_tombstone(registration.vault_binding_id, _capability=STORAGE_MUTATION_CAPABILITY)
+            return lease
+
+        monkeypatch.setattr(runtime.ledger, "recover_or_require_active", retire_after_admission)
+    before = runtime.registry.load()
+    source_before = _source_and_owner_bytes(runtime, root)
+    newer = None
+    if failure == "stale-registry":
+        original_update = runtime.registry.update_registration
+
+        def race_before_update(candidate, **kwargs):
+            nonlocal newer
+            newer = runtime.registry.set_instance_default(None, _capability=STORAGE_MUTATION_CAPABILITY)
+            return original_update(candidate, **kwargs)
+
+        monkeypatch.setattr(runtime.registry, "update_registration", race_before_update)
+    with pytest.raises((RegistryError, LedgerError)):
+        runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    assert runtime.registry.load() == (newer or before)
+    if failure == "stale-registry":
+        assert newer is not None
+        assert newer.registrations[registration.vault_binding_id] == registration
+    if failure != "stale-owner":
+        assert _source_and_owner_bytes(runtime, root) == source_before
+    else:
+        assert {path: path.read_bytes() for path in root.rglob("*") if path.is_file()} == {
+            path: content for path, content in source_before.items() if path.is_relative_to(root)
+        }
+        assert registration.vault_binding_id in runtime.ledger.require_existing().tombstones
+
+
+@pytest.mark.parametrize("shape", [
+    "missing-settings", "missing-vault-id", "missing-local-id",
+    "missing-identities-and-schema", "provisional", "ordinary",
+])
+def test_authenticated_legacy_identity_completion_preserves_uninitialized_compatibility(
+    tmp_path, monkeypatch, shape,
+) -> None:
+    runtime, root, registration = _authenticated_legacy_identity_fixture(tmp_path, monkeypatch)
+    if shape == "missing-settings":
+        (root / "settings/paths.md").unlink()
+    elif shape == "missing-identities-and-schema":
+        for filename in ("vault.md", "local.md"):
+            MarkdownSettingsStore().write_frontmatter(root / "settings" / filename, {})
+    elif shape.startswith("missing-"):
+        filename, schema = ("vault.md", "vault") if shape == "missing-vault-id" else ("local.md", "local")
+        MarkdownSettingsStore().write_frontmatter(root / "settings" / filename, {"schema": f"design-handoff.{schema}.v1"})
+    else:
+        registration = replace(registration, local_instance_id="local-provisional", extensions={
+            **registration.extensions,
+            "status": "uninitialized" if shape == "provisional" else "initialized",
+            "provenance": "first_open_existing" if shape == "provisional" else "legacy_env_bootstrap",
+        })
+        runtime.registry.update_registration(registration, _capability=STORAGE_MUTATION_CAPABILITY)
+    before = _runtime_state_bytes(tmp_path, runtime)
+    source_before = _source_and_owner_bytes(runtime, root)
+    assert _legacy_identity_preflight(runtime) == 0
+    assert _runtime_state_bytes(tmp_path, runtime) == before
+    assert _source_and_owner_bytes(runtime, root) == source_before
+    with pytest.raises(CapabilityNotReadyError, match="uninitialized"):
+        runtime.require_initialized(registration.vault_binding_id)
+
+
+@pytest.mark.parametrize("source_failure", ["parse", "schema", "identity-type"])
+def test_authenticated_legacy_identity_completion_is_value_free_and_metadata_only(
+    tmp_path, monkeypatch, source_failure,
+) -> None:
+    runtime, root, registration = _authenticated_legacy_identity_fixture(tmp_path, monkeypatch)
+    identity_read = runtime_module._read_vault_identity
+
+    def assert_ownership_lock():
+        with runtime.ledger.lock_path.open("a+b") as handle:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def locked_read(path):
+        assert_ownership_lock()
+        return identity_read(path)
+
+    monkeypatch.setattr(runtime_module, "_read_vault_identity", locked_read)
+    original_update = runtime.registry.update_registration
+
+    def locked_commit(candidate, **kwargs):
+        assert_ownership_lock()
+        return original_update(candidate, **kwargs)
+
+    monkeypatch.setattr(runtime.registry, "update_registration", locked_commit)
+    source_before = _source_and_owner_bytes(runtime, root)
+    runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    assert runtime.registry.lookup(registration.vault_binding_id).vault_id == "vault-retained-source"
+    assert _source_and_owner_bytes(runtime, root) == source_before
+    # Another eligible placeholder is prepared entirely in fixtures to exercise refusal.
+    with runtime.registry._locked():
+        snapshot = runtime.registry._read_current_locked(recover=True)
+        runtime.registry._write_locked(replace(snapshot, registrations={registration.vault_binding_id: registration}))
+    marker = "PROTECTED_FIXTURE_PARSE_VALUE"
+    if source_failure == "parse":
+        (root / "settings/vault.md").write_text(f"---\nvaultId: [{marker}\n---\n", encoding="utf-8")
+    else:
+        MarkdownSettingsStore().write_frontmatter(root / "settings/vault.md", {
+            "schema": marker if source_failure == "schema" else "design-handoff.vault.v1",
+            "vaultId": {marker: True} if source_failure == "identity-type" else "vault-retained-source",
+        })
+    before = _runtime_state_bytes(tmp_path, runtime)
+    source_before = _source_and_owner_bytes(runtime, root)
+    with pytest.raises(RegistryError) as exc:
+        runtime.bootstrap_env_binding(vault_root=root, watcher_vault_path=root)
+    output = "".join(traceback.format_exception(exc.type, exc.value, exc.tb))
+    assert marker not in output and str(root) not in output
+    assert "vault-retained-source" not in str(exc.value)
+    assert _runtime_state_bytes(tmp_path, runtime) == before
+    assert _source_and_owner_bytes(runtime, root) == source_before

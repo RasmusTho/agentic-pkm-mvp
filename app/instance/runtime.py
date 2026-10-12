@@ -70,6 +70,7 @@ from app.instance.vault_registry import (
     DEFAULT_PROVENANCE_FIRST_OPEN_EXISTING,
     RegistryDefaultConflict,
     RegistryError,
+    RegistryRevisionConflict,
     RegistryActivationProof,
     RegistrySnapshot,
     REGISTRY_AUTHORITY_ACTIVE,
@@ -213,7 +214,10 @@ class InstanceRegistryRuntime:
                     # path, binding checkpoint, and host-produced identity.
                     pass
                 else:
-                    return registration
+                    return self._complete_authenticated_legacy_identity_locked(
+                        registration, current=current,
+                        source_root=Path(root_identity.canonical_path),
+                    )
         # A consumer can see the canonical selected-root path through a
         # remount while its local inode is necessarily different from the
         # host identity that established this registration.  That namespace
@@ -265,7 +269,11 @@ class InstanceRegistryRuntime:
                 raise RegistryError(
                     "registered remounted root has no authenticated ownership reservation"
                 ) from exc
-            return registration
+            return self._complete_authenticated_legacy_identity_locked(
+                registration, current=current,
+                source_root=Path(root_identity.canonical_path),
+                host_owner=matching_owners[0],
+            )
         for tombstone in current.removal_tombstones.values():
             if same_filesystem_root(
                 resolve_filesystem_root_identity(tombstone.path), root_identity
@@ -660,7 +668,9 @@ class InstanceRegistryRuntime:
                     root=canonical_root,
                     _capability=_STORAGE_MUTATION_CAPABILITY,
                 )
-                return existing
+                return self._complete_authenticated_legacy_identity_locked(
+                    existing, current=current, source_root=canonical_root,
+                )
         pending = self.ledger.pending_registration(
             channel_id=self.layout.channel_id,
             root=canonical_root,
@@ -694,6 +704,111 @@ class InstanceRegistryRuntime:
             _capability=_STORAGE_MUTATION_CAPABILITY,
         )
         return registration
+
+    def _complete_authenticated_legacy_identity_locked(
+        self,
+        registration: VaultRegistration,
+        *,
+        current: RegistrySnapshot,
+        source_root: Path,
+        host_owner: LegacyOwner | None = None,
+    ) -> VaultRegistration:
+        """Complete only receipt-materialized metadata from an already-owned source.
+
+        Callers retain the producer lock and have admitted this selected root. Hold
+        ownership through source inspection and the revision-checked registry commit;
+        deployment's mount-blind materializer never calls this completion path.
+        """
+
+        from app.instance._storage_boundary import _STORAGE_MUTATION_CAPABILITY
+        from app.settings.locations import read_settings_mapping, resolve_settings_file
+
+        if (
+            registration.extensions.get("provenance")
+            != "authenticated_legacy_owner_inventory"
+            or registration.extensions.get("status") != "initialized"
+            or (registration.vault_id is not None and registration.local_instance_id is not None)
+        ):
+            return registration
+        try:
+            with self.ledger._locked():
+                key = self.ledger._load_or_create_key_locked(allow_create=False)
+                ownership = self.ledger._load_or_create_ledger_locked(key, allow_create=False)
+                lease = ownership.leases.get(registration.vault_binding_id)
+                if (
+                    lease is None
+                    or lease.channel_id != self.layout.channel_id
+                    or lease.vault_binding_id != registration.vault_binding_id
+                    or lease.state != "active"
+                    or ownership.transfer is not None
+                ):
+                    raise RegistryError("authenticated legacy identity ownership refused")
+                if host_owner is None:
+                    admitted = self.ledger._matches_materialized_root(lease, source_root, key)
+                else:
+                    admitted = (
+                        host_owner.channel_id == self.layout.channel_id
+                        and host_owner.vault_binding_id == registration.vault_binding_id
+                        and host_owner.receipt_digest is not None
+                        and lease.owner_receipt_digest == host_owner.receipt_digest
+                        and self.ledger._matches_host_validated_identity(lease, host_owner, key)
+                    )
+                if not admitted:
+                    raise RegistryError("authenticated legacy identity ownership refused")
+                try:
+                    identity = resolve_filesystem_root_identity(source_root)
+                    # Missing settings or source IDs remain an unresolved legacy entry,
+                    # preserving read-before-initialize and ordinary startup compatibility.
+                    shared = resolve_settings_file(source_root, "vault.md")
+                    local = resolve_settings_file(source_root, "local.md")
+                    if not identity.materialized or not _first_vault_content_complete(source_root):
+                        return registration
+                    shared_metadata = read_settings_mapping(shared)
+                    local_metadata = read_settings_mapping(local)
+                    source_ids = (shared_metadata.get("vaultId"), local_metadata.get("localInstanceId"))
+                    if any(value is None or (isinstance(value, str) and not value.strip()) for value in source_ids):
+                        return registration
+                    if (
+                        shared_metadata.get("schema") != "design-handoff.vault.v1"
+                        or local_metadata.get("schema") != "design-handoff.local.v1"
+                        or any(
+                            value is not None and not isinstance(value, str)
+                            for value in source_ids
+                        )
+                    ):
+                        raise ValueError("invalid initialized source metadata")
+                    vault_id, local_instance_id = _read_vault_identity(source_root)
+                    if vault_id is None or local_instance_id is None:
+                        return registration
+                    if (vault_id, local_instance_id) != (
+                        str(shared_metadata.get("vaultId") or "").strip(),
+                        str(local_metadata.get("localInstanceId") or "").strip(),
+                    ):
+                        raise ValueError("source identities changed during inspection")
+                    if resolve_filesystem_root_identity(source_root) != identity:
+                        raise ValueError("source root changed during identity inspection")
+                except (OSError, ValueError, RuntimeError, yaml.YAMLError):
+                    raise RegistryError("authenticated legacy identity source refused") from None
+                if (
+                    registration.vault_id not in {None, vault_id}
+                    or registration.local_instance_id not in {None, local_instance_id}
+                ):
+                    raise RegistryError("authenticated legacy identity conflicts with retained metadata")
+                updated = replace(
+                    registration, vault_id=vault_id, local_instance_id=local_instance_id,
+                )
+                try:
+                    self.registry.update_registration(
+                        updated, expected_revision=current.revision,
+                        _capability=_STORAGE_MUTATION_CAPABILITY,
+                    )
+                except RegistryRevisionConflict:
+                    raise RegistryRevisionConflict("authenticated legacy identity registry revision changed") from None
+                except (RegistryError, OSError):
+                    raise RegistryError("authenticated legacy identity metadata commit refused") from None
+                return updated
+        except (LedgerError, FilesystemIdentityError):
+            raise RegistryError("authenticated legacy identity ownership refused") from None
 
     def activate_authority(
         self,

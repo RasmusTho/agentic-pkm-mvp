@@ -313,6 +313,26 @@ used as the selected-root input. #5235 owns only this receipt handoff repair; th
 Service, multi-vault Settings control plane, and write queue remain separate architecture-study
 work.
 
+Receipt-only materialization may retain an initialized `authenticated_legacy_owner_inventory`
+registration without `vault_id` or `local_instance_id`. Once the already-owned selected source is
+visible to a runtime consumer, matching `preflight`/`bootstrap_env_binding` (ordinary root or
+receipt-authenticated remount) and active existing-root `production_register` complete only those
+absent fields. They read the existing owner-native source identities after checking the required
+settings and vault/local schemas; they never initialize settings or mint identities. The producer
+lock and ownership lock cover source inspection and the expected-revision registry update.
+Established identities, binding/root/ref, default/history, provenance, authority and runtime floors
+remain intact, as do source, key and ownership bytes. The existing registry transaction advances its
+revision and rollback-export checkpoint normally; repeating completion is a no-op.
+
+Incomplete settings or missing source identities retain the existing unresolved, read-only
+compatibility posture. Other provisional and first-vault registrations still require their existing
+explicit initialization flow. Conflicting retained identity, unsafe settings aliases, unproven or
+stale ownership and stale registry observations refuse completion with bounded, value-free errors.
+This source-visible metadata repair does not hydrate host-only roots in ordinary
+`instance-state-init`, widen its mounts, or activate registry authority. Guarded MVR-01C cutover and
+initialized-only consumer admission retain their existing contracts. The repository regression
+proof for #6028 remains separate from actual channel repair and KMA06 acceptance on open #3367.
+
 **Traceability:** #4539 owns this decision and its docs writeback; #5235 is the bounded executable
 implementation issue for the selected host-side receipt approach.
 
