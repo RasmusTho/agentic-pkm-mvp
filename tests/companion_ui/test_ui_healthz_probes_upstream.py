@@ -12,6 +12,8 @@ from __future__ import annotations
 import io
 from typing import Any
 
+import pytest
+
 from companion_ui.workspace.serve_dev_page import make_handler
 from companion_ui.workspace.workspace_http_client import (
     WorkspaceClientNetworkError,
@@ -79,6 +81,30 @@ class _GetDriver:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    ("profile", "production_profile"),
+    (("dev", False), ("test", False), ("prod", True)),
+)
+def test_all_gateway_profiles_preserve_active_health_producer(
+    profile: str,
+    production_profile: bool,
+) -> None:
+    """Every gateway profile keeps /healthz as an active cache producer."""
+    client = _FakeClient(get_responses={"/api/health": {"ok": True}})
+    handler_cls = make_handler(
+        client=client,
+        api_base_url="http://127.0.0.1:18001",
+        production_profile=production_profile,
+    )  # type: ignore[arg-type]
+
+    driver = _GetDriver(handler_cls, "/healthz")
+    driver.run_get()
+
+    assert driver.status_code == 200, profile
+    assert driver.payload == {"ok": True, "service": "companion-ui"}
+    assert client.get_calls == [("/api/health", {})]
+
+
 def test_healthz_503_when_upstream_down() -> None:
     """UI /healthz returns 503 when the upstream runtime API is unreachable.
 
@@ -94,7 +120,7 @@ def test_healthz_503_when_upstream_down() -> None:
     assert driver.status_code == 503
     assert driver.payload == {"ok": False, "upstream": "unreachable"}
     # Confirm the handler actually attempted the upstream probe.
-    assert client.get_calls == [("/api/health", {"model_access_sampling": "cache"})]
+    assert client.get_calls == [("/api/health", {})]
 
 
 def test_healthz_200_when_upstream_ok() -> None:
@@ -113,7 +139,7 @@ def test_healthz_200_when_upstream_ok() -> None:
     assert driver.status_code == 200
     assert driver.payload == {"ok": True, "service": "companion-ui"}
     # Confirm the handler actually probed upstream before returning 200.
-    assert client.get_calls == [("/api/health", {"model_access_sampling": "cache"})]
+    assert client.get_calls == [("/api/health", {})]
 
 
 def test_prod_handler_healthz_probes_upstream() -> None:
