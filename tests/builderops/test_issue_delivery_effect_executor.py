@@ -1621,6 +1621,9 @@ def test_unknown_effect_requires_readback_before_retry(
         frozen_destination=race.frozen,
         transport=stale_transport,
         prepared_worker=race.prepared_worker,
+        trusted_workflow_root=race.executor.trusted_workflow_root,
+        trusted_executor_artifact=race.executor.trusted_executor_artifact,
+        trusted_worker_isolation_artifact=race.executor.trusted_worker_isolation_artifact,
         expected_isolation_profile_sha256=(
             race.prepared_worker.launcher.expected_profile_sha256
         ),
