@@ -1720,6 +1720,82 @@ def test_bws_lookup_uses_scoped_active_identity(
     assert "fixture-machine-token" not in (controller.directory / "operations.jsonl").read_text()
 
 
+def test_interrupted_same_channel_bws_check_is_reconciled_before_retry(tmp_path):
+    webhook = "https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456"
+    reader, _client, controller = _bws_fixture(
+        tmp_path,
+        project="prod",
+        identity="shared/discord.webhook",
+        value=webhook,
+    )
+    with controller.admit("check", "prod") as interrupted:
+        interrupted_id = interrupted.operation_id
+
+    assert resolve_host_secret_values(
+        channel="prod",
+        consumer="heimdal-external-alerts",
+        provider="bws",
+        bws_reader=reader,
+        controller=controller,
+    ) == {"discord.webhook": webhook}
+
+    records = [
+        json.loads(line)
+        for line in (controller.directory / "operations.jsonl").read_text().splitlines()
+    ]
+    assert records[0]["operation_id"] == interrupted_id
+    assert records[0]["stage"] == "prepared"
+    assert records[1] == {
+        "operation_id": interrupted_id,
+        "kind": "check",
+        "target": "prod",
+        "stage": "aborted",
+        "source": "read-complete",
+    }
+    assert records[2]["kind"] == "check"
+    assert records[2]["target"] == "prod"
+    assert records[2]["stage"] == "prepared"
+    assert records[2]["operation_id"] != interrupted_id
+    assert records[3]["stage"] == "committed"
+    assert records[3]["source"] == "read-complete"
+
+
+@pytest.mark.parametrize(
+    ("pending_kind", "pending_target"),
+    [("deploy", "prod"), ("check", "test")],
+)
+def test_interrupted_bws_check_reconciliation_preserves_other_pending_operation(
+    tmp_path, pending_kind, pending_target
+):
+    reader, client, controller = _bws_fixture(
+        tmp_path,
+        project="prod",
+        identity="shared/discord.webhook",
+        value="https://discord.com/api/webhooks/123456789/fixtureWebhookToken_123456",
+    )
+    with controller.admit(pending_kind, pending_target):
+        pass
+
+    with pytest.raises(HostSecretBootstrapError):
+        resolve_host_secret_values(
+            channel="prod",
+            consumer="heimdal-external-alerts",
+            provider="bws",
+            bws_reader=reader,
+            controller=controller,
+        )
+
+    assert client.calls == []
+    records = [
+        json.loads(line)
+        for line in (controller.directory / "operations.jsonl").read_text().splitlines()
+    ]
+    assert len(records) == 1
+    assert records[0]["kind"] == pending_kind
+    assert records[0]["target"] == pending_target
+    assert records[0]["stage"] == "prepared"
+
+
 def test_bws_lookup_accepts_both_projects_and_fetches_only_selected_item(
     tmp_path, capsys, caplog
 ):

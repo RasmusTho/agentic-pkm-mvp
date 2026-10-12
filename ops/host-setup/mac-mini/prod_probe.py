@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 import time
@@ -49,9 +50,7 @@ log = logging.getLogger("prod_probe")
 # come from an explicit target config; never infer production from a default.
 PROBE_BASE_URL = os.environ.get("PROBE_BASE_URL", "")
 WORKER_HEARTBEAT_PATH = os.environ.get("WORKER_HEARTBEAT_PATH", "")
-WORKER_HEARTBEAT_STALE_SECONDS = float(
-    os.environ.get("WORKER_HEARTBEAT_STALE_SECONDS", "60")
-)
+DEFAULT_WORKER_HEARTBEAT_STALE_SECONDS = 60.0
 ALERT_STATE_FILE = Path(
     os.environ.get("PROBE_STATE_FILE")
     or os.environ.get("PROD_PROBE_STATE_FILE")
@@ -266,13 +265,15 @@ def _probe_health_required_ok(
 
 def _probe_worker_heartbeat(
     heartbeat_path: str = WORKER_HEARTBEAT_PATH,
-    stale_seconds: float = WORKER_HEARTBEAT_STALE_SECONDS,
+    stale_seconds: float = DEFAULT_WORKER_HEARTBEAT_STALE_SECONDS,
 ) -> tuple[bool, str]:
     """Check worker-heartbeat staleness.
 
     Returns (ok, reason). A missing heartbeat file or stale timestamp is a
     failure; the threshold is controlled by WORKER_HEARTBEAT_STALE_SECONDS.
     """
+    if not math.isfinite(stale_seconds) or stale_seconds <= 0:
+        return False, "worker heartbeat stale threshold invalid"
     path = Path(heartbeat_path)
     if not path.exists():
         return False, f"worker heartbeat missing at {heartbeat_path}"
@@ -288,8 +289,13 @@ def _probe_worker_heartbeat(
     if ts is None:
         return False, "worker heartbeat has no timestamp (expected `ts`)"
     try:
-        age = time.time() - float(ts)
+        timestamp = float(ts)
     except (TypeError, ValueError):
+        return False, "worker heartbeat timestamp invalid"
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        return False, "worker heartbeat timestamp invalid"
+    age = time.time() - timestamp
+    if not math.isfinite(age) or age < 0:
         return False, "worker heartbeat timestamp invalid"
     if age > stale_seconds:
         return False, f"worker heartbeat stale by {age:.0f}s (threshold {stale_seconds}s)"
@@ -299,7 +305,7 @@ def _probe_worker_heartbeat(
 def run_probe(
     base_url: str = PROBE_BASE_URL,
     heartbeat_path: str = WORKER_HEARTBEAT_PATH,
-    heartbeat_stale_seconds: float = WORKER_HEARTBEAT_STALE_SECONDS,
+    heartbeat_stale_seconds: float = DEFAULT_WORKER_HEARTBEAT_STALE_SECONDS,
     channel: NotificationChannel | None = None,
     http_get: Any = None,
     environment: str | None = None,
@@ -367,7 +373,7 @@ def run_probe(
 # ---------------------------------------------------------------------------
 # CLI entrypoint
 # ---------------------------------------------------------------------------
-def _runtime_config() -> tuple[str, int]:
+def _runtime_config() -> tuple[str, int, float]:
     environment = PROBE_ENVIRONMENT.strip().lower()
     if environment not in {"test", "prod"}:
         raise ValueError("PROBE_ENVIRONMENT must be test or prod")
@@ -394,6 +400,14 @@ def _runtime_config() -> tuple[str, int]:
         raise ValueError("PROBE_INTERVAL_SECONDS is invalid") from None
     if interval < 1:
         raise ValueError("PROBE_INTERVAL_SECONDS is invalid")
+    try:
+        heartbeat_stale_seconds = float(
+            os.environ.get("WORKER_HEARTBEAT_STALE_SECONDS", "60")
+        )
+    except ValueError:
+        raise ValueError("WORKER_HEARTBEAT_STALE_SECONDS is invalid") from None
+    if not math.isfinite(heartbeat_stale_seconds) or heartbeat_stale_seconds <= 0:
+        raise ValueError("WORKER_HEARTBEAT_STALE_SECONDS is invalid")
     state_file = os.environ.get("PROBE_STATE_FILE") or os.environ.get(
         "PROD_PROBE_STATE_FILE"
     )
@@ -401,7 +415,7 @@ def _runtime_config() -> tuple[str, int]:
         raise ValueError("PROBE_STATE_FILE is required")
     if not Path(state_file).is_absolute():
         raise ValueError("PROBE_STATE_FILE must be absolute")
-    return environment, interval
+    return environment, interval, heartbeat_stale_seconds
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -409,7 +423,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--loop", action="store_true", help="probe repeatedly at the configured interval")
     args = parser.parse_args(argv)
     try:
-        environment, interval = _runtime_config()
+        environment, interval, heartbeat_stale_seconds = _runtime_config()
         global ALERT_STATE_FILE
         state_file = os.environ.get("PROBE_STATE_FILE") or os.environ.get(
             "PROD_PROBE_STATE_FILE"
@@ -423,13 +437,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.loop:
         while True:
             try:
-                run_probe(environment=environment)
+                run_probe(
+                    environment=environment,
+                    heartbeat_stale_seconds=heartbeat_stale_seconds,
+                )
             except Exception:
                 log.exception("probe iteration failed: environment=%s", environment)
             time.sleep(interval)
 
     try:
-        healthy = run_probe(environment=environment)
+        healthy = run_probe(
+            environment=environment,
+            heartbeat_stale_seconds=heartbeat_stale_seconds,
+        )
     except Exception:
         log.exception("probe execution failed: environment=%s", environment)
         return 1

@@ -28,13 +28,20 @@ def _read_deploy_identifiers(channel: str, config_root: Path = DEPLOY_CONFIG_ROO
         flags |= os.O_CLOEXEC
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     try:
         descriptor = os.open(path, flags)
     except OSError:
         raise ValueError("BWS channel configuration is unavailable") from None
     try:
         details = os.fstat(descriptor)
-        if not stat.S_ISREG(details.st_mode) or details.st_uid != 0:
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != 0
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_nlink != 1
+        ):
             raise ValueError("BWS channel configuration is unavailable")
         with os.fdopen(descriptor, "r", encoding="utf-8", closefd=True) as handle:
             descriptor = -1

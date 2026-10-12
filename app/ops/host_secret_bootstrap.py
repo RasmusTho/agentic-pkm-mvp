@@ -26,7 +26,12 @@ from app.ops.bws_secret_reader import (
     BwsReaderConfig,
     BwsSecretReader,
 )
-from app.ops.host_secret_controller import HostSecretController, HostSecretOperation, TerminalEvidence
+from app.ops.host_secret_controller import (
+    HostSecretAdmissionError,
+    HostSecretController,
+    HostSecretOperation,
+    TerminalEvidence,
+)
 from app.ops.host_secret_contract import (
     BWS_ONLY_SECRETS,
     HostSecretContract,
@@ -585,6 +590,7 @@ def resolve_host_secret_values(
             operation.require_active(channel)
             return _resolve_bws_consumer_values(channel, consumer, selected, bws_reader)
         active_controller = controller or HostSecretController()
+        _reconcile_interrupted_read_check(active_controller, channel)
         with active_controller.admit("check", channel) as check_operation:
             try:
                 resolved = _resolve_bws_consumer_values(channel, consumer, selected, bws_reader)
@@ -597,6 +603,30 @@ def resolve_host_secret_values(
             return resolved
     except Exception:
         raise HostSecretBootstrapError("host secret lookup failed for declared consumer") from None
+
+
+def _reconcile_interrupted_read_check(
+    controller: HostSecretController, channel: str
+) -> None:
+    """Retire only a stale read-only check before admitting a new BWS check.
+
+    A check cannot prepare a remote mutation. Acquiring the controller lock inside
+    reconcile also proves no prior check still owns the admission lock. Other
+    operation kinds, targets, and malformed journals remain fail-closed; the next
+    admission below is still the authority when no matching pending check exists.
+    """
+    try:
+        controller.reconcile(
+            lambda operation_id, kind, target: TerminalEvidence(
+                operation_id, kind, target, "aborted", "read-complete"
+            ),
+            expected=("check", channel, None),
+        )
+    except HostSecretAdmissionError:
+        # No pending check for this exact target, a live/invalid controller state,
+        # or a different pending operation. The following `admit` rechecks under
+        # the same lock and remains responsible for refusing the latter cases.
+        pass
 
 
 def _resolve_bws_consumer_values(

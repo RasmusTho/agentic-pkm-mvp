@@ -2,11 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from types import SimpleNamespace
+
+import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPOSITORY_ROOT / "scripts"))
+sys.path.insert(0, str(REPOSITORY_ROOT / "ops/host-setup/linux"))
 
+import host_probe_launcher  # noqa: E402
 from install_host_probe import (
     CONTROLLER_STATE_DIRECTORY,
     _parse_remote_main_readback,
@@ -92,3 +97,35 @@ def test_remote_main_readback_requires_one_valid_main_ref() -> None:
 
     with pytest.raises(ValueError, match="live origin/main readback"):
         _parse_remote_main_readback(f"{head}\trefs/heads/main\n{head}\trefs/heads/dev\n")
+
+
+def test_deploy_config_requires_root_private_single_link_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import stat
+
+    config = tmp_path / "prod.json"
+    config.write_text(
+        '{"project_id":"prod-project","organization_id":"org"}',
+        encoding="utf-8",
+    )
+
+    def fake_fstat(_descriptor: int) -> SimpleNamespace:
+        return SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0, st_nlink=1)
+
+    monkeypatch.setattr(host_probe_launcher.os, "fstat", fake_fstat)
+    assert host_probe_launcher._read_deploy_identifiers("prod", tmp_path) == (
+        "prod-project",
+        "org",
+    )
+
+    for mode, links in ((0o640, 1), (0o666, 1), (0o600, 2)):
+        monkeypatch.setattr(
+            host_probe_launcher.os,
+            "fstat",
+            lambda _descriptor, mode=mode, links=links: SimpleNamespace(
+                st_mode=stat.S_IFREG | mode, st_uid=0, st_nlink=links
+            ),
+        )
+        with pytest.raises(ValueError, match="BWS channel configuration is unavailable"):
+            host_probe_launcher._read_deploy_identifiers("prod", tmp_path)

@@ -189,3 +189,57 @@ def test_probe_runtime_refuses_missing_environment_and_target_config(
 
     assert prod_probe.main([]) == 78
     assert "PROBE_ENVIRONMENT must be test or prod" in caplog.text
+
+
+@pytest.mark.parametrize("timestamp", [float("nan"), float("inf"), float("-inf"), "NaN", "Infinity"])
+def test_non_finite_worker_heartbeat_timestamp_fails_closed(
+    tmp_path: Path, timestamp: float | str
+) -> None:
+    heartbeat = tmp_path / "worker_heartbeat.json"
+    heartbeat.write_text(json.dumps({"ts": timestamp}))
+
+    healthy, reason = prod_probe._probe_worker_heartbeat(str(heartbeat))
+
+    assert healthy is False
+    assert reason == "worker heartbeat timestamp invalid"
+
+
+def test_future_worker_heartbeat_timestamp_fails_closed(tmp_path: Path) -> None:
+    heartbeat = tmp_path / "worker_heartbeat.json"
+    heartbeat.write_text(json.dumps({"ts": time.time() + 60}))
+
+    healthy, reason = prod_probe._probe_worker_heartbeat(str(heartbeat))
+
+    assert healthy is False
+    assert reason == "worker heartbeat timestamp invalid"
+
+
+@pytest.mark.parametrize("threshold", [float("nan"), float("inf"), float("-inf"), 0.0, -1.0])
+def test_non_finite_or_non_positive_heartbeat_threshold_fails_closed(
+    tmp_path: Path, threshold: float
+) -> None:
+    heartbeat = _write_fresh_heartbeat(tmp_path)
+
+    healthy, reason = prod_probe._probe_worker_heartbeat(
+        str(heartbeat), stale_seconds=threshold
+    )
+
+    assert healthy is False
+    assert reason == "worker heartbeat stale threshold invalid"
+
+
+@pytest.mark.parametrize("threshold", ["nan", "inf", "-inf", "0", "-1", "invalid"])
+def test_runtime_config_rejects_invalid_heartbeat_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, threshold: str
+) -> None:
+    monkeypatch.setattr(prod_probe, "PROBE_ENVIRONMENT", "test")
+    monkeypatch.setattr(prod_probe, "PROBE_BASE_URL", "http://127.0.0.1:18002")
+    monkeypatch.setattr(
+        prod_probe, "WORKER_HEARTBEAT_PATH", str(tmp_path / "worker_heartbeat.json")
+    )
+    monkeypatch.setattr(prod_probe, "PROBE_ALERT_CHANNEL", "discord")
+    monkeypatch.setenv("PROBE_STATE_FILE", str(tmp_path / "probe.state"))
+    monkeypatch.setenv("WORKER_HEARTBEAT_STALE_SECONDS", threshold)
+
+    with pytest.raises(ValueError, match="WORKER_HEARTBEAT_STALE_SECONDS is invalid"):
+        prod_probe._runtime_config()
