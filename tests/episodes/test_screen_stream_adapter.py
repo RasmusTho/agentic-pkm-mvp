@@ -85,6 +85,93 @@ def _screen_only_registry() -> StreamRegistry:
     )
 
 
+def _speech_and_screen_registry(*, screen_first: bool = False) -> StreamRegistry:
+    speech = StreamRegistryEntry(
+        stream_id="heimdal.observations",
+        status="live",
+        owner_constituent="Heimdal",
+        dimensions_fed=("time", "protagonist"),
+        transport="module:app.heimdal.observation_log",
+        consent_class="heimdal_gated",
+        cadence="continuous",
+    )
+    screen = StreamRegistryEntry(
+        stream_id=SCREEN_STREAM_ID,
+        status="live",
+        owner_constituent="Heimdal",
+        dimensions_fed=tuple(sorted(DIMENSIONS)),
+        transport="module:app.heimdal.observation_log",
+        consent_class="heimdal_gated",
+        cadence="continuous",
+    )
+    entries = {SCREEN_STREAM_ID: screen, "heimdal.observations": speech} if screen_first else {
+        "heimdal.observations": speech,
+        SCREEN_STREAM_ID: screen,
+    }
+    return StreamRegistry(entries=entries)
+
+
+def _install_fake_assignment_ledger(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[dict[tuple[str, str], dict[str, str]], list[tuple[tuple[str, str], ...]]]:
+    active: dict[tuple[str, str], dict[str, str]] = {}
+    writes: list[tuple[tuple[str, str], ...]] = []
+
+    def read_refs(refs: set[str]) -> dict[tuple[str, str], dict[str, str]]:
+        return {key: value for key, value in active.items() if key[0] in refs}
+
+    def read_episodes(episode_ids: set[str]) -> dict[tuple[str, str], dict[str, str]]:
+        return {key: value for key, value in active.items() if key[1] in episode_ids}
+
+    def commit(to_insert, to_correct, write_guard=None, vault_root=None):
+        inserted: list[tuple[str, str]] = []
+        for decision in to_insert:
+            key = (decision.artifact_ref, decision.episode_id)
+            active[key] = {
+                "binding_state": "active",
+                "basis": decision.basis,
+                "scope": decision.scope,
+            }
+            inserted.append(key)
+        for key in to_correct:
+            if key in active:
+                active[key]["binding_state"] = "corrected"
+        if inserted or to_correct:
+            writes.append(tuple(inserted) + tuple(to_correct))
+        return {"pending": len(inserted), "corrected": len(to_correct)}
+
+    monkeypatch.setattr(segmenter, "read_existing_bindings", read_refs)
+    monkeypatch.setattr(segmenter, "read_existing_bindings_for_episodes", read_episodes)
+    monkeypatch.setattr(segmenter, "commit_assignment_diff", commit)
+    return active, writes
+
+
+def _mixed_replay_rows() -> list[ObservationRow]:
+    return [
+        _row(
+            "speech-s",
+            modality="speech",
+            start="2026-07-11T08:00:00Z",
+            end="2026-07-11T08:00:30Z",
+            sequence=1,
+        ),
+        _row(
+            "screen-a",
+            start="2026-07-11T08:01:00Z",
+            end="2026-07-11T08:01:30Z",
+            goal="goal one",
+            sequence=2,
+        ),
+        _row(
+            "screen-b",
+            start="2026-07-11T08:02:00Z",
+            end="2026-07-11T08:02:30Z",
+            goal="goal two",
+            sequence=3,
+        ),
+    ]
+
+
 def _stub_tick_io(monkeypatch: pytest.MonkeyPatch) -> dict[str, dict[str, object]]:
     state: dict[str, dict[str, object]] = {}
     monkeypatch.setattr(segmenter.engine_state, "all_state_with_prefix", lambda prefix: {
@@ -324,3 +411,253 @@ def test_screen_cursor_replay_is_idempotent_after_tick_state_persisted(
     assert cursor_positions[SCREEN_CONSUMER_ID] == 2
     assert state["open_segment:work"]["signal_ids"] == ["screen-replay"]
     assert state["open_segment:work"]["derived_from"] == ["screen:screen-replay"]
+
+
+@pytest.mark.parametrize(
+    ("failed_consumer", "screen_first"),
+    [
+        (SCREEN_CONSUMER_ID, False),
+        (segmenter.CONSUMER_ID, True),
+    ],
+    ids=["generic-ack-before-screen-failure", "screen-ack-before-generic-failure"],
+)
+def test_production_tick_replay_admission_survives_partial_sibling_ack(
+    failed_consumer: str,
+    screen_first: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A sibling cursor may commit first without replaying a segment as a new episode."""
+    rows = _mixed_replay_rows()
+    cursor_positions: dict[str, int] = {}
+    fail_once = True
+
+    def read_for_consumer(consumer_id: str, *, limit: int | None = None) -> Sequence[ObservationRow]:
+        position = cursor_positions.get(consumer_id, 0)
+        unread = [row for row in rows if row.sequence >= position]
+        return unread[:limit] if limit is not None else unread
+
+    def advance_for_consumer(consumer_id: str, consumed_rows: list[ObservationRow]) -> None:
+        nonlocal fail_once
+        if consumer_id == failed_consumer and fail_once:
+            fail_once = False
+            raise RuntimeError("simulated partial sibling cursor commit")
+        if consumed_rows:
+            cursor_positions[consumer_id] = max(row.sequence for row in consumed_rows) + 1
+
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", read_for_consumer)
+    monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", advance_for_consumer)
+    monkeypatch.setattr(segmenter, "_sync_new_episode_row", lambda *args, **kwargs: None)
+    state = _stub_tick_io(monkeypatch)
+    active_bindings, binding_writes = _install_fake_assignment_ledger(monkeypatch)
+    registry = _speech_and_screen_registry(screen_first=screen_first)
+
+    with pytest.raises(RuntimeError, match="partial sibling cursor"):
+        segmenter.run_segmentation_tick(
+            vault_root=tmp_path,
+            registry=registry,
+            write_guard=_healthy_guard(),
+        )
+
+    notes_dir = tmp_path / "episodes"
+    original_notes = sorted(notes_dir.glob("ep-*.md"))
+    assert len(original_notes) == 1
+    original_note_path = original_notes[0]
+    original_note_bytes = original_note_path.read_bytes()
+    original_fields = segmenter.parse_validated_episode_note(original_note_bytes.decode("utf-8"))
+    assert original_fields["derived_from"] == [
+        "heimdal.observations:speech-s",
+        "screen:screen-a",
+    ]
+    open_before_retry = dict(state["open_segment:work"])
+    bindings_before_retry = {key: dict(value) for key, value in active_bindings.items()}
+    binding_writes_before_retry = list(binding_writes)
+
+    replay = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=registry,
+        write_guard=_healthy_guard(),
+    )
+
+    assert replay["proposed"] == []
+    assert sorted(notes_dir.glob("ep-*.md")) == [original_note_path]
+    assert original_note_path.read_bytes() == original_note_bytes
+    assert state["open_segment:work"] == open_before_retry
+    assert active_bindings == bindings_before_retry
+    assert binding_writes == binding_writes_before_retry
+    assert cursor_positions == {segmenter.CONSUMER_ID: 4, SCREEN_CONSUMER_ID: 4}
+
+    # Exact identity, not timestamp overlap, controls replay admission. A new
+    # screen observation inside the old proposal's bounds still extends B.
+    rows.append(
+        _row(
+            "screen-c",
+            start="2026-07-11T08:00:45Z",
+            end="2026-07-11T08:01:00Z",
+            goal="goal two",
+            sequence=4,
+        )
+    )
+    new_inside_old_bounds = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=registry,
+        write_guard=_healthy_guard(),
+    )
+    assert new_inside_old_bounds["proposed"] == []
+    assert state["open_segment:work"]["start"] == "2026-07-11T08:00:45+00:00"
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b", "screen:screen-c"]
+
+    # A genuinely new goal boundary still closes B+C once and leaves D open.
+    rows.append(
+        _row(
+            "screen-d",
+            start="2026-07-11T08:03:00Z",
+            end="2026-07-11T08:03:30Z",
+            goal="goal three",
+            sequence=5,
+        )
+    )
+    boundary = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=registry,
+        write_guard=_healthy_guard(),
+    )
+    assert len(boundary["proposed"]) == 1
+    closed_path = notes_dir / f"{boundary['proposed'][0]}.md"
+    closed_fields = segmenter.parse_validated_episode_note(closed_path.read_text(encoding="utf-8"))
+    assert closed_fields["derived_from"] == ["screen:screen-b", "screen:screen-c"]
+    assert closed_fields["time"]["start"] == "2026-07-11T08:00:45+00:00"
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-d"]
+
+
+def test_production_tick_replay_recovers_after_note_before_assignment_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A canonical note survives a crash before state and cursor commits, and assignment recovers."""
+    rows = _mixed_replay_rows()
+    cursor_positions: dict[str, int] = {}
+    fail_assignment = True
+
+    def read_for_consumer(consumer_id: str, *, limit: int | None = None) -> Sequence[ObservationRow]:
+        position = cursor_positions.get(consumer_id, 0)
+        unread = [row for row in rows if row.sequence >= position]
+        return unread[:limit] if limit is not None else unread
+
+    def advance_for_consumer(consumer_id: str, consumed_rows: list[ObservationRow]) -> None:
+        if consumed_rows:
+            cursor_positions[consumer_id] = max(row.sequence for row in consumed_rows) + 1
+
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", read_for_consumer)
+    monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", advance_for_consumer)
+    monkeypatch.setattr(segmenter, "_sync_new_episode_row", lambda *args, **kwargs: None)
+    state = _stub_tick_io(monkeypatch)
+    active_bindings: dict[tuple[str, str], dict[str, str]] = {}
+
+    def fail_then_persist(to_insert, to_correct, write_guard=None, vault_root=None):
+        nonlocal fail_assignment
+        if fail_assignment:
+            fail_assignment = False
+            raise RuntimeError("simulated failure after proposal before assignment")
+        for decision in to_insert:
+            active_bindings[(decision.artifact_ref, decision.episode_id)] = {
+                "binding_state": "active",
+                "basis": decision.basis,
+                "scope": decision.scope,
+            }
+        return {"pending": len(to_insert), "corrected": len(to_correct)}
+
+    monkeypatch.setattr(segmenter, "commit_assignment_diff", fail_then_persist)
+    with pytest.raises(RuntimeError, match="after proposal before assignment"):
+        segmenter.run_segmentation_tick(
+            vault_root=tmp_path,
+            registry=_speech_and_screen_registry(),
+            write_guard=_healthy_guard(),
+        )
+
+    notes_dir = tmp_path / "episodes"
+    first_note = sorted(notes_dir.glob("ep-*.md"))[0]
+    first_note_bytes = first_note.read_bytes()
+    assert not state
+    assert cursor_positions == {}
+
+    replay = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=_speech_and_screen_registry(),
+        write_guard=_healthy_guard(),
+    )
+
+    assert replay["proposed"] == []
+    assert len(list(notes_dir.glob("ep-*.md"))) == 1
+    assert first_note.read_bytes() == first_note_bytes
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
+    assert {key[0] for key in active_bindings} == {
+        "heimdal.observations:speech-s",
+        "screen:screen-a",
+    }
+    assert cursor_positions == {segmenter.CONSUMER_ID: 4, SCREEN_CONSUMER_ID: 4}
+
+
+def test_production_tick_replay_admission_is_scope_specific(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.episodes.ids import mint_episode_id
+
+    monkeypatch.setattr(segmenter, "_sync_new_episode_row", lambda *args, **kwargs: None)
+    segmenter.write_episode_note(
+        title="Existing work episode",
+        scope="work",
+        start="2026-07-11T08:00:00Z",
+        end="2026-07-11T08:01:00Z",
+        closed=False,
+        derived_from=["screen:screen-same-id"],
+        episode_id=mint_episode_id(),
+        vault_root=tmp_path,
+        write_guard=_healthy_guard(),
+    )
+    row = _row("screen-same-id", scope="private", sequence=1)
+    positions: dict[str, int] = {}
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", lambda consumer, **kwargs: [row])
+    monkeypatch.setattr(
+        segmenter,
+        "advance_cursor_for_consumer",
+        lambda consumer, consumed: positions.__setitem__(consumer, max(r.sequence for r in consumed) + 1)
+        if consumed
+        else None,
+    )
+    state = _stub_tick_io(monkeypatch)
+
+    result = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=_screen_only_registry(),
+        write_guard=_healthy_guard(),
+    )
+
+    assert result["open_segments"] == 1
+    assert state["open_segment:private"]["derived_from"] == ["screen:screen-same-id"]
+    assert positions[SCREEN_CONSUMER_ID] == 2
+
+
+def test_production_tick_does_not_ack_when_canonical_episode_evidence_is_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    notes_dir = tmp_path / "episodes"
+    notes_dir.mkdir()
+    (notes_dir / "ep-invalid.md").write_text("---\nartifact_class: episode_note\nunknown: true\n---\n")
+    row = _row("screen-needs-admission", sequence=1)
+    advances: list[str] = []
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", lambda consumer, **kwargs: [row])
+    monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", lambda consumer, consumed: advances.append(consumer))
+    state = _stub_tick_io(monkeypatch)
+
+    with pytest.raises(segmenter.EpisodeReplayAdmissionError, match="cannot be validated"):
+        segmenter.run_segmentation_tick(
+            vault_root=tmp_path,
+            registry=_screen_only_registry(),
+            write_guard=_healthy_guard(),
+        )
+
+    assert advances == []
+    assert state == {}

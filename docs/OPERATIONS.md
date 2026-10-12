@@ -68,6 +68,19 @@ event zero and (re)write the weekly markdown projection note(s) at
 projection and refuses to touch any other note at the path. A missing store
 backend fails loud (`STORE_BACKEND=memory` or a Postgres DSN is required).
 
+### ERE screen-span ingestion (SCREEN-04)
+
+The registry-driven Episode Resolution Engine tick consumes already-published
+screen spans from Heimdal's observation log through its own modality-filtered,
+monotone consumer cursor. Each admitted span becomes a normalized signal; the
+`heimdal_gated` registry class describes the existing publish-side consent
+gate. ERE registration does not start capture or grant consent, and the
+adapter requires a nonempty grant reference without resolving or changing the
+grant. On retry, exact scope/provenance already recorded by a validated
+canonical Episode note or current open state is skipped before segmentation;
+malformed canonical note evidence stops the tick before cursor advancement.
+See `docs/EPISODE_RESOLUTION_ENGINE/README.md` for the owner contract.
+
 ## Version & Release Workflow
 - Run `python scripts/bump_version.py <new_version>` to update `settings.app_version`, core docs, and project memory (supporting `--dry-run`).
 - Commit the bump with `chore(version): bump to X.Y.Z`, then create an annotated tag using `python scripts/tag_release.py [--dry-run|--push]` (tags default to `v<version>`).
