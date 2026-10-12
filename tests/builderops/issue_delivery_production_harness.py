@@ -1099,7 +1099,7 @@ def issue_delivery_production_harness(
         # its real checkout before creating the pinned base commit; a host
         # live-binding reader may verify those bytes rather than trusting the
         # coordinator checkout or a substituted artifact map.
-        for artifact in (() if bifrost else REQUIRED_WORKFLOW_ARTIFACTS):
+        for artifact in (() if bifrost else CANDIDATE_ARTIFACTS):
             source = REPO_ROOT / artifact
             destination_path = checkout / artifact
             destination_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1172,7 +1172,7 @@ def issue_delivery_production_harness(
             subprocess.run(["git", "init", "--initial-branch=main", str(workflow_root)], check=True, capture_output=True)
             for key, val in (("user.email", "test@example.com"), ("user.name", "Host Test")):
                 subprocess.run(["git", "-C", str(workflow_root), "config", key, val], check=True)
-            for path in (CANDIDATE_ARTIFACTS if host_candidate else REQUIRED_WORKFLOW_ARTIFACTS):
+            for path in CANDIDATE_ARTIFACTS:
                 target = workflow_root / path
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(REPO_ROOT / path, target)

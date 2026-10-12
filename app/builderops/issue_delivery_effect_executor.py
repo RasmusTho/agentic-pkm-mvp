@@ -1771,6 +1771,13 @@ class IssueDeliveryHostExecutor:
         workflow: Mapping[str, Any],
     ) -> None:
         artifacts = workflow.get("artifacts")
+        from app.builderops.issue_delivery_operation import (
+            IssueDeliveryOperationRefused, _verify_executing_authority_code,
+        )
+        try:
+            _verify_executing_authority_code(request.approval, self.trusted_workflow_root)
+        except IssueDeliveryOperationRefused as exc:
+            raise ValueError(f"trusted Issue-delivery artifact changed: {exc}") from exc
         if delivery_source_pair(request.approval):
             from app.builderops.issue_delivery_operation import _verify_workflow_root
             _verify_workflow_root(request.approval, self.trusted_workflow_root)

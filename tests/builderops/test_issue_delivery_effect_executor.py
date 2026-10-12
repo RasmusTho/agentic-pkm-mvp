@@ -3,6 +3,7 @@
 from __future__ import annotations
 import json
 import subprocess
+import shutil
 from copy import deepcopy
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
@@ -689,17 +690,19 @@ def _executor(tmp_path: Path, *, effect_kind: str = "claim", parent: bool = Fals
     tmp_path.mkdir(parents=True, exist_ok=True)
     executor_artifact = tmp_path / "issue_delivery_effect_executor.py"
     isolation_artifact = tmp_path / "issue_delivery_worker_isolation.py"
-    executor_artifact.write_text("host executor\n", encoding="utf-8")
-    isolation_artifact.write_text("worker isolation\n", encoding="utf-8")
+    source_root = Path(__file__).resolve().parents[2]
+    shutil.copyfile(source_root / EXECUTOR_ARTIFACT, executor_artifact)
+    shutil.copyfile(source_root / WORKER_ISOLATION_ARTIFACT, isolation_artifact)
     workflow_root = tmp_path / "workflow-root"
-    for artifact_path in REQUIRED_WORKFLOW_ARTIFACTS:
-        if artifact_path in {EXECUTOR_ARTIFACT, WORKER_ISOLATION_ARTIFACT}:
-            continue
+    from app.builderops.control_plane.issue_delivery import CANDIDATE_WORKFLOW_ARTIFACTS
+    for artifact_path in CANDIDATE_WORKFLOW_ARTIFACTS:
         trusted_artifact = workflow_root / artifact_path
         trusted_artifact.parent.mkdir(parents=True, exist_ok=True)
-        trusted_artifact.write_text(
-            f"trusted workflow artifact: {artifact_path}\n", encoding="utf-8"
-        )
+        shutil.copyfile(source_root / artifact_path, trusted_artifact)
+    subprocess.run(["git", "init", str(workflow_root)], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(workflow_root), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(workflow_root), "-c", "user.name=Test", "-c", "user.email=test@example.com",
+                    "commit", "-m", "Pinned workflow"], check=True, capture_output=True)
     destination = _destination(tmp_path)
     isolation = _isolation()
     approval = _approval(
@@ -709,6 +712,8 @@ def _executor(tmp_path: Path, *, effect_kind: str = "claim", parent: bool = Fals
         workflow_root,
         parent=parent,
     )
+    approval["source"]["revision"] = subprocess.check_output(
+        ["git", "-C", str(workflow_root), "rev-parse", "HEAD"], text=True).strip()
     request = _request(
         approval,
         destination,
