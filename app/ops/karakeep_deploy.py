@@ -366,8 +366,9 @@ class KarakeepEffects:
 
 class KarakeepSupervisor:
     """One supervised worker on the existing channel reader service/socket."""
-    def __init__(self, effects: KarakeepEffects) -> None:
+    def __init__(self, effects: KarakeepEffects, require_current_config: Callable[[], None]) -> None:
         self.effects = effects
+        self.require_current_config = require_current_config
         self.mutex = threading.Lock()
         self.worker: threading.Thread | None = None
         self.finished = threading.Event()
@@ -401,8 +402,10 @@ class KarakeepSupervisor:
         lock = LinuxEffects(self.effects.config)
         lock.operation_id = operation_id
         try:
+            self.require_current_config()
             with lock.channel_lock(journal=journal, owner_marker=self.effects.lock_owner(operation_id, boot=boot)):
                 try:
+                    self.require_current_config()
                     values = self.effects.preflight(plan, boot=boot)
                     journal.write(operation_id, 'preflighted')
                     self.effects.materialize(values)
@@ -440,6 +443,7 @@ class KarakeepSupervisor:
             journal = self.effects.boot_journal if action in {'karakeep-boot', 'karakeep-boot-status'} else self.effects.journal
             previous = journal.read()
             if action == 'karakeep-preflight':
+                self.require_current_config()
                 boot_previous = self.effects.boot_journal.read()
                 if ((previous and previous.terminal_result is None)
                     or (boot_previous and boot_previous.terminal_result is None)):
@@ -447,6 +451,7 @@ class KarakeepSupervisor:
                 self.effects.preflight(plan)
                 return {'ready': True}
             if action == 'karakeep-boot':
+                self.require_current_config()
                 installed = self.effects.journal.read()
                 if (not installed or installed.operation_id != data['prior_operation_id']
                     or installed.terminal_result != 'committed' or operation_id == installed.operation_id
@@ -462,6 +467,7 @@ class KarakeepSupervisor:
                 self.worker = threading.Thread(target=self._deploy, args=(operation_id, plan, True), daemon=True)
                 self.worker.start()
             elif previous and previous.operation_id == operation_id:
+                self.require_current_config()
                 journal.bind_request(operation_id, plan, False)
                 if previous.terminal_result is not None:
                     self.effects.reconcile_terminal_lock()
@@ -472,6 +478,10 @@ class KarakeepSupervisor:
             elif action == 'karakeep-deploy':
                 boot_previous = self.effects.boot_journal.read()
                 try:
+                    # This existing dispatcher guard belongs inside known
+                    # pre-effect refusal handling. It must never strand an
+                    # authenticated, already-sent request outside its receipt.
+                    self.require_current_config()
                     if ((previous and previous.terminal_result is None)
                         or (boot_previous and boot_previous.terminal_result is None)
                         or (self.worker and self.worker.is_alive())):

@@ -1414,10 +1414,12 @@ class DeploymentSupervisor:
         if isinstance(data.get('action'), str) and data['action'].startswith('karakeep-'):
             from app.ops.karakeep_deploy import KarakeepEffects, KarakeepSupervisor
 
-            self._require_current_config()
             with self.mutex:
                 if self.karakeep is None:
-                    self.karakeep = KarakeepSupervisor(KarakeepEffects(self.config))
+                    self.karakeep = KarakeepSupervisor(KarakeepEffects(self.config), self._require_current_config)
+            # Karakeep retains this same guard at admission/effect boundaries,
+            # inside durable refusal handling for new deploy IDs. Other
+            # operations keep the existing fail-closed configuration gate.
             return self.karakeep.request(data)
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()

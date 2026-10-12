@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import replace
 from io import StringIO
 import json
 import fcntl
@@ -116,15 +117,18 @@ def runtime(tmp_path, monkeypatch):
         return ''
 
     monkeypatch.setattr(kd, '_command', command)
-    supervisor = kd.KarakeepSupervisor(effects)
+    monkeypatch.setattr(LinuxConfig, 'load', lambda channel: config)
+    owner = DeploymentSupervisor(config)
+    supervisor = kd.KarakeepSupervisor(effects, owner._require_current_config)
+    owner.karakeep = supervisor
     admin = SecretAdmin(provider, controller=HostSecretController(tmp_path / 'controller'))
 
     class Remote(kd.SshKarakeepRemote):
         def request(self, action, operation_id, plan):
             state.calls.append(([action], None))
-            return supervisor.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()})
+            return owner.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()})
 
-    return SimpleNamespace(effects=effects, supervisor=supervisor, remote=Remote(), admin=admin,
+    return SimpleNamespace(effects=effects, supervisor=supervisor, owner=owner, remote=Remote(), admin=admin,
                            provider=provider, state=state, settings=settings,
                            plan=kd.KarakeepPlan('dev', REVISION))
 
@@ -258,7 +262,7 @@ def test_rerun_preserves_data_and_unknown_outcome_blocks_duplicate(runtime):
     assert before == sum('up' in argv for argv, _ in runtime.state.calls)
     # Supervisor restart cannot recreate a missing worker or bless healthy
     # containers after an unacknowledged activation.
-    lost = kd.KarakeepSupervisor(runtime.effects)
+    lost = kd.KarakeepSupervisor(runtime.effects, runtime.owner._require_current_config)
     assert lost.request({'action': 'karakeep-status', 'operation_id': pending.operation_id,
                          'plan': runtime.plan.payload()}) == {'unknown': True}
     with pytest.raises(HostSecretAdmissionError):
@@ -432,7 +436,7 @@ def test_unknown_boot_preserves_install_authority_and_blocks_all_replay(runtime,
     assert before == sum('up' in argv for argv, _ in runtime.state.calls)
     assert runtime.effects.journal.read() == installed
     assert (runtime.effects.config.root / 'config/deploy/dev.env.lock').exists()
-    lost = kd.KarakeepSupervisor(runtime.effects)
+    lost = kd.KarakeepSupervisor(runtime.effects, runtime.owner._require_current_config)
     assert lost.request({'action': 'karakeep-boot-status', 'operation_id': pending.operation_id,
                          'plan': runtime.plan.payload()}) == {'unknown': True}
 
@@ -483,7 +487,7 @@ def _interrupt_boot_cleanup(runtime, monkeypatch):
     marker = runtime.effects.config.root / 'config/deploy/dev.env.lock/bws-owner'
     assert json.loads(marker.read_text()) == runtime.effects.lock_owner(receipt.operation_id, boot=True)
     assert runtime.effects.journal.read() == installed
-    runtime.supervisor = kd.KarakeepSupervisor(runtime.effects)  # actual supervisor loss/restart
+    runtime.supervisor = kd.KarakeepSupervisor(runtime.effects, runtime.owner._require_current_config)  # actual supervisor loss/restart
     return installed, receipt, marker, retire
 
 
@@ -525,7 +529,7 @@ def test_terminal_install_cleanup_crash_reconciles_host_without_duplicate_deploy
     marker = runtime.effects.config.root / 'config/deploy/dev.env.lock/bws-owner'
     assert installed.terminal_result == 'committed' and marker.exists()
     monkeypatch.setattr(LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(retire))
-    restarted = kd.KarakeepSupervisor(runtime.effects)
+    restarted = kd.KarakeepSupervisor(runtime.effects, runtime.owner._require_current_config)
     monkeypatch.setattr(runtime.remote, 'request', lambda action, operation_id, plan:
                         restarted.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()}))
     assert deploy(runtime, operation_id=installed.operation_id) == installed
@@ -715,7 +719,7 @@ def test_sent_deploy_refused_by_concurrent_boot_remains_reconcilable(runtime, mo
             with pytest.raises(kd.KarakeepDeployError):
                 deploy(runtime)
             # Same production host caller resumes status only; no duplicate RPC.
-            restarted = kd.KarakeepSupervisor(runtime.effects)
+            restarted = kd.KarakeepSupervisor(runtime.effects, runtime.owner._require_current_config)
             monkeypatch.setattr(runtime.remote, 'request', lambda action, operation_id, plan:
                                 restarted.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()}))
             refused = deploy(runtime)
@@ -774,7 +778,7 @@ def test_sent_deploy_rechecks_inputs_and_durably_refuses_before_effects(runtime,
     with pytest.raises(kd.KarakeepDeployError):
         deploy(runtime)
     before = marker.read_bytes() if marker.exists() else None
-    restarted = kd.KarakeepSupervisor(runtime.effects)
+    restarted = kd.KarakeepSupervisor(runtime.effects, runtime.owner._require_current_config)
     monkeypatch.setattr(runtime.remote, 'request', lambda action, operation_id, plan:
                         restarted.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()}))
     refused = deploy(runtime)
@@ -786,3 +790,74 @@ def test_sent_deploy_rechecks_inputs_and_durably_refuses_before_effects(runtime,
     # Missing authority is never synthesized into an aborted/success receipt.
     with pytest.raises(kd.KarakeepDeployError):
         restarted.request({'action': 'karakeep-status', 'operation_id': str(uuid4()), 'plan': runtime.plan.payload()})
+
+
+@pytest.mark.parametrize('restore_config', [False, True])
+def test_outer_dispatcher_config_drift_terminalizes_only_unaccepted_sent_request(runtime, monkeypatch, restore_config):
+    installed = deploy(runtime)
+    cfg = runtime.effects.config
+    current = [cfg]
+    monkeypatch.setattr(LinuxConfig, 'load', lambda channel: current[0])
+    owner = DeploymentSupervisor(cfg)
+    owner.karakeep = runtime.supervisor
+    identifiers = []
+    binding = (runtime.effects.journal.directory / 'dev.request.json').read_bytes()
+    def request(action, operation_id, plan):
+        if action == 'karakeep-deploy':
+            identifiers.append(operation_id)
+        response = owner.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()})
+        if action == 'karakeep-preflight':
+            current[0] = replace(cfg, uid=cfg.uid + 1)
+        elif action == 'karakeep-deploy':
+            assert response['receipt']['terminal_result'] == 'aborted'
+            raise OSError('fixture acknowledgement loss')
+        return response
+    monkeypatch.setattr(runtime.remote, 'request', request)
+    with pytest.raises(kd.KarakeepDeployError):
+        deploy(runtime)
+    if restore_config:
+        current[0] = cfg
+    restarted = DeploymentSupervisor(cfg)
+    restarted.karakeep = kd.KarakeepSupervisor(runtime.effects, restarted._require_current_config)
+    monkeypatch.setattr(runtime.remote, 'request', lambda action, operation_id, plan:
+                        restarted.request({'action': action, 'operation_id': operation_id, 'plan': plan.payload()}))
+    refused = deploy(runtime)
+    assert refused.terminal_result == 'aborted' and refused.operation_id == identifiers[0]
+    assert runtime.effects.journal.read() == installed
+    assert (runtime.effects.journal.directory / 'dev.request.json').read_bytes() == binding
+    assert sum('up' in argv for argv, _ in runtime.state.calls) == 1
+    assert not (cfg.root / 'config/deploy/dev.env.lock').exists()
+    assert runtime.admin.check('dev', kd.SERVICE_CONSUMERS)[0]['status'] == 'ok'
+    # Accepted installation authority may never be reclassified as rejection.
+    current[0] = replace(cfg, uid=cfg.uid + 1)
+    with pytest.raises(PostgresDeployError):
+        restarted.request({'action': 'karakeep-deploy', 'operation_id': installed.operation_id, 'plan': runtime.plan.payload()})
+    with pytest.raises(PostgresDeployError):
+        restarted.request({'action': 'karakeep-preflight', 'operation_id': str(uuid4()), 'plan': runtime.plan.payload()})
+    with pytest.raises(PostgresDeployError):
+        restarted.request({'action': 'karakeep-boot', 'operation_id': str(uuid4()),
+                           'prior_operation_id': installed.operation_id, 'plan': runtime.plan.payload()})
+    assert runtime.effects.journal.read() == installed
+    current[0] = cfg
+    assert restarted.request({'action': 'karakeep-status', 'operation_id': installed.operation_id,
+                              'plan': runtime.plan.payload()}) == {'receipt': installed.payload()}
+
+
+def test_admitted_worker_rechecks_bound_configuration_before_channel_or_service_effects(runtime, monkeypatch):
+    cfg = runtime.effects.config
+    checks = []
+    def load(channel):
+        checks.append(channel)
+        # Valid at read-only preflight and request admission, then drift before
+        # the worker can acquire the VM lock or select/materialize credentials.
+        return cfg if len(checks) < 3 else replace(cfg, uid=cfg.uid + 1)
+    monkeypatch.setattr(LinuxConfig, 'load', load)
+    aborted = deploy(runtime)
+    assert aborted.terminal_result == 'aborted'
+    assert runtime.effects.journal.read() == aborted
+    assert not runtime.effects.runtime.exists()
+    assert not (cfg.root / 'config/deploy/dev.env.lock').exists()
+    assert not any('up' in argv for argv, _ in runtime.state.calls)
+    assert not runtime.effects.refused_journal.directory.exists()
+    monkeypatch.setattr(LinuxConfig, 'load', lambda channel: cfg)
+    assert deploy(runtime, operation_id=aborted.operation_id) == aborted

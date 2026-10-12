@@ -152,6 +152,11 @@ evidence and returns `aborted`; a lost acknowledgment therefore clears host admi
 replaying deployment. Absence of such a bound request never proves rejection. A refused ID cannot
 later become a deployment, and a changed plan cannot borrow its receipt. One cooperating host
 controller has at most one unresolved request; no additional writer or authority registry is added.
+The existing dispatcher's bound-configuration guard is mandatory in every Karakeep supervisor
+producer. It runs inside new-request refusal handling and again at worker admission before
+credentials/service effects. Boot, preflight and already-admitted request paths still fail closed
+on configuration drift. Only bound pre-effect refusal status can reconcile without the changed
+configuration; it never turns an accepted or absent operation into an abort.
 
 The existing `bws-owner` lock marker durably binds Karakeep's finite deploy/boot actor, channel and
 operation ID. After a terminal receipt, status/retry reconciles only that actor's free matching
