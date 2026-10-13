@@ -172,6 +172,43 @@ def _fs_adapter_forwards_resolved_sources_root(source: str) -> bool:
     )
 
 
+def _fs_adapter_construction_forwards_resolved_sources_root(source: str) -> bool:
+    """Require the production builder to pass its resolved root into the filesystem adapter."""
+    tree = ast.parse(source)
+    builder = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_build_adapter"
+        ),
+        None,
+    )
+    if builder is None:
+        return False
+    adapter_calls = [
+        call
+        for call in ast.walk(builder)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "FsVaultAdapter"
+    ]
+    if len(adapter_calls) != 1:
+        return False
+    call = adapter_calls[0]
+    return (
+        bool(call.args)
+        and isinstance(call.args[0], ast.Name)
+        and call.args[0].id == "fs_root"
+        and any(
+            keyword.arg == "sources_root_rel"
+            and isinstance(keyword.value, ast.Name)
+            and keyword.value.id == "sources_root_rel"
+            for keyword in call.keywords
+        )
+    )
+
+
 def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
     set[tuple[str, str, str]], set[tuple[str, str]], set[tuple[str, str]]
 ]:
@@ -804,10 +841,33 @@ def test_zone_resolved_via_settings_not_literal() -> None:
     assert resolver_callers == SOURCE_RESOLVER_CALLERS
     assert source_write_callers == REGISTERED_SOURCE_WRITERS | SOURCE_WRITE_EXCLUSIONS
     adapter_source = (REPO_ROOT / "app/knowledge/adapters.py").read_text(encoding="utf-8")
+    service_source = (REPO_ROOT / "app/knowledge/service.py").read_text(encoding="utf-8")
+    assert _fs_adapter_construction_forwards_resolved_sources_root(service_source)
     assert _fs_adapter_forwards_resolved_sources_root(adapter_source)
 
 
 def test_adapter_forwarding_proof_rejects_missing_or_default_sources_root() -> None:
+    service_source = (REPO_ROOT / "app/knowledge/service.py").read_text(encoding="utf-8")
+    constructor_call = "return FsVaultAdapter(fs_root, sources_root_rel=sources_root_rel)"
+    assert constructor_call in service_source
+    assert _fs_adapter_construction_forwards_resolved_sources_root(service_source)
+
+    without_constructor_forwarding = service_source.replace(
+        constructor_call, "return FsVaultAdapter(fs_root)", 1
+    )
+    assert not _fs_adapter_construction_forwards_resolved_sources_root(
+        without_constructor_forwarding
+    )
+
+    constructor_defaulted_to_packaged_root = service_source.replace(
+        constructor_call,
+        'return FsVaultAdapter(fs_root, sources_root_rel="Sources")',
+        1,
+    )
+    assert not _fs_adapter_construction_forwards_resolved_sources_root(
+        constructor_defaulted_to_packaged_root
+    )
+
     adapter_source = (REPO_ROOT / "app/knowledge/adapters.py").read_text(encoding="utf-8")
     forwarded_argument = "            sources_root_rel=self.sources_root_rel,\n"
     assert forwarded_argument in adapter_source
