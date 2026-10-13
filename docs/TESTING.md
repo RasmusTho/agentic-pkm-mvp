@@ -589,6 +589,38 @@ browser playback belong to the Daily wrapper. Unit/contract tests prove envelope
 behavior only. Actual post-merge all-scenario qualification remains on #2443/#3314; repository
 delivery establishes neither their acceptance nor currently healthy deployment.
 
+The separate fixed `native-journaling.v1` extension is invoked with
+`app.ops.postgres_deploy_linux qualify-journaling test <committed-operation-uuid>`.
+It does not add a third pilot to `native-web-pilots.v1`. It reuses the committed native
+request/PG proof, SHA/digest, baked Product code, immutable Git resources and exact
+operation/generation cleanup. No command, provider, selector, manifest, fixture or budget is
+caller-selectable. Canonical vault initialization, commitment persistence, decision receipt
+append and capture-candidate writeback supply all three current-day source families. The private
+manifest is created inside the disposable image and consumed by the exact #5988 live wrapper.
+The wrapper runs without deterministic-suite conftests: their mock provider/memory defaults are
+not qualified Product evidence. Original Product calls and returns are observed, not replaced;
+the fixed six-effect order binds two distinct sessions, primary/addendum candidates, one exact
+synthetic checkbox write and one guarded receipt-bound canonical materialization. All ten original
+scenarios, exact budgets, source hashes and accepted-primary preservation are mandatory.
+
+The existing protected `/etc/yggdrasil/model-access/runtime.env` four-key binding must select
+an actual private IPv4 HTTPS Product executor with existing mTLS material. Only finite private
+certificate snapshots enter the image. The candidate retains its configured endpoint/model/TLS
+identity; a native-owned bounded ciphertext relay on an operation-local loopback /32 connects
+only that same executor. The candidate remains network-none, with no socket mount or general
+egress. Missing references, unsupported endpoints, provider unavailability, transport limits,
+skips, incomplete effects or drift refuse; there is no mock, host Product overlay or fallback.
+
+Private report/JUnit retention is complete-before-rename under `native-journaling-results/`,
+outside the disposable vault. Separate terminal evidence binds operation, SHA/digest, generation,
+fixture/actor, exact wrapper, report hashes, transport budget and cleanup readback. Partial
+retention is non-PASS; unknown cleanup keeps channel admission, and foreign resources remain
+untouched. Retry uses the same committed operation and existing inode/flock reconciliation before
+a fresh generation. A deterministic mechanism test or refused receipt is not parent acceptance:
+only an actual post-merge TEST all-PASS `conversational_journaling_execution.v1` receipt on #3347
+permits delivered-capability owner-doc promotion and parent closure. PG, Daily/Deep, channel health
+and production eligibility remain separate authorities.
+
 ### Nightly deterministic acceptance harness
 
 The deterministic Quality Wave acceptance harness belongs in `integration-nightly`, not `release-uat`.

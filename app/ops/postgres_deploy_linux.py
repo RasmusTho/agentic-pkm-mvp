@@ -1206,6 +1206,69 @@ class LinuxEffects:
             finally:
                 self.lock_fd = None
 
+    def qualify_journaling(self, operation_id: str) -> dict[str, Any]:
+        """Separate fixed TEST extension; no selector, command or provider input."""
+        from app.ops.native_journaling_acceptance import private_json
+        from app.ops.native_journaling_acceptance_runner import NativeJournalingRunner
+        if self.config.channel != 'test' or self.lock_fd is None or self.operation_id != operation_id:
+            raise NativeWebRefusal('fixed_test_journaling_invocation_required')
+        proof = self._web_admission(operation_id)
+        ensure_candidate_object(self.config, proof['source_sha'])
+        result = NativeJournalingRunner(self.config.root, self.config.journal.directory,
+                                        sha=proof['source_sha'], digest=proof['image_digest'],
+                                        channel='test', operation_id=operation_id).verify()
+        directory = self.config.journal.directory / 'native-journaling-results'
+        directory.mkdir(mode=0o700, exist_ok=True)
+        info = directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700
+            or any(path.is_symlink() for path in (directory, *directory.parents))):
+            raise NativeWebRefusal('journaling_evidence_directory_unqualified')
+        private_json(directory / (operation_id + '-' + result['resource_generation'] + '.json'), result)
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        return result
+
+    def run_journaling_qualification(self, operation_id: str) -> dict[str, Any]:
+        """Use the existing same-operation channel-lock recovery/retirement seam."""
+        if self.config.channel != 'test':
+            raise NativeWebRefusal('fixed_test_journaling_invocation_required')
+        self._web_admission(operation_id)
+        self.operation_id = operation_id
+        path = self.config.root / 'config/deploy/test.env.lock'
+        result: dict[str, Any] | None = None
+        fresh_identity = None
+        if not path.exists():
+            with self.channel_lock(retire_terminal=False):
+                if self.lock_fd is None:
+                    raise PostgresDeployError()
+                directory, owner = path.lstat(), os.fstat(self.lock_fd)
+                fresh_identity = (directory.st_dev, directory.st_ino, owner.st_dev, owner.st_ino)
+                result = self.qualify_journaling(operation_id)
+                if result.get('cleanup') != 'confirmed':
+                    raise PostgresDeployError()
+        with self.failed_reconciliation_lock() as handle:
+            self.lock_fd = handle[3]
+            try:
+                if fresh_identity is not None:
+                    directory, owner = os.fstat(handle[2]), os.fstat(handle[3])
+                    if fresh_identity != (directory.st_dev, directory.st_ino, owner.st_dev, owner.st_ino):
+                        raise PostgresDeployError()
+                receipt = self.config.journal.read()
+                if (receipt is None or receipt.operation_id != operation_id
+                    or receipt.terminal_result != 'committed' or not self.quiescent()):
+                    raise PostgresDeployError()
+                if result is None:
+                    result = self.qualify_journaling(operation_id)
+                if result.get('cleanup') != 'confirmed':
+                    raise PostgresDeployError()
+                self.retire_reconciled_channel_lock(handle)
+                return result
+            finally:
+                self.lock_fd = None
+
     def _running_one_shots(self) -> bool:
         # Running-only inventory misses a created container that Docker may
         # still start. This census grants no authority to stop any container.
@@ -1720,7 +1783,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=(
         'serve', 'rpc', 'guard', 'cleanup', 'token-push', 'token-push-worker',
-        'token-push-status', 'token-push-inspect', 'qualify-web', 'karakeep-boot',
+        'token-push-status', 'token-push-inspect', 'qualify-web', 'qualify-journaling', 'karakeep-boot',
         'karakeep-acquire', 'karakeep-project',
     ))
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
@@ -1753,6 +1816,20 @@ def main(argv: list[str] | None = None) -> int:
                 selected,
                 app_root=LinuxConfig.load(args.channel, require_runtime_env=False).root,
             )
+        if args.action == 'qualify-journaling':
+            if (args.channel != 'test' or args.operation_id is None
+                or args.attempt_id is not None or args.prior_generation is not None or args.compose_command):
+                raise NativeWebRefusal('fixed_test_journaling_invocation_required')
+            effects = LinuxEffects(LinuxConfig.load(args.channel))
+            def journaling_interrupted(_signal: int, _frame: Any) -> None:
+                raise KeyboardInterrupt()
+            previous_handler = signal.signal(signal.SIGTERM, journaling_interrupted)
+            try:
+                result = effects.run_journaling_qualification(args.operation_id)
+            finally:
+                signal.signal(signal.SIGTERM, previous_handler)
+            print(json.dumps(result, sort_keys=True))
+            return 0 if result['result'] == 'passed' else 78
         if args.action == 'qualify-web':
             if (args.channel not in {'dev', 'test'} or args.operation_id is None
                 or args.attempt_id is not None or args.prior_generation is not None or args.compose_command):
