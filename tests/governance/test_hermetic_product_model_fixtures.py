@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
 import pytest
 
+from app.components.llm.router import LLMRouter
 from app.search.service import ingest_object
 from app.workers.outbox_worker import handle_ingest_vault_changed
 
 pytestmark = pytest.mark.not_pg
+
+_ORIGINAL_LLM_ROUTER_ROUTE = LLMRouter.route
 
 
 _AFFECTED_MODULES = (
@@ -22,6 +26,8 @@ _AFFECTED_MODULES = (
     "tests/evals/test_general_knowledge_crosses_clean.py",
     "tests/evals/test_private_not_in_work_results.py",
     "tests/evals/test_rpg_not_confused_with_software.py",
+    "tests/e2e/test_pipe_graph.py",
+    "tests/e2e/test_reality_mvp_pipeline.py",
     "tests/fitness/test_ci_fitness.py",
     "tests/heimdal/test_attribution.py",
     "tests/indexer/test_embed_queue_ingest.py",
@@ -131,7 +137,7 @@ def test_ingest_and_worker_paths_use_synthetic_model_access_without_host_paths(
     assert all(request.dimensions > 0 for request in product_model_access_gateway.embedding_requests)
 
 
-def test_enumerated_unit_callers_are_enrolled_without_live_transport() -> None:
+def test_e2e_pipe_and_reality_callers_are_enrolled() -> None:
     """The finite CI failure set opts in explicitly; admission tests stay un-enrolled."""
     missing = [
         path
@@ -154,6 +160,100 @@ def test_enumerated_unit_callers_are_enrolled_without_live_transport() -> None:
         and keyword.value.value is True
         for keyword in ast.walk(gateway_fixtures[0])
         if isinstance(keyword, ast.keyword)
+    )
+
+    admission_path = Path("tests/model_access/test_executor_network_policy.py")
+    assert not _uses_product_gateway_marker(admission_path)
+    admission_tree = ast.parse(admission_path.read_text(encoding="utf-8"))
+    admission_tests = [
+        node
+        for node in admission_tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "test_missing_path_configuration_fails_before_transport_creation"
+    ]
+    assert len(admission_tests) == 1
+    assert "product_model_access_gateway" not in {
+        argument.arg
+        for argument in admission_tests[0].args.args
+    }
+
+
+def test_e2e_callers_remain_hermetic_with_compiled_product_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    product_model_access_gateway,
+    tmp_path: Path,
+) -> None:
+    """Real E2E callers use typed gateway responses with compiled routes and no host path."""
+    from app.model_access.remote_contract import (
+        ProductCompletionRequest,
+        ProductEmbeddingRequest,
+        ProductPreflightRequest,
+    )
+    from app.settings import runtime
+    from tests.e2e.test_pipe_graph import test_e2e_pipe
+    from tests.e2e.test_reality_mvp_pipeline import test_reality_mvp_note_ingest_and_ask
+
+    for name in _MODEL_ACCESS_PATH_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("LLM_FORCE_PROVIDER", raising=False)
+    monkeypatch.delenv("LLM_FORCE_MODEL", raising=False)
+    monkeypatch.delenv("LLM_PROVIDER_ENFORCE", raising=False)
+    monkeypatch.setenv("LLM_PROVIDER", "mock")
+    response = '{"type":"note","trust":"own","tags":["topic/test"],"confidence":0.95}'
+    monkeypatch.setenv("LLM_MOCK_RESPONSE", response)
+    product_model_access_gateway.completion_content = response
+
+    runtime_dir = tmp_path / "compiled-runtime"
+    runtime_dir.mkdir()
+    (runtime_dir / "llm_routing.yaml").write_text(
+        "default_chat:\n"
+        "  primary:\n"
+        "    model_id: openai.chat.gpt_6_luna\n"
+        "default_reasoning:\n"
+        "  primary:\n"
+        "    model_id: openai.chat.gpt_6_luna\n"
+        "default_embedding:\n"
+        "  primary:\n"
+        "    model_id: ollama.embed.nomic_embed_text\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(runtime, "RUNTIME", runtime_dir)
+    compiled_bundle = runtime._build_bundle()
+    monkeypatch.setattr(
+        "app.components.llm.router.get_settings_bundle", lambda: compiled_bundle
+    )
+    # Keep production route precedence while reusing only the typed gateway seam.
+    monkeypatch.setattr(LLMRouter, "route", _ORIGINAL_LLM_ROUTER_ROUTE)
+
+    gateway = product_model_access_gateway
+    pipe_preflight_start = len(gateway.preflight_requests)
+    pipe_completion_start = len(gateway.completion_requests)
+    pipe_root = tmp_path / "pipe"
+    pipe_root.mkdir()
+    test_e2e_pipe(pipe_root)
+    pipe_preflight = gateway.preflight_requests[pipe_preflight_start:]
+    pipe_completions = gateway.completion_requests[pipe_completion_start:]
+    assert pipe_preflight
+    assert all(isinstance(request, ProductPreflightRequest) for request in pipe_preflight)
+    assert any(
+        isinstance(request, ProductCompletionRequest)
+        and request.provider == "openai"
+        and request.model == "gpt-6-luna"
+        for request in pipe_completions
+    )
+
+    reality_embedding_start = len(gateway.embedding_requests)
+    reality_root = tmp_path / "reality"
+    reality_root.mkdir()
+    test_reality_mvp_note_ingest_and_ask(reality_root, monkeypatch)
+    reality_embeddings = gateway.embedding_requests[reality_embedding_start:]
+
+    assert all(name not in os.environ for name in _MODEL_ACCESS_PATH_ENV)
+    assert any(
+        isinstance(request, ProductEmbeddingRequest)
+        and request.provider == "ollama"
+        and request.model == "nomic-embed-text:latest"
+        for request in reality_embeddings
     )
 
 
