@@ -1166,12 +1166,17 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
   retain their full lexical path, and the census follows one value-carrying path-helper/write-helper
   boundary; star imports fail closed. Focused callsite proofs require the production
   `app.knowledge.service._build_adapter` to pass its resolved `sources_root_rel` into both
-  `FsVaultAdapter` and `ObsidianCliAdapter`. An exact inventory requires all three shipped
-  `classify_note_in_vault` callsites — `FsVaultAdapter._classify_target`,
-  `ObsidianCliAdapter.write_note`, and `app.services.artifact_identity._is_create_once` — to
-  forward the selected root; removing or replacing a forwarding argument with the packaged
-  `Sources` default fails. Synthetic positive and negative cases cover those bindings and unrelated
-  writes.
+  `FsVaultAdapter` and `ObsidianCliAdapter`. One alias-aware inventory covers all eight current
+  default-bearing helper/constructor identities, including candidate projection paths, the YouTube
+  attachment root validator, and the meeting path helper. A source census compares that finite set
+  with default-bearing identities found in the current AST, so a new root default cannot silently
+  escape caller proof. Every current caller must pass its resolved root by keyword or positional
+  argument; missing/defaulted forwarding and new callers fail closed. The same enclosing-scope
+  collector records calls in eagerly evaluated function defaults at module, function, and class-body
+  definition sites. Writer census keys retain every lexical scope name so
+  same-leaf writers under different enclosing factories cannot deduplicate. Synthetic positive and
+  negative cases cover aliases, class-body calls, forwarding removal/defaulting, new-caller drift,
+  and unrelated writes.
   Production producer tests verify selected-root writes and capture-note overlap refusal, while
   capture, MCP, and panel-agent paths verify exclusion with existing vault notes.
 - **Eventual test path:** `tests/architecture/test_sources_zone_writers.py`.

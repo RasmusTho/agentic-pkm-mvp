@@ -99,13 +99,96 @@ SOURCE_RESOLVER_CALLERS = {
     ("app/vault/paths.py", "get_vault_sources_dir_rel"),
 }
 
-# These are all shipped direct callers of the helper whose packaged default is ``Sources``.
-# Keeping the exact callsite map beside the main literal/resolver census makes a newly added or
-# moved caller fail closed until it forwards the settings-resolved root explicitly.
+# These are the shipped direct callers of ``classify_note_in_vault``. Keeping this focused view
+# beside the full default-bearing callsite map below makes changes to this classifier easy to read.
 SOURCE_CLASSIFICATION_FORWARDING_CALLERS = {
     ("app/knowledge/adapters.py", "FsVaultAdapter._classify_target"): "self.sources_root_rel",
     ("app/knowledge/adapters.py", "ObsidianCliAdapter.write_note"): "self.sources_root_rel",
     ("app/services/artifact_identity.py", "_is_create_once"): "sources_root_rel",
+}
+
+# Every shipped production helper or constructor whose packaged fallback names Sources. Values
+# are (parameter name, positional argument index); None means the root is keyword-only. The
+# fourth inventory records every resolved call to these targets and the value passed to the
+# default-bearing parameter. Keeping the full caller map below makes a new caller fail closed even
+# when it contains no literal or resolver call of its own.
+SOURCE_DEFAULT_ROOT_ARGUMENTS = {
+    "app.knowledge.multiwriter.classify_note": ("sources_root_rel", None),
+    "app.knowledge.multiwriter.classify_note_in_vault": ("sources_root_rel", None),
+    "app.knowledge_acquisition.candidate_writeback.candidate_note_path": ("sources_dir", None),
+    "app.knowledge.adapters.FsVaultAdapter": ("sources_root_rel", None),
+    "app.heimdal.candidate_projection.candidate_note_path": ("candidates_dir", None),
+    "app.heimdal.candidate_projection.reading_candidate_note_path": ("candidates_dir", None),
+    "app.knowledge_acquisition.source_bundle.validate_youtube_attachment_root": ("value", 0),
+    "app.heimdal.meeting_finalization.meetings_dir_rel": ("vault_root", 0),
+}
+
+SOURCE_DEFAULT_ROOT_FORWARDING_CALLERS = {
+    (
+        "app/agents/panel_agent/policy.py",
+        "watcher_panel_writeback_allowed",
+        "app.knowledge.multiwriter.classify_note",
+    ): ("Path(sources_root_rel).as_posix()",),
+    (
+        "app/knowledge/multiwriter.py",
+        "classify_note_in_vault",
+        "app.knowledge.multiwriter.classify_note",
+    ): ("sources_root_rel or 'Sources'",),
+    (
+        "app/knowledge/adapters.py",
+        "FsVaultAdapter._classify_target",
+        "app.knowledge.multiwriter.classify_note_in_vault",
+    ): ("self.sources_root_rel",),
+    (
+        "app/knowledge/adapters.py",
+        "ObsidianCliAdapter.write_note",
+        "app.knowledge.multiwriter.classify_note_in_vault",
+    ): ("self.sources_root_rel",),
+    (
+        "app/services/artifact_identity.py",
+        "_is_create_once",
+        "app.knowledge.multiwriter.classify_note_in_vault",
+    ): ("sources_root_rel",),
+    (
+        "app/knowledge_acquisition/candidate_writeback.py",
+        "write_candidate_note",
+        "app.knowledge_acquisition.candidate_writeback.candidate_note_path",
+    ): ("sources_dir",),
+    (
+        "app/knowledge_acquisition/acquire.py",
+        "_candidate_will_render",
+        "app.knowledge_acquisition.candidate_writeback.candidate_note_path",
+    ): ("get_vault_sources_dir_rel(vault_root)",),
+    (
+        "app/knowledge/service.py",
+        "_build_adapter",
+        "app.knowledge.adapters.FsVaultAdapter",
+    ): ("sources_root_rel",),
+    (
+        "app/heimdal/candidate_projection.py",
+        "write_candidate_note",
+        "app.heimdal.candidate_projection.candidate_note_path",
+    ): ("candidates_dir",),
+    (
+        "app/heimdal/candidate_projection.py",
+        "write_reading_candidate_note",
+        "app.heimdal.candidate_projection.reading_candidate_note_path",
+    ): ("candidates_dir",),
+    (
+        "app/knowledge_acquisition/source_bundle.py",
+        "materialize_youtube_source_bundle",
+        "app.knowledge_acquisition.source_bundle.validate_youtube_attachment_root",
+    ): ("youtube_attachment_root",),
+    (
+        "app/knowledge_acquisition/source_frames.py",
+        "_bundle_folder",
+        "app.knowledge_acquisition.source_bundle.validate_youtube_attachment_root",
+    ): ("youtube_attachment_root",),
+    (
+        "app/heimdal/meeting_finalization.py",
+        "finalize_session",
+        "app.heimdal.meeting_finalization.meetings_dir_rel",
+    ): ("vault_root",),
 }
 
 SOURCE_WRITE_EXCLUSIONS = {
@@ -138,7 +221,7 @@ def _module_function_for(node_stack: list[ast.AST]) -> str:
     ]
     if not names:
         return "<module>"
-    return ".".join(names[-2:]) if len(names) > 1 else names[-1]
+    return ".".join(names)
 
 
 def _application_sources(repo_root: Path = REPO_ROOT) -> dict[str, str]:
@@ -151,35 +234,23 @@ def _application_sources(repo_root: Path = REPO_ROOT) -> dict[str, str]:
 def _source_classification_forwarding_inventory(
     sources: dict[str, str],
 ) -> dict[tuple[str, str], tuple[str, ...]]:
-    """Inventory direct classifier callsites and their explicit Sources-root values."""
-    inventory: dict[tuple[str, str], list[str]] = {}
+    """Return resolved-root callsites for the filesystem-aware classifier."""
+    return {
+        (relative, scope): roots
+        for (relative, scope, consumer), roots in _source_code_inventory(
+            source_overrides=sources
+        )[3].items()
+        if consumer == "app.knowledge.multiwriter.classify_note_in_vault"
+    }
 
-    def visit(node: ast.AST, scope: list[ast.AST], relative: str) -> None:
-        current_scope = scope
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            current_scope = [*scope, node]
-        is_classifier_call = isinstance(node, ast.Call) and (
-            (isinstance(node.func, ast.Name) and node.func.id == "classify_note_in_vault")
-            or (
-                isinstance(node.func, ast.Attribute)
-                and node.func.attr == "classify_note_in_vault"
-            )
-        )
-        if is_classifier_call:
-            key = (relative, _module_function_for(current_scope))
-            roots = [keyword.value for keyword in node.keywords if keyword.arg == "sources_root_rel"]
-            if len(roots) != 1:
-                inventory.setdefault(key, []).append("<missing-or-duplicate>")
-            else:
-                inventory.setdefault(key, []).append(ast.unparse(roots[0]))
-        for child in ast.iter_child_nodes(node):
-            visit(child, current_scope, relative)
 
-    for relative, source in sorted(sources.items()):
-        if not relative.startswith("app/") or not relative.endswith(".py"):
-            continue
-        visit(ast.parse(source, filename=relative), [], relative)
-    return {key: tuple(values) for key, values in inventory.items()}
+def _source_default_root_forwarding_inventory(
+    sources: dict[str, str] | None = None,
+) -> dict[tuple[str, str, str], tuple[str, ...]]:
+    """Return every alias-resolved caller of a shipped Sources-default consumer."""
+    return _source_code_inventory(
+        source_overrides=sources if sources is not None else _application_sources()
+    )[3]
 
 
 def _fs_adapter_forwards_resolved_sources_root(source: str) -> bool:
@@ -290,8 +361,14 @@ def _obsidian_adapter_construction_forwards_resolved_sources_root(source: str) -
     )
 
 
-def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
-    set[tuple[str, str, str]], set[tuple[str, str]], set[tuple[str, str]]
+def _source_code_inventory(
+    repo_root: Path = REPO_ROOT, *, source_overrides: dict[str, str] | None = None
+) -> tuple[
+    set[tuple[str, str, str]],
+    set[tuple[str, str]],
+    set[tuple[str, str]],
+    dict[tuple[str, str, str], tuple[str, ...]],
+    dict[str, tuple[str, int | None]],
 ]:
     """Inventory Sources callers with a bounded, scope-aware AST binding model.
 
@@ -301,12 +378,21 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
     literals: set[tuple[str, str, str]] = set()
     resolver_callers: set[tuple[str, str]] = set()
     source_write_callers: set[tuple[str, str]] = set()
-    trees = {
-        path.relative_to(repo_root).as_posix(): ast.parse(
-            path.read_text(encoding="utf-8"), filename=path.relative_to(repo_root).as_posix()
-        )
-        for path in sorted((repo_root / "app").rglob("*.py"))
-    }
+    default_root_forwarding_callers: dict[tuple[str, str, str], list[str]] = {}
+    if source_overrides is None:
+        trees = {
+            path.relative_to(repo_root).as_posix(): ast.parse(
+                path.read_text(encoding="utf-8"),
+                filename=path.relative_to(repo_root).as_posix(),
+            )
+            for path in sorted((repo_root / "app").rglob("*.py"))
+        }
+    else:
+        trees = {
+            relative: ast.parse(source, filename=relative)
+            for relative, source in source_overrides.items()
+            if relative.startswith("app/") and relative.endswith(".py")
+        }
 
     def module_for_file(relative: str) -> str:
         parts = relative[:-3].split("/")
@@ -325,6 +411,9 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
 
     def function_target(module: str, node: ast.AST, qualname: tuple[str, ...]) -> str:
         return f"function:{module}::{'.'.join(qualname)}@{node.lineno}"
+
+    def class_target(module: str, node: ast.ClassDef, qualname: tuple[str, ...]) -> str:
+        return f"class:{module}::{'.'.join(qualname)}@{node.lineno}"
 
     def module_import_name(
         node: ast.ImportFrom, current_module: str, relative: str
@@ -346,6 +435,8 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
     # display labels used by the existing allowlists remain short and stable.
     function_by_node: dict[int, str] = {}
     function_nodes: dict[str, tuple[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
+    class_by_node: dict[int, str] = {}
+    class_nodes: dict[str, tuple[str, ast.ClassDef]] = {}
     parent_function: dict[str, str | None] = {}
     function_display: dict[str, str] = {}
     function_depth: dict[str, int] = {}
@@ -357,6 +448,15 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
             self.module = module_for_relative[relative]
 
         def visit_ClassDef(self, node: ast.ClassDef) -> None:
+            lexical_nodes = [
+                item
+                for item in module_stack
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            ]
+            qualname = tuple(item.name for item in lexical_nodes) + (node.name,)
+            target = class_target(self.module, node, qualname)
+            class_by_node[id(node)] = target
+            class_nodes[target] = (self.relative, node)
             module_stack.append(node)
             self.generic_visit(node)
             module_stack.pop()
@@ -393,6 +493,137 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
         module_stack.clear()
         FunctionIndex(relative).visit(tree)
 
+    def is_sources_root(value: object) -> bool:
+        return isinstance(value, str) and (value == "Sources" or value.startswith("Sources/"))
+
+    module_sources_names: dict[str, set[str]] = {}
+    for relative, tree in trees.items():
+        names = module_sources_names.setdefault(module_for_relative[relative], set())
+        for statement in tree.body:
+            if isinstance(statement, (ast.Assign, ast.AnnAssign)):
+                value = statement.value
+                targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+                if isinstance(value, ast.Constant) and is_sources_root(value.value):
+                    names.update(
+                        target.id for target in targets if isinstance(target, ast.Name)
+                    )
+
+    def root_expression(expression: ast.AST, module: str) -> bool:
+        return any(
+            (isinstance(node, ast.Constant) and is_sources_root(node.value))
+            or (isinstance(node, ast.Name) and node.id in module_sources_names.get(module, set()))
+            for node in ast.walk(expression)
+        )
+
+    def scope_uses_sources(body: list[ast.stmt], module: str) -> bool:
+        found = False
+
+        class RootReferences(ast.NodeVisitor):
+            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                return
+
+            visit_AsyncFunctionDef = visit_FunctionDef
+
+            def visit_ClassDef(self, node: ast.ClassDef) -> None:
+                return
+
+            def visit_Constant(self, node: ast.Constant) -> None:
+                nonlocal found
+                found = found or is_sources_root(node.value)
+
+            def visit_Name(self, node: ast.Name) -> None:
+                nonlocal found
+                found = found or node.id in module_sources_names.get(module, set())
+
+        visitor = RootReferences()
+        for statement in body:
+            visitor.visit(statement)
+        return found
+
+    def function_default_parameters(
+        node: ast.FunctionDef | ast.AsyncFunctionDef, module: str
+    ) -> list[tuple[str, int | None, ast.expr]]:
+        positional = [*node.args.posonlyargs, *node.args.args]
+        defaults: list[tuple[str, int | None, ast.expr]] = []
+        if node.args.defaults:
+            start = len(positional) - len(node.args.defaults)
+            defaults.extend(
+                (argument.arg, index, default)
+                for index, (argument, default) in enumerate(
+                    zip(positional[start:], node.args.defaults, strict=True), start
+                )
+            )
+        defaults.extend(
+            (argument.arg, None, default)
+            for argument, default in zip(
+                node.args.kwonlyargs, node.args.kw_defaults, strict=True
+            )
+            if default is not None
+        )
+        direct = [item for item in defaults if root_expression(item[2], module)]
+        if direct:
+            return direct
+
+        # A None default can select a packaged Sources fallback in the function body.
+        if scope_uses_sources(node.body, module):
+            root_named = [
+                item
+                for item in defaults
+                if any(token in item[0].casefold() for token in ("source", "vault", "root"))
+            ]
+            if root_named:
+                return root_named
+            if len(defaults) == 1:
+                return defaults
+        return []
+
+    observed_default_root_arguments: dict[str, tuple[str, int | None]] = {}
+    for target, (relative, node) in function_nodes.items():
+        if function_display[target] != node.name:
+            continue
+        module = module_for_relative[relative]
+        parameters = function_default_parameters(node, module)
+        if parameters:
+            identity = f"{module}.{node.name}"
+            if len(parameters) == 1:
+                argument, positional_index, _default = parameters[0]
+                observed_default_root_arguments[identity] = (argument, positional_index)
+            else:
+                observed_default_root_arguments[identity] = (
+                    "<ambiguous-default-parameters>",
+                    None,
+                )
+
+    for target, (relative, node) in class_nodes.items():
+        class_qualname = target.split("::", 1)[1].rsplit("@", 1)[0]
+        if class_qualname != node.name:
+            continue
+        constructor = next(
+            (
+                item
+                for item in node.body
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and item.name == "__init__"
+            ),
+            None,
+        )
+        if constructor is None:
+            continue
+        module = module_for_relative[relative]
+        parameters = function_default_parameters(constructor, module)
+        if parameters:
+            identity = f"{module}.{node.name}"
+            if len(parameters) == 1:
+                argument, positional_index, _default = parameters[0]
+                if positional_index is not None:
+                    positional_index -= 1  # Constructor calls omit implicit self.
+                observed_default_root_arguments[identity] = (argument, positional_index)
+            else:
+                observed_default_root_arguments[identity] = (
+                    "<ambiguous-default-parameters>",
+                    None,
+                )
+
     module_specs: dict[str, dict[str, list[tuple[str, str]]]] = {
         module: {} for module in modules
     }
@@ -418,7 +649,9 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
         visit_AsyncFunctionDef = visit_FunctionDef
 
         def visit_ClassDef(self, node: ast.ClassDef) -> None:
-            return
+            target = class_by_node.get(id(node))
+            if target:
+                add_binding(self.bindings, node.name, target)
 
         def visit_Import(self, node: ast.Import) -> None:
             for alias in node.names:
@@ -545,7 +778,52 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
         if target.startswith("symbol:"):
             return target.removeprefix("symbol:") in names
         record = function_nodes.get(target)
-        return bool(record and record[1].name in names)
+        if record and record[1].name in names:
+            return True
+        class_record = class_nodes.get(target)
+        return bool(class_record and class_record[1].name in names)
+
+    default_root_consumers: dict[str, tuple[str, tuple[str, int | None]]] = {}
+    for target, (relative, node) in function_nodes.items():
+        if function_display[target] != node.name:
+            continue
+        qualified = f"{module_for_relative[relative]}.{node.name}"
+        if qualified in SOURCE_DEFAULT_ROOT_ARGUMENTS:
+            default_root_consumers[target] = (
+                qualified,
+                SOURCE_DEFAULT_ROOT_ARGUMENTS[qualified],
+            )
+    for target, (relative, node) in class_nodes.items():
+        class_qualname = target.split("::", 1)[1].rsplit("@", 1)[0]
+        if class_qualname != node.name:
+            continue
+        qualified = f"{module_for_relative[relative]}.{node.name}"
+        if qualified in SOURCE_DEFAULT_ROOT_ARGUMENTS:
+            default_root_consumers[target] = (
+                qualified,
+                SOURCE_DEFAULT_ROOT_ARGUMENTS[qualified],
+            )
+
+    def record_default_root_calls(
+        relative: str,
+        scope: str,
+        calls: list[tuple[set[str], ast.Call]],
+    ) -> None:
+        for callees, call in calls:
+            for target in callees & default_root_consumers.keys():
+                qualified, (argument_name, positional_index) = default_root_consumers[target]
+                roots = [
+                    ast.unparse(keyword.value)
+                    for keyword in call.keywords
+                    if keyword.arg == argument_name
+                ]
+                if positional_index is not None and positional_index < len(call.args):
+                    roots.append(ast.unparse(call.args[positional_index]))
+                if len(roots) != 1:
+                    roots = ["<missing-or-duplicate>"]
+                default_root_forwarding_callers.setdefault(
+                    (relative, scope, qualified), []
+                ).extend(roots)
 
     calls_by_function: dict[str, list[tuple[set[str], ast.Call]]] = {}
     for target, (relative, function) in function_nodes.items():
@@ -553,6 +831,9 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
 
         class DirectCalls(ast.NodeVisitor):
             def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                for default in (*node.args.defaults, *node.args.kw_defaults):
+                    if default is not None:
+                        self.visit(default)
                 return
 
             visit_AsyncFunctionDef = visit_FunctionDef
@@ -568,6 +849,7 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
         for statement in function.body:
             visitor.visit(statement)
         calls_by_function[target] = calls
+        record_default_root_calls(relative, function_display[target], calls)
         if any(
             any(function_named(callee, {"get_vault_sources_dir_rel", "resolve_vault_sources_dir_rel"}) for callee in callees)
             for callees, _call in calls
@@ -608,9 +890,10 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                     None,
                 )
                 active_env = function_env.get(active_target, env)
+                callees = expression_targets(relative, node.func, active_env)
                 if not any(
                     function_named(callee, {"get_vault_sources_dir_rel", "resolve_vault_sources_dir_rel"})
-                    for callee in expression_targets(relative, node.func, active_env)
+                    for callee in callees
                 ):
                     return self.generic_visit(node)
                 active = function_display[active_target] if active_target else _module_function_for(stack)
@@ -728,6 +1011,9 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
 
         class DirectScopeCalls(ast.NodeVisitor):
             def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+                for default in (*node.args.defaults, *node.args.kw_defaults):
+                    if default is not None:
+                        self.visit(default)
                 return
 
             visit_AsyncFunctionDef = visit_FunctionDef
@@ -768,8 +1054,10 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
             name: set(values)
             for name, values in module_targets.get(module_for_relative[relative], {}).items()
         }
+        module_calls = direct_scope_calls(relative, tree.body, module_env)
+        record_default_root_calls(relative, "<module>", module_calls)
         if scope_writes_source(
-            relative, tree.body, module_env, direct_scope_calls(relative, tree.body, module_env)
+            relative, tree.body, module_env, module_calls
         ):
             source_write_callers.add((relative, "<module>"))
 
@@ -820,6 +1108,7 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
                 else _module_function_for(lexical_classes)
             )
             calls = direct_scope_calls(relative, class_node.body, env)
+            record_default_root_calls(relative, label, calls)
             if any(
                 any(
                     function_named(callee, {"get_vault_sources_dir_rel", "resolve_vault_sources_dir_rel"})
@@ -831,7 +1120,13 @@ def _source_code_inventory(repo_root: Path = REPO_ROOT) -> tuple[
             if scope_writes_source(relative, class_node.body, env, calls):
                 source_write_callers.add((relative, label))
 
-    return literals, resolver_callers, source_write_callers
+    return (
+        literals,
+        resolver_callers,
+        source_write_callers,
+        {key: tuple(values) for key, values in default_root_forwarding_callers.items()},
+        observed_default_root_arguments,
+    )
 
 
 def _configured_vault(root: Path, *, sources_dir: str = CONFIGURED_SOURCES) -> VaultContext:
@@ -917,10 +1212,18 @@ def _meeting_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, vault: Vau
 
 
 def test_zone_resolved_via_settings_not_literal() -> None:
-    literals, resolver_callers, source_write_callers = _source_code_inventory()
+    (
+        literals,
+        resolver_callers,
+        source_write_callers,
+        default_root_callers,
+        observed_default_root_arguments,
+    ) = _source_code_inventory()
     assert literals == SOURCE_LITERAL_ALLOWLIST
     assert resolver_callers == SOURCE_RESOLVER_CALLERS
     assert source_write_callers == REGISTERED_SOURCE_WRITERS | SOURCE_WRITE_EXCLUSIONS
+    assert default_root_callers == SOURCE_DEFAULT_ROOT_FORWARDING_CALLERS
+    assert observed_default_root_arguments == SOURCE_DEFAULT_ROOT_ARGUMENTS
     adapter_source = (REPO_ROOT / "app/knowledge/adapters.py").read_text(encoding="utf-8")
     service_source = (REPO_ROOT / "app/knowledge/service.py").read_text(encoding="utf-8")
     assert _fs_adapter_construction_forwards_resolved_sources_root(service_source)
@@ -996,12 +1299,116 @@ def test_adapter_forwarding_proof_rejects_missing_or_default_sources_root() -> N
 
 
 def test_classifier_callsite_inventory_rejects_missing_or_default_sources_root() -> None:
-    sources = _application_sources()
+    application_sources = _application_sources()
+    sources = {
+        relative: application_sources[relative]
+        for relative in (
+            "app/knowledge/__init__.py",
+            "app/knowledge/adapters.py",
+            "app/knowledge/multiwriter.py",
+            "app/services/artifact_identity.py",
+        )
+    }
     expected = {
         caller: (root_expression,)
         for caller, root_expression in SOURCE_CLASSIFICATION_FORWARDING_CALLERS.items()
     }
     assert _source_classification_forwarding_inventory(sources) == expected
+
+    aliased_caller = (
+        "from app.knowledge.multiwriter import classify_note_in_vault as classify\n"
+        "def aliased_classifier_writer():\n"
+        "    return classify('note.md', sources_root_rel='ConfiguredSources')\n"
+    )
+    aliased_sources = dict(sources)
+    aliased_sources["app/knowledge/aliased_classifier.py"] = aliased_caller
+    alias_key = ("app/knowledge/aliased_classifier.py", "aliased_classifier_writer")
+    aliased_sources["app/knowledge/function_local_classifier.py"] = (
+        "def function_local_classifier_writer():\n"
+        "    from app.knowledge.multiwriter import classify_note_in_vault as local_classify\n"
+        "    return local_classify('note.md', sources_root_rel='ConfiguredSources')\n"
+    )
+    local_alias_key = (
+        "app/knowledge/function_local_classifier.py",
+        "function_local_classifier_writer",
+    )
+    assert _source_classification_forwarding_inventory(aliased_sources) == {
+        **expected,
+        alias_key: ("'ConfiguredSources'",),
+        local_alias_key: ("'ConfiguredSources'",),
+    }
+
+    package_reexport_sources = dict(sources)
+    package_reexport_sources["app/knowledge/__init__.py"] += (
+        "\nfrom .multiwriter import classify_note_in_vault as exported_classifier\n"
+    )
+    package_reexport_sources["app/knowledge/reexported_classifier.py"] = (
+        "from app.knowledge import exported_classifier as classify_alias\n"
+        "def reexported_classifier_writer():\n"
+        "    return classify_alias('note.md', sources_root_rel='ConfiguredSources')\n"
+    )
+    reexport_key = (
+        "app/knowledge/reexported_classifier.py",
+        "reexported_classifier_writer",
+    )
+    assert _source_classification_forwarding_inventory(package_reexport_sources) == {
+        **expected,
+        reexport_key: ("'ConfiguredSources'",),
+    }
+
+    module_alias_sources = dict(sources)
+    module_alias_sources["app/knowledge/module_alias_classifier.py"] = (
+        "import app.knowledge.multiwriter as classifier_module\n"
+        "def module_alias_classifier_writer():\n"
+        "    return classifier_module.classify_note_in_vault('note.md', "
+        "sources_root_rel='ConfiguredSources')\n"
+    )
+    module_alias_key = (
+        "app/knowledge/module_alias_classifier.py",
+        "module_alias_classifier_writer",
+    )
+    assert _source_classification_forwarding_inventory(module_alias_sources) == {
+        **expected,
+        module_alias_key: ("'ConfiguredSources'",),
+    }
+
+    for alias_sources, relative, scope, call in (
+        (aliased_sources, "app/knowledge/aliased_classifier.py", "aliased_classifier_writer", "classify"),
+        (
+            aliased_sources,
+            "app/knowledge/function_local_classifier.py",
+            "function_local_classifier_writer",
+            "local_classify",
+        ),
+        (
+            package_reexport_sources,
+            "app/knowledge/reexported_classifier.py",
+            "reexported_classifier_writer",
+            "classify_alias",
+        ),
+        (
+            module_alias_sources,
+            "app/knowledge/module_alias_classifier.py",
+            "module_alias_classifier_writer",
+            "classifier_module.classify_note_in_vault",
+        ),
+    ):
+        alias_call = f"return {call}('note.md', sources_root_rel='ConfiguredSources')"
+        alias_missing = dict(alias_sources)
+        alias_missing[relative] = alias_sources[relative].replace(
+            ", sources_root_rel='ConfiguredSources'", "", 1
+        )
+        assert _source_classification_forwarding_inventory(alias_missing)[
+            (relative, scope)
+        ] == ("<missing-or-duplicate>",)
+        alias_defaulted = dict(alias_sources)
+        alias_defaulted[relative] = alias_sources[relative].replace(
+            "sources_root_rel='ConfiguredSources'", "sources_root_rel='Sources'", 1
+        )
+        assert _source_classification_forwarding_inventory(alias_defaulted)[
+            (relative, scope)
+        ] == ("'Sources'",)
+        assert alias_call in alias_sources[relative]
 
     for caller, root_expression in SOURCE_CLASSIFICATION_FORWARDING_CALLERS.items():
         relative, scope = caller
@@ -1034,6 +1441,191 @@ def test_classifier_callsite_inventory_rejects_missing_or_default_sources_root()
                 forwarded, forwarded.replace(f"={root_expression}", '="Sources"', 1), 1
             )
         assert _source_classification_forwarding_inventory(packaged_default) != expected
+
+
+def test_default_root_callsite_inventory_fails_closed_for_new_and_defaulted_callers() -> None:
+    calls = {
+        "app.knowledge.multiwriter.classify_note": (
+            "from app.knowledge.multiwriter import classify_note as consumer",
+            "consumer('note.md', WriteOperation.WRITE, sources_root_rel={root})",
+        ),
+        "app.knowledge.multiwriter.classify_note_in_vault": (
+            "from app.knowledge.multiwriter import classify_note_in_vault as consumer",
+            "consumer('note.md', WriteOperation.WRITE, vault_root='.', sources_root_rel={root})",
+        ),
+        "app.knowledge_acquisition.candidate_writeback.candidate_note_path": (
+            "from app.knowledge_acquisition.candidate_writeback import candidate_note_path as consumer",
+            "consumer(candidate, sources_dir={root})",
+        ),
+        "app.knowledge.adapters.FsVaultAdapter": (
+            "from app.knowledge.adapters import FsVaultAdapter as consumer",
+            "consumer('.', sources_root_rel={root})",
+        ),
+        "app.heimdal.candidate_projection.candidate_note_path": (
+            "from app.heimdal.candidate_projection import candidate_note_path as consumer",
+            "consumer(candidate, candidates_dir={root})",
+        ),
+        "app.heimdal.candidate_projection.reading_candidate_note_path": (
+            "from app.heimdal.candidate_projection import reading_candidate_note_path as consumer",
+            "consumer(candidate, candidates_dir={root})",
+        ),
+        "app.knowledge_acquisition.source_bundle.validate_youtube_attachment_root": (
+            "from app.knowledge_acquisition.source_bundle import validate_youtube_attachment_root as consumer",
+            "consumer({root})",
+        ),
+        "app.heimdal.meeting_finalization.meetings_dir_rel": (
+            "from app.heimdal.meeting_finalization import meetings_dir_rel as consumer",
+            "consumer({root})",
+        ),
+    }
+    for index, (qualified, (import_line, call_template)) in enumerate(calls.items()):
+        module, _, name = qualified.rpartition(".")
+        assert name
+        assert import_line.startswith(f"from {module} import {name} as ")
+        relative = f"app/knowledge/new_default_root_caller_{index}.py"
+        scope = f"new_default_root_caller_{index}"
+        entry = (relative, scope, qualified)
+        fixture_sources = {
+            "app/__init__.py": "",
+            "app/knowledge/__init__.py": "",
+            "app/knowledge/multiwriter.py": (
+                "def classify_note(*args, **kwargs):\n    return None\n"
+                "def classify_note_in_vault(*args, **kwargs):\n    return None\n"
+            ),
+            "app/knowledge/adapters.py": "class FsVaultAdapter:\n    pass\n",
+            "app/knowledge_acquisition/__init__.py": "",
+            "app/knowledge_acquisition/candidate_writeback.py": (
+                "def candidate_note_path(*args, **kwargs):\n    return ''\n"
+            ),
+            "app/heimdal/__init__.py": "",
+            "app/heimdal/candidate_projection.py": (
+                "def candidate_note_path(*args, **kwargs):\n    return ''\n"
+                "def reading_candidate_note_path(*args, **kwargs):\n    return ''\n"
+            ),
+            "app/knowledge_acquisition/source_bundle.py": (
+                "def validate_youtube_attachment_root(*args, **kwargs):\n    return ''\n"
+            ),
+            "app/heimdal/meeting_finalization.py": (
+                "def meetings_dir_rel(*args, **kwargs):\n    return ''\n"
+            ),
+        }
+
+        for root, expected_root in (
+            ("'ConfiguredSources'", ("'ConfiguredSources'",)),
+            (None, ("<missing-or-duplicate>",)),
+            ("'Sources'", ("'Sources'",)),
+        ):
+            if root is None:
+                # Drop only the default-bearing keyword while retaining all required arguments.
+                call = call_template.format(root="'ConfiguredSources'")
+                call = call.replace(", sources_root_rel='ConfiguredSources'", "")
+                call = call.replace(", sources_dir='ConfiguredSources'", "")
+                call = call.replace(", candidates_dir='ConfiguredSources'", "")
+                call = call.replace("consumer('ConfiguredSources')", "consumer()")
+            else:
+                call = call_template.format(root=root)
+            mutated = dict(fixture_sources)
+            mutated[relative] = (
+                f"{import_line}\n"
+                f"def {scope}():\n"
+                f"    return {call}\n"
+            )
+            inventory = _source_default_root_forwarding_inventory(mutated)
+            assert inventory[entry] == expected_root
+            assert set(inventory) == {entry}
+
+
+def test_function_local_class_body_default_classifier_call_is_in_inventory() -> None:
+    relative = "app/knowledge/function_local_class_default_classifier.py"
+    qualified = "app.knowledge.multiwriter.classify_note_in_vault"
+    class_sources = {
+        "app/__init__.py": "",
+        "app/knowledge/__init__.py": "",
+        "app/knowledge/multiwriter.py": (
+            "def classify_note_in_vault(*args, **kwargs):\n    return None\n"
+        ),
+    }
+    class_sources[relative] = (
+        "def enclosing_default_classifier():\n"
+        "    class LocalDefaultClassifier:\n"
+        "        from app.knowledge.multiwriter import classify_note_in_vault as classify\n"
+        "        classify('note.md', WriteOperation.WRITE, vault_root='.')\n"
+    )
+    entry = (
+        relative,
+        "enclosing_default_classifier.LocalDefaultClassifier",
+        qualified,
+    )
+    missing = _source_default_root_forwarding_inventory(class_sources)
+    assert missing[entry] == ("<missing-or-duplicate>",)
+
+    class_sources[relative] = class_sources[relative].replace(
+        "vault_root='.')", "vault_root='.', sources_root_rel='ConfiguredSources')"
+    )
+    forwarded = _source_default_root_forwarding_inventory(class_sources)
+    assert forwarded[entry] == ("'ConfiguredSources'",)
+
+    class_sources[relative] = class_sources[relative].replace(
+        "sources_root_rel='ConfiguredSources'", "sources_root_rel='Sources'"
+    )
+    defaulted = _source_default_root_forwarding_inventory(class_sources)
+    assert defaulted[entry] == ("'Sources'",)
+
+
+def test_default_root_census_detects_new_default_bearing_helpers() -> None:
+    sources = _application_sources()
+    relative = "app/knowledge/new_default_root_helper.py"
+    sources[relative] = (
+        "DEFAULT_NEW_SOURCE_ROOT = 'Sources/New'\n"
+        "def newly_allowlisted_helper(sources_root_rel=DEFAULT_NEW_SOURCE_ROOT):\n"
+        "    return sources_root_rel\n"
+    )
+
+    observed = _source_code_inventory(source_overrides=sources)[4]
+    assert observed["app.knowledge.new_default_root_helper.newly_allowlisted_helper"] == (
+        "sources_root_rel",
+        0,
+    )
+    assert observed != SOURCE_DEFAULT_ROOT_ARGUMENTS
+
+
+def test_eager_function_default_calls_are_recorded_in_enclosing_execution_scopes() -> None:
+    relative = "app/knowledge/eager_default_callers.py"
+    sources = {
+        "app/__init__.py": "",
+        "app/knowledge/__init__.py": "",
+        "app/knowledge/adapters.py": (
+            "class FsVaultAdapter:\n"
+            "    def __init__(self, root, *, sources_root_rel='Sources'):\n"
+            "        self.root = root\n"
+        ),
+        relative: (
+            "from app.knowledge.adapters import FsVaultAdapter as Adapter\n"
+            "def module_writer(adapter=Adapter('.')):\n"
+            "    return adapter\n"
+            "def enclosing():\n"
+            "    def local_writer(adapter=Adapter('.')):\n"
+            "        return adapter\n"
+            "    class Writer:\n"
+            "        def method(adapter=Adapter('.')):\n"
+            "            return adapter\n"
+        ),
+    }
+
+    inventory = _source_default_root_forwarding_inventory(sources)
+    missing = ("<missing-or-duplicate>",)
+    consumer = "app.knowledge.adapters.FsVaultAdapter"
+    assert inventory[(relative, "<module>", consumer)] == missing
+    assert inventory[(relative, "enclosing", consumer)] == missing
+    assert inventory[(relative, "enclosing.Writer", consumer)] == missing
+
+    sources[relative] = sources[relative].replace(
+        "def module_writer(adapter=Adapter('.')):",
+        "def module_writer(adapter=Adapter('.', sources_root_rel='ConfiguredSources')):",
+        1,
+    )
+    inventory = _source_default_root_forwarding_inventory(sources)
+    assert inventory[(relative, "<module>", consumer)] == ("'ConfiguredSources'",)
 
 
 def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: Path) -> None:
@@ -1207,7 +1799,13 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
 
-    _literals, resolver_callers, source_write_callers = _source_code_inventory(tmp_path)
+    (
+        _literals,
+        resolver_callers,
+        source_write_callers,
+        _classifier_callers,
+        _default_consumers,
+    ) = _source_code_inventory(tmp_path)
 
     assert ("app/writers/helpers.py", "build_source_path") in resolver_callers
     assert (
@@ -1221,7 +1819,10 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
     assert ("app/writers/producer.py", "local_import_writer") in source_write_callers
     assert ("app/writers/producer.py", "nested_local_import_writer_3414") in source_write_callers
     assert ("app/writers/relative.py", "relative_import_writer") in source_write_callers
-    assert ("app/writers/producer.py", "producer_layer_3414.writer") in source_write_callers
+    factory_a_writer = ("app/writers/producer.py", "factory_a_3414.producer_layer_3414.writer")
+    factory_b_writer = ("app/writers/producer.py", "factory_b_3414.producer_layer_3414.writer")
+    assert factory_a_writer in source_write_callers
+    assert factory_b_writer not in source_write_callers
     assert ("app/writers/module_producer.py", "<module>") in source_write_callers
     assert ("app/writers/class_producer.py", "Example") in source_write_callers
     assert ("app/writers/function_local_class.py", "outer_3414.Example") in source_write_callers
@@ -1229,12 +1830,47 @@ def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: 
     assert ("app/writers/function_local_class.py", "unrelated_outer_3414.Unrelated") not in source_write_callers
     assert ("app/writers/method_inbox_class_shadow.py", "InboxClassShadow.writer") in source_write_callers
     assert ("app/writers/method_sources_class_shadow.py", "SourcesClassShadow.writer") not in source_write_callers
-    assert ("app/writers/producer.py", "producer_layer_3414.make_path") in resolver_callers
+    assert (
+        "app/writers/producer.py",
+        "factory_a_3414.producer_layer_3414.make_path",
+    ) in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in resolver_callers
     assert ("app/writers/producer.py", "shadowed_enclosing_resolver_3414.write_inbox") not in source_write_callers
     assert ("app/writers/producer.py", "unrelated_path_and_write_calls") not in source_write_callers
     assert ("app/writers/unrelated_module.py", "<module>") not in source_write_callers
     assert ("app/writers/class_producer.py", "Unrelated") not in source_write_callers
+
+    producer_path = tmp_path / "app" / "writers" / "producer.py"
+    producer_source = producer_path.read_text(encoding="utf-8")
+    inbox_writer = (
+        "def factory_b_3414():\n"
+        "    def producer_layer_3414():\n"
+        "        def make_path():\n"
+        "            return 'Inbox/b.md'\n"
+        "        def persist_path(path):\n"
+        "            return path\n"
+    )
+    sources_writer = (
+        "def factory_b_3414():\n"
+        "    def producer_layer_3414():\n"
+        "        def make_path():\n"
+        "            return f'{factory_resolve()}/b.md'\n"
+        "        def persist_path(path):\n"
+        "            return factory_persist(path)\n"
+    )
+    assert inbox_writer in producer_source
+    producer_path.write_text(
+        producer_source.replace(inbox_writer, sources_writer, 1), encoding="utf-8"
+    )
+    (
+        _literals,
+        _resolver_callers,
+        mutated_source_write_callers,
+        _classifier_callers,
+        _default_consumers,
+    ) = _source_code_inventory(tmp_path)
+    assert factory_a_writer in mutated_source_write_callers
+    assert factory_b_writer in mutated_source_write_callers
 
 
 def test_writer_inventory_fails_closed_on_unresolved_star_import(tmp_path: Path) -> None:
