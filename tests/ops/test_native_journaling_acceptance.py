@@ -335,6 +335,36 @@ def test_journaling_refusal_is_not_native_web_evidence(monkeypatch, capsys):
     assert outcome['result'] == 'unknown' and outcome['cleanup'] == 'unknown'
 
 
+@pytest.mark.parametrize('failure_point', ['link_ack', 'staging_cleanup'])
+def test_terminal_ambiguous_link_and_cleanup_leave_absence_not_pass(tmp_path, monkeypatch, failure_point):
+    target = tmp_path / 'terminal.json'
+    original_link, original_unlink = os.link, Path.unlink
+    faults = []
+    def ambiguous_link(*args, **kwargs):
+        original_link(*args, **kwargs)
+        faults.append('link')
+        raise KeyboardInterrupt('link happened; caller never acknowledged return')
+    def interrupted_unlink(path, *args, **kwargs):
+        if path.name.startswith('.terminal.json.') and not faults:
+            faults.append('unlink')
+            raise OSError('injected staging cleanup failure')
+        return original_unlink(path, *args, **kwargs)
+    with monkeypatch.context() as context:
+        if failure_point == 'link_ack':
+            context.setattr(os, 'link', ambiguous_link)
+            failure = KeyboardInterrupt
+        else:
+            context.setattr(Path, 'unlink', interrupted_unlink)
+            failure = OSError
+        with pytest.raises(failure):
+            journaling.private_json(target, {'result': 'passed', 'cleanup': 'confirmed'})
+    assert len(faults) == 1 and not target.exists() and not list(tmp_path.glob('.terminal.json.*'))
+    target.write_text('foreign evidence, never overwrite or remove')
+    with pytest.raises(FileExistsError):
+        journaling.private_json(target, {'result': 'passed', 'cleanup': 'confirmed'})
+    assert target.read_text() == 'foreign evidence, never overwrite or remove'
+
+
 def test_actual_product_observer_rejects_deterministic_provider_substitution(tmp_path, monkeypatch):
     from app.write_guard import DEFAULT_WRITE_GUARD
     from tests.journaling.test_live_journaling_acceptance_contract import _install_real_product_seams

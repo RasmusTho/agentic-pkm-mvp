@@ -46,7 +46,7 @@ def private_json(path: Path, value: Any) -> None:
     """Durable complete-before-publication, atomic no-overwrite, or absent."""
     descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix='.' + path.name + '.')
     temporary = Path(temporary_name)
-    published = False
+    staged = None
     try:
         with os.fdopen(descriptor, 'w') as stream:
             os.fchmod(stream.fileno(), 0o600)
@@ -56,7 +56,6 @@ def private_json(path: Path, value: Any) -> None:
         # Hard-link publication is atomic and refuses an existing final name.
         staged = temporary.lstat()
         os.link(temporary, path, follow_symlinks=False)
-        published = True
         temporary.unlink()
         parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -65,11 +64,14 @@ def private_json(path: Path, value: Any) -> None:
             os.close(parent)
     except BaseException:
         try:
-            if published:
+            if staged is not None:
                 # Only the exact link just published can be invalidated on a
                 # failed acknowledgement; never remove a replaced/foreign file.
-                named = path.lstat()
-                if (named.st_dev, named.st_ino) == (staged.st_dev, staged.st_ino):
+                try:
+                    named = path.lstat()
+                except FileNotFoundError:
+                    named = None
+                if named is not None and (named.st_dev, named.st_ino) == (staged.st_dev, staged.st_ino):
                     path.unlink()
                     parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
                     try:
