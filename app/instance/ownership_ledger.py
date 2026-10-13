@@ -310,6 +310,7 @@ class OwnershipLedger:
         *,
         channel_id: str,
         registrations: Mapping[str, Path | None],
+        recover_rotation: bool = True,
     ) -> None:
         """Reject rollback while any ownership transition is pending or mismatched.
 
@@ -317,10 +318,18 @@ class OwnershipLedger:
         rollback guard prove every binding is actively owned without mounting
         every content root; the selected binding still supplies its mounted
         root and must match the ledger's authenticated filesystem identity.
+        Read-only native admission disables rotation recovery and requires the
+        existing private lock; unresolved rotation is refusal, never repair.
         """
 
         self._assert_existing_artifacts()
-        with self._locked():
+        if type(recover_rotation) is not bool:
+            raise LedgerError("ownership proof recovery mode is invalid")
+        if not recover_rotation:
+            _assert_private_file(self.lock_path)
+        with self._locked(recover_rotation=recover_rotation):
+            if not recover_rotation and os.path.lexists(self.rotation_path):
+                raise LedgerKeyError("pending ownership key rotation requires recovery")
             key = self._load_or_create_key_locked(allow_create=False)
             current = self._load_or_create_ledger_locked(key, allow_create=False)
             if current.transfer is not None or any(

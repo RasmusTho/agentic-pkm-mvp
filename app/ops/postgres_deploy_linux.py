@@ -511,6 +511,7 @@ def require_existing_authority_binding(data: dict[str, Any]) -> None:
     OwnershipLedger(Path(selected.ownership_root)).require_scalar_rollback_ready(
         channel_id=data['channel'],
         registrations={key: root if key == selected.binding_id else None for key in snapshot.registrations},
+        recover_rotation=False,
     )
 
 

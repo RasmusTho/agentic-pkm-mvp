@@ -270,6 +270,29 @@ def test_native_cutover_requires_existing_qualified_binding_before_effects(targe
     assert all(argv[0] == 'docker' and argv[1] in {'ps', 'inspect', 'volume'} for argv in target.calls)
 
 
+def test_cutover_admission_refuses_pending_ownership_rotation_without_recovery(target):
+    effects = linux.LinuxEffects(target.cfg)
+    effects.validate_plan(target.plan)
+    with pytest.raises(RuntimeError, match='key_commit'):
+        target.ledger.rotate_key(precondition=lambda *_: None, crash_after='key_commit',
+                                 _capability=STORAGE_MUTATION_CAPABILITY)
+    snapshots = {path: path.read_bytes() for directory in (target.registry.path.parent, target.ledger.root)
+                 for path in directory.iterdir() if path.is_file()}
+    assert target.ledger.rotation_path in snapshots
+    with pytest.raises(PostgresDeployError):
+        effects.validate_plan(target.plan)
+    assert all(path.read_bytes() == payload for path, payload in snapshots.items())
+    assert target.ledger.rotation_path.exists()
+    # The ordinary public proof retains its prior recovery behavior.
+    target.ledger.require_scalar_rollback_ready(channel_id='test', registrations={target.selected.binding_id: target.vault})
+    assert not target.ledger.rotation_path.exists()
+    effects.validate_plan(target.plan)
+    target.ledger.lock_path.unlink()
+    with pytest.raises(PostgresDeployError):
+        effects.validate_plan(target.plan)
+    assert not target.ledger.lock_path.exists()
+
+
 def test_native_cutover_recovery_preserves_pending_and_exact_input_binding(target, monkeypatch):
     cfg, plan = target.cfg, target.plan
     identifier = str(uuid4())
