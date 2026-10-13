@@ -1165,17 +1165,20 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
   use enclosing function bindings; class-local bindings do not leak into methods. Helper identities
   retain their full lexical path, and the census follows one value-carrying path-helper/write-helper
   boundary; star imports fail closed. Focused callsite proofs require the production
-  `app.knowledge.service._build_adapter` to pass its resolved `sources_root_rel` into
-  `FsVaultAdapter`, then require `FsVaultAdapter._classify_target` to forward that value to
-  classification; dropping or defaulting either argument fails. Synthetic positive and negative
-  cases cover those bindings and unrelated writes. Production producer tests verify selected-root
-  writes and capture-note overlap refusal, while capture, MCP, and panel-agent paths verify
-  exclusion with existing vault notes.
+  `app.knowledge.service._build_adapter` to pass its resolved `sources_root_rel` into both
+  `FsVaultAdapter` and `ObsidianCliAdapter`. An exact inventory requires all three shipped
+  `classify_note_in_vault` callsites — `FsVaultAdapter._classify_target`,
+  `ObsidianCliAdapter.write_note`, and `app.services.artifact_identity._is_create_once` — to
+  forward the selected root; removing or replacing a forwarding argument with the packaged
+  `Sources` default fails. Synthetic positive and negative cases cover those bindings and unrelated
+  writes.
+  Production producer tests verify selected-root writes and capture-note overlap refusal, while
+  capture, MCP, and panel-agent paths verify exclusion with existing vault notes.
 - **Eventual test path:** `tests/architecture/test_sources_zone_writers.py`.
 - **Related docs / contracts / ADRs:** `docs/contracts/MIMER_CLIENT_CONTRACT.md` §5;
   `docs/testing/invariant-synthesis-2026-07.md` P-1 registered-list conventions and P-6
   `single_writer_per_table`.
-- **Related issues:** #3414, #3413, #5700.
+- **Related issues:** #3414, #3413, #5700, #6034.
 
 ## Coverage map (invariant → principle → test)
 

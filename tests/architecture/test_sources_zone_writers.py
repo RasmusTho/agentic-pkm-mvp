@@ -99,6 +99,15 @@ SOURCE_RESOLVER_CALLERS = {
     ("app/vault/paths.py", "get_vault_sources_dir_rel"),
 }
 
+# These are all shipped direct callers of the helper whose packaged default is ``Sources``.
+# Keeping the exact callsite map beside the main literal/resolver census makes a newly added or
+# moved caller fail closed until it forwards the settings-resolved root explicitly.
+SOURCE_CLASSIFICATION_FORWARDING_CALLERS = {
+    ("app/knowledge/adapters.py", "FsVaultAdapter._classify_target"): "self.sources_root_rel",
+    ("app/knowledge/adapters.py", "ObsidianCliAdapter.write_note"): "self.sources_root_rel",
+    ("app/services/artifact_identity.py", "_is_create_once"): "sources_root_rel",
+}
+
 SOURCE_WRITE_EXCLUSIONS = {
     ("app/api/routes/capture.py", "capture_to_inbox"),
     ("app/mcp/vault_tools.py", "append_note"),
@@ -130,6 +139,47 @@ def _module_function_for(node_stack: list[ast.AST]) -> str:
     if not names:
         return "<module>"
     return ".".join(names[-2:]) if len(names) > 1 else names[-1]
+
+
+def _application_sources(repo_root: Path = REPO_ROOT) -> dict[str, str]:
+    return {
+        path.relative_to(repo_root).as_posix(): path.read_text(encoding="utf-8")
+        for path in sorted((repo_root / "app").rglob("*.py"))
+    }
+
+
+def _source_classification_forwarding_inventory(
+    sources: dict[str, str],
+) -> dict[tuple[str, str], tuple[str, ...]]:
+    """Inventory direct classifier callsites and their explicit Sources-root values."""
+    inventory: dict[tuple[str, str], list[str]] = {}
+
+    def visit(node: ast.AST, scope: list[ast.AST], relative: str) -> None:
+        current_scope = scope
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            current_scope = [*scope, node]
+        is_classifier_call = isinstance(node, ast.Call) and (
+            (isinstance(node.func, ast.Name) and node.func.id == "classify_note_in_vault")
+            or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "classify_note_in_vault"
+            )
+        )
+        if is_classifier_call:
+            key = (relative, _module_function_for(current_scope))
+            roots = [keyword.value for keyword in node.keywords if keyword.arg == "sources_root_rel"]
+            if len(roots) != 1:
+                inventory.setdefault(key, []).append("<missing-or-duplicate>")
+            else:
+                inventory.setdefault(key, []).append(ast.unparse(roots[0]))
+        for child in ast.iter_child_nodes(node):
+            visit(child, current_scope, relative)
+
+    for relative, source in sorted(sources.items()):
+        if not relative.startswith("app/") or not relative.endswith(".py"):
+            continue
+        visit(ast.parse(source, filename=relative), [], relative)
+    return {key: tuple(values) for key, values in inventory.items()}
 
 
 def _fs_adapter_forwards_resolved_sources_root(source: str) -> bool:
@@ -206,6 +256,37 @@ def _fs_adapter_construction_forwards_resolved_sources_root(source: str) -> bool
             and keyword.value.id == "sources_root_rel"
             for keyword in call.keywords
         )
+    )
+
+
+def _obsidian_adapter_construction_forwards_resolved_sources_root(source: str) -> bool:
+    """Require the production builder to pass its resolved root into the Obsidian adapter."""
+    tree = ast.parse(source)
+    builder = next(
+        (
+            node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == "_build_adapter"
+        ),
+        None,
+    )
+    if builder is None:
+        return False
+    adapter_calls = [
+        call
+        for call in ast.walk(builder)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "ObsidianCliAdapter"
+    ]
+    if len(adapter_calls) != 1:
+        return False
+    return any(
+        keyword.arg == "sources_root_rel"
+        and isinstance(keyword.value, ast.Name)
+        and keyword.value.id == "sources_root_rel"
+        for keyword in adapter_calls[0].keywords
     )
 
 
@@ -843,7 +924,12 @@ def test_zone_resolved_via_settings_not_literal() -> None:
     adapter_source = (REPO_ROOT / "app/knowledge/adapters.py").read_text(encoding="utf-8")
     service_source = (REPO_ROOT / "app/knowledge/service.py").read_text(encoding="utf-8")
     assert _fs_adapter_construction_forwards_resolved_sources_root(service_source)
+    assert _obsidian_adapter_construction_forwards_resolved_sources_root(service_source)
     assert _fs_adapter_forwards_resolved_sources_root(adapter_source)
+    assert _source_classification_forwarding_inventory(_application_sources()) == {
+        caller: (root_expression,)
+        for caller, root_expression in SOURCE_CLASSIFICATION_FORWARDING_CALLERS.items()
+    }
 
 
 def test_adapter_forwarding_proof_rejects_missing_or_default_sources_root() -> None:
@@ -868,6 +954,33 @@ def test_adapter_forwarding_proof_rejects_missing_or_default_sources_root() -> N
         constructor_defaulted_to_packaged_root
     )
 
+    obsidian_constructor_call = (
+        "return ObsidianCliAdapter(\n"
+        "            sources_root_rel=sources_root_rel,\n"
+        "            vault_root=vault_root,\n"
+        "        )"
+    )
+    assert obsidian_constructor_call in service_source
+    assert _obsidian_adapter_construction_forwards_resolved_sources_root(service_source)
+    without_obsidian_constructor_forwarding = service_source.replace(
+        obsidian_constructor_call,
+        "return ObsidianCliAdapter(vault_root=vault_root)",
+        1,
+    )
+    assert not _obsidian_adapter_construction_forwards_resolved_sources_root(
+        without_obsidian_constructor_forwarding
+    )
+    obsidian_constructor_defaulted = service_source.replace(
+        obsidian_constructor_call,
+        obsidian_constructor_call.replace(
+            "sources_root_rel=sources_root_rel", 'sources_root_rel="Sources"'
+        ),
+        1,
+    )
+    assert not _obsidian_adapter_construction_forwards_resolved_sources_root(
+        obsidian_constructor_defaulted
+    )
+
     adapter_source = (REPO_ROOT / "app/knowledge/adapters.py").read_text(encoding="utf-8")
     forwarded_argument = "            sources_root_rel=self.sources_root_rel,\n"
     assert forwarded_argument in adapter_source
@@ -880,6 +993,47 @@ def test_adapter_forwarding_proof_rejects_missing_or_default_sources_root() -> N
         forwarded_argument, '            sources_root_rel="Sources",\n', 1
     )
     assert not _fs_adapter_forwards_resolved_sources_root(defaulted_argument)
+
+
+def test_classifier_callsite_inventory_rejects_missing_or_default_sources_root() -> None:
+    sources = _application_sources()
+    expected = {
+        caller: (root_expression,)
+        for caller, root_expression in SOURCE_CLASSIFICATION_FORWARDING_CALLERS.items()
+    }
+    assert _source_classification_forwarding_inventory(sources) == expected
+
+    for caller, root_expression in SOURCE_CLASSIFICATION_FORWARDING_CALLERS.items():
+        relative, scope = caller
+        forwarded = f"            sources_root_rel={root_expression},\n"
+        mutated = dict(sources)
+        source = mutated[relative]
+        if scope == "ObsidianCliAdapter.write_note":
+            prefix, class_source = source.split("class ObsidianCliAdapter", maxsplit=1)
+            assert forwarded in class_source
+            class_source = class_source.replace(forwarded, "", 1)
+            mutated[relative] = prefix + "class ObsidianCliAdapter" + class_source
+        else:
+            assert forwarded in source
+            mutated[relative] = source.replace(forwarded, "", 1)
+        assert _source_classification_forwarding_inventory(mutated) != expected
+
+        packaged_default = dict(sources)
+        source = packaged_default[relative]
+        if scope == "ObsidianCliAdapter.write_note":
+            prefix, class_source = source.split("class ObsidianCliAdapter", maxsplit=1)
+            root_name = "self.sources_root_rel"
+            class_source = class_source.replace(
+                forwarded,
+                forwarded.replace(f"={root_name}", '="Sources"', 1),
+                1,
+            )
+            packaged_default[relative] = prefix + "class ObsidianCliAdapter" + class_source
+        else:
+            packaged_default[relative] = source.replace(
+                forwarded, forwarded.replace(f"={root_expression}", '="Sources"', 1), 1
+            )
+        assert _source_classification_forwarding_inventory(packaged_default) != expected
 
 
 def test_writer_inventory_follows_aliased_resolvers_and_write_helpers(tmp_path: Path) -> None:
