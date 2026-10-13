@@ -22,6 +22,7 @@ from app.builderops.publication import (
 )
 from scripts.pr_body_generator import generate_pr_body_from_mapping
 from scripts.publication import main as publication_main
+from scripts.build_verification_dispatch_request import build_request as build_verification_request
 
 
 BASE_SHA = "a" * 40
@@ -1548,6 +1549,68 @@ def _local_publication_repo(tmp_path: Path) -> tuple[Path, Path]:
     _run("git", "push", "origin", "main", cwd=repo)
     _run("git", "checkout", "-b", BRANCH, cwd=repo)
     return repo, remote
+
+
+@pytest.mark.parametrize("rounds", [0, 1])
+@pytest.mark.parametrize("issue_free", [False, True])
+def test_native_and_retained_executor_routes_remain_distinct(
+    tmp_path: Path, rounds: int, issue_free: bool
+) -> None:
+    """Real Git publication stays native; the retained producer needs executor intent."""
+    repo, remote = _local_publication_repo(tmp_path)
+    (repo / "feature.txt").write_text("bounded native candidate\n")
+    inputs = {**BODY_INPUTS, "final_review_rounds": rounds}
+    if issue_free:
+        inputs.update(lane="docs-authoring", issue_number=None)
+    request = replace(
+        _request(repo), lane=str(inputs["lane"]),
+        governing_issue=None if issue_free else 5230, pr_body_inputs=inputs,
+    )
+    runner = LocalGitPublicationExecutor(remote)
+    plan = build_publication_plan(request, executor=runner)
+    receipt = apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=runner)
+    head = _run("git", "rev-parse", "HEAD", cwd=repo).strip()
+    assert receipt["commit_sha"] == head
+    assert _run("git", "ls-remote", "--heads", "origin", f"refs/heads/{BRANCH}", cwd=repo).split()[0] == head
+    assert _run("git", "status", "--short", cwd=repo) == ""
+    assert not any(
+        "prepare_verified_issue_set_merge" in " ".join(call)
+        or "build_verification_dispatch_request" in " ".join(call)
+        for call in runner.calls
+    )
+    assert ("Governing-Issue:" not in plan["pr"]["body"]) == issue_free
+
+    # Retained executor requests are bound to successful CI and exact Issue/head authority.
+    event = {
+        "repository": {"full_name": REPOSITORY},
+        "artifact_workflow_run": {"id": 123, "repository_id": 456},
+        "workflow_run": {"id": 987, "run_attempt": 1, "name": "CI Smoke",
+                         "event": "pull_request", "conclusion": "success", "head_sha": head,
+                         "updated_at": "2026-10-14T00:00:00Z"},
+    }
+    pr = {"number": 6000, "state": "open", "head": {"sha": head},
+          "body": plan["pr"]["body"],
+          "live_closing_issues": [] if issue_free else [{"number": 5230, "repository": REPOSITORY}]}
+    issue = {} if issue_free else _issue()
+    assert build_verification_request(event=event, pr=pr, issue=issue, automatic=True) is None
+    explicit = build_verification_request(event=event, pr=pr, issue=issue, automatic=False)
+    if issue_free or rounds == 0:
+        assert explicit is None
+    else:
+        assert explicit is not None and explicit["closing_issues"] == [5230]
+        assert explicit["current_head_sha"] == head
+        legacy = {**pr, "body": str(pr["body"]).replace("Final-Review-Rounds: 1", "Final-Review-Rounds: 2")}
+        assert build_verification_request(event=event, pr=legacy, issue=issue, automatic=True) is not None
+        stale_event = {**event, "workflow_run": {**event["workflow_run"], "head_sha": RACED_HEAD_SHA}}
+        assert build_verification_request(event=stale_event, pr=pr, issue=issue) is None
+        assert build_verification_request(event=event, pr={**pr, "live_closing_issues": []}, issue=issue) is None
+        assert build_verification_request(event=event, pr=pr, issue={"number": 9999}) is None
+
+    # A clean reviewed native success cannot turn protected publication into a supported path.
+    protected = LocalGitPublicationExecutor(remote)
+    with pytest.raises(PublicationRefusal, match="high-risk publication"):
+        build_publication_plan(replace(request, risk_surfaces=("auth",)), executor=protected)
+    assert protected.calls == []
 
 
 def test_resumed_publication_stages_only_dirty_paths_with_retired_history(tmp_path: Path) -> None:
