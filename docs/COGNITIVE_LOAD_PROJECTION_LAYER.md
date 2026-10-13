@@ -336,6 +336,38 @@ rendering or reading-support font presets. They must be opt-in, reversible, rend
 possible, clearly marked as experimental, and disabled by default unless a later owner-doc update
 changes that posture.
 
+## Source-family projection proposal (#4906)
+
+**Proposal v1; semantic acceptance pending; no shipped UI claim.** HIX would render one
+non-authoritative family view over RCA's eligible candidates and SIP/DRI lineage views. Its compact
+form shows the source label, selected representation and version, matched/cited segment, count of
+eligible collapsed siblings, review scope with current applicability, evidence posture, and a
+short why-shown reason. Unknown independence is explicit text, not a missing badge or a zero score.
+Source wording and machine interpretation remain visually attributable.
+
+Progressive disclosure follows the existing projection boundary:
+
+| View | Content available under the same permissions |
+| --- | --- |
+| Compact result | Selected representation, source pointer, exact citation, why selected, eligible sibling count, and known/shared/`independence_unknown` posture. |
+| Expand family | Eligible representations and versions, retained conflicting/relevant spans, what was collapsed and why, and a route to the original anchored material. |
+| Evidence and review | Compared claim/purpose/bases, reviewer/method/outcome, exact assessed versions/ranges, supporting notes, unresolved/conflicting assessments, and acceptance receipts where present. |
+| Technical provenance | Derivation chain, source/segment identities, stage versions, per-source vault binding/provenance, freshness and unresolved anchors. |
+
+All counts and disclosures are computed from eligible material only. A hidden sibling cannot be
+revealed by a family title, total count, tooltip, provenance expansion, or why-shown explanation.
+Requesting additional material runs ordinary eligibility/citation checks. Expanding, selecting, or
+listening changes a view; it does not confirm identity, review all siblings, accept evidence, or
+grant authority. Correction/confirmation is an explicit proposal routed through SIP/GOV and the
+existing HKA write path, preserving human attribution and receipts.
+
+The projection keeps retrieval utility, epistemic contribution, and attention value distinct. A
+useful summary may add no independent support. Missing or stale assessment data is shown as unknown;
+missing source anchors are exposed and the view cannot make unsupported original-source claims.
+The [retrieval proposal](architecture/retrieval-contract.md#family-aware-retrieval-proposal-4906)
+owns selection; [State axes](CONCEPTS/STATE_AXES_CONTRACT.md#scoped-assessment-proposal-4906) owns the
+assessment detail. This section chooses no visual implementation or new capability identity.
+
 ## Decision Test
 
 Use this test before implementing or documenting a cognitive-load projection:

@@ -112,6 +112,66 @@ in the content-free `denied_or_escalated_candidates` list.
 - includes a `trace_id`;
 - closes the object (`additionalProperties: false`) with an explicit `extensions` point.
 
+## Family-aware retrieval proposal (#4906)
+
+**Proposal v1; semantic owner acceptance pending.** This is an ordered target design, not a
+change to the current schema or production retrieval. Existing required rules above remain the
+floor. The [current-state owner](../RETRIEVAL.md#source-lineage-proposal-and-shipped-boundary-4906)
+records what is shipped; the [evaluation plan](../testing/invariant-tests.md#sler-proposal-evaluation-4906)
+defines the evidence required for any later implementation.
+
+1. **Bind eligibility first.** Resolve the immutable request context and per-source/binding GOV
+   scope, sensitivity, suppression, standing and operation checks before retrieval/ranking.
+   Membership in a family grants no retrieve/cite right. Denied members contribute no identifiers,
+   metadata, sibling counts, group labels, or explanations to an agent/human-facing result.
+2. **Retrieve eligible segments.** Retain artifact/segment recall and their metadata bundles,
+   content versions, exact ranges, and provenance. A later implementation must use a bounded
+   candidate window before family composition rather than collapse only an already truncated
+   top-k list; the evaluator records the window and any truncation.
+3. **Resolve source lineage.** Group only from declared origin/version identities and explicit
+   derivation anchors under the SIP proposal. Unresolvable identity, stale lineage, cycles, or
+   conflicting origin records remain separate visible unresolved candidates. Similarity is a
+   suggestion only. A multi-source synthesis preserves all its inputs and is not assigned to one
+   convenient family.
+4. **Collapse redundancy within the eligible set.** Deduplicate repeated representations/spans of
+   the same source contribution. Preserve access to eligible siblings and their exact anchors;
+   collapse changes presentation/context occupancy, never content or intrinsic metadata. Distinct
+   relevant spans, revisions, counterarguments, and contradictions remain available; a version-
+   comparison task keeps both versions. Additional siblings may be selected when they add required
+   task coverage, with the reason recorded.
+5. **Choose a task-specific representative.** Orientation may prefer a source-linked summary;
+   quotation/verification prefers the original anchored span; analysis may need several relevant
+   spans; audit/version comparison retains provenance and version differences. Record the intent,
+   selected representation/version, matching span, selection reason, and collapsed eligible count.
+   A summary retains its projection/evidence posture and never impersonates the cited original.
+6. **Diversify evidence bases.** For admissible, task-relevant candidates, prefer coverage of
+   distinct assessed bases over repeat support from one known shared basis. Apply assessments only
+   to their declared claims, purpose, and versions. Partial overlap is considered per contribution;
+   do not transitively union sources. Unknown/conflicting/stale assessments remain
+   `independence_unknown`, can be shown for relevance, and add no *confirmed independent* count.
+   Show known-basis coverage and unresolved contributions separately; never report a total
+   independent count from URL or family cardinality. Diversification cannot manufacture relevance.
+7. **Admit context under the consuming contract.** Apply token/item budgets, current citation
+   policy and required cross-scope `cite` grants. Revalidate the applicable snapshot/versions at
+   admission; a stale, denied, or unresolvable member cannot be replaced silently by a sibling.
+   Retrieve, cite, and mutate remain separate permissions.
+8. **Cite the exact used material.** Preserve source identity, content/version identity, artifact
+   and segment/range, per-source provenance, semantic roles, `episode_ref`, scope/sensitivity
+   and vault binding. Family labels
+   are navigation aids, never citations. A citation to a summary also discloses the summary's
+   derivation; a claim attributed to the original must resolve to its original cited span.
+9. **Present the non-authoritative family view.** HIX exposes the selected representation,
+   eligible collapsed siblings, review scope/applicability, known/shared/unknown evidence posture,
+   and why-shown via the existing
+   [projection layer](../COGNITIVE_LOAD_PROJECTION_LAYER.md#source-family-projection-proposal-4906).
+
+The proposed output is a view over existing candidates and their metadata/provenance references.
+It creates no second candidate identity field or evidence authority. DRI owns disposable grouping
+and collapse data; RCA owns selection/composition; SIP supplies identity and assessed lineage;
+GOV/WSP retain permission and request-context ownership. PDM/SFC storage/replication choices remain
+unselected. Unavailable assessment/grouping data degrades to exact eligible candidates with unknown
+posture, preserving recall and citations without inventing independence.
+
 ## Related documents
 
 - [Architecture context packet](../foundation/yggdrasil-architecture-context-packet.md)
