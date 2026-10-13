@@ -111,6 +111,37 @@ the ratified posture; it adds no new persistence, authority, or behavior.
 - Render **inferred relations** with an explicit inferred marker and a confirm/dismiss affordance; never as confirmed edges.
 - Keep **system relations** (`companion_for`/`has_companion`, `proposal_for`) out of the human's primary reading surface by default; surface them in audit/provenance/overlay views.
 
+## Source and evidence lineage proposal (#4906)
+
+**Proposal v1; semantic acceptance pending; no runtime or vocabulary change.** The minimum posture
+uses existing relations with their existing meanings:
+
+| Existing relation / record | Proposed use | Limit |
+| --- | --- | --- |
+| `derived_from` with origin/version provenance | Build the source-family view for explicitly recorded transformations. | Transitive ancestry does not make every ancestor the same source object or establish evidence independence. Preserve multiple inputs. |
+| `source_ref` | Locate an exact origin or representation. | A mutable locator is never the grouping identity. |
+| `supports` | Preserve the asserted source-to-claim grounding with exact segment anchors. | Two support edges do not imply two independent bases. |
+| Assessment `Artifact` plus `decision_about` and `ProvenanceEvent` | Record a human's scoped shared-basis/distinct-basis/unknown judgment about explicitly referenced sources and claims. | This records the assessment and its justification; it grants no admissibility or truth. GOV confirmation is separate. |
+| `proposal_for` / inferred projection | Surface a proposed overlap or identity correction for review. | Unconfirmed inference cannot change durable relations, independent-support counts, or identity-based collapse. |
+
+No `same_as`, `independent_of`, or new global lineage identifier is proposed. The assessment's own
+artifact identity and explicit target references suffice for this proposal. `links_to`, `part_of`,
+and a bundle membership must not be overloaded into shared-evidence assertions. Physical encoding
+is deferred until accepted architecture and evaluation contracts permit a bounded implementation.
+
+An assessment can record **shared basis**, **distinct bases for the stated purpose**, or
+**`independence_unknown`**, with references to the exact underlying evidence it compared. Partial
+overlap is recorded per basis/claim rather than unioning every connected source into one evidence
+class. Shared-basis links are not an equivalence relation: A sharing one basis with B and B sharing
+another with C does not establish that A and C share evidence. Conflicting assessments remain
+visible and resolve to unknown for counting until governed resolution. Neither confidence,
+reviewer identity, human involvement, nor a scalar trust score substitutes for that record.
+
+The [scoped assessment proposal](STATE_AXES_CONTRACT.md#scoped-assessment-proposal-4906) owns target
+version, method, scope, reviewer, outcome, notes, and stale/conflict handling. Accepted human
+assessment content must remain recoverable on the durable human-addressable surface; its relation
+store and source-family renderings remain rebuildable projections.
+
 ## Cross-references
 
 - Parent semantic map (Layer 1 ontology, Layer 7 projection): `docs/SEMANTIC_SYSTEM_ARCHITECTURE.md`.

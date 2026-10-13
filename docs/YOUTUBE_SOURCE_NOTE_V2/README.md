@@ -130,6 +130,25 @@ This stable heading is retained because parent Issue #4107 uses it as an accepta
 
 Integration Issue [#5746](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5746) wires tasks 9 and 11 into acquisition-time candidate production (`app/knowledge_acquisition/candidate_moments.py`): every transcript-bearing acquisition persists key moments, attempts bounded default frame capture, and renders a `Timestamped moments` section under the shared proposals wrapper with the retained context frame embedded, or timestamps-only with a visible `Source frames` evidence status when capture degrades. Metadata-only acquisitions render no moments and attempt no capture; replay re-references already retained frames and never recaptures. The task 10 overlay is wired separately by #5747.
 
+## Implementation Tasks
+
+### Cross-source reconciliation (#4906)
+
+The source-specific #4107 parent and #4112/#4113/#4119 tasks are closed as of the #4906 validation
+baseline `69e23e89ce5962c556af16cdf454026c2e1380fd`; the existing task graph, quality limitations
+and owner-gold-set gates remain their contracts. The portable bundle's item/content/version keys
+and exact transcript/claim anchors are inputs to the
+[cross-source proposal](../architecture/functional-ontology.md#31-source-and-evidence-lineage-proposal-4906),
+not a generic family/independence implementation. In particular, #4119's `evidence_lineage`
+criterion checks source derivation/ancestor consistency; it does not establish that separately
+published sources supply independent evidence.
+
+No YouTube task is reopened, absorbed or duplicated. Knowledge Acquisition continues to own its
+acquisition/refinement mechanics; SIP/RCA/GOV/DRI/HIX own the proposed cross-source semantics and
+views. #4906 delivers the reviewable docs proposal only. A later owner acceptance record must name
+the exact owner sections and [evaluation v1](../testing/invariant-tests.md#sler-proposal-evaluation-4906)
+before any dependency-ordered implementation issue set is produced; that set is absent here.
+
 ## Acceptance and evidence
 
 Child PRs resolve their own `Verify:` targets and post a concise validation receipt to live parent feature Issue [#4107](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4107). YSNV2-12 is the final child: after tasks 1–11 have merged, it owns the end-to-end invariant matrix and the parent-closure handoff. The gold-set annotation scope is recorded as an operator receipt on that live validation ledger, never inferred from runtime data. The parent is accepted only when all twelve children are delivered, its v2 note is evidence-anchored, human content remains non-destructively protected, replay remains no-egress, dependency-gated work has its required authority contract, and the quality evaluation records an operator-visible result. Current-state owner docs are updated only at accepted capability truth. At parent acceptance every repo-verifiable criterion above is satisfied; the operator-visible real-world quality run was moved out of the parent to #5756 under `docs/development/PARENT_ISSUE_CLOSURE.md :: Boundary Rules`, and the current-state owner docs record it as a pending gate rather than a shipped result.
