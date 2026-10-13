@@ -74,13 +74,40 @@ Without in-session context, every spoken follow-up must be a fully-restated ques
 
 ## How to Verify (Pre-Merge)
 
+```bash
+ruff check app tests companion-ui/companion-app
+mypy app
+python3 scripts/docs_guard.py --language-only
+python3 -m pytest -q tests/voice/ tests/chat/
+python3 scripts/select_pr_tests.py --base-ref <immutable-main-sha> --head-ref <candidate-sha>
 ```
-ruff check app tests && mypy app
-pytest -q tests/voice/test_session_followup.py tests/voice/test_session_transcript.py
-pytest -q tests/chat/            # regression guard: session_log writer behavior unchanged for existing callers
-pytest -q -m "not pg"
-RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q -m "not pg" tests/uat   # vault-write path (append-only) → opt-in UAT gate
-```
+
+Run the selector's emitted `pytest_args` through the canonical host lease:
+`python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id issue3336:<candidate-sha> -- python3 -m pytest <emitted-args>`.
+Retain the complete selection and its marker expression from
+`docs/development/TEST_STRATEGY_HOT_PATH.md`; record the base, candidate, command
+and actual terminal result. Every task `Verify:` target and the selected tests
+must pass, with an independent review of the current contract and implementation
+and current-head CI before merge. The full voice and chat suites protect existing
+turn callers and note-linked session-log behavior.
+
+The append-only integration proof is
+`tests/voice/test_session_transcript.py::test_only_write_is_appendonly_transcript`:
+HTTP requests use the real selected-vault resolver, `SessionLogWriter` and guarded
+create/append/close operations on an isolated initialized vault. It checks existing
+human/config bytes, the `.chats/voice/` write boundary and absence of
+`.canvas-sessions` writes. The voice suites also check scope/vault isolation,
+restart and close refusal, capture-intent zero writes, write refusal/append failure
+and quoted timestamped Markdown framing. ASR, ASK synthesis and TTS doubles in
+these tests prove session wiring and failure boundaries, not live model/audio quality.
+
+The generic `tests/uat` Canvas/Panel journeys do not exercise voice sessions or
+this transcript seam, so they are not VOICE-04 pre-merge proof. Parent #3335 still
+owns composed UI and qualified TARS TEST sv/en audio acceptance through the actual
+configured routes. Its acceptance remains pending until that proof passes;
+repository slice verification does not replace it or any required real-model
+qualification. Broader E2E/live/eval/UAT lanes retain their dedicated owners under
+the repository test strategy.
 
 ## Restart / Durability Posture (required — in-memory state)
 
