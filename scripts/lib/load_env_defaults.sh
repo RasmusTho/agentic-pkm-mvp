@@ -46,7 +46,7 @@ else:
                 decoded.append(character)
         if escaped:
             decoded.append("\\")
-        return "".join(decoded)
+        return "".join(decoded).replace("$$", "$")
 
     def compose_env_value(raw_value: str) -> str:
         value = raw_value.strip()

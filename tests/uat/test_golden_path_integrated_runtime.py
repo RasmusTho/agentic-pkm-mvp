@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -260,10 +261,14 @@ class _PostDriver:
         self._instance.headers = {"Content-Length": str(len(raw))}
         self.status_code: int | None = None
         self.payload: dict[str, Any] | None = None
+        self.confirmation_header: str | None = None
 
-        def _send_json(status_code: int, payload: dict[str, Any]) -> None:
+        def _send_json(
+            status_code: int, payload: dict[str, Any], *, confirmation_header: str | None = None
+        ) -> None:
             self.status_code = status_code
             self.payload = payload
+            self.confirmation_header = confirmation_header
 
         self._instance._send_json = _send_json  # type: ignore[method-assign]
 
@@ -310,6 +315,9 @@ def _confirm_via_same_origin_proxy(
     assert runtime_client.post_calls[-1][0] == "/api/panel/confirm"
     assert driver.status_code == 200
     assert driver.payload is not None
+    assert driver.confirmation_header is not None
+    assert driver.confirmation_header.isascii() and len(driver.confirmation_header) <= 8192
+    assert driver.payload["receipt"]["receipt_id"] in unquote(driver.confirmation_header)
     return driver.payload
 
 

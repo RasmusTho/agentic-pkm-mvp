@@ -22,6 +22,18 @@ enablement — which cannot live in the repo.
 - Machine-specific values originate in `.env.prod.local` (`TTS_HOST_ROOT`, `TTS_ENABLED`), are
   copied together by the canonical runtime-env generator into a same-directory temporary file and
   atomically published as the selected untracked runtime-env file; they are never committed.
+- When regenerating through `scripts/export_runtime_env.sh`, explicitly supplied operator values
+  for `EMBED_MAX_INPUT_CHARS`, `EMBED_MODEL`, `HEIMDAL_CAPTURE_WATCH_DIR`, `OLLAMA_EMBED_MODEL`,
+  `OLLAMA_HOST`, `OLLAMA_MODEL`, and `OLLAMA_URL` survive in both vault-bound and idle contexts.
+  Supply the current bindings in the producer environment when changing only TTS selectors;
+  an explicit empty capture selector remains empty, and inactive model aliases remain present.
+  Literal dollars are escaped for ordinary Compose env-file consumption and decoded by the
+  existing defaults readers; quotes and backslashes retain their original values. Whitespace-only
+  capture input is preserved but remains unconfigured in both deployment preflights, matching the
+  capture runtime's stripped-empty rule. No raw env-file mode is needed.
+  Absent inputs keep the existing channel defaults and provider derivation. Multiline inputs are
+  refused before publication. This preserves configuration; it does not establish model-backed
+  qualification or authorize a deployment.
 - TTS stays **off** until a host sets `TTS_ENABLED=true`, so a merged mechanism cannot 503 prod.
 
 ## Provisioning steps (on the runtime host, e.g. Demerzel)

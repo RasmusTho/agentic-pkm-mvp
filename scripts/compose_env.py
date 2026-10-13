@@ -21,7 +21,22 @@ def _decode_double_quoted(value: str) -> str:
             decoded.append(character)
     if escaped:
         decoded.append("\\")
-    return "".join(decoded)
+    # Compose consumes $$ as one literal dollar in double-quoted env values.
+    # This bounded reader does not expand caller-dependent variable references.
+    return "".join(decoded).replace("$$", "$")
+
+
+def compose_env_literal(value: str) -> str:
+    """Encode literal caller data for ordinary Compose env-file consumers."""
+    if (
+        value != value.strip()
+        or value[:1] in {"'", '"'}
+        or "$" in value
+        or re.search(r"\s+#", value)
+    ):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "$$")
+        return '"' + escaped + '"'
+    return value
 
 
 def compose_env_value(raw_value: str) -> str:

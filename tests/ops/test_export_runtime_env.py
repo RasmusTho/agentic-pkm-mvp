@@ -1,10 +1,14 @@
 import ast
+import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+from scripts.compose_env import compose_env_value
 
 
 def _runtime_env_base(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
@@ -566,6 +570,258 @@ def test_export_runtime_env_operator_env_overrides_settings(tmp_path: Path) -> N
     assert re.search(r"^LLM_MODEL=operator-model$", text, re.M)
     assert re.search(r"^OPENAI_BASE_URL=https://operator\.example/v1$", text, re.M)
     assert re.search(r"^OPENAI_BASE=https://operator\.example/v1/chat/completions$", text, re.M)
+
+
+@pytest.mark.parametrize(
+    ("no_vault", "provider", "capture_dir"),
+    [
+        (False, "mock", "/app/retained # capture"),
+        (False, "ollama", ""),
+        (True, "mock", ""),
+        (True, "ollama", "/app/retained-capture"),
+    ],
+)
+def test_export_runtime_env_tts_change_preserves_explicit_operator_context(
+    tmp_path: Path, no_vault: bool, provider: str, capture_dir: str
+) -> None:
+    """TTS regeneration keeps active and inactive operator bindings unchanged."""
+    repo_root, out_path, env = _runtime_env_with_db(tmp_path)
+    env.update(
+        HOST_SECRET_PROVIDER="bws",
+        PKM_ENVIRONMENT="test",
+        COMPOSE_PROJECT_NAME="pkm-test",
+        DATABASE_URL="postgresql+psycopg://app@db:5432/app_test",
+        DB_DSN="postgresql+psycopg://app@db:5432/app_test",
+        API_KEY="synthetic-principal",
+        LOCAL_UID="1000",
+        LOCAL_GID="1000",
+        LLM_PROVIDER=provider,
+        NO_VAULT_MODE=str(int(no_vault)),
+        TTS_ENABLED="false",
+    )
+    supplied = {
+        "EMBED_MAX_INPUT_CHARS": "7311",
+        "EMBED_MODEL": "retained-embedding",
+        "HEIMDAL_CAPTURE_WATCH_DIR": capture_dir,
+        "OLLAMA_EMBED_MODEL": "retained-embedding-alias",
+        "OLLAMA_HOST": "http://retained-ollama:11434/v1",
+        "OLLAMA_MODEL": "retained-chat",
+        "OLLAMA_URL": "http://retained-ollama:11434/v1",
+    }
+    env.update(supplied)
+    env.pop("POSTGRES_PASSWORD", None)
+    env.pop("PGPASSWORD", None)
+
+    def generate() -> dict[str, str]:
+        result = subprocess.run(
+            ["bash", "scripts/export_runtime_env.sh"],
+            cwd=repo_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        lines = out_path.read_text(encoding="utf-8").splitlines()
+        for key in supplied:
+            assert sum(line.startswith(f"{key}=") for line in lines) == 1, key
+        return {
+            key: compose_env_value(value)
+            for key, value in (line.split("=", 1) for line in lines if "=" in line)
+        }
+
+    before = generate()
+    assert {key: before[key] for key in supplied} == supplied
+    env.update(TTS_ENABLED="true", TTS_HOST_ROOT=str(tmp_path / "external-tts"))
+    after = generate()
+    assert after["TTS_ENABLED"] == "true"
+    assert after["TTS_HOST_ROOT"] == env["TTS_HOST_ROOT"]
+    assert {k: v for k, v in after.items() if k not in {"TTS_ENABLED", "TTS_HOST_ROOT"}} == {
+        k: v for k, v in before.items() if k not in {"TTS_ENABLED", "TTS_HOST_ROOT"}
+    }
+    assert after["DATABASE_URL"] == env["DATABASE_URL"]
+    assert after["DB_DSN"] == env["DB_DSN"]
+    assert after["API_KEY"] == env["API_KEY"]
+    assert after["WATCHER_RUNTIME_ENV_FILE"] == str(out_path)
+    assert after["LOCAL_UID"] == after["LOCAL_GID"] == "1000"
+    assert out_path.stat().st_mode & 0o777 == 0o600
+    if no_vault:
+        assert "VAULT_ROOT" not in after and "VAULT_HOST_ROOT" not in after
+        assert after["WATCHER_ENABLE"] == "0"
+    else:
+        assert after["VAULT_ROOT"] == "/app/vault"
+        assert after["VAULT_HOST_ROOT"] == env["VAULT_ROOT"]
+
+
+def test_export_runtime_env_context_preservation_keeps_unspecified_defaults(tmp_path: Path) -> None:
+    """Absent overrides still use test isolation and normal Ollama derivation."""
+    repo_root, out_path, env = _runtime_env_with_db(tmp_path)
+    for key in (
+        "EMBED_MAX_INPUT_CHARS",
+        "EMBED_MODEL",
+        "HEIMDAL_CAPTURE_WATCH_DIR",
+        "OLLAMA_EMBED_MODEL",
+        "OLLAMA_HOST",
+        "OLLAMA_MODEL",
+        "OLLAMA_URL",
+    ):
+        env.pop(key, None)
+    env.update(
+        COMPOSE_PROJECT_NAME="pkm-test",
+        LLM_PROVIDER="ollama",
+        LLM_MODEL="derived-chat",
+        OLLAMA_BASE_URL="http://derived-ollama:11434/v1",
+    )
+    subprocess.check_call(["bash", "scripts/export_runtime_env.sh"], cwd=repo_root, env=env)
+    lines = out_path.read_text(encoding="utf-8").splitlines()
+    values = dict(line.split("=", 1) for line in lines if "=" in line)
+    assert values["HEIMDAL_CAPTURE_WATCH_DIR"] == "/app/tmp-test/heimdal-capture-inbox"
+    assert values["OLLAMA_HOST"] == values["OLLAMA_URL"] == "http://derived-ollama:11434"
+    assert values["EMBED_MODEL"] == values["OLLAMA_EMBED_MODEL"] == "nomic-embed-text:latest"
+    for key in ("HEIMDAL_CAPTURE_WATCH_DIR", "OLLAMA_HOST", "OLLAMA_URL", "EMBED_MODEL"):
+        assert sum(line.startswith(f"{key}=") for line in lines) == 1
+
+
+@pytest.mark.parametrize("guard", ["bws", "settings-import", "multiline", "cr", "unicode-line"])
+def test_export_runtime_env_context_guard_preserves_atomic_target(
+    tmp_path: Path, guard: str
+) -> None:
+    """An invalid input or failed required import cannot replace the target."""
+    repo_root, out_path, env = _runtime_env_with_db(tmp_path)
+    previous = b"TTS_ENABLED=false\nexisting=preserved\n"
+    out_path.write_bytes(previous)
+    out_path.chmod(0o600)
+    env.update(LLM_PROVIDER="mock", TTS_ENABLED="true", HOST_SECRET_PROVIDER="")
+    if guard == "bws":
+        env.update(
+            HOST_SECRET_PROVIDER="bws",
+            PKM_ENVIRONMENT="test",
+            DATABASE_URL="postgresql+psycopg://app:synthetic-password@db:5432/app_test",
+            DB_DSN="postgresql+psycopg://app:synthetic-password@db:5432/app_test",
+        )
+    elif guard == "settings-import":
+        _install_settings_location_import_failure(tmp_path, env, fail_on_import=1)
+    else:
+        separator = {"multiline": "\n", "cr": "\r", "unicode-line": "\u2028"}[guard]
+        env["HEIMDAL_CAPTURE_WATCH_DIR"] = (
+            f"/app/retained{separator}INJECTED_FIELD=private-synthetic-value"
+        )
+    result = subprocess.run(
+        ["bash", "scripts/export_runtime_env.sh"],
+        cwd=repo_root,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert out_path.read_bytes() == previous
+    assert out_path.stat().st_mode & 0o777 == 0o600
+    assert not list(out_path.parent.glob(".runtime.env.*"))
+    assert "private-synthetic-value" not in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose executable required")
+@pytest.mark.parametrize(
+    ("provider", "no_vault", "standalone_loader"),
+    [
+        ("mock", False, False),
+        ("ollama", False, False),
+        ("mock", True, True),
+        ("ollama", False, True),
+    ],
+)
+def test_export_runtime_env_literal_values_reach_compose_and_defaults(
+    tmp_path: Path, provider: str, no_vault: bool, standalone_loader: bool
+) -> None:
+    """Actual Compose and both loader paths consume the original literal data."""
+    repo_root, out_path, env = _runtime_env_with_db(tmp_path)
+    supplied = {
+        "EMBED_MAX_INPUT_CHARS": "7311",
+        "EMBED_MODEL": "embed-${BOUNDARY_VALUE}\\t",
+        "HEIMDAL_CAPTURE_WATCH_DIR": "/app/quote' # \\\"$BOUNDARY_VALUE\\",
+        "OLLAMA_EMBED_MODEL": "embed-$$BOUNDARY_VALUE",
+        "OLLAMA_HOST": "http://literal-$BOUNDARY_VALUE:11434/v1",
+        "OLLAMA_MODEL": "cost-$BOUNDARY_VALUE",
+        "OLLAMA_URL": "http://literal-${BOUNDARY_VALUE}:11434/v1",
+    }
+    env.update(supplied)
+    env.update(
+        LLM_PROVIDER=provider,
+        NO_VAULT_MODE=str(int(no_vault)),
+        BOUNDARY_VALUE="expanded",
+        API_KEY="synthetic-principal",
+        OPENAI_API_KEY="synthetic-model-key",
+        HOST_SECRET_PROVIDER="bws",
+        PKM_ENVIRONMENT="test",
+        COMPOSE_PROJECT_NAME="pkm-test",
+        DATABASE_URL="postgresql+psycopg://app@db:5432/app_test",
+        DB_DSN="postgresql+psycopg://app@db:5432/app_test",
+    )
+    env.pop("POSTGRES_PASSWORD", None)
+    env.pop("PGPASSWORD", None)
+    subprocess.run(
+        ["bash", "scripts/export_runtime_env.sh"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        "services:\n  probe:\n    image: busybox:latest\n    env_file: runtime.env\n",
+        encoding="utf-8",
+    )
+    rendered = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--project-directory",
+            str(tmp_path),
+            "-f",
+            str(compose),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    effective = json.loads(rendered.stdout)["services"]["probe"]["environment"]
+    # Compose config escapes literal dollars once when serializing its resolved
+    # model for reuse. An interpolated value instead contains "expanded".
+    assert {key: effective[key] for key in supplied} == {
+        key: value.replace("$", "$$") for key, value in supplied.items()
+    }
+    if provider == "ollama" and not no_vault:
+        assert effective["LLM_MODEL"] == supplied["OLLAMA_MODEL"].replace("$", "$$")
+
+    loader = repo_root / "scripts/lib/load_env_defaults.sh"
+    if standalone_loader:
+        loader = tmp_path / "standalone/lib/load_env_defaults.sh"
+        loader.parent.mkdir(parents=True)
+        shutil.copyfile(repo_root / "scripts/lib/load_env_defaults.sh", loader)
+    child_env = dict(env)
+    for key in supplied:
+        child_env.pop(key)
+    snippet = (
+        'source "$1"; load_env_defaults_file "$2"; '
+        'python3 -c "import json,os,sys; print(json.dumps({k:os.environ[k] for k in sys.argv[1:]}))" '
+        '"${@:3}"'
+    )
+    loaded = subprocess.run(
+        ["bash", "-c", snippet, "literal-loader", str(loader), str(out_path), *supplied],
+        cwd=tmp_path,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(loaded.stdout) == supplied
 
 
 def test_export_runtime_env_no_duplicate_provider_keys(tmp_path: Path) -> None:
