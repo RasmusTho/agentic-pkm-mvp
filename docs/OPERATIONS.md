@@ -524,6 +524,12 @@ Companion docs:
   provisioning steps
   live in `companion-ui/docs/LOCAL_FIRST_TTS_CONTRACT.md` and
   `docs/runbooks/RUNBOOK_TTS_PROVISIONING.md`.
+- Runtime-env regeneration retains the explicitly supplied binding set described in that TTS
+  runbook through ordinary Compose env-file syntax and the existing defaults loaders, including
+  literal dollars, quotes and backslashes. Empty or whitespace-only capture selectors remain
+  unconfigured in both deployment preflights, matching the capture runtime's stripped-empty rule;
+  their input values are preserved. Configuration preservation does not establish model-backed
+  qualification or current runtime health.
 
 ### BuilderOps Issue-delivery repository support
 
