@@ -557,8 +557,13 @@ def run_recut_tick(
             # re-cut -- the terminality guard already froze its cut, round-1 Finding 2 self-heal)
             # and reconcile whatever bindings its own derived_from + bounds support (AC4, also the
             # split/merge "re-bound to the sibling" case, AC6).
-            _record_baseline(episode_id, fields, body=body, first_seen_at=moment)
+            # Reconcile before adopting the note. If this write path fails, leave
+            # the note without a baseline so the next production tick retries its
+            # provenance bindings instead of treating an incomplete adoption as
+            # complete. The reconciliation is idempotent, so a later baseline
+            # write failure safely repeats it.
             _reconcile(fields)
+            _record_baseline(episode_id, fields, body=body, first_seen_at=moment)
             continue
 
         current_hash = compute_fields_hash(fields)

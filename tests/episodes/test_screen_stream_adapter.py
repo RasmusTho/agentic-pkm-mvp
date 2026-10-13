@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Sequence
 
 import pytest
+from click.testing import CliRunner
 
-from app.episodes import segmenter
+from app.cli import cli
+from app.cli import episodes as episodes_cli_module
+from app.episodes import recut, segmenter
 from app.episodes.screen_stream import (
     OBSERVATION_TOPIC,
     SCREEN_CONSUMER_ID,
@@ -886,3 +890,151 @@ def test_production_tick_retries_projection_after_stale_open_note_recovery(
         write_guard=_healthy_guard(),
     )
     assert closure_visibility[-1] == {episode_id}
+
+
+def test_episodes_cli_retries_founder_binding_after_interrupted_recut_adoption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A failed first-adoption reconcile stays retryable through the public tick command."""
+    rows = [_row("screen-a", sequence=1)]
+    registry = _screen_only_registry()
+    cursor_positions: dict[str, int] = {}
+
+    def read_for_consumer(consumer_id: str, *, limit: int | None = None) -> Sequence[ObservationRow]:
+        position = cursor_positions.get(consumer_id, 0)
+        unread = [row for row in rows if row.sequence >= position]
+        return unread[:limit] if limit is not None else unread
+
+    def advance_for_consumer(consumer_id: str, consumed_rows: list[ObservationRow]) -> None:
+        if consumed_rows:
+            cursor_positions[consumer_id] = max(row.sequence for row in consumed_rows) + 1
+
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", read_for_consumer)
+    monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", advance_for_consumer)
+    monkeypatch.setattr(segmenter, "_sync_new_episode_row", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        segmenter,
+        "_retry_existing_episode_projection_sync",
+        lambda **kwargs: None,
+    )
+    state = _stub_tick_io(monkeypatch)
+
+    production_segmenter_tick = segmenter.run_segmentation_tick
+
+    def invoke_segmenter_tick(**kwargs):
+        return production_segmenter_tick(
+            registry=registry,
+            write_guard=_healthy_guard(),
+            **kwargs,
+        )
+
+    production_recut_tick = recut.run_recut_tick
+
+    def invoke_recut_tick(**kwargs):
+        return production_recut_tick(write_guard=_healthy_guard(), **kwargs)
+
+    monkeypatch.setattr(episodes_cli_module, "run_segmentation_tick", invoke_segmenter_tick)
+    monkeypatch.setattr(episodes_cli_module, "run_recut_tick", invoke_recut_tick)
+    active_bindings: dict[tuple[str, str], dict[str, str]] = {}
+    fail_segment_assignment = False
+
+    def commit_segment_assignments(to_insert, to_correct, write_guard=None, vault_root=None):
+        nonlocal fail_segment_assignment
+        if fail_segment_assignment:
+            fail_segment_assignment = False
+            raise RuntimeError("simulated assignment interruption after canonical note write")
+        for decision in to_insert:
+            active_bindings[(decision.artifact_ref, decision.episode_id)] = {
+                "binding_state": "active",
+                "basis": decision.basis,
+                "scope": decision.scope,
+            }
+        for key in to_correct:
+            if key in active_bindings:
+                active_bindings[key]["binding_state"] = "corrected"
+        return {"pending": len(to_insert), "corrected": len(to_correct)}
+
+    monkeypatch.setattr(segmenter, "commit_assignment_diff", commit_segment_assignments)
+    fail_first_adoption_reconcile = False
+    reconcile_calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def reconcile_first_adoption(
+        episode_id: str,
+        *,
+        scope: str,
+        start: datetime,
+        end: datetime | None,
+        derived_from: Sequence[str],
+        write_guard=None,
+        vault_root=None,
+        flow_provider=None,
+    ):
+        nonlocal fail_first_adoption_reconcile
+        refs = tuple(derived_from)
+        reconcile_calls.append((episode_id, refs))
+        if fail_first_adoption_reconcile:
+            fail_first_adoption_reconcile = False
+            raise RuntimeError("simulated interruption before founding binding reconciliation")
+        for ref in refs:
+            active_bindings[(ref, episode_id)] = {
+                "binding_state": "active",
+                "basis": "provenance",
+                "scope": scope,
+            }
+        return {"pending": len(refs), "corrected": 0}
+
+    monkeypatch.setattr(recut, "reconcile_episode_bindings", reconcile_first_adoption)
+    runner = CliRunner()
+    args = ["episodes", "tick", "--vault-root", str(tmp_path), "--json"]
+
+    first = runner.invoke(cli, args)
+    assert first.exit_code == 0, first.output
+    assert cursor_positions[SCREEN_CONSUMER_ID] == 2
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-a"]
+
+    rows.append(
+        _row(
+            "screen-b",
+            start="2026-07-11T08:02:00Z",
+            end="2026-07-11T08:02:30Z",
+            goal="goal two",
+            sequence=2,
+        )
+    )
+    fail_segment_assignment = True
+    failed_segment = runner.invoke(cli, args)
+    assert isinstance(failed_segment.exception, RuntimeError)
+    assert "after canonical note write" in str(failed_segment.exception)
+    notes_dir = tmp_path / "episodes"
+    note_paths = sorted(notes_dir.glob("ep-*.md"))
+    assert len(note_paths) == 1
+    note_bytes = note_paths[0].read_bytes()
+    episode_id = note_paths[0].stem
+    assert cursor_positions[SCREEN_CONSUMER_ID] == 2
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-a"]
+
+    # Segmenter replay recovers the open replacement and acknowledges B. Then
+    # fail the actual first-adoption reconciliation after segmenter returns.
+    fail_first_adoption_reconcile = True
+    failed_recut = runner.invoke(cli, args)
+    assert isinstance(failed_recut.exception, RuntimeError)
+    assert "before founding binding reconciliation" in str(failed_recut.exception)
+    assert cursor_positions[SCREEN_CONSUMER_ID] == 3
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
+    assert ("screen:screen-a", episode_id) not in active_bindings
+    assert not any(key.startswith(recut._RECUT_STATE_KEY_PREFIX) for key in state)
+    assert note_paths[0].read_bytes() == note_bytes
+
+    # With no new observation, the real CLI still runs recut. Since failed
+    # reconciliation did not persist an adoption baseline, it retries A.
+    healthy_retry = runner.invoke(cli, args)
+    assert healthy_retry.exit_code == 0, healthy_retry.output
+    summary = json.loads(healthy_retry.output)
+    assert summary["proposed"] == []
+    assert cursor_positions[SCREEN_CONSUMER_ID] == 3
+    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
+    assert len(list(notes_dir.glob("ep-*.md"))) == 1
+    assert note_paths[0].read_bytes() == note_bytes
+    assert active_bindings[("screen:screen-a", episode_id)]["binding_state"] == "active"
+    assert reconcile_calls == [(episode_id, ("screen:screen-a",)), (episode_id, ("screen:screen-a",))]
