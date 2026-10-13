@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 class GlobalSettings(BaseModel):
@@ -466,6 +466,33 @@ class WatcherAndTuningSettings(BaseModel):
     tick_sleep_seconds: float = Field(default=1.0, gt=0)
     connect_relatedness_floor: float = Field(default=0.55, ge=0.0, le=1.0)
     contradiction_floor: float = Field(default=0.4, ge=0.0, le=1.0)
+
+
+ScreenIdentifier = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
+
+class ScreenControlSettings(BaseModel):
+    """SCREEN-06's sole default registry; values are provisional and vault scoped.
+
+    A fresh/ambiguous client starts paused. The other defaults bound retained
+    frames and client work; declaring them does not activate capture or change
+    SCREEN-02's current exact-dimension coalescer.
+    """
+
+    model_config = ConfigDict(strict=True, extra="forbid", allow_inf_nan=False)
+
+    screen_paused: bool = Field(default=True, description="Revoke active screen consent grants and pause capture permission.")
+    screen_excluded_apps: list[ScreenIdentifier] = Field(default_factory=list, description="Excluded application bundle IDs.")
+    screen_excluded_scopes: list[ScreenIdentifier] = Field(default_factory=list, description="Excluded scope names.")
+    screen_scope_app_mapping: dict[ScreenIdentifier, list[ScreenIdentifier]] = Field(default_factory=dict, description="Scope names mapped to application bundle IDs.")
+    screen_frame_retention_minutes: int = Field(default=5, ge=1, le=120, description="Maximum raw-frame reprocessing buffer in minutes.")
+    screen_capture_cadence_seconds: float = Field(default=10.0, gt=0, le=3600, description="Client capture interval in seconds.")
+    screen_client_buffer_max: int = Field(default=100, ge=1, le=10000, description="Maximum frames in the client's offline buffer.")
+    screen_coalesce_max_gap_seconds: float = Field(default=30.0, gt=0, le=3600, description="Provisional maximum gap for a coalescing consumer.")
+    screen_coalesce_similarity_threshold: float = Field(default=0.98, ge=0, le=1, description="Provisional similarity threshold; prefer over-segmentation.")
+
+
+SCREEN_CONTROL_KEYS = frozenset(ScreenControlSettings.model_fields)
 
 
 class QaSettings(AgentBase):

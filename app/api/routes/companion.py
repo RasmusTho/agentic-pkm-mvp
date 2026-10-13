@@ -63,6 +63,7 @@ from app.agent_memory.posture_projection import (
     agent_memory_posture_for_artifacts,
 )
 from app.auth import api_key_header, require_loopback_or_api_key, resolve_auth_subject
+from app.settings.models import SCREEN_CONTROL_KEYS
 from app.text.helpers import (
     body_contains_frontmatter as _body_contains_frontmatter,
     content_hash as _content_hash,
@@ -1518,7 +1519,12 @@ def read_companion_vault_settings() -> VaultSettingsResponse:
 
 
 @router.post("/vault/settings", response_model=VaultSettingUpdateResponse)
-def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSettingUpdateResponse:
+def update_companion_vault_setting(
+    req: VaultSettingUpdateRequest,
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+) -> VaultSettingUpdateResponse:
+    actor = resolve_auth_subject(request, api_key) if req.key in SCREEN_CONTROL_KEYS else "human"
     manager = get_vault_manager()
     context = manager.context
     if context.status != "selected" or not context.active_vault_path:
@@ -1534,7 +1540,7 @@ def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSetti
     if blocked_reason:
         raise HTTPException(status_code=403, detail=blocked_reason)
     try:
-        updated, _receipt = service.update_setting(context, req.key, req.value, surface="api", actor="human")
+        updated, _receipt = service.update_setting(context, req.key, req.value, surface="api", actor=actor)
     except SettingsWriteError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     refreshed = manager.select_vault(Path(context.active_vault_path), remember=False)

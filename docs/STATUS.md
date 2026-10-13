@@ -6,6 +6,10 @@ Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
 Last reviewed: 2026-10-09 (Issue #5868 existing-value TARS deployment candidate checked alongside the PR #5835, #5822, #5838, and #5847 evidence; no host credentials, route settings, database, or deployment changed)
+Last reviewed (SCREEN-06 host controls): 2026-10-13
+Last verified against (SCREEN-06 host controls): Issue #3342, `app/heimdal/screen_control.py`,
+`tests/heimdal/test_screen_control_receipts.py`, and `tests/heimdal/test_screen_control_settings.py`.
+Actual native capture/indicator agreement remains Bifrost #72, #3341, and parent #3340 acceptance.
 Last reviewed (Builder execution routing): 2026-10-11
 Last verified against (Builder execution routing): `docs/settings/models/providers.yaml`,
 `.codex/agents/verification-closer.toml`, and the focused provider-census, execution-routing,
@@ -310,6 +314,15 @@ promote public internet readiness.
 - The Heimdal time-spend projection's vault writes (#4609, repairing PR #4586 P1 residuals) quarantine observed bucket labels through the HEIM-9 path before materialization, replace owned notes only by expected-version compare-and-swap, create absent targets atomically no-clobber, and clear owned weekly notes the rebuild fold no longer targets — a racing human edit or creation always wins with a loud, item-scoped `blocked` receipt entry (`docs/HEIMDAL_SCREEN_STREAM/PROJECT_TIME_SPEND_ANALYSIS.md`).
 
 ## Runtime verification
+- SCREEN-06 (#3342) exposes authenticated host pause/exclusion/tunable controls through the existing
+  Settings Spine, live Markdown ingestion, and durable actor-tagged receipts. Source version-CAS
+  preserves concurrent edits; invalid or unaccepted changes are visible and deny capture permission.
+  Pause revokes active screen grants through the canonical ledger and its raw-erasure path; resume
+  alone never grants consent again. Erasure/receipt failures remain refused and retryable.
+  Status reports requested/effective control state with `capture_state=unknown_external_client`.
+  Native capture enforcement, actual loop/indicator agreement, and live capability acceptance remain
+  with Bifrost #72, #3341, and #3340; no production activation is claimed. The owner contract is
+  `docs/HEIMDAL_SCREEN_STREAM/CONTROL_SURFACE_AND_EXCLUSIONS.md`.
 - Sources-zone runtime boundaries are shipped (#5700, PR #5701): acquisition candidate and proposal writes, source-bundle outputs, Heimdal projections, and meeting finalization check the effective capture note before side effects; internal MCP append refuses destinations inside the configured Sources zone. Knowledge adapters and artifact identity classify the selected-vault Sources root across filesystem aliases. The Sources writer set and owner contract are unchanged; #3414’s separate writer census and fitness check remain outstanding.
 - `/api/health` reports watcher and worker heartbeat freshness plus the runtime DB/LLM probes so operators see deterministic health signals.
 - `scripts/start_full_system.sh` and `scripts/gap_test_alpha.sh` drive the registry watcher → DB outbox → worker → index → `/api/ask` chain, emit `watcher.run` audit rows plus `index.embedding.created` / `index.embedding.failed` (legacy alias: `index.object.embedded`), and log diagnostics when sources are missing.

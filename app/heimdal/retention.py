@@ -310,23 +310,24 @@ def resolve_retention_window_days(
 def resolve_screen_frame_retention_minutes(
     vault_root: Optional[Path] = None, *, settings_dir: str = DEFAULT_SETTINGS_DIR
 ) -> int:
-    """Resolve SCREEN-01's short raw-frame buffer without inventing a default."""
+    """Consume SCREEN-06's accepted Settings Spine value for this vault."""
     from app.config.paths import resolve_optional_vault_root
+    from app.heimdal.screen_control import resolve_screen_controls
+    from app.vault.manager import VaultManager
 
     root = vault_root if vault_root is not None else resolve_optional_vault_root()
     if root is None:
         raise RetentionWindowMissingError("No vault root configured for screen_frame_retention_minutes")
-    note = read_settings_note(root, SETTINGS, settings_dir=settings_dir)
-    raw_value = note.values.get("screen_frame_retention_minutes") if note is not None else None
-    try:
-        minutes = int(str(raw_value))
-    except (TypeError, ValueError) as exc:
-        raise RetentionWindowMissingError(
-            "_heimdal/settings.md must set a positive screen_frame_retention_minutes; no default is safe"
-        ) from exc
-    if minutes <= 0:
-        raise RetentionWindowMissingError("screen_frame_retention_minutes must be a positive integer")
-    return minutes
+    del settings_dir  # compatibility argument; never a second screen-policy source
+    context = VaultManager().validate_vault(root)
+    if context.status != "selected" or not (root / "settings" / "screen_control.md").is_file():
+        raise RetentionWindowMissingError("screen retention requires initialized settings/screen_control.md")
+    resolution = resolve_screen_controls(context)
+    if resolution.errors and "screen_frame_retention_minutes" not in resolution.accepted_keys:
+        raise RetentionWindowMissingError("screen retention has no last-valid acceptance: " + "; ".join(resolution.errors))
+    # A rejected edit retains the last accepted retention value. Status carries
+    # the degradation; cleanup cannot silently switch to an invalid disk value.
+    return resolution.controls.screen_frame_retention_minutes
 
 
 def reset_memory_deletion_receipts() -> None:

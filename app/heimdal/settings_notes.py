@@ -411,9 +411,9 @@ SETTINGS = SettingsNoteSpec(
                 FieldSpec(
                     "screen_frame_retention_minutes",
                     FIELD_HUMAN_EDITABLE,
-                    "SCREEN-01 bounded raw-frame reprocessing buffer in minutes. This is a "
-                    "separate, deliberately short bound from retention_window_days and is "
-                    "read markdown-first; screen capture refuses to assume a default.",
+                    "Legacy SCREEN-01 retention input, retained for migration provenance. "
+                    "SCREEN-06 requires an explicit Settings Spine write to "
+                    "settings/screen_control.md; this legacy field is not effective policy.",
                 ),
                 FieldSpec(
                     "last_enforced_at",
