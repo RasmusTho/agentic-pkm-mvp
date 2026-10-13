@@ -567,6 +567,37 @@ evidence; this statement is a planning hypothesis, not measured proof.
 
 ### Future measurement posture
 
+The finite #5857 evaluation is now recorded in
+[`GOVERNANCE_PROPORTIONALITY.md :: Implementation and evaluation`](GOVERNANCE_PROPORTIONALITY.md#implementation-and-evaluation).
+It compares the first twenty ordinary accepted deliveries whose final-head CI follows #5862's
+2026-10-09T05:47:04Z core cutoff with twenty prior deliveries matched by risk/artifact/proof
+environment. The pre-core cohort is partially already improved, including first-wave #5833;
+this is an observational comparison, not an untreated control or causal estimate.
+
+The post/pre medians are 40.05/33.93 minutes from the observed ready label (17/14 rows available),
+19.89/10.35 minutes from PR open, and 5.14/4.28 minutes of accepted CI Smoke attempt feedback.
+CI Smoke has 32/29 observed attempts, five/two failed attempts followed by documented corrections,
+and 329.00/279.90 deduplicated runner-job minutes. These exclude other workflows and local checks;
+job duration is not billing or CPU usage, and scheduling delay does not isolate pure runner queue.
+The test/CI stratum has lower integration time and no post-core failed attempt, while text-governance
+repairs and implementation/browser proof increase other measures. The <=10-minute CI Smoke goal
+holds for 15/20 post-core and 18/20 prior rows; a 50% lead-time or cost saving is not established.
+
+A common 24-hour window has no observed governing-Issue reopen (17/15 Issues), but pre-core
+#5827's remaining host-controller fixture dependence required #5830/#5833 after its accepted
+host-independence claim. No corresponding post-core defect is identified in the inspected receipts;
+a complete incident/escaped-defect count remains unknown. Total delivery tokens, billing, active
+human labour, owner-intervention count, context reloads and coordination/control calls also remain
+unknown. #6009 exposes only partial advisory telemetry (3,259 input / 667 output tokens), not total
+PR cost. Review declarations, commit/run counts, quota notices and wall-clock time are named proxies
+or recovery evidence and cannot fill those unknowns.
+
+Continue native delivery and affected proof; use the finite consumer inventory for #5858 to correct
+redundant native-reviewed dispatch routing while preserving executor/in-flight/release ownership and
+unique failure detection. The evaluation adds no meter, dashboard, ledger or permanent evidence
+schema. Its source PR/run identities, exclusions, formulas and recommendation live in the existing
+proportionality owner above; the architecture's future measurement policy below remains in force.
+
 Total Cost of Development (TCD) is the north-star decision model: minimize expected cost per
 accepted delivery, including human attention, rework, defects, delay, coordination, context, tools,
 and model capability. This architecture does **not** require token metering, human-time tracking, a
