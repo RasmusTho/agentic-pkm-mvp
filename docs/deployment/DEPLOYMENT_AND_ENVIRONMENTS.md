@@ -253,6 +253,36 @@ create a checkout-relative substitute.
 Every consumer rejects any active host-global deployment lease, including a lease owned by another
 channel, before reading or mutating channel state.
 
+The native host controller supports an explicit manual DEV/TEST MVR-01C authority cutover via
+`python -m app.ops.postgres_deploy_host <channel> <candidate-sha> --existing-secrets-only`
+with all three `--authority-cutover-binding`, `--authority-cutover-root`, and
+`--authority-cutover-ownership-root` inputs. Supply only an already-qualified binding, its exact
+existing host source and ownership-state root under the applicable nonprod mandate. These inputs
+are protected values, retained in the existing root-private deployment request rather than public
+receipts. An optional `--operation-id` binds reconnects to that exact manual request; it does not
+grant setup or migration authority. The existing explicit forward-only acknowledgment, when
+applicable, remains a separate operator input and is never inferred from cutover selection.
+
+Before effects, native admission checks the configured pin/runtime source, actual existing
+API/worker/watcher and applicable Heimdal/migration writer mounts, channel instance-state volume,
+initialized registry identities and authenticated physical ownership. It reads existing registry
+state without initialization, restoration or repair. Missing, conflicting, pending or uninitialized
+proof refuses; this route cannot discover, select, transfer or initialize a vault. The immutable
+plan binds the selection and ownership source to the channel, candidate and operation before the
+worker prepares. Each inherited Compose guard rechecks the request and selected configuration.
+Native workers discard ambient MVR-01C binding/root variables and supply only the frozen request
+to the existing public stopped-window producer. That producer retains the actual all-owner
+inventory, drained-writer proof, rollback guards, deployment lease and finalization order.
+
+PROD, automatic and secret-bootstrap cutover requests are refused. Ordinary and automatic native
+requests retain their existing wire shape and defaults. Join, status, lost-acknowledgment recovery
+and supervisor restart require the same retained inputs. Interrupted nonterminal cutover remains
+pending with its operation evidence and admission lock; healthy services or a quiescent census
+cannot turn it into a failed or completed receipt, trigger replay, or authorize cleanup. A changed
+binding, source, ownership-state root, channel or candidate cannot reuse the operation. Repository
+support does not establish live Karakeep acceptance; the parent coordinator owns subsequent
+qualified DEV/TEST operation and acceptance evidence.
+
 Both `scripts/deploy_channel.sh` and `scripts/start_full_system.sh` invoke
 `scripts/lib/instance_state_deployment.sh`. Before the first init or any lease/fence mutation, the
 shared producer derives every dev/test/prod/native legacy owner from canonical channel and runtime

@@ -394,6 +394,14 @@ class VaultRegistryStore:
                 return self._restore_or_initialize_missing_locked()
             return self._read_current_locked(recover=True)
 
+    def read_existing(self) -> RegistrySnapshot:
+        """Read existing qualified state without initialization or repair."""
+        _assert_private(self.path.parent, directory=True)
+        _assert_private(self.path, directory=False)
+        _assert_private(self.lock_path, directory=False)
+        with self._locked(recover_transactions=False):
+            return self._read_current_locked(recover=False)
+
     def install_settings_rebind_dormant(
         self,
         *,

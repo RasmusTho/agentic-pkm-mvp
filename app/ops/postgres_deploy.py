@@ -37,6 +37,23 @@ class PostgresDeployError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class AuthorityCutover:
+    """Explicit existing selection; retained only in the private request."""
+    binding_id: str
+    root: str
+    ownership_root: str
+
+    def validate(self) -> None:
+        if (not isinstance(self.binding_id, str)
+            or re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', self.binding_id) is None
+            or any(not isinstance(value, str) or not value.startswith('/')
+                   or value == '/' or any(c in value for c in ('\x00', '\n', '\r', ':'))
+                   or str(Path(value)) != value or '..' in Path(value).parts
+                   for value in (self.root, self.ownership_root))):
+            raise PostgresDeployError()
+
+
+@dataclass(frozen=True)
 class DeployPlan:
     channel: str
     revision: str
@@ -45,10 +62,13 @@ class DeployPlan:
     ack_forward_only: bool = False
     image_digest: str | None = None
     automatic: bool = False
+    authority_cutover: AuthorityCutover | None = None
 
     def payload(self) -> dict[str, Any]:
         """Keep retained manual request bindings compatible with older workers."""
         payload = asdict(self)
+        if self.authority_cutover is None:
+            del payload['authority_cutover']
         if self.image_digest is None and not self.automatic:
             del payload['image_digest']
             del payload['automatic']
@@ -56,7 +76,35 @@ class DeployPlan:
             payload['verification_profile'] = {'version': PROFILE_VERSION, 'selection_hash': SELECTION_HASH}
         return payload
 
+    @classmethod
+    def from_payload(cls, raw: Any) -> DeployPlan:
+        legacy = {'channel', 'revision', 'services', 'consumers', 'ack_forward_only'}
+        if not isinstance(raw, dict):
+            raise PostgresDeployError()
+        keys = set(raw) - {'authority_cutover'}
+        if keys not in (legacy, legacy | {'image_digest', 'automatic'},
+                        legacy | {'image_digest', 'automatic', 'verification_profile'}):
+            raise PostgresDeployError()
+        cutover = None
+        if raw.get('authority_cutover') is not None:
+            selected = raw['authority_cutover']
+            if not isinstance(selected, dict) or set(selected) != {'binding_id', 'root', 'ownership_root'}:
+                raise PostgresDeployError()
+            cutover = AuthorityCutover(**selected)
+        plan = cls(raw['channel'], raw['revision'], tuple(raw['services']), tuple(raw['consumers']),
+                   raw['ack_forward_only'], raw.get('image_digest'), raw.get('automatic', False), cutover)
+        plan.validate()
+        if (plan.automatic and raw != json.loads(json.dumps(plan.payload()))
+            or not plan.automatic and 'verification_profile' in raw):
+            raise PostgresDeployError()
+        return plan
+
     def validate(self) -> None:
+        if self.authority_cutover is not None:
+            if (not isinstance(self.authority_cutover, AuthorityCutover)
+                or self.channel not in {'dev', 'test'} or self.automatic):
+                raise PostgresDeployError()
+            self.authority_cutover.validate()
         contract = load_host_secret_contract()
         if (type(self.ack_forward_only) is not bool or type(self.automatic) is not bool
             or self.channel not in CHANNEL_PROJECTS or len(self.revision) != 40
@@ -183,6 +231,10 @@ class DeployJournal:
         never turn an old terminal receipt into success for a different request.
         """
         plan.validate()
+        if type(bootstrap) is not bool:
+            raise PostgresDeployError()
+        if isinstance(plan, DeployPlan) and plan.authority_cutover is not None and bootstrap:
+            raise PostgresDeployError()
         DeployReceipt(operation_id, self.channel, 'deploy', 'prepared', None).validate()
         expected = {'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': bootstrap}
         # Normalize tuples to the on-disk JSON representation before comparison.
@@ -221,6 +273,26 @@ class DeployJournal:
                     os.unlink(temporary, dir_fd=directory)
                 except FileNotFoundError:
                     pass
+
+    def bound_plan(self, operation_id: str) -> DeployPlan:
+        """Load the private native request, then revalidate its exact coupling."""
+        with self._directory() as directory:
+            descriptor = os.open(self.channel + '.request.json', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=directory)
+            with os.fdopen(descriptor, 'r') as source:
+                info = os.fstat(source.fileno())
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_size > 8192 or info.st_nlink != 1):
+                    raise PostgresDeployError()
+                request = json.load(source)
+        if (not isinstance(request, dict) or set(request) != {'operation_id', 'plan', 'bootstrap'}
+            or request['operation_id'] != operation_id):
+            raise PostgresDeployError()
+        plan = DeployPlan.from_payload(request['plan'])
+        if plan.channel != self.channel:
+            raise PostgresDeployError()
+        self.bind_request(operation_id, plan, request['bootstrap'])
+        return plan
 
     def write(self, operation_id: str, stage: str,
               pg_acceptance: dict[str, Any] | None = None) -> DeployReceipt:
@@ -368,6 +440,8 @@ class DeployWorker:
 
     def run(self, operation_id: str, plan: DeployPlan) -> DeployReceipt:
         plan.validate()
+        if plan.authority_cutover is not None:
+            self.journal.bind_request(operation_id, plan, False)
         previous = self.journal.read()
         if previous and previous.operation_id == operation_id:
             if previous.terminal_result:
@@ -492,7 +566,8 @@ def deploy_from_host(admin: SecretAdmin, remote: DeployRemote, plan: DeployPlan,
                      operation_id: str | None = None) -> DeployReceipt:
     """Hold the shared controller lock through matching remote terminal evidence."""
     if (type(allow_bootstrap) is not bool or (plan.automatic and allow_bootstrap)
-        or (operation_id is not None and not plan.automatic)):
+        or (plan.authority_cutover is not None and allow_bootstrap)
+        or (operation_id is not None and not (plan.automatic or plan.authority_cutover is not None))):
         raise PostgresDeployError()
     plan.validate()
     try:
