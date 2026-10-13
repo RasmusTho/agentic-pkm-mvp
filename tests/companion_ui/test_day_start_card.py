@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 from http.server import HTTPServer
 from pathlib import Path
 import re
 import threading
 from typing import Any
 from unittest.mock import patch
+from urllib.parse import quote
 
 import httpx
 import pytest
@@ -93,6 +95,69 @@ def test_day_start_card_has_no_text_input_affordances() -> None:
     assert "<textarea" not in html
     assert "contenteditable" not in html
     assert 'type="text"' not in html
+
+
+def test_calendar_episode_provenance_is_preserved_read_only() -> None:
+    projection = _full_projection()
+    projection["sections"] = [{
+        "name": "calendar_episodes", "status": "available", "items": [
+            {"source": "calendar", "title": "Synthetic meeting", "provenance_ref": 'calendar:uid<&:etag"'},
+            {"source": "episode", "title": "Synthetic episode", "provenance_ref": "ep-00000000-0000-4000-8000-000000000001"},
+            {"source": "episode", "title": "Malformed reference", "provenance_ref": '<script>alert(1)</script>'},
+        ],
+    }]
+    rendered = render_day_start_card_html(projection)
+    assert 'data-read-only="true"' in rendered
+    assert 'calendar:uid&lt;&amp;:etag&quot;' in rendered
+    assert 'note_path=episodes%2Fep-00000000-0000-4000-8000-000000000001.md' in rendered
+    assert '&lt;script&gt;alert(1)&lt;/script&gt;' in rendered
+    assert '<script>alert(1)</script>' not in rendered
+    assert 'source recorded in briefing' not in rendered
+    assert '<input' not in rendered and '<textarea' not in rendered
+
+
+@pytest.mark.parametrize("receipt", ["_system/receipts/decisions/decisions-202610.jsonl",
+                                     "vault://_system/receipts/decisions/decisions-202610.jsonl",
+                                     '_system/receipts/decisions/decisions-202610<&".jsonl'])
+def test_receipt_ledger_provenance_is_escaped_inert_and_read_only(receipt: str) -> None:
+    projection = _full_projection()
+    projection["sections"] = [{"name": "decision_receipts", "status": "available",
+                               "items": [{"key": "Synthetic review", "receipt_path": receipt}]}]
+    rendered = render_day_start_card_html(projection)
+    assert f'<span data-source-ref="true">{escape(receipt)}</span>' in rendered
+    assert '<a href=' not in rendered and 'note_path=' not in rendered
+    assert 'data-read-only="true"' in rendered
+    assert '<input' not in rendered and '<textarea' not in rendered
+
+
+@pytest.mark.parametrize(("target", "note_path"), [
+    ("vault://Notes/Synthetic.md", "Notes/Synthetic.md"),
+    ("vault://Notes/Plan%20%26%20review.md", "Notes/Plan & review.md"),
+    ("vault://Notes/Åtgärd <draft>.md", "Notes/Åtgärd <draft>.md"),
+    ("vault:///etc/passwd", None),
+    ("vault://Notes/../private.md", None),
+    ("vault://Notes/%2e%2e/private.md", None),
+    ("vault://%2f%2fexternal.example/Note.md", None),
+    ("vault://javascript:alert(1)", None),
+    ("vault:Notes/Synthetic.md", None),
+    ("javascript:alert(1)", None),
+    ("data:text/html,<script>alert(1)</script>", None),
+])
+def test_canonical_vault_provenance_uses_existing_note_route(
+    target: str, note_path: str | None,
+) -> None:
+    projection = _full_projection()
+    projection["sections"][0]["items"][0]["target_ref"] = target
+    rendered = render_day_start_card_html(projection)
+    label = escape(target)
+    if note_path is None:
+        assert f'<span data-blocked-ref="true">{label}</span>' in rendered
+    else:
+        assert f'<a href="/?note_path={quote(note_path, safe="")}">{label}</a>' in rendered
+        assert f'<span data-blocked-ref="true">{label}</span>' not in rendered
+    assert 'data-read-only="true"' in rendered
+    assert "<input" not in rendered and "<textarea" not in rendered
+    assert "<script>alert(1)</script>" not in rendered
 
 
 def test_missing_todays_briefing_shows_pending_state_not_blank(tmp_path: Path) -> None:

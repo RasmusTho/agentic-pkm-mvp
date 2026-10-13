@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import html
+import re
 from typing import Any, Mapping
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 from companion_ui.workspace.briefing_listen import render_briefing_listen_affordance
 
@@ -102,12 +103,35 @@ def _render_item(item: Mapping[str, Any]) -> str:
         for ref in surfaced:
             if isinstance(ref, Mapping) and isinstance(ref.get("ref"), str):
                 provenance.append(_render_ref(str(ref["ref"])))
+    source_ref = item.get("provenance_ref")
+    if isinstance(source_ref, str) and source_ref:
+        if item.get("source") == "episode" and re.fullmatch(r"ep-[0-9a-f-]+", source_ref):
+            provenance.append(_render_ref(f"episodes/{source_ref}.md"))
+        else:
+            # Calendar UID/etag is an adapter reference, not a note locator.
+            # Preserve it visibly without constructing a misleading note link.
+            provenance.append(f'<span data-source-ref="true">{html.escape(source_ref)}</span>')
     provenance_html = " · ".join(provenance) or "source recorded in briefing"
     return f'<li><span>{html.escape(label)}</span><small class="day-start-provenance">Source: {provenance_html}</small></li>'
 
 
 def _render_ref(target: str) -> str:
     cleaned = target.strip().replace("\\", "/")
+    label = html.escape(target)
+    if cleaned.lower().startswith("vault://"):
+        try:
+            note_path = unquote(cleaned[len("vault://"):], errors="strict").replace("\\", "/")
+            note = urlsplit(note_path)
+        except (ValueError, UnicodeError):
+            return f'<span data-blocked-ref="true">{label}</span>'
+        if (note_path and not note.scheme and not note.netloc and not note.query and not note.fragment
+                and all(part not in {"", ".", ".."} for part in note_path.split("/"))
+                and not any(ord(char) < 32 or ord(char) == 127 for char in note_path)):
+            if note_path.lower().endswith(".jsonl"):
+                return f'<span data-source-ref="true">{label}</span>'
+            href = "/?note_path=" + quote(note_path, safe="")
+            return f'<a href="{html.escape(href, quote=True)}">{label}</a>'
+        return f'<span data-blocked-ref="true">{label}</span>'
     try:
         parsed = urlsplit(cleaned)
     except ValueError:
@@ -116,9 +140,12 @@ def _render_ref(target: str) -> str:
         (not parsed.scheme and not parsed.netloc and not cleaned.startswith("/"))
         or parsed.scheme.lower() in {"http", "https"}
     )
-    label = html.escape(target)
     if not safe:
         return f'<span data-blocked-ref="true">{label}</span>'
+    if parsed is not None and not parsed.scheme and parsed.path.lower().endswith(".jsonl"):
+        # A canonical receipt ledger is provenance, not a workspace note. The
+        # existing note reader deliberately accepts only Markdown files.
+        return f'<span data-source-ref="true">{label}</span>'
     if parsed is not None and parsed.scheme.lower() in {"http", "https"}:
         href = quote(target, safe="/:#?=&%")
     else:

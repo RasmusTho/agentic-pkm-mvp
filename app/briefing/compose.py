@@ -416,7 +416,7 @@ def _read_moments(
     vault_context: VaultContext,
     system_dir: str,
 ) -> tuple[MomentBriefingItem, ...]:
-    records = collect_now_moments(vault_context)
+    records = collect_now_moments(vault_context, strict=True)
     if not isinstance(records, list):
         raise _InvalidSourceRecord
     items: list[MomentBriefingItem] = []
