@@ -121,8 +121,13 @@ uses existing relations with their existing meanings:
 | `derived_from` with origin/version provenance | Build the source-family view for explicitly recorded transformations. | Transitive ancestry does not make every ancestor the same source object or establish evidence independence. Preserve multiple inputs. |
 | `source_ref` | Locate an exact origin or representation. | A mutable locator is never the grouping identity. |
 | `supports` | Preserve the asserted source-to-claim grounding with exact segment anchors. | Two support edges do not imply two independent bases. |
-| Assessment `Artifact` plus `decision_about` and `ProvenanceEvent` | Record a human's scoped shared-basis/distinct-basis/unknown judgment about explicitly referenced sources and claims. | This records the assessment and its justification; it grants no admissibility or truth. GOV confirmation is separate. |
+| Assessment `Artifact` with explicit target references and `ProvenanceEvent` | Record a scoped shared-basis/distinct-basis/unknown assessment about the referenced sources and claims. | Pending, unknown, stale, conflicting or unconfirmed assessments create no authoritative or traversed decision edge. |
 | `proposal_for` / inferred projection | Surface a proposed overlap or identity correction for review. | Unconfirmed inference cannot change durable relations, independent-support counts, or identity-based collapse. |
+
+Use `decision_about` only for an explicit human, governance-recorded resolved judgment that settles
+the stated question under the existing relation meaning. An unresolved or unconfirmed assessment
+keeps artifact target references, or `proposal_for` for a proposed correction, without that decision
+edge. Accepting the assessment record's storage does not by itself confirm its semantic outcome.
 
 No `same_as`, `independent_of`, or new global lineage identifier is proposed. The assessment's own
 artifact identity and explicit target references suffice for this proposal. `links_to`, `part_of`,
