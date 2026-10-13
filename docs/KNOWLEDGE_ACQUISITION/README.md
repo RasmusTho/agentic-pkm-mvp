@@ -58,6 +58,11 @@ the axis table and per-axis owners.
 2. `RESEARCH_2026-07.md` — Phase 0 research memo: 2026 ecosystem survey, gap analysis against the
    existing repo assets, and the two decided mechanism questions (caption acquisition, subscription
    discovery). Context, non-normative.
+   The sibling
+   [source-lineage research](SOURCE_LINEAGE_EVIDENCE_INDEPENDENCE_AND_FAMILY_AWARE_RETRIEVAL_RESEARCH_2026-08-15.md#11-repository-validated-disposition)
+   is also advisory and covered by this indexed capability directory. Its #4906 validation and
+   proposal links do not transfer semantic ownership to Knowledge Acquisition: SIP remains the
+   primary owner, with RCA/GOV/DRI/HIX and the existing HKA/WSP/PDM/SFC/EBF/OEF boundaries.
 3. `SOURCE_PLUGIN_CONTRACT.md` — the source interface every acquisition source implements.
 4. `REFINEMENT_PIPELINE_CONTRACT.md` — stages, derived artifacts, events, replay semantics, and
    the extraction registry.

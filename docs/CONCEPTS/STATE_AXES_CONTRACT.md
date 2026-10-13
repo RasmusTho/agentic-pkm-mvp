@@ -96,6 +96,33 @@ The canonical global value set for `review_state` is:
   2026-07-02; vocabulary in `docs/CONTEXTUALIZATION_LAYER/CONTEXT_ACTIVATION_SEMANTICS.md` §7.3),
 - or that a promotion transition has occurred.
 
+## Scoped assessment proposal (#4906)
+
+**Proposal v1; semantic acceptance pending; no change to the canonical state axes.** A `reviewed`
+badge expresses artifact posture. It cannot say which facts, versions, or transformations were
+checked. The proposed assessment records the following inspectable content using existing
+artifact/provenance contracts, without introducing a new state value or schema:
+
+| Required content | Meaning |
+| --- | --- |
+| Target and version | Exact source/artifact/claim identities, immutable content/version identities, and the assessed segments or ranges. Multi-source judgments enumerate every compared version. |
+| Scope and purpose | What was checked: format, completeness, source fidelity, citation integrity, factual accuracy, method, argument, fit for purpose, evidence overlap, or authority acceptance. A scope may be narrower than an artifact. |
+| Reviewer and method | Attributable human or machine actor, timestamp, procedure/tool version, comparison inputs, and declared limits. A machine result is marked as a suggestion. |
+| Outcome | The result for that scope, including unresolved/unknown and conflicts; lineage assessments use the outcomes owned by the relation proposal. |
+| Supporting evidence / notes | Resolvable source and segment references, justification, omissions, and evidence needed to reproduce or challenge the assessment. |
+| Confirmation / standing | Separate provenance and any GOV acceptance receipt; absence leaves a machine proposal non-authoritative. Acceptance of a review record is not proof of its factual accuracy. |
+
+Review of a summary's source fidelity does not review the source's factual accuracy, accept its
+authority, or review its siblings. A changed target version invalidates applicability to that
+version; retain the old assessment as history and surface the current version as unassessed or
+`independence_unknown`. Missing references, disputed outcomes, or incompatible scopes must not be
+collapsed into a positive badge. Changing an accepted assessment or identity remains an explicit
+SIP/GOV correction with provenance, not a render-time update.
+
+GOV owns confirmation and authority effects; SIP owns lineage/overlap meaning; HKA preserves the
+human assessment content; HIX displays scope and current applicability. The existing `review_state`,
+`maturity`, `authority_state`, and `evidence_role` keep their independent meanings.
+
 ## `maturity`
 
 ### Meaning

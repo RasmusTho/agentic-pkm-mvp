@@ -98,6 +98,44 @@ framing per the audit's guidance so the silence stops reading as an oversight; i
 Q1. If the owner later adopts option (a), update the "Non-functional requirements" and "Scalability"
 rows above accordingly.
 
+### Source-lineage operating-budget proposal (#4906)
+
+**Proposed trial budgets v1, unmeasured and not accepted.** The existing Q1 decision above remains
+open. This bounded proposal makes the inputs to a future topology decision reviewable; it adopts
+no global SRS/NFR policy and establishes no current performance claim. Physical vault/store/index
+separation remains undecided until the owner accepts a workload/profile and budgets and repeated
+measurements show a material need that logical grouping cannot address.
+
+The trial profile is one human operator, one foreground retrieval request, k=8, a 256-segment
+candidate window and a 4,096-token context, evaluated at 1,000 and 10,000 retained artifacts with
+recorded source bytes/segments and warm/cold state. These sizes are test points, not file-count
+thresholds for splitting. Record hardware, disk, model/settings, index versions, network and
+available memory; report acquisition/model latency separately from local retrieval/assembly.
+
+| Budget | Proposed trial target / measurement |
+| --- | --- |
+| Retrieval | Warm local retrieval/assembly p95 at most 2 s; family composition adds at most max(100 ms, 10% of paired baseline p95). Report cold p95, per-intent failures and peak memory separately. |
+| Freshness | Eligible committed content/assessment change to current searchable projection at most 60 s p95; pending/stale state is visible during the interval. |
+| Backlog | A declared burst of 1,000 already-acquired text updates drains within 10 min without silent loss; record arrival/service rate, retry count, queue age and failures. External acquisition is a separate measured stage. |
+| Rebuild | Full disposable projection rebuild for the 10,000-artifact profile at most 15 min; record wall time, peak RAM/CPU and bytes read/written; immutable sources and human meaning remain intact. |
+| Recovery | Zero loss of committed durable identity, source, assessment and authority records (RPO 0 for the declared fault test); restoration to usable local retrieval within 30 min (RTO). Record backup generation, fault, restored generation and missing/unresolved material. |
+| Sync | For a named two-device online profile and 50 changed text artifacts, convergence p95 at most 120 s; record bytes, backlog, conflicts and retry/degraded/offline posture. Offline duration is reported separately. |
+| Storage amplification | At most 4x retained source bytes for the declared retained-plus-derived set, counting index/projection/metadata and excluding separately reported model binaries/backups. Report absolute bytes and raw-media contribution; tiny-source denominator cases separately. |
+| Mobile footprint | At most 512 MiB for a declared 1,000-artifact active text working set and its necessary local projections; report retained media and model binaries separately. This is a future device experiment, not a shipped mobile support claim. |
+| Failure domain | One failed/corrupt disposable binding projection loses no durable records and does not corrupt another binding. Separate authorized requests to healthy bindings continue; a multi-binding request follows existing all-or-nothing authorization and visible degradation, never silent subset/default substitution. Record affected artifacts/bindings and recovery time. |
+
+Run at least three independently reset operating trials per profile; publish raw denominators,
+p50/p95, failures, baseline comparison and exact reproducible inputs/commands. A missed budget
+triggers diagnosis and the smallest reversible logical repair first. Any physical separation
+proposal then needs measured benefits, security/retention and working-set constraints, portable
+per-source provenance, recovery/rebuild evidence and reversibility to the single-vault floor under
+the existing topology contract. #4906 creates neither that decision nor implementation children.
+
+The [SLER evaluation plan](testing/invariant-tests.md#sler-proposal-evaluation-4906) owns retrieval
+quality metrics. OEF observes these budgets; SIP/GOV/HKA own semantic and authority meaning,
+RCA/DRI own retrieval/projections, WSP owns bindings, PDM owns persistence mechanics, and SFC owns
+sync. Accepting trial budgets is separate from changing Q1's repository-wide coverage posture.
+
 ### Index placement note (audit §15 Q5)
 
 Q5 (SRS index home: separate index vs. a `docs/DOCS_INDEX.md` section vs. extending the

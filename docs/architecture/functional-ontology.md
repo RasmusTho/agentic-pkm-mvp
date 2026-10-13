@@ -110,6 +110,44 @@ representation & indexing).
 | `Source` | An origin entity or locator represented for provenance: the internal artifact, external document, or provider feed from which an artifact or claim derives. This is distinct from the epistemic `Source Role` an artifact plays in a particular context. | An intrinsic class that every source-role artifact must acquire; the segment or projection derived from it; evidence standing by itself. External-source adapters are EBF; provenance is SIP. | SIP (provenance/attribution); EBF (external adapter facet) | `source_id`, kind, locator, `provenance_ref` | `source_role`, `sensitivity` | TBD ([#2550](https://github.com/RasmusTho/agentic-pkm-mvp/issues/2550)) |
 | `Episode` | A durable, note-serialized record of a bounded, observer-relative lived situation (a meeting, a walk, a work session) that observations are the context of, indexed on time/space/causation/goal/protagonist. | A Heimdal sensor `event` (a discrete sensing act; many compose into one Episode); a `Context` (present-tense frame — the Episode is the durable record that a Context was active during); a `Workspace` (ephemeral); a `moment` (which surfaces it). Grouping observations is not sensing them, and belonging to an Episode is context, not evidence. | HKA (durable artifact); SIP (situation identity/relations) | `episode_id`, `time{start,end,closed}`, `space`, `protagonists`, `goal`, `causation`, `parent_episode`, `scope_binding`, `authority_state` | `episode_ref` (as anchor target), `scope_binding`, `source_role`, `authority_state` | TBD (ADR-0051) |
 
+### 3.1 Source and evidence lineage proposal (#4906)
+
+**Proposal v1; semantic owner acceptance pending.** This section is a docs-only target proposal,
+not a shipped object model or a schema extension. Publication or closure of #4906 completes the
+proposal stage; acceptance of the named owner sections and evaluation targets is required before
+implementation breakdown or runtime changes.
+
+The minimum representation reuses `Source`, `Artifact`, `Segment`, `Claim`, `Relation`,
+`ProvenanceEvent`, and `Projection`; no new functional object is proposed:
+
+- **Source lineage** describes one origin object across content versions, representations,
+  fragments, and derivatives. Use a declared stable origin identity (including its namespace),
+  version/content identity, and explicit derivation anchors. A content hash identifies a version;
+  it does not prove that two separately published objects have the same origin. Paths and
+  `source_ref` remain locators. A **source family** is a rebuildable projection of these anchors,
+  not another primary identity, evidence unit, source bundle, or vault grouping. Unresolved origin
+  identity remains ungrouped rather than being merged by similarity.
+- **Evidence lineage** describes a shared study, observation, dataset, event, or argument basis
+  for a particular claim and purpose across possibly distinct origin objects. It is a scoped
+  assessment, not an intrinsic source class. One source may depend on several bases; one basis may
+  appear in many sources. Derivatives add representations, never additional independent support.
+  Different URLs, authors, publishers, files, paths, or vaults establish no independence.
+- **`independence_unknown`** is the ordinary posture when the basis is unresolved, unassessed,
+  stale, disputed, or supported only by an unconfirmed machine suggestion. A human assessment of
+  distinct bases is inspectable and bounded to its claim/purpose/versions; it does not certify
+  factual truth or universal independence.
+
+Durable origin/version anchors and human assessment content belong to HKA. SIP owns their meaning
+and relation vocabulary; GOV owns confirmation and standing. DRI builds disposable family and
+assessment views from those sources. RCA selects candidates, HIX presents them, and PDM/SFC retain
+their existing storage and sync responsibilities. The proposal selects no graph, schema, store,
+file layout, resolver service, or physical topology.
+
+The relation posture is owned by
+[Relation taxonomy](../CONCEPTS/RELATION_TAXONOMY.md#source-and-evidence-lineage-proposal-4906),
+review scope by [State axes](../CONCEPTS/STATE_AXES_CONTRACT.md#scoped-assessment-proposal-4906),
+and retrieval by [Retrieval contract](retrieval-contract.md#family-aware-retrieval-proposal-4906).
+
 ## 4. Memory, cognition, and capability terms
 
 These describe *recall*, *proposal*, and *delegated capability*. Owning boundaries: **MEM** (machine
