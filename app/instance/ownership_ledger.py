@@ -325,9 +325,8 @@ class OwnershipLedger:
         self._assert_existing_artifacts()
         if type(recover_rotation) is not bool:
             raise LedgerError("ownership proof recovery mode is invalid")
-        if not recover_rotation:
-            _assert_private_file(self.lock_path)
-        with self._locked(recover_rotation=recover_rotation):
+        lock = self._locked() if recover_rotation else self._existing_read_lock()
+        with lock:
             if not recover_rotation and os.path.lexists(self.rotation_path):
                 raise LedgerKeyError("pending ownership key rotation requires recovery")
             key = self._load_or_create_key_locked(allow_create=False)
@@ -2022,6 +2021,24 @@ class OwnershipLedger:
 
     def _replace(self, current: LedgerSnapshot, **changes: Any) -> LedgerSnapshot:
         return replace(current, **changes)
+
+    @contextmanager
+    def _existing_read_lock(self) -> Iterator[None]:
+        """Share the existing writer fence without creating or repairing state."""
+        _assert_private_file(self.lock_path)
+        descriptor = os.open(self.lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            info = os.fstat(descriptor)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                raise LedgerKeyError("ownership read lock is unsafe")
+            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            try:
+                yield
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
     @contextmanager
     def _locked(

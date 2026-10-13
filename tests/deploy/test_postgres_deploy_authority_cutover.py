@@ -353,7 +353,20 @@ def test_runtime_uid_reads_existing_registry_view_without_host_ancestry_access(t
                     'except PermissionError: sys.exit(0)\nelse: sys.exit(1)', str(target.registry.path)],
                     **{key: value for key, value in kwargs.items() if key != 'input'})
                 assert probe.returncode == 0
-                result = target.real_run(argv, **kwargs)
+                readonly = '''import errno,os
+_open = os.open
+def read_open(path, flags, *args, **kwargs):
+    if flags & (os.O_CREAT | os.O_RDWR | os.O_WRONLY | os.O_TRUNC):
+        raise OSError(errno.EROFS, "proof view is read-only")
+    return _open(path, flags, *args, **kwargs)
+def refuse_write(*args, **kwargs):
+    raise OSError(errno.EROFS, "proof view is read-only")
+os.open = read_open
+os.fchmod = os.chmod = os.mkdir = refuse_write
+'''
+                guarded = [*argv]
+                guarded[2] = 'exec(' + repr(readonly) + '); ' + argv[2]
+                result = target.real_run(guarded, **kwargs)
                 assert result.returncode == 0, result.stderr
                 observed.append(result.returncode)
                 return result
@@ -367,6 +380,32 @@ def test_runtime_uid_reads_existing_registry_view_without_host_ancestry_access(t
     assert observed == [0]
     assert engine.stat().st_mode & 0o777 == 0o700
     assert all(path.read_bytes() == payload for path, payload in snapshots.items())
+
+
+def test_read_only_authority_proof_never_changes_permissions_or_creates_locks(target, monkeypatch):
+    before = {path: (path.read_bytes(), path.stat().st_mode, path.stat().st_uid, path.stat().st_gid)
+              for directory in (target.registry.path.parent, target.ledger.root)
+              for path in directory.iterdir() if path.is_file()}
+    real_open = os.open
+    calls = []
+
+    def read_open(path, flags, *args, **kwargs):
+        assert not flags & (os.O_CREAT | os.O_RDWR | os.O_WRONLY | os.O_TRUNC)
+        calls.append((path, flags))
+        return real_open(path, flags, *args, **kwargs)
+
+    def refuse_write(*_args, **_kwargs):
+        pytest.fail('read-only proof attempted a filesystem write or permission change')
+
+    monkeypatch.setattr(os, 'open', read_open)
+    for name in ('fchmod', 'chmod', 'mkdir'):
+        monkeypatch.setattr(os, name, refuse_write)
+    linux.require_existing_authority_binding({'channel': 'test', 'selection': {
+        'binding_id': target.selected.binding_id, 'root': target.selected.root,
+        'ownership_root': target.selected.ownership_root}, 'registry_path': str(target.registry.path)})
+    assert len(calls) >= 2
+    assert all((path.read_bytes(), path.stat().st_mode, path.stat().st_uid, path.stat().st_gid) == state
+               for path, state in before.items())
 
 
 @pytest.mark.parametrize('mount_mode', ['alias', 'same-path'])
