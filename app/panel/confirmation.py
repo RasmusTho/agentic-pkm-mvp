@@ -862,9 +862,9 @@ class PanelConfirmationService:
         emitted_events = list(result.emitted_events or [])
         events = [_event_name(e) for e in emitted_events]
 
-        # Classify outcome: if all checked actions were logged (not triggered), surface as logged.
+        # Execution requires a checked action that actually triggered. Empty
+        # results and no-match/log events record a decision, not execution.
         checked_actions = [a for a in result.actions if a.checked]
-        all_logged = bool(checked_actions) and all(a.status == "logged" for a in checked_actions)
         any_triggered = any(a.status == "triggered" for a in checked_actions)
 
         now_iso = datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
@@ -873,7 +873,7 @@ class PanelConfirmationService:
         correction_note = "corrected" if is_corrected else None
         receipt_id: str | None
 
-        if all_logged and not any_triggered:
+        if not any_triggered:
             # Logged outcome: emit panel.action.logged if not already present
             if "panel.action.logged" not in events:
                 receipt_id = _emit_projection_event(

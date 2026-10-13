@@ -10,6 +10,7 @@ import json
 import pathlib
 import time
 from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,6 +19,8 @@ import app.panel.confirmation as confirm_module
 from app.api.app import app
 from app.events.panel import NoteRef, PanelInfo, PanelIntentEvent, PanelIntentPayload
 from app.panel.confirmation import StagedProposal
+from app.agents.panel_agent.runtime import PanelRuntimeResult
+from app.events.panel import PanelRuntimeActionResult
 from app.write_guard import WritesBlockedError
 
 
@@ -72,9 +75,14 @@ def _stage(
 
 def _mock_execute(monkeypatch, events: list[str] | None = None) -> MagicMock:
     events = events or ["panel.intent.executed"]
-    mock_result = MagicMock()
-    mock_result.emitted_events = [{"event": e} for e in events]
-    mock_fn = MagicMock(return_value=mock_result)
+    def execute(intent: PanelIntentEvent) -> PanelRuntimeResult:
+        return PanelRuntimeResult(
+            intent=intent,
+            actions=[PanelRuntimeActionResult(id="typed-api-fixture", label="Declared triggered fixture",
+                                             checked=True, status="triggered")],
+            emitted_events=[SimpleNamespace(event=e) for e in events],
+        )
+    mock_fn = MagicMock(side_effect=execute)
     monkeypatch.setattr(confirm_module, "execute_panel_intent", mock_fn)
     return mock_fn
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from tests.companion_ui.rendered_html import elements_with_test_id
 
 from companion_ui.panel.render_model import PANEL_STATES_REQUIRED
 from companion_ui.workspace.real_note_workspace_dev_page import (
@@ -128,7 +129,7 @@ def test_proposal_rows_rendered() -> None:
         ],
     })
 
-    assert html.count('data-testid="workspace-panel-proposal-row"') == 2
+    assert len(elements_with_test_id(html, "workspace-panel-proposal-row")) == 2
     assert "Move note to Projects" in html
     assert "Add follow-up reminder" in html
     assert "Project tag detected" in html

@@ -2,12 +2,15 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from contextlib import contextmanager, nullcontext
@@ -649,9 +652,290 @@ def test_targeted_remote_cleanup_uses_github_token_fallback_without_config(
     assert git_hygiene._github_auth_token() == "github-actions-token"
 
 
+_GH_DIAGNOSTIC_KEYS = (
+    "GH_CONFIG_DIR",
+    "GH_HOST",
+    "GH_HTTP_UNIX_SOCKET",
+    "GH_REPO",
+    "GITHUB_API_URL",
+    "GITHUB_GRAPHQL_URL",
+    "GITHUB_SERVER_URL",
+    "XDG_CONFIG_HOME",
+    "GH_ENTERPRISE_TOKEN",
+    "GH_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GITHUB_TOKEN",
+)
+
+
+def _gh_binary_name(raw_path):
+    # Directory components and unexpected basenames can themselves be secret.
+    # Keep only a fixed label for the expected program, never raw path data.
+    if not isinstance(raw_path, (str, Path)):
+        return None
+    return "gh" if Path(raw_path).name == "gh" else "other"
+
+
+def _gh_child_diagnostic(argv, environment):
+    # Values and captured child output must never enter failure diagnostics.
+    if not isinstance(environment, dict) or not isinstance(argv, (list, tuple)):
+        return {"status": "unavailable"}, None
+    record = {
+        "status": "observed",
+        "authority_keys_present": {key: key in environment for key in _GH_DIAGNOSTIC_KEYS},
+        "expected_api_argv": argv
+        == ["gh", "api", "--hostname", "github.com", "--method", "GET", "meta"],
+    }
+    if argv and isinstance(argv[0], str):
+        record["resolved_binary"] = _gh_binary_name(
+            shutil.which(argv[0], path=os.pathsep.join(os.get_exec_path(environment)))
+        )
+    raw_config = environment.get("GH_CONFIG_DIR")
+    config = Path(raw_config) if isinstance(raw_config, str) else None
+    # Inspect only the production helper's temporary directory shape, never
+    # an ambient or attacker-selected user configuration directory.
+    private = bool(
+        config is not None
+        and config.parent.resolve() == Path(tempfile.gettempdir()).resolve()
+        and re.fullmatch(r"git-hygiene-gh-[A-Za-z0-9_-]+", config.name)
+        and not config.is_symlink()
+    )
+    record["private_config_shape"] = private
+    if private:
+        identity = config.stat()
+        record["config_mode_0700"] = identity.st_mode & 0o777 == 0o700
+        record["config_empty"] = next(config.iterdir(), None) is None
+        record["config_device"] = identity.st_dev
+        record["config_inode"] = identity.st_ino
+        return record, config
+    return record, None
+
+
+@contextmanager
+def _observe_gh_transport(monkeypatch, evidence):
+    original_popen = subprocess.Popen
+    private_configs = []
+
+    def observed_popen(*args, **kwargs):
+        try:
+            record, config = _gh_child_diagnostic(
+                args[0] if args else kwargs.get("args"), kwargs.get("env")
+            )
+        except Exception:
+            record, config = {"status": "unavailable"}, None
+        record["launch_status"] = "not_returned"
+        evidence.append(record)
+        # Forward exactly the original positional/keyword arguments. The
+        # constructor result and launch exception retain their original identity.
+        process = original_popen(*args, **kwargs)
+        record["launch_status"] = "created"
+        try:
+            pid = process.pid
+            record["pid"] = pid if type(pid) is int and pid > 0 else None
+            record["executed_binary"] = (
+                _gh_binary_name(Path(f"/proc/{pid}/exe").readlink())
+                if record["pid"] is not None
+                else None
+            )
+        except Exception:
+            record["executed_binary"] = None
+        if config is not None:
+            private_configs.append((record, config))
+        return process
+
+    with monkeypatch.context() as observer_patch:
+        observer_patch.setattr(subprocess, "Popen", observed_popen)
+        try:
+            yield
+        finally:
+            for record, config in private_configs:
+                try:
+                    record["config_removed_after_call"] = not config.exists()
+                except Exception:
+                    record["config_removed_after_call"] = None
+
+
+def _gh_peer_identity(connection):
+    if not hasattr(socket, "SO_PEERCRED"):
+        return {"status": "unavailable", "pid": None}
+    try:
+        credentials = connection.getsockopt(
+            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+        )
+        pid, _, _ = struct.unpack("3i", credentials)
+    except Exception:
+        return {"status": "unavailable", "pid": None}
+    return {"status": "observed", "pid": pid}
+
+
+def _gh_cli_version():
+    try:
+        result = subprocess.run(
+            ["gh", "--version"], check=False, capture_output=True, text=True, timeout=5
+        )
+        # Emit only a recognized numeric version; arbitrary stdout/stderr may
+        # be secret-bearing or come from an unexpected executable.
+        if result.returncode != 0 or not isinstance(result.stdout, str):
+            return None
+        match = re.match(
+            r"\Agh version ([0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4})(?:[ \n]|$)", result.stdout
+        )
+        return match.group(1) if match else None
+    except Exception:
+        return None
+
+
+def _gh_caller_diagnostic():
+    expected_file = Path(__file__).resolve().parents[2] / "scripts/git_hygiene.py"
+    try:
+        code = git_hygiene._github_get.__code__
+        return {
+            "module_matches_expected": git_hygiene.__name__ == "scripts.git_hygiene",
+            "module_file_matches_checkout": git_hygiene.__file__ == str(expected_file),
+            "callable_file_matches_checkout": code.co_filename == str(expected_file),
+            "callable_code_sha256": hashlib.sha256(code.co_code).hexdigest(),
+            "source_sha256": hashlib.sha256(expected_file.read_bytes()).hexdigest(),
+        }
+    except Exception:
+        return {"status": "unavailable"}
+
+
+def test_gh_transport_observer_preserves_real_process(tmp_path, monkeypatch) -> None:
+    arguments = [sys.executable, "-c", "import sys; print('actual-child'); sys.exit(3)"]
+    environment = {"PATH": os.defpath, "GH_TOKEN": "secret-control-token"}
+    evidence = []
+    original_popen = subprocess.Popen
+    with _observe_gh_transport(monkeypatch, evidence):
+        result = subprocess.run(
+            arguments, env=environment, cwd=tmp_path, capture_output=True, text=True, check=False
+        )
+    assert result.returncode == 3
+    assert result.stdout == "actual-child\n"
+    assert len(evidence) == 1 and evidence[0]["pid"] > 0
+    assert subprocess.Popen is original_popen
+    assert environment == {"PATH": os.defpath, "GH_TOKEN": "secret-control-token"}
+
+    # An unavailable diagnostic still forwards the real child unchanged.
+    def unavailable(*args):
+        raise ValueError("secret-control-token")
+
+    monkeypatch.setattr(sys.modules[__name__], "_gh_child_diagnostic", unavailable)
+    evidence = []
+    with _observe_gh_transport(monkeypatch, evidence):
+        result = subprocess.run(
+            arguments, env=environment, cwd=tmp_path, capture_output=True, text=True, check=False
+        )
+    assert result.returncode == 3 and result.stdout == "actual-child\n"
+    assert evidence[0]["status"] == "unavailable"
+    assert "secret-control-token" not in json.dumps(evidence)
+    with _observe_gh_transport(monkeypatch, evidence):
+        with pytest.raises(FileNotFoundError):
+            subprocess.run([str(tmp_path / "absent-child")], env=environment, check=False)
+    assert subprocess.Popen is original_popen
+
+
+@pytest.mark.parametrize("path_surface", ["resolved", "executed"])
+def test_gh_transport_diagnostics_exclude_secret_values(
+    tmp_path, monkeypatch, path_surface
+) -> None:
+    token = "secret-control-token"
+    private_value = "private-config-control-value"
+    environment = {key: token for key in _GH_DIAGNOSTIC_KEYS}
+    environment["GH_CONFIG_DIR"] = str(tmp_path / private_value)
+    environment["UNRELATED_SECRET"] = private_value
+    record, config = _gh_child_diagnostic(["gh"], environment)
+    assert config is None and record["private_config_shape"] is False
+    assert set(record["authority_keys_present"]) == set(_GH_DIAGNOSTIC_KEYS)
+    assert set(record["authority_keys_present"].values()) == {True}
+    assert token not in json.dumps(record) and private_value not in json.dumps(record)
+    assert _gh_child_diagnostic(["gh"], None) == ({"status": "unavailable"}, None)
+    private_directory = tmp_path / private_value
+    private_directory.mkdir()
+    (private_directory / "gh").symlink_to(shutil.which("gh"))
+    (private_directory / private_value).symlink_to(shutil.which("gh"))
+    if path_surface == "resolved":
+        private_path_environment = dict(environment, PATH=str(private_directory))
+        path_record, _ = _gh_child_diagnostic(["gh"], private_path_environment)
+        assert private_value not in json.dumps(path_record)
+        name_record, _ = _gh_child_diagnostic([private_value], private_path_environment)
+        assert name_record["resolved_binary"] == "other"
+        assert private_value not in json.dumps(name_record)
+    else:
+        # Double only kernel metadata. The constructor and child stay real.
+        with monkeypatch.context() as kernel_metadata:
+            kernel_metadata.setattr(
+                Path, "readlink", lambda self: private_directory / private_value
+            )
+            child_evidence = []
+            with _observe_gh_transport(monkeypatch, child_evidence):
+                child = subprocess.run(
+                    [sys.executable, "-c", "print('actual-child')"],
+                    env={"PATH": os.defpath},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            assert child.returncode == 0 and child.stdout == "actual-child\n"
+            assert private_value not in json.dumps(child_evidence)
+    malformed = dict(environment, GH_CONFIG_DIR=[])
+    observed, retained_config = _gh_child_diagnostic(["gh"], malformed)
+    assert retained_config is None and observed["private_config_shape"] is False
+
+    with tempfile.TemporaryDirectory(prefix="git-hygiene-gh-") as raw_config:
+        config = Path(raw_config)
+        config.chmod(0o700)
+        observed, retained_config = _gh_child_diagnostic(["gh"], {"GH_CONFIG_DIR": raw_config})
+        assert retained_config == config
+        assert observed["config_empty"] is True and observed["config_mode_0700"] is True
+        (config / "synthetic.yml").write_text(private_value, encoding="utf-8")
+        observed, _ = _gh_child_diagnostic(["gh"], {"GH_CONFIG_DIR": raw_config})
+        assert observed["config_empty"] is False
+        assert private_value not in json.dumps(observed)
+        link = config.parent / (config.name + "-link")
+        link.symlink_to(config, target_is_directory=True)
+        try:
+            observed, _ = _gh_child_diagnostic(["gh"], {"GH_CONFIG_DIR": str(link)})
+            assert observed["private_config_shape"] is False
+        finally:
+            link.unlink()
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, token, private_value),
+    )
+    assert _gh_cli_version() is None
+    monkeypatch.setattr(
+        subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, None)
+    )
+    assert _gh_cli_version() is None
+
+
+def test_gh_transport_peer_identity_is_explicit(monkeypatch) -> None:
+    left, right = socket.socketpair()
+    try:
+        identity = _gh_peer_identity(left)
+        if hasattr(socket, "SO_PEERCRED"):
+            assert identity == {"status": "observed", "pid": os.getpid()}
+        else:
+            assert identity == {"status": "unavailable", "pid": None}
+    finally:
+        left.close()
+        right.close()
+    monkeypatch.delattr(socket, "SO_PEERCRED", raising=False)
+    assert _gh_peer_identity(None) == {"status": "unavailable", "pid": None}
+
+
 def test_targeted_remote_cleanup_installed_gh_ignores_configured_unix_socket(
     tmp_path, monkeypatch
 ) -> None:
+    peer_identities = []
+    child_diagnostics = []
+    diagnostics = {
+        "gh_version": _gh_cli_version(),
+        "caller": _gh_caller_diagnostic(),
+        "children": child_diagnostics,
+        "socket_peers": peer_identities,
+    }
     attacker_config = tmp_path / "attacker-gh-config"
     attacker_config.mkdir(mode=0o700)
     attacker_socket = Path("/tmp") / f"gh-r9-{os.getpid()}-{time.time_ns()}.sock"
@@ -686,6 +970,7 @@ def test_targeted_remote_cleanup_installed_gh_ignores_configured_unix_socket(
             except OSError:
                 return
             connections.append(True)
+            peer_identities.append(_gh_peer_identity(connection))
             body = b'{"attacker":true}'
             connection.sendall(
                 b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
@@ -705,7 +990,8 @@ def test_targeted_remote_cleanup_installed_gh_ignores_configured_unix_socket(
 
     payload: object | None = None
     try:
-        payload = git_hygiene._github_get(tmp_path, "meta")
+        with _observe_gh_transport(monkeypatch, child_diagnostics):
+            payload = git_hygiene._github_get(tmp_path, "meta")
     except RuntimeError as exc:
         assert str(exc) == "github_get_failed:meta"
     finally:
@@ -713,9 +999,20 @@ def test_targeted_remote_cleanup_installed_gh_ignores_configured_unix_socket(
         server.close()
         thread.join(timeout=2)
         attacker_socket.unlink(missing_ok=True)
+        # Pytest retains this safe evidence on failure; do not expose the
+        # response body, error text, or any environment/configuration values.
+        print("gh-transport-diagnostic=" + json.dumps(diagnostics, sort_keys=True))
 
     assert connections == []
     assert not (isinstance(payload, dict) and payload.get("attacker") is True)
+    assert len(child_diagnostics) == 1
+    child = child_diagnostics[0]
+    assert child["expected_api_argv"] is True and child["pid"] > 0
+    assert child["private_config_shape"] is True and child["config_empty"] is True
+    assert child["config_mode_0700"] is True and child["config_removed_after_call"] is True
+    assert child["authority_keys_present"] == {
+        key: key in {"GH_CONFIG_DIR", "GH_TOKEN"} for key in _GH_DIAGNOSTIC_KEYS
+    }
 
 
 def test_targeted_remote_cleanup_rereads_lifecycle_before_archive(tmp_path, monkeypatch) -> None:
