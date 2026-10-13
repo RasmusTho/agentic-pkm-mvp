@@ -85,8 +85,19 @@ def test_fixed_entrypoint_owns_manifest_and_refuses_caller_control(tmp_path, mon
     monkeypatch.setattr(runners, 'NativeJournalingRunner', lambda *args, **kwargs: (
         calls.append(kwargs) or SimpleNamespace(verify=lambda: {**runner.identity, 'result': 'refused',
             'reason': 'actual_product_provider_references_unavailable', 'cleanup': 'confirmed'})))
+    published = []
+    original_publish, original_fsync = journaling.private_json, os.fsync
+    def publish(path, value):
+        original_publish(path, value)
+        published.append(path)
+    def sync_before_publication(descriptor):
+        assert not published, 'no fallible sync after complete terminal publication'
+        original_fsync(descriptor)
+    monkeypatch.setattr(journaling, 'private_json', publish)
+    monkeypatch.setattr(os, 'fsync', sync_before_publication)
     outcome = effects.qualify_journaling(operation)
-    assert outcome['result'] == 'refused' and len(calls) == 1
+    assert outcome['result'] == 'refused' and len(calls) == 1 and len(published) == 1
+    monkeypatch.setattr(os, 'fsync', original_fsync)
     assert calls[0] == {'sha': plan.revision, 'digest': DIGEST, 'channel': 'test', 'operation_id': operation}
     assert journal.read().pg_acceptance == _result(plan.revision, 'test', operation)
     for key in ('command', 'profile', 'selector', 'fixture_path', 'provider', 'effect_budget', 'manifest'):
@@ -291,17 +302,19 @@ def test_unknown_relay_cleanup_never_retires_channel_admission(request, tmp_path
 def test_terminal_fsync_failure_leaves_no_pass_file(tmp_path, monkeypatch):
     target = tmp_path / 'terminal.json'
     original = os.fsync
-    for fail_at in (1, 2):
+    for fail_at, failure in ((1, OSError), (2, OSError), (2, KeyboardInterrupt)):
         calls = []
         def fail(descriptor):
             calls.append(descriptor)
             if len(calls) == fail_at:
-                raise OSError('injected durability failure')
+                raise failure('injected durability failure')
             return original(descriptor)
         with monkeypatch.context() as context:
             context.setattr(journaling.os, 'fsync', fail)
-            with pytest.raises(OSError):
+            with pytest.raises(failure):
                 journaling.private_json(target, {'result': 'passed', 'cleanup': 'confirmed'})
+        if fail_at == 2:
+            assert len(calls) == 3  # Durable invalidation after publication failure.
         assert not target.exists() and not list(tmp_path.glob('.terminal.json.*'))
     journaling.private_json(target, {'result': 'refused'})
     assert json.loads(target.read_text()) == {'result': 'refused'}
@@ -473,3 +486,82 @@ def test_provider_relay_unknown_worker_exit_is_never_complete():
         relay.__exit__()
     with pytest.raises(web.NativeWebRefusal, match='transport_incomplete'):
         relay.readback()
+
+
+def test_interrupted_relay_and_fresh_runner_keep_exact_owner_admission(tmp_path, monkeypatch):
+    runner, boundary = _runner(tmp_path, monkeypatch)
+    runner.resources(IMAGE_ID)
+    process = {'pid': 123, 'boot_id': str(uuid4()), 'start_ticks': '100'}
+    monkeypatch.setattr(runners, 'process_identity', lambda _pid: process)
+    monkeypatch.setattr(transport, 'process_identity', lambda _pid: process)
+    runner._relay_owner()
+    relay = transport.ProviderRelay(0, 'https://10.0.0.8:8123')
+    closed = []
+    def interrupted(**kwargs):
+        raise KeyboardInterrupt()
+    relay.worker = SimpleNamespace(join=interrupted, is_alive=lambda: True)
+    relay.listener = SimpleNamespace(close=lambda: closed.append(True))
+    with pytest.raises(KeyboardInterrupt):
+        relay.__exit__()
+    assert closed == [True] and not relay.cleanup_confirmed
+    recovered = runners.NativeJournalingRunner(runner.repository, tmp_path / 'journal',
+        sha=runner.identity['source_sha'], digest=DIGEST, channel='test', operation_id=runner.identity['operation_id'])
+    monkeypatch.setattr(recovered, '_docker', boundary.command)
+    assert recovered.identity == runner.identity
+    with pytest.raises(web.NativeWebRefusal, match='cleanup_unknown'):
+        recovered.cleanup()
+    assert runner.marker.exists() and (runner.directory / 'relay-owner.json').exists()
+    # Kernel readback proves the exact owner departed; never kill by PID.
+    monkeypatch.setattr(transport, 'process_identity', lambda _pid: None)
+    recovered.cleanup()
+    assert not runner.marker.exists() and not runner.directory.exists()
+
+
+def test_deadline_exhaustion_cannot_consume_late_pass_logs(tmp_path, monkeypatch):
+    runner, boundary = _runner(tmp_path, monkeypatch)
+    refs = {transport.REFERENCE_KEYS[0]: 'https://10.0.0.8:8123'}
+    for key in transport.REFERENCE_KEYS[1:]:
+        source = tmp_path / key
+        source.write_text('unit-only certificate fixture')
+        refs[key] = str(source)
+    monkeypatch.setattr(runners, 'selected_references', lambda: refs)
+    native_owner = {'pid': 123, 'boot_id': str(uuid4()), 'start_ticks': '100'}
+    monkeypatch.setattr(runners, 'process_identity', lambda _pid: native_owner)
+    namespace_file = tmp_path / 'namespace-inode'
+    namespace_file.write_text('unit-only inode identity; no namespace effects')
+    original_open, original_stat, original_docker = os.open, os.stat, runner._docker
+    monkeypatch.setattr(runners.os, 'open', lambda path, *args, **kwargs:
+        original_open(namespace_file if path == '/var/run/docker/netns/unit' else path, *args, **kwargs))
+    monkeypatch.setattr(runners.os, 'stat', lambda path, *args, **kwargs:
+        original_stat(namespace_file if path == '/proc/123/ns/net' else path, *args, **kwargs))
+    class QuietRelay:
+        cleanup_confirmed = False
+        def __init__(self, *args):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.cleanup_confirmed = True
+    monkeypatch.setattr(runners, 'ProviderRelay', QuietRelay)
+    def docker(*args, timeout=60):
+        if args[:2] == ('start', '--attach'):
+            raise pg.PgAcceptanceDeadlineExceeded()
+        if args[0] == 'logs':
+            pytest.fail('deadline must never substitute late PASS logs')
+        output = original_docker(*args, timeout=timeout)
+        if args[0] == 'create':
+            name = args[args.index('--name') + 1]
+            row = boundary.containers[name]
+            row['HostConfig']['SecurityOpt'] = ['no-new-privileges']
+            if name.endswith('-tests'):
+                row['Config']['Entrypoint'] = ['/usr/bin/env']
+                row['Config']['Cmd'] = list(args[args.index(runner.image) + 1:])
+            else:
+                row['State'] = {'Pid': 123, 'Running': True}
+                row['NetworkSettings'] = {'SandboxKey': '/var/run/docker/netns/unit'}
+        return output
+    monkeypatch.setattr(runner, '_docker', docker)
+    outcome = runner.verify()
+    assert outcome['result'] == 'refused' and outcome['reason'] == 'journaling_deadline_exceeded'
+    assert outcome['cleanup'] == 'confirmed' and not boundary.containers
+    assert not runner.marker.exists() and not runner.directory.exists()

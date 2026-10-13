@@ -16,6 +16,7 @@ from threading import Event, Thread
 import time
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from app.ops.native_web_acceptance import NativeWebRefusal
 from app.ops.pg_acceptance_runner import _command
@@ -26,6 +27,39 @@ DEADLINE = 1800
 REFERENCE_FILE = Path('/etc/yggdrasil/model-access/runtime.env')
 REFERENCE_KEYS = ('MODEL_ACCESS_CODEX_VLAN_ENDPOINT', 'MODEL_ACCESS_CODEX_VLAN_CA_BUNDLE',
                   'MODEL_ACCESS_CODEX_VLAN_CLIENT_CERT', 'MODEL_ACCESS_CODEX_VLAN_CLIENT_KEY')
+
+
+def process_identity(pid: int) -> dict[str, Any] | None:
+    """Read-only Linux owner identity; never use a PID to kill or authorize effects."""
+    if type(pid) is not int or pid < 1:
+        raise NativeWebRefusal('native_provider_owner_identity_unknown')
+    try:
+        boot = str(UUID(Path('/proc/sys/kernel/random/boot_id').read_text().strip()))
+        fields = Path('/proc/' + str(pid) + '/stat').read_text().rsplit(') ', 1)[1].split()
+        started = fields[19]
+        if not started.isdecimal():
+            raise ValueError()
+        return {'pid': pid, 'boot_id': boot, 'start_ticks': started}
+    except FileNotFoundError:
+        # Only an absent exact proc entry proves that owner no longer exists.
+        if Path('/proc/sys/kernel/random/boot_id').exists():
+            return None
+        raise NativeWebRefusal('native_provider_owner_identity_unknown') from None
+    except Exception:
+        raise NativeWebRefusal('native_provider_owner_identity_unknown') from None
+
+
+def owner_alive(proof: Any) -> bool:
+    if (not isinstance(proof, dict) or set(proof) != {'pid', 'boot_id', 'start_ticks'}
+        or type(proof['pid']) is not int or proof['pid'] < 1
+        or not isinstance(proof['start_ticks'], str) or not proof['start_ticks'].isdecimal()):
+        raise NativeWebRefusal('native_provider_owner_identity_unknown')
+    try:
+        if str(UUID(proof['boot_id'])) != proof['boot_id']:
+            raise ValueError()
+    except (ValueError, TypeError, AttributeError):
+        raise NativeWebRefusal('native_provider_owner_identity_unknown') from None
+    return process_identity(proof['pid']) == proof
 
 
 def selected_references() -> dict[str, str]:
@@ -72,6 +106,7 @@ class ProviderRelay(AbstractContextManager['ProviderRelay']):
         self.namespace_fd = namespace_fd
         self.stop = Event()
         self.failed = False
+        self.cleanup_confirmed = False
         self.connections = 0
         self.bytes = 0
         self.worker: Thread | None = None
@@ -140,13 +175,16 @@ class ProviderRelay(AbstractContextManager['ProviderRelay']):
 
     def __exit__(self, *args: Any) -> None:
         self.stop.set()
-        if self.worker is not None:
-            self.worker.join(timeout=12)
-        if self.listener is not None:
-            self.listener.close()
+        try:
+            if self.worker is not None:
+                self.worker.join(timeout=12)
+        finally:
+            if self.listener is not None:
+                self.listener.close()
         if self.worker is not None and self.worker.is_alive():
             self.failed = True
             raise NativeWebRefusal('native_provider_transport_cleanup_unknown')
+        self.cleanup_confirmed = True
 
     def readback(self) -> dict[str, Any]:
         if self.failed or self.connections < 1:

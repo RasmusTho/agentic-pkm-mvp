@@ -1224,11 +1224,6 @@ class LinuxEffects:
             or any(path.is_symlink() for path in (directory, *directory.parents))):
             raise NativeWebRefusal('journaling_evidence_directory_unqualified')
         private_json(directory / (operation_id + '-' + result['resource_generation'] + '.json'), result)
-        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
         return result
 
     def run_journaling_qualification(self, operation_id: str) -> dict[str, Any]:

@@ -675,6 +675,11 @@ leaves no consumable PASS artifact. Complete owner-preparing proofs recover the 
 generation across pre-rename crashes. Unknown relay worker exit remains unknown cleanup even
 after container removal, preserving admission for same-operation recovery. Journaling refusals
 have independent profile and cleanup attribution.
+An exact operation/generation-bound private relay proof records Linux boot/PID/start-time before
+listener effects. Interrupted teardown and fresh-runner retries preserve admission while that
+native owner remains live or unknown; only proved departure permits recovery, never a PID kill.
+Deadline exhaustion cannot accept late PASS logs. Terminal publication owns durable interruption
+invalidation and has no fallible sync or temporary cleanup after its acknowledgement.
 
 Repository delivery proves this mechanism only. The parent #3347 owner must invoke it after merge
 against the admitted TEST image and post the redaction-safe all-PASS or attributable refusal

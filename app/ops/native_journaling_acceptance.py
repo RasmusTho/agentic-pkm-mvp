@@ -54,23 +54,31 @@ def private_json(path: Path, value: Any) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         # Hard-link publication is atomic and refuses an existing final name.
+        staged = temporary.lstat()
         os.link(temporary, path, follow_symlinks=False)
         published = True
+        temporary.unlink()
         parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
             os.fsync(parent)
         finally:
             os.close(parent)
-    except Exception:
-        if published:
-            # Only the exact link just published can be invalidated on a failed
-            # durability acknowledgement; never remove a replaced/foreign file.
-            named, staged = path.lstat(), temporary.lstat()
-            if (named.st_dev, named.st_ino) == (staged.st_dev, staged.st_ino):
-                path.unlink()
+    except BaseException:
+        try:
+            if published:
+                # Only the exact link just published can be invalidated on a
+                # failed acknowledgement; never remove a replaced/foreign file.
+                named = path.lstat()
+                if (named.st_dev, named.st_ino) == (staged.st_dev, staged.st_ino):
+                    path.unlink()
+                    parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        os.fsync(parent)
+                    finally:
+                        os.close(parent)
+        finally:
+            temporary.unlink(missing_ok=True)
         raise
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def file_hash(path: Path) -> str:

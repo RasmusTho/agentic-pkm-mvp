@@ -633,6 +633,12 @@ Terminal evidence is fsynced before atomic no-overwrite publication; a failed pu
 no consumable PASS file. A complete pre-rename owner-preparing proof recovers its exact generation,
 while malformed pre-owner bytes can only be retired when no durable resource exists. Foreign
 proofs remain preserved. Journaling refusals retain their own profile and cleanup attribution.
+Relay uncertainty is durable: an operation/generation-bound private proof records the native
+owner's Linux boot/PID/start-time identity before listener effects. Interrupted teardown or a
+fresh runner preserves admission until the exact owner is proved departed; no PID is killed.
+Deadline exhaustion refuses even if late container logs contain PASS. Terminal interruption
+invalidates only its own published inode and syncs absence, with no fallible cleanup after the
+publication acknowledgement.
 
 ### Nightly deterministic acceptance harness
 

@@ -14,12 +14,12 @@ from uuid import UUID, uuid4
 from xml.etree import ElementTree
 
 from app.ops.native_journaling_acceptance import (
-    DEADLINE, PROFILE, SELECTION_HASH, WRAPPER, identity, require_report, require_result,
+    DEADLINE, PROFILE, SELECTION_HASH, WRAPPER, identity, private_json, require_report, require_result,
 )
-from app.ops.native_journaling_transport import ProviderRelay, REFERENCE_KEYS, selected_references
+from app.ops.native_journaling_transport import ProviderRelay, REFERENCE_KEYS, owner_alive, process_identity, selected_references
 from app.ops.native_web_acceptance import NativeWebRefusal, hash_json
 from app.ops.native_web_acceptance_runner import NativeWebRunner
-from app.ops.pg_acceptance import POSTGRES_IMAGE, PgAcceptanceError
+from app.ops.pg_acceptance import POSTGRES_IMAGE, PgAcceptanceDeadlineExceeded, PgAcceptanceError
 from app.ops.pg_acceptance_runner import PgAcceptanceRunner, RESOURCE_PATHS
 
 
@@ -53,6 +53,43 @@ class NativeJournalingRunner(NativeWebRunner):
                 generation = owner['resource_generation']
         self.identity['resource_generation'] = generation
         self.labels = {'io.yggdrasil.journaling.' + key: value for key, value in self.identity.items()}
+
+    def cleanup(self) -> None:
+        proof = self.directory / 'relay-owner.json'
+        if proof.exists() or proof.is_symlink():
+            self._require_parent()
+            self._require_directory()
+            if self._owner() != self.identity:
+                raise NativeWebRefusal('foreign_resource_owner')
+            self._regular_marker(proof)
+            owner = json.loads(proof.read_text())
+            if (not isinstance(owner, dict) or set(owner) != {'identity', 'process'}
+                or owner['identity'] != self.identity):
+                raise NativeWebRefusal('foreign_resource_owner')
+            if owner_alive(owner['process']):
+                raise NativeWebRefusal('native_provider_transport_cleanup_unknown')
+            # A departed exact boot/PID/start-time owner cannot retain its
+            # listener or worker. No PID-based termination is ever attempted.
+        super().cleanup()
+
+    def _relay_owner(self) -> None:
+        owner = process_identity(os.getpid())
+        if owner is None:
+            raise NativeWebRefusal('native_provider_owner_identity_unknown')
+        self.relay_owner = {'identity': dict(self.identity), 'process': owner}
+        private_json(self.directory / 'relay-owner.json', self.relay_owner)
+
+    def _relay_retired(self) -> None:
+        proof = self.directory / 'relay-owner.json'
+        self._regular_marker(proof)
+        if json.loads(proof.read_text()) != self.relay_owner:
+            raise NativeWebRefusal('foreign_resource_owner')
+        proof.unlink()
+        descriptor = os.open(self.directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     def resources(self, app_image_id: str) -> dict[str, Any]:
         # Reuse the exact-SHA native source producer, including baked config/schema
@@ -215,11 +252,19 @@ class NativeJournalingRunner(NativeWebRunner):
                 or reread is None or reread['Id'] != database or reread.get('State') != db['State']
                 or reread.get('NetworkSettings', {}).get('SandboxKey') != sandbox):
                 raise NativeWebRefusal('database_namespace_identity_drift')
-            with ProviderRelay(namespace, provider[REFERENCE_KEYS[0]]) as relay:
-                try:
-                    output = self._docker('start', '--attach', identifier, timeout=DEADLINE).decode()
-                except PgAcceptanceError:
-                    output = self._docker('logs', '--tail', '500', identifier).decode()
+            self._relay_owner()
+            relay = ProviderRelay(namespace, provider[REFERENCE_KEYS[0]])
+            try:
+                with relay:
+                    try:
+                        output = self._docker('start', '--attach', identifier, timeout=DEADLINE).decode()
+                    except PgAcceptanceDeadlineExceeded:
+                        raise NativeWebRefusal('journaling_deadline_exceeded') from None
+                    except PgAcceptanceError:
+                        output = self._docker('logs', '--tail', '500', identifier).decode()
+            finally:
+                if relay.cleanup_confirmed:
+                    self._relay_retired()
         finally:
             os.close(namespace)
         transport = relay.readback()
