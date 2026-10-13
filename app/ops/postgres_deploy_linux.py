@@ -534,7 +534,7 @@ def require_cutover_target_config(config: LinuxConfig, selected: AuthorityCutove
     if root != selected.root:
         raise PostgresDeployError()
     for values in sources:
-        if any(value and value != '/app/vault' for key, value in values.items()
+        if any(value and value not in {selected.root, '/app/vault'} for key, value in values.items()
                if key in {'VAULT_ROOT', 'VAULT_ROOT_' + config.channel.upper(), 'WATCHER_VAULT_PATH'}):
             raise PostgresDeployError()
         owner = values.get('INSTANCE_OWNERSHIP_HOST_STATE_DIR')
@@ -875,11 +875,13 @@ class LinuxEffects:
                 raise PostgresDeployError()
             seen.add(service)
             mounts = row.get('Mounts', [])
-            for destination, source in (('/app/vault', selected.root),
-                                        ('/app/instance-ownership', env['INSTANCE_OWNERSHIP_HOST_STATE_DIR'])):
-                bound = [mount for mount in mounts if mount.get('Destination') == destination]
+            for destinations, source in (({selected.root, '/app/vault'}, selected.root),
+                                         ({'/app/instance-ownership'}, env['INSTANCE_OWNERSHIP_HOST_STATE_DIR'])):
+                bound = [mount for mount in mounts if mount.get('Destination') in destinations]
                 if len(bound) != 1 or bound[0].get('Type') != 'bind' or bound[0].get('Source') != source:
                     raise PostgresDeployError()
+                if source == selected.root:
+                    selected_destination = bound[0]['Destination']
             bound = [mount for mount in mounts if mount.get('Destination') == '/app/instance-state']
             if (len(bound) != 1 or bound[0].get('Type') != 'volume'
                 or bound[0].get('Name') != 'pkm-' + cfg.channel + '_instance-state'):
@@ -893,7 +895,7 @@ class LinuxEffects:
                 selectors[key] = value
             container_roots = [selectors.get(key, '') for key in
                                ('VAULT_ROOT', 'VAULT_ROOT_' + cfg.channel.upper(), 'WATCHER_VAULT_PATH')]
-            if (not any(container_roots) or any(value and value != '/app/vault' for value in container_roots)
+            if (not any(container_roots) or any(value and value != selected_destination for value in container_roots)
                 or selectors.get('VAULT_HOST_ROOT', selected.root) != selected.root):
                 raise PostgresDeployError()
         if not expected_services <= seen or len(registry_roots) != 1:
@@ -905,15 +907,36 @@ class LinuxEffects:
             raise PostgresDeployError()
         data = {'channel': cfg.channel, 'selection': {'binding_id': selected.binding_id, 'root': selected.root,
                                                    'ownership_root': selected.ownership_root},
-                'registry_path': str(Path(registry_root) / 'agentic-pkm/vault-registry.md')}
+                'registry_path': 'vault-registry.md'}
         # Registry/ledger are owned by the Compose runtime, not root. No protected
         # input is placed on argv or returned in the child/status diagnostics.
-        result = subprocess.run([sys.executable, '-c',
-            'import json,sys; from app.ops.postgres_deploy_linux import require_existing_authority_binding; '
-            'require_existing_authority_binding(json.load(sys.stdin))'],
-            input=json.dumps(data), text=True, cwd=cfg.root,
-            env={'PATH': os.defpath, 'PYTHONPATH': str(Path(__file__).resolve().parents[2])},
-            user=cfg.uid, group=cfg.gid, extra_groups=[], capture_output=True, check=False, timeout=30)
+        # Docker's host volume ancestry is root-private even when the mounted
+        # registry directory/files belong to the runtime UID. Open only this
+        # already-qualified directory as supervisor, then let that UID read its
+        # existing view through the inherited descriptor. No permissions/groups,
+        # content mounts or storage-mutation capability are added.
+        registry_directory = Path(registry_root) / 'agentic-pkm'
+        if any(path.is_symlink() for path in (registry_directory, *registry_directory.parents)):
+            raise PostgresDeployError()
+        descriptor = os.open(registry_directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(descriptor)
+            if info.st_uid != cfg.uid or stat.S_IMODE(info.st_mode) != 0o700:
+                raise PostgresDeployError()
+            result = subprocess.run([sys.executable, '-c',
+                'import json,os,sys; from app.ops.postgres_deploy_linux import require_existing_authority_binding; '
+                'sys.path=[path for path in sys.path if path]; '
+                'os.fchdir(int(sys.argv[1])); require_existing_authority_binding(json.load(sys.stdin))',
+                str(descriptor)],
+                input=json.dumps(data), text=True, cwd=cfg.root, pass_fds=(descriptor,),
+                env={'PATH': os.defpath, 'PYTHONPATH': str(Path(__file__).resolve().parents[2]),
+                     'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONNOUSERSITE': '1'},
+                user=cfg.uid, group=cfg.gid, extra_groups=[], capture_output=True, check=False, timeout=30)
+            current = registry_directory.stat()
+            if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                raise PostgresDeployError()
+        finally:
+            os.close(descriptor)
         if result.returncode:
             raise PostgresDeployError()
 

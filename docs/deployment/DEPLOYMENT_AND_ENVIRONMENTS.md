@@ -274,6 +274,15 @@ Native workers discard ambient MVR-01C binding/root variables and supply only th
 to the existing public stopped-window producer. That producer retains the actual all-owner
 inventory, drained-writer proof, rollback guards, deployment lease and finalization order.
 
+Qualification accepts the existing same-path content mount and the legacy `/app/vault` alias only
+when each writer's selectors match its actual mount of that exact host source. It does not rebind
+another vault. Docker's protected host volume ancestry need not be traversable to the runtime UID:
+the root supervisor opens the already-qualified instance-state directory and passes that existing
+directory descriptor to the separate runtime-UID proof child. The child reads the current private
+registry in that view, with no ancestry permission/group widening, additional mount, initialization
+or ownership recovery. Registry directory ownership/mode and identity are checked at the boundary;
+missing or changed views refuse. Proof output stays private and never establishes cutover completion.
+
 PROD, automatic and secret-bootstrap cutover requests are refused. Ordinary and automatic native
 requests retain their existing wire shape and defaults. Join, status, lost-acknowledgment recovery
 and supervisor restart require the same retained inputs. Interrupted nonterminal cutover remains

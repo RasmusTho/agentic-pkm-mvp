@@ -17,14 +17,15 @@ from app.ops import postgres_deploy_linux as linux
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
 from app.ops.postgres_deploy import AuthorityCutover, DeployJournal, DeployPlan, DeployWorker, PostgresDeployError
 from tests.helpers.instance_storage_capability import STORAGE_MUTATION_CAPABILITY
+from tests.helpers.runtime_identity import runtime_reachable_test_root
 
 
 REPO = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
-def target(tmp_path, monkeypatch):
-    tmp_path = tmp_path.resolve()
+def target(tmp_path, monkeypatch, request):
+    tmp_path = runtime_reachable_test_root(tmp_path, request).resolve()
     root = tmp_path / 'checkout'
     (root / 'config/deploy').mkdir(parents=True)
     runtime = root / 'runtime.env'
@@ -82,11 +83,13 @@ def target(tmp_path, monkeypatch):
     def run(argv, **kwargs):
         if len(argv) > 2 and 'require_existing_authority_binding' in argv[2]:
             assert kwargs['user'] == cfg.uid and kwargs['group'] == cfg.gid
-            try:
-                linux.require_existing_authority_binding(json.loads(kwargs['input']))
-            except Exception:
-                return SimpleNamespace(returncode=78)
-            return SimpleNamespace(returncode=0)
+            assert kwargs['pass_fds'] == (int(argv[3]),)
+            # The production supervisor is root. A local non-root test already
+            # has this exact UID/GID and cannot perform setgroups(2), so retain
+            # its identity while exercising the real separate proof process.
+            if os.geteuid() != 0:
+                kwargs.pop('extra_groups')
+            return real_run(argv, **kwargs)
         return real_run(argv, **kwargs)
 
     monkeypatch.setattr(linux, '_command', command)
@@ -99,11 +102,21 @@ def target(tmp_path, monkeypatch):
                            real_run=real_run)
 
 
+def _mount_mode(target, mode):
+    destination = target.selected.root if mode == 'same-path' else '/app/vault'
+    target.runtime.write_text('VAULT_ROOT=' + destination + '\nWATCHER_VAULT_PATH=' + destination + '\n')
+    for row in target.rows:
+        row['Mounts'][0]['Destination'] = destination
+        row['Config']['Env'] = ['VAULT_ROOT=' + destination, 'WATCHER_VAULT_PATH=' + destination]
+
+
 def request(plan, operation_id, action='prepare'):
     return {'action': action, 'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': False}
 
 
-def test_native_cutover_admission_freezes_exact_inputs_and_refuses_changed_request(target, monkeypatch):
+@pytest.mark.parametrize('mount_mode', ['alias', 'same-path'])
+def test_native_cutover_admission_freezes_exact_inputs_and_refuses_changed_request(target, monkeypatch, mount_mode):
+    _mount_mode(target, mount_mode)
     cfg, plan = target.cfg, target.plan
     effects = linux.LinuxEffects(cfg)
     monkeypatch.setattr(linux, 'LinuxEffects', lambda _: effects)
@@ -189,7 +202,9 @@ prepare_instance_state_deployment fake_compose test
     return event_log.read_text().splitlines()
 
 
-def test_native_worker_uses_frozen_cutover_only_in_stopped_window(target, monkeypatch):
+@pytest.mark.parametrize('mount_mode', ['alias', 'same-path'])
+def test_native_worker_uses_frozen_cutover_only_in_stopped_window(target, monkeypatch, mount_mode):
+    _mount_mode(target, mount_mode)
     cfg, plan = target.cfg, target.plan
     identifier = str(uuid4())
     cfg.journal.bind_request(identifier, plan, False, create=True)
@@ -253,6 +268,11 @@ def test_native_cutover_requires_existing_qualified_binding_before_effects(targe
     with pytest.raises(PostgresDeployError):
         effects.validate_plan(target.plan)
     target.rows[1]['Mounts'][0]['Source'] = original
+    original_destination = target.rows[1]['Mounts'][0]['Destination']
+    target.rows[1]['Mounts'][0]['Destination'] = str(target.vault)
+    with pytest.raises(PostgresDeployError):
+        effects.validate_plan(target.plan)  # Selector and actual destination disagree.
+    target.rows[1]['Mounts'][0]['Destination'] = original_destination
     local = target.vault / 'settings/local.md'
     before = local.read_bytes()
     local.write_text('---\nlocalInstanceId: conflicting\n---\n')
@@ -291,6 +311,97 @@ def test_cutover_admission_refuses_pending_ownership_rotation_without_recovery(t
     with pytest.raises(PostgresDeployError):
         effects.validate_plan(target.plan)
     assert not target.ledger.lock_path.exists()
+
+
+def test_runtime_uid_reads_existing_registry_view_without_host_ancestry_access(target, monkeypatch):
+    """Run the real proof child against inaccessible ancestry, without chmod repair."""
+    engine = target.cfg.root.parent / 'protected-engine'
+    engine.mkdir(mode=0o700)
+    volume = target.registry.path.parent.parent.rename(engine / 'volume')
+    target.registry = VaultRegistryStore(volume / 'agentic-pkm/vault-registry.md')
+    for row in target.rows:
+        row['Mounts'][2]['Source'] = str(volume)
+    original_command = target.command
+
+    def command(argv, **kwargs):
+        if argv[:3] == ['docker', 'volume', 'inspect']:
+            return json.dumps([{'Mountpoint': str(volume)}])
+        return original_command(argv, **kwargs)
+
+    monkeypatch.setattr(linux, '_command', command)
+    if os.geteuid() == 0:
+        target.cfg.uid = target.cfg.gid = 65534
+        for directory in (target.vault, target.ledger.root, volume / 'agentic-pkm'):
+            for path in (directory, *directory.rglob('*')):
+                os.chown(path, target.cfg.uid, target.cfg.gid)
+    snapshots = {path: path.read_bytes() for directory in (target.registry.path.parent, target.ledger.root)
+                 for path in directory.iterdir() if path.is_file()}
+    observed = []
+
+    def run(argv, **kwargs):
+        if len(argv) > 2 and 'require_existing_authority_binding' in argv[2]:
+            assert kwargs['user'] == target.cfg.uid and kwargs['pass_fds'] == (int(argv[3]),)
+            # Local non-root tests cannot open an already-inaccessible engine
+            # path as the root supervisor does. Close ancestry only after the
+            # real production callsite opens the qualified directory descriptor.
+            if os.geteuid() != 0:
+                engine.chmod(0o000)
+                kwargs.pop('extra_groups')
+            try:
+                probe = target.real_run([sys.executable, '-c',
+                    'import os,sys\ntry: os.stat(sys.argv[1])\n'
+                    'except PermissionError: sys.exit(0)\nelse: sys.exit(1)', str(target.registry.path)],
+                    **{key: value for key, value in kwargs.items() if key != 'input'})
+                assert probe.returncode == 0
+                result = target.real_run(argv, **kwargs)
+                assert result.returncode == 0, result.stderr
+                observed.append(result.returncode)
+                return result
+            finally:
+                if os.geteuid() != 0:
+                    engine.chmod(0o700)
+        return target.real_run(argv, **kwargs)
+
+    monkeypatch.setattr(linux.subprocess, 'run', run)
+    linux.LinuxEffects(target.cfg).validate_plan(target.plan)
+    assert observed == [0]
+    assert engine.stat().st_mode & 0o777 == 0o700
+    assert all(path.read_bytes() == payload for path, payload in snapshots.items())
+
+
+@pytest.mark.parametrize('mount_mode', ['alias', 'same-path'])
+def test_cutover_mismatch_refuses_native_prepare_and_worker_before_authority(target, monkeypatch, mount_mode):
+    _mount_mode(target, mount_mode)
+    cfg, plan = target.cfg, target.plan
+    effects = linux.LinuxEffects(cfg)
+    monkeypatch.setattr(linux, 'LinuxEffects', lambda _: effects)
+    effects.quiescent = lambda: True
+    supervisor = linux.DeploymentSupervisor(cfg)
+    identifier = str(uuid4())
+    previous_runtime = target.runtime.read_text()
+    target.runtime.write_text('VAULT_ROOT=/foreign\n')
+    result = supervisor.request(request(plan, identifier))
+    assert result['receipt']['stage'] == 'aborted'
+    assert target.calls == []  # Refused before Docker or state effects.
+    target.runtime.write_text(previous_runtime)
+    identifier = str(uuid4())
+    cfg.journal.bind_request(identifier, plan, False, create=True)
+    effects.operation_id = identifier
+    effects.preflight = lambda _: 'fake-password'
+    effects.initialized = lambda: True
+    effects.materialize = lambda _: None
+    effects.local_database = lambda: False
+    effects.authenticate = lambda: None
+    effects.active_consumers = plan.consumers
+    effects.source.verify = lambda: None
+    target.rows[1]['Config']['Env'] = ['VAULT_ROOT=/foreign']
+    with effects.channel_lock():
+        worker = DeployWorker(cfg.journal, effects)
+        worker.prepare(identifier)
+        with pytest.raises(PostgresDeployError):
+            worker.run(identifier, plan)
+        assert cfg.journal.read().stage == 'activating'  # No guessed terminal cleanup.
+    assert all(argv[0] == 'docker' for argv in target.calls)
 
 
 def test_native_cutover_recovery_preserves_pending_and_exact_input_binding(target, monkeypatch):
@@ -362,7 +473,9 @@ def test_host_cli_produces_explicit_cutover_without_inferred_ack(target, monkeyp
     assert captured == []
 
 
-def test_inherited_compose_guard_refuses_changed_or_missing_authority_request(target, monkeypatch):
+@pytest.mark.parametrize('mount_mode', ['alias', 'same-path'])
+def test_inherited_compose_guard_refuses_changed_or_missing_authority_request(target, monkeypatch, mount_mode):
+    _mount_mode(target, mount_mode)
     cfg, plan = target.cfg, target.plan
     identifier = str(uuid4())
     cfg.journal.bind_request(identifier, plan, False, create=True)
@@ -396,6 +509,10 @@ def test_inherited_compose_guard_refuses_changed_or_missing_authority_request(ta
         with pytest.raises(PostgresDeployError):
             linux.inherited_worker_guard('test')
         pin.write_text('VAULT_HOST_ROOT=' + target.selected.root + '\n')
+        target.runtime.write_text('VAULT_ROOT=/foreign\n')
+        with pytest.raises(PostgresDeployError):
+            linux.inherited_worker_guard('test')
+        _mount_mode(target, mount_mode)
         (cfg.journal.directory / 'test.request.json').unlink()
         with pytest.raises(PostgresDeployError):
             linux.inherited_worker_guard('test')
