@@ -98,19 +98,116 @@ def test_docker_copy_file_reads_a_complete_tar_after_member_scan(monkeypatch) ->
     assert writer_inventory._docker_copy_file("container", "/app-local.md") == payload
 
 
-def test_config_sources_accept_quoted_container_app_local_setting(tmp_path, monkeypatch) -> None:
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    (repo_root / ".env.dev.local").write_text(
-        'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical\n',
-        encoding="utf-8",
+QUOTED_CONTAINER_APP_LOCAL_SETTING = (
+    b'DESIGN_HANDOFF_APP_LOCAL_SETTINGS="/app/tmp/agentic-pkm/app-local.md" # canonical\n'
+)
+EMPTY_NATIVE_APP_LOCAL_FRONTMATTER = b"---\nknownVaults: {}\n---\n"
+
+
+def _native_app_local_frontmatter(vault_root: Path) -> bytes:
+    return (
+        b"---\nknownVaults:\n  fixture:\n    path: "
+        + str(vault_root).encode("utf-8")
+        + b"\n---\n"
     )
-    for name in ("VAULT_HOST_ROOT", "VAULT_ROOT", "WATCHER_VAULT_PATH", "VAULT_ROOT_DEV"):
+
+
+def _clear_inventory_source_environment(monkeypatch) -> None:
+    for name in (
+        "VAULT_HOST_ROOT",
+        "VAULT_ROOT",
+        "WATCHER_VAULT_PATH",
+        "VAULT_ROOT_DEV",
+        "VAULT_ROOT_TEST",
+        "VAULT_ROOT_PROD",
+        "WATCHER_RUNTIME_ENV_FILE",
+        "INSTANCE_LEGACY_OWNER_CONFIG_PATHS",
+    ):
         monkeypatch.delenv(name, raising=False)
 
-    owners, _ = writer_inventory._config_legacy_owner_sources(repo_root, active_channel="dev")
+
+def _guard_config_source_reads(fixture_root: Path, monkeypatch) -> list[Path]:
+    allowed_root = fixture_root.resolve()
+    original_read_source = writer_inventory._read_source
+    read_paths: list[Path] = []
+
+    def guarded_read_source(path: Path, *, required: bool) -> bytes | None:
+        resolved = Path(path).expanduser().resolve(strict=False)
+        if not resolved.is_relative_to(allowed_root):
+            raise AssertionError(
+                "config source reader attempted a read outside its synthetic fixture"
+            )
+        read_paths.append(resolved)
+        return original_read_source(path, required=required)
+
+    monkeypatch.setattr(writer_inventory, "_read_source", guarded_read_source)
+    return read_paths
+
+
+def _run_quoted_container_config_setup(
+    fixture_root: Path, monkeypatch
+) -> tuple[list[writer_inventory.LegacyOwnerRecord], Path, list[Path]]:
+    repo_root = fixture_root / "repo"
+    repo_root.mkdir(parents=True)
+    (repo_root / ".env.dev.local").write_bytes(QUOTED_CONTAINER_APP_LOCAL_SETTING)
+
+    native_settings = fixture_root / "declared-native-input" / "app-local.md"
+    native_settings.parent.mkdir()
+    native_settings.write_bytes(EMPTY_NATIVE_APP_LOCAL_FRONTMATTER)
+    monkeypatch.setattr(
+        writer_inventory,
+        "_native_app_local_settings_path",
+        lambda native_settings=native_settings: (native_settings, False),
+    )
+    _clear_inventory_source_environment(monkeypatch)
+    read_paths = _guard_config_source_reads(fixture_root, monkeypatch)
+
+    owners, _ = writer_inventory._config_legacy_owner_sources(
+        repo_root, active_channel="dev"
+    )
+    return owners, native_settings, read_paths
+
+
+def test_config_sources_accept_quoted_container_app_local_setting(tmp_path, monkeypatch) -> None:
+    owners, native_settings, read_paths = _run_quoted_container_config_setup(
+        tmp_path, monkeypatch
+    )
 
     assert owners == []
+    assert native_settings.resolve() in read_paths
+
+
+def test_quoted_container_config_source_fixture_is_independent_of_ambient_native_settings(
+    tmp_path, monkeypatch
+) -> None:
+    for case_name in ("absent", "nonempty", "malformed"):
+        case_root = tmp_path / case_name
+        case_root.mkdir()
+        ambient_native_settings = case_root / "ambient-native-app-local.md"
+        if case_name == "nonempty":
+            ambient_native_settings.write_bytes(
+                _native_app_local_frontmatter(case_root / "ambient-vault")
+            )
+        elif case_name == "malformed":
+            ambient_native_settings.write_bytes(MALFORMED_APP_LOCAL_FRONTMATTER)
+
+        with monkeypatch.context() as case_monkeypatch:
+            case_monkeypatch.setenv(
+                "DESIGN_HANDOFF_APP_LOCAL_SETTINGS", str(ambient_native_settings)
+            )
+            selected_ambient_settings, required = (
+                writer_inventory._native_app_local_settings_path()
+            )
+            assert selected_ambient_settings == ambient_native_settings.resolve()
+            assert required
+
+            owners, declared_native_settings, read_paths = (
+                _run_quoted_container_config_setup(case_root, case_monkeypatch)
+            )
+
+        assert owners == []
+        assert declared_native_settings.resolve() in read_paths
+        assert ambient_native_settings.resolve() not in read_paths
 
 
 def _inspect_payload(mounts, *, env=None):
@@ -1070,6 +1167,47 @@ def test_inventory_errors_name_domain_and_source():
     message = str(excinfo.value)
     assert "domain=dev" in message
     assert "source=config_app_local" in message
+
+
+def test_native_app_local_config_reader_retains_validation_and_owner_detection(
+    tmp_path, monkeypatch
+):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    native_settings = tmp_path / "synthetic-native-input" / "app-local.md"
+    native_settings.parent.mkdir()
+    native_vault = tmp_path / "synthetic-native-vault"
+    native_vault.mkdir()
+    native_settings.write_bytes(_native_app_local_frontmatter(native_vault))
+
+    monkeypatch.setattr(
+        writer_inventory,
+        "_native_app_local_settings_path",
+        lambda: (native_settings, False),
+    )
+    _clear_inventory_source_environment(monkeypatch)
+    read_paths = _guard_config_source_reads(tmp_path, monkeypatch)
+
+    owners, _ = writer_inventory._config_legacy_owner_sources(
+        repo_root, active_channel="dev"
+    )
+    assert [(owner.channel_id, owner.root, owner.source) for owner in owners] == [
+        ("native", str(native_vault), "native_app_local")
+    ]
+    assert native_settings.resolve() in read_paths
+
+    native_settings.write_bytes(MALFORMED_APP_LOCAL_FRONTMATTER)
+    with pytest.raises(InventoryError) as excinfo:
+        writer_inventory._config_legacy_owner_sources(
+            repo_root, active_channel="dev"
+        )
+
+    message = str(excinfo.value)
+    assert "domain=native" in message
+    assert "source=native_app_local" in message
+    assert str(native_settings) not in message
+    assert str(native_vault) not in message
+    assert native_settings.resolve() in read_paths
 
 
 def test_missing_and_non_directory_roots_are_distinguishable(tmp_path):

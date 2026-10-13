@@ -23,12 +23,17 @@ from app.vault.paths import get_vault_system_dir_rel
 _TERMINAL_LIFECYCLES = frozenset({"dismissed", "expired"})
 
 
+class InvalidMomentSourceRecord(ValueError):
+    """A strict derived reader found a present invalid Moment artifact."""
+
+
 def collect_now_moments(
     vault_context: VaultContext,
     *,
     reachout_outbox_path: Path | None = None,
+    strict: bool = False,
 ) -> list[dict[str, Any]]:
-    """Return view-models for materialized moments, most urgent first."""
+    """Return moments; strict derived consumers must name invalid source loss."""
 
     if not vault_context.active_vault_path:
         return []
@@ -42,6 +47,8 @@ def collect_now_moments(
     for path in sorted(moments_dir.glob("*.md")):
         moment = _load_moment(path)
         if moment is None:
+            if strict:
+                raise InvalidMomentSourceRecord("invalid_moment_source_record")
             continue
         # Terminal artifacts stay in the vault for audit/learning, but the
         # live now surface must not present a dismissed or expired proposal as

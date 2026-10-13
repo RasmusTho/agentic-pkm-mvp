@@ -13,6 +13,8 @@ from app.retrieval.hybrid import get_store as get_hybrid_store
 from app.retrieval.hybrid import reset_durable_rebuild_state
 from app.stores import get_object_store, reset_store_backends
 
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
+
 SCENARIO_DOC = Path("docs/scenarios/REALITY_MVP.md")
 FIXTURE_NOTE = Path("tests/fixtures/reality_mvp/demo_note.md")
 

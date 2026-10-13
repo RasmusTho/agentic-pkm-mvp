@@ -1145,6 +1145,46 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 - **Related docs / contracts / ADRs:** ADR-0055; `docs/audits/YGGDRASIL_ECOSYSTEM_2026-07-06.md` §2/§7 (INV-VW3).
 - **Related issues:** #3132, #3450, #3452.
 
+### sources_zone_single_writer (proposed)
+
+- **Purpose:** Keep the selected vault's Sources zone settings-resolved, restricted to the
+  registered sensor/acquisition writers, and disjoint from capture and app-agent destinations.
+- **Protected principle:** One registered writer class per zone; configured vault paths determine
+  destinations, while capture and app-agent paths remain excluded.
+- **Affected boundaries:** OEF, HKA, EBF.
+- **Required fixture / data:** A vault with a non-default `paths.sources_dir_rel`, production
+  fixtures for every shipped sensor/acquisition producer, and capture, MCP, and app-agent
+  exclusion paths.
+- **Expected failure mode:** A new literal or resolver callsite drifts without review, a shipped
+  producer writes outside the configured root, an unregistered producer targets Sources, or capture
+  / app-agent content crosses the Sources boundary.
+- **Current enforcement:** `static_test + runtime_test` (proposed) — an exact source inventory
+  rejects unreviewed literal/resolver drift and resolves absolute and relative app imports,
+  visible package re-exports, and possible aliases across module, immediate class-body,
+  function-local class-body, function, and enclosing lexical scopes. Function-local class bodies
+  use enclosing function bindings; class-local bindings do not leak into methods. Helper identities
+  retain their full lexical path, and the census follows one value-carrying path-helper/write-helper
+  boundary; star imports fail closed. Focused callsite proofs require the production
+  `app.knowledge.service._build_adapter` to pass its resolved `sources_root_rel` into both
+  `FsVaultAdapter` and `ObsidianCliAdapter`. One alias-aware inventory covers all eight current
+  default-bearing helper/constructor identities, including candidate projection paths, the YouTube
+  attachment root validator, and the meeting path helper. A source census compares that finite set
+  with default-bearing identities found in the current AST, so a new root default cannot silently
+  escape caller proof. Every current caller must pass its resolved root by keyword or positional
+  argument; missing/defaulted forwarding and new callers fail closed. The same enclosing-scope
+  collector records calls in eagerly evaluated function defaults at module, function, and class-body
+  definition sites. Writer census keys retain every lexical scope name so
+  same-leaf writers under different enclosing factories cannot deduplicate. Synthetic positive and
+  negative cases cover aliases, class-body calls, forwarding removal/defaulting, new-caller drift,
+  and unrelated writes.
+  Production producer tests verify selected-root writes and capture-note overlap refusal, while
+  capture, MCP, and panel-agent paths verify exclusion with existing vault notes.
+- **Eventual test path:** `tests/architecture/test_sources_zone_writers.py`.
+- **Related docs / contracts / ADRs:** `docs/contracts/MIMER_CLIENT_CONTRACT.md` §5;
+  `docs/testing/invariant-synthesis-2026-07.md` P-1 registered-list conventions and P-6
+  `single_writer_per_table`.
+- **Related issues:** #3414, #3413, #5700, #6034.
+
 ## Coverage map (invariant → principle → test)
 
 | Invariant | Matrix principle(s) | Primary boundary | Enforcement | Test path |
@@ -1191,6 +1231,7 @@ captured here with the structurally-enforced part marked `schema_enforced` and t
 | stale_write_rejected_for_rewritten_notes (INV-VW1) | vault canonical + fail-loud | WSP/HKA | runtime (opt-in expected-version seam) | `tests/invariants/test_vault_multiwriter.py::test_rewritten_write_enforces_only_on_opt_in_expected_version_at_filesystem_seam`, `tests/invariants/test_vault_multiwriter.py::test_stale_rewritten_write_stages_conflict_artifact_at_filesystem_seam` |
 | write_guard_asserted_at_every_write_seam (INV-VW2) | vault canonical + fail-loud | WSP | gate + runtime | `tests/knowledge/test_write_ops.py::test_append_note_relative_rejects_unhealthy_write_guard`, `tests/knowledge/test_write_ops.py::test_append_note_relative_allows_healthy_write_guard` |
 | icloud_conflict_artifacts_never_silently_ingested (INV-VW3) | vault canonical + fail-loud | SIP/WSP | runtime | `tests/watcher/test_vault_conflict_quarantine.py` |
+| sources_zone_single_writer (proposed) | registered writer + selected-vault path | OEF/HKA/EBF | static + runtime | `tests/architecture/test_sources_zone_writers.py` |
 
 ## Heimdal invariants (HEIM-1..14) — sibling registry
 

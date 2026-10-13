@@ -21,27 +21,69 @@ KERNEL-10 (#2772) delivered the prefilter MECHANISM; these tests bind its ACTIVA
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
+import app.stores as stores
 import app.retrieval.hybrid as hybrid
 from app.agents.ask import graph as ask_graph
 from app.agents.ask.state import AgentState
 from app.api.app import app
+from app.components.embeddings import get_embedding_identity
 from app.retrieval.capability import RetrievalHit, RetrievalRequest, retrieve
 from app.retrieval.hybrid import get_store
+from app.stores.memory import MemoryVectorIndex
 
 
 pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 @pytest.fixture(autouse=True)
-
 def _isolated_store(monkeypatch):
     """Clean store around every test, so scope decides membership rather than leftover state."""
     monkeypatch.setenv("LLM_PROVIDER", "mock")
+    get_store().set_documents([])
+    hybrid.reset_durable_rebuild_state()
     yield
     get_store().set_documents([])
+    hybrid.reset_durable_rebuild_state()
+
+
+@pytest.fixture
+def _empty_index_after_generation_change(monkeypatch) -> tuple[str, str]:
+    """Reproduce an empty warmed index whose real generation advanced by upsert/purge."""
+    index = MemoryVectorIndex()
+    monkeypatch.setattr(stores, "get_vector_index", lambda: index)
+
+    hybrid.rebuild_from_durable_index(force=True)
+    warmed_generation = index.generation()
+
+    object_id = uuid4()
+    identity = get_embedding_identity()
+    index.upsert(
+        object_id=object_id,
+        kind="note",
+        source_ref="unit-test://generation-drift",
+        payload={"text": "temporary generation row"},
+        embedding=[0.125] * identity.dim,
+        model=identity.model,
+        identity=identity,
+    )
+    assert index.generation() != warmed_generation
+    assert index.purge_vectors(object_id, view="note") == 1
+    assert index.count_vectors() == 0
+    changed_generation = index.generation()
+    assert changed_generation != warmed_generation
+
+    # Make the real serving-path generation check due in this same process.
+    hybrid._LAST_GENERATION_CHECK_MONOTONIC = 0.0
+
+    # The test seeds a synthetic corpus directly into the cache next. It must not retain the
+    # durable-index marker established above, or the live request replaces that corpus with the
+    # empty durable rows. Keep the production generation check itself unchanged.
+    hybrid.reset_durable_rebuild_state()
+    return warmed_generation, changed_generation
 
 
 def _seed_two_scopes() -> None:
@@ -76,13 +118,17 @@ def _spy_partition(monkeypatch) -> list[str | None]:
     return seen
 
 
-def test_ask_request_scope_excludes_out_of_scope_material(monkeypatch) -> None:
+def test_ask_request_scope_excludes_out_of_scope_material(
+    monkeypatch, _empty_index_after_generation_change: tuple[str, str]
+) -> None:
     """The PRODUCTION request path binds the active scope — not an injected ``ASK_DOMAIN_SCOPE``.
 
     This is the enforcement AC: the guard (``_partition_by_scope``) must be reached from the real
     runtime entrypoint (``app.api.routes.ask``) carrying the caller's scope, and the out-of-scope
     material must be absent from the answer's grounded sources.
     """
+    warmed_generation, changed_generation = _empty_index_after_generation_change
+    assert changed_generation != warmed_generation
     monkeypatch.delenv("ASK_DOMAIN_SCOPE", raising=False)
     _seed_two_scopes()
     seen = _spy_partition(monkeypatch)
