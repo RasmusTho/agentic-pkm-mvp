@@ -168,6 +168,8 @@ list. These invariants hold *across* tasks; each names its partial-failure walk.
   (frontmost app, window/document, scope, or derived-goal change) — because those boundaries are exactly
   the five-dimension shifts the ERE segmenter consumes (SCREEN-04). **Over-segmentation is preferred**
   (merge is a cheap downstream re-cut; a lost boundary is not recoverable), mirroring the ERE stance.
+  The ERE adapter retains the canonical Heimdal observation provenance across registry routes, so a
+  first screen-cursor replay cannot turn an already-represented span into a second source identity.
   **Partial failure — the coalescer over-merges two genuinely distinct activities:** it must not; the
   invariant test asserts a boundary survives on every dimension shift, so a merge that crosses a shift
   is a defect, not an acceptable coarsening.

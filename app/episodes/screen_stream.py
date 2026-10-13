@@ -183,7 +183,11 @@ def screen_observation_to_signal_contract(row: ObservationRow) -> SignalContract
         emitted_at=emitted_at.isoformat(),
         dimensions_fed=dimensions,
         scope_binding=ContextDimensions(scope=scope_hint) if scope_hint and scope_hint.strip() else None,
-        provenance_ref=f"screen:{observation_id}",
+        # Keep provenance tied to the published source record rather than to
+        # the registry route. SCREEN activation can replay observations that
+        # the legacy generic Heimdal consumer already recorded under this
+        # identity; `stream_id` remains the modality-specific route.
+        provenance_ref=f"heimdal.observations:{observation_id}",
     )
 
 

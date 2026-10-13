@@ -215,7 +215,7 @@ def test_screen_span_maps_to_signal_contract() -> None:
     assert contract.observed_at_start == "2026-07-11T08:00:00Z"
     assert contract.observed_at_end == "2026-07-11T08:00:30Z"
     assert contract.emitted_at == row.created_at.isoformat()
-    assert contract.provenance_ref == "screen:screen-1"
+    assert contract.provenance_ref == "heimdal.observations:screen-1"
     assert contract.scope_binding is not None and contract.scope_binding.scope == "work"
     assert set(contract.dimensions_fed) == {"time", "protagonist", "goal", "space"}
     assert contract.dimensions_fed["time"].calibration == "by_construction"
@@ -402,7 +402,7 @@ def test_screen_cursor_replay_is_idempotent_after_tick_state_persisted(
     persisted = state["open_segment:work"]
     assert cursor_positions.get(SCREEN_CONSUMER_ID, 0) == 0
     assert persisted["signal_ids"] == ["screen-replay"]
-    assert persisted["derived_from"] == ["screen:screen-replay"]
+    assert persisted["derived_from"] == ["heimdal.observations:screen-replay"]
 
     replay = segmenter.run_segmentation_tick(
         vault_root=tmp_path,
@@ -414,7 +414,109 @@ def test_screen_cursor_replay_is_idempotent_after_tick_state_persisted(
     assert replay["open_segments"] == 1
     assert cursor_positions[SCREEN_CONSUMER_ID] == 2
     assert state["open_segment:work"]["signal_ids"] == ["screen-replay"]
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-replay"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-replay"]
+
+
+def test_first_screen_tick_reconciles_legacy_generic_episode_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A newly-live screen cursor reuses the source identity of legacy generic rows."""
+    legacy_a = "heimdal.observations:screen-a"
+    legacy_b = "heimdal.observations:screen-b"
+    rows = [
+        _row("screen-a", start="2026-07-11T08:00:00Z", end="2026-07-11T08:00:30Z", goal="goal one"),
+        _row("screen-b", start="2026-07-11T09:00:00Z", end="2026-07-11T09:00:30Z", goal="goal two", sequence=2),
+    ]
+    cursor_positions: dict[str, int] = {}
+
+    def read_for_consumer(consumer_id: str, *, limit: int | None = None) -> Sequence[ObservationRow]:
+        position = cursor_positions.get(consumer_id, 0)
+        unread = [row for row in rows if row.sequence >= position]
+        return unread[:limit] if limit is not None else unread
+
+    def advance_for_consumer(consumer_id: str, consumed_rows: list[ObservationRow]) -> None:
+        if consumed_rows:
+            cursor_positions[consumer_id] = max(row.sequence for row in consumed_rows) + 1
+
+    monkeypatch.setattr(segmenter, "read_observations_for_consumer", read_for_consumer)
+    monkeypatch.setattr(segmenter, "advance_cursor_for_consumer", advance_for_consumer)
+    monkeypatch.setattr(segmenter, "_sync_new_episode_row", lambda *args, **kwargs: None)
+    projection_retries: list[str] = []
+    monkeypatch.setattr(
+        segmenter,
+        "_retry_existing_episode_projection_sync",
+        lambda *, vault_root, rel_path: projection_retries.append(rel_path),
+    )
+    state = _stub_tick_io(monkeypatch)
+    active_bindings, binding_writes = _install_fake_assignment_ledger(monkeypatch)
+
+    legacy_episode_id = segmenter._emit_proposal(
+        segmenter.ClosedSegment(
+            scope="work",
+            start=segmenter._parse_dt("2026-07-11T08:00:00Z"),
+            end=segmenter._parse_dt("2026-07-11T08:00:30Z"),
+            heimdal_session_id=None,
+            protagonists=("operator",),
+            goal=("goal one",),
+            derived_from=(legacy_a,),
+        ),
+        vault_root=tmp_path,
+        write_guard=_healthy_guard(),
+    )
+    assert legacy_episode_id is not None
+    legacy_note_path = tmp_path / "episodes" / f"{legacy_episode_id}.md"
+    legacy_note_bytes = legacy_note_path.read_bytes()
+    state["open_segment:work"] = segmenter.OpenSegment(
+        scope="work",
+        start=segmenter._parse_dt("2026-07-11T09:00:00Z"),
+        last_signal_at=segmenter._parse_dt("2026-07-11T09:00:30Z"),
+        protagonists=frozenset({"operator"}),
+        goal=frozenset({"goal two"}),
+        derived_from=(legacy_b,),
+        signal_ids=frozenset({"screen-b"}),
+    ).to_state()
+    active_bindings[(legacy_a, legacy_episode_id)] = {
+        "binding_state": "active",
+        "basis": segmenter.BASIS_PROVENANCE,
+        "scope": "work",
+    }
+    open_before = dict(state["open_segment:work"])
+    bindings_before = {key: dict(value) for key, value in active_bindings.items()}
+    writes_before = list(binding_writes)
+
+    first_screen_tick = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=_screen_only_registry(),
+        write_guard=_healthy_guard(),
+    )
+
+    assert first_screen_tick["proposed"] == []
+    assert sorted((tmp_path / "episodes").glob("ep-*.md")) == [legacy_note_path]
+    assert legacy_note_path.read_bytes() == legacy_note_bytes
+    assert state["open_segment:work"] == open_before
+    assert active_bindings == bindings_before
+    assert binding_writes == writes_before
+    assert projection_retries == [f"episodes/{legacy_note_path.name}"]
+    assert cursor_positions == {SCREEN_CONSUMER_ID: 3}
+
+    # A genuinely new same-scope row still extends the existing open B segment.
+    rows.append(
+        _row(
+            "screen-c",
+            start="2026-07-11T09:00:45Z",
+            end="2026-07-11T09:01:00Z",
+            goal="goal two",
+            sequence=3,
+        )
+    )
+    later_tick = segmenter.run_segmentation_tick(
+        vault_root=tmp_path,
+        registry=_screen_only_registry(),
+        write_guard=_healthy_guard(),
+    )
+    assert later_tick["proposed"] == []
+    assert state["open_segment:work"]["start"] == "2026-07-11T09:00:00+00:00"
+    assert state["open_segment:work"]["derived_from"] == [legacy_b, "heimdal.observations:screen-c"]
 
 
 @pytest.mark.parametrize(
@@ -477,7 +579,7 @@ def test_production_tick_replay_admission_survives_partial_sibling_ack(
     original_fields = segmenter.parse_validated_episode_note(original_note_bytes.decode("utf-8"))
     assert original_fields["derived_from"] == [
         "heimdal.observations:speech-s",
-        "screen:screen-a",
+        "heimdal.observations:screen-a",
     ]
     open_before_retry = dict(state["open_segment:work"])
     bindings_before_retry = {key: dict(value) for key, value in active_bindings.items()}
@@ -516,7 +618,7 @@ def test_production_tick_replay_admission_survives_partial_sibling_ack(
     )
     assert new_inside_old_bounds["proposed"] == []
     assert state["open_segment:work"]["start"] == "2026-07-11T08:00:45+00:00"
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b", "screen:screen-c"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-b", "heimdal.observations:screen-c"]
 
     # A genuinely new goal boundary still closes B+C once and leaves D open.
     rows.append(
@@ -536,9 +638,9 @@ def test_production_tick_replay_admission_survives_partial_sibling_ack(
     assert len(boundary["proposed"]) == 1
     closed_path = notes_dir / f"{boundary['proposed'][0]}.md"
     closed_fields = segmenter.parse_validated_episode_note(closed_path.read_text(encoding="utf-8"))
-    assert closed_fields["derived_from"] == ["screen:screen-b", "screen:screen-c"]
+    assert closed_fields["derived_from"] == ["heimdal.observations:screen-b", "heimdal.observations:screen-c"]
     assert closed_fields["time"]["start"] == "2026-07-11T08:00:45+00:00"
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-d"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-d"]
 
 
 def test_production_tick_replay_recovers_after_note_before_assignment_failure(
@@ -607,10 +709,10 @@ def test_production_tick_replay_recovers_after_note_before_assignment_failure(
     assert replay["proposed"] == []
     assert len(list(notes_dir.glob("ep-*.md"))) == 1
     assert first_note.read_bytes() == first_note_bytes
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-b"]
     assert {key[0] for key in active_bindings} == {
         "heimdal.observations:speech-s",
-        "screen:screen-a",
+        "heimdal.observations:screen-a",
     }
     assert projection_retries == [f"episodes/{first_note.name}"]
     assert cursor_positions == {segmenter.CONSUMER_ID: 4, SCREEN_CONSUMER_ID: 4}
@@ -629,7 +731,7 @@ def test_production_tick_replay_admission_is_scope_specific(
         start="2026-07-11T08:00:00Z",
         end="2026-07-11T08:01:00Z",
         closed=False,
-        derived_from=["screen:screen-same-id"],
+        derived_from=["heimdal.observations:screen-same-id"],
         episode_id=mint_episode_id(),
         vault_root=tmp_path,
         write_guard=_healthy_guard(),
@@ -653,7 +755,7 @@ def test_production_tick_replay_admission_is_scope_specific(
     )
 
     assert result["open_segments"] == 1
-    assert state["open_segment:private"]["derived_from"] == ["screen:screen-same-id"]
+    assert state["open_segment:private"]["derived_from"] == ["heimdal.observations:screen-same-id"]
     assert positions[SCREEN_CONSUMER_ID] == 2
 
 
@@ -719,7 +821,7 @@ def test_production_tick_fails_closed_when_canonical_note_enumeration_fails(
 
     notes_dir = tmp_path / "episodes"
     assert len(list(notes_dir.glob("ep-*.md"))) == 1
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-b"]
     cursor_before_retry = dict(cursor_positions)
     state_before_retry = {key: dict(value) for key, value in state.items()}
     bindings_before_retry = {key: dict(value) for key, value in active_bindings.items()}
@@ -813,7 +915,7 @@ def test_production_tick_retries_projection_after_stale_open_note_recovery(
         write_guard=_healthy_guard(),
     )
     assert first["proposed"] == []
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-a"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-a"]
     assert cursor_positions[SCREEN_CONSUMER_ID] == 2
 
     # B closes A. The canonical note lands, but a later assignment failure
@@ -849,8 +951,8 @@ def test_production_tick_retries_projection_after_stale_open_note_recovery(
     assert len(note_paths) == 1
     note_fields = segmenter.parse_validated_episode_note(note_paths[0].read_text(encoding="utf-8"))
     episode_id = note_fields["episode_id"]
-    assert note_fields["derived_from"] == ["screen:screen-a"]
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-a"]
+    assert note_fields["derived_from"] == ["heimdal.observations:screen-a"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-a"]
     assert cursor_positions[SCREEN_CONSUMER_ID] == 2
 
     projection_rows: set[str] = set()
@@ -879,7 +981,7 @@ def test_production_tick_retries_projection_after_stale_open_note_recovery(
     assert retry_requests == [f"episodes/{note_paths[0].name}"]
     assert episode_id in projection_rows
     assert len(list(notes_dir.glob("ep-*.md"))) == 1
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-b"]
     assert cursor_positions[SCREEN_CONSUMER_ID] == 3
 
     # The retry is detached in production; after it succeeds, the next closure
@@ -991,7 +1093,7 @@ def test_episodes_cli_retries_founder_binding_after_interrupted_recut_adoption(
     first = runner.invoke(cli, args)
     assert first.exit_code == 0, first.output
     assert cursor_positions[SCREEN_CONSUMER_ID] == 2
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-a"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-a"]
 
     rows.append(
         _row(
@@ -1012,7 +1114,7 @@ def test_episodes_cli_retries_founder_binding_after_interrupted_recut_adoption(
     note_bytes = note_paths[0].read_bytes()
     episode_id = note_paths[0].stem
     assert cursor_positions[SCREEN_CONSUMER_ID] == 2
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-a"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-a"]
 
     # Segmenter replay recovers the open replacement and acknowledges B. Then
     # fail the actual first-adoption reconciliation after segmenter returns.
@@ -1021,8 +1123,8 @@ def test_episodes_cli_retries_founder_binding_after_interrupted_recut_adoption(
     assert isinstance(failed_recut.exception, RuntimeError)
     assert "before founding binding reconciliation" in str(failed_recut.exception)
     assert cursor_positions[SCREEN_CONSUMER_ID] == 3
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
-    assert ("screen:screen-a", episode_id) not in active_bindings
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-b"]
+    assert ("heimdal.observations:screen-a", episode_id) not in active_bindings
     assert not any(key.startswith(recut._RECUT_STATE_KEY_PREFIX) for key in state)
     assert note_paths[0].read_bytes() == note_bytes
 
@@ -1033,8 +1135,8 @@ def test_episodes_cli_retries_founder_binding_after_interrupted_recut_adoption(
     summary = json.loads(healthy_retry.output)
     assert summary["proposed"] == []
     assert cursor_positions[SCREEN_CONSUMER_ID] == 3
-    assert state["open_segment:work"]["derived_from"] == ["screen:screen-b"]
+    assert state["open_segment:work"]["derived_from"] == ["heimdal.observations:screen-b"]
     assert len(list(notes_dir.glob("ep-*.md"))) == 1
     assert note_paths[0].read_bytes() == note_bytes
-    assert active_bindings[("screen:screen-a", episode_id)]["binding_state"] == "active"
-    assert reconcile_calls == [(episode_id, ("screen:screen-a",)), (episode_id, ("screen:screen-a",))]
+    assert active_bindings[("heimdal.observations:screen-a", episode_id)]["binding_state"] == "active"
+    assert reconcile_calls == [(episode_id, ("heimdal.observations:screen-a",)), (episode_id, ("heimdal.observations:screen-a",))]

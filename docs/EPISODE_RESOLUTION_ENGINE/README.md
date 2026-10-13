@@ -29,6 +29,10 @@ The owner requires every input source identified and part of the architecture. T
 | `screen` | **live** (SCREEN-04, #3346) | modality-filtered observation-log cursor (`modality: screen`) | time (high), space (low), protagonist (high), goal (high), causation (medium) | Heimdal consent-gated (existing `consent.grant_ref`) | Heimdal |
 | `biometric`, `ambient_audio` | **future** | Heimdal v2 modality vocabulary | varies | Heimdal consent-gated (Posture B) | Heimdal |
 
+The `screen` route keeps the observation's canonical `heimdal.observations:<observation_id>` provenance
+identity. A route-specific `stream_id` does not create a new source identity when an observation is
+first consumed through the modality-filtered cursor.
+
 **Excluded (identified, deliberately out):** `builderops.records` — BuilderOps records / LearningSignals (dev-time builder telemetry, not lived situations); `orchestrator.internals` — orchestrator/planner/MCP/agent-internal events (machinery — the chat *session* is the lived-situation representative); `sync.transports` — sync transports (iCloud/Git — Integration Fabric class 5, never semantic); `egress.surfaces` — egress surfaces (notifications, TTS playback). Exclusions live in the registry with `status: excluded` so they are ruled out, not merely absent.
 
 ## Implementation tasks (execution order)

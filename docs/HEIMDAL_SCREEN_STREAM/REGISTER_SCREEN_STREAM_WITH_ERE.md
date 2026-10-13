@@ -42,7 +42,10 @@ observations to authoritative knowledge.
    `stream_id: screen`, `signal_id` (idempotency = observation_id), `observed_at` (span start;
    `emitted_at` separate — bitemporal, mirroring `heimdal.observation.published`), `dimensions_fed`
    with per-dimension confidence carried from the observation's confidence axes, `scope_binding` from
-   the span's `scope_hint`, `provenance_ref` to the observation_id.
+   the span's `scope_hint`, and `provenance_ref` to the canonical Heimdal observation identity
+   (`heimdal.observations:<observation_id>`). The registry `stream_id` remains `screen`; provenance
+   identifies the source row so first-time screen consumption can replay records already represented
+   by the former generic observation consumer without changing their identity.
 3. **Span boundaries are the segmentation signal (INV-SCREEN-E closes here).** The whole point of
    preserving span boundaries in SCREEN-02 is this consumer: each boundary (app/window/scope/goal shift)
    is a candidate five-dimension shift the segmenter evaluates. This task asserts the boundaries survive
@@ -106,8 +109,10 @@ seam). No change to any other registry entry.
 
 ## Restart / Durability Posture
 
-Not applicable to this task's own deliverables (a registry entry + a stateless span→signal adapter). The
-ERE cursor's durability is ERE-01/04's posture; this task adds a source, not a stateful surface.
+The adapter itself is stateless. Its `provenance_ref` retains the canonical Heimdal observation
+identity, so ERE's existing exact-scope open-segment and canonical-note admission remains idempotent
+when the screen cursor first replays rows already handled by the former generic consumer. Cursor and
+canonical-note durability remain ERE-01/04's posture; SCREEN-04 adds no separate state surface.
 
 ## Related Docs
 

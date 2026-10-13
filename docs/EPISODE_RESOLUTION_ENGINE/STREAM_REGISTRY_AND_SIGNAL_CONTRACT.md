@@ -22,6 +22,11 @@ The engine fuses *multiple* information streams, and the owner requires that **e
    - `dimensions_fed`: which of the five Episode dimensions (time / space / protagonist / goal / causation) this signal can evidence, with per-dimension confidence (per-axis, never scalar — mirrors the Heimdal confidence block)
    - `scope_binding` / sphere context when known (SSI-01 shape from `app/context_dimensions.py`)
    - `provenance_ref` back to the source record (observation id, outbox event id, note path+hash)
+
+   Observation-log adapters retain the canonical Heimdal source identity in `provenance_ref`
+   (`heimdal.observations:<observation_id>`) even when a modality-specific registry route such as
+   `screen` consumes the row. `stream_id` selects the registered adapter; it does not redefine the
+   source record's identity.
 2. Defines the **registry entry contract** per stream: `stream_id`, `status` (`live | planned | future | excluded`), `transport` (observation-log cursor / outbox topic / file event), `consent_class` (Heimdal consent-gated vs. vault-implicit), `cadence` (bursty/continuous/sparse), `owner_constituent` (Heimdal / Mimer / external via private-bindings).
 3. Ships the registry as **markdown-first settings + code mirror**, consistent with the `_heimdal/settings.md` precedent: the human-legible registry doc is the declaration surface; `app/episodes/stream_registry.py` loads and validates it fail-loud.
 4. Seeds the registry with the **complete inventory** (canonical enumeration lives in the capability [README](README.md), which this registry must match 1:1):
