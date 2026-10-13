@@ -592,9 +592,10 @@ unknown. #6009 exposes only partial advisory telemetry (3,259 input / 667 output
 PR cost. Review declarations, commit/run counts, quota notices and wall-clock time are named proxies
 or recovery evidence and cannot fill those unknowns.
 
-Continue native delivery and affected proof; use the finite consumer inventory for #5858 to correct
-redundant native-reviewed dispatch routing while preserving executor/in-flight/release ownership and
-unique failure detection. The evaluation adds no meter, dashboard, ledger or permanent evidence
+Continue native delivery and affected proof; #5836 already separates native review rounds 0/1
+from automatic executor dispatch. Use the finite inventory for #5858 to retire only proven-unused
+legacy branches/references, retaining explicit executor/in-flight/release and native post-merge
+consumers. If none is safely removable, record the concrete retention/migration evidence. The evaluation adds no meter, dashboard, ledger or permanent evidence
 schema. Its source PR/run identities, exclusions, formulas and recommendation live in the existing
 proportionality owner above; the architecture's future measurement policy below remains in force.
 

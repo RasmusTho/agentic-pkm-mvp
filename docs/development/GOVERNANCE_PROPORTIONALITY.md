@@ -123,9 +123,10 @@ protections that demonstrate unique failure detection.
 
 **Decision:** continue native session-owned delivery and affected-test selection. This sample does
 not demonstrate a 50% lead-time or cost reduction. For #5858, remove only demonstrably redundant
-native-to-executor routing and its references; retain protected executor/in-flight and release
-controls. The specific review-depth/dispatch coupling below merits correction, not deletion of the
-whole full-path implementation. This evaluation performs no retirement.
+legacy branches, duplicate instructions or artifacts whose callers are proven migrated/absent;
+retain protected executor/in-flight and release controls. Native review/dispatch separation already
+ships in #5836. The inventory below identifies remaining compatibility consumers, not permission to
+delete the whole full-path implementation. This evaluation performs no retirement.
 
 The exposure cutoff is #5862, merge `ed9df9fe916d3c86d66b89f54ae5e938ed53cec7` at
 2026-10-09T05:47:04Z, after #5851/#5853/#5854 delivered. Sort accepted `main` PRs by
@@ -311,24 +312,27 @@ Retirement must refresh the finite callers and preserve in-flight ownership befo
 
 | Artifact / concrete consumer | Native versus full-path responsibility | #5858 recommendation / retained protection |
 | --- | --- | --- |
-| `.codex/skills/publish-pr/SKILL.md`; `scripts/publication.py` and `app/builderops/publication.py` | Normal new single-Issue Tier 1/2, review-round-zero plan/apply; unsupported publication selects `publish-pr/FULL_PATH.md` | Keep exact repo/base/branch/path authority and collision checks; do not delete the exception procedure for existing PRs, reviewed/native changes or protected work |
+| `.codex/skills/publish-pr/SKILL.md`; `scripts/publication.py` and `app/builderops/publication.py` | Bounded native Tier 1/2, review rounds 0/1; issue-free docs/governance, resumed linear candidates, explicitly bound existing PR and batches of <=10 closing Issues | Keep exact repo/base/branch/path/scope authority and collision checks. `publish-pr/FULL_PATH.md` retains actual unsupported/protected cases, merge-history ambiguity and nonstandard lanes, not all reviewed or existing native PRs |
 | `.codex/skills/verification-and-closure/SKILL.md`; `scripts/closure.py` subset | Native expected-head merge with exact Issue readback; explicit review depth is independent of executor ownership | Keep this as the session-owned router; remove stale references that send every reviewed native PR into executor mechanics |
 | `.codex/skills/verification-and-closure/FULL_PATH.md`; dispatcher merge/recovery consumers and phase helpers | Authenticated body fencing, phase recovery, exact external-effect attribution; review sections also support independent native review | Keep executor/in-flight/refusal recovery and protected review/severity rules. #5909 is recent positive implementation evidence of recovery use, not an obsolete route |
 | `docs/development/PR_ESCALATION_PATHS.md` | Conditional CI failure, merge-ref, drift, dependency, owner-doc and review repair | Keep the triggered repairs; reconcile stale light/full terminology only where it contradicts the native router |
-| `scripts/build_verification_dispatch_request.py::build_request`; workflow imports/CLI | Requires successful current-head CI and exact Issue/closing authority, but uses positive `Final-Review-Rounds` to admit a request | Correct the review-depth-to-dispatch inference for demonstrably session-owned native deliveries. Retain current-head, authenticated closing-set and idempotent artifact provenance checks |
-| `.github/workflows/verification-dispatch-request.yml::build-request` | CI Smoke completion invokes the producer; `rounds in {1, 2}` selects closing-link GraphQL and request generation | Remove redundant native-reviewed dispatch work only through an explicit existing route/ownership decision; do not infer executor transfer from a successful artifact upload |
+| `scripts/build_verification_dispatch_request.py::build_request`; workflow imports/CLI | Current-head/Issue/closing authority; automatic round 1 is suppressed, while explicit `--executor-request`/canary construction and legacy automatic round 2 remain supported | Retain existing native suppression and explicit executor admission/provenance. Audit legacy automatic round-2 callers before retirement; a compatibility producer with unknown host adoption is not demonstrated unused |
+| `.github/workflows/verification-dispatch-request.yml::build-request` | CI Smoke completion invokes the producer; `rounds == 2` selects legacy automatic closing-link GraphQL/request generation; native 0/1 stops before those effects | Preserve the native 0/1 short circuit. Round-2 compatibility is a possible migration target only after concrete consumer/in-flight proof; artifact upload does not transfer executor ownership |
 | `app/dispatcher/verification_consumer.py`, `verification_dispatch.py`, `verification_contract.py`, `verification_merge.py`, `store.py`; dispatcher CLI enqueue/consume entrypoints | Consume authenticated artifact requests, validate versions/scope and own fenced executor effects | Live code consumers exist; preserve dispatched and already-started attempts, compatible request admission and recovery. Host installation/adoption is unknown in this sample |
 | `.github/workflows/post-merge-docs-classifier.yml` imports `app.dispatcher.verified_merge.resolve_post_merge_issue_authority`; `post-merge-owner-doc-watchdog.yml` uses verified-merge history/phase classification | Native and fenced post-merge authority/owner-doc consumers share the compatibility resolver | Keep these direct consumers and exact closure attribution; any retired helper must update both workflows and their regressions. Native merge does not make verified-merge classification unused |
 | `tests/governance/test_verification_dispatch_request.py`, `test_verification_dispatch_workflow.py`, `tests/architecture/test_pr_hot_path_governance.py` | Production-callsite and routing regression consumers | Update the relevant tests with the changed callers; prove native review remains native and explicit executor/in-flight work still fails closed |
 | `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md` verification-dispatch producer/workflow rows; `PR_HOT_PATH.md` | Owner/reference descriptions of the producer, caller and merge path | Reconcile only the retirement slice's actual shipped routing; retain this point-in-time evaluation and the unknown measurements |
 
-The producer and workflow currently conflate a review declaration with full-path request production,
-while `verification-and-closure :: Routing` requires dispatched/in-flight/release ownership. Nine
-post-core ordinary PRs declare independent review, illustrating the mismatch in a native cohort;
-that does not prove nine executor runs or quantify their cost. The smallest supported change is to
-align those consumers and references with the established ownership route. Keep every unique
-correctness, authority, credential, durability, current-head and closure protection; measurement
-uncertainty is not permission to remove it.
+#5836 (publication commit `642756f55560b64a725ee757985a47801cd6478d`) already expanded
+native publication and suppressed automatic round-1 dispatch; its producer/workflow tests cover
+that short circuit. Nine post-core ordinary PRs declare independent review without selecting
+executor ownership; they are not nine executor runs or a measured dispatch-cost saving. The
+remaining automatic round-2 branch is an explicit legacy compatibility consumer, and verified-merge
+helpers still have direct native post-merge consumers. #5858 should refresh these finite callers,
+remove only demonstrated migrated/absent use, and record named retention triggers or a concrete
+migration follow-up when no route can be safely removed. Keep every unique correctness, authority,
+credential, durability, current-head and closure protection; measurement uncertainty is not
+permission to remove it.
 
 ## Delivery budgets and stop-loss
 
