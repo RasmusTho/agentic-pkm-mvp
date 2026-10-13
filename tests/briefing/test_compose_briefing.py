@@ -615,7 +615,7 @@ def test_invalid_moment_provenance_text_degrades_whole_section(
         record[field] = invalid_value
     else:
         raw_ref[field] = invalid_value
-    monkeypatch.setattr(compose_module, "collect_now_moments", lambda *_: [record])
+    monkeypatch.setattr(compose_module, "collect_now_moments", lambda *_, **_kw: [record])
     _seed_commitment(context, "commitment-kept", kind="next_action", state="next")
     _seed_receipts(root, [_receipt("receipt-kept", "2026-07-09T12:00:00Z")])
 

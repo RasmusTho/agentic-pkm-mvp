@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from app.agents.normalizer.graph import invoke as normalize_invoke
 from app.agents.classifier.graph import invoke as classify_invoke
 from app.agents.chunker.graph import invoke as chunk_invoke
@@ -21,6 +23,8 @@ from app.events.types import (
     PROMOTION_PROJECT_DONE,
     PROMOTION_PROJECT_SKIP,
 )
+
+pytestmark = pytest.mark.usefixtures("product_model_access_gateway")
 
 # offline cache of "published membership"
 PROJECTED_CACHE: set[tuple[str, str]] = set()
