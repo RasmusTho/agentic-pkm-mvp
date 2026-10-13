@@ -806,12 +806,17 @@ With the ordinary write-capable services stopped, the producer freshly checks Pr
 An explicitly unbound API retains its no-vault picker posture without a SourceAction. For a
 configured missing, inaccessible or invalid root, the canonical resolver refuses before any
 SourceWrite; it cannot select a foreign root or turn the configured error into an unbound API.
-For a selected vault, an already usable projection skips source replay; otherwise the existing
-`vault-alpha-ingest --max-notes 0 --force --source-backed-rebuild --json` SourceAction reconstructs
-the complete selected inventory. All six counters must be present nonnegative integers,
-`scanned == ingested`, and errors/malformed/locked/invalid counts must be zero. A fresh Product
-readiness check and the existing strict index doctor must then pass. Missing summaries, partial
-work, refused context or an unready index fail the operation; child streams stay private.
+For a selected vault, an already usable Product projection with no missing vector rows skips source
+replay. A Product-ready projection with missing vectors also runs the existing
+`vault-alpha-ingest --max-notes 0 --force --source-backed-rebuild --json` SourceAction; the numeric
+`unembedded_object_count` and `non_vector_issue_count` from the read-only index doctor distinguish
+this case: replay is eligible only when missing vectors are the sole index issue. An unrecognized
+diagnosis fails closed. Otherwise that SourceAction reconstructs the complete selected inventory.
+All six counters must be present nonnegative integers, `scanned == ingested`, and
+errors/malformed/locked/invalid counts must be zero. A fresh Product readiness check and the
+existing strict index doctor must then pass with zero missing vectors. Other index problems remain
+blocking and do not trigger an unrelated source replay. Missing summaries, partial work, refused
+context or an unready index fail the operation; child streams stay private.
 Ordinary service recreation and the existing final Data health, version, UI and receipt gates
 still follow this step. Ordinary API startup clears the selector and retains migration→uvicorn.
 
