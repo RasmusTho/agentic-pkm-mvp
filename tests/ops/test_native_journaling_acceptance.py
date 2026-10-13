@@ -434,6 +434,15 @@ def test_image_main_compiles_and_ingests_settings_before_model_admission(tmp_pat
     assert not list((tmp_path / 'vault').glob('**/journal/*.md'))
 
 
+def test_passive_interaction_observer_refuses_foreign_producer_origin():
+    from app.chat.reflection_conversation import ReflectionConversationService
+    observer = journaling.EffectObserver(root=Path(__file__).resolve().parents[2])
+    foreign = ReflectionConversationService.start.__code__.replace(co_filename='/foreign/interaction.py')
+    with pytest.raises(web.NativeWebRefusal, match='order_or_origin_invalid'):
+        observer.profile(SimpleNamespace(f_code=foreign, f_locals={}), 'call', None)
+    assert observer.order == [] and observer.observed == []
+
+
 def test_native_container_command_is_fixed_and_namespace_drift_refuses_before_product(tmp_path, monkeypatch):
     runner, boundary = _runner(tmp_path, monkeypatch)
     refs = {transport.REFERENCE_KEYS[0]: 'https://10.0.0.8:8123'}

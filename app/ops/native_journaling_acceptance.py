@@ -266,11 +266,10 @@ class EffectObserver:
     ORDER = ('conversation', 'draft', 'actor', 'review', 'conversation', 'draft')
 
     def __init__(self, *, root: Path = Path('/app')) -> None:
-        from app.chat.reflection_conversation import ReflectionConversationService
         from app.journaling.draft import draft_journal_entry
         from app.journaling.review import process_journal_reviews_tick
         from tests.journaling.live_journaling_acceptance import _check_primary_accept
-        self.functions = {'conversation': ReflectionConversationService.start, 'draft': draft_journal_entry,
+        self.functions = {'draft': draft_journal_entry,
                           'actor': _check_primary_accept, 'review': process_journal_reviews_tick}
         self.codes = {function.__code__: name for name, function in self.functions.items()}
         self.order: list[str] = []
@@ -311,6 +310,12 @@ class EffectObserver:
                 raise NativeWebRefusal('actual_product_provider_calls_over_budget')
             return
         name = self.codes.get(frame.f_code)
+        # Native governance observes the fixed interaction producer passively;
+        # it must not import or invoke a protected interaction-layer surface.
+        if frame.f_code.co_qualname == 'ReflectionConversationService.start':
+            if Path(frame.f_code.co_filename).resolve() != self.root / 'app/chat/reflection_conversation.py':
+                raise NativeWebRefusal('journaling_effect_order_or_origin_invalid')
+            name = 'conversation'
         if name is None:
             return
         if event == 'call':
