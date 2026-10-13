@@ -410,6 +410,7 @@ def test_image_main_compiles_and_ingests_settings_before_model_admission(tmp_pat
     monkeypatch.setattr(journaling, 'MANIFEST', tmp_path / 'manifest.json')
     monkeypatch.setattr(compiler, 'RUNTIME', tmp_path / 'runtime/settings')
     monkeypatch.setattr(runtime, 'RUNTIME', tmp_path / 'runtime/settings')
+    monkeypatch.setattr(runtime, '_CURRENT', None)
     monkeypatch.setenv('VAULT_ROOT', str(tmp_path / 'vault'))
     monkeypatch.setattr(DEFAULT_WRITE_GUARD, 'snapshot_fn', lambda: {'state': 'healthy'})
     # Resource/image and migration transport are unavailable in this local test;
