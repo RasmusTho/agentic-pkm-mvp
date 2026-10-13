@@ -427,7 +427,9 @@ def test_first_screen_tick_reconciles_legacy_generic_episode_sources(
         _row("screen-a", start="2026-07-11T08:00:00Z", end="2026-07-11T08:00:30Z", goal="goal one"),
         _row("screen-b", start="2026-07-11T09:00:00Z", end="2026-07-11T09:00:30Z", goal="goal two", sequence=2),
     ]
-    cursor_positions: dict[str, int] = {}
+    # The former generic consumer already acknowledged A and B; the newly
+    # registered screen consumer has no cursor yet and must safely replay both.
+    cursor_positions: dict[str, int] = {segmenter.CONSUMER_ID: 3}
 
     def read_for_consumer(consumer_id: str, *, limit: int | None = None) -> Sequence[ObservationRow]:
         position = cursor_positions.get(consumer_id, 0)
@@ -483,21 +485,23 @@ def test_first_screen_tick_reconciles_legacy_generic_episode_sources(
     open_before = dict(state["open_segment:work"])
     bindings_before = {key: dict(value) for key, value in active_bindings.items()}
     writes_before = list(binding_writes)
+    assert cursor_positions == {segmenter.CONSUMER_ID: 3}
 
     first_screen_tick = segmenter.run_segmentation_tick(
         vault_root=tmp_path,
-        registry=_screen_only_registry(),
+        registry=_speech_and_screen_registry(),
         write_guard=_healthy_guard(),
     )
 
     assert first_screen_tick["proposed"] == []
+    assert first_screen_tick["consumed"] == {"heimdal.observations": 0, SCREEN_STREAM_ID: 2}
     assert sorted((tmp_path / "episodes").glob("ep-*.md")) == [legacy_note_path]
     assert legacy_note_path.read_bytes() == legacy_note_bytes
     assert state["open_segment:work"] == open_before
     assert active_bindings == bindings_before
     assert binding_writes == writes_before
     assert projection_retries == [f"episodes/{legacy_note_path.name}"]
-    assert cursor_positions == {SCREEN_CONSUMER_ID: 3}
+    assert cursor_positions == {segmenter.CONSUMER_ID: 3, SCREEN_CONSUMER_ID: 3}
 
     # A genuinely new same-scope row still extends the existing open B segment.
     rows.append(
@@ -511,12 +515,13 @@ def test_first_screen_tick_reconciles_legacy_generic_episode_sources(
     )
     later_tick = segmenter.run_segmentation_tick(
         vault_root=tmp_path,
-        registry=_screen_only_registry(),
+        registry=_speech_and_screen_registry(),
         write_guard=_healthy_guard(),
     )
     assert later_tick["proposed"] == []
     assert state["open_segment:work"]["start"] == "2026-07-11T09:00:00+00:00"
     assert state["open_segment:work"]["derived_from"] == [legacy_b, "heimdal.observations:screen-c"]
+    assert cursor_positions == {segmenter.CONSUMER_ID: 4, SCREEN_CONSUMER_ID: 4}
 
 
 @pytest.mark.parametrize(
