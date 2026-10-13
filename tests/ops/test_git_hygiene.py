@@ -668,6 +668,14 @@ _GH_DIAGNOSTIC_KEYS = (
 )
 
 
+def _gh_binary_name(raw_path):
+    # Directory components and unexpected basenames can themselves be secret.
+    # Keep only a fixed label for the expected program, never raw path data.
+    if not isinstance(raw_path, (str, Path)):
+        return None
+    return "gh" if Path(raw_path).name == "gh" else "other"
+
+
 def _gh_child_diagnostic(argv, environment):
     # Values and captured child output must never enter failure diagnostics.
     if not isinstance(environment, dict) or not isinstance(argv, (list, tuple)):
@@ -679,8 +687,8 @@ def _gh_child_diagnostic(argv, environment):
         == ["gh", "api", "--hostname", "github.com", "--method", "GET", "meta"],
     }
     if argv and isinstance(argv[0], str):
-        record["resolved_binary"] = shutil.which(
-            argv[0], path=os.pathsep.join(os.get_exec_path(environment))
+        record["resolved_binary"] = _gh_binary_name(
+            shutil.which(argv[0], path=os.pathsep.join(os.get_exec_path(environment)))
         )
     raw_config = environment.get("GH_CONFIG_DIR")
     config = Path(raw_config) if isinstance(raw_config, str) else None
@@ -725,7 +733,9 @@ def _observe_gh_transport(monkeypatch, evidence):
             pid = process.pid
             record["pid"] = pid if type(pid) is int and pid > 0 else None
             record["executed_binary"] = (
-                str(Path(f"/proc/{pid}/exe").readlink()) if record["pid"] is not None else None
+                _gh_binary_name(Path(f"/proc/{pid}/exe").readlink())
+                if record["pid"] is not None
+                else None
             )
         except Exception:
             record["executed_binary"] = None
@@ -824,7 +834,10 @@ def test_gh_transport_observer_preserves_real_process(tmp_path, monkeypatch) -> 
     assert subprocess.Popen is original_popen
 
 
-def test_gh_transport_diagnostics_exclude_secret_values(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("path_surface", ["resolved", "executed"])
+def test_gh_transport_diagnostics_exclude_secret_values(
+    tmp_path, monkeypatch, path_surface
+) -> None:
     token = "secret-control-token"
     private_value = "private-config-control-value"
     environment = {key: token for key in _GH_DIAGNOSTIC_KEYS}
@@ -836,6 +849,34 @@ def test_gh_transport_diagnostics_exclude_secret_values(tmp_path, monkeypatch) -
     assert set(record["authority_keys_present"].values()) == {True}
     assert token not in json.dumps(record) and private_value not in json.dumps(record)
     assert _gh_child_diagnostic(["gh"], None) == ({"status": "unavailable"}, None)
+    private_directory = tmp_path / private_value
+    private_directory.mkdir()
+    (private_directory / "gh").symlink_to(shutil.which("gh"))
+    (private_directory / private_value).symlink_to(shutil.which("gh"))
+    if path_surface == "resolved":
+        private_path_environment = dict(environment, PATH=str(private_directory))
+        path_record, _ = _gh_child_diagnostic(["gh"], private_path_environment)
+        assert private_value not in json.dumps(path_record)
+        name_record, _ = _gh_child_diagnostic([private_value], private_path_environment)
+        assert name_record["resolved_binary"] == "other"
+        assert private_value not in json.dumps(name_record)
+    else:
+        # Double only kernel metadata. The constructor and child stay real.
+        with monkeypatch.context() as kernel_metadata:
+            kernel_metadata.setattr(
+                Path, "readlink", lambda self: private_directory / private_value
+            )
+            child_evidence = []
+            with _observe_gh_transport(monkeypatch, child_evidence):
+                child = subprocess.run(
+                    [sys.executable, "-c", "print('actual-child')"],
+                    env={"PATH": os.defpath},
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            assert child.returncode == 0 and child.stdout == "actual-child\n"
+            assert private_value not in json.dumps(child_evidence)
     malformed = dict(environment, GH_CONFIG_DIR=[])
     observed, retained_config = _gh_child_diagnostic(["gh"], malformed)
     assert retained_config is None and observed["private_config_shape"] is False
