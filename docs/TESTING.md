@@ -602,6 +602,11 @@ not qualified Product evidence. Original Product calls and returns are observed,
 the fixed six-effect order binds two distinct sessions, primary/addendum candidates, one exact
 synthetic checkbox write and one guarded receipt-bound canonical materialization. All ten original
 scenarios, exact budgets, source hashes and accepted-primary preservation are mandatory.
+Canonical settings compilation and runtime ingestion precede provider admission in the fresh
+scratch runtime. Every original Product model call is reserved and observed at its real call
+seam, with successful remote preflight/response and undegraded actual route. Draft cognition
+provider failures or missing model calls refuse even if the original wrapper's degraded collation
+remains useful; preflight alone cannot attest model execution.
 
 The existing protected `/etc/yggdrasil/model-access/runtime.env` four-key binding must select
 an actual private IPv4 HTTPS Product executor with existing mTLS material. Only finite private
@@ -610,6 +615,9 @@ identity; a native-owned bounded ciphertext relay on an operation-local loopback
 only that same executor. The candidate remains network-none, with no socket mount or general
 egress. Missing references, unsupported endpoints, provider unavailability, transport limits,
 skips, incomplete effects or drift refuse; there is no mock, host Product overlay or fallback.
+The loopback alias uses an open descriptor of the exact owned Docker namespace inode, not a
+recyclable PID pathname. Relay worker exit is part of cleanup; container absence cannot confirm
+an unknown host relay exit.
 
 Private report/JUnit retention is complete-before-rename under `native-journaling-results/`,
 outside the disposable vault. Separate terminal evidence binds operation, SHA/digest, generation,
@@ -620,6 +628,11 @@ a fresh generation. A deterministic mechanism test or refused receipt is not par
 only an actual post-merge TEST all-PASS `conversational_journaling_execution.v1` receipt on #3347
 permits delivered-capability owner-doc promotion and parent closure. PG, Daily/Deep, channel health
 and production eligibility remain separate authorities.
+The original guarded review outbox is also retained and hash-bound to the materialization receipt.
+Terminal evidence is fsynced before atomic no-overwrite publication; a failed publication leaves
+no consumable PASS file. A complete pre-rename owner-preparing proof recovers its exact generation,
+while malformed pre-owner bytes can only be retired when no durable resource exists. Foreign
+proofs remain preserved. Journaling refusals retain their own profile and cleanup attribution.
 
 ### Nightly deterministic acceptance harness
 

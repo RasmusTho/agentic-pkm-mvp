@@ -66,10 +66,10 @@ def selected_references() -> dict[str, str]:
 
 
 class ProviderRelay(AbstractContextManager['ProviderRelay']):
-    def __init__(self, namespace_pid: int, endpoint: str) -> None:
+    def __init__(self, namespace_fd: int, endpoint: str) -> None:
         parsed = urlsplit(endpoint)
         self.target = (str(ipaddress.ip_address(parsed.hostname or '')), parsed.port or 443)
-        self.pid = namespace_pid
+        self.namespace_fd = namespace_fd
         self.stop = Event()
         self.failed = False
         self.connections = 0
@@ -78,14 +78,16 @@ class ProviderRelay(AbstractContextManager['ProviderRelay']):
         self.listener: socket.socket | None = None
 
     def __enter__(self) -> ProviderRelay:
-        if not hasattr(os, 'setns') or self.pid <= 0:
+        if not hasattr(os, 'setns') or self.namespace_fd < 0:
             raise NativeWebRefusal('native_provider_transport_unavailable')
-        _command(['nsenter', '--net=/proc/' + str(self.pid) + '/ns/net', 'ip', 'address',
+        # The trusted owner holds Docker's exact namespace inode, not a PID
+        # pathname that could be recycled between readback and this effect.
+        namespace = '/proc/' + str(os.getpid()) + '/fd/' + str(self.namespace_fd)
+        _command(['nsenter', '--net=' + namespace, 'ip', 'address',
                   'add', self.target[0] + '/32', 'dev', 'lo'])
         host = os.open('/proc/self/ns/net', os.O_RDONLY)
-        candidate = os.open('/proc/' + str(self.pid) + '/ns/net', os.O_RDONLY)
         try:
-            os.setns(candidate, 0)
+            os.setns(self.namespace_fd, 0)
             try:
                 self.listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.listener.bind(self.target)
@@ -95,7 +97,6 @@ class ProviderRelay(AbstractContextManager['ProviderRelay']):
                 os.setns(host, 0)
         finally:
             os.close(host)
-            os.close(candidate)
         self.worker = Thread(target=self._run, daemon=True)
         self.worker.start()
         return self

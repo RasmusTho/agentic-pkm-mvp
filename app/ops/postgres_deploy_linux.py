@@ -1792,6 +1792,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('prior_generation', nargs='?')
     parser.add_argument('--compose-command')
     args = parser.parse_args(argv)
+    journaling_started = False
     try:
         if args.action in {'karakeep-acquire', 'karakeep-project'}:
             if args.channel != 'test' or any((args.operation_id, args.attempt_id, args.prior_generation, args.compose_command)):
@@ -1821,10 +1822,12 @@ def main(argv: list[str] | None = None) -> int:
                 or args.attempt_id is not None or args.prior_generation is not None or args.compose_command):
                 raise NativeWebRefusal('fixed_test_journaling_invocation_required')
             effects = LinuxEffects(LinuxConfig.load(args.channel))
+            effects._web_admission(args.operation_id)
             def journaling_interrupted(_signal: int, _frame: Any) -> None:
                 raise KeyboardInterrupt()
             previous_handler = signal.signal(signal.SIGTERM, journaling_interrupted)
             try:
+                journaling_started = True
                 result = effects.run_journaling_qualification(args.operation_id)
             finally:
                 signal.signal(signal.SIGTERM, previous_handler)
@@ -1859,10 +1862,21 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(result, sort_keys=True))
         return 0
     except NativeWebRefusal as exc:
+        if args.action == 'qualify-journaling':
+            from app.ops.native_journaling_acceptance import PROFILE
+            print(json.dumps({'profile_version': PROFILE, 'result': 'unknown' if journaling_started else 'refused',
+                              'reason': exc.reason, 'cleanup': 'unknown' if journaling_started else 'not_started'}, sort_keys=True))
+            return 78
         print(json.dumps({'profile_version': WEB_PROFILE, 'result': 'refused', 'reason': exc.reason,
                           'cleanup': 'not_started'}, sort_keys=True))
         return 78
     except Exception:
+        if args.action == 'qualify-journaling':
+            from app.ops.native_journaling_acceptance import PROFILE
+            print(json.dumps({'profile_version': PROFILE, 'result': 'unknown' if journaling_started else 'refused',
+                              'reason': 'native_journaling_boundary_unavailable',
+                              'cleanup': 'unknown' if journaling_started else 'not_started'}, sort_keys=True))
+            return 78
         print('database deployment refused; operation remains pending', file=sys.stderr)
         return 78
 

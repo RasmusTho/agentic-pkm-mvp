@@ -34,15 +34,23 @@ class NativeJournalingRunner(NativeWebRunner):
         self.marker = self.directory.with_name(self.name + '.owner.json')
         self.preparing = self.directory.with_name(self.name + '.owner.preparing')
         generation = str(uuid4())
-        if self.marker.exists() or self.marker.is_symlink():
+        proof = self.marker if self.marker.exists() or self.marker.is_symlink() else self.preparing
+        if proof.exists() or proof.is_symlink():
             self._require_parent()
-            self._regular_marker(self.marker)
-            owner = json.loads(self.marker.read_text())
-            if (set(owner) != set(self.identity) | {'resource_generation'}
+            self._regular_marker(proof)
+            try:
+                owner = json.loads(proof.read_text())
+            except (ValueError, UnicodeError):
+                if proof != self.preparing or self.directory.exists():
+                    raise NativeWebRefusal('foreign_resource_owner') from None
+                owner = None  # Interrupted pre-owner bytes; no durable resource exists.
+            if owner is not None and (not isinstance(owner, dict)
+                or set(owner) != set(self.identity) | {'resource_generation'}
                 or any(owner.get(key) != value for key, value in self.identity.items())
                 or str(UUID(str(owner.get('resource_generation')))) != owner.get('resource_generation')):
                 raise NativeWebRefusal('foreign_resource_owner')
-            generation = owner['resource_generation']
+            if owner is not None:
+                generation = owner['resource_generation']
         self.identity['resource_generation'] = generation
         self.labels = {'io.yggdrasil.journaling.' + key: value for key, value in self.identity.items()}
 
@@ -67,7 +75,9 @@ class NativeJournalingRunner(NativeWebRunner):
             before = source.stat()
             data = source.read_bytes()
             after = source.stat()
-            if before != after:
+            observed = lambda value: (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns,
+                                      value.st_ctime_ns, value.st_uid, value.st_gid, value.st_mode)
+            if observed(before) != observed(after):
                 raise NativeWebRefusal('actual_product_provider_reference_drift')
             path = target / key
             descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -97,7 +107,8 @@ class NativeJournalingRunner(NativeWebRunner):
         final = directory / (self.identity['operation_id'] + '-' + self.identity['resource_generation'])
         pending = directory / (final.name + '.pending')
         pending.mkdir(mode=0o700)
-        filenames = {'report.json': self.identity['resource_generation'] + '.json', 'junit.xml': 'junit.xml'}
+        filenames = {'report.json': self.identity['resource_generation'] + '.json', 'junit.xml': 'junit.xml',
+                     'journal-review-outbox.jsonl': 'journal-review-outbox.jsonl'}
         hashes = {}
         for target, source in filenames.items():
             self._docker('cp', identifier + ':/scratch/journaling-evidence/' + source, str(pending / target))
@@ -112,6 +123,11 @@ class NativeJournalingRunner(NativeWebRunner):
                 os.fsync(stream.fileno())
         report = json.loads((pending / 'report.json').read_text())
         require_report(report, manifest)
+        receipt_rows = [json.loads(line) for line in (pending / 'journal-review-outbox.jsonl').read_text().splitlines()
+                        if line.strip()]
+        if (len(receipt_rows) != 1 or receipt_rows[0].get('event') != 'journal.entry.accepted'
+            or receipt_rows[0].get('event_id') != report['artifacts']['acceptance_receipt_id']):
+            raise NativeWebRefusal('guarded_journaling_receipt_incomplete')
         rows = ElementTree.parse(pending / 'junit.xml').getroot().findall('.//testcase')
         if (len(rows) != 1 or rows[0].get('name') != WRAPPER.split('::')[1]
             or rows[0].get('classname') != 'tests.journaling.test_conversational_journaling_live_acceptance'
@@ -122,6 +138,8 @@ class NativeJournalingRunner(NativeWebRunner):
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+        if final.exists() or final.is_symlink():
+            raise NativeWebRefusal('foreign_journaling_evidence_preserved')
         os.rename(pending, final)
         descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         try:
@@ -182,13 +200,28 @@ class NativeJournalingRunner(NativeWebRunner):
         self._check_container(identifier, database, image['Id'], mounts)
         self._check_provider_assets()
         db = self._owned('db')
-        if db is None or db['Id'] != database or type(db.get('State', {}).get('Pid')) is not int:
+        if (db is None or db['Id'] != database or type(db.get('State', {}).get('Pid')) is not int
+            or db.get('State', {}).get('Running') is not True):
             raise NativeWebRefusal('database_identity_unknown')
-        with ProviderRelay(db['State']['Pid'], provider[REFERENCE_KEYS[0]]) as relay:
-            try:
-                output = self._docker('start', '--attach', identifier, timeout=DEADLINE).decode()
-            except PgAcceptanceError:
-                output = self._docker('logs', '--tail', '500', identifier).decode()
+        sandbox = db.get('NetworkSettings', {}).get('SandboxKey')
+        if not isinstance(sandbox, str) or re.fullmatch(r'/(?:var/)?run/docker/netns/[a-z0-9_-]+', sandbox) is None:
+            raise NativeWebRefusal('database_namespace_identity_unknown')
+        namespace = os.open(sandbox, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            opened = os.fstat(namespace)
+            observed = os.stat('/proc/' + str(db['State']['Pid']) + '/ns/net')
+            reread = self._owned('db')
+            if ((opened.st_dev, opened.st_ino) != (observed.st_dev, observed.st_ino)
+                or reread is None or reread['Id'] != database or reread.get('State') != db['State']
+                or reread.get('NetworkSettings', {}).get('SandboxKey') != sandbox):
+                raise NativeWebRefusal('database_namespace_identity_drift')
+            with ProviderRelay(namespace, provider[REFERENCE_KEYS[0]]) as relay:
+                try:
+                    output = self._docker('start', '--attach', identifier, timeout=DEADLINE).decode()
+                except PgAcceptanceError:
+                    output = self._docker('logs', '--tail', '500', identifier).decode()
+        finally:
+            os.close(namespace)
         transport = relay.readback()
         self._check_provider_assets()
         self._check_container(identifier, database, image['Id'], mounts)
@@ -210,7 +243,8 @@ class NativeJournalingRunner(NativeWebRunner):
         require_result(result, manifest)
         if (result.get('wrapper') != WRAPPER or result.get('app_image_id') != image['Id']
             or result.get('resource_tree') != manifest['resource_tree'] or result.get('report') != retained['report']
-            or result.get('report_hash') != hash_json(retained['report'])):
+            or result.get('report_hash') != hash_json(retained['report'])
+            or result['guarded_receipt']['sha256'] != retained['artifacts']['files']['journal-review-outbox.jsonl']):
             raise NativeWebRefusal('journaling_evidence_drift')
         return {**result, 'transport': transport, 'artifacts': retained['artifacts'], 'profile_version': PROFILE}
 
@@ -224,6 +258,8 @@ class NativeJournalingRunner(NativeWebRunner):
             result.update(self._execute())
         except NativeWebRefusal as exc:
             result.update(result='refused', reason=exc.reason)
+            if exc.reason == 'native_provider_transport_cleanup_unknown':
+                self.extra_cleanup_unknown = True
         except KeyboardInterrupt:
             result.update(result='refused', reason='interrupted_execution')
         except Exception:
@@ -231,7 +267,10 @@ class NativeJournalingRunner(NativeWebRunner):
         finally:
             try:
                 self.cleanup()
-                result['cleanup'] = 'confirmed'
+                if getattr(self, 'extra_cleanup_unknown', False):
+                    result.update(result='unknown', reason='native_provider_transport_cleanup_unknown', cleanup='unknown')
+                else:
+                    result['cleanup'] = 'confirmed'
             except Exception:
                 result.update(result='unknown', reason='owned_cleanup_unknown', cleanup='unknown')
         if hasattr(self, 'retained_artifacts'):

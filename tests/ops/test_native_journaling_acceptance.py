@@ -4,8 +4,10 @@ from __future__ import annotations
 import copy
 from datetime import date
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -19,6 +21,7 @@ from app.ops import pg_acceptance as pg
 from app.ops import postgres_deploy_linux as linux
 from app.ops.postgres_deploy import DeployJournal, DeployPlan
 from tests.deploy.test_postmerge_pg_acceptance import DIGEST, IMAGE_ID, DockerBoundary, _repository, _result
+from tests.ops.test_native_web_lock_lifecycle import admitted as admitted
 
 
 def binding() -> dict:
@@ -197,16 +200,18 @@ def test_complete_retention_requires_original_report_and_junit(tmp_path, monkeyp
         target = Path(args[-1])
         if target.name == 'report.json':
             target.write_text(json.dumps(original))
-        else:
+        elif target.name == 'junit.xml':
             target.write_text('<testsuites><testsuite><testcase name="test_conversational_journaling_live_acceptance" '
                               'classname="tests.journaling.test_conversational_journaling_live_acceptance" />'
                               '</testsuite></testsuites>')
+        else:
+            target.write_text(json.dumps({'event': 'journal.entry.accepted', 'event_id': 'contract-receipt'}) + '\n')
         return b''
     monkeypatch.setattr(runner, '_docker', copy_artifact)
     retained = runner._retain('owned-container', bound)
     assert retained['report'] == original
     directory = Path(retained['artifacts']['directory'])
-    assert set(retained['artifacts']['files']) == {'report.json', 'junit.xml'}
+    assert set(retained['artifacts']['files']) == {'report.json', 'junit.xml', 'journal-review-outbox.jsonl'}
     assert not directory.with_name(directory.name + '.pending').exists()
     assert directory.stat().st_mode & 0o777 == 0o700
     assert (directory / 'report.json').stat().st_mode & 0o777 == 0o600
@@ -245,3 +250,226 @@ def test_provider_binding_refuses_missing_or_caller_environment(tmp_path, monkey
     (tmp_path / 'missing.env').symlink_to(tmp_path / 'foreign.env')
     with pytest.raises(web.NativeWebRefusal, match='references_unavailable'):
         transport.selected_references()
+
+
+def test_owner_preparing_crash_recovers_exact_generation(tmp_path, monkeypatch):
+    runner, boundary = _runner(tmp_path, monkeypatch)
+    runner.preparing.parent.mkdir(mode=0o700, parents=True)
+    journaling.private_json(runner.preparing, runner.identity)
+    recovered = runners.NativeJournalingRunner(runner.repository, tmp_path / 'journal',
+        sha=runner.identity['source_sha'], digest=DIGEST, channel='test', operation_id=runner.identity['operation_id'])
+    assert recovered.identity == runner.identity
+    monkeypatch.setattr(recovered, '_docker', boundary.command)
+    recovered.cleanup()
+    assert not recovered.preparing.exists()
+    journaling.private_json(recovered.preparing, {**runner.identity, 'source_sha': 'f' * 40})
+    with pytest.raises(web.NativeWebRefusal, match='foreign_resource_owner'):
+        runners.NativeJournalingRunner(runner.repository, tmp_path / 'journal', sha=runner.identity['source_sha'],
+                                      digest=DIGEST, channel='test', operation_id=runner.identity['operation_id'])
+    assert recovered.preparing.exists()
+
+
+def test_unknown_relay_cleanup_never_retires_channel_admission(request, tmp_path, monkeypatch):
+    runner, _boundary = _runner(tmp_path, monkeypatch)
+    monkeypatch.setattr(runner, '_execute', lambda: (_ for _ in ()).throw(
+        web.NativeWebRefusal('native_provider_transport_cleanup_unknown')))
+    unknown = runner.verify()
+    assert unknown['result'] == 'unknown' and unknown['cleanup'] == 'unknown'
+    effects, operation, lock = request.getfixturevalue('admitted')
+    monkeypatch.setattr(effects, 'qualify_journaling', lambda _operation: unknown)
+    with pytest.raises(linux.PostgresDeployError):
+        effects.run_journaling_qualification(operation)
+    assert lock.is_dir() and (lock / 'bws-owner').is_file()
+    before = effects.config.journal.read().payload()
+    with pytest.raises(web.NativeWebRefusal):
+        effects.run_journaling_qualification(str(uuid4()))
+    monkeypatch.setattr(effects, 'qualify_journaling', lambda _operation: {'result': 'refused', 'cleanup': 'confirmed'})
+    assert effects.run_journaling_qualification(operation)['result'] == 'refused'
+    assert not lock.exists() and effects.config.journal.read().payload() == before
+
+
+def test_terminal_fsync_failure_leaves_no_pass_file(tmp_path, monkeypatch):
+    target = tmp_path / 'terminal.json'
+    original = os.fsync
+    for fail_at in (1, 2):
+        calls = []
+        def fail(descriptor):
+            calls.append(descriptor)
+            if len(calls) == fail_at:
+                raise OSError('injected durability failure')
+            return original(descriptor)
+        with monkeypatch.context() as context:
+            context.setattr(journaling.os, 'fsync', fail)
+            with pytest.raises(OSError):
+                journaling.private_json(target, {'result': 'passed', 'cleanup': 'confirmed'})
+        assert not target.exists() and not list(tmp_path.glob('.terminal.json.*'))
+    journaling.private_json(target, {'result': 'refused'})
+    assert json.loads(target.read_text()) == {'result': 'refused'}
+
+
+def test_journaling_refusal_is_not_native_web_evidence(monkeypatch, capsys):
+    assert linux.main(['qualify-journaling', 'prod', str(uuid4())]) == 78
+    outcome = json.loads(capsys.readouterr().out)
+    assert outcome['profile_version'] == journaling.PROFILE and outcome['cleanup'] == 'not_started'
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: object())
+    monkeypatch.setattr(linux, 'LinuxEffects', lambda _config: SimpleNamespace(
+        _web_admission=lambda _operation: None,
+        run_journaling_qualification=lambda _operation: (_ for _ in ()).throw(
+            web.NativeWebRefusal('journaling_evidence_directory_unqualified'))))
+    assert linux.main(['qualify-journaling', 'test', str(uuid4())]) == 78
+    outcome = json.loads(capsys.readouterr().out)
+    assert outcome['profile_version'] == journaling.PROFILE
+    assert outcome['result'] == 'unknown' and outcome['cleanup'] == 'unknown'
+
+
+def test_actual_product_observer_rejects_deterministic_provider_substitution(tmp_path, monkeypatch):
+    from app.write_guard import DEFAULT_WRITE_GUARD
+    from tests.journaling.test_live_journaling_acceptance_contract import _install_real_product_seams
+    from tests.journaling import live_journaling_acceptance as live
+    bound = binding()
+    monkeypatch.setattr(journaling, 'VAULT', tmp_path / 'vault')
+    monkeypatch.setattr(journaling, 'EVIDENCE', tmp_path / 'evidence')
+    monkeypatch.setattr(journaling, 'MANIFEST', tmp_path / 'manifest.json')
+    monkeypatch.setenv('VAULT_ROOT', str(tmp_path / 'vault'))
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, 'snapshot_fn', lambda: {'state': 'healthy'})
+    fixture = journaling.bootstrap(bound)
+    manifest = live.load_manifest(tmp_path / 'manifest.json')
+    _install_real_product_seams(monkeypatch, manifest)
+    observer = journaling.EffectObserver(root=Path(__file__).resolve().parents[2])
+    sys.setprofile(observer.profile)
+    try:
+        produced = live.run_qualified_journey(manifest)
+    finally:
+        sys.setprofile(None)
+    assert produced.feature_acceptance == 'PASS'  # Unit journey only; native must refuse it below.
+    observed = observer.require_complete(produced.as_payload())
+    assert observed['provider_calls'] == []
+    candidate = {**bound, 'result': 'passed', 'wrapper': journaling.WRAPPER, 'report': produced.as_payload(),
+                 'report_hash': web.hash_json(produced.as_payload()), 'effect_observer': observed, 'fixture': fixture,
+                 'provider': {'execution_host_profile': 'profile.codex_remote_host', 'provider': 'codex_cli', 'model': 'unit-only'}}
+    with pytest.raises(web.NativeWebRefusal, match='provider_calls_incomplete'):
+        journaling.require_result(candidate, bound)
+    candidate['effect_observer']['observed'][1]['cognition']['degraded'] = True
+    with pytest.raises(web.NativeWebRefusal):
+        journaling.require_result(candidate, bound)
+
+
+def test_image_main_compiles_and_ingests_settings_before_model_admission(tmp_path, monkeypatch, capsys):
+    from app.components.llm import fabric
+    from app.settings import compiler, runtime
+    from app.write_guard import DEFAULT_WRITE_GUARD
+    bound = binding()
+    bound['files'] = {journaling.WRAPPER.split('::')[0]: 'a' * 64}
+    resource = tmp_path / 'resources.json'
+    journaling.private_json(resource, bound)
+    monkeypatch.setattr(journaling, 'VAULT', tmp_path / 'vault')
+    monkeypatch.setattr(journaling, 'EVIDENCE', tmp_path / 'evidence')
+    monkeypatch.setattr(journaling, 'MANIFEST', tmp_path / 'manifest.json')
+    monkeypatch.setattr(compiler, 'RUNTIME', tmp_path / 'runtime/settings')
+    monkeypatch.setattr(runtime, 'RUNTIME', tmp_path / 'runtime/settings')
+    monkeypatch.setenv('VAULT_ROOT', str(tmp_path / 'vault'))
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, 'snapshot_fn', lambda: {'state': 'healthy'})
+    # Resource/image and migration transport are unavailable in this local test;
+    # canonical bootstrap, compiler and runtime ingestion remain real.
+    monkeypatch.setattr(pg, 'verify_resources', lambda _binding: None)
+    migrations = []
+    monkeypatch.setattr(journaling.subprocess, 'run', lambda args, **kwargs: migrations.append(args))
+    called = []
+    def unavailable(_intent):
+        assert (compiler.RUNTIME / 'llm_routing.yaml').is_file()
+        assert runtime.get_settings_bundle().llm_routing.default_provider != 'mock'
+        assert (tmp_path / 'manifest.json').is_file()
+        called.append('actual_provider_admission_after_canonical_settings')
+        raise web.NativeWebRefusal('actual_product_provider_unavailable')
+    monkeypatch.setattr(fabric, 'get_chat_client', unavailable)
+    assert journaling.main(['--manifest', str(resource)]) == 78
+    assert migrations == [[sys.executable, '-m', 'alembic', 'upgrade', 'head']]
+    assert called == ['actual_provider_admission_after_canonical_settings']
+    line = next(line for line in capsys.readouterr().out.splitlines() if line.startswith('YGGDRASIL_NATIVE_JOURNALING='))
+    assert json.loads(line.split('=', 1)[1])['reason'] == 'actual_product_provider_unavailable'
+    assert not list((tmp_path / 'vault').glob('**/journal/*.md'))
+
+
+def test_native_container_command_is_fixed_and_namespace_drift_refuses_before_product(tmp_path, monkeypatch):
+    runner, boundary = _runner(tmp_path, monkeypatch)
+    refs = {transport.REFERENCE_KEYS[0]: 'https://10.0.0.8:8123'}
+    for key in transport.REFERENCE_KEYS[1:]:
+        source = tmp_path / key
+        source.write_text('unit-only certificate fixture; never a provider PASS')
+        refs[key] = str(source)
+    monkeypatch.setattr(runners, 'selected_references', lambda: refs)
+    original_docker = runner._docker
+    def docker(*args, timeout=60):
+        output = original_docker(*args, timeout=timeout)
+        if args[0] == 'create':
+            name = args[args.index('--name') + 1]
+            row = boundary.containers[name]
+            row['HostConfig']['SecurityOpt'] = ['no-new-privileges']
+            if name.endswith('-tests'):
+                row['Config']['Entrypoint'] = ['/usr/bin/env']
+                row['Config']['Cmd'] = list(args[args.index(runner.image) + 1:])
+            else:
+                row['State'] = {'Pid': 123, 'Running': True}
+                row['NetworkSettings'] = {'SandboxKey': '/foreign/namespace'}
+        return output
+    monkeypatch.setattr(runner, '_docker', docker)
+    outcome = runner.verify()
+    assert outcome['result'] == 'refused' and outcome['cleanup'] == 'confirmed'
+    assert outcome['reason'] == 'database_namespace_identity_unknown'
+    assert not boundary.containers
+    command = runner._candidate_command
+    assert command[-5:] == ['python', '-m', 'app.ops.native_journaling_acceptance',
+                            '--manifest', '/native-journaling-manifest.json']
+    assert command[0] == '-i'
+    assert not any(value.startswith(('LLM_PROVIDER=', 'LLM_FORCE_PROVIDER=', 'BWS_ACCESS_TOKEN=')) for value in command)
+    creations = [args for args, _ in boundary.commands if args[0] == 'create']
+    app = next(args for args in creations if args[args.index('--name') + 1].endswith('-tests'))
+    mounts = [app[index + 1] for index, value in enumerate(app) if value == '--mount']
+    assert all('readonly' in mount and '/app/app' not in mount and 'docker.sock' not in mount for mount in mounts)
+    assert not any(args[:2] == ('start', '--attach') for args, _ in boundary.commands)
+
+
+def test_provider_relay_forwards_unchanged_bytes_and_confirms_own_worker_exit():
+    import socket
+    from threading import Thread
+    server = socket.socket()
+    server.bind(('127.0.0.1', 0))
+    server.listen(1)
+    def echo():
+        with server.accept()[0] as remote:
+            remote.settimeout(3)
+            data = remote.recv(4096)
+            remote.sendall(data)
+    remote_worker = Thread(target=echo)
+    remote_worker.start()
+    relay = transport.ProviderRelay(0, 'https://127.0.0.1:' + str(server.getsockname()[1]))
+    # Exercise the real forwarding/stop loop, without changing a host namespace
+    # or making a Product/provider acceptance claim.
+    relay.listener = socket.socket()
+    relay.listener.bind(('127.0.0.1', 0))
+    relay.listener.listen(1)
+    relay.listener.settimeout(0.2)
+    relay.worker = Thread(target=relay._run)
+    relay.worker.start()
+    payload = b'unit-only opaque TLS-like bytes'
+    try:
+        with socket.create_connection(relay.listener.getsockname(), timeout=3) as client:
+            client.sendall(payload)
+            assert client.recv(4096) == payload
+    finally:
+        relay.__exit__()
+        server.close()
+        remote_worker.join(timeout=3)
+    observed = relay.readback()
+    assert observed['connections'] == 1 and observed['bytes'] == len(payload) * 2
+    assert not relay.worker.is_alive() and not remote_worker.is_alive()
+
+
+def test_provider_relay_unknown_worker_exit_is_never_complete():
+    relay = transport.ProviderRelay(0, 'https://10.0.0.8:8123')
+    relay.worker = SimpleNamespace(join=lambda **kwargs: None, is_alive=lambda: True)
+    relay.listener = SimpleNamespace(close=lambda: None)
+    with pytest.raises(web.NativeWebRefusal, match='cleanup_unknown'):
+        relay.__exit__()
+    with pytest.raises(web.NativeWebRefusal, match='transport_incomplete'):
+        relay.readback()

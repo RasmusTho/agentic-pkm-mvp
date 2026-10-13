@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from types import FrameType
 from typing import Any
 
@@ -42,11 +43,34 @@ def identity(sha: str, digest: str, channel: str, operation_id: str) -> dict[str
 
 
 def private_json(path: Path, value: Any) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, 'w') as stream:
-        json.dump(value, stream, sort_keys=True)
-        stream.flush()
-        os.fsync(stream.fileno())
+    """Durable complete-before-publication, atomic no-overwrite, or absent."""
+    descriptor, temporary_name = tempfile.mkstemp(dir=path.parent, prefix='.' + path.name + '.')
+    temporary = Path(temporary_name)
+    published = False
+    try:
+        with os.fdopen(descriptor, 'w') as stream:
+            os.fchmod(stream.fileno(), 0o600)
+            json.dump(value, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Hard-link publication is atomic and refuses an existing final name.
+        os.link(temporary, path, follow_symlinks=False)
+        published = True
+        parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(parent)
+        finally:
+            os.close(parent)
+    except Exception:
+        if published:
+            # Only the exact link just published can be invalidated on a failed
+            # durability acknowledgement; never remove a replaced/foreign file.
+            named, staged = path.lstat(), temporary.lstat()
+            if (named.st_dev, named.st_ino) == (staged.st_dev, staged.st_ino):
+                path.unlink()
+        raise
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def file_hash(path: Path) -> str:
@@ -103,6 +127,10 @@ def require_result(result: Any, binding: dict[str, Any]) -> None:
         or not rows[1].get('candidate_uuid') or rows[1].get('candidate_uuid') == rows[5].get('candidate_uuid')
         or any(rows[index].get('authority_state') != 'proposal' or rows[index].get('derived_by') != 'conversation'
                for index in (1, 5))
+        or any(not isinstance(rows[index].get('cognition'), dict)
+               or rows[index]['cognition'].get('degraded') is not False
+               or rows[index]['cognition'].get('outcome') in {'provider_failure', 'missing_input', 'empty_output'}
+               for index in (1, 5))
         or rows[2].get('path') != rows[1].get('path') or rows[2].get('actor_id') != ACTOR
         or rows[1].get('sha256') != artifacts['primary_candidate_sha256']
         or rows[5].get('sha256') != artifacts['addendum_candidate_sha256']
@@ -123,6 +151,23 @@ def require_result(result: Any, binding: dict[str, Any]) -> None:
     if (not isinstance(provider, dict) or provider.get('execution_host_profile') != 'profile.codex_remote_host'
         or provider.get('provider') in {None, '', 'mock'} or provider.get('model') in {None, '', 'mock-chat'}):
         raise NativeWebRefusal('actual_product_provider_unavailable')
+    calls = observer.get('provider_calls')
+    if any(type(row['cognition'].get('source_count')) is not int
+           or not 4 <= row['cognition']['source_count'] <= 8 for row in (rows[1], rows[5])):
+        raise NativeWebRefusal('actual_drafting_provider_inventory_invalid')
+    expected_calls = 6 + sum(row['cognition'].get('source_count', 0) for row in (rows[1], rows[5]))
+    if (not isinstance(calls, list) or len(calls) != expected_calls or not 8 <= expected_calls <= 32
+        or any(not isinstance(call, dict) or call.get('execution_host_profile') != 'profile.codex_remote_host'
+               or call.get('provider') in {None, '', 'mock'} or not call.get('model')
+               or call.get('degraded') is not False or call.get('preflight_status') != 'passed' for call in calls)):
+        raise NativeWebRefusal('actual_product_provider_calls_incomplete')
+    if (result.get('producer_pid') != 1 or result.get('producer_module') != '/app/app/ops/native_journaling_acceptance.py'
+        or result.get('configuration_hash') != fixture.get('configuration_hash')
+        or re.fullmatch(r'[0-9a-f]{64}', str(result.get('configuration_hash'))) is None
+        or result.get('guarded_receipt', {}).get('event_id') != artifacts['acceptance_receipt_id']
+        or result.get('guarded_receipt', {}).get('event') != 'journal.entry.accepted'
+        or re.fullmatch(r'[0-9a-f]{64}', str(result.get('guarded_receipt', {}).get('sha256'))) is None):
+        raise NativeWebRefusal('journaling_producer_or_guarded_receipt_unknown')
 
 
 def bootstrap(binding: dict[str, Any]) -> dict[str, Any]:
@@ -206,7 +251,7 @@ class EffectObserver:
     """Observe original Product calls/returns; never replace any implementation."""
     ORDER = ('conversation', 'draft', 'actor', 'review', 'conversation', 'draft')
 
-    def __init__(self) -> None:
+    def __init__(self, *, root: Path = Path('/app')) -> None:
         from app.chat.reflection_conversation import ReflectionConversationService
         from app.journaling.draft import draft_journal_entry
         from app.journaling.review import process_journal_reviews_tick
@@ -219,14 +264,44 @@ class EffectObserver:
         self.primary: Path | None = None
         self.canonical: Path | None = None
         self.canonical_hash: str | None = None
+        self.root = root
+        from app.components.llm.fabric import ChatClient
+        self.chat_code = ChatClient.chat.__code__
+        self.provider_calls: list[dict[str, Any]] = []
+        self.provider_started = 0
+        self.provider_active: set[int] = set()
 
     def profile(self, frame: FrameType, event: str, value: Any) -> None:
+        if frame.f_code is self.chat_code and event == 'call':
+            if Path(frame.f_code.co_filename).resolve() != self.root / 'app/components/llm/fabric.py':
+                raise NativeWebRefusal('actual_product_provider_call_origin_invalid')
+            self.provider_started += 1
+            if self.provider_started > 32:
+                raise NativeWebRefusal('actual_product_provider_calls_over_budget')
+            self.provider_active.add(id(frame))
+            return
+        if frame.f_code is self.chat_code and event == 'return':
+            if id(frame) not in self.provider_active:
+                raise NativeWebRefusal('actual_product_provider_call_unobserved')
+            self.provider_active.remove(id(frame))
+            route = frame.f_locals['self'].model_access_route
+            if (Path(frame.f_code.co_filename).resolve() != self.root / 'app/components/llm/fabric.py'
+                or route is None or route.execution_host_profile != 'profile.codex_remote_host'
+                or route.provider == 'mock' or route.degraded or route.preflight_status != 'passed'
+                or not isinstance(value, str) or not value.strip()):
+                raise NativeWebRefusal('actual_product_provider_call_unavailable')
+            self.provider_calls.append({'execution_host_profile': route.execution_host_profile,
+                                        'provider': route.provider, 'model': route.model, 'degraded': route.degraded,
+                                        'preflight_status': route.preflight_status})
+            if len(self.provider_calls) > 32:
+                raise NativeWebRefusal('actual_product_provider_calls_over_budget')
+            return
         name = self.codes.get(frame.f_code)
         if name is None:
             return
         if event == 'call':
             if (len(self.order) >= len(self.ORDER) or name != self.ORDER[len(self.order)]
-                or not Path(frame.f_code.co_filename).resolve().is_relative_to('/app')):
+                or not Path(frame.f_code.co_filename).resolve().is_relative_to(self.root)):
                 raise NativeWebRefusal('journaling_effect_order_or_origin_invalid')
             if name == 'actor' and frame.f_locals.get('path') != self.primary:
                 raise NativeWebRefusal('synthetic_actor_target_mismatch')
@@ -246,6 +321,13 @@ class EffectObserver:
                            derived_by=frontmatter.get('derived_by'))
                 if frontmatter.get('authority_state') != 'proposal' or frontmatter.get('derived_by') != 'conversation':
                     raise NativeWebRefusal('journaling_candidate_provenance_invalid')
+                cognition = frontmatter.get('proposed_by', {}).get('cognition', {})
+                if (not isinstance(cognition, dict) or cognition.get('degraded') is not False
+                    or cognition.get('outcome') in {'provider_failure', 'missing_input', 'empty_output'}
+                    or not isinstance(cognition.get('object_ids'), list) or not cognition['object_ids']):
+                    raise NativeWebRefusal('actual_drafting_provider_unavailable')
+                row['cognition'] = {'outcome': cognition.get('outcome'), 'degraded': cognition['degraded'],
+                                    'source_count': len(cognition['object_ids'])}
                 if value.is_addendum is False:
                     if self.primary is not None:
                         raise NativeWebRefusal('duplicate_primary_candidate')
@@ -270,6 +352,8 @@ class EffectObserver:
             self.observed.append(row)
 
     def require_complete(self, report: dict[str, Any]) -> dict[str, Any]:
+        if self.provider_active or self.provider_started != len(self.provider_calls):
+            raise NativeWebRefusal('actual_product_provider_calls_incomplete')
         if self.order != list(self.ORDER) or [row['effect'] for row in self.observed] != list(self.ORDER):
             raise NativeWebRefusal('journaling_observed_effects_incomplete')
         artifacts = report['artifacts']
@@ -287,7 +371,8 @@ class EffectObserver:
         for index, field in ((0, 'primary_transcript_sha256'), (4, 'second_transcript_sha256')):
             if file_hash(VAULT / rows[index]['path']) != artifacts[field]:
                 raise NativeWebRefusal('journaling_transcript_drift')
-        return {'order': list(self.order), 'observed': rows, 'effects': dict(EFFECTS)}
+        return {'order': list(self.order), 'observed': rows, 'effects': dict(EFFECTS),
+                'provider_calls': self.provider_calls}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -308,14 +393,26 @@ def main(argv: list[str] | None = None) -> int:
             raise NativeWebRefusal('journaling_wrapper_missing')
         subprocess.run([sys.executable, '-m', 'alembic', 'upgrade', 'head'], check=True, timeout=120,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        fixture = bootstrap(binding)
+        # The runtime tmpfs is intentionally empty. Produce and ingest settings
+        # canonically before any model consumer; ambient/mock routing is not used.
+        from app.settings.compiler import RUNTIME, compile_all
+        from app.settings.runtime import reload_settings_bundle
+        compile_all(vault_root=VAULT, auto_heal=False)
+        reload_settings_bundle(notify=False)
+        configuration_hash = hash_json({path.relative_to(RUNTIME).as_posix(): file_hash(path)
+                                        for path in sorted(RUNTIME.rglob('*')) if path.is_file()})
+        fixture['configuration_hash'] = configuration_hash
         # Actual Product routing must be remote, never mock or another in-memory factory.
         from app.components.llm.fabric import get_chat_client
         from app.components.llm.router import LLMTaskIntent
-        client = get_chat_client(LLMTaskIntent(task_kind='reflection'))
+        try:
+            client = get_chat_client(LLMTaskIntent(task_kind='reflection'))
+        except Exception:
+            raise NativeWebRefusal('actual_product_provider_unavailable') from None
         route = client.model_access_route
         if route is None or route.execution_host_profile != 'profile.codex_remote_host':
             raise NativeWebRefusal('actual_product_provider_unavailable')
-        fixture = bootstrap(binding)
         os.environ['JOURNALING_ACCEPTANCE_MANIFEST'] = str(MANIFEST)
         plugin = RequiredJournalingResults()
         observer = EffectObserver()
@@ -332,12 +429,24 @@ def main(argv: list[str] | None = None) -> int:
         report = json.loads((EVIDENCE / (binding['resource_generation'] + '.json')).read_text())
         require_report(report, binding)
         effects = observer.require_complete(report)
+        receipt_path = EVIDENCE / 'journal-review-outbox.jsonl'
+        receipt_rows = [json.loads(line) for line in receipt_path.read_text().splitlines() if line.strip()]
+        if (len(receipt_rows) != 1 or receipt_rows[0].get('event') != 'journal.entry.accepted'
+            or receipt_rows[0].get('event_id') != report['artifacts']['acceptance_receipt_id']):
+            raise NativeWebRefusal('guarded_journaling_receipt_incomplete')
         if any(file_hash(VAULT / path) != value for path, value in fixture['sources'].items()):
             raise NativeWebRefusal('journaling_source_drift')
+        if configuration_hash != hash_json({path.relative_to(RUNTIME).as_posix(): file_hash(path)
+                                            for path in sorted(RUNTIME.rglob('*')) if path.is_file()}):
+            raise NativeWebRefusal('journaling_configuration_drift')
         pg_acceptance.verify_resources(pg_binding)
         result.update(result='passed', resource_tree=binding['resource_tree'], app_image_id=binding['app_image_id'],
                       wrapper=WRAPPER, report=report, report_hash=hash_json(report), fixture=fixture,
                       effect_observer=effects,
+                      guarded_receipt={'event': 'journal.entry.accepted',
+                                       'event_id': receipt_rows[0]['event_id'], 'sha256': file_hash(receipt_path)},
+                      producer_pid=os.getpid(), producer_module=str(Path(__file__).resolve()),
+                      configuration_hash=configuration_hash,
                       provider={'execution_host_profile': route.execution_host_profile,
                                 'provider': route.provider, 'model': route.model})
     except NativeWebRefusal as exc:

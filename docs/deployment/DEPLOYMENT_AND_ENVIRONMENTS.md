@@ -656,6 +656,10 @@ missing references or actual provider failure refuse. A bounded native TLS byte 
 the selected private IPv4 endpoint reachable on disposable loopback while preserving the Product
 endpoint/model/TLS identity and network-none containment. There is no host socket or arbitrary
 candidate egress. Each certificate snapshot is private, readonly and operation-owned.
+The alias is bound through the exact owned Docker namespace descriptor/inode rather than a PID
+pathname. Canonical settings compilation/ingestion precedes model admission. Actual model calls,
+including both drafts, must have successful remote preflight/responses and undegraded cognition;
+a preflight flag or usable provider-failure collation cannot produce qualified PASS.
 
 All ten original scenarios, finite observed Product effects, synthetic-actor candidate identity,
 guarded receipt and unchanged accepted-primary bytes must pass. Complete original report/JUnit
@@ -665,6 +669,12 @@ bounded transport and exact cleanup. Partial evidence or drift is a refusal, nev
 Unknown cleanup retains admission; recover through the same-operation inode/flock seam, preserving
 foreign resources and re-reading exact owned IDs before cleanup and a fresh generation. This
 does not rewrite `postmerge-pg.v1`, `native-web-pilots.v1`, Daily/Deep reports or channel health.
+The original guarded review outbox is retained alongside report/JUnit and receipt-hash-bound.
+Terminal evidence uses complete/fsynced atomic no-overwrite publication; publication failure
+leaves no consumable PASS artifact. Complete owner-preparing proofs recover the exact prior
+generation across pre-rename crashes. Unknown relay worker exit remains unknown cleanup even
+after container removal, preserving admission for same-operation recovery. Journaling refusals
+have independent profile and cleanup attribution.
 
 Repository delivery proves this mechanism only. The parent #3347 owner must invoke it after merge
 against the admitted TEST image and post the redaction-safe all-PASS or attributable refusal
