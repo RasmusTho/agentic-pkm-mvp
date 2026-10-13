@@ -208,6 +208,8 @@ class VaultIdentityState(BaseModel):
     vault_name: str
     channel: str
     provenance: str
+    vault_id: str | None = None
+    local_instance_id: str | None = None
 
 
 class IngestBindingResponse(BaseModel):
@@ -832,7 +834,11 @@ class VaultUninitializedError(RuntimeError):
 _READABLE_SELECTED_STATUSES: frozenset[str] = frozenset({"selected", "uninitialized"})
 
 
-def _active_companion_vault_root(*, require_initialized: bool = False) -> Path:
+def _active_companion_vault_root(
+    *,
+    require_initialized: bool = False,
+    context_snapshot_out: dict[str, VaultContext] | None = None,
+) -> Path:
     manager = get_vault_manager()
     context = _companion_vault_context_with_lazy_last_active(manager)
     # Writes require a fully-initialized vault (status ``selected``); reads also
@@ -841,6 +847,8 @@ def _active_companion_vault_root(*, require_initialized: bool = False) -> Path:
     # initialize it before a write boundary will resolve its root.
     allowed = frozenset({"selected"}) if require_initialized else _READABLE_SELECTED_STATUSES
     if context.status in allowed and context.active_vault_path:
+        if context_snapshot_out is not None:
+            context_snapshot_out["context"] = context
         return Path(context.active_vault_path).expanduser()
     # A write boundary on a selected-but-``uninitialized`` vault is blocked, but
     # the residual state is distinct from a genuinely unselected context: name it
@@ -872,6 +880,7 @@ def _active_companion_vault_root_or_picker(
     requested_note_path: str | None = None,
     trace_id: str | None = None,
     require_initialized: bool = False,
+    context_snapshot_out: dict[str, VaultContext] | None = None,
 ) -> Path | VaultSelectionRequiredResponse:
     """Resolve the active vault root, or the picker state when none is bound.
 
@@ -887,6 +896,11 @@ def _active_companion_vault_root_or_picker(
     so the picker/init path can offer initialization (#2336).
     """
     try:
+        if context_snapshot_out is not None:
+            return _active_companion_vault_root(
+                require_initialized=require_initialized,
+                context_snapshot_out=context_snapshot_out,
+            )
         return _active_companion_vault_root(require_initialized=require_initialized)
     except VaultRootMisconfiguredError as exc:
         return _vault_selection_required_response(
@@ -1651,6 +1665,8 @@ class PanelState(BaseModel):
     blocked_reason: str | None
     no_match_reason: str | None
     selectable_options: list[PanelSelectableOption] = Field(default_factory=list)
+    proposals: list[dict[str, Any]] = Field(default_factory=list)
+    last_response: dict[str, Any] | None = None
 
 
 class SuggestionsState(BaseModel):
@@ -2136,7 +2152,9 @@ def _configured_vault_name() -> str | None:
     return None
 
 
-def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
+def _vault_identity_state(
+    vault_root: Path, *, context_snapshot: VaultContext | None = None
+) -> VaultIdentityState:
     raw_channel = (
         os.getenv("PKM_ENVIRONMENT")
         or os.getenv("CHANNEL")
@@ -2144,6 +2162,21 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
         or ""
     ).strip().lower()
     channel = raw_channel if raw_channel in {"dev", "test", "prod"} else "unknown"
+    # Optional read-side binding for local presentation state. A name is not
+    # identity: different selected vaults can have the same display name.
+    # Do not heal, select or require a new startup field merely to expose it.
+    try:
+        context = context_snapshot
+        matches = (
+            context is not None
+            and context.status == "selected"
+            and context.active_vault_path is not None
+            and Path(context.active_vault_path).expanduser().resolve() == vault_root.expanduser().resolve()
+        )
+        vault_id = context.active_vault_id if matches else None
+        local_instance_id = context.local_instance_id if matches else None
+    except Exception:
+        context, vault_id, local_instance_id = None, None, None
 
     # A configured vault name is authoritative. It survives the container's
     # host-VAULT_ROOT-vs-/app/vault path divergence that previously mislabeled a
@@ -2154,6 +2187,8 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
             vault_name=configured_name,
             channel=channel,
             provenance="settings",
+            vault_id=vault_id,
+            local_instance_id=local_instance_id,
         )
 
     # In the container the vault is bound at /app/vault, so neither VAULT_ROOT's
@@ -2170,12 +2205,15 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
                 vault_name=host_name,
                 channel=channel,
                 provenance="host_root",
+                vault_id=vault_id,
+                local_instance_id=local_instance_id,
             )
 
-    try:
-        context = get_vault_manager().context
-    except Exception:
-        context = None
+    if context is None:
+        try:
+            context = get_vault_manager().context
+        except Exception:
+            context = None
     if (
         context is not None
         and context.status == "selected"
@@ -2192,6 +2230,8 @@ def _vault_identity_state(vault_root: Path) -> VaultIdentityState:
                 vault_name=context.active_vault_name or vault_root.name or str(vault_root),
                 channel=channel,
                 provenance="selected",
+                vault_id=vault_id,
+                local_instance_id=local_instance_id,
             )
 
     # No configured name and no host-root hint: infer identity from the
@@ -2622,10 +2662,41 @@ def _panel_state(
         state = "blocked"
     elif proposal_count or selectable_count:
         state = "proposals-staged"
-    elif latest_outcome == "success":
+    elif latest is not None and latest.receipt is not None and latest.status in {"executed", "logged"}:
         state = "receipt-displayed"
     else:
         state = "idle"
+    staged = getattr(confirm_module._proposal_store, "_proposals", {})
+    proposal_rows = []
+    for proposal_id, proposal in staged.items():
+        if proposal.artifact_id != artifact_id:
+            continue
+        intent = proposal.intent_event
+        actions = [action for action in intent.payload.actions if action.checked]
+        created_at: str | None
+        try:
+            created_at = datetime.datetime.fromtimestamp(
+                proposal.proposed_at, tz=datetime.timezone.utc,
+            ).isoformat().replace("+00:00", "Z")
+        except (TypeError, ValueError, OverflowError, OSError):
+            created_at = None
+        proposal_rows.append({
+            "proposal_id": proposal_id,
+            "artifact_id": proposal.artifact_id,
+            "description": "; ".join(action.label for action in actions) or intent.payload.panel.instruction,
+            "status": "staged",
+            "created_at": created_at,
+            "lane": "governed",
+            "governed": True,
+            "proposal_origin": proposal.proposal_origin,
+            "affordances": {"confirm": True, "reject": True},
+            "evidence": {
+                "trigger_summary": intent.payload.panel.instruction,
+                "action_class": actions[0].mapping.intent_type if actions and actions[0].mapping else "",
+                "cognition_route": intent.source.component,
+            },
+            "block_reason": None,
+        })
     return PanelState(
         state=state,
         proposal_count=proposal_count + selectable_count,
@@ -2634,6 +2705,8 @@ def _panel_state(
         blocked_reason=blocked_reason,
         no_match_reason=None,
         selectable_options=options,
+        proposals=proposal_rows,
+        last_response=latest.model_dump(mode="json") if latest is not None else None,
     )
 
 
@@ -4748,12 +4821,17 @@ def read_companion_workspace(
 ) -> WorkspaceStateResponse | VaultSelectionRequiredResponse:
     trace_id = uuid4().hex
     safe_note_path = _validate_workspace_note_path(note_path)
+    admitted_context: dict[str, VaultContext] = {}
     vault_root = _active_companion_vault_root_or_picker(
         requested_note_path=safe_note_path,
         trace_id=trace_id,
+        context_snapshot_out=admitted_context,
     )
     if isinstance(vault_root, VaultSelectionRequiredResponse):
         return vault_root
+    # Reuse the exact snapshot that admitted this artifact root. A later
+    # selection must not supply presentation IDs for an earlier artifact.
+    workspace_context_snapshot = admitted_context.get("context")
     artifact_path = _find_workspace_note(vault_root, safe_note_path)
     if artifact_path is None:
         raise HTTPException(
@@ -4831,7 +4909,7 @@ def read_companion_workspace(
             environment_label=_safe_environment_label(),
             api_base_url_label=_safe_api_label(),
             trace_id=trace_id,
-            vault_identity=_vault_identity_state(vault_root),
+            vault_identity=_vault_identity_state(vault_root, context_snapshot=workspace_context_snapshot),
             ingest=_ingest_binding_state(vault_root),
             reorient=_reorient_state(signals=orientation_signals),
             resurface=_resurface_state(safe_note_path, signals=orientation_signals),

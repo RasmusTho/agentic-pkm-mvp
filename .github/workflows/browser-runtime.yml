@@ -61,6 +61,24 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
+      # #5958: adds missing/skip detection for the required five-case proof.
+      # Review this bounded inventory gate after acceptance, by 2026-11-12.
+      - name: Verify required deep-review focus continuity regressions
+        run: |
+          set -euo pipefail
+          proof="$RUNNER_TEMP/deep-review-focus.xml"
+          pytest -q --junitxml="$proof" \
+            tests/companion_ui/test_deep_review_production_wiring.py::test_overlay_frame_returns_to_original_focus_and_selection
+          python - "$proof" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse(sys.argv[1]).getroot().iter("testcase"))
+          expected = {"escape", "back", "replace", "disconnected", "stale"}
+          observed = {case.attrib["name"].rsplit("[", 1)[-1].rstrip("]") for case in cases}
+          assert len(cases) == 5 and observed == expected, "required focus inventory missing"
+          assert not any(list(case.iter(tag)) for case in cases for tag in ("skipped", "failure", "error")), "required focus proof did not pass"
+          PY
+
       # #5594/#5596: ordinary PRs must execute every current Overview regression,
       # including owner-language/disclosure and evidence-axis ACs. Keep this JUnit
       # gate separate from the historical exact-ref receipt inventory below.

@@ -113,6 +113,8 @@ class DevPageState:
     runtime_api_base_url_label: str = "local-dev"
     runtime_trace_id: str = ""
     runtime_vault_name: str = "unresolved"
+    runtime_vault_id: str | None = None
+    runtime_local_instance_id: str | None = None
     runtime_vault_channel: str = "unknown"
     runtime_vault_provenance: str = "unresolved"
     # Ingest-binding visibility (#3119): whether the watcher/worker are
@@ -460,7 +462,7 @@ class RealNoteWorkspaceDevPage:
         suggestion_machine = CanvasRailStateMachine(
             _normalise_suggestion_state(suggestions.get("current_suggestion_state"))
         )
-        panel_last_response = self.state.panel_last_response
+        panel_last_response = panel.get("last_response") or self.state.panel_last_response
         if panel_last_response and panel_last_response.get("artifact_id") != resolved_artifact_id:
             panel_last_response = None
         suggestion_cards = _suggestion_cards_from_payload(suggestions)
@@ -476,6 +478,8 @@ class RealNoteWorkspaceDevPage:
             runtime_api_base_url_label=runtime.get("api_base_url_label") or "local-dev",
             runtime_trace_id=runtime.get("trace_id") or "",
             runtime_vault_name=(runtime.get("vault_identity") or {}).get("vault_name") or "unresolved",
+            runtime_vault_id=(runtime.get("vault_identity") or {}).get("vault_id"),
+            runtime_local_instance_id=(runtime.get("vault_identity") or {}).get("local_instance_id"),
             runtime_vault_channel=(runtime.get("vault_identity") or {}).get("channel") or "unknown",
             runtime_vault_provenance=(runtime.get("vault_identity") or {}).get("provenance") or "unresolved",
             runtime_ingest_state=(runtime.get("ingest") or {}).get("state") or "unknown",
@@ -1001,6 +1005,8 @@ class RealNoteWorkspaceDevPage:
             "runtime_api_base_url_label": self.state.runtime_api_base_url_label,
             "runtime_trace_id": self.state.runtime_trace_id,
             "runtime_vault_name": self.state.runtime_vault_name,
+            "runtime_vault_id": self.state.runtime_vault_id,
+            "runtime_local_instance_id": self.state.runtime_local_instance_id,
             "runtime_vault_channel": self.state.runtime_vault_channel,
             "runtime_vault_provenance": self.state.runtime_vault_provenance,
             "runtime_ingest_state": self.state.runtime_ingest_state,
