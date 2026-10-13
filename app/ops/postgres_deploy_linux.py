@@ -488,7 +488,7 @@ def _capture_watch_configured(config: LinuxConfig) -> bool:
               for line in lines if line.startswith('HEIMDAL_CAPTURE_WATCH_DIR=')]
     if len(values) > 1:
         raise PostgresDeployError()
-    return bool(values and compose_env_value(values[0]))
+    return bool(values and compose_env_value(values[0]).strip())
 
 
 def _pin_value(config: LinuxConfig, key: str) -> str:

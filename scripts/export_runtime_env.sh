@@ -119,8 +119,8 @@ publish_runtime_env() {
 import json
 import os
 from pathlib import Path
-import re
 import sys
+from scripts.compose_env import compose_env_literal
 
 context = json.loads(os.environ["PKM_EXPORT_OPERATOR_CONTEXT"])
 if context:
@@ -128,11 +128,7 @@ if context:
     lines = candidate.read_text(encoding="utf-8").splitlines(keepends=True)
     lines = [line for line in lines if line.partition("=")[0] not in context]
     for key, value in context.items():
-        # Preserve bounded dotenv parsing of leading quotes, whitespace and
-        # comment-like path text, while keeping ordinary generated values plain.
-        if value != value.strip() or value[:1] in {"'", '"'} or re.search(r"\s+#", value):
-            value = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
-        lines.append(f"{key}={value}\n")
+        lines.append(f"{key}={compose_env_literal(value)}\n")
     candidate.write_text("".join(lines), encoding="utf-8")
 OPERATOR_CONTEXT
   mv -f "$runtime_env_output_path" "$runtime_env_path"
@@ -527,6 +523,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from scripts.compose_env import compose_env_literal
 
 _operator_provider = os.environ.get("LLM_PROVIDER")
 if not (_operator_provider or "").strip():
@@ -618,14 +615,14 @@ base_url = base_url.rstrip("/")
 ollama_host = _strip_v1(base_url)
 
 if ollama_host:
-    print(f"OLLAMA_HOST={ollama_host}")
-    print(f"OLLAMA_URL={ollama_host}")
+    print(f"OLLAMA_HOST={compose_env_literal(ollama_host)}")
+    print(f"OLLAMA_URL={compose_env_literal(ollama_host)}")
 if model:
-    print(f"OLLAMA_MODEL={model}")
-    print(f"LLM_MODEL={model}")
+    print(f"OLLAMA_MODEL={compose_env_literal(model)}")
+    print(f"LLM_MODEL={compose_env_literal(model)}")
 if embed_model:
-    print(f"OLLAMA_EMBED_MODEL={embed_model}")
-    print(f"EMBED_MODEL={embed_model}")
+    print(f"OLLAMA_EMBED_MODEL={compose_env_literal(embed_model)}")
+    print(f"EMBED_MODEL={compose_env_literal(embed_model)}")
 PY
 fi
 

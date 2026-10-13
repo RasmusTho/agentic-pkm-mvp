@@ -1,6 +1,8 @@
 import ast
+import json
 import os
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -717,6 +719,109 @@ def test_export_runtime_env_context_guard_preserves_atomic_target(
     assert out_path.stat().st_mode & 0o777 == 0o600
     assert not list(out_path.parent.glob(".runtime.env.*"))
     assert "private-synthetic-value" not in result.stdout + result.stderr
+
+
+@pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Compose executable required")
+@pytest.mark.parametrize(
+    ("provider", "no_vault", "standalone_loader"),
+    [
+        ("mock", False, False),
+        ("ollama", False, False),
+        ("mock", True, True),
+        ("ollama", False, True),
+    ],
+)
+def test_export_runtime_env_literal_values_reach_compose_and_defaults(
+    tmp_path: Path, provider: str, no_vault: bool, standalone_loader: bool
+) -> None:
+    """Actual Compose and both loader paths consume the original literal data."""
+    repo_root, out_path, env = _runtime_env_with_db(tmp_path)
+    supplied = {
+        "EMBED_MAX_INPUT_CHARS": "7311",
+        "EMBED_MODEL": "embed-${BOUNDARY_VALUE}\\t",
+        "HEIMDAL_CAPTURE_WATCH_DIR": "/app/quote' # \\\"$BOUNDARY_VALUE\\",
+        "OLLAMA_EMBED_MODEL": "embed-$$BOUNDARY_VALUE",
+        "OLLAMA_HOST": "http://literal-$BOUNDARY_VALUE:11434/v1",
+        "OLLAMA_MODEL": "cost-$BOUNDARY_VALUE",
+        "OLLAMA_URL": "http://literal-${BOUNDARY_VALUE}:11434/v1",
+    }
+    env.update(supplied)
+    env.update(
+        LLM_PROVIDER=provider,
+        NO_VAULT_MODE=str(int(no_vault)),
+        BOUNDARY_VALUE="expanded",
+        API_KEY="synthetic-principal",
+        OPENAI_API_KEY="synthetic-model-key",
+        HOST_SECRET_PROVIDER="bws",
+        PKM_ENVIRONMENT="test",
+        COMPOSE_PROJECT_NAME="pkm-test",
+        DATABASE_URL="postgresql+psycopg://app@db:5432/app_test",
+        DB_DSN="postgresql+psycopg://app@db:5432/app_test",
+    )
+    env.pop("POSTGRES_PASSWORD", None)
+    env.pop("PGPASSWORD", None)
+    subprocess.run(
+        ["bash", "scripts/export_runtime_env.sh"],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    compose = tmp_path / "compose.yml"
+    compose.write_text(
+        "services:\n  probe:\n    image: busybox:latest\n    env_file: runtime.env\n",
+        encoding="utf-8",
+    )
+    rendered = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--project-directory",
+            str(tmp_path),
+            "-f",
+            str(compose),
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    effective = json.loads(rendered.stdout)["services"]["probe"]["environment"]
+    # Compose config escapes literal dollars once when serializing its resolved
+    # model for reuse. An interpolated value instead contains "expanded".
+    assert {key: effective[key] for key in supplied} == {
+        key: value.replace("$", "$$") for key, value in supplied.items()
+    }
+    if provider == "ollama" and not no_vault:
+        assert effective["LLM_MODEL"] == supplied["OLLAMA_MODEL"].replace("$", "$$")
+
+    loader = repo_root / "scripts/lib/load_env_defaults.sh"
+    if standalone_loader:
+        loader = tmp_path / "standalone/lib/load_env_defaults.sh"
+        loader.parent.mkdir(parents=True)
+        shutil.copyfile(repo_root / "scripts/lib/load_env_defaults.sh", loader)
+    child_env = dict(env)
+    for key in supplied:
+        child_env.pop(key)
+    snippet = (
+        'source "$1"; load_env_defaults_file "$2"; '
+        'python3 -c "import json,os,sys; print(json.dumps({k:os.environ[k] for k in sys.argv[1:]}))" '
+        '"${@:3}"'
+    )
+    loaded = subprocess.run(
+        ["bash", "-c", snippet, "literal-loader", str(loader), str(out_path), *supplied],
+        cwd=tmp_path,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(loaded.stdout) == supplied
 
 
 def test_export_runtime_env_no_duplicate_provider_keys(tmp_path: Path) -> None:

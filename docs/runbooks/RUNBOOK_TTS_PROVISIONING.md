@@ -27,6 +27,10 @@ enablement — which cannot live in the repo.
   `OLLAMA_HOST`, `OLLAMA_MODEL`, and `OLLAMA_URL` survive in both vault-bound and idle contexts.
   Supply the current bindings in the producer environment when changing only TTS selectors;
   an explicit empty capture selector remains empty, and inactive model aliases remain present.
+  Literal dollars are escaped for ordinary Compose env-file consumption and decoded by the
+  existing defaults readers; quotes and backslashes retain their original values. Whitespace-only
+  capture input is preserved but remains unconfigured in both deployment preflights, matching the
+  capture runtime's stripped-empty rule. No raw env-file mode is needed.
   Absent inputs keep the existing channel defaults and provider derivation. Multiline inputs are
   refused before publication. This preserves configuration; it does not establish model-backed
   qualification or authorize a deployment.

@@ -834,6 +834,9 @@ def test_every_postmutation_gate_has_fail_closed_terminal_handling(
         'TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=""\n',
         "TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=''\n",
         'TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR="" # disabled\n',
+        'TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR="   "\n',
+        "TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=' \t '\n",
+        'TTS_ENABLED=false\nHEIMDAL_CAPTURE_WATCH_DIR=" \t " # disabled\n',
     ],
 )
 def test_unconfigured_capture_watch_does_not_block_or_start_with_deploy(
@@ -3107,9 +3110,10 @@ def test_bws_host_and_vm_preflight_use_active_secret_consumers(tmp_path, monkeyp
     assert values['heimdal-raw-migrate'] == {}
 
 
-def test_vm_capture_watch_selection_uses_runtime_input_and_fails_on_ambiguity(tmp_path):
+def test_vm_capture_watch_selection_uses_runtime_input_and_fails_on_ambiguity(tmp_path, monkeypatch):
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import PostgresDeployError
+    from app.heimdal.capture_runtime import CaptureRuntimeConfig, CaptureRuntimeConfigError
 
     pin_dir = tmp_path / 'config/deploy'
     pin_dir.mkdir(parents=True)
@@ -3124,6 +3128,12 @@ def test_vm_capture_watch_selection_uses_runtime_input_and_fails_on_ambiguity(tm
     assert linux._capture_watch_configured(cfg) is False
     runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR="" # disabled\n', encoding='utf-8')
     assert linux._capture_watch_configured(cfg) is False
+    for whitespace in ('   ', ' \t '):
+        runtime.write_text(f'HEIMDAL_CAPTURE_WATCH_DIR="{whitespace}"\n', encoding='utf-8')
+        assert linux._capture_watch_configured(cfg) is False
+        monkeypatch.setenv('HEIMDAL_CAPTURE_WATCH_DIR', whitespace)
+        with pytest.raises(CaptureRuntimeConfigError, match='must be set'):
+            CaptureRuntimeConfig.from_env()
     runtime.write_text('HEIMDAL_CAPTURE_WATCH_DIR=/capture\n', encoding='utf-8')
     assert linux._capture_watch_configured(cfg) is True
     alternate = tmp_path / 'alternate.env'

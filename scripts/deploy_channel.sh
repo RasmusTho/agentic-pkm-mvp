@@ -192,7 +192,7 @@ values = [compose_env_value(line[len("HEIMDAL_CAPTURE_WATCH_DIR="):]) for line i
           if line.startswith("HEIMDAL_CAPTURE_WATCH_DIR=")]
 if len(values) > 1:
     print("blocked")
-elif values and values[0]:
+elif values and values[0].strip():
     print("configured")
 else:
     print("disabled")
