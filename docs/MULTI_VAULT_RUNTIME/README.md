@@ -315,6 +315,23 @@ prior effect result by inference.
 
 ## Implementation tasks
 
+### Cross-source reconciliation (#4906)
+
+#4906's [source/evidence lineage proposal](../architecture/functional-ontology.md#31-source-and-evidence-lineage-proposal-4906)
+adds no registry, dimension, request carrier, global catalogue, or physical topology choice.
+Source families, portable source bundles, evidence bases and vault dimensions have different
+meanings. The proposal consumes immutable `ActiveContextSet` and each eligible source binding
+with its own provenance; no family member inherits another member's authorization.
+
+The #2143 parent remains the multi-vault delivery/acceptance hub. The shipped V1 selection seam and
+the unwired full-context cache seam in
+[`ACTIVE_CONTEXT_SET`](../contracts/ACTIVE_CONTEXT_SET.md#shipped-v1-seam-mvr-03-3857) do not prove
+the remaining production consumer migration or cross-vault family retrieval is shipped. This
+proposal preserves that task graph and all-or-nothing authorization. Implementation children for
+cross-source work are not filed until the semantic owner accepts the named owner sections,
+[evaluation v1](../testing/invariant-tests.md#sler-proposal-evaluation-4906) and budget treatment.
+This prerequisite gates later implementation, not the bounded #4906 proposal stage.
+
 **Option 1 (#4035):** MVR-01B supplies the durable substrate and sealed entrypoints. Production
 coordination and engine-driven crash recovery proof are owned by transfer MVR-05C/#3861,
 removal/reactivation MVR-06B/#3864, and relocation MVR-06C/#3865. Each owner tests its actual
