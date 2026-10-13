@@ -107,6 +107,13 @@ Panel state, receipts, or write-guard state.
     "environment_label": "dev | test | prod | unknown",
     "api_base_url_label": "string",
     "trace_id": "string",
+    "vault_identity": {
+      "vault_name": "string",
+      "channel": "dev | test | prod | unknown",
+      "provenance": "settings | host_root | selected | fallback",
+      "vault_id": "string | null",
+      "local_instance_id": "string | null"
+    },
     "reorient": {
       "facts": [],
       "inferences": [],
@@ -186,8 +193,18 @@ runtime.
 | `environment_label` | Safe label only. It must not include vault root paths. |
 | `api_base_url_label` | Safe display label such as `local-dev`, `local-test`, `local-prod`, or an operator-provided alias. It must not expose filesystem paths or secrets. |
 | `trace_id` | Correlation ID for this aggregate read. |
+| `vault_identity` | Existing runtime-declared vault name, channel and provenance, with optional logical `vault_id` and clone-local `local_instance_id` from the same admitted artifact workspace snapshot. Display names and paths are not identity. Missing or unbound identities remain `null`; this read must not mint/heal them or create a startup precondition. |
 | `reorient` | Read-only Reorient-mode projection derived from the orientation runtime. Items are grouped as facts, inferences, candidates, stale context, recent deltas, and open loops. Each item must carry a source link; actionable items may expose a Panel handoff hint, but the workspace aggregate does not execute or mutate from Reorient mode. |
 | `resurface` | Read-only Resurface-mode projection derived from the resurfacing runtime. Candidates carry a grounded why-now explanation, relation to the active artifact, source link, and signal labels. Dismiss, snooze, and pin are UI affordances only in this slice; the aggregate does not persist those decisions or upgrade similarity into urgency. |
+
+Local caret/selection and scroll restoration may use bounded, ephemeral browser/session view data keyed to both the logical vault and local clone identities, the current artifact UUID, relative note reference and server-supplied content hash. The existing current orientation leave-point must admit that same artifact and scope before Resume consumes the view data. Missing, stale or mismatched identities/content/view data preserve ordinary note opening and cannot claim that a position was restored. This is optional presentation scaffolding: no body text, semantic continuity, permission, receipt, runtime cursor or orientation position field is introduced. ADR-0008's forbidden fields remain forbidden.
+
+The optional identities come from the same admitted request context that supplied
+the artifact root. They must not be read from a later vault selection. Resume
+also checks a current artifact workspace readback after its orientation read;
+changed scope, local clone or content, or an unavailable readback, disables only
+the optional position restoration. Missing optional IDs do not add a startup or
+ordinary-note-opening requirement.
 
 ### `canvas`
 

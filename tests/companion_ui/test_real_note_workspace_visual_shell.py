@@ -13,6 +13,8 @@ Verifies that the rendered dev-page HTML matches the Companion UI visual contrac
 
 from __future__ import annotations
 
+from tests.companion_ui.rendered_html import elements_with_test_id
+
 import re
 
 from companion_ui.workspace.serve_dev_page import render_index_html
@@ -419,7 +421,7 @@ class TestErrorState:
         html = _html_error()
         assert 'data-testid="workspace-note-header"' not in html
         assert 'data-testid="workspace-note-body"' not in html
-        assert 'data-testid="workspace-agent-rail"' not in html
+        assert not elements_with_test_id(html, "workspace-agent-rail")
 
     def test_no_artifact_id_label_in_error_page(self) -> None:
         """Regression guard: no debug 'Artifact ID' label in error-only output."""
