@@ -962,9 +962,27 @@ def test_malformed_actual_moment_must_name_partial_source(
     compose_briefing(vault_context=context, for_date=date(2026, 7, 10), write_guard=WriteGuard(lambda: {"state": "healthy"}))
     note = load_briefing(vault_context=context, for_date=date(2026, 7, 10))
     assert note is not None and note.degraded_sections == ("moments",)
+    assert note.sections["moments"].reason == "invalid_source_record"
+    briefing = composer.briefing_note_path(vault_context=context, for_date=date(2026, 7, 10))
+    assert "This section could not be generated (invalid_source_record)." in briefing.read_text()
     assert note.sections["commitments"].status == "available"
     assert note.sections["decision_receipts"].status == "available"
     assert note.sections["calendar_episodes"].status == "available"
+
+
+@pytest.mark.parametrize("failure", [OSError("unavailable source"), ValueError("invalid context")])
+def test_unrelated_moment_read_failure_keeps_source_read_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: Exception,
+) -> None:
+    from app.briefing import compose as composer
+    from app.vault.manager import VaultContext
+    def unavailable(*args: Any, **kwargs: Any) -> Any:
+        assert kwargs["strict"] is True
+        raise failure
+    monkeypatch.setattr(composer, "collect_now_moments", unavailable)
+    context = VaultContext(status="selected", active_vault_path=str(tmp_path))
+    section = composer._read_section(lambda: composer._read_moments(vault_context=context, system_dir="_system"))
+    assert section.status == "degraded" and section.reason == "source_read_failed"
 
 
 def _native_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:

@@ -116,6 +116,37 @@ def test_calendar_episode_provenance_is_preserved_read_only() -> None:
     assert '<input' not in rendered and '<textarea' not in rendered
 
 
+@pytest.mark.parametrize(("episode_id", "supported"), [
+    ("ep-abcdef12-3456-7890-abcd-ef1234567890", True),
+    ("ep-ABCDEF12-3456-7890-ABCD-EF1234567890", True),
+    ("ep-AbCdEf12-3456-7890-aBcD-Ef1234567890", True),
+    ("ep-abcd", False),
+    ("EP-ABCDEF12-3456-7890-ABCD-EF1234567890", False),
+    ("ep-ABCDEF12-3456-7890-ABCD-EF1234567890\n", False),
+    ("ep-ABCDEF12-3456-7890-ABCD-EF123456789G", False),
+    ("ep-../../private<script>", False),
+])
+def test_episode_provenance_link_matches_canonical_schema(episode_id: str, supported: bool) -> None:
+    from app.episodes.notes import render_episode_note
+    from app.episodes.schema import validate_episode_note_fields
+    fields = {"episode_id": episode_id, "scope": "synthetic", "title": "Synthetic episode",
+              "time": {"start": "2026-10-13T08:00:00Z", "closed": False}, "segmentation": "proposed"}
+    if supported:
+        validate_episode_note_fields(fields)
+        assert episode_id in render_episode_note(fields)  # Actual schema-valid producer preserves case.
+    projection = _full_projection()
+    projection["sections"] = [{"name": "calendar_episodes", "status": "available",
+                               "items": [{"source": "episode", "title": "Synthetic", "provenance_ref": episode_id}]}]
+    rendered = render_day_start_card_html(projection)
+    href = "note_path=" + quote("episodes/" + episode_id + ".md", safe="")
+    if supported:
+        assert href in rendered
+    else:
+        assert '<a href=' not in rendered and href not in rendered
+        assert escape(episode_id) in rendered
+    assert 'data-read-only="true"' in rendered and '<input' not in rendered
+
+
 @pytest.mark.parametrize("receipt", ["_system/receipts/decisions/decisions-202610.jsonl",
                                      "vault://_system/receipts/decisions/decisions-202610.jsonl",
                                      '_system/receipts/decisions/decisions-202610<&".jsonl'])

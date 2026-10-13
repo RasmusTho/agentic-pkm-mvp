@@ -105,7 +105,9 @@ def _render_item(item: Mapping[str, Any]) -> str:
                 provenance.append(_render_ref(str(ref["ref"])))
     source_ref = item.get("provenance_ref")
     if isinstance(source_ref, str) and source_ref:
-        if item.get("source") == "episode" and re.fullmatch(r"ep-[0-9a-f-]+", source_ref):
+        if item.get("source") == "episode" and re.fullmatch(
+            r"ep-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", source_ref
+        ):
             provenance.append(_render_ref(f"episodes/{source_ref}.md"))
         else:
             # Calendar UID/etag is an adapter reference, not a note locator.

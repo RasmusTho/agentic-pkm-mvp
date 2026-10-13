@@ -38,7 +38,7 @@ from app.episodes.stream_registry import STATUS_LIVE, load_registry
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.write_ops import read_note_text_with_version, write_note_relative
 from app.receipts.decision_receipt_log import iter_decision_receipts
-from app.relevance.now_surface import collect_now_moments
+from app.relevance.now_surface import InvalidMomentSourceRecord, collect_now_moments
 from app.relevance.schema import NeedBasis, URGENCY_ORDER
 from app.services.commitment_persistence import commitment_artifact_path, load_commitments
 from app.vault.manager import VaultContext, iter_vault_markdown_files
@@ -416,7 +416,10 @@ def _read_moments(
     vault_context: VaultContext,
     system_dir: str,
 ) -> tuple[MomentBriefingItem, ...]:
-    records = collect_now_moments(vault_context, strict=True)
+    try:
+        records = collect_now_moments(vault_context, strict=True)
+    except InvalidMomentSourceRecord as exc:
+        raise _InvalidSourceRecord from exc
     if not isinstance(records, list):
         raise _InvalidSourceRecord
     items: list[MomentBriefingItem] = []
