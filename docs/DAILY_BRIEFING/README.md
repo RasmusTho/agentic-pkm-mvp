@@ -3,7 +3,7 @@ Doc role: Capability specification (feature-breakdown lane)
 Temporal class: strategic
 Review cadence: event-driven (task merges, parent-issue lifecycle)
 Source of truth: this directory + the ideation capture it grounds; GitHub issues (#3314–#3319) are execution artifacts, this spec is the contract
-Last reviewed: 2026-10-11
+Last reviewed: 2026-10-13
 
 # Daily Briefing — Specification
 
@@ -97,14 +97,17 @@ Follow `docs/TESTING.md :: Automated Technical Acceptance`. TEST is the default 
 use the short same-candidate DEV core-flow smoke and add DEV scenarios only for a specific
 DEV contract or failure. Qualify the actual deployed UI/API and required producer SHA/image digest,
 source binding and synthetic test actor through the existing native/channel evidence. The live entry
-target above and `tests/companion_ui/test_live_daily_briefing_contract.py` are intended automation
-targets; deterministic contract tests and merged implementation are not a live PASS.
+target above is the original eight-scenario runner, and
+`tests/companion_ui/test_live_daily_briefing_contract.py` verifies its refusal, effect-budget,
+private-evidence and identity boundaries. Deterministic contract tests and merged implementation
+do not establish a live PASS.
 
 Generation/first-contact, scheduling, provenance navigation and one-tap playback need observable
 journey results. Reuse the existing core-flow identity/admission/private artifact boundary, while
-qualifying this journey's effects separately: passive admission currently refuses first-contact
-generation when today's briefing is absent. Do not disable that guard or infer generation/TTS
-permission from a capture/ASK manifest. Assert the generated artifact and once-per-day behavior
+qualifying this journey's effects separately. Passive core-flow admission alone does not grant
+first-contact generation or TTS permission. The fixed native web envelope admits the Daily
+current-day absent-to-generated transition explicitly; a capture/ASK manifest cannot grant it.
+Assert the generated artifact and once-per-day behavior
 through the actual producer, and keep synthetic approvals inside existing WriteGuard/intent paths.
 
 Calendar proof consumes the registered source-selected adapter and episode read interfaces with
@@ -113,6 +116,36 @@ per-segment language/provider/voice, actual synthesized audio and browser playba
 a doubled provider or a text-only fallback cannot satisfy successful audio acceptance. The existing
 TTS/cache/mount and calendar access contracts select the environment; this spec grants no personal
 calendar access, credential provisioning, deployment or production effect authority.
+
+The existing `app.ops.postgres_deploy_linux qualify-web test <committed-operation-uuid>` path
+owns the disposable `native-web-pilots.v1` run described in
+`docs/TESTING.md :: Fixed disposable Product web qualification`. It prepares canonical synthetic
+sources, then invokes the Daily wrapper with `COMPANION_UI_LIVE_DAILY_BRIEFING=1` and its private
+`COMPANION_UI_DAILY_BRIEFING_MANIFEST`. The wrapper accepts only the fixed image-owned
+`/scratch/native-web-context.json` binding and writes the original report under
+`/scratch/native-web-reports/daily-briefing`; it does not launch or modify a shared environment.
+An explicit invocation without qualified inputs retains all eight blocked outcomes and returns
+nonzero. Its unqualified identity expectations and zero effects are code-delivery evidence only.
+
+The original scenario inventory is `preflight`, `generation_and_provenance`,
+`daily_trigger_idempotence`, `one_read_only_card`, `mixed_audio_playback`, `partial_source`,
+`text_only_degradation`, and `fixture_restored`. The finite effect budget remains two normal
+API first-contacts, four gateway document navigations, one actual TTS plan, one synthesis,
+one source degradation and one restoration. Each source-transition slot contains exactly one
+fixed Moment CAS write and one normal same-day briefing regeneration CAS write, bound to
+the admitted pre-state and the producer's real receipts and post-state. The browser-local
+audio failure is separately labelled and forwards no TTS mutation.
+
+The card's Markdown source links use the existing note-open route. Decision-receipt JSONL
+ledger references remain escaped read-only source labels; the Markdown note reader is not
+extended to arbitrary ledger or attachment files. Readability proof binds the opened source's
+exact raw path/hash/UUID/API body separately from its existing rendered Markdown reading view.
+
+Acceptance requires all eight actual TEST outcomes, a visible admitted date, a working source
+note reached through the served provenance link, decodable synthesized audio with observed
+browser playback, complete private JUnit/trace evidence, restoration, and unchanged end
+identity/configuration/runner inputs. Startup failure retains the original eight non-PASS rows;
+prior, foreign, removed, replaced or partial output is preserved rather than reused as success.
 
 Record each required scenario's outcome in the existing private report and link it on #3314.
 Unavailable qualified environment/source/provider is concrete restore-environment work with owner
