@@ -22,12 +22,17 @@ The engine fuses *multiple* information streams, and the owner requires that **e
    - `dimensions_fed`: which of the five Episode dimensions (time / space / protagonist / goal / causation) this signal can evidence, with per-dimension confidence (per-axis, never scalar — mirrors the Heimdal confidence block)
    - `scope_binding` / sphere context when known (SSI-01 shape from `app/context_dimensions.py`)
    - `provenance_ref` back to the source record (observation id, outbox event id, note path+hash)
+
+   Observation-log adapters retain the canonical Heimdal source identity in `provenance_ref`
+   (`heimdal.observations:<observation_id>`) even when a modality-specific registry route such as
+   `screen` consumes the row. `stream_id` selects the registered adapter; it does not redefine the
+   source record's identity.
 2. Defines the **registry entry contract** per stream: `stream_id`, `status` (`live | planned | future | excluded`), `transport` (observation-log cursor / outbox topic / file event), `consent_class` (Heimdal consent-gated vs. vault-implicit), `cadence` (bursty/continuous/sparse), `owner_constituent` (Heimdal / Mimer / external via private-bindings).
 3. Ships the registry as **markdown-first settings + code mirror**, consistent with the `_heimdal/settings.md` precedent: the human-legible registry doc is the declaration surface; `app/episodes/stream_registry.py` loads and validates it fail-loud.
 4. Seeds the registry with the **complete inventory** (canonical enumeration lives in the capability [README](README.md), which this registry must match 1:1):
-   - **live:** `heimdal.observations` (observation-log cursor; feeds time/protagonist/goal; consent-gated), `vault.activity` (`ingest.vault.changed`/`ingest.object.created`/`ingest.object.deleted` outbox topics + `extract_context_dimensions_for_note`; feeds time/goal/causation), `calendar` (ERE-09 read-only CalDAV/ICS adapter; feeds time/protagonist/space/goal)
+   - **live:** `heimdal.observations` (observation-log cursor; feeds time/protagonist/goal; consent-gated), `vault.activity` (`ingest.vault.changed`/`ingest.object.created`/`ingest.object.deleted` outbox topics + `extract_context_dimensions_for_note`; feeds time/goal/causation), `calendar` (ERE-09 read-only CalDAV/ICS adapter; feeds time/protagonist/space/goal), `screen` (SCREEN-04 modality-filtered observation-log cursor; Heimdal consent-gated)
    - **planned:** `chat.sessions` (session log exists; ERE normalizer pending), `decision.receipts` (receipt log/projection exists; ERE normalizer pending), `kap.acquisitions` (stage-completed events exist; ERE normalizer pending), `heimdal.attention` (attention log exists; ERE normalizer pending), `bifrost.native_capture` (space/protagonist/causation enrichment per `CAPTURE_TRANSPORT_FEASIBILITY.md` "Episode richness")
-   - **future:** `location`, `screen`, `biometric`, `ambient_audio` (the Heimdal v2 `modality` vocabulary — ERE-10)
+   - **future:** `location`, `biometric`, `ambient_audio` (the Heimdal v2 `modality` vocabulary — ERE-10)
    - **excluded (identified, deliberately out):** BuilderOps/LearningSignals (dev-time, not lived situations), orchestrator/planner/MCP/agent internals (machinery, not situations — the chat *session* is the lived-situation representative), sync transports (iCloud/Git — never semantic per Integration Fabric class 5), egress surfaces (notifications, TTS)
 
 ## Concretely

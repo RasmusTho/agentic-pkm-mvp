@@ -120,13 +120,13 @@ streams:
     notes: "ERE-10; Heimdal v2 modality: location"
 
   - stream_id: screen
-    status: future
-    transport: null
-    dimensions_fed: []
-    consent_class: heimdal_consent_gated_posture_b
-    cadence: null
+    status: live
+    transport: "module:app.heimdal.observation_log"
+    dimensions_fed: [time, space, protagonist, goal, causation]
+    consent_class: heimdal_gated
+    cadence: continuous
     owner_constituent: Heimdal
-    notes: "Heimdal v2 modality vocabulary"
+    notes: "modality-filtered to screen; reuses the existing ERE observation-log cursor; design strengths: time/protagonist/goal high, causation medium, space low; per-observation confidence remains in SignalContract; published observations require an existing consent.grant_ref; registration grants no consent"
 
   - stream_id: biometric
     status: future
