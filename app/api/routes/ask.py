@@ -12,6 +12,13 @@ from pydantic import AliasChoices, BaseModel, Field
 
 from app.agents.ask.graph import run_ask_graph
 from app.api.request_active_context import require_scoped_read_context
+from app.api.compatibility_mutation import reject_scoped_vault_mutation
+from app.api.routes.vault_resolution import (
+    NoSelectedVaultError,
+    SelectedVaultUninitializedError,
+    resolve_active_vault_root,
+)
+from app.config.paths import VaultRootMisconfiguredError
 from app.instance.context_bound_read import ContextBoundReadError, context_bound_effect_window
 from app.instance.context_settings import resolve_context_settings
 from app.instance.vault_registry import VaultRegistryStore
@@ -26,9 +33,23 @@ from app.tts.config import load_tts_config
 from app.tts.planning import build_tts_plan
 from app.tts.service import synthesize_tts
 from app.voice.transcription import transcribe_voice_audio
+from app.voice.session import VoiceSessionContextLost, VoiceSessions
 from app.vault.active_context_v1 import ActiveContextSetV1
 
 _HYBRID_WARMED = False
+_VOICE_SESSIONS: dict[Path, VoiceSessions] = {}
+
+
+def _voice_sessions_for_selected_vault() -> VoiceSessions | None:
+    try:
+        root = resolve_active_vault_root(require_initialized=True)
+    except (NoSelectedVaultError, SelectedVaultUninitializedError, VaultRootMisconfiguredError):
+        return None
+    service = _VOICE_SESSIONS.get(root)
+    if service is None:
+        service = VoiceSessions(root)
+        _VOICE_SESSIONS[root] = service
+    return service
 
 
 def _ensure_hybrid_store_loaded() -> None:
@@ -166,6 +187,9 @@ class VoiceAskResponse(BaseModel):
     degraded: bool = False
     reason: str | None = None
     session_id: str | None = None
+    # Logging is best effort (INV-VOICE-A). This marker survives a simultaneous
+    # TTS degradation so an answer never implies an unobserved durable write.
+    session_error: str | None = None
     trace_id: str
 
 
@@ -346,7 +370,11 @@ def _run_ask(
     )
 
 
-@router.post("/ask/voice", response_model=VoiceAskResponse)
+@router.post(
+    "/ask/voice",
+    response_model=VoiceAskResponse,
+    dependencies=[Depends(reject_scoped_vault_mutation)],
+)
 async def ask_voice(
     request: Request,
     audio: UploadFile = File(...),
@@ -355,11 +383,12 @@ async def ask_voice(
     # Same per-request active-scope binding as `/api/ask` (#2921); a voice turn must not be a
     # scope-isolation hole just because it arrives as form data.
     scope: str | None = Form(None),
+    end_session: bool = Form(False),
 ) -> VoiceAskResponse | JSONResponse:
     """Turn transient client audio into a grounded, optionally spoken answer.
 
-    The route is deliberately composed only from read-only seams: shared ASR,
-    ASK, and the derived TTS cache.  It must never become a capture shortcut.
+    Shared ASR, ASK, and the derived TTS cache retain their read-only seams.
+    Only the mechanical chat-session transcript may write the selected vault.
     """
 
     trace_id = getattr(request.state, "trace_id", None) or request.headers.get("x-trace-id") or new_trace_id()
@@ -401,14 +430,34 @@ async def ask_voice(
             reason="capture_intent_surfaced",
         )
 
+    # Direct Python callers can omit FastAPI's Form defaults. A scope binds
+    # context only when it is an actual supplied string.
+    request_scope = scope.strip() if isinstance(scope, str) else None
+    voice_scope = request_scope or os.getenv("ASK_DOMAIN_SCOPE", "").strip() or None
+    sessions = _voice_sessions_for_selected_vault()
+    question = transcript
+    if session_id is not None and sessions is None:
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "voice_session_context_lost", "trace_id": trace_id},
+        )
+    if sessions is not None:
+        try:
+            question = sessions.question(transcript, session_id=session_id, scope=voice_scope)
+        except VoiceSessionContextLost as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={"error": "voice_session_context_lost", "trace_id": trace_id},
+            ) from exc
+
     try:
         if not _HYBRID_WARMED:
             _ensure_hybrid_store_loaded()
         state = run_ask_graph(
-            transcript,
+            question,
             trace_id=trace_id,
             ask_settings=get_ask_settings(),
-            active_scope=scope,
+            active_scope=voice_scope,
         )
     except Exception:
         # The heard text is still useful, but no ungrounded substitute answer is.
@@ -426,6 +475,16 @@ async def ask_voice(
 
     answer_text = state.answer or "No results found."
     sources = [_to_source(hit) for hit in state.hits]
+    session_error = "session_transcript_unavailable"
+    if sessions is not None:
+        session_id, session_error = sessions.record(
+            session_id=session_id,
+            scope=voice_scope,
+            question=transcript,
+            answer=answer_text,
+            citations=[source.model_dump(mode="json") for source in sources],
+            end_session=end_session is True,
+        )
     config = load_tts_config()
     plan = build_tts_plan(text=answer_text, config=config, language=detected_language)
     if not config.enabled:
@@ -436,6 +495,7 @@ async def ask_voice(
             sources=sources,
             speech_plan=plan,
             session_id=session_id,
+            session_error=session_error,
             trace_id=trace_id,
             degraded=True,
             reason="tts_unavailable",
@@ -449,6 +509,7 @@ async def ask_voice(
             sources=sources,
             speech_plan=plan,
             session_id=session_id,
+            session_error=session_error,
             trace_id=trace_id,
             degraded=True,
             reason="tts_unavailable",
@@ -461,7 +522,10 @@ async def ask_voice(
         speech_plan=plan,
         audio_url=str(result.get("audio_url") or plan["audio_url"]),
         session_id=session_id,
+        session_error=session_error,
         trace_id=trace_id,
+        degraded=session_error is not None,
+        reason=session_error,
     )
 
 
