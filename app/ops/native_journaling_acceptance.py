@@ -221,7 +221,11 @@ def bootstrap(binding: dict[str, Any]) -> dict[str, Any]:
     bundle = assemble_day_context(vault_context=context, for_date=date.today())
     if any(section.status != 'available' or not section.items for section in bundle.sections.values()):
         raise NativeWebRefusal('heterogeneous_journaling_sources_incomplete')
-    sources = {item.path: file_hash(VAULT / item.path) for item in bundle.included}
+    sources = {}
+    for item in bundle.included:
+        if not isinstance(item.path, str) or not item.path:
+            raise NativeWebRefusal('heterogeneous_journaling_source_identity_missing')
+        sources[item.path] = file_hash(VAULT / item.path)
     marker = {'run_id': generation, 'fixture_id': 'jrnl-' + generation, 'actor_id': ACTOR,
               'channel': 'test', 'for_date': date.today().isoformat()}
     private_json(VAULT / '.journal-acceptance-fixture.json', marker)
@@ -356,8 +360,8 @@ class EffectObserver:
                 if (accepted.state is not JournalReviewState.FULLY_MATERIALIZED or accepted.action != 'accept'
                     or not accepted.canonical_path or not accepted.receipt_id):
                     raise NativeWebRefusal('guarded_materialization_incomplete')
-                self.canonical = VAULT / accepted.canonical_path
-                self.canonical_hash = file_hash(self.canonical)
+                canonical = VAULT / accepted.canonical_path
+                self.canonical, self.canonical_hash = canonical, file_hash(canonical)
                 row.update(path=accepted.canonical_path, sha256=self.canonical_hash, receipt_id=accepted.receipt_id)
             self.observed.append(row)
 
