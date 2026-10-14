@@ -1388,6 +1388,35 @@ def test_integration_nightly_keeps_k6_and_pg_contract_lanes_nightly_only() -> No
     assert "k6 run" not in _smoke_text()
 
 
+def test_k6_search_uses_migrated_canonical_fixture() -> None:
+    workflow = yaml.safe_load(INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8"))
+    job = workflow["jobs"]["k6-search"]
+    steps = {step.get("name"): step for step in job["steps"] if "name" in step}
+    names = list(steps)
+
+    assert job["services"]["db"]["image"] == "pgvector/pgvector:pg16"
+    assert job["services"]["db"]["env"]["POSTGRES_DB"] == "k6_search"
+    assert job["env"]["STORE_BACKEND"] == "pg"
+    assert job["env"]["EMBED_PROFILE"] == "deterministic"
+    assert names.index("Prepare pgvector extension") < names.index("Apply migrations")
+    assert names.index("Apply migrations") < names.index("Bootstrap database")
+    assert names.index("Bootstrap database") < names.index("Seed search fixture")
+    assert "scripts.k6_search_fixture prepare-extension" in steps["Prepare pgvector extension"]["run"]
+    assert "alembic upgrade head" in steps["Apply migrations"]["run"]
+    assert "bootstrap()" in steps["Bootstrap database"]["run"]
+    assert "scripts.k6_search_fixture seed" in steps["Seed search fixture"]["run"]
+    assert "objects_embeddings" not in str(job)
+    assert "STORE_SCHEMA_AUTOCREATE" not in str(job)
+    assert job["env"]["K6_FIXTURE_MANIFEST"] == "/tmp/k6-search.json"
+    for name in ("Seed search fixture", "Wait for API readiness", "Warm up search endpoint"):
+        assert '"$K6_FIXTURE_MANIFEST"' in steps[name]["run"]
+    assert "scripts.k6_search_fixture probe" in steps["Wait for API readiness"]["run"]
+    assert "--wait-seconds 90" in steps["Wait for API readiness"]["run"]
+    assert "scripts.k6_search_fixture probe" in steps["Warm up search endpoint"]["run"]
+    assert "k6 run scripts/k6_search.js" in steps["Run k6 smoke"]["run"]
+    assert "workflow_dispatch" in INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
+
+
 def test_architecture_ci_is_stripped_to_unique_dispatch_only_jobs() -> None:
     text = ARCHITECTURE_CI_WORKFLOW.read_text(encoding="utf-8")
 
