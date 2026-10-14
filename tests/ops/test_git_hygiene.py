@@ -6633,12 +6633,14 @@ def test_local_retirement_ignores_completed_dedicated_worktree_lifecycle_prose(
     [
         "Dedicated worktree /tmp/old is `<br>` still dirty on branch old at head {sha}.",
         r"Dedicated worktree /tmp/old is \<br> still dirty on branch old at head {sha}.",
+        r"Dedicated worktree /tmp/old is still \<!-- note --> dirty on branch old at head {sha}.",
         "~~~\nDedicated worktree /tmp/old is <br>\ndirty on branch old at head {sha}.\n~~~",
         "~~~\nDedicated worktree /tmp/old is still\ndirty on branch old at head {sha}.\n~~~",
         "Dedicated worktree /tmp/old is still\n~~~\nopaque\n~~~\ndirty on branch old at head {sha}.",
         "Dedicated worktree /tmp/old is still\n~~~\n~~~\ndirty on branch old at head {sha}.",
         "Dedicated worktree /tmp/old is still\n~~~\n\n~~~\ndirty on branch old at head {sha}.",
         "Dedicated worktree /tmp/old\n~~~\nopaque\n~~~\nis still dirty on branch old at head {sha}.",
+        "Completed delivery mentions `<!-- note` before routine cleanup.",
         "> ~~~\n> Dedicated worktree /tmp/old is <br>\n> dirty on branch old at head {sha}.\n> ~~~",
         "- ~~~\n- Dedicated worktree /tmp/old is <br>\n- dirty on branch old at head {sha}.\n- ~~~",
         "Dedicated worktree /tmp/old is <br-widget> still dirty on branch old at head {sha}.",
@@ -6677,7 +6679,79 @@ def test_local_retirement_ignores_literal_html_break_markup(
     assert result["deleted"] == 1
 
 
+@pytest.mark.parametrize(
+    "body_template",
+    [
+        (
+            "<div>Dedicated worktree /tmp/old is still<br>\n"
+            "dirty on branch old at head {sha}.</div>"
+        ),
+        (
+            "<div>Dedicated worktree /tmp/old is still<!-- note\n"
+            "--> dirty on branch old at head {sha}.</div>"
+        ),
+        (
+            "<div>Dedicated worktree /tmp/old is still<!-- outer\n\n"
+            "--\\> hidden --> dirty on branch old at head {sha}.</div>"
+        ),
+        (
+            "<div>Dedicated worktree /tmp/old is still<!-- note\n\n"
+            "--> dirty on branch old at head {sha}.</div>"
+        ),
+        (
+            "<div>Dedicated worktree /tmp/old is still<!-- note\n\n"
+            "hidden text\n--> dirty on branch old at head {sha}.</div>"
+        ),
+        (
+            "<div>Dedicated worktree /tmp/old is still<!-- hidden\n\n"
+            "`-->`\n--> dirty on branch old at head {sha}</div>"
+        ),
+        (
+            "<div>Dedicated worktree /tmp/old is still<!-- outer\n\n"
+            "<div><!-- inner --> dirty on branch old at head {sha}.</div></div>"
+        ),
+        (
+            "<div>Dedicated worktree /tmp/old is still<!-- outer\n\n"
+            "<div>--> <!-- inner\n\n"
+            "--> dirty on branch old at head {sha}.</div></div>"
+        ),
+        (
+            "Dedicated worktree /tmp/old is still<!-- outer\n\n"
+            "--> <span>dirty on branch old at head {sha}</span>"
+        ),
+    ],
+)
 def test_local_retirement_rejects_html_block_dedicated_worktree_marker(
+    tmp_path, monkeypatch, body_template
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": body_template.format(sha=sha)
+                    }]
+                }),
+            },
+        }
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard inactive work only when HTML block receipt intent is explicit",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_local_retirement_rejects_inline_comment_reopened_after_close(
     tmp_path, monkeypatch
 ):
     repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
@@ -6694,8 +6768,9 @@ def test_local_retirement_rejects_html_block_dedicated_worktree_marker(
                 "sync_state": json.dumps({
                     "comments": [{
                         "body": (
-                            "<div>Dedicated worktree /tmp/old is still<br>\n"
-                            f"dirty on branch old at head {sha}.</div>"
+                            "Dedicated worktree /tmp/old is still<!-- outer\n\n"
+                            "--> <!-- inner\n\n"
+                            f"--> dirty on branch old at head {sha}."
                         )
                     }]
                 }),
@@ -6705,7 +6780,7 @@ def test_local_retirement_rejects_html_block_dedicated_worktree_marker(
     with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
         git_hygiene.retire_inactive_local_branches(
             repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
-            owner_discard="discard inactive work only when HTML block receipt intent is explicit",
+            owner_discard="discard inactive work only when every inline retention receipt is line-bounded",
         )
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
@@ -6886,6 +6961,31 @@ def test_local_retirement_rejects_whitespace_dedicated_worktree_marker(
             'Dedicated worktree /tmp/old is <span title="`"> still<br>',
             "dirty",
             "\n",
+        ),
+        (
+            "Dedicated worktree /tmp/old is still<!-- note --> dirty",
+            "",
+            "",
+        ),
+        (
+            "Dedicated worktree /tmp/old is still<!-- note",
+            "dirty",
+            "\n",
+        ),
+        (
+            "Dedicated worktree /tmp/old is still<!-- note",
+            "--> dirty",
+            "\n",
+        ),
+        (
+            "Dedicated worktree /tmp/old is still<!-- note",
+            "--> dirty",
+            "\n\n",
+        ),
+        (
+            "Dedicated worktree /tmp/old is still<!-- outer",
+            "<!-- inner --> dirty",
+            "\n\n",
         ),
         (
             "Dedicated worktree /tmp/old `literal ``` `is still<br>",

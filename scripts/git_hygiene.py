@@ -1775,8 +1775,13 @@ _DISPATCHER_HTML_BREAK_TOKEN_RE = re.compile(
     r"<br(?=[\s/>])(?:[\s]+(?:[^\"'>]|\"[^\"]*\"|'[^']*')*)?[\s]*/?>",
     re.IGNORECASE | re.DOTALL,
 )
+_DISPATCHER_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_DISPATCHER_HTML_COMMENT_OPEN_RE = re.compile(r"<!--[^\r\n]*")
 _DISPATCHER_HTML_TAG_NAME_RE = re.compile(r"<\s*/?\s*([A-Za-z][A-Za-z0-9:-]*)")
 _DISPATCHER_OPAQUE_CODE_MARKER = "\x00"
+_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER = "\x02"
+_DISPATCHER_HTML_COMMENT_CLOSER_MASK = "\x03"
+_DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER = "\x04"
 
 
 def _dispatcher_is_html_break_token(content: str) -> bool:
@@ -1784,12 +1789,68 @@ def _dispatcher_is_html_break_token(content: str) -> bool:
 
 
 def _dispatcher_render_html_token(content: str) -> str:
+    stripped = content.strip()
+    if _DISPATCHER_HTML_COMMENT_RE.fullmatch(stripped) or stripped.startswith("<!--"):
+        return "\n" * content.count("\n")
     if _dispatcher_is_html_break_token(content):
         return "\n"
     name = _DISPATCHER_HTML_TAG_NAME_RE.match(content)
     if name is not None and not name.group(1).lower().startswith("br-"):
         return ""
     return content
+
+
+def _dispatcher_protect_escaped_html_comments(content: str) -> str:
+    protected: list[str] = []
+    cursor = 0
+    while cursor < len(content):
+        if content.startswith("<!--", cursor):
+            backslashes = 0
+            index = cursor - 1
+            while index >= 0 and content[index] == "\\":
+                backslashes += 1
+                index -= 1
+            if backslashes % 2:
+                protected.pop()
+                protected.append(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER)
+                cursor += len("<!--")
+                continue
+        if content.startswith("--", cursor):
+            end = cursor + 2
+            backslashes = 0
+            while end < len(content) and content[end] == "\\":
+                backslashes += 1
+                end += 1
+            if backslashes % 2 and end < len(content) and content[end] == ">":
+                protected.append(
+                    "--" + _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER
+                )
+                cursor = end + 1
+                continue
+        protected.append(content[cursor])
+        cursor += 1
+    return "".join(protected)
+
+
+def _dispatcher_render_text_token(
+    content: str, *, mask_comment_closers: bool = False
+) -> str:
+    content = _DISPATCHER_HTML_COMMENT_OPEN_RE.sub("", content)
+    content = content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
+    if not mask_comment_closers:
+        content = content.replace(
+            _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER, "-->"
+        )
+    return content
+
+
+def _dispatcher_render_pending_html_inline_token(content: str) -> str:
+    close = content.find("-->")
+    if close >= 0:
+        return content[: close + 3] + _dispatcher_render_html_token(content[close + 3 :])
+    if content.strip().startswith("<!--"):
+        return content
+    return _dispatcher_render_html_token(content)
 
 
 class _DispatcherHTMLBlockTextParser(HTMLParser):
@@ -1799,6 +1860,9 @@ class _DispatcherHTMLBlockTextParser(HTMLParser):
 
     def handle_data(self, data: str) -> None:
         self.parts.append(data)
+
+    def handle_comment(self, data: str) -> None:
+        self.parts.append("\n" * data.count("\n"))
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag.lower() == "br":
@@ -1818,30 +1882,83 @@ def _dispatcher_render_html_block(content: str) -> str:
     return "".join(parser.parts)
 
 
+def _dispatcher_html_comment_is_unclosed(content: str) -> bool:
+    return content.rfind("<!--") > content.rfind("-->")
+
+
+def _dispatcher_inline_html_comment_is_unclosed(token: Any) -> bool:
+    children = token.children or []
+    return bool(
+        any(
+            child.type in {"text", "html_inline"}
+            and _dispatcher_html_comment_is_unclosed(child.content)
+            for child in children
+        )
+    )
+
+
+def _dispatcher_consume_split_html_comment(content: str) -> tuple[str, bool]:
+    close = content.find("-->")
+    if close == -1:
+        return "\n" * content.count("\n"), True
+    return "\n" * content[:close].count("\n") + content[close + 3 :], False
+
+
+def _dispatcher_consume_pending_html_block_comment(
+    content: str,
+) -> tuple[str, bool]:
+    close = content.find("-->")
+    if close == -1:
+        return "\n" * content.count("\n"), True
+    raw_suffix = content[close + 3 :]
+    suffix = _dispatcher_render_html_block(raw_suffix)
+    return (
+        "\n" * content[:close].count("\n") + suffix,
+        _dispatcher_html_comment_is_unclosed(raw_suffix),
+    )
+
+
 def _dispatcher_mask_code_block(content: str) -> str:
     masked = re.sub(r"[^\n]", " ", content)
     return f"{_DISPATCHER_OPAQUE_CODE_MARKER}{masked}{_DISPATCHER_OPAQUE_CODE_MARKER}"
 
 
 def _dispatcher_render_inline_tokens(
-    tokens: Sequence[Any], *, strip_task_prefix: bool,
+    tokens: Sequence[Any], *, strip_task_prefix: bool, mask_comment_closers: bool = False,
 ) -> str:
     parts: list[str] = []
     for token in tokens:
         token_type = token.type
         if token_type in {"softbreak", "hardbreak"}:
             parts.append("\n")
-        elif token_type in {"code_inline", "text"}:
-            parts.append(token.content)
+        elif token_type == "code_inline":
+            code = token.content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
+            if mask_comment_closers:
+                code = code.replace("-->", _DISPATCHER_HTML_COMMENT_CLOSER_MASK)
+            parts.append(code)
+        elif token_type == "text":
+            parts.append(
+                _dispatcher_render_text_token(
+                    token.content, mask_comment_closers=mask_comment_closers
+                )
+            )
         elif token_type in {"html_inline", "html_block"}:
-            parts.append(_dispatcher_render_html_token(token.content))
+            if mask_comment_closers:
+                content = token.content.replace(
+                    _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--"
+                )
+                parts.append(_dispatcher_render_pending_html_inline_token(content))
+            else:
+                parts.append(_dispatcher_render_html_token(token.content))
         elif token_type in {"link_open", "link_close", "image", "em_open", "em_close", "strong_open", "strong_close", "s_open", "s_close", "del_open", "del_close"}:
             if token_type == "image":
                 parts.append(token.content)
         elif token.children:
             parts.append(
                 _dispatcher_render_inline_tokens(
-                    token.children, strip_task_prefix=False
+                    token.children,
+                    strip_task_prefix=False,
+                    mask_comment_closers=mask_comment_closers,
                 )
             )
         elif token.content:
@@ -1852,24 +1969,69 @@ def _dispatcher_render_inline_tokens(
     return rendered
 
 
+def _dispatcher_inline_comment_source(tokens: Sequence[Any]) -> str:
+    parts: list[str] = []
+    for token in tokens:
+        if token.type == "code_inline":
+            code = token.content.replace("<!--", _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER)
+            code = code.replace("-->", _DISPATCHER_HTML_COMMENT_CLOSER_MASK)
+            parts.append(code)
+        elif token.type in {"text", "html_inline", "html_block"}:
+            parts.append(token.content)
+        elif token.type in {"softbreak", "hardbreak"}:
+            parts.append("\n")
+        elif token.children:
+            parts.append(_dispatcher_inline_comment_source(token.children))
+    return "".join(parts)
+
+
+def _dispatcher_inline_comment_reopens_after_close(token: Any) -> bool:
+    source = _dispatcher_inline_comment_source(token.children or [])
+    close = source.find("-->")
+    return close >= 0 and _dispatcher_html_comment_is_unclosed(source[close + 3 :])
+
+
 def _dispatcher_cross_line_scan_body(body: str) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
-    tokens = _DISPATCHER_MARKDOWN.parse(normalized)
+    tokens = _DISPATCHER_MARKDOWN.parse(
+        _dispatcher_protect_escaped_html_comments(normalized)
+    )
     parts: list[str] = []
     previous_end = 0
     rendered_block = False
+    html_comment_open = False
     for token in tokens:
         if token.type == "inline":
             rendered = _dispatcher_render_inline_tokens(
-                token.children or [], strip_task_prefix=token.level > 1
+                token.children or [],
+                strip_task_prefix=token.level > 1,
+                mask_comment_closers=html_comment_open,
             )
         elif token.type in {"fence", "code_block"}:
             rendered = _dispatcher_mask_code_block(token.content)
         elif token.type == "html_block":
-            rendered = _dispatcher_render_html_block(token.content)
+            if html_comment_open:
+                rendered, html_comment_open = _dispatcher_consume_pending_html_block_comment(
+                    token.content
+                )
+            else:
+                rendered = _dispatcher_render_html_block(token.content)
+                html_comment_open = _dispatcher_html_comment_is_unclosed(token.content)
         else:
             continue
+        reopens_after_close = (
+            html_comment_open
+            and token.type == "inline"
+            and _dispatcher_inline_comment_reopens_after_close(token)
+        )
+        if html_comment_open and token.type != "html_block":
+            rendered, html_comment_open = _dispatcher_consume_split_html_comment(rendered)
+            html_comment_open = html_comment_open or reopens_after_close
+        elif not html_comment_open and token.type == "inline" and _dispatcher_inline_html_comment_is_unclosed(
+            token
+        ):
+            html_comment_open = True
         if token.map is None:
             parts.append(rendered)
             continue
