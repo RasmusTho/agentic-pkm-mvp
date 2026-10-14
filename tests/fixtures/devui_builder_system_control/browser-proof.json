@@ -1,0 +1,111 @@
+{
+  "browser_request_count": 59,
+  "cross_origin_request_count": 0,
+  "evidence_class": "repository production-route browser proof with isolated synthetic sources; no live qualification",
+  "modes": [
+    {
+      "mode": "desktop",
+      "passed": true
+    },
+    {
+      "mode": "narrow",
+      "passed": true
+    },
+    {
+      "mode": "zoom_200",
+      "passed": true
+    },
+    {
+      "mode": "keyboard",
+      "passed": true
+    },
+    {
+      "mode": "screen_reader",
+      "passed": true
+    },
+    {
+      "mode": "print",
+      "passed": true
+    },
+    {
+      "mode": "javascript_off",
+      "passed": true
+    }
+  ],
+  "source_states": [
+    {
+      "source_state": {
+        "availability": "available",
+        "captured_at": "2026-10-14T19:46:23+00:00",
+        "cardinality": "not_measured",
+        "coverage": "missing",
+        "freshness": "fresh",
+        "freshness_rule": "exact candidate bytes verified at this read; no live-policy freshness claim",
+        "limitations": [
+          "Exact candidate bytes were read; typed lifecycle and governance completeness remain undeclared."
+        ],
+        "linkage": "linked",
+        "read_scope": "docs/DEVUI.md",
+        "read_watermark": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "state": "fresh",
+      "text_preserved": true
+    },
+    {
+      "source_state": {
+        "availability": "refused",
+        "captured_at": "2026-10-14T19:46:23+00:00",
+        "cardinality": "not_measured",
+        "coverage": "missing",
+        "freshness": "unknown",
+        "freshness_rule": "exact candidate bytes verified at this read; no live-policy freshness claim",
+        "limitations": [
+          "Candidate document identity or content was refused; no document claims are admitted."
+        ],
+        "linkage": "unlinked",
+        "read_scope": "docs/DEVUI.md",
+        "read_watermark": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "state": "refused",
+      "text_preserved": true
+    },
+    {
+      "source_state": {
+        "availability": "unavailable",
+        "captured_at": "2026-10-14T19:46:23+00:00",
+        "cardinality": "not_measured",
+        "coverage": "missing",
+        "freshness": "unknown",
+        "freshness_rule": "exact candidate bytes verified at this read; no live-policy freshness claim",
+        "limitations": [
+          "Candidate document is missing; governance completeness is not declared."
+        ],
+        "linkage": "unlinked",
+        "read_scope": "docs/DEVUI.md",
+        "read_watermark": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "state": "unavailable",
+      "text_preserved": true
+    },
+    {
+      "source_region": "Assurance",
+      "state": "stale",
+      "text_preserved": true
+    },
+    {
+      "source_region": "Workflows",
+      "state": "unread",
+      "text_preserved": true
+    },
+    {
+      "source_region": "Governance",
+      "state": "missing",
+      "text_preserved": true
+    },
+    {
+      "source_region": "Routes",
+      "state": "unlinked",
+      "text_preserved": true
+    }
+  ]
+}

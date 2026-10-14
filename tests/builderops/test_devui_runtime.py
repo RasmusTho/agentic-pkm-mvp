@@ -1225,12 +1225,15 @@ def _package_managed_shell(root: Path) -> None:
     shutil.copytree(source, root / "assets", dirs_exist_ok=True)
     shutil.copyfile(ROOT / "app/builderops/devui_managed.css", root / "assets/devui.css")
     shutil.copyfile(ROOT / "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css", root / "assets/yggdrasil.css")
+    from app.builderops.devui_control import bind_managed_control_assets
+    from app.builderops.devui_assets import ASSET_SHA256
+    bind_managed_control_assets(root / "assets")
     manifest_path = root / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["files"].update(
         {
             "assets/" + name: hashlib.sha256((root / "assets" / name).read_bytes()).hexdigest()
-            for name in MANAGED_ROUTES.values()
+            for name in ASSET_SHA256
         }
     )
     manifest_path.write_text(json.dumps(manifest))
@@ -1250,6 +1253,8 @@ def test_managed_journey_serves_exact_packaged_asset_allowlist(managed_sources) 
         assert {r.path for r in client.app.routes} == set(MANAGED_ROUTES) | {
             "/api/devui/overview",
             "/api/devui/focus",
+            "/devui/builder-system-control",
+            "/api/devui/builder-system-control",
             "/version",
             "/healthz",
         }

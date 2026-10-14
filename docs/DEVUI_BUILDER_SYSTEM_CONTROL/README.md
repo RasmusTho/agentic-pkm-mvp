@@ -1,7 +1,7 @@
 State: Proposed target-state specification from issue #4698; BSC-01's pure governing-document
 inventory composer, BSC-02's pure workflow-adapter and capability-binding composer, and BSC-03's
 pure coverage/deviation and governed-route composer are delivered as nonvisual partial inputs.
-BSC-04 design, BSC-05 previews, route/UI, commands, and the whole lens remain undelivered.
+A bounded managed read-only navigation page/API is delivered by #6080 using independently reviewed exact shipped reuse. Broader BSC-04 design, BSC-05 previews, commands, complete source inventories and the whole assurance lens remain undelivered.
 Delivered inputs and target contracts are separated below.
 Doc role: Capability specification and hard authority boundary for the separate devUI Builder
 System Control lens.
@@ -15,7 +15,7 @@ Review cadence: Event-driven
 Source of truth: Owner documents own policy and intended behavior; workflow contracts own their
 admission and receipts; live sources own observations; GitHub and repository evidence own delivery
 truth. This lens owns none of them.
-Last reviewed: 2026-08-10
+Last reviewed: 2026-10-14 for bounded #6080 managed navigation; broader source/design/acceptance contracts retained
 
 # devUI Builder System Control
 
@@ -28,8 +28,7 @@ correlated delivery-route deviations.
 
 It is a read-time/rebuildable orientation projection and governed-command boundary. It does not
 decide policy, advance a workflow, create work, reconcile sources, or become the source of truth for
-anything it displays. No runtime, route, or visual implementation is delivered by this
-specification.
+anything it displays. The bounded managed navigation implementation below is repository evidence; this specification does not establish live qualification or whole-lens delivery.
 
 ## Current-to-target truth
 
@@ -45,13 +44,66 @@ specification.
 | BSC-01 governing-document inventory composer | Delivered partial input; no route, UI, or effect is delivered | Composes only explicit governing-document declarations per read, preserves source-owned authority/lifecycle/state evidence, and never discovers, copies, or decides document truth. |
 | BSC-02 workflow-adapter and capability-binding composer | Delivered partial input; no source discovery, route, UI, command, or effect is delivered | Composes only explicit skill/MCP/connector/script/CLI declarations per read, preserves their exact refs, operations, ownership, admission boundary, source axes, and limitations, and withdraws unsupported ownership or authority claims rather than inferring them. |
 | BSC-03 coverage/deviation and governed-route composer | Delivered partial input by issue #4725; no source discovery, UI, command, or effect is delivered | Composes only explicit bounded coverage, exception, unknown, intended/observed correlation, and governed-route declarations per read; incomplete completeness/exception evidence is withdrawn locally and a route remains navigation only. |
-| `BuilderSystemControlView.v1` | Target contract; partially delivered | BSC-01..03 compose only explicit governing-document, workflow-adapter, capability-binding, coverage, deviation, and governed-route records per read; BSC-04 design, BSC-05 previews, route/UI, commands, and the whole lens remain undelivered. |
-| Builder System Control route and UI | Target contract; not delivered | Separate system-governance context, pending implementation and governed design handoff. |
+| `BuilderSystemControlView.v1` | Target contract; partially delivered | BSC-01..03 compose only explicit governing-document, workflow-adapter, capability-binding, coverage, deviation, and governed-route records per read; the broader BSC-04 handoff, BSC-05, commands and complete lens remain undelivered; the managed navigation slice below consumes the nonvisual composers. |
+| Managed read-only BSC navigation route and UI | Bounded repository implementation by #6080 | Separate `builder_system` context, five orientation maps, candidate-backed document headers, existing composition source states and explicit Inspect destinations. Exact shipped reuse is bound by `constrained-reuse.json`; no live design-system selection or full BSC-04 handoff is claimed. |
 | Command proposals | Target contract; not delivered | Later proposals may route only to existing governed workflows. |
 
 The status of an input is not inherited by the composed view. A delivered source may be stale,
 unavailable, unread, unsupported, unlinked, missing, or measured empty at a particular read. A
 target contract does not become delivered merely because this specification names it.
+
+### Bounded managed navigation delivery (#6080)
+
+The standalone managed listener serves GET `/devui/builder-system-control` and
+`/api/devui/builder-system-control` under its existing direct-loopback/local-Host/no-forwarded-identity,
+GET-only admission. Overview links to the system lens; Focus supplies one encoded
+`return_subject` for the configured repository. This is return navigation only: the BSC primary
+identity stays `builder_system`, no Focus payload is joined, and return performs the existing fresh
+Focus read. Missing repository binding or candidate packaging is unavailable; a malformed, duplicate,
+foreign or unsupported prior subject is refused before source reads.
+
+The document selection is finite: `docs/DEVUI.md`, this README, the SBS operating model,
+`docs/development/DEV_WORKFLOW.md` and `docs/development/BUILDER_SYSTEM_PROCESS_MAP.md`. The
+candidate manifest owns repository/SHA/content identity; each document read checks its bytes and
+preserves literal role/authority/owner headers. Owner and workflow documents remain normative;
+this proposed specification and the descriptive process map are reference inputs. A fresh byte read
+proves only those candidate bytes. Typed lifecycle and governance completeness are undeclared and
+remain unknown/missing; missing or changed bytes withdraw only that document. No source discovery,
+registry or governance-completeness claim is added.
+
+The existing `devui.composition.v1` read retains independent Cockpit planes, CKM refusal and receipt
+states. Raw provider payloads are omitted from this lens's transport; source snapshot, authority,
+completeness and refusal metadata survive. Workflow/tool inventories, coverage, exceptions and
+intended-to-observed correlations remain unread or unlinked because no owning declarations are
+supplied. Empty projection arrays never mean measured-empty sources or healthy governance.
+
+Inspect uses explicit optional navigation addresses, without probing or forwarding credentials:
+
+- `DEVUI_DIAGNOSTIC_ORIGIN` addresses the existing legacy Product-hosted Cockpit, Signboard GET
+  board, operational Signboard recovery, legacy BuilderOps records and Product status diagnostics.
+  It is a credential-free HTTPS origin or loopback HTTP origin, with no path/query/fragment.
+- `DEVUI_CKM_OVERVIEW_URL` optionally addresses an already hosted generated CKM view; CKM has no
+  built-in HTTP UI route and its managed provider remains unavailable. The URL cannot contain
+  credentials, query/fragment or traversal.
+- The existing `BUILDEROPS_API_URL` supplies the source-owned `/v1/tasks?repository=...` outlink;
+  destination authentication remains separate. No browser token is supplied and reachability is
+  not asserted. `/version` and `/healthz` are local candidate/liveness diagnostics only.
+
+Absent addresses remain visibly unavailable, including unavailable Cockpit/CKM Inspect links.
+Declared external addresses remain unread until visited under their own admission. Destinations
+without repository/subject query contracts are explicitly marked context-unsupported; they open a
+separate tab and the DevUI return context stays in the original tab. Signboard's recovery link is
+marked operational because opening it triggers a refresh POST and its controls can write. The
+read-only Signboard board GET is separate. DevUI itself makes only same-origin browser reads and
+existing source GETs; its page has no command, storage or effect authority.
+
+Image packaging applies the exact content/interaction transformation to the managed Overview/Focus
+copies, adds the server-rendered BSC template and binds all seven asset hashes. Original Companion
+assets and its historical finite gateway remain unchanged. Unknown asset inputs fail packaging;
+repeated packaging is idempotent. The new template has no script and remains useful with JavaScript
+off. Production-route browser/negative source fixtures and the content-addressed constrained-reuse
+receipt are repository conformance evidence only. Wider #4982/#4695 design, VM102/source qualification,
+#4749 pilot and #5399 owner acceptance remain separate.
 
 ### Governing and supporting baseline
 
