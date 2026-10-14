@@ -932,6 +932,38 @@ errors/malformed/locked/invalid counts must be zero. A fresh Product readiness c
 existing strict index doctor must then pass with zero missing vectors. Other index problems remain
 blocking and do not trigger an unrelated source replay. Missing summaries, partial work, refused
 context or an unready index fail the operation; child streams stay private.
+After retained-source replay, a fresh non-strict doctor may identify a remaining vector-only gap
+outside that inventory. The same supervised, stopped-writer SourceAction then invokes
+`index repair-missing --json` across canonical ObjectStore rows in the selected binding. Only
+provenance-complete admitted vault notes with canonical text are eligible: vault origin, a retained
+replay recipe/generation matching stored meaning, non-draft review state, and supported existing
+trust metadata are preserved, not upgraded. Candidate-only, untrusted, malformed and incomplete
+rows remain absent and refuse the operation. The repair uses the configured embedding identity,
+locks and rechecks the source snapshot, and inserts vector plus provenance atomically with
+`ON CONFLICT DO NOTHING`. It never resets, overwrites or deletes an existing vector or Product
+object. Embedding/write failures retain only the existing finite redacted failure classes; the
+strict final doctor still proves whole-binding coverage before any service activation. Repository
+delivery does not substitute for parent-owned live DEV/TEST acceptance.
+Admission also requires the complete source frontmatter captured by canonical producers; negative
+markers at every persisted level remain binding. Legacy rows lacking that snapshot fail closed,
+even when body replay provenance is complete. Missing-only repair cannot invent omitted authority
+or read raw sources to fill it. Before that repair, stopped-writer native recovery invokes the
+separate `index reconcile-legacy --json` stage. It resolves only the stored locator beneath the
+active vault through the hardened source adapter, re-proves current profile/source admission and
+unambiguous canonical identity, and checks the canonical producer inventory. An eligible source
+prepares its evidence-complete vault-alpha projection without source, companion or outbox writes;
+embedding generation precedes atomic compare-and-swap Product replacement plus absent-only vector
+insertion. A currently excluded source may instead retire only its exact stale rebuildable mirror,
+with derived vector state absent; source files, canonical objects, receipts and accepted history
+remain untouched. Alpha exclusion is insufficient when the separate dev-only filesystem watcher's
+configured/default `VAULT_DIR` scope overlaps the active vault; unresolved broader-producer
+applicability refuses retirement. History dependencies, candidate/staging or untrusted material, changed sources,
+redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again
+alongside forward/reverse canonical identity and binding-wide canonical source-locator checks,
+inside the transaction, including after writes, so partial writes roll back; existing vectors
+never get overwritten. Only finite counts/refusal classes cross the private CLI boundary. Missing-only
+repair, fresh Product readiness and the strict whole-binding final doctor still follow, before service activation. This is
+repository support, not a claim that legacy live DEV/TEST gaps or parent acceptance have converged.
 Source-backed replay counts a vector-producer exception as an error, not an ingested note,
 and returns a nonzero result with numeric counters. The private native consumer validates
 that bounded result and retains only the fixed `embedding_generation_failed` (exit 80),

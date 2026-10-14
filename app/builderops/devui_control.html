@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>devUI Builder System Control</title>
+  <link rel="stylesheet" href="/devui/assets/yggdrasil.css">
+  <link rel="stylesheet" href="/devui/assets/devui.css">
+</head>
+<body>
+  <main class="wrap" data-testid="builder-system-control" data-primary-identity="builder_system" data-server-state="read-only" aria-labelledby="control-heading">
+    <section class="claim">
+      <div class="claim-top">
+        <div>
+          <p class="eyebrow">devUI · Builder System · read-only projection</p>
+          <h1 id="control-heading">Builder System Control</h1>
+        </div>
+        <span class="mono load-state" role="status">Source-specific read · $composed_at</span>
+      </div>
+      <p class="said">$repository · Governance and source evidence for the Builder System.</p>
+      <a class="btn btn-out" data-testid="overview-return" href="/devui/overview"><span class="k">back</span>Return to Overview</a>
+      $focus_return
+    </section>
+    <div class="focus-grid">
+      <div>
+        <section class="surface" aria-labelledby="governance-heading"><h2 id="governance-heading">Governance</h2>$governance</section>
+        <section class="surface" aria-labelledby="workflow-heading"><h2 id="workflow-heading">Workflows</h2>$workflows</section>
+        <section class="surface" aria-labelledby="capabilities-heading"><h2 id="capabilities-heading">Capabilities</h2>$capabilities</section>
+      </div>
+      <div>
+        <section class="surface" aria-labelledby="assurance-heading"><h2 id="assurance-heading">Assurance</h2>$assurance</section>
+        <section class="surface" aria-labelledby="routes-heading"><h2 id="routes-heading">Routes</h2>$routes</section>
+        <section class="surface" aria-labelledby="inspect-heading"><h2 id="inspect-heading">Inspect and recovery</h2>$inspect</section>
+        <section class="limitations" aria-labelledby="limits-heading"><h2 id="limits-heading">Limitations</h2>$limitations</section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

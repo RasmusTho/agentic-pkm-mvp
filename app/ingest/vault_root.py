@@ -25,6 +25,7 @@ from app.rebuildability import (
 )
 from app.stores.provider import get_stores
 from app.objects import resolve_canonical_object_id
+from app.rebuildability.product_total_loss import capture_source_frontmatter
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     ep_ref = episode_ref_from_frontmatter(frontmatter)
     payload = {
         "title": title,
+        "frontmatter": capture_source_frontmatter(text),
         "review_state": review_state,
         "origin": "vault",
         "source": str(path),
@@ -184,6 +186,7 @@ def _ingest_file(path: Path, *, trace_id: str, vault_root: Path | None = None) -
     # blind-dropped to 'unbound' on the next cold rebuild (index_rebuild reads store_objects payload).
     canonical_payload = {
         **payload_copy,
+        "frontmatter": capture_source_frontmatter(text),
         "core6": core6,
         "episode_ref": ep_ref,
         "replay": replay,

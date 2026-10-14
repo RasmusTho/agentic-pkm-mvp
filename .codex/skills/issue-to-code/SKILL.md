@@ -542,6 +542,13 @@ When continuing through anchor drift:
      Heartbeat the same owner before long validation or review waits. Record `release` only when
      abandoning/handover makes the checkout inactive, or `complete` after terminal delivery; an
      open PR that may need review fixes remains active.
+     Preserve the wrapper's final pickup-claim-complete line exactly as the `pickup_receipt` input
+     to the first issue-backed PR body. The wrapper emits a preflight report before that line, so a
+     shell capture may select only the final line (for example, `tail -n 1`); do not reconstruct the
+     receipt from dispatcher status, labels, or a fabricated success string. Pass the captured value
+     through the body-input JSON and let `scripts/pr_body_generator.py` refuse missing, malformed, or
+     foreign-Issue receipts before publication effects. Issue-free and explicit multi-Issue bodies
+     retain their declared scope; a receipt binds to the governing Issue, never an unclaimed parent.
 3. Run delivered-state preflight before claim when target implementation paths are explicit:
    - Verify whether referenced target modules already exist in the repo.
    - If core implementation already exists, do not proceed as fresh implementation; route to `issue-maintenance-change-control` to correct stale or drifted contract state.
