@@ -219,6 +219,25 @@ def _run_json(arguments: list[str]) -> Any:
         return json.loads(raw)
 
 
+def _diagnosis_unembedded_count(diagnosis: Any) -> int:
+    if (
+        not isinstance(diagnosis, dict)
+        or diagnosis.get('backend') != 'PgVectorIndex'
+        or type(diagnosis.get('unembedded_object_count')) is not int
+        or diagnosis['unembedded_object_count'] < 0
+        or type(diagnosis.get('non_vector_issue_count')) is not int
+        or diagnosis['non_vector_issue_count'] < 0
+        or not isinstance(diagnosis.get('issues'), list)
+        or any(not isinstance(issue, str) for issue in diagnosis['issues'])
+        or type(diagnosis.get('rebuild_required')) is not bool
+        or not isinstance(diagnosis.get('pg_state'), dict)
+        or len(diagnosis['issues'])
+        != diagnosis['non_vector_issue_count'] + int(diagnosis['unembedded_object_count'] > 0)
+    ):
+        raise ValueError('source index diagnosis invalid')
+    return diagnosis['unembedded_object_count']
+
+
 def rebuild_if_needed(selector: str) -> None:
     root = preflight(selector)
     if root is None:
@@ -226,7 +245,15 @@ def rebuild_if_needed(selector: str) -> None:
         # or invalid configured roots still raise at the canonical resolver.
         return
     _run_json(['settings', 'validate', '--json'])
-    if not _product_ready(root):
+    product_ready = _product_ready(root)
+    rebuild_source_projection = not product_ready
+    if product_ready:
+        preflight_diagnosis = _run_json(['index', 'doctor', '--json'])
+        unembedded_count = _diagnosis_unembedded_count(preflight_diagnosis)
+        rebuild_source_projection = (
+            unembedded_count > 0 and preflight_diagnosis['non_vector_issue_count'] == 0
+        )
+    if rebuild_source_projection:
         summary = _run_json([
             'vault-alpha-ingest', '--vault-root', str(root), '--max-notes', '0',
             '--force', '--source-backed-rebuild', '--json',
@@ -234,10 +261,10 @@ def rebuild_if_needed(selector: str) -> None:
         if not source_rebuild_complete(summary) or not _product_ready(root):
             raise ValueError('source projection incomplete')
     diagnosis = _run_json(['index', 'doctor', '--json', '--strict'])
+    unembedded_count = _diagnosis_unembedded_count(diagnosis)
     if (
-        not isinstance(diagnosis, dict) or diagnosis.get('backend') != 'PgVectorIndex'
-        or diagnosis.get('issues') != [] or diagnosis.get('rebuild_required') is not False
-        or not isinstance(diagnosis.get('pg_state'), dict)
+        diagnosis.get('issues') != [] or diagnosis.get('rebuild_required') is not False
+        or unembedded_count != 0 or diagnosis.get('non_vector_issue_count') != 0
     ):
         raise ValueError('source index not ready')
 

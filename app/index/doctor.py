@@ -159,6 +159,8 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
     mixed_identity_count = 0
     metadata_completeness: Dict[str, Any] | None = None
     content_hash_staleness: Dict[str, Any] | None = None
+    unembedded_object_count: int | None = None
+    unembedded_issue_added = False
 
     if stored_identity is None:
         warnings.append("VectorIndex has no recorded embedding identity (empty index or legacy backend).")
@@ -203,6 +205,7 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
             if isinstance(wrong_rows, int) and wrong_rows > 0:
                 issues.append(f"{wrong_rows} rows have embeddings not matching the recorded dimension.")
             unembedded_count, unembedded_samples = inspect_unembedded_pg_objects()
+            unembedded_object_count = unembedded_count
             if unembedded_count:
                 sample_text = ", ".join(unembedded_samples)
                 if unembedded_count > len(unembedded_samples):
@@ -211,6 +214,7 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
                     f"{unembedded_count} store_objects rows have no embedded "
                     f"store_vector_index row: {sample_text}"
                 )
+                unembedded_issue_added = True
             # Mixed-identity detection (CTI-1). Key on the full
             # (provider, model, dim, normalize) tuple, not provider alone: a
             # same-provider model swap at the same dim is still a semantically
@@ -332,6 +336,8 @@ def diagnose_index(*, use_cache: bool = False, include_vault_coverage: bool = Fa
         "pg_state": pg_state,
         "mixed_identities": mixed_identities,
         "mixed_identity_count": mixed_identity_count,
+        "unembedded_object_count": unembedded_object_count,
+        "non_vector_issue_count": len(issues) - int(unembedded_issue_added),
         "metadata_completeness": metadata_completeness,
         "content_hash_staleness": content_hash_staleness,
         "vault_coverage": vault_coverage,
