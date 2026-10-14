@@ -74,11 +74,23 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
-- Both full and scoped non-PG unit-test steps retain the verified 35-minute batch ceiling from
-  #5921 / PR #5924 and the existing 120-second per-test thread watchdog. This preserves every
-  target, marker, required check, assertion and failure handler. The earlier #5922 selection
-  reached 98 percent before its old 22-minute ceiling; a larger ceiling is execution margin,
-  not a reduction in execution time. Actual duration and coverage handoff are measured separately.
+- The full non-PG unit step has a finite 60-minute outer ceiling; the scoped step retains
+  the 35-minute ceiling from #5921 / PR #5924. Both retain the 120-second per-test thread watchdog,
+  every target, marker, required check, assertion and failure handler. #6084 records two independent
+  35-minute cutoffs: [#6074 job 115700746542](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38514333873/job/115700746542)
+  and [#6075 job 115693481077](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38515571086/job/115693481077).
+  All parallel shards passed; the serial boundary was still running when cancelled. Their
+  parallel phases alone took approximately 30m56s and 29m50s, leaving only about four to five
+  minutes for serial coverage at the old ceiling. The 60-minute bound leaves approximately
+  29 minutes after the slowest observed parallel phase, without changing four-process concurrency
+  or starting host-sensitive tests until all parallel processes exit. This is execution margin,
+  not a speedup or a completed-run duration measurement. The `required-unit-phase-margin.v1`
+  receipt (`pytest-not-pg-shards/phase-margin.json`) records exact checkout SHA, budget, watchdog,
+  phase durations and exit status. Only `phase=complete` with `exit_status=0` describes success;
+  null/incomplete fields cannot prove a missing or cancelled phase. Initial and boundary receipts,
+  partial logs, and status inventory survive cancellation for the always-run artifact upload;
+  normal EXIT handling adds final timings/status when the shell can execute it. Actual current-head
+  CI completion remains required; the ceiling and fixture receipt alone are not runtime proof.
 - The shared native PostgreSQL acceptance profile retains the former `pr-index-pg-contracts`
   surface (#5587), including FCA-06 second-consumer conformance (#5405) and dormant host-candidate
   admission/history/live-refusal and managed-source proofs (#5593). Each test retains the
