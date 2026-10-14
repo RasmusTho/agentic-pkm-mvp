@@ -219,7 +219,7 @@ def test_source_backed_existing_object_missing_vector_repair_converges(
     from app.ingest import vault_alpha
     from app.index.doctor import diagnose_index, reset_diagnose_cache
     from app.stores import get_object_store, get_vector_index
-    from click.testing import CliRunner
+    from tests._click_compat import cli_runner
     from tests.indexer.test_outbox_roundtrip_pg import (
         _configure_isolated_pg_test, _drop_schema, _reset_store_backend_cache_only,
     )
@@ -245,15 +245,16 @@ def test_source_backed_existing_object_missing_vector_repair_converges(
         assert diagnose_index()["unembedded_object_count"] == 1
         arguments = ["vault-alpha-ingest", "--vault-root", str(vault), "--source-backed-rebuild", "--json"]
         index = get_vector_index()
+        runner = cli_runner(mix_stderr=False)
         with monkeypatch.context() as failed_write:
             def refuse(*args, **kwargs):
                 raise RuntimeError("synthetic unavailable index")
             failed_write.setattr(index, "upsert", refuse)
-            failed = CliRunner().invoke(cli, arguments)
+            failed = runner.invoke(cli, arguments)
             assert failed.exit_code == 79
             assert json.loads(failed.stdout)["vector_projection_failure_counts"] == {"vector_index_write_failed": 1}
             assert list(index.all_rows()) == []
-        result = CliRunner().invoke(cli, arguments)
+        result = runner.invoke(cli, arguments)
         assert result.exit_code == 0, result.output
         assert json.loads(result.stdout)["ingested"] == 1
         rows = list(get_vector_index().all_rows())
@@ -268,7 +269,7 @@ def test_source_backed_existing_object_missing_vector_repair_converges(
         }
         assert len(get_object_store().list_objects(limit=None)) == 1
         reset_diagnose_cache()
-        doctor = CliRunner().invoke(cli, ["index", "doctor", "--strict", "--json"])
+        doctor = runner.invoke(cli, ["index", "doctor", "--strict", "--json"])
         assert doctor.exit_code == 0, doctor.output
         assert json.loads(doctor.stdout)["unembedded_object_count"] == 0
     finally:
