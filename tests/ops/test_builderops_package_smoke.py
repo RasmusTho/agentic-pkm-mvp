@@ -31,6 +31,8 @@ def test_minimal_builder_package_boots_without_product_runtime() -> None:
     dockerfile = (ROOT / "Dockerfile.builderops").read_text(encoding="utf-8")
     manifest = (ROOT / "requirements-builderops.txt").read_text(encoding="utf-8")
     assert "COPY requirements-builderops.txt ./" in dockerfile
+    assert "COPY scripts/pr_body_generator.py ./scripts/pr_body_generator.py" in dockerfile
+    assert "!scripts/pr_body_generator.py" in (ROOT / "Dockerfile.builderops.dockerignore").read_text().splitlines()
     assert "requirements.txt" not in dockerfile
     assert "pip install --no-cache-dir -r requirements-builderops.txt" in dockerfile
     assert "fastapi==" in manifest
@@ -47,6 +49,7 @@ def test_minimal_builder_package_boots_without_product_runtime() -> None:
 import json
 import sys
 
+import app.builderops.publication
 from app.builderops.control_plane import migrate, service, worker
 from app.builderops.model_inquiry_workflow import workflow_binding
 assert len(workflow_binding()["content_hash"]) == 64
