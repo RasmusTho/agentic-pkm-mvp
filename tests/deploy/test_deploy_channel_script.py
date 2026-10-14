@@ -6446,6 +6446,143 @@ def test_native_source_summary_unknown_is_not_empty_success(value) -> None:
         source_rebuild_counts(value)
 
 
+@pytest.mark.parametrize('fault,reason', [
+    ('identity', 'embedding_identity_unavailable'),
+    ('invalid_identity', 'embedding_identity_unavailable'),
+    ('service', 'embedding_service_unavailable'),
+    ('readiness', 'embedding_service_not_ready'),
+    ('pull', 'embedding_model_unavailable'),
+    ('model', 'embedding_model_not_ready'),
+    ('probe', 'embedding_probe_failed'),
+    ('context', 'embedding_context_invalid'),
+    ('host_identity', 'embedding_identity_invalid'),
+])
+def test_native_source_embedding_preflight_failures_are_finitely_attributed(tmp_path, monkeypatch, fault, reason):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    variables = {'identity': 'FAKE_EMBEDDING_IDENTITY_RC', 'service': 'FAKE_OLLAMA_UP_RC',
+                 'readiness': 'FAKE_OLLAMA_LIST_RC', 'pull': 'FAKE_OLLAMA_PULL_RC',
+                 'probe': 'FAKE_EMBEDDING_PROBE_RC'}
+    if fault in variables:
+        env[variables[fault]] = '42'
+    if fault in {'pull', 'model'}:
+        Path(env['FAKE_OLLAMA_MODEL_STATE_FILE']).unlink()
+    if fault == 'model':
+        docker = tmp_path / 'bin/docker'
+        docker.write_text(docker.read_text().replace(': > "${FAKE_OLLAMA_MODEL_STATE_FILE:?}"', ':'))
+    if fault == 'invalid_identity':
+        env['FAKE_EMBEDDING_IDENTITY_EXTRA_OUTPUT'] = 'hostile-child-canary /private/vault password=do-not-leak'
+    if fault in {'context', 'host_identity'}:
+        # These defensive branches sit behind earlier whole-deployment guards
+        # and Compose redaction. Execute the actual gate body with only that
+        # predecessor seam isolated, then use the real supervisor boundary.
+        script = SCRIPT.read_text()
+        gate = script[script.index('native_source_failure() {'):script.index('native_source_projection_gate() {')]
+        payload = '{"provider":"BAD", "model":"hostile-child-canary"}'
+        operation = 'invalid' if fault == 'context' else env['BWS_DEPLOY_OPERATION_ID']
+        command = (gate + '\naction=deploy\ntarget_sha=' + sha
+                   + '\nBWS_DEPLOY_OPERATION_ID=' + operation
+                   + '\ncompose() { printf \'%s\\n\' \' ' + payload + '\'; }\n'
+                   + 'native_source_embedding_preflight_gate\nrc=$?\n'
+                   + 'printf "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection\\n" >&2\nexit "$rc"\n')
+        emitted = []
+        monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+        with pytest.raises(PostgresDeployError):
+            linux._command(['bash', '-c', command], env=env, deploy_diagnostics=True)
+        assert emitted == [(
+            'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+            f'MESSAGE=native deployment failure: stage=source_projection class={reason}\n'
+        ).encode('ascii')]
+        return
+    if fault == 'readiness':
+        sleeper = tmp_path / 'bin/sleep'
+        sleeper.write_text('#!/bin/sh\nexit 0\n')
+        sleeper.chmod(0o755)
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        f'MESSAGE=native deployment failure: stage=source_projection class={reason}\n'
+    ).encode('ascii')]
+    assert 'source-rebuild' not in _deploy_events(env)
+    assert not list((root / 'ops/deployments').glob('*.json'))
+
+
+@pytest.mark.parametrize('changes,ready,reason', [
+    ({'FAKE_API_CONTEXT_RC': '42'}, False, 'source_preflight_failed'),
+    ({'FAKE_SOURCE_SETTINGS_RC': '42'}, False, 'source_settings_failed'),
+    ({'FAKE_SOURCE_RC': '42'}, False, 'source_command_failed'),
+    ({'FAKE_SOURCE_SUMMARY': 'hostile-child-canary /private/vault password=do-not-leak'}, False, 'source_summary_invalid'),
+    ({'FAKE_SOURCE_SUMMARY': '{}'}, False, 'source_summary_invalid'),
+    ({'FAKE_SOURCE_PREADINESS': '0'}, False, 'source_post_rebuild_failed'),
+    ({'FAKE_SOURCE_INDEX_RC': '42'}, False, 'source_doctor_failed'),
+    ({'FAKE_SOURCE_INDEX_SUMMARY': '{}'}, False, 'source_doctor_failed'),
+    ({'FAKE_SOURCE_INDEX_PREFLIGHT_RC': '42'}, True, 'source_doctor_failed'),
+    ({'FAULT_READINESS': '1'}, False, 'source_readiness_failed'),
+    ({'FAULT_QUIESCENCE': '1'}, False, 'source_quiescence_failed'),
+    ({'FAULT_WORKER': '1'}, False, 'source_worker_failed'),
+])
+def test_native_source_bootstrap_generic_failures_are_finitely_attributed(tmp_path, monkeypatch, changes, ready, reason):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, sha = _native_source_harness(tmp_path, channel='dev', ready=ready)
+    env.update(changes)
+    if 'FAULT_READINESS' in changes:
+        site = tmp_path / 'api-python-fixture/sitecustomize.py'
+        site.write_text(site.read_text() + '\ndef fail_readiness(*args):\n    raise RuntimeError("hostile-child-canary /private/vault password=do-not-leak")\nrebuildability.evaluate_product_store_readiness = fail_readiness\n')
+    if 'FAULT_QUIESCENCE' in changes:
+        docker = tmp_path / 'bin/docker'
+        docker.write_text(docker.read_text().replace('case "$*" in\n', 'if [ "${1:-}" = ps ] && [[ "$*" == *source-bootstrap* ]]; then exit 42; fi\ncase "$*" in\n', 1))
+    if 'FAULT_WORKER' in changes:
+        bootstrap = root / 'app/ops/native_source_bootstrap.py'
+        bootstrap.write_text(bootstrap.read_text().replace('rebuild_if_needed(selector)', 'raise RuntimeError("hostile-child-canary /private/vault password=do-not-leak")'))
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+        f'MESSAGE=native deployment failure: stage=source_projection class={reason}\n'
+    ).encode('ascii')]
+    assert not list((root / 'ops/deployments').glob('*.json'))
+
+
+@pytest.mark.parametrize('shape', ['valid', 'duplicate', 'injected', 'unknown', 'malformed', 'other_stage'])
+def test_supervised_source_projection_reasons_are_finite_and_fail_closed(monkeypatch, shape):
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    emitted = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', emitted.append)
+    for reason in linux._SOURCE_PROJECTION_FAILURE_REASONS:
+        stage = 'health' if shape == 'other_stage' else 'source_projection'
+        marker = f'YGGDRASIL_DEPLOY_FAILURE_REASON={reason}\n'
+        if shape == 'duplicate':
+            marker += marker
+        elif shape == 'injected':
+            marker = 'hostile-child-canary ' + marker
+        elif shape == 'unknown':
+            marker = 'YGGDRASIL_DEPLOY_FAILURE_REASON=hostile-child-canary\n'
+        elif shape == 'malformed':
+            marker = marker.rstrip() + ' /private/vault password=do-not-leak\n'
+        stderr = f'YGGDRASIL_DEPLOY_FAILURE_STAGE={stage}\n' + marker
+        monkeypatch.setattr(linux.subprocess, 'run', lambda *a, **kw: subprocess.CompletedProcess(a, 78, 'hostile stdout', stderr))
+        with pytest.raises(PostgresDeployError):
+            linux._command(['deployment'], deploy_diagnostics=True)
+        expected = reason if shape == 'valid' else 'command_failed'
+        assert emitted.pop() == (
+            'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
+            f'MESSAGE=native deployment failure: stage={stage} class={expected}\n'
+        ).encode('ascii')
+
+
 def test_full_startup_uses_same_strict_source_summary_parser() -> None:
     script = (REPO_ROOT / "scripts/start_full_system.sh").read_text()
     assert "from app.ops.native_source_bootstrap import source_rebuild_counts" in script

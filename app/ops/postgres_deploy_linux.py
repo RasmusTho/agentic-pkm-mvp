@@ -48,6 +48,13 @@ _DEPLOY_FAILURE_STAGES = frozenset({
 })
 _SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
     'vector_projection_failed', 'embedding_generation_failed', 'vector_index_write_failed',
+    'source_preflight_failed', 'source_readiness_failed', 'source_command_failed',
+    'source_summary_invalid', 'source_post_rebuild_failed', 'source_doctor_failed',
+    'source_settings_failed', 'source_worker_failed', 'source_quiescence_failed',
+    'source_writer_stop_failed', 'embedding_context_invalid',
+    'embedding_identity_unavailable', 'embedding_identity_invalid',
+    'embedding_service_unavailable', 'embedding_service_not_ready',
+    'embedding_model_unavailable', 'embedding_model_not_ready', 'embedding_probe_failed',
 })
 _GUARD_FAILURE_CHECKPOINTS = frozenset({
     'config_runtime_file_binding', 'inherited_owner_fd_inode_flock',
