@@ -1764,7 +1764,8 @@ _DISPATCHER_RETENTION_SEPARATOR = (
     r"(?:\s+|[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)"
 )
 _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
-    r"^[ \t]*(?:(?:>[ \t]*)|(?:[-*+][ \t]+)|(?:\d{1,9}[.)][ \t]+))+",
+    r"^[ \t]*(?:(?:>[ \t]*)|(?:[-*+][ \t]+)|(?:\d{1,9}[.)][ \t]+))+"
+    r"(?:\[[ xX]\][ \t]+)?",
     re.MULTILINE,
 )
 _DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE = re.compile(
