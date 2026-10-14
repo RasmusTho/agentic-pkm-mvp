@@ -63,6 +63,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 
 from app.knowledge_acquisition.pipeline_defaults import DEFAULT_EXTRACTOR_IDS
 import os
@@ -126,8 +127,22 @@ _ALLOWED_POLICY_KEYS: frozenset[str] = frozenset(
         "extractor_requirements",
         "captions",
         "media",
+        "filters",
     }
 )
+_ALLOWED_FILTER_KEYS: frozenset[str] = frozenset(
+    {"language_allowlist", "min_duration_seconds", "max_duration_seconds", "channel_allowlist"}
+)
+_LANGUAGE_CODE_RE = re.compile(r"[a-z]{2}\Z")
+ISO_639_1_LANGUAGE_CODES: frozenset[str] = frozenset(
+    "aa ab ae af ak am an ar as av ay az ba be bg bh bi bm bn bo br bs ca ce ch co cr cs cu cv cy "
+    "da de dv dz ee el en eo es et eu fa ff fi fj fo fr fy ga gd gl gn gu gv ha he hi ho hr ht hu "
+    "hy hz ia id ie ig ii ik io is it iu ja jv ka kg ki kj kk kl km kn ko kr ks ku kv kw ky la lb "
+    "lg li ln lo lt lu lv mg mh mi mk ml mn mr ms mt my na nb nd ne ng nl nn no nr nv ny oc oj om "
+    "or os pa pi pl ps pt qu rm rn ro ru rw sa sc sd se sg si sk sl sm sn so sq sr ss st su sv sw "
+    "ta te tg th ti tk tl tn to tr ts tt tw ty ug uk ur uz ve vi vo wa wo xh yi yo za zh zu".split()
+)
+_CHANNEL_ID_RE = re.compile(r"UC[A-Za-z0-9_-]{22}\Z")
 _ALLOWED_MEDIA_KEYS: frozenset[str] = frozenset(
     {"enabled", "max_quality", "format", "storage_binding", "min_free_gb", "retention_days", "checksum"}
 )
@@ -159,6 +174,10 @@ class SourceRegistryValidationError(ValueError):
 
 class DuplicateBindingError(ValueError):
     """Raised when (collection_kind, collection_ref, account_binding_id) already exists."""
+
+
+class SourceRegistryPolicyConflictError(RuntimeError):
+    """Raised when a concurrent update changes the binding policy being edited."""
 
 
 class InboxAlreadySelectedError(ValueError):
@@ -308,6 +327,53 @@ def _default_acquisition_policy(collection_kind: str) -> dict[str, Any]:
     }
 
 
+def _validate_acquisition_filters(filters: Any) -> None:
+    if not isinstance(filters, dict):
+        raise SourceRegistryValidationError("acquisition_policy.filters must be an object")
+    unknown = set(filters) - _ALLOWED_FILTER_KEYS
+    if unknown:
+        raise SourceRegistryValidationError(
+            f"acquisition_policy.filters has unknown keys: {sorted(unknown)}"
+        )
+    if not filters:
+        raise SourceRegistryValidationError("acquisition_policy.filters must contain at least one criterion")
+
+    for key in ("language_allowlist", "channel_allowlist"):
+        if key not in filters:
+            continue
+        values = filters[key]
+        if not isinstance(values, list) or not values:
+            raise SourceRegistryValidationError(f"acquisition_policy.filters.{key} must be a non-empty list")
+        pattern = _LANGUAGE_CODE_RE if key == "language_allowlist" else _CHANNEL_ID_RE
+        for index, value in enumerate(values):
+            if (
+                not isinstance(value, str)
+                or pattern.fullmatch(value) is None
+                or (key == "language_allowlist" and value not in ISO_639_1_LANGUAGE_CODES)
+            ):
+                expected = "lowercase two-letter ISO 639-1 codes" if key == "language_allowlist" else "UC channel ids"
+                raise SourceRegistryValidationError(
+                    f"acquisition_policy.filters.{key}[{index}] must be {expected}"
+                )
+        if len(set(values)) != len(values):
+            raise SourceRegistryValidationError(f"acquisition_policy.filters.{key} must not contain duplicates")
+
+    for key in ("min_duration_seconds", "max_duration_seconds"):
+        if key not in filters:
+            continue
+        value = filters[key]
+        if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value < 0:
+            raise SourceRegistryValidationError(
+                f"acquisition_policy.filters.{key} must be a finite nonnegative number"
+            )
+    minimum = filters.get("min_duration_seconds")
+    maximum = filters.get("max_duration_seconds")
+    if minimum is not None and maximum is not None and minimum > maximum:
+        raise SourceRegistryValidationError(
+            "acquisition_policy.filters.min_duration_seconds must not exceed max_duration_seconds"
+        )
+
+
 def _validate_acquisition_policy_override(override: Any) -> None:
     if not isinstance(override, dict):
         raise SourceRegistryValidationError(f"acquisition_policy must be an object, got {override!r}")
@@ -351,6 +417,8 @@ def _validate_acquisition_policy_override(override: Any) -> None:
         raise SourceRegistryValidationError("acquisition_policy.captions must be a boolean")
     if "media" in override:
         _validate_media_policy(override["media"])
+    if "filters" in override:
+        _validate_acquisition_filters(override["filters"])
 
 
 def _build_acquisition_policy(collection_kind: str, override: dict[str, Any] | None) -> dict[str, Any]:
@@ -367,6 +435,16 @@ def _build_acquisition_policy(collection_kind: str, override: dict[str, Any] | N
         merged_media = dict(base["media"])
         merged_media.update(override["media"])
         merged["media"] = merged_media
+    if merged["mode"] == "acquire_if_filter_matches":
+        if "filters" not in merged:
+            raise SourceRegistryValidationError(
+                "acquisition_policy.filters is required for acquire_if_filter_matches"
+            )
+        _validate_acquisition_filters(merged["filters"])
+    elif "filters" in merged:
+        raise SourceRegistryValidationError(
+            "acquisition_policy.filters is only valid with acquire_if_filter_matches"
+        )
     requirements = merged.get("extractor_requirements")
     if requirements is not None:
         selected = tuple(merged.get("extractor_ids") or DEFAULT_EXTRACTOR_IDS)
@@ -573,6 +651,31 @@ class _MemorySourceRegistryBackend:
             if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
             updated = replace(row, title=title, updated_at=_now_iso())
+            self._rows[binding_id] = updated
+            return _copy_binding(updated)
+
+    def update_acquisition_policy(
+        self,
+        binding_id: str,
+        *,
+        policy: dict[str, Any],
+        expected_policy_version: int,
+    ) -> SourceBinding:
+        with self._lock:
+            row = self._rows.get(binding_id)
+            if row is None:
+                raise KeyError(f"no such binding: {binding_id}")
+            current_version = row.acquisition_policy.get("policy_version", 1)
+            if current_version != expected_policy_version:
+                raise SourceRegistryPolicyConflictError(
+                    f"binding policy changed concurrently: expected version {expected_policy_version}, "
+                    f"found {current_version}"
+                )
+            updated = replace(
+                row,
+                acquisition_policy=deepcopy(policy),
+                updated_at=_now_iso(),
+            )
             self._rows[binding_id] = updated
             return _copy_binding(updated)
 
@@ -1021,6 +1124,40 @@ class _PgSourceRegistryBackend:
         assert result is not None  # just wrote it
         return result
 
+    def update_acquisition_policy(
+        self,
+        binding_id: str,
+        *,
+        policy: dict[str, Any],
+        expected_policy_version: int,
+    ) -> SourceBinding:
+        conn = _pg_connect()
+        try:
+            _assert_pg_schema(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"UPDATE {_TABLE} SET acquisition_policy = %s::jsonb, updated_at = %s::timestamptz "
+                "WHERE binding_id = %s "
+                "AND COALESCE((acquisition_policy->>'policy_version')::integer, 1) = %s "
+                f"RETURNING {_COLUMNS_SQL}",
+                (json.dumps(policy), _now_iso(), binding_id, expected_policy_version),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return _row_to_binding(tuple(row))
+            cur.execute(f"SELECT acquisition_policy FROM {_TABLE} WHERE binding_id = %s", (binding_id,))
+            current = cur.fetchone()
+            if current is None:
+                raise KeyError(f"no such binding: {binding_id}")
+            current_policy = json.loads(current[0]) if isinstance(current[0], str) else current[0]
+            actual_version = current_policy.get("policy_version", 1)
+            raise SourceRegistryPolicyConflictError(
+                f"binding policy changed concurrently: expected version {expected_policy_version}, "
+                f"found {actual_version}"
+            )
+        finally:
+            conn.close()
+
     def set_inbox(self, account_binding_id: str | None, binding_id: str) -> SourceBinding:
         from psycopg.errors import UniqueViolation  # noqa: PLC0415
 
@@ -1196,7 +1333,7 @@ class _PgSourceRegistryBackend:
             row = cur.fetchone()
             if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
-            return _row_to_binding(row)
+            return _row_to_binding(tuple(row))
         finally:
             if transaction_conn is None:
                 conn.close()
@@ -1229,7 +1366,7 @@ class _PgSourceRegistryBackend:
             row = cur.fetchone()
             if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
-            return _row_to_binding(row)
+            return _row_to_binding(tuple(row))
         finally:
             if transaction_conn is None:
                 conn.close()
@@ -1260,7 +1397,7 @@ class _PgSourceRegistryBackend:
             row = cur.fetchone()
             if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
-            return _row_to_binding(row)
+            return _row_to_binding(tuple(row))
         finally:
             if transaction_conn is None:
                 conn.close()
@@ -1416,6 +1553,61 @@ class SourceRegistry:
             raise SourceRegistryValidationError("title must be a non-empty string")
         _check_portable_string(title, "title")
         return self._backend.update_title(binding_id, title)
+
+    def update_acquisition_policy(
+        self, binding_id: str, policy_patch: dict[str, Any]
+    ) -> SourceBinding:
+        """Update effective source policy and bump its version only on change.
+
+        ``policy_version`` is owned by this registry operation. The patch
+        merges into the current policy; leaving ``acquire_if_filter_matches``
+        clears its obsolete filters. The backend compare-and-set prevents a
+        stale editor from overwriting a newer policy version.
+        """
+        if not isinstance(policy_patch, dict):
+            raise SourceRegistryValidationError("policy_patch must be an object")
+        if "policy_version" in policy_patch:
+            raise SourceRegistryValidationError("policy_version is managed by SourceRegistry")
+        current = self._backend.get(binding_id)
+        if current is None:
+            raise KeyError(f"no such binding: {binding_id}")
+        current_policy = deepcopy(current.acquisition_policy)
+        current_version = current_policy.get("policy_version", 1)
+        if not isinstance(current_version, int) or isinstance(current_version, bool) or current_version < 1:
+            raise SourceRegistryValidationError("stored acquisition_policy.policy_version is invalid")
+
+        merged = deepcopy(current_policy)
+        patch = deepcopy(policy_patch)
+        if "filters" in patch and patch.get("mode", current_policy.get("mode")) != "acquire_if_filter_matches":
+            raise SourceRegistryValidationError(
+                "acquisition_policy.filters is only valid with acquire_if_filter_matches"
+            )
+        if "media" in patch:
+            media_patch = patch["media"]
+            if not isinstance(media_patch, dict):
+                raise SourceRegistryValidationError("acquisition_policy.media must be an object")
+            media = dict(merged.get("media") or _default_media_policy())
+            media.update(media_patch)
+            patch["media"] = media
+        merged.update(patch)
+        if merged.get("mode") != "acquire_if_filter_matches":
+            merged.pop("filters", None)
+        # Rebuild from the collection default so registration and updates share
+        # the same validation and normalization contract.
+        resolved = _build_acquisition_policy(current.collection_kind, merged)
+        resolved["policy_version"] = current_version
+        if resolved == current_policy:
+            return current
+
+        resolved["policy_version"] = current_version + 1
+        stored = _portable_json_copy(resolved, field="acquisition_policy")
+        if not isinstance(stored, dict):  # pragma: no cover - fixed object above
+            raise SourceRegistryValidationError("acquisition_policy must be an object")
+        return self._backend.update_acquisition_policy(
+            binding_id,
+            policy=stored,
+            expected_policy_version=current_version,
+        )
 
     def get(self, binding_id: str) -> SourceBinding | None:
         return self._backend.get(binding_id)

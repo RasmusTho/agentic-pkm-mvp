@@ -1,4 +1,4 @@
-State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, anchored synthesis and claims bound to retained transcript segments, deterministic coverage/confidence reporting, and authority-banded review-required proposal rendering. YouTube Source Note v2 is delivered and accepted under parent #4107 (see `:: Writeback`): durable anchored lineage, portable versioned source bundles, conservative content routing and modules, gated ontology proposals, timestamped moments with bounded default frame capture, the governed interest overlay, and a no-egress quality evaluation; the owner gold-set quality run (#5756) is pending. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. The bounded YSS-06 continuation (#3921 / PR #5616) adds gated discovery scheduling for this Inbox; acquisition draining remains operator-invoked. Liked Videos, multi-playlist product sync, subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
+State: Partially implemented source specification. The explicit-URL fetch/refinement/writeback path is delivered by KA-01..06, including evidence-derived transcript availability, anchored synthesis and claims bound to retained transcript segments, deterministic coverage/confidence reporting, and authority-banded review-required proposal rendering. YouTube Source Note v2 is delivered and accepted under parent #4107 (see `:: Writeback`): durable anchored lineage, portable versioned source bundles, conservative content routing and modules, gated ontology proposals, timestamped moments with bounded default frame capture, the governed interest overlay, and a no-egress quality evaluation; the owner gold-set quality run (#5756) is pending. Pragmatic discovery V1 is delivered by #3915/#3920: one OAuth account, one ordinary owned playlist selected as Inbox, explicit manual sync, sanitized status, and review-required draft candidates. The bounded YSS-06 continuation (#3921 / PR #5616) adds gated discovery scheduling for this Inbox; acquisition draining remains operator-invoked. Bounded YSS-07 registry import and subscription RSS discovery (#3922) add an internal capability path without a subscription UI or widening the one-Inbox V1 product outcome. Backfill, analytics, broad CLI/UI, and full-media work remain target state and are not shipped claims.
 Doc role: Source instance specification
 Authority: Instantiates `SOURCE_PLUGIN_CONTRACT.md` for YouTube. Mechanism choices are grounded in `RESEARCH_2026-07.md` (mid-2026 verification). The triage flow for the resulting artifacts is owned by `docs/CONTEXTUALIZATION_LAYER/INGESTION_AND_TRIAGE_POLICY.md` §4.3; the artifact class by `LIFE_WIDE_ARTIFACT_TAXONOMY.md` (`youtube_source_note`).
 
@@ -58,26 +58,31 @@ The existing transcript path fetches this metadata with captions in its existing
 Metadata lands in the `raw` record and drives the early rejection filters (language, duration,
 duplicate, ignored channel) defined in the pipeline contract.
 
-## Discovery (Inbox V1 shipped; broader Phase 4 target state)
+## Discovery (Inbox V1 shipped; bounded YSS-07 capability delivered)
 
-The shipped V1 uses point 4 only for one ordinary owned playlist selected as Inbox. The later
-[YSS-06 continuation](../YOUTUBE_SOURCE_SYNC/SCHEDULE_AND_OPERATE_CONTINUOUS_SYNC.md) adds
-discovery-only scheduling for that Inbox. Points 1–3, Liked Videos, other playlists, and background
-acquisition remain deferred target state. The broader mechanism record below is retained for
-future re-contracting, not as a shipped claim:
+The user-facing V1 still uses point 4 only for one ordinary owned playlist selected as Inbox.
+YSS-06 adds discovery-only scheduling for that Inbox. YSS-07 adds a separate internal subscription
+registry/RSS path through Takeout import and per-channel discovery with four acquisition modes; it
+adds no schedule, backfill, subscription setup/status surface, or automatic promotion. The
+mechanism record below distinguishes that bounded capability from the remaining deferred work:
 
-1. **Bootstrap + periodic reconcile: Google Takeout** — `subscriptions.csv` (channel IDs/titles)
-   and playlist CSVs (incl. Liked). Takeout is snapshot-grade: bootstrap and drift repair, not the
-   live feed. Watch Later is absent from Takeout (removed 2020).
-2. **Incremental: per-channel RSS/Atom feeds** — `videos.xml?playlist_id=UULF<channel>` (uploads,
-   Shorts/live excluded) polled at relaxed cadence. No auth, no quota, ~15 most recent items per
-   feed; the `discover` cursor is newest-published-seen per feed.
+1. **Bootstrap: Google Takeout** — `subscriptions.csv` (channel IDs/titles) and playlist CSVs
+   (incl. Liked) import into registry bindings. Takeout is snapshot-grade; re-import preserves
+   existing cursor/policy/state and does not delete bindings absent from a later export. Watch
+   Later is absent from Takeout (removed 2020).
+2. **Incremental: per-channel RSS/Atom feeds** —
+   `videos.xml?channel_id=UC<channel-id>` (uploads, Shorts/live excluded). The YSS-07 poller is
+   manual-callable and has no scheduler. YouTube RSS requires no auth or Data API quota and returns
+   a bounded recent-entry window; the cursor is newest-published-seen plus recent entry IDs.
+   DTDs/entities, non-UTF-8 feeds, redirects, and oversized payloads are refused.
 3. **Gap repair: yt-dlp `--flat-playlist`** logged-out, rare cadence (weekly/monthly), as
-   `backfill` — catches anything past the RSS window. Convergent with what Pinchflat /
-   TubeArchivist / ytdl-sub all landed on: cheap frequent incremental + rare full reconcile.
-4. **YouTube Data API v3:** shipped for manual and gated scheduled Inbox discovery with OAuth 2.0 at exactly
+   `backfill` — catches anything past the RSS window. This remains YSS-08 deferred work.
+4. **YouTube Data API v3:** shipped for manual and gated scheduled Inbox discovery with OAuth 2.0
+   at exactly
    `youtube.readonly`, fully degradable per `auth_degradation`. Its broader use for private,
    multi-playlist, or Liked Videos discovery remains deferred. Subscriptions stay off the API.
+   YSS-07 language/duration filters use the existing logged-out metadata-only yt-dlp boundary when
+   the RSS payload lacks a required criterion.
 5. **Watch Later / Watch History: unsupported.** The Data API does not expose them, and cookies,
    scraping, and browser sessions are banned in the standard flow (revised 2026-07-16 — the
    former "optional cookie-based degradable capability" posture is removed). The supported

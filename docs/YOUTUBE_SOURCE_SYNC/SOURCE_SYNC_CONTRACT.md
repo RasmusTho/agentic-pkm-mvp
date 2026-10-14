@@ -1,4 +1,4 @@
-State: Partially implemented normative contract. `Shipped V1 product boundary` is current-state authority; broader sections remain target state until their deferred child issues are freshly re-contracted and delivered.
+State: Partially implemented normative contract. `Shipped V1 product boundary` remains the user-facing product authority. YSS-07 (#3922) delivers the bounded subscription registry/RSS discovery path, policy filters, and per-source receipts; scheduling, backfill, status surfaces, and other broader sections remain deferred or target state.
 Doc role: Capability contract
 Authority: Owns the source-registry shape, AcquisitionRequest contract, cursor discipline, sync event topics/payloads, settings keys and scopes, reason-code taxonomy, quota accounting, and the media-retention policy for this capability. Subordinate to `docs/EVENTS.md` (envelope/idempotency), `docs/KNOWLEDGE_ACQUISITION/SOURCE_PLUGIN_CONTRACT.md` (plugin interface), `docs/CONCEPTS/VAULT_AND_SETTINGS_CONTEXT.md` (settings scopes), and `docs/SECURITY.md` (secret baseline).
 
@@ -13,17 +13,16 @@ The current product route is deliberately smaller than this directory's future-f
 shapes: one OAuth account, exactly one enabled `inbox_playlist`, explicit manual sync,
 and minimal connected/degraded status with `last_success_at` and one sanitized latest error.
 The 2026-09-22 owner continuation of YSS-06 (#3921 / PR #5616) adds gated discovery scheduling
-for this Inbox, with a durable lease, pause, source backoff, and restart reconciliation.
-The registry may retain already-delivered generic row vocabulary as internal/future-compatible
-shape, but V1 configuration and polling expose no owned/public/unlisted/Liked multi-playlist,
-subscription, RSS, Takeout, backfill, filter, analytics, broad CLI/UI, or full-media outcome.
-The watcher tick performs discovery and durable enqueue only; `youtube-inbox-dev drain` remains
-the separate operator acquisition path. Scheduled acquisition and siblings #3922-#3926 remain
-deferred. Every acquired result remains a review-required draft candidate and is never
-automatically promoted into knowledge.
-V1 uses the existing acquisition lineage events; it does not introduce per-run sync receipt
-events or their cursor/outbox atomicity machinery. The broader event table below remains target
-state for deferred operational work.
+for this Inbox, with a durable lease, pause, source backoff, and restart reconciliation. YSS-07
+adds an internal `subscription_feed` registry/RSS path through Takeout import, per-source policy,
+filters, and cursor-bound receipts. It does not widen the one-Inbox V1 product route with
+subscription setup, other playlist products, backfill, analytics, broad CLI/UI, or full-media
+outcomes. The watcher tick performs Inbox discovery and durable enqueue only; `youtube-inbox-dev
+drain` remains the separate operator acquisition path. Every acquired result remains a
+review-required draft candidate and is never automatically promoted into knowledge.
+The Inbox V1 route uses the existing acquisition lineage events. YSS-07 adds per-source
+`youtube.sync.*` receipts only for `subscription_feed`; it adds no global receipt or scheduler-owned
+sync receipt.
 
 ## Source registry (YSS-01; read by YSS-03..11)
 
@@ -45,7 +44,7 @@ mechanism).
 | `cursor` | opaque JSON per adapter (see §Cursor discipline); mutated only by its adapter |
 | `last_attempt_at` / `last_success_at` | timestamps of the last poll attempt / last successful poll |
 | `last_error` | JSON `{reason_code, detail, at}` or null; cleared on success |
-| `acquisition_policy` | JSON: `{mode, extractor_ids, extractor_requirements, captions, media}` — see §Acquisition policy |
+| `acquisition_policy` | JSON: `{mode, policy_version, extractor_ids, extractor_requirements, captions, media, filters?}` — see §Acquisition policy |
 | `provenance` | JSON: how the binding was created — `{origin: user_pick \| takeout_import \| manual_add, at, detail}` |
 | `created_at` / `updated_at` | timestamps |
 
@@ -76,9 +75,33 @@ constraints where expressible):
 
 Defaults: playlist-shaped sources (`inbox_playlist`, `owned_playlist`, `liked_videos`,
 `public_playlist`) default to `acquire_transcript`; `subscription_feed` defaults to
-`discover_only` (conservative — shown and changeable in setup). `policy_version` is an integer
-stamped into requests; a policy change bumps it, which changes request identity for *future*
-discoveries only (no retroactive re-acquisition without explicit backfill).
+`discover_only`. `policy_version` is a positive integer stamped into requests; the registry owns
+its increments through `update_acquisition_policy`, which merges a validated patch, bumps once for
+an effective change, leaves no-op versions unchanged, and removes obsolete filters when leaving
+filter mode. Changes affect future discoveries only (no retroactive re-acquisition without
+explicit backfill).
+
+`acquire_if_filter_matches` requires a non-empty `filters` object. Supported criteria are
+`language_allowlist` (non-empty list of valid lowercase two-letter ISO 639-1 primary codes),
+`min_duration_seconds` and `max_duration_seconds` (finite nonnegative numbers, inclusive), and
+`channel_allowlist` (non-empty list of exact `UC` channel IDs). At least one criterion is
+required; criteria are ANDed. Unknown keys, empty lists, duplicate values, invalid ranges, and
+filters on other modes fail registry validation before egress. A channel-only filter uses the
+subscription binding ID without a metadata request. Language/duration criteria use the existing
+logged-out metadata-only `yt_dlp_extract_metadata` path and do not request captions, media,
+cookies, or credentials. Missing required metadata degrades with
+`filter_metadata_unavailable`, leaves the cursor unchanged, and creates no false completion.
+A proven match queues an effective `acquire_transcript` snapshot; a proven nonmatch records traced
+discovery without a request.
+
+Acquisition request identity remains `(source_kind, item_ref, policy_version)` across sources.
+When a second binding resolves to the same request identity with a different effective policy
+snapshot, enqueue fails closed with `policy_conflict`; the existing snapshot is not replaced and
+the new source cursor does not advance. The source's discovery is still traced, and the operator
+must resolve the conflicting source policy before retry. RSS sync reports the reason in its degraded
+receipt. The V1 Inbox records the Inbox discovery trace and exposes the same sanitized reason through
+its sync result and status surface instead of labeling the conflict as a storage outage. Equal
+snapshots retain the shared request and merged discovery provenance.
 
 Only `acquire_transcript` is reachable through the shipped V1 Inbox operator route. The metadata-only
 producer is available to durable requests from future discovery consumers; subscription discovery
@@ -152,7 +175,11 @@ only under INV-YSS-1 (*request-before-cursor*):
   mutates neither cursor nor known-set, records a sanitized `last_error`, and emits no false
   completion (INV-YSS-4). Historical enumeration/backfill remains deferred.
 - **RSS channel adapter (YSS-07):** cursor is newest-published-seen per feed plus recent entry ids;
-  the ~15-entry RSS window bounds incremental reach — anything past the window is backfill's job.
+  durable request rows or traced discovery dispositions are written before cursor advance. A
+  required filter-metadata failure leaves the cursor unchanged. Cursor success state and its
+  `youtube.sync.completed` receipt commit in one canonical DB transaction; inability to open or
+  write that transaction never advances the cursor. The current RSS response window bounds
+  incremental reach — anything past the window is backfill's job.
 - **Backfill (YSS-08):** does not use the incremental cursor; it enumerates via yt-dlp
   `--flat-playlist` (logged-out) or full API pagination, diffs against existing
   requests/dispositions, and enqueues only the gap. It never rewinds an incremental cursor.
@@ -168,10 +195,11 @@ not a transaction across the entire poll. Quota spending remains monotonic API a
 node-local encrypted credential files retain the V1 safety floor and are not part of a
 cross-resource database/filesystem transaction.
 
-## Event topics (YSS-04/05/06; schemas registered per KERNEL-08)
+## Event topics (YSS-04/05/06/07; schemas registered per KERNEL-08)
 
-Only the source-discovery and acquisition topics in this table are shipped for V1. The per-run
-`youtube.sync.*` rows remain target state for the deferred operational capability.
+The Inbox V1 route uses the source-discovery and acquisition topics. YSS-07 additionally emits the
+two per-source `youtube.sync.*` receipts shown below for `subscription_feed`; no global or
+scheduler-owned sync receipt is defined here.
 
 All on the canonical DB outbox via `write_outbox_event` with `derive_idempotency_key` — never the
 Heimdal observation log, never embedding payloads. Versioned schemas under
@@ -186,8 +214,8 @@ validation, and any future consumer follows the KA-07 route pattern.
 | `acquisition.started` | a drain attempt begins | `request_id, attempt` | `(topic, request_id, attempt)` — each attempt is a distinct event |
 | `acquisition.completed` | a request reaches `completed` | `request_id, attempt, content_identity, artifact_path?, dedup_noop` | `(topic, request_id, attempt)` |
 | `acquisition.failed` | an attempt fails (retryable or terminal) | `request_id, attempt, reason_code, terminal, next_attempt_at?` | `(topic, request_id, attempt)` |
-| `youtube.sync.completed` | a per-source poll run ends successfully (incl. 304 no-change) | `binding_id, run_id, discovered, enqueued, deduped, not_modified, duration_ms, quota_units_spent` | `(topic, binding_id, run_id)` |
-| `youtube.sync.degraded` | a poll run ends degraded, or global degradation starts/changes | `binding_id?, run_id, reason_code, detail` | `(topic, binding_id or "global", run_id)` |
+| `youtube.sync.completed` | a YSS-07 subscription RSS poll ends successfully | `binding_id, collection_kind=subscription_feed, collection_ref, run_id, discovered, enqueued, deduped, filtered_out, not_modified=false, duration_ms, quota_units_spent=0` | `(topic, binding_id, run_id)` |
+| `youtube.sync.degraded` | a YSS-07 subscription RSS poll ends degraded | `binding_id, collection_kind=subscription_feed, collection_ref, run_id, reason_code, detail, duration_ms` | `(topic, binding_id, run_id)` |
 
 Receipt sufficiency: request rows + these events must answer — why a candidate exists (triggers),
 which source discovered it and when, whether it was deduplicated, which step failed, whether the
@@ -200,7 +228,9 @@ substrate (the `settings_receipts`/`promotion_receipts` pattern).
 `auth_missing` (no binding), `auth_key_missing` (token store key absent — fail-closed),
 `auth_expired`, `auth_revoked`, `auth_disconnected` (operator action), `quota_exhausted`,
 `api_unavailable` (5xx/timeout), `network_error`, `source_gone` (404/private-without-access),
-`source_unsupported` (Watch Later / Watch History), `writeguard_blocked`, `pipeline_dead_letter`,
+`source_unsupported` (Watch Later / Watch History), `rss_feed_unavailable`, `rss_feed_invalid`,
+`rss_feed_too_large`, `source_mismatch`, `filter_metadata_unavailable`, `policy_conflict`,
+`writeguard_blocked`, `pipeline_dead_letter`,
 `policy_unsupported` (queued acquisition mode/depth has no delivered production path),
 `paused_global`, `paused_source`, `runner_offline` (staleness derived, not self-reported),
 `media_policy_disabled`, `inbox_missing` (the V1 operator route has no enabled Inbox). UI copy maps these through the Companion UI's single degraded-copy module;
@@ -298,7 +328,10 @@ redirect off-list): `www.googleapis.com` (Data API), `accounts.google.com` +
 `googlevideo.com` (existing fetch path, unchanged). Item refs are validated as 11-char video ids /
 `PL*`/`UU*`/`LL*` playlist ids / `UC*` channel ids before any URL is built. Bounded pagination
 (page cap per poll), bounded response size, request timeouts, and politeness sleeps on yt-dlp
-paths (existing constants) apply everywhere.
+  paths (existing constants) apply everywhere. The YSS-07 RSS fetch uses the fixed channel-feed
+  URL, refuses redirects, times out after 10 seconds, caps the response at 1 MiB and entries at
+  100, and refuses DTD/entity declarations before parsing. Filter metadata uses the existing
+  metadata-only yt-dlp boundary; it does not request captions or media.
 
 ## Quota accounting (YSS-03/06/09)
 

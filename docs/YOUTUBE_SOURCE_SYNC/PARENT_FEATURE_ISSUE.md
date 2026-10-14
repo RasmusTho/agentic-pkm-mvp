@@ -1,4 +1,4 @@
-State: Mirrors live parent feature issue #3915 after the pragmatic V1 re-contract of 2026-07-21.
+State: Mirrors live parent feature issue #3915 after the pragmatic V1 re-contract of 2026-07-21 and bounded YSS-07 continuation recorded 2026-09-29.
 Doc role: Parent feature issue mirror
 Authority: GitHub issue #3915 is the live validation hub; this file is a repo-local mirror only.
 
@@ -18,7 +18,8 @@ The original V1 acceptance set above claims no automatic cadence. The later owne
 discovery scheduling and a shared scheduler lease without expanding that parent acceptance set.
 Acquisition draining remains operator-invoked. Multi-playlist product support, Liked Videos,
 subscriptions/RSS/Takeout, backfill, analytics, broad CLI/UI, full-media storage, and generalized
-recovery remain deferred.
+recovery remain deferred as product outcomes. The bounded internal registry/RSS mechanism in #3922
+does not widen that parent acceptance set or add a subscription setup surface.
 
 ## Active delivery set
 
@@ -27,10 +28,12 @@ recovery remain deferred.
 | Registry/settings, OAuth, Data API, acquisition queue | #3916–#3919 | Delivered reusable foundations |
 | OAuth safety floor | #3990 / PR #4030 | Delivered: token-first connection authority and transient revoke retry preservation |
 | One-Inbox manual sync | #3920 / PR #4014 | Final V1 slice: request-before-cursor, sanitized status, review-required candidate proof |
+| Bounded YSS-07 mechanism | #3922 / PR pending | Separate internal Takeout registry import and subscription RSS discovery; no scheduler or product setup surface |
 
-YSS-06 (#3921) was separately continued by the owner on 2026-09-22. YSS-07..11 (#3922-#3926)
-and #3993 remain deferred traceability records, not active V1 children or pickup candidates.
-Their continuation requires a fresh owner directive and bounded re-contract.
+YSS-06 (#3921) was separately continued by the owner on 2026-09-22, and YSS-07 (#3922) was
+separately continued on 2026-09-29. YSS-08 through YSS-11 (#3923-#3926) and #3993 remain deferred
+traceability records, not active pickup candidates. Their continuation requires a fresh owner
+directive and bounded re-contract.
 
 ## Acceptance criteria
 

@@ -17,9 +17,10 @@ Shape and discipline:
   "{source_kind}:{item_ref}:{policy_version}")`` — one request per
   ``(source_kind, item_ref, policy_version)``. The same video saved in N
   playlists is ONE request whose ``discovery_triggers`` records all N bindings;
-  a duplicate discovery appends its trigger (identity-novel triggers only — an
-  identical ``(binding_id, trigger, playlist_item_id)`` re-discovery converges
-  without unbounded growth) and touches nothing else.
+  equal policy snapshots may append their identity-novel triggers (an identical
+  ``(binding_id, trigger, playlist_item_id)`` re-discovery converges without
+  unbounded growth). A different policy snapshot for the same deterministic
+  identity fails closed with :class:`AcquisitionRequestPolicyConflictError`.
 - **Dual backend** (the ``app/heimdal/cursor_store.py`` /
   ``source_registry.py`` shape): memory for ``not_pg`` tests, Postgres for a
   configured runtime with fail-loud resolution (never a silent volatile
@@ -136,6 +137,12 @@ class AcquisitionRequestsSchemaMissingError(RuntimeError):
 
 class AcquisitionRequestValidationError(ValueError):
     """Raised for malformed enqueue/transition inputs (fail-loud, never coerced)."""
+
+
+class AcquisitionRequestPolicyConflictError(ValueError):
+    """Raised when one deterministic request identity carries different policies."""
+
+    reason_code = "policy_conflict"
 
 
 def request_identity(source_kind: str, item_ref: str, policy_version: int) -> str:
@@ -388,6 +395,10 @@ class _MemoryAcquisitionRequestsBackend:
             if existing is None:
                 self._rows[row.request_id] = _copy_request(row)
                 return _copy_request(row), True
+            if existing.policy_snapshot != row.policy_snapshot:
+                raise AcquisitionRequestPolicyConflictError(
+                    "the video already has a request with a different acquisition policy"
+                )
             probe = trigger.identity_dict()
             if _trigger_is_novel(existing.discovery_triggers, probe):
                 # Contract: "appends the new discovery trigger ... and touches
@@ -764,12 +775,14 @@ class _PgAcquisitionRequestsBackend:
                 UPDATE {_TABLE}
                 SET discovery_triggers = discovery_triggers || %s::jsonb
                 WHERE request_id = %s
+                  AND policy_snapshot = %s::jsonb
                   AND NOT (discovery_triggers @> %s::jsonb)
                 RETURNING {_COLUMNS_SQL}
                 """,
                 (
                     json.dumps([trigger.stored_dict(discovered_at=row.requested_at)]),
                     row.request_id,
+                    json.dumps(row.policy_snapshot),
                     json.dumps([probe]),
                 ),
             )
@@ -779,6 +792,10 @@ class _PgAcquisitionRequestsBackend:
             # Exact-duplicate trigger: nothing changed; read the existing row.
             fetched = self.get(row.request_id, conn=conn)
             assert fetched is not None  # conflicted on an existing row
+            if fetched.policy_snapshot != row.policy_snapshot:
+                raise AcquisitionRequestPolicyConflictError(
+                    "the video already has a request with a different acquisition policy"
+                )
             return fetched, False
         finally:
             if transaction_conn is None:
@@ -1009,9 +1026,10 @@ class AcquisitionRequests:
     ) -> AcquisitionRequest:
         """Idempotent enqueue (INV-YSS-2). Emits ``youtube.source.discovered``
         (key-deduped per ``(binding_id, item_ref)``) and, on first insert only,
-        ``acquisition.requested``. On conflict the identity-novel trigger is
-        appended and nothing else is touched — a completed/dead-lettered request
-        is never reopened by a late duplicate discovery.
+        ``acquisition.requested``. On conflict, an equal policy snapshot lets an
+        identity-novel trigger append without reopening a completed/dead-lettered
+        request. A different snapshot raises
+        :class:`AcquisitionRequestPolicyConflictError` and leaves the row intact.
         """
         for name, value in (("source_kind", source_kind), ("item_ref", item_ref), ("source_ref", source_ref)):
             if not isinstance(value, str) or not value.strip() or "\x00" in value:
@@ -1104,22 +1122,7 @@ class AcquisitionRequests:
         # Discovery lineage: youtube-shaped sources only (the queue itself is
         # source-agnostic; the topic is not).
         if source_kind == YOUTUBE_SOURCE_KIND:
-            payload: dict[str, Any] = {
-                "binding_id": trigger.binding_id,
-                "collection_kind": trigger.collection_kind,
-                "collection_ref": trigger.collection_ref,
-                "item_ref": item_ref,
-                "trigger": trigger.trigger,
-            }
-            if trigger.playlist_item_id is not None:
-                payload["playlist_item_id"] = trigger.playlist_item_id
-            self._emit(
-                YOUTUBE_SOURCE_DISCOVERED_TOPIC,
-                payload,
-                key=discovered_event_key(trigger.binding_id, item_ref),
-                trace_id=trace_id,
-                conn=conn,
-            )
+            self.record_discovery(item_ref=item_ref, trigger=trigger, trace_id=trace_id, conn=conn)
         # Emitted unconditionally with the deterministic (request_id,
         # policy_version) key: the FIRST emission wins and duplicates dedup, so
         # a crash between the row insert and the emit self-heals on the next
@@ -1140,6 +1143,41 @@ class AcquisitionRequests:
         )
         del created  # identity/dedup outcome is visible via discovery_triggers
         return stored
+
+    def record_discovery(
+        self,
+        *,
+        item_ref: str,
+        trigger: DiscoveryTrigger,
+        trace_id: str | None = None,
+        conn: Any = None,
+    ) -> None:
+        """Record a traced discovery that has no acquisition request.
+
+        Used by conservative discovery and proven filter nonmatches. The
+        canonical `youtube.source.discovered` key makes retries idempotent.
+        """
+        if not isinstance(item_ref, str) or not item_ref.strip() or "\x00" in item_ref:
+            raise AcquisitionRequestValidationError("item_ref must be a non-empty NUL-free string")
+        if not isinstance(trigger, DiscoveryTrigger):
+            raise AcquisitionRequestValidationError("trigger must be a DiscoveryTrigger")
+        trigger.validate()
+        payload: dict[str, Any] = {
+            "binding_id": trigger.binding_id,
+            "collection_kind": trigger.collection_kind,
+            "collection_ref": trigger.collection_ref,
+            "item_ref": item_ref,
+            "trigger": trigger.trigger,
+        }
+        if trigger.playlist_item_id is not None:
+            payload["playlist_item_id"] = trigger.playlist_item_id
+        self._emit(
+            YOUTUBE_SOURCE_DISCOVERED_TOPIC,
+            payload,
+            key=discovered_event_key(trigger.binding_id, item_ref),
+            trace_id=trace_id,
+            conn=conn,
+        )
 
     # -- drain lifecycle -------------------------------------------------------
 
@@ -1722,6 +1760,7 @@ __all__ = [
     "ACQUISITION_REQUEST_NAMESPACE",
     "ACQUISITION_STARTED_TOPIC",
     "AcquisitionRequest",
+    "AcquisitionRequestPolicyConflictError",
     "AcquisitionRequestValidationError",
     "AcquisitionRequests",
     "AcquisitionRequestsSchemaMissingError",

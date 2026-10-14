@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import csv
 import json
+import re
+import uuid
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 from urllib.parse import urlparse, parse_qs
 
 
@@ -38,6 +40,13 @@ class OnboardingRegistry:
 
     def as_dict(self) -> dict[str, object]:
         return {"version": self.version, "sources": [asdict(source) for source in self.sources]}
+
+
+@dataclass(frozen=True)
+class TakeoutImportResult:
+    imported: int
+    deduplicated: int
+    binding_ids: tuple[str, ...]
 
 
 def _value(row: dict[str, str], *names: str) -> str:
@@ -85,7 +94,7 @@ def parse_takeout(takeout_root: Path) -> OnboardingRegistry:
             channel_id = _value(row, "channel_id", "channelid")
             title = _value(row, "channel_title", "channeltitle", "title")
             url = _value(row, "channel_url", "channelurl", "url")
-            channel_id = channel_id or _channel_id_from_url(url)
+            channel_id = channel_id or _channel_id_from_url(url) or ""
             if not channel_id:
                 continue
             source_url = f"https://www.youtube.com/channel/{channel_id}"
@@ -121,4 +130,113 @@ def save_registry(path: Path, registry: OnboardingRegistry) -> None:
     path.write_text(json.dumps(registry.as_dict(), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-__all__ = ["OnboardingRegistry", "REGISTRY_FILENAME", "YouTubeSource", "load_registry", "parse_takeout", "save_registry"]
+_CHANNEL_ID_RE = re.compile(r"UC[A-Za-z0-9_-]{22}\Z")
+_PLAYLIST_ID_RE = re.compile(r"PL[A-Za-z0-9_-]+\Z")
+
+
+def import_takeout_registry(
+    takeout_root: Path,
+    *,
+    registry: Any,
+    account_binding_id: str | None = None,
+) -> TakeoutImportResult:
+    """Import Takeout sources into the durable YSS-01 registry idempotently.
+
+    The snapshot never removes rows absent from a later export, and existing
+    bindings are not rewritten (their cursor, policy, enablement, and history
+    are live operator state rather than Takeout snapshot data).
+    """
+    from app.knowledge_acquisition.source_registry import (
+        DuplicateBindingError,
+        SourceRegistryValidationError,
+    )
+
+    if account_binding_id is None:
+        normalized_account_id = None
+    elif isinstance(account_binding_id, str):
+        try:
+            normalized_account_id = str(uuid.UUID(account_binding_id.strip()))
+        except (ValueError, AttributeError) as exc:
+            raise SourceRegistryValidationError("account_binding_id must be a valid UUID or None") from exc
+    else:
+        raise SourceRegistryValidationError("account_binding_id must be a UUID string or None")
+
+    snapshot = parse_takeout(takeout_root)
+    planned: list[tuple[str, str, str]] = []
+    for source in snapshot.sources:
+        if source.kind == "subscription":
+            channel_id = source.channel_id or source.source_id
+            if _CHANNEL_ID_RE.fullmatch(channel_id) is None:
+                raise SourceRegistryValidationError("Takeout subscription contained an invalid channel id")
+            planned.append(("subscription_feed", channel_id, source.title))
+        elif source.kind == "playlist":
+            playlist_id = source.playlist_id or source.source_id
+            if playlist_id == "LL":
+                collection_kind = "liked_videos"
+            elif _PLAYLIST_ID_RE.fullmatch(playlist_id):
+                collection_kind = "owned_playlist"
+            else:
+                raise SourceRegistryValidationError("Takeout playlist contained an invalid playlist id")
+            if normalized_account_id is None:
+                raise SourceRegistryValidationError(
+                    "account_binding_id is required to import Takeout playlist bindings"
+                )
+            planned.append((collection_kind, playlist_id, source.title))
+        else:
+            raise SourceRegistryValidationError(f"unsupported Takeout source kind: {source.kind!r}")
+
+    existing = {
+        (binding.collection_kind, binding.collection_ref, binding.account_binding_id): binding.binding_id
+        for binding in registry.list_all()
+    }
+    imported = deduplicated = 0
+    binding_ids: list[str] = []
+    for collection_kind, collection_ref, title in planned:
+        key = (collection_kind, collection_ref, normalized_account_id)
+        binding_id = existing.get(key)
+        if binding_id is None:
+            try:
+                binding = registry.register(
+                    collection_kind=collection_kind,
+                    collection_ref=collection_ref,
+                    title=title,
+                    account_binding_id=normalized_account_id,
+                    acquisition_policy={"mode": "discover_only"},
+                    provenance={"origin": "takeout_import"},
+                )
+                binding_id = binding.binding_id
+                imported += 1
+                existing[key] = binding_id
+            except DuplicateBindingError:
+                # A concurrent import won the unique-key race. Re-read the
+                # key and count it as the same idempotent outcome.
+                latest = registry.list_all()
+                duplicate = next(
+                    (
+                        item
+                        for item in latest
+                        if (item.collection_kind, item.collection_ref, item.account_binding_id) == key
+                    ),
+                    None,
+                )
+                if duplicate is None:
+                    raise
+                binding_id = duplicate.binding_id
+                existing[key] = binding_id
+                deduplicated += 1
+        else:
+            deduplicated += 1
+        binding_ids.append(binding_id)
+    return TakeoutImportResult(imported, deduplicated, tuple(binding_ids))
+
+
+__all__ = [
+    "OnboardingRegistry",
+    "REGISTRY_FILENAME",
+    "TakeoutImportResult",
+    "YouTubeSource",
+    "import_takeout_registry",
+    "load_registry",
+    "parse_takeout",
+    "save_registry",
+]

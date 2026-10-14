@@ -91,6 +91,7 @@ _POLL_FAILURE_REASON_CODES: frozenset[str] = frozenset(
         "source_gone",
         "source_unsupported",
         "inbox_missing",
+        "policy_conflict",
     }
 )
 

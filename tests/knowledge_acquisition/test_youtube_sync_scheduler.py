@@ -354,6 +354,21 @@ def test_backoff_and_manual_sync_now() -> None:
     assert backoff["consecutive_failures"] >= 2
 
 
+def test_policy_conflict_reason_is_preserved_in_scheduled_backoff() -> None:
+    registry = _Registry([_Binding("inbox")])
+
+    def conflicting_poll(_binding: _Binding, **_kwargs: Any) -> _PollResult:
+        return _PollResult(reason_code="policy_conflict")
+
+    sched, _clock, state, _queue = _make(registry=registry, poll_fn=conflicting_poll)
+
+    sched.tick()
+
+    backoff = state.get("backoff:inbox") or {}
+    assert backoff["consecutive_failures"] == 1
+    assert backoff["reason_code"] == "policy_conflict"
+
+
 def test_pause_semantics() -> None:
     registry = _Registry([_Binding("inbox"), _Binding("paused-source", enabled=False)])
     polls: list[str] = []
