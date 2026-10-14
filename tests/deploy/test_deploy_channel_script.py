@@ -5198,6 +5198,47 @@ def test_native_deploy_repairs_vector_only_gap_before_health_gate(tmp_path: Path
     assert f"NATIVE_SOURCE_BOOTSTRAP=dev:{sha}" in "\n".join(events)
 
 
+@pytest.mark.parametrize("counter", [1, True, "1", 0, -1, 3, None])
+def test_native_deploy_reports_redacted_vector_projection_failure(tmp_path: Path, counter) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    env["FAKE_SOURCE_RC"] = "79"
+    env["FAKE_SOURCE_SUMMARY"] = json.dumps(dict(
+        scanned=2, ingested=1, errors=1, malformed=0, skipped_locked=0,
+        skipped_invalid=0, vector_projection_errors=counter,
+        private="hostile-summary-canary /private/vault password=do-not-leak",
+    ))
+    result = _run_deploy(root, env, sha, channel="dev")
+    assert result.returncode != 0
+    assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+    assert ("YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed" in result.stderr) is (type(counter) is int and counter == 1)
+    assert "hostile" not in result.stdout + result.stderr
+    assert "/private/vault" not in result.stdout + result.stderr
+    assert not any("up -d --force-recreate api worker watcher" in event for event in _deploy_events(env))
+    assert not list((root / "ops/deployments").glob("*.json"))
+
+
+def test_native_deploy_vector_repair_retry_converges_before_activation(tmp_path: Path) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    missing = dict(backend="PgVectorIndex", issues=["missing vector"], rebuild_required=True,
+                   unembedded_object_count=1, non_vector_issue_count=0, pg_state={"rows": 1})
+    env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = json.dumps(missing)
+    env["FAKE_SOURCE_RC"] = "79"
+    env["FAKE_SOURCE_SUMMARY"] = json.dumps(dict(scanned=2, ingested=1, errors=1, malformed=0,
+        skipped_locked=0, skipped_invalid=0, vector_projection_errors=1))
+    failed = _run_deploy(root, env, sha, channel="dev")
+    assert failed.returncode != 0
+    env["FAKE_SOURCE_RC"] = "0"
+    del env["FAKE_SOURCE_SUMMARY"]
+    retried = _run_deploy(root, env, sha, channel="dev")
+    assert retried.returncode == 0, retried.stderr
+    events = _deploy_events(env)
+    strict = events.index("api-cli index doctor --json --strict")
+    activation = next(i for i, event in enumerate(events)
+                      if "up -d --force-recreate api worker watcher" in event)
+    assert strict < activation
+    assert events.count("source-rebuild") == 2
+
+
 def test_native_deploy_fails_closed_when_vector_repair_does_not_converge(
     tmp_path: Path,
 ) -> None:

@@ -92,6 +92,11 @@ class VaultAlphaSummary:
     skipped_invalid: int = 0
     invalid_examples: List[str] = field(default_factory=list)
     invalid_report_path: str | None = None
+    vector_projection_errors: int = 0
+
+
+class SourceVectorProjectionError(RuntimeError):
+    """Content-free failure of the required source-backed vector producer."""
 
 
 _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
@@ -808,7 +813,8 @@ def _ingest_single(
             text=stripped_text,
         )
     except Exception:
-        pass
+        if reconcile_existing_projection:
+            raise SourceVectorProjectionError("vector_projection_failed") from None
 
     normalize_payload = {
         "event": "ingest.normalize",
@@ -973,6 +979,7 @@ def _ingest_candidates(
     skipped_invalid = 0
     invalid_examples: List[str] = []
     invalid_report_path = _invalid_files_log_path()
+    vector_projection_errors = 0
     _reset_invalid_files_log()
 
     def _record_locked(rel_display: str) -> None:
@@ -1117,6 +1124,10 @@ def _ingest_candidates(
                 _ingest_single(path, vault_root=vault_root, trace_id=trace_id)
             ingested += 1
             processed.add(rel_display)
+        except SourceVectorProjectionError:
+            vector_projection_errors += 1
+            errors.append(rel_display)
+            continue
         except OSError as exc:
             rel_display = str(rel_path) if "rel_path" in locals() else str(path)
             if uuid_write_action == SOURCE_BACKED_REBUILD_ACTION:
@@ -1151,6 +1162,7 @@ def _ingest_candidates(
         skipped_invalid=skipped_invalid,
         invalid_examples=invalid_examples,
         invalid_report_path=str(invalid_report_path) if skipped_invalid > 0 else None,
+        vector_projection_errors=vector_projection_errors,
     )
     if skipped_locked > 0:
         example = locked_examples[0] if locked_examples else "-"

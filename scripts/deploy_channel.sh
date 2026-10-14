@@ -1372,6 +1372,9 @@ native_source_projection_gate() {
   else
     return 78
   fi
+  if [ "${rc}" -eq 79 ]; then
+    printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed\n' >&2
+  fi
   return "${rc}"
 }
 
