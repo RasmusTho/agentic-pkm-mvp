@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 import yaml
@@ -380,6 +381,77 @@ def test_not_pg_steps_have_room_for_selected_coverage(step_name: str) -> None:
 
     assert step["timeout-minutes"] >= 30
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+
+
+@pytest.mark.parametrize("pytest_exit", [0, 7])
+def test_scoped_unit_budget_preserves_selected_command_and_failure(
+    tmp_path: Path, pytest_exit: int,
+) -> None:
+    job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
+    step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
+    assert step["timeout-minutes"] == 60
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert step["env"]["PYTHONUNBUFFERED"] == "1"
+    selected = "-q -m 'not pg and not eval' tests/governance tests/scripts/test_publication.py"
+    script = step["run"].replace("${{ steps.select-tests.outputs.pytest_args }}", selected)
+    script = re.sub(r"\$\{\{.*?\}\}", "fixture", script)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import json
+import os
+from pathlib import Path
+import sys
+import time
+Path("invocation.json").write_text(json.dumps({
+    "args": sys.argv[1:], "watchdog": os.environ["PYTEST_ADDOPTS"],
+    "unbuffered": os.environ["PYTHONUNBUFFERED"],
+}))
+outcome = "FAILED" if int(os.environ["FIXTURE_PYTEST_EXIT"]) else "PASSED"
+print(f"tests/fixture.py::test_scoped_result {outcome}")
+if outcome == "FAILED":
+    print("tests/fixture.py:7: AssertionError: scoped diagnostic")
+deadline = time.monotonic() + 5
+while not Path("release").exists() and time.monotonic() < deadline:
+    time.sleep(0.01)
+sys.exit(int(os.environ["FIXTURE_PYTEST_EXIT"]))
+''', encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    process = subprocess.Popen(
+        ["bash", "-c", script], cwd=tmp_path, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True,
+        env={**os.environ, **step["env"], "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             "FIXTURE_PYTEST_EXIT": str(pytest_exit)},
+    )
+    log_path = tmp_path / "pytest-not-pg.log"
+    expected_node = "tests/fixture.py::test_scoped_result " + ("FAILED" if pytest_exit else "PASSED")
+    try:
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            if log_path.exists() and expected_node in log_path.read_text():
+                break
+            time.sleep(0.01)
+        # Node evidence reaches tee before pytest completes, even through a pipe.
+        assert process.poll() is None
+        assert expected_node in log_path.read_text()
+    finally:
+        (tmp_path / "release").touch()
+        stdout, stderr = process.communicate(timeout=10)
+    assert process.returncode == pytest_exit, stdout + stderr
+    invocation = json.loads((tmp_path / "invocation.json").read_text())
+    assert invocation == {
+        "args": ["-q", "-m", "not pg and not eval", "tests/governance",
+                 "tests/scripts/test_publication.py", "-vv", "--tb=short", "--durations=20"],
+        "watchdog": "--timeout=120 --timeout-method=thread", "unbuffered": "1",
+    }
+    log = log_path.read_text()
+    assert expected_node in log
+    if pytest_exit:
+        assert "AssertionError: scoped diagnostic" in log
+    assert log in stdout
 
 
 @pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])

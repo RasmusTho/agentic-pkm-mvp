@@ -86,8 +86,8 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   seed copies and require failure for missing/malformed metric input, failed gates and missing
   thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
   unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
-- The full non-PG unit step has a finite 60-minute outer ceiling; the scoped step retains
-  the 35-minute ceiling from #5921 / PR #5924. Both retain the 120-second per-test thread watchdog,
+- The full and scoped non-PG unit steps each have a finite 60-minute outer ceiling.
+  Both retain the 120-second per-test thread watchdog,
   every target, marker, required check, assertion and failure handler. #6084 records two independent
   35-minute cutoffs: [#6074 job 115700746542](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38514333873/job/115700746542)
   and [#6075 job 115693481077](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38515571086/job/115693481077).
@@ -103,6 +103,14 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   partial logs, and status inventory survive cancellation for the always-run artifact upload;
   normal EXIT handling adds final timings/status when the shell can execute it. Actual current-head
   CI completion remains required; the ceiling and fixture receipt alone are not runtime proof.
+  PR #6083's scoped serial job [115940412928](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38531981018/job/115940412928)
+  separately reached 93% at the old 35-minute cutoff, with one failed result whose traceback
+  was lost. The scoped command keeps the exact selector arguments and adds verbose node IDs,
+  short tracebacks and unbuffered output; pipefail and the always-uploaded log retain failure
+  evidence. Its increased ceiling is execution margin, not a completed-run measurement or a
+  speedup. `tests/ops/test_ci_workflow.py::test_scoped_unit_budget_preserves_selected_command_and_failure`
+  executes that YAML command against finite success/failure producers to verify selected arguments,
+  watchdog, visible diagnostics, retained log and failure exit propagation.
 - The shared native PostgreSQL acceptance profile retains the former `pr-index-pg-contracts`
   surface (#5587), including FCA-06 second-consumer conformance (#5405) and dormant host-candidate
   admission/history/live-refusal and managed-source proofs (#5593). Each test retains the

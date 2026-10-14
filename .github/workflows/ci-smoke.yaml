@@ -952,15 +952,18 @@ jobs:
         if: steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'
         shell: bash
         # Several independently selected subsystems run serially in this step.
+        # PR #6083 reached 93% at the old 35-minute ceiling; retain finite
+        # completion/diagnostic margin without changing selected coverage.
         # The 120-second per-test timeout still catches individual hangs.
-        timeout-minutes: 35
+        timeout-minutes: 60
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+          PYTHONUNBUFFERED: "1"
         run: |
           set -o pipefail
           echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"
           echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"
-          pytest ${{ steps.select-tests.outputs.pytest_args }} --durations=20 | tee pytest-not-pg.log
+          pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20 | tee pytest-not-pg.log
 
       - name: Skip unit tests for docs-only PR
         if: steps.changes.outputs.code != 'true'
