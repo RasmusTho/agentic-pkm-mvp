@@ -67,8 +67,12 @@ jobs:
             | tee tmp/uat-pytest.log
 
       - name: Fitness report
+        shell: bash
         run: |
-          python -m app.fitness.report | tee tmp/ci_summary.log
+          set -euo pipefail
+          python -m pytest -q -s -m "not pg" \
+            tests/fitness/test_ci_fitness.py::test_ci_report_entrypoint_uses_scoped_product_gateway_fixture \
+            2>&1 | tee tmp/ci_summary.log
 
       - name: Verify CI gates
         run: |
@@ -91,4 +95,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: uat-pytest-log
-          path: tmp/uat-pytest.log
+          path: |
+            tmp/uat-pytest.log
+            tmp/ci_summary.log
