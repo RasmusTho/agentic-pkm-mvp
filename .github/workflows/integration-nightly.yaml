@@ -132,8 +132,8 @@ jobs:
         run: mkdir -p tmp
 
       - name: Full test suite (memory, not pg)
-        # Run 38638069945 completed all 132 shards at 35m06s, but timed out.
-        # Retain a finite margin for that measured complete execution.
+        # Keep the finite limit while qualifying the file-level deploy grouping.
+        # Timeout or incomplete results remain failed full-suite evidence.
         timeout-minutes: 40
         continue-on-error: ${{ matrix.experimental }}
         shell: bash
@@ -155,6 +155,7 @@ jobs:
           find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print |
             while IFS= read -r path; do
               case "$path" in
+                tests/deploy/*) printf '%s\n' "$path" ;;
                 tests/*/*)
                   relative="${path#tests/}"
                   printf 'tests/%s\n' "${relative%%/*}"
@@ -165,7 +166,17 @@ jobs:
             LC_ALL=C sort -u |
             while IFS= read -r shard; do
               [[ "$shard" == tests/ops ]] || printf '%s\n' "$shard"
-            done > "$shard_list"
+            done |
+            # This measured long-running file starts with the first workers.
+            # It remains in the same discovered inventory as every other file.
+            awk '
+              $0 == "tests/deploy/test_deploy_channel_script.py" { first = $0; next }
+              { remaining[++count] = $0 }
+              END {
+                if (first != "") print first
+                for (i = 1; i <= count; i++) print remaining[i]
+              }
+            ' > "$shard_list"
           if [[ ! -s "$shard_list" ]]; then
             echo "No collectible nightly process shards discovered" >&2
             exit 1
