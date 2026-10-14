@@ -734,12 +734,6 @@ def find_write_missing_call_sites(root: Path = APP_ROOT) -> list[tuple[str, int]
 #                           asserts its own action string caller-side
 #                           (defense-in-depth, pre-dates #2953).
 WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
-    ("app/ops/native_journaling_acceptance.py", "bootstrap", 1): (
-        "guarded_by_port: existing #6050 / PR #6059 synthetic source uses "
-        "write_note_relative(create_once=True); its create-once seam asserts "
-        "WriteGuard before path resolution or mutation. Registered during "
-        "#6056 base-integration CI repair; no producer or guard behavior changed."
-    ),
     ("app/chat/session_log.py", "SessionLogWriter.open_session", 1): (
         "guarded_by_caller: SessionLogWriter.open_session asserts "
         "DEFAULT_WRITE_GUARD.assert_writes_allowed(CHAT_SESSION_PERSIST_ACTION) "
@@ -920,10 +914,6 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
 # WriteGuard census above: create-once is a producer contract, while the
 # guard classification proves only that the shared seam is protected.
 WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
-    ("app/ops/native_journaling_acceptance.py", "bootstrap", 1): (
-        "create_once: existing #6050 / PR #6059 fixed synthetic source preserves "
-        "an earlier artifact through the port's atomic first-write-wins seam."
-    ),
     ("app/agent_memory/materialization.py", "materialize_promoted_memory", 1): (
         "create_once: deterministic promoted-memory artifact; retry/recovery logic owns idempotency."
     ),
