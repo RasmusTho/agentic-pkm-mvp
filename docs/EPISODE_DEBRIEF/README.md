@@ -1,6 +1,6 @@
-State: Specification directory — FILED, BLOCKED (parent #3331; children #3332–#3334 filed 2026-07-07,
-all carrying `agent:blocked` pending Episode Resolution Engine core delivery — see
-`README.md :: Blocked on Episode Resolution Engine core delivery`).
+State: Active specification directory. DEBRIEF-01 (#3334) has repository implementation;
+DEBRIEF-02 synthesis and DEBRIEF-03 review remain separate work. Parent #3331 is the
+capability acceptance hub.
 System-level source of truth for the Episode Debrief capability: when the Episode Resolution Engine
 closes an episode, synthesize a provenance-cited debrief note — decisions made, commitments taken, open
 loops, key captures — the retro the owner never has time to run. Grounded in
@@ -14,7 +14,9 @@ Temporal class: strategic
 Review cadence: event-driven (ERE prerequisite merges, task merges, parent-issue lifecycle)
 Source of truth: this directory + the governing ERE/Create-engine docs; GitHub issues (#3331–#3334) are
 execution artifacts, this spec is the contract
-Last reviewed: 2026-07-07
+Last reviewed: 2026-10-14
+Last verified against: `app/episode_debrief/trigger.py`, `app/stores/episode_debrief.py`,
+`tests/episode_debrief/test_trigger.py`; repository fixtures, not a deployed-channel receipt.
 
 # Episode Debrief — Specification
 
@@ -31,11 +33,24 @@ candidate-class Human Knowledge Artifact); secondary: **SIP** (episode closure/`
 **GOV** (WriteGuard-gated writes, review-disposition receipts), **RCA** (retrieval-seam assembly of
 decisions/commitments/captures as debrief inputs).
 
-## THE WHOLE CAPABILITY IS BLOCKED ON ERE CORE DELIVERY
+## Repository implementation and remaining acceptance
 
-Every task below — and the parent feature issue — is blocked and carries (or will carry, once filed)
-`agent:blocked`. See **Blocked on Episode Resolution Engine core delivery** below for the exact unblock
-condition. Do not flip any issue in this capability to `agent:ready` before that condition is met.
+ERE-02/#3177, ERE-04/#3179 and ERE-06/#3181 are delivered. DEBRIEF-01 consumes their current
+projection/event contracts through `python -m app.cli episode-debrief tick --json`. It emits the
+registered `debrief.trigger.created` payload and keeps a binding-scoped consumer cursor in the
+existing `episode_engine_state` table. The PostgreSQL comparison advances `(created_at, id)`
+atomically, so a stale or concurrent tick cannot regress it. Raw malformed event positions are
+acknowledged only after successful projection reconciliation.
+
+Each tick derives still-owed work from closed episodes, active artifact bindings and the existing
+debrief artifact location/reference. It re-reads the Episode note's closure and exact scope, so an
+obsolete closure event cannot trigger an open note or substitute a scope. Emission commits before
+cursor advancement; retry derives the same identity and the canonical outbox key suppresses a
+duplicate. A missing event or a cursor already past it does not prevent reconciliation.
+
+DEBRIEF-02/#3333 and DEBRIEF-03/#3332, composed capability acceptance and the authorized test-channel
+receipt remain outstanding. Repository fixtures do not establish live synthesis, review,
+deployment or operator acceptance.
 
 ## What this capability consumes from ERE (read-only; nothing here re-decides ERE's contracts)
 
@@ -64,7 +79,8 @@ task reads the previous task's durable output (trigger → draft → disposition
 ## Provisional thresholds
 
 - `EPISODE_DEBRIEF_MIN_ARTIFACT_COUNT` (DEBRIEF-01): minimum in-bounds artifact count for an episode to
-  be debrief-eligible. Provisional, named, single-sourced constant (proposed default: 3); documented
+  be debrief-eligible. Provisional, named, single-sourced constant (current value: **3**, defined only
+  in `app/episode_debrief/trigger.py`); documented
   provisional pending real-usage data, eventually governed by the Settings Spine
   (`docs/SETTINGS_SPINE/README.md`) rather than hardcoded permanently — mirrors ERE's own
   provisional-constant pattern (RQ-E1/RQ3). Skipping a debrief for a trivial episode is cheap (nothing
@@ -115,8 +131,7 @@ boundaries hold.
 
 ## Blocked on Episode Resolution Engine core delivery
 
-This entire capability — the parent feature issue and all three children — is blocked. It must not be
-filed as (or flipped to) `agent:ready` until the following ERE children merge to `main`:
+The prerequisite gate is satisfied: these ERE children have merged to `main`:
 
 - **#3177** (ERE-02, `EPISODE_NOTE_STORE_AND_PROJECTION`) — the Episode note schema/store DEBRIEF-01
   reads scope/existence from and DEBRIEF-02 appends `debrief_ref` to.
@@ -124,11 +139,11 @@ filed as (or flipped to) `agent:ready` until the following ERE children merge to
 - **#3181** (ERE-06, `EMIT_CLOSURE_AND_DERIVE_DECAY`) — the `episode.closed` event DEBRIEF-01 subscribes
   to.
 
-**Unblock condition**: all three of #3177/#3179/#3181 merged to `main`. Parent #3175 (the ERE capability
+**Original unblock condition**: all three of #3177/#3179/#3181 merged to `main`. Parent #3175 (the ERE capability
 validation hub) remaining open is not itself a blocker for this capability — only these three named
-children are read/write dependencies here; ERE-01/03/05/07/08/09 are not. Until the condition is met,
-every issue filed from this spec (parent **#3331**; children **#3332–#3334**) carries `STATUS: blocked` /
-`agent:blocked`; see `PARENT_FEATURE_ISSUE.md` for the live issue numbers.
+children are read/write dependencies here; ERE-01/03/05/07/08/09 are not. Before this condition was met,
+the original gate applied to parent **#3331** and children **#3332–#3334**. Current readiness follows
+each remaining child's own dependencies; parent acceptance remains open.
 
 ## Capability acceptance criteria
 
@@ -150,7 +165,11 @@ every issue filed from this spec (parent **#3331**; children **#3332–#3334**) 
 
 ## Relationship to GitHub issues
 
-**Filed 2026-07-07.** Parent feature issue: **#3331** (Backlog, `agent:blocked` live validation hub; see [PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). All three children were filed `agent:blocked`, consistent with the ERE precedent of pre-filing blocked children so the dependency chain is visible in the backlog: DEBRIEF-01 → **#3334** (blocked on ERE core delivery — #3177/#3179/#3181; parent #3175 tracks progress, not itself the blocker); DEBRIEF-02 → **#3333** (blocked on DEBRIEF-01/#3334); DEBRIEF-03 → **#3332** (blocked on DEBRIEF-02/#3333). None of this capability's issues flips to `agent:ready` on this spec PR's merge — the ERE-core unblock condition governs, not the spec-PR-merge convention used by the other closed-loop capabilities. The spec is the source of truth; issues track pickup state.
+**Filed 2026-07-07.** Parent feature issue **#3331** is the separate live-validation hub (see
+[PARENT_FEATURE_ISSUE.md](PARENT_FEATURE_ISSUE.md)). DEBRIEF-01 → **#3334** has repository
+implementation; DEBRIEF-02 → **#3333** depends on it; DEBRIEF-03 → **#3332** depends on DEBRIEF-02.
+The original ERE prerequisite block is historical. GitHub Issues own execution state; this directory
+owns the capability contract and distinguishes partial repository delivery from full acceptance.
 
 ## Out of Scope (capability level)
 

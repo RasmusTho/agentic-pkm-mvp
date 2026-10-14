@@ -13,6 +13,8 @@ INGEST_VAULT_CHANGED = "ingest.vault.changed"
 # note's own `time.closed` flip is the SoR; a consumer that misses this event self-heals from the
 # `episodes` projection). See app/episodes/closure.py.
 EPISODE_CLOSED = "episode.closed"
+# DEBRIEF-01: deterministic derived trigger; synthesis remains DEBRIEF-02.
+DEBRIEF_TRIGGER_CREATED = "debrief.trigger.created"
 PANEL_SCAN_REQUESTED = "panel.scan.requested"
 INDEX_OBJECT_EMBEDDED = "index.object.embedded"
 INDEX_EMBEDDING_FAILED = "index.embedding.failed"

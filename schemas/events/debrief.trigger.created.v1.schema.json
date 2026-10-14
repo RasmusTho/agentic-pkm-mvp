@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://yggdrasil.local/schemas/events/debrief.trigger.created.v1.schema.json",
+  "title": "Episode Debrief trigger payload (DEBRIEF-01)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["episode_id", "debrief_id", "scope", "bound_artifact_count"],
+  "properties": {
+    "episode_id": {"type": "string", "minLength": 1},
+    "debrief_id": {"type": "string", "pattern": "^debrief-[0-9a-f]{64}$"},
+    "scope": {"type": "string", "minLength": 1},
+    "bound_artifact_count": {"type": "integer", "minimum": 0}
+  }
+}
