@@ -17,10 +17,11 @@ ROUTES = {
 }
 # Exact reviewed managed candidate bytes; historical Companion assets remain separate.
 ASSET_SHA256 = {
+    "control.html": "f6f2496dbaecdd042255fa4aa568cd8d5a32c0a1b1ed7542ed8a86316a8a245f",
     "devui.css": "04f248ebed67ed91cf4356a280d90eac05ea6f811faa3323c1370537de7661ce",
-    "focus.html": "464e2f2ee5ba59268177261ac6f8f9464cb024caac567d8054e13c058a3a753e",
-    "focus.js": "47454f62ab51cde497741504669903f235eee3e131380ea7692f0bcc78d25f0b",
-    "overview.html": "6e0b20cf2aca808d1330bc6033994e9f9acb7b17c9cf46d3f61479995fa7b2b5",
+    "focus.html": "34fefea890511220d74c458a26fa2a71008ccb9529c71192466dbbf4c70a2081",
+    "focus.js": "199c9c47b92232dcf584472de38a3a0370eca9f90992f48e50f8dcc5ec291053",
+    "overview.html": "950402b8c8bea8443f9fe40e1402f393a3a6ba210366a74adf2a6013961ee6c1",
     "overview.js": "873c9de9bbc8eb85410f0f6450b477cfc52346ff42a921588d8d33494581b4b2",
     "yggdrasil.css": "1cffbb6d4226a1ad593902b7b72ec54fb76a39f071ae64bd74bc1176331a203b",
 }
