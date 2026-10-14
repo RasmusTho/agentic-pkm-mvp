@@ -6968,6 +6968,16 @@ def test_local_retirement_rejects_whitespace_dedicated_worktree_marker(
             "",
         ),
         (
+            "Dedicated worktree /tmp/old is still<?note?> dirty",
+            "",
+            "",
+        ),
+        (
+            "Dedicated worktree /tmp/old is still<!DOCTYPE note> dirty",
+            "",
+            "",
+        ),
+        (
             "Dedicated worktree /tmp/old is still<!-- note",
             "dirty",
             "\n",

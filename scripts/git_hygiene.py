@@ -1775,6 +1775,11 @@ _DISPATCHER_HTML_BREAK_TOKEN_RE = re.compile(
     r"<br(?=[\s/>])(?:[\s]+(?:[^\"'>]|\"[^\"]*\"|'[^']*')*)?[\s]*/?>",
     re.IGNORECASE | re.DOTALL,
 )
+_DISPATCHER_HTML_INVISIBLE_TOKEN_RE = re.compile(
+    r"(?:<\?(?:[^\"'>]|\"[^\"]*\"|'[^']*')*\?>"
+    r"|<![A-Za-z](?:[^\"'>]|\"[^\"]*\"|'[^']*')*>)",
+    re.IGNORECASE | re.DOTALL,
+)
 _DISPATCHER_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _DISPATCHER_HTML_COMMENT_OPEN_RE = re.compile(r"<!--[^\r\n]*")
 _DISPATCHER_HTML_TAG_NAME_RE = re.compile(r"<\s*/?\s*([A-Za-z][A-Za-z0-9:-]*)")
@@ -1791,6 +1796,8 @@ def _dispatcher_is_html_break_token(content: str) -> bool:
 def _dispatcher_render_html_token(content: str) -> str:
     stripped = content.strip()
     if _DISPATCHER_HTML_COMMENT_RE.fullmatch(stripped) or stripped.startswith("<!--"):
+        return "\n" * content.count("\n")
+    if _DISPATCHER_HTML_INVISIBLE_TOKEN_RE.fullmatch(stripped):
         return "\n" * content.count("\n")
     if _dispatcher_is_html_break_token(content):
         return "\n"
