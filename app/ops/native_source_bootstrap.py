@@ -26,11 +26,36 @@ SOURCE_PROJECTION_FAILURE_CODES = {
     'vector_projection_failed': 79,
     'embedding_generation_failed': 80,
     'vector_index_write_failed': 81,
+    'source_preflight_failed': 82,
+    'source_readiness_failed': 83,
+    'source_command_failed': 84,
+    'source_summary_invalid': 85,
+    'source_post_rebuild_failed': 86,
+    'source_doctor_failed': 87,
+    'source_settings_failed': 88,
+    'source_worker_failed': 89,
 }
 
 
 class SourceVectorProjectionFailure(RuntimeError):
     """Fixed private-child classification; never retain provider diagnostics."""
+
+
+class SourceBootstrapFailure(ValueError):
+    """A fixed checkpoint code, not exception or child-output text."""
+
+    def __init__(self, reason: str) -> None:
+        self.code = SOURCE_PROJECTION_FAILURE_CODES[reason]
+        super().__init__(reason.replace('_', ' '))
+
+
+def _checkpoint(reason: str, function: Any, *args: Any, **kwargs: Any) -> Any:
+    try:
+        return function(*args, **kwargs)
+    except (SourceBootstrapFailure, SourceVectorProjectionFailure):
+        raise
+    except Exception:
+        raise SourceBootstrapFailure(reason) from None
 
 
 def source_rebuild_counts(payload: Any) -> tuple[int, ...]:
@@ -214,20 +239,23 @@ def _product_ready(root: Path) -> bool:
 def _run_json(arguments: list[str]) -> Any:
     # Producer summaries can include examples and paths. Inspect them privately;
     # never print child stdout, stderr, exceptions or an untrusted summary field.
+    command_reason = ('source_settings_failed' if arguments[:2] == ['settings', 'validate']
+                      else 'source_doctor_failed' if arguments[:2] == ['index', 'doctor']
+                      else 'source_command_failed')
     with tempfile.TemporaryFile() as output:
-        result = subprocess.run(
+        result = _checkpoint(command_reason, subprocess.run,
             [sys.executable, '-m', 'app.cli', *arguments],
             stdout=output, stderr=subprocess.DEVNULL, check=False,
         )
         if result.returncode and result.returncode != 79:
-            raise ValueError('source command failed')
+            raise SourceBootstrapFailure(command_reason)
         output.seek(0)
         raw = output.read(_SUMMARY_LIMIT + 1)
         if len(raw) > _SUMMARY_LIMIT:
-            raise ValueError('source summary invalid')
-        payload = json.loads(raw)
+            raise SourceBootstrapFailure('source_summary_invalid')
+        payload = _checkpoint('source_summary_invalid', json.loads, raw)
         if result.returncode:
-            counts = source_rebuild_counts(payload)
+            counts = _checkpoint('source_summary_invalid', source_rebuild_counts, payload)
             failures = payload.get('vector_projection_errors')
             if (
                 arguments[:1] == ['vault-alpha-ingest']
@@ -240,15 +268,16 @@ def _run_json(arguments: list[str]) -> Any:
                     reason = 'vector_projection_failed'  # Prior candidate summary.
                 elif (
                     isinstance(reasons, dict) and reasons
-                    and all(key in SOURCE_PROJECTION_FAILURE_CODES for key in reasons)
+                    and all(key in {'vector_projection_failed', 'embedding_generation_failed',
+                                    'vector_index_write_failed'} for key in reasons)
                     and all(type(value) is int and value > 0 for value in reasons.values())
                     and sum(reasons.values()) == failures
                 ):
                     reason = next(iter(reasons)) if len(reasons) == 1 else 'vector_projection_failed'
                 else:
-                    raise ValueError('source summary invalid')
+                    raise SourceBootstrapFailure('source_summary_invalid')
                 raise SourceVectorProjectionFailure(reason)
-            raise ValueError('source command failed')
+            raise SourceBootstrapFailure('source_command_failed')
         return payload
 
 
@@ -272,17 +301,17 @@ def _diagnosis_unembedded_count(diagnosis: Any) -> int:
 
 
 def rebuild_if_needed(selector: str) -> None:
-    root = preflight(selector)
+    root = _checkpoint('source_preflight_failed', preflight, selector)
     if root is None:
         # Preserve the ordinary explicitly unbound API/picker posture. Missing
         # or invalid configured roots still raise at the canonical resolver.
         return
-    _run_json(['settings', 'validate', '--json'])
-    product_ready = _product_ready(root)
+    _checkpoint('source_settings_failed', _run_json, ['settings', 'validate', '--json'])
+    product_ready = _checkpoint('source_readiness_failed', _product_ready, root)
     rebuild_source_projection = not product_ready
     if product_ready:
         preflight_diagnosis = _run_json(['index', 'doctor', '--json'])
-        unembedded_count = _diagnosis_unembedded_count(preflight_diagnosis)
+        unembedded_count = _checkpoint('source_doctor_failed', _diagnosis_unembedded_count, preflight_diagnosis)
         rebuild_source_projection = (
             unembedded_count > 0 and preflight_diagnosis['non_vector_issue_count'] == 0
         )
@@ -291,37 +320,41 @@ def rebuild_if_needed(selector: str) -> None:
             'vault-alpha-ingest', '--vault-root', str(root), '--max-notes', '0',
             '--force', '--source-backed-rebuild', '--json',
         ])
-        if not source_rebuild_complete(summary) or not _product_ready(root):
-            raise ValueError('source projection incomplete')
+        if not _checkpoint('source_summary_invalid', source_rebuild_complete, summary):
+            raise SourceBootstrapFailure('source_post_rebuild_failed')
+        if not _checkpoint('source_post_rebuild_failed', _product_ready, root):
+            raise SourceBootstrapFailure('source_post_rebuild_failed')
     diagnosis = _run_json(['index', 'doctor', '--json', '--strict'])
-    unembedded_count = _diagnosis_unembedded_count(diagnosis)
+    unembedded_count = _checkpoint('source_doctor_failed', _diagnosis_unembedded_count, diagnosis)
     if (
         diagnosis.get('issues') != [] or diagnosis.get('rebuild_required') is not False
         or unembedded_count != 0 or diagnosis.get('non_vector_issue_count') != 0
     ):
-        raise ValueError('source index not ready')
+        raise SourceBootstrapFailure('source_doctor_failed')
 
 
 def main(argv: list[str] | None = None) -> int:
     arguments = sys.argv[1:] if argv is None else argv
     if len(arguments) != 2 or arguments[0] not in {'--preflight', '--run', '--worker'}:
-        return 78
+        return SOURCE_PROJECTION_FAILURE_CODES['source_preflight_failed']
     mode, selector = arguments
     try:
         if mode == '--preflight':
-            preflight(selector)
+            _checkpoint('source_preflight_failed', preflight, selector)
         elif mode == '--worker':
             rebuild_if_needed(selector)
         else:
-            preflight(selector)
+            _checkpoint('source_preflight_failed', preflight, selector)
             return wait_for_owned_child(
                 [sys.executable, '-m', 'app.ops.native_source_bootstrap', '--worker', selector],
                 timeout=SOURCE_TIMEOUT_SECONDS,
             )
     except SourceVectorProjectionFailure as exc:
         return SOURCE_PROJECTION_FAILURE_CODES.get(str(exc), 78)
+    except SourceBootstrapFailure as exc:
+        return exc.code
     except Exception:
-        return 78
+        return SOURCE_PROJECTION_FAILURE_CODES['source_worker_failed']
     return 0
 
 

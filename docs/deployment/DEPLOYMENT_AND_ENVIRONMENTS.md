@@ -948,6 +948,22 @@ retains its existing best-effort vector behavior. A retry uses the same configur
 identity and full selected inventory; the final strict doctor must independently prove zero
 missing vectors before candidate activation. This repository repair does not establish live
 DEV or TEST acceptance.
+Native source diagnostics also classify embedding context, identity availability/validation,
+service availability/readiness, configured-model availability/readiness and the fixed probe as
+`embedding_context_invalid`, `embedding_identity_unavailable`, `embedding_identity_invalid`,
+`embedding_service_unavailable`, `embedding_service_not_ready`, `embedding_model_unavailable`,
+`embedding_model_not_ready` and `embedding_probe_failed`. The private bootstrap maps fixed
+exit codes 82–89 to `source_preflight_failed`, `source_readiness_failed`, `source_command_failed`,
+`source_summary_invalid`, `source_post_rebuild_failed`, `source_doctor_failed`,
+`source_settings_failed` and `source_worker_failed`. Writer-stop and exact-operation cleanup
+failures are `source_writer_stop_failed` and `source_quiescence_failed`; unknown child exits,
+timeouts and termination signals remain failed with `source_worker_failed` after cleanup.
+The supervisor accepts these reasons only with one exact `source_projection` stage and one
+exact allowlisted reason marker. Other stages or malformed, duplicate, injected or unknown
+markers retain `command_failed`. These content-free reasons identify checkpoints, not root
+causes or repair authority: they never authorize source replay, semantic fallback, data/vector
+mutation or candidate activation. Raw stdout/stderr suppression, candidate/operation binding,
+compensation and no-replay semantics are unchanged.
 Ordinary service recreation and the existing final Data health, version, UI and receipt gates
 still follow this step. Ordinary API startup clears the selector and retains migration→uvicorn.
 
