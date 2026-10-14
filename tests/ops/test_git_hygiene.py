@@ -6661,6 +6661,46 @@ def test_local_retirement_rejects_relative_dedicated_worktree_marker(
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
 
+@pytest.mark.parametrize(
+    "marker_prefix",
+    [
+        "Dedicated worktree /tmp/old checkout",
+        "Dedicated worktree /tmp/old; checkout",
+    ],
+)
+def test_local_retirement_rejects_whitespace_dedicated_worktree_marker(
+    tmp_path, monkeypatch, marker_prefix
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            f"{marker_prefix} is still dirty on branch old "
+                            f"at head {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard inactive work only when explicit retention intent is valid",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
 def test_local_retirement_ignores_negated_pickup_marker(
     tmp_path, monkeypatch
 ):

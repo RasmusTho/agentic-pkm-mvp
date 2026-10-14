@@ -1741,7 +1741,7 @@ _DISPATCHER_PRESERVED_WORKTREE_RE = re.compile(
 )
 _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree"
-    r"(?:\s*:\s*|\s+)(?:`?[^\s;`,]+`?\s+)?is\s+still\s+dirty\b",
+    r"(?:\s*:\s*|\s+).*?\bis\s+still\s+dirty\b",
     re.IGNORECASE,
 )
 _DISPATCHER_DEDICATED_WORKTREE_RE = re.compile(
