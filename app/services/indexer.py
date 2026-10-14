@@ -132,6 +132,7 @@ def _source_backed_projection_metadata(
         product_replay_for_vault_note,
     )
     from app.rebuildability import canonical_product_body_text, parse_bounded_frontmatter
+    from app.rebuildability.product_total_loss import capture_source_frontmatter
 
     frontmatter, body, parse_error = parse_bounded_frontmatter(source_snapshot)
     if parse_error is not None:
@@ -143,6 +144,7 @@ def _source_backed_projection_metadata(
     )
     return {
         "title": _frontmatter_title(frontmatter) or _derive_title(body, source_path),
+        "frontmatter": capture_source_frontmatter(source_snapshot),
         "review_state": normalized["review_state"],
         "maturity": normalized.get("maturity"),
         "episode_ref": episode_ref_from_frontmatter(frontmatter),
@@ -368,6 +370,10 @@ def handle_ingest_object_created(
             source_ref=source_ref,
             created_at=existing.created_at,
         )
+    if not isinstance(source_metadata.get("frontmatter"), dict):
+        # A failed source snapshot refresh cannot leave old admission evidence
+        # attached to a newly written projection, even when body hashes agree.
+        domain.payload.pop("frontmatter", None)
     domain.payload = build_indexed_unit_payload(
         object_id=domain.uuid,
         kind=domain.kind,

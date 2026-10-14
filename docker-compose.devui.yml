@@ -15,6 +15,8 @@ services:
       DEVUI_IMAGE_DIGEST: ${DEVUI_IMAGE_DIGEST:?immutable image digest required}
       DEVUI_CONFIG_FINGERPRINT: ${DEVUI_CONFIG_FINGERPRINT:?pinned configuration fingerprint required}
       DEVUI_VM102_RECEIPT_DIR: /run/builderops/devui-receipts
+      DEVUI_DIAGNOSTIC_ORIGIN: ${DEVUI_DIAGNOSTIC_ORIGIN:-}
+      DEVUI_CKM_OVERVIEW_URL: ${DEVUI_CKM_OVERVIEW_URL:-}
     volumes:
       - type: bind
         source: /opt/builderops/receipts
