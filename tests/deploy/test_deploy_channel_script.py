@@ -33,6 +33,27 @@ MAKEFILE = REPO_ROOT / "Makefile"
 
 def _deploy_harness(tmp_path: Path) -> tuple[Path, dict[str, str], str]:
     root, env, sha = _base_deploy_harness(tmp_path)
+    # BWS deployment tests run the real shell preflight against the deterministic
+    # Docker stub from the shared harness. The selected Product embedding
+    # identity is Ollama in these fixtures, so provide only the strict identity
+    # receipt the new preflight consumes; all other Compose commands already
+    # succeed through the stub's normal default path.
+    docker = Path(env["PATH"].split(os.pathsep)[0]) / "docker"
+    docker_script = docker.read_text(encoding="utf-8")
+    identity_stub = '''if [ "${FAKE_GENERIC_EMBEDDING_IDENTITY:-0}" = "1" ] && \
+    [[ "$*" == *"native-source-embedding-identity.v1"* ]]; then
+  printf '{"contract":"native-source-embedding-identity.v1","provider":"%s","model":"%s"}\\n' \\
+    "${FAKE_EMBEDDING_PROVIDER:-ollama}" "${FAKE_EMBEDDING_MODEL:-nomic-embed-text:latest}"
+  exit "${FAKE_EMBEDDING_IDENTITY_RC:-0}"
+fi
+'''
+    case_marker = 'case "$*" in\n'
+    assert case_marker in docker_script
+    docker.write_text(
+        docker_script.replace(case_marker, identity_stub + case_marker, 1),
+        encoding="utf-8",
+    )
+    env["FAKE_GENERIC_EMBEDDING_IDENTITY"] = "1"
     # BWS deployment callers supply the runtime env path from private host
     # config. Keep the shell harness explicit so it tests the same boundary.
     env["BWS_DEPLOY_RUNTIME_ENV_FILE"] = str(root / "tmp/runtime.env")
@@ -5186,6 +5207,7 @@ else:
     env.update(
         FAKE_API_VAULT=str(root / "tmp"), FAKE_API_READY_FILE=str(ready_file),
         FAKE_API_PYTHONPATH=f"{site}:{root}:{REPO_ROOT}", VCS_REF=sha,
+        FAKE_GENERIC_EMBEDDING_IDENTITY="0",
     )
     command = _compose("docker-compose.yaml")["services"]["api"]["command"][2]
     (root / "api-command.sh").write_text(
