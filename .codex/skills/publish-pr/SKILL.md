@@ -101,6 +101,16 @@ Add `--existing-pr-number` only for a verified exact open PR update. A resumed c
 contain bounded commits or be clean; the plan binds the complete candidate and any additive dirty
 change. Merge commits and unrelated history use the protected full path.
 
+For an issue-backed publication, the JSON must carry the exact successful wrapper output under
+`pickup_receipt`. Use the pickup-claim-complete line captured from
+`scripts/issue_pickup_claim.sh`; the generator accepts both dispatcher-backed and
+GitHub-label-only fallback receipts, validates that the receipt's Issue matches the governing
+Issue, and refuses missing, malformed, placeholder, or foreign-scope input before commit, branch
+reservation, push, or PR creation. The standalone generator also supports
+`--pickup-receipt-file` for a captured line. Issue-free bodies omit this field, and an explicit
+multi-Issue body keeps the receipt bound to its declared governing Issue rather than fabricating a
+claim for an open parent.
+
 The two completion flags are explicit caller attestations, not defaults; supply them only after the
 named local prerequisites have actually completed. `plan` is read-only. It emits canonical
 `builder.publication-plan.v1` JSON whose

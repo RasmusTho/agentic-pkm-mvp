@@ -1,6 +1,7 @@
 {
   "lane": "governance",
   "issue_number": 3275,
+  "pickup_receipt": "pickup-claim-complete issue=3275 branch=codex/issue-3275-pr-body worktree=/tmp/issue-3275-pr-body coordination_mode=dispatcher-backed fallback_reason=none task_id=github-RasmusTho--agentic-pkm-mvp-issue-3275 lease_id=lease-3275 holder=codex-slice-implementer evidence=verified-dispatcher-lease",
   "summary": [
     "add a PR body generator for governance lane delivery",
     "document local PR body preparation before opening a PR"

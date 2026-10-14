@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from typing import Any, Mapping, Sequence
 LANES = frozenset({"implementation", "docs-authoring", "governance", "direct-repair"})
 DIRECT_REPAIR_TYPES = frozenset({"docs", "governance", "code"})
 OWNER_DOC_RESOLUTIONS = frozenset({"none", "updated", "follow-up"})
+PICKUP_RECEIPT_PREFIX = "pickup-claim-complete"
 
 TEMPLATE_SECTION_HEADINGS = (
     "Change Lane",
@@ -58,6 +60,7 @@ class PRBodyInputs:
     direct_repair_validation: str | None = None
     owner_doc_followup_issue: str | None = None
     closing_issues: tuple[int, ...] | None = None
+    pickup_receipt: str | None = None
 
 
 def generate_pr_body(inputs: PRBodyInputs) -> str:
@@ -69,7 +72,9 @@ def generate_pr_body(inputs: PRBodyInputs) -> str:
         sections.append(_direct_repair_section(inputs))
     sections.extend([
         _change_lane_section(inputs.lane, inputs.final_review_rounds),
-        _linked_issue_section(inputs.issue_number, inputs.closing_issues),
+        _linked_issue_section(
+            inputs.issue_number, inputs.closing_issues, inputs.pickup_receipt
+        ),
         _sbs_impact_section(inputs.sbs_impact),
         _owner_doc_section(inputs),
         _summary_section(inputs.summary),
@@ -108,6 +113,7 @@ def _inputs_from_mapping(data: Mapping[str, Any]) -> PRBodyInputs:
         direct_repair_type=_optional_text(data.get("direct_repair_type")),
         direct_repair_reason=_optional_text(data.get("direct_repair_reason")),
         direct_repair_validation=_optional_text(data.get("direct_repair_validation")),
+        pickup_receipt=_optional_text(data.get("pickup_receipt")),
     )
 
 
@@ -134,6 +140,17 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
             raise PRBodyGeneratorError("direct-repair lane requires direct_repair_type")
         _require_text(inputs.direct_repair_reason, "direct_repair_reason")
         _require_text(inputs.direct_repair_validation, "direct_repair_validation")
+    if inputs.issue_number is None:
+        if inputs.pickup_receipt is not None:
+            raise PRBodyGeneratorError(
+                "pickup_receipt is only valid for an issue-backed publication"
+            )
+    else:
+        if inputs.pickup_receipt is None:
+            raise PRBodyGeneratorError(
+                "pickup_receipt is required for issue-backed publication"
+            )
+        _validate_pickup_receipt(inputs.pickup_receipt, inputs.issue_number)
     if not inputs.summary or any(not item.strip() for item in inputs.summary):
         raise PRBodyGeneratorError("summary must contain at least one non-empty item")
     if inputs.owner_doc_resolution not in OWNER_DOC_RESOLUTIONS:
@@ -163,13 +180,19 @@ def _change_lane_section(lane: str, final_review_rounds: int) -> str:
     ])
 
 
-def _linked_issue_section(issue_number: int | None, closing_issues: tuple[int, ...] | None) -> str:
+def _linked_issue_section(
+    issue_number: int | None,
+    closing_issues: tuple[int, ...] | None,
+    pickup_receipt: str | None,
+) -> str:
     if issue_number is None:
         return "## Linked Issue\n"
     closing = closing_issues if closing_issues is not None else (issue_number,)
     return (
         f"Governing-Issue: #{issue_number}\n\n"
-        "## Linked Issue\n" + "\n".join(f"Closes #{number}" for number in sorted(closing))
+        "## Linked Issue\n"
+        f"Pickup-Receipt: {pickup_receipt}\n"
+        + "\n".join(f"Closes #{number}" for number in sorted(closing))
     )
 
 
@@ -237,6 +260,57 @@ def _require_text(value: str | None, field: str) -> None:
         raise PRBodyGeneratorError(f"{field} is required")
 
 
+def _validate_pickup_receipt(receipt: str, issue_number: int) -> str:
+    """Validate one exact successful pickup-wrapper receipt for its Issue."""
+
+    text = receipt.strip()
+    if not text or "\n" in text or "\r" in text:
+        raise PRBodyGeneratorError("pickup_receipt is malformed")
+    tokens = text.split()
+    if not tokens or tokens[0] != PICKUP_RECEIPT_PREFIX:
+        raise PRBodyGeneratorError("pickup_receipt must be a successful pickup-claim-complete receipt")
+    fields: dict[str, str] = {}
+    for token in tokens[1:]:
+        if "=" not in token:
+            raise PRBodyGeneratorError("pickup_receipt is malformed")
+        key, value = token.split("=", 1)
+        if not key or (not value and key != "branch") or key in fields:
+            raise PRBodyGeneratorError("pickup_receipt is malformed")
+        fields[key] = value
+
+    common = {"issue", "branch", "worktree", "coordination_mode", "fallback_reason", "evidence"}
+    mode = fields.get("coordination_mode")
+    if mode == "dispatcher-backed":
+        expected = common | {"task_id", "lease_id", "holder"}
+        if set(fields) != expected:
+            raise PRBodyGeneratorError("pickup_receipt dispatcher fields are malformed")
+        if fields.get("fallback_reason") != "none":
+            raise PRBodyGeneratorError("pickup_receipt dispatcher fallback_reason is malformed")
+        if fields.get("evidence") != "verified-dispatcher-lease":
+            raise PRBodyGeneratorError("pickup_receipt dispatcher evidence is malformed")
+    elif mode == "github-label-only-fallback":
+        expected = common | {"agent", "session"}
+        if set(fields) != expected:
+            raise PRBodyGeneratorError("pickup_receipt fallback fields are malformed")
+        if _is_missing_value(fields.get("fallback_reason")) or fields.get("fallback_reason") == "none":
+            raise PRBodyGeneratorError("pickup_receipt fallback reason is malformed")
+        if re.fullmatch(r"github-comment:[1-9][0-9]*", fields.get("evidence", "")) is None:
+            raise PRBodyGeneratorError("pickup_receipt fallback evidence is malformed")
+    else:
+        raise PRBodyGeneratorError("pickup_receipt coordination_mode is malformed")
+
+    if fields.get("issue") != str(issue_number):
+        raise PRBodyGeneratorError("pickup_receipt Issue scope does not match governing Issue")
+    for field in ("worktree", "holder", "agent", "session", "task_id", "lease_id"):
+        field_value = fields.get(field)
+        if field_value is not None and _is_missing_value(field_value):
+            raise PRBodyGeneratorError(f"pickup_receipt {field} is malformed")
+    worktree = fields.get("worktree", "")
+    if not Path(worktree).is_absolute():
+        raise PRBodyGeneratorError("pickup_receipt worktree must be absolute")
+    return text
+
+
 def _is_missing_value(value: str | None) -> bool:
     if value is None:
         return True
@@ -270,6 +344,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--builderops-records")
     parser.add_argument("--builderops-reason")
     parser.add_argument("--notes", default="None.")
+    receipt = parser.add_mutually_exclusive_group()
+    receipt.add_argument("--pickup-receipt")
+    receipt.add_argument("--pickup-receipt-file", type=Path)
     parser.add_argument("--direct-repair-type", choices=sorted(DIRECT_REPAIR_TYPES))
     parser.add_argument("--direct-repair-reason")
     parser.add_argument("--direct-repair-validation")
@@ -299,6 +376,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 direct_repair_type=args.direct_repair_type,
                 direct_repair_reason=args.direct_repair_reason,
                 direct_repair_validation=args.direct_repair_validation,
+                pickup_receipt=(
+                    args.pickup_receipt
+                    if args.pickup_receipt is not None
+                    else (
+                        args.pickup_receipt_file.read_text(encoding="utf-8")
+                        if args.pickup_receipt_file is not None
+                        else None
+                    )
+                ),
             ))
     except (OSError, json.JSONDecodeError, PRBodyGeneratorError) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)

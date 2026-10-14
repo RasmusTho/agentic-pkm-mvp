@@ -87,6 +87,13 @@ opens or updates a PR. Required lane inputs must be concrete:
 - every body requires concrete SBS impact, validation, and owner-doc writeback resolution;
 - issue-backed and direct-repair bodies require concrete BuilderOps routing lines;
 - direct repair requires `Type`, `Reason`, `Validation`, and `Issue required: no`.
+- issue-backed bodies require the exact successful `pickup-claim-complete` line emitted by
+  `scripts/issue_pickup_claim.sh` under the `pickup_receipt` input. The generator validates the
+  dispatcher-backed or GitHub-label-only fallback form and binds its Issue to the declared
+  governing Issue before any commit, branch reservation, push, or PR creation. Capture the final
+  wrapper line when the wrapper's preflight report is also printed, or use the generator's
+  `--pickup-receipt-file` convenience input. Issue-free bodies omit the receipt; explicit
+  multi-Issue bodies keep it bound to their governing Issue and do not fabricate a parent claim.
 
 Neither the generator nor a publication plan weakens `pr-contract`, infers issues silently, or
 becomes PR authority. CI remains the authority for whether the final live PR body satisfies the
