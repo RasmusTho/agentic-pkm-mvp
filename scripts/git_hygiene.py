@@ -1881,8 +1881,10 @@ def _dispatcher_resumable_binding_resources(
         if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
             raise RuntimeError("dispatcher_activity_invalid")
         body = comment["body"]
-        cross_line_match = _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.search(body)
-        if cross_line_match and re.search(r"[\r\n]", cross_line_match.group(0)):
+        if any(
+            re.search(r"[\r\n]", match.group(0))
+            for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(body)
+        ):
             raise RuntimeError("dispatcher_activity_invalid")
         lines = body.splitlines()
         for line_number, line in enumerate(lines):
