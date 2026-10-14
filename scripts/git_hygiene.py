@@ -1754,7 +1754,7 @@ _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE = re.compile(
 _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+`?"
     r"/[^\s;`,]+`?(?:\s+is(?:\s+still)?)?\s*$",
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -1882,14 +1882,24 @@ class _DispatcherHTMLBlockTextParser(HTMLParser):
         self.parts.append("\n" * data.count("\n"))
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag.lower() == "br":
+        normalized_tag = tag.lower()
+        if normalized_tag in {"tr", "td", "th"}:
+            self.parts.append(_DISPATCHER_TABLE_CELL_BOUNDARY)
+        if normalized_tag == "br":
             self.parts.append("\n")
 
     def handle_startendtag(
         self, tag: str, attrs: list[tuple[str, str | None]],
     ) -> None:
-        if tag.lower() == "br":
+        normalized_tag = tag.lower()
+        if normalized_tag in {"tr", "td", "th"}:
+            self.parts.append(_DISPATCHER_TABLE_CELL_BOUNDARY)
+        if normalized_tag == "br":
             self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in {"tr", "td", "th"}:
+            self.parts.append(_DISPATCHER_TABLE_CELL_BOUNDARY)
 
 
 def _dispatcher_render_html_block(content: str) -> str:
@@ -2028,7 +2038,7 @@ def _dispatcher_normalize_gfm_table_pipes(body: str) -> str:
         if index not in table_lines:
             rendered_lines.append(line)
             continue
-        rendered = line.replace("|", _DISPATCHER_TABLE_CELL_BOUNDARY)
+        rendered = _dispatcher_replace_gfm_table_delimiters(line)
         if rendered.endswith("\n"):
             rendered = (
                 rendered[:-1] + _DISPATCHER_TABLE_CELL_BOUNDARY + "\n"
@@ -2037,6 +2047,37 @@ def _dispatcher_normalize_gfm_table_pipes(body: str) -> str:
             rendered += _DISPATCHER_TABLE_CELL_BOUNDARY
         rendered_lines.append(rendered)
     return "".join(rendered_lines)
+
+
+def _dispatcher_replace_gfm_table_delimiters(line: str) -> str:
+    result: list[str] = []
+    code_run = 0
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if character == "\\" and index + 1 < len(line):
+            result.extend((character, line[index + 1]))
+            index += 2
+            continue
+        if character == "`":
+            run_end = index
+            while run_end < len(line) and line[run_end] == "`":
+                run_end += 1
+            run_length = run_end - index
+            if code_run == 0:
+                code_run = run_length
+            elif run_length == code_run:
+                code_run = 0
+            result.extend(line[index:run_end])
+            index = run_end
+            continue
+        result.append(
+            _DISPATCHER_TABLE_CELL_BOUNDARY
+            if character == "|" and code_run == 0
+            else character
+        )
+        index += 1
+    return "".join(result)
 
 
 def _dispatcher_gfm_table_line_numbers(body: str) -> set[int]:
@@ -2048,6 +2089,20 @@ def _dispatcher_gfm_table_line_numbers(body: str) -> set[int]:
         if token.type == "table_open" and token.map is not None
         for line_number in range(token.map[0], token.map[1])
     }
+
+
+def _dispatcher_html_table_line_numbers(body: str) -> set[int]:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    line_numbers: set[int] = set()
+    for token in _DISPATCHER_MARKDOWN.parse(normalized):
+        if (
+            token.type == "html_block"
+            and token.map is not None
+            and re.search(r"<\s*/?\s*(?:table|thead|tbody|tfoot|tr|td|th)\b", token.content, re.IGNORECASE)
+        ):
+            line_numbers.update(range(token.map[0], token.map[1]))
+    return line_numbers
 
 
 def _dispatcher_split_scan_segments(text: str) -> list[str]:
@@ -2068,11 +2123,12 @@ def _dispatcher_marker_search(pattern: re.Pattern[str], text: str) -> re.Match[s
 def _dispatcher_table_marker_search(
     pattern: re.Pattern[str], text: str
 ) -> re.Match[str] | None:
-    for segment in text.split(_DISPATCHER_TABLE_CELL_BOUNDARY):
-        match = pattern.search(segment)
-        if match is not None:
-            return match
-    return None
+    segments = [
+        segment
+        for segment in text.split(_DISPATCHER_TABLE_CELL_BOUNDARY)
+        if segment.strip()
+    ]
+    return pattern.search(segments[-1]) if segments else None
 
 
 def _dispatcher_cross_line_scan_body(
@@ -2299,6 +2355,7 @@ def _dispatcher_resumable_binding_resources(
         lines = body.splitlines()
         table_scan_lines = _dispatcher_normalize_gfm_table_pipes(body).splitlines()
         table_line_numbers = _dispatcher_gfm_table_line_numbers(body)
+        table_line_numbers.update(_dispatcher_html_table_line_numbers(body))
         code_block_lines = _dispatcher_code_block_line_numbers(body)
         truncated_scan_lines = [
             line
