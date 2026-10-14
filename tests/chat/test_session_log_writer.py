@@ -390,3 +390,30 @@ def test_session_store_load_heals_legacy_json_missing_note_uuid(tmp_path: Path) 
 
     assert session is not None
     assert session.note_uuid
+
+
+def test_standalone_session_pointer_does_not_heal_transcript_identity(tmp_path: Path) -> None:
+    session = _writer(tmp_path).open_session(None, "voice")
+    before = session.log_path.read_bytes()
+    store = SessionStore(tmp_path)
+    store.save(session)
+
+    loaded = store.load(session.session_id)
+
+    assert loaded == session
+    assert loaded.note_uuid is None
+    assert session.log_path.read_bytes() == before
+
+
+def test_ephemeral_session_store_never_restores_disk_pointers(tmp_path: Path) -> None:
+    session = _writer(tmp_path).open_session(None, "voice")
+    SessionStore(tmp_path).save(session)
+    store = SessionStore(tmp_path, durable=False)
+    assert store.load(session.session_id) is None
+
+    store.save(session)
+    assert store.load(session.session_id) == session
+    assert SessionStore(tmp_path, durable=False).load(session.session_id) is None
+    store.delete(session.session_id)
+    assert store.load(session.session_id) is None
+    assert SessionStore(tmp_path).load(session.session_id) == session
