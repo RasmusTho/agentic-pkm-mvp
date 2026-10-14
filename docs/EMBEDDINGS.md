@@ -446,6 +446,12 @@ Recommended checks:
 - `index doctor` detects:
   - runtime identity != stored identity
   - mismatched vector dimensions in storage
+  - indexable objects with no embedded vector row; diagnosis reports a content-free count,
+    and strict mode fails while any remain
+
+During native deployment, a vector-only finding can trigger the existing guarded source-backed
+rebuild of the selected retained-source inventory. The strict doctor must then pass before service
+activation; see [the deployment procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
 
 ## Rebuild playbook (when identity changes)
 

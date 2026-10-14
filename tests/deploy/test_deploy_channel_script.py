@@ -5093,8 +5093,12 @@ if args[:1] == ["vault-alpha-ingest"]:
     print("hostile-child-canary /private/vault password=do-not-leak", file=sys.stderr)
     raise SystemExit(int(os.environ.get("FAKE_SOURCE_RC", "0")))
 elif args[:2] == ["index", "doctor"]:
-    print(os.environ.get("FAKE_SOURCE_INDEX_SUMMARY", '{"backend":"PgVectorIndex","issues":[],"rebuild_required":false,"pg_state":{"rows":2}}'))
-    raise SystemExit(int(os.environ.get("FAKE_SOURCE_INDEX_RC", "0")))
+    strict = "--strict" in args
+    summary_name = "FAKE_SOURCE_INDEX_SUMMARY" if strict else "FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"
+    default_summary = '{"backend":"PgVectorIndex","issues":[],"rebuild_required":false,"unembedded_object_count":0,"non_vector_issue_count":0,"pg_state":{"rows":2}}'
+    print(os.environ.get(summary_name, default_summary))
+    rc_name = "FAKE_SOURCE_INDEX_RC" if strict else "FAKE_SOURCE_INDEX_PREFLIGHT_RC"
+    raise SystemExit(int(os.environ.get(rc_name, "0")))
 elif args[:2] == ["settings", "validate"]:
     print('{}')
     raise SystemExit(int(os.environ.get("FAKE_SOURCE_SETTINGS_RC", "0")))
@@ -5173,6 +5177,115 @@ def test_native_deploy_rebuilds_source_projection_before_health_gate(
         assert f"api-cli vault-alpha-ingest --vault-root {(root / 'tmp').resolve()} --max-notes 0 --force --source-backed-rebuild --json" in events
     assert "hostile-child-canary" not in result.stdout + result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_native_deploy_repairs_vector_only_gap_before_health_gate(tmp_path: Path) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = json.dumps({
+        "backend": "PgVectorIndex",
+        "issues": ["1 object has no vector"],
+        "rebuild_required": True,
+        "unembedded_object_count": 1,
+        "non_vector_issue_count": 0,
+        "pg_state": {"rows": 1},
+    })
+
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    preflight_doctor = events.index("api-cli index doctor --json")
+    rebuild = events.index("source-rebuild")
+    strict_doctor = events.index("api-cli index doctor --json --strict")
+    runtime_start = next(
+        i for i, event in enumerate(events)
+        if "up -d --force-recreate api worker watcher" in event
+    )
+    assert events.count("source-rebuild") == 1
+    assert preflight_doctor < rebuild < strict_doctor < runtime_start
+    assert f"NATIVE_SOURCE_BOOTSTRAP=dev:{sha}" in "\n".join(events)
+
+
+def test_native_deploy_fails_closed_when_vector_repair_does_not_converge(
+    tmp_path: Path,
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    missing_vector = {
+        "backend": "PgVectorIndex",
+        "issues": ["1 object has no vector"],
+        "rebuild_required": True,
+        "unembedded_object_count": 1,
+        "non_vector_issue_count": 0,
+        "pg_state": {"rows": 1},
+    }
+    env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = json.dumps(missing_vector)
+    env["FAKE_SOURCE_INDEX_SUMMARY"] = json.dumps(missing_vector)
+    env["FAKE_SOURCE_INDEX_RC"] = "2"
+
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert events.count("source-rebuild") == 1
+    assert events.index("source-rebuild") < events.index("api-cli index doctor --json --strict")
+    assert not any("up -d --force-recreate api worker watcher" in event for event in events)
+    assert not list((root / "ops/deployments").glob("*.json"))
+    assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+def test_native_deploy_refuses_unrecognized_index_preflight(tmp_path: Path) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = "{}"
+
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert "api-cli index doctor --json" in events
+    assert "source-rebuild" not in events
+    assert not any("up -d --force-recreate api worker watcher" in event for event in events)
+    assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "other_issue",
+    [
+        "Identity mismatch for model: expected primary, stored other.",
+        "1 rows have embeddings not matching the recorded dimension.",
+        "Mixed embedding identities in index: primary, fallback.",
+    ],
+)
+def test_native_deploy_does_not_rebuild_vector_gap_with_other_index_issue(
+    tmp_path: Path, other_issue: str,
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    vector_issue = "1 store_objects rows have no embedded store_vector_index row: object-id"
+    diagnosis = {
+        "backend": "PgVectorIndex",
+        "issues": [other_issue, vector_issue],
+        "rebuild_required": True,
+        "unembedded_object_count": 1,
+        "non_vector_issue_count": 1,
+        "pg_state": {"rows": 1},
+    }
+    env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = json.dumps(diagnosis)
+    env["FAKE_SOURCE_INDEX_SUMMARY"] = json.dumps(diagnosis)
+    env["FAKE_SOURCE_INDEX_RC"] = "2"
+
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert "source-rebuild" not in events
+    assert "api-cli index doctor --json --strict" in events
+    assert not any(
+        "up -d --force-recreate api worker watcher" in event for event in events
+    )
+    assert not list((root / "ops/deployments").glob("*.json"))
+    assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+    assert "hostile-child-canary" not in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("rows,refused", [

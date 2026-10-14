@@ -89,3 +89,31 @@ Use when the delivery trail is incomplete, stale, or contradictory.
 - repair issue/PR traceability
 - repair missing or stale receipts
 - route terminal closure work through verification-and-closure or issue maintenance instead of padding the hot path
+
+### Evaluated route disposition (#5858)
+
+The finite #5857 inventory was refreshed against its merged main
+`69e23e89ce5962c556af16cdf454026c2e1380fd`. The safe retirement is duplicated instruction text
+and the stale review-only full-path selection claim. No executable route or generated proof
+artifact is demonstrated unconsumed. Automatic native round-1 suppression already shipped in
+#5836 and is retained, not attributed to this cleanup.
+
+| Inventory surface | Disposition | Current consumer and concrete trigger |
+| --- | --- | --- |
+| `publish-pr/SKILL.md`, `scripts/publication.py`, `app/builderops/publication.py` | Retained | Native Tier 1/2 publication with review rounds 0/1, supported issue-free lanes, resumed/exact existing candidates and batches of at most ten; unsupported lanes, risk, base or history still refuse into `publish-pr/FULL_PATH.md` |
+| `verification-and-closure/SKILL.md`, `scripts/closure.py` | Retained | Session-owned native merge and exact closing-Issue readback; the closure adapter remains the single-Issue rounds-0 subset. Independent review alone does not select executor ownership |
+| `verification-and-closure/FULL_PATH.md` | Duplicate common validation, continuation and CI-wait instructions removed; review-only selection claim corrected | Common checks reference `SKILL.md :: Inputs` and `:: Validation`, README continuation and the shared CI wait contract. Dispatched contexts, authenticated merge attempts and release operations still consume the full path; unique supersession, severity, fencing, phase and recovery rules remain |
+| Issue-free reviewed compatibility procedure within `FULL_PATH.md` | Retained with its actual executor/in-flight trigger | `scripts/prepare_verified_issue_set_merge.py` calls the issue-free reviewed-lane planner in `app/dispatcher/verified_merge.py`; `scripts/plan_issue_free_post_merge_reconciliation.py` consumes exact closure attribution. The existing full-path router must select this procedure first |
+| `PR_ESCALATION_PATHS.md` | Retained; disposition recorded here | CI failure/missing checks, merge-ref review repairs, SHA/worktree drift, known dependent-Issue changes, owner-doc changes, blocking feedback and contradictory delivery receipts trigger their existing sections |
+| `scripts/build_verification_dispatch_request.py` | Retained | Workflow/CLI automatic construction suppresses rounds 0/1; explicit `--executor-request` or provenance-bound canary input admits reviewed executor requests. Stale head, mismatched Issue or closing references still refuse |
+| `.github/workflows/verification-dispatch-request.yml` | Retained | Successful current-head CI Smoke plus legacy rounds 2 reaches closing-reference lookup and artifact production. Native rounds 0/1 exit before those effects. An artifact does not transfer merge ownership |
+| Dispatcher verification consumer/dispatch/contract/merge/store and CLI | Retained | Authenticated enqueue/consume requests and already-started fenced operations. Deployed capability, credentials and installation remain separate operational authority; unknown host adoption does not prove absence |
+| Post-merge docs classifier and owner-doc watchdog workflows | Retained | Merged-PR classification imports `resolve_post_merge_issue_authority`; watchdog phase/history classification handles native and verified-merge trails. Native merges therefore still consume verified-merge helpers |
+| Request/workflow/architecture/publication regression tests | Retained and extended at production callsites | The workflow snapshot step executes for native, malformed and legacy-round-2 inputs; real local Git publication and the request producer verify native/executor separation, stale-head and authority refusals |
+| `BUILDER_SYSTEM_PROCESS_MAP.md`, `PR_HOT_PATH.md` | Retained | Existing owner/reference descriptions and their linked production consumers. This cleanup changes no executable routing or operational adoption claim |
+
+No compatibility-code migration is inferred from the sampled deliveries. Retiring legacy automatic
+rounds 2 would first require an identified host/request consumer migration and proof that no
+authenticated attempt remains in flight; the current workflow is a concrete retained producer.
+The two #5858 caller/routing `Verify:` tests cover this disposition without replacing current-head CI
+or the protected full-path checks.

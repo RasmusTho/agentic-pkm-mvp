@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
 from click.testing import CliRunner
@@ -7,6 +8,18 @@ from click.testing import CliRunner
 from app.cli import cli
 from app.components.llm.fabric import LLMTaskIntent, get_embeddings_client
 from app.stores import get_vector_index, reset_store_backends
+
+
+def test_json_reports_unembedded_object_count(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "app.cli.index_doctor.diagnose_index",
+        lambda **_kwargs: {"unembedded_object_count": 1},
+    )
+
+    result = CliRunner().invoke(cli, ["index", "doctor", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["unembedded_object_count"] == 1
 
 
 def _seed_vector() -> None:
