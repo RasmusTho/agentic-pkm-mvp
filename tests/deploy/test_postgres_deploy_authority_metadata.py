@@ -8,9 +8,14 @@ import yaml
 
 from app.ops import postgres_deploy_linux as linux
 from app.ops.postgres_deploy import PostgresDeployError
-from tests.deploy.test_postgres_deploy_authority_cutover import REPO, request
+from tests.deploy.test_postgres_deploy_authority_cutover import REPO, request, target as cutover_target
 
-pytest_plugins = ['tests.deploy.test_postgres_deploy_authority_cutover']
+
+@pytest.fixture
+def target(tmp_path, monkeypatch, request):
+    # Register locally: an already-collected test module is not a reliable
+    # global fixture plugin. Reuse its exact initialized-source fixture body.
+    return cutover_target.__wrapped__(tmp_path, monkeypatch, request)
 
 
 def _prepare(target, monkeypatch, *, admitted=True):
