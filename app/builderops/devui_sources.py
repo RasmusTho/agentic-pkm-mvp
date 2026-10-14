@@ -736,6 +736,9 @@ def package_candidate(
     repo = canonical_repository(repository)
     if not _SHA.fullmatch(source_sha) or set(source_sha) == {"0"}:
         raise SourceConfigurationError("immutable candidate SHA required")
+    from app.builderops.devui_control import bind_managed_control_assets
+
+    bind_managed_control_assets(root / "assets")
     files = {
         str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(root.rglob("*"))
