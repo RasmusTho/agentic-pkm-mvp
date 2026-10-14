@@ -8,6 +8,7 @@
 !app/**
 !scripts
 !scripts/validate_issue_readiness.py
+!scripts/pr_body_generator.py
 !tests/
 !tests/fixtures/
 !tests/fixtures/issue_readiness/

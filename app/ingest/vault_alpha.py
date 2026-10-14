@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Sequence, Set, Tuple
+from typing import Callable, Iterable, List, Sequence, Set, Tuple
 
 import click
 
@@ -603,6 +603,7 @@ def _ingest_single(
     raw_text: str | None = None,
     write_companion_record: bool = True,
     reconcile_existing_projection: bool = False,
+    projection_sink: Callable[[dict], None] | None = None,
 ) -> str:
     rel_path = path.relative_to(vault_root)
     if raw_text is None:
@@ -767,6 +768,14 @@ def _ingest_single(
         **producer_fields,
         "replay": replay,
     }
+
+    if projection_sink is not None:
+        # Recovery prepares exactly the canonical producer payload, but owns
+        # the object/vector transaction and must emit no companion/outbox work.
+        if write_companion_record or not reconcile_existing_projection:
+            raise ValueError("invalid projection preparation")
+        projection_sink(store_payload)
+        return canonical_object_id
 
     object_store = get_object_store()
     reconcile = getattr(object_store, "put_and_reconcile_source_backed", None)

@@ -69,6 +69,7 @@ scripts
 !scripts/__init__.py
 !scripts/yaml_roundtrip.py
 !scripts/compose_env.py
+!scripts/pr_body_generator.py
 !scripts/validate_issue_readiness.py
 !scripts/validate_source_anchors.py
 # The BuilderOps PostgreSQL image has one independent bootstrap entrypoint.
