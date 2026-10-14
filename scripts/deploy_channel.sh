@@ -1451,6 +1451,10 @@ snapshot_previous_pin_before_deploy() {
   fi
 }
 
+native_source_failure() {
+  printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=%s\n' "$1" >&2
+}
+
 native_source_embedding_preflight_gate() {
   if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
     NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY=1
@@ -1459,16 +1463,16 @@ native_source_embedding_preflight_gate() {
 
   local operation="${BWS_DEPLOY_OPERATION_ID:-}" identity_json identity_result
   local provider="" model="" identity_command probe_command service_ready=0 attempt
-  [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 78
-  [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || return 78
+  [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure embedding_context_invalid; return 78; }
+  [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure embedding_context_invalid; return 78; }
   [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
     [ -f "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] && \
-    [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || return 78
+    [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || { native_source_failure embedding_context_invalid; return 78; }
 
   identity_command='import json; from app.components.llm.router import LLMRouter, LLMTaskIntent; route = LLMRouter().route(LLMTaskIntent(task_kind="embed", strict_identity_required=True)); identity = route.embedding_identity; assert identity is not None; print(json.dumps({"contract": "native-source-embedding-identity.v1", "provider": identity.provider, "model": identity.model}, separators=(",", ":")))'
   identity_json="$(DEPLOY_NATIVE_SOURCE_EMBEDDING_IDENTITY_OUTPUT=1 compose run --rm --no-deps -T \
     --entrypoint python api -c "${identity_command}" 2>/dev/null)" || {
-    echo "native source embedding preflight failed: selected identity unavailable" >&2
+    native_source_failure embedding_identity_unavailable
     return 78
   }
   identity_result="$(
@@ -1495,7 +1499,7 @@ if not isinstance(model, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,25
 print("ollama\t" + model)
 PY
   )" || {
-    echo "native source embedding preflight failed: selected identity invalid" >&2
+    native_source_failure embedding_identity_invalid
     return 78
   }
   if [ "${identity_result}" = "skip" ]; then
@@ -1503,10 +1507,10 @@ PY
     return 0
   fi
   IFS=$'\t' read -r provider model <<<"${identity_result}"
-  [ "${provider}" = "ollama" ] && [ -n "${model}" ] || return 78
+  [ "${provider}" = "ollama" ] && [ -n "${model}" ] || { native_source_failure embedding_identity_invalid; return 78; }
 
   compose up -d --no-deps ollama >/dev/null 2>&1 || {
-    echo "native source embedding preflight failed: Ollama service unavailable" >&2
+    native_source_failure embedding_service_unavailable
     return 78
   }
   for ((attempt = 0; attempt < 30; attempt++)); do
@@ -1517,17 +1521,17 @@ PY
     sleep 2
   done
   if [ "${service_ready}" != "1" ]; then
-    echo "native source embedding preflight failed: Ollama service not ready" >&2
+    native_source_failure embedding_service_not_ready
     return 78
   fi
   if ! compose exec -T ollama ollama show "${model}" >/dev/null 2>&1; then
     if ! compose exec -T ollama ollama pull "${model}" >/dev/null 2>&1; then
-      echo "native source embedding preflight failed: configured model unavailable" >&2
+      native_source_failure embedding_model_unavailable
       return 78
     fi
   fi
   if ! compose exec -T ollama ollama show "${model}" >/dev/null 2>&1; then
-    echo "native source embedding preflight failed: configured model not ready" >&2
+    native_source_failure embedding_model_not_ready
     return 78
   fi
 
@@ -1536,7 +1540,7 @@ PY
       -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER=${provider}" \
       -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL=${model}" \
       --entrypoint python api -c "${probe_command}" >/dev/null 2>&1; then
-    echo "native source embedding preflight failed: selected Ollama Product embedding probe failed" >&2
+    native_source_failure embedding_probe_failed
     return 78
   fi
 
@@ -1547,15 +1551,19 @@ native_source_projection_gate() {
   if [ "${HOST_SECRET_PROVIDER:-}" != bws ] || [ "${action}" != deploy ]; then
     return 0
   fi
-  [ "${NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY:-0}" = "1" ] || return 78
+  [ "${NATIVE_SOURCE_EMBEDDING_PREFLIGHT_READY:-0}" = "1" ] || { native_source_failure embedding_context_invalid; return 78; }
   local operation="${BWS_DEPLOY_OPERATION_ID:-}" name="" rc=0
-  [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 78
-  [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || return 78
+  [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure source_preflight_failed; return 78; }
+  [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure source_preflight_failed; return 78; }
   [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
     [ -f "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] && \
-    [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || return 78
+    [ -r "${HOST_SECRET_RUNTIME_ENV_FILE_API}" ] || { native_source_failure source_preflight_failed; return 78; }
   name="pkm-${channel}-source-bootstrap-${operation}"
-  compose stop api worker watcher heimdal-capture-watch companion-ui || return $?
+  compose stop api worker watcher heimdal-capture-watch companion-ui || {
+    rc=$?
+    native_source_failure source_writer_stop_failed
+    return "${rc}"
+  }
   NATIVE_SOURCE_QUIESCENT=0
   compose run --rm --no-deps -T --name "${name}" \
     --label "yggdrasil.native.operation=${operation}" \
@@ -1564,12 +1572,23 @@ native_source_projection_gate() {
   if native_source_container_quiescence "${name}"; then
     NATIVE_SOURCE_QUIESCENT=1
   else
+    native_source_failure source_quiescence_failed
     return 78
   fi
   case "${rc}" in
     79) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed\n' >&2 ;;
     80) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=embedding_generation_failed\n' >&2 ;;
     81) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_index_write_failed\n' >&2 ;;
+    82) native_source_failure source_preflight_failed ;;
+    83) native_source_failure source_readiness_failed ;;
+    84) native_source_failure source_command_failed ;;
+    85) native_source_failure source_summary_invalid ;;
+    86) native_source_failure source_post_rebuild_failed ;;
+    87) native_source_failure source_doctor_failed ;;
+    88) native_source_failure source_settings_failed ;;
+    89|124|130|143) native_source_failure source_worker_failed ;;
+    0) ;;
+    *) native_source_failure source_worker_failed ;;
   esac
   return "${rc}"
 }
