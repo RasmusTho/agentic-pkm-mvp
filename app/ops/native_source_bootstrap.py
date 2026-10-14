@@ -41,11 +41,12 @@ class SourceVectorProjectionFailure(RuntimeError):
     """Fixed private-child classification; never retain provider diagnostics."""
 
 
-class SourceBootstrapFailure(RuntimeError):
+class SourceBootstrapFailure(ValueError):
     """A fixed checkpoint code, not exception or child-output text."""
 
     def __init__(self, reason: str) -> None:
         self.code = SOURCE_PROJECTION_FAILURE_CODES[reason]
+        super().__init__(reason.replace('_', ' '))
 
 
 def _checkpoint(reason: str, function: Any, *args: Any, **kwargs: Any) -> Any:
