@@ -201,6 +201,28 @@ class MissingVectorRepairFailure(RuntimeError):
     """Only fixed, content-free failure classes cross the private CLI boundary."""
 
 
+@index.command("reconcile-legacy", help="Reconcile evidence-free legacy mirrors against current source policy.")
+@click.option("--json", "as_json", is_flag=True, default=False)
+def reconcile_legacy(as_json: bool) -> None:
+    from app.rebuildability.legacy_source import private_source_output, reconcile_legacy_sources
+    from app.stores.pg import PgObjectStore, PgVectorIndex
+    from app.write_guard import DEFAULT_WRITE_GUARD, SOURCE_BACKED_REBUILD_ACTION
+    try:
+        with private_source_output():
+            DEFAULT_WRITE_GUARD.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
+            binding = domain_objects.resolve_object_store_port()
+            vector = get_vector_index()
+            if (binding.backend != "pg" or not isinstance(binding.store, PgObjectStore)
+                    or not isinstance(vector, PgVectorIndex)
+                    or binding.store.vault_binding_id != vector.vault_binding_id):
+                raise ValueError("legacy binding refused")
+            processed = reconcile_legacy_sources(binding, vector, get_product_embedding_client)
+    except Exception:
+        click.echo(json.dumps({"reason": "source_post_rebuild_failed"}))
+        raise click.exceptions.Exit(79) from None
+    _emit_summary({"processed": processed}, as_json)
+
+
 def repair_missing_vectors() -> int:
     """Repair admitted vault-note projections only; never replay or promote meaning."""
     from app.stores.pg import PgVectorIndex
@@ -208,6 +230,7 @@ def repair_missing_vectors() -> int:
         PRODUCT_REPLAY_RECIPE_VERSION, _canonical_payload_text, _row_replay,
     )
     from app.index.artifact_metadata import compute_content_hash
+    from app.rebuildability.legacy_source import assert_admission_layers
     from app.write_guard import DEFAULT_WRITE_GUARD, SOURCE_BACKED_REBUILD_ACTION
 
     DEFAULT_WRITE_GUARD.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
@@ -239,22 +262,10 @@ def repair_missing_vectors() -> int:
             raise MissingVectorRepairFailure("source_post_rebuild_failed")
         core = core if isinstance(core, dict) else {}
         layers = (frontmatter, core, payload)
-        for layer in layers:
-            authority = layer.get("authority")
-            if (
-                ("candidate_only" in layer and layer["candidate_only"] is not False)
-                or layer.get("artifact_class") in ("youtube_source_note", "youtube_source_note_proposal")
-                or ("authority" in layer and not isinstance(authority, dict))
-                or (isinstance(authority, dict) and (
-                    ("source_authoritative" in authority and type(authority["source_authoritative"]) is not bool)
-                    or ("requires_review" in authority and type(authority["requires_review"]) is not bool)
-                    or authority.get("source_authoritative") is False
-                    or authority.get("requires_review") is True
-                ))
-                or ("trust" in layer and layer["trust"] not in ("unreviewed", "trusted", "reviewed", "human", "own"))
-                or ("review_state" in layer and layer["review_state"] not in ("provisional", "reviewed", "protected", "archived"))
-            ):
-                raise MissingVectorRepairFailure("source_post_rebuild_failed")
+        try:
+            assert_admission_layers(*layers)
+        except ValueError:
+            raise MissingVectorRepairFailure("source_post_rebuild_failed") from None
         metadata = {**frontmatter, **core, **payload}
         replay = _row_replay(payload)
         if (

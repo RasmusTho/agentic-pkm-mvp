@@ -76,6 +76,85 @@ def _count(object_id) -> int:
             return int(cur.fetchone()[0])
 
 
+@pytest.mark.parametrize("mode", ["replace", "retire", "existing", "write-failure", "source-race", "row-race", "history", "identity", "retire-source-race", "reverse-identity", "cross-key-alias", "replace-source-alias", "retire-source-alias"])
+def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, monkeypatch, mode):
+    from copy import deepcopy
+    from app.rebuildability.product_total_loss import product_replay_provenance
+    store = pg_store.PgObjectStore()
+    oid, other = uuid4(), uuid4()
+    legacy = {"content": "canonical body"}
+    store.put(oid, kind="note", source_ref="source.md", payload=legacy)
+    store.put(other, kind="note", source_ref="other.md", payload={"text": "preserved"})
+    expected = dict(store.get(oid))
+    original = deepcopy(expected)
+    source_uuid = uuid4() if mode == "cross-key-alias" else oid
+    retained_uuid = uuid4() if mode == "reverse-identity" else source_uuid
+    # The identity seam is production SQL, not a mocked resolver.
+    from app.db.db import ensure_schema
+    with psycopg.connect(_dsn()) as conn:
+        ensure_schema(conn)
+        conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
+                     (other if mode == "identity" else oid, retained_uuid, store.vault_binding_id))
+    if mode == "cross-key-alias":
+        store.put(source_uuid, kind="note", source_ref="unrelated-alias.md", payload={"text": "preserved alias"})
+    from pathlib import Path
+    from app.rebuildability.legacy_source import assert_unique_projection_source
+    source_root = Path("/synthetic-issue6096-vault")
+    alias_id = uuid4()
+    if mode.endswith("source-alias"):
+        store.put(alias_id, kind="note", source_ref=str(source_root / "source.md"), payload={"text": "preserved alias"})
+    replacement = dict(frontmatter={}, text="canonical body", origin="vault", trust="human", review_state="reviewed",
+        replay=product_replay_provenance(source_identity="source.md", source_text="canonical body"))
+    vector = dict(kind="note", source_ref="source.md", payload={"text": "canonical body"},
+                  embedding=[1., 0., 0., 0.], model=PRIMARY.model, identity=PRIMARY)
+    if mode == "existing":
+        _pg_index.upsert(oid, **vector)
+    if mode.endswith("source-alias"):
+        _pg_index.upsert(alias_id, **{**vector, "source_ref": str(source_root / "source.md")})
+    if mode == "row-race":
+        store.put(oid, kind="note", source_ref="source.md", payload={"text": "racing state"})
+    if mode == "history":
+        with psycopg.connect(_dsn()) as conn:
+            conn.execute("INSERT INTO decisions (object_id, vault_binding_id, key, value) VALUES (%s, %s, 'receipt', '{}')",
+                         (oid, store.vault_binding_id))
+    calls = []
+
+    def revalidate():
+        calls.append(True)
+        if mode in ("source-race", "retire-source-race") and len(calls) == 2:
+            raise ValueError("changed source after write")
+
+    if mode == "write-failure":
+        monkeypatch.setattr(pg_store.PgVectorIndex, "upsert", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("failed insert")))
+    retiring = mode in ("retire", "history", "retire-source-race", "retire-source-alias")
+    kwargs = dict(vault_uuid=str(source_uuid), revalidate=revalidate,
+                  check_sources=lambda rows: assert_unique_projection_source(rows, expected_id=str(oid),
+                      root=source_root, source_identity="source.md", vault_uuid=str(source_uuid)),
+                  replacement=None if retiring else replacement, vector=None if retiring else vector)
+    if mode in ("replace", "retire"):
+        store.reconcile_legacy_source(expected, **kwargs)
+        assert store.get(oid) is None if retiring else store.get(oid)["payload"] == replacement
+        assert _count(oid) == (0 if retiring else 1)
+        with pytest.raises(ValueError):
+            store.reconcile_legacy_source(expected, **kwargs)
+    else:
+        before = store.get(oid)
+        with pytest.raises((RuntimeError, ValueError)):
+            store.reconcile_legacy_source(expected, **kwargs)
+        assert store.get(oid) == before
+        assert _count(oid) == (1 if mode == "existing" else 0)
+    assert store.get(other)["payload"] == {"text": "preserved"}
+    if mode == "existing":
+        assert store.get(oid) == original
+        assert _row(oid)["model"] == PRIMARY.model
+    if mode == "history":
+        with psycopg.connect(_dsn()) as conn:
+            assert conn.execute("SELECT object_id FROM decisions WHERE key = 'receipt' AND object_id = %s", (oid,)).fetchone()[0] == oid
+    if mode.endswith("source-alias"):
+        assert store.get(alias_id)["payload"] == {"text": "preserved alias"}
+        assert _count(alias_id) == 1
+
+
 def test_upsert_records_full_identity_columns(_pg_index):
     index = _pg_index
     oid = uuid4()

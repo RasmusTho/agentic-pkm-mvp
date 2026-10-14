@@ -5294,6 +5294,29 @@ def advanced_uri_from_vault_path(path: Path | str, *, vault_root: Path | str) ->
     return build_obsidian_advanced_uri(make_note_locator(rel))
 
 
+def read_recovery_snapshot_relative(note_rel_path: str, *, vault_root: Path | str) -> tuple[str, tuple]:
+    """Read a no-follow source snapshot with stable path identity for recovery.
+
+    The knowledge boundary owns descriptor access; callers retain identity and
+    bytes so same-content replacement still invalidates a recovery proof.
+    """
+    root = Path(vault_root).resolve(strict=True)
+    relative = Path(note_rel_path)
+    if relative.is_absolute() or not relative.parts or any(p in (".", "..") for p in relative.parts):
+        raise KnowledgeCapabilityError("invalid recovery locator")
+
+    def identities() -> tuple:
+        paths = [root, *(root.joinpath(*relative.parts[:i]) for i in range(1, len(relative.parts) + 1))]
+        return tuple((s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+                     for s in (path.lstat() for path in paths))
+
+    before = identities()
+    text = read_create_once_winner_relative(relative.as_posix(), vault_root=root)
+    if identities() != before:
+        raise KnowledgeCapabilityError("recovery source changed")
+    return text, before
+
+
 __all__ = [
     "CandidateCreateResult",
     "KNOWLEDGE_WRITE_ACTION",
@@ -5305,6 +5328,7 @@ __all__ = [
     "locked_atomic_append_authority",
     "read_create_once_winner_relative",
     "read_note_text_with_version",
+    "read_recovery_snapshot_relative",
     "write_note_from_absolute",
     "write_note_relative",
 ]
