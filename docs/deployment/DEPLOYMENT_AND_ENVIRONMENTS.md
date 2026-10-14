@@ -944,6 +944,11 @@ locks and rechecks the source snapshot, and inserts vector plus provenance atomi
 object. Embedding/write failures retain only the existing finite redacted failure classes; the
 strict final doctor still proves whole-binding coverage before any service activation. Repository
 delivery does not substitute for parent-owned live DEV/TEST acceptance.
+Admission also requires the complete source frontmatter captured by canonical producers; negative
+markers at every persisted level remain binding. Legacy rows lacking that snapshot fail closed,
+even when body replay provenance is complete. This repair cannot invent omitted authority or read
+raw sources to fill it. Their source-backed recovery remains separately governed; repository
+support does not claim that such legacy live gaps have converged.
 Source-backed replay counts a vector-producer exception as an error, not an ingested note,
 and returns a nonzero result with numeric counters. The private native consumer validates
 that bounded result and retains only the fixed `embedding_generation_failed` (exit 80),

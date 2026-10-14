@@ -229,18 +229,39 @@ def repair_missing_vectors() -> int:
         text = canonicalize_indexable_text(payload)
         if not text:
             continue
+        frontmatter = payload.get("frontmatter")
+        if not isinstance(frontmatter, dict):
+            # Body-only replay hashes cannot reconstruct omitted source
+            # authority. Legacy absence is unknown, not captured empty metadata.
+            raise MissingVectorRepairFailure("source_post_rebuild_failed")
         core = payload.get("core6")
-        metadata = {**(core if isinstance(core, dict) else {}), **payload}
+        if core is not None and not isinstance(core, dict):
+            raise MissingVectorRepairFailure("source_post_rebuild_failed")
+        core = core if isinstance(core, dict) else {}
+        layers = (frontmatter, core, payload)
+        for layer in layers:
+            authority = layer.get("authority")
+            if (
+                ("candidate_only" in layer and layer["candidate_only"] is not False)
+                or layer.get("artifact_class") in ("youtube_source_note", "youtube_source_note_proposal")
+                or ("authority" in layer and not isinstance(authority, dict))
+                or (isinstance(authority, dict) and (
+                    ("source_authoritative" in authority and type(authority["source_authoritative"]) is not bool)
+                    or ("requires_review" in authority and type(authority["requires_review"]) is not bool)
+                    or authority.get("source_authoritative") is False
+                    or authority.get("requires_review") is True
+                ))
+                or ("trust" in layer and layer["trust"] not in ("unreviewed", "trusted", "reviewed", "human", "own"))
+                or ("review_state" in layer and layer["review_state"] not in ("provisional", "reviewed", "protected", "archived"))
+            ):
+                raise MissingVectorRepairFailure("source_post_rebuild_failed")
+        metadata = {**frontmatter, **core, **payload}
         replay = _row_replay(payload)
-        authority = metadata.get("authority")
         if (
             row.get("kind") != "note"
             or metadata.get("origin") != "vault"
             or metadata.get("review_state") not in {"provisional", "reviewed", "protected", "archived"}
-            or metadata.get("trust") not in {"unreviewed", "trusted", "reviewed", "human"}
-            or metadata.get("candidate_only")
-            or metadata.get("artifact_class") == "youtube_source_note"
-            or (isinstance(authority, dict) and authority.get("source_authoritative") is False)
+            or metadata.get("trust") not in {"unreviewed", "trusted", "reviewed", "human", "own"}
             or replay is None or replay.recipe_version != PRODUCT_REPLAY_RECIPE_VERSION
             or replay.source_generation != compute_content_hash(_canonical_payload_text(payload))
         ):

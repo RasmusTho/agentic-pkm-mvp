@@ -29,6 +29,7 @@ def _missing_repair_fixture(monkeypatch):
 
     identity = EmbeddingIdentity(provider="mock", model="selected-model", dim=2, normalize=False)
     payload = dict(content="canonical body", text="stale alias", origin="vault",
+                   frontmatter={},
                    trust="unreviewed", review_state="provisional", episode_ref="unbound",
                    replay=product_replay_provenance(source_identity="outside.md", source_text="canonical body"))
     row = dict(object_id=uuid4(), kind="note", source_ref="outside.md", payload=payload)
@@ -144,6 +145,167 @@ def test_missing_only_repair_refuses_unadmitted_payload(monkeypatch, change):
     with pytest.raises(repair.MissingVectorRepairFailure, match="^source_post_rebuild_failed$"):
         repair.repair_missing_vectors()
     assert state.vectors == {} and state.embedded == []
+
+
+@pytest.mark.parametrize("level", ["frontmatter", "core6", "top"])
+@pytest.mark.parametrize("change", [
+    {"candidate_only": True}, {"artifact_class": "youtube_source_note"},
+    {"authority": {"source_authoritative": False}}, {"authority": "malformed"},
+    {"authority": {"source_authoritative": "true"}},
+    {"authority": {"requires_review": True}}, {"trust": "untrusted"},
+    {"review_state": "draft"},
+])
+def test_missing_only_repair_refuses_nested_or_missing_admission(monkeypatch, level, change):
+    repair, state, _ = _missing_repair_fixture(monkeypatch)
+    payload = state.rows[0]["payload"]
+    payload.update(candidate_only=False, authority={"source_authoritative": True})
+    target = payload if level == "top" else payload.setdefault(level, {})
+    target.update(change)
+    with pytest.raises(repair.MissingVectorRepairFailure, match="^source_post_rebuild_failed$"):
+        repair.repair_missing_vectors()
+    assert state.embedded == [] and state.vectors == {}
+
+
+@pytest.mark.parametrize("snapshot", [None, "malformed", False, []])
+def test_missing_only_repair_refuses_legacy_admission_absence(monkeypatch, snapshot):
+    repair, state, _ = _missing_repair_fixture(monkeypatch)
+    state.rows[0]["payload"]["frontmatter"] = snapshot
+    with pytest.raises(repair.MissingVectorRepairFailure, match="^source_post_rebuild_failed$"):
+        repair.repair_missing_vectors()
+    assert state.embedded == [] and state.vectors == {}
+
+
+@pytest.mark.parametrize("producer", ["alpha", "alpha_recovery", "alpha_carrying_failure",
+                                    "vault_sync", "indexer", "vault_root",
+                                    "vault_root_carrying_failure", "projection"])
+def test_missing_only_repair_producer_admission_snapshots(monkeypatch, tmp_path, producer):
+    from types import SimpleNamespace
+    from app.ingest import vault_alpha, vault_root
+    from app.services import indexer, vault_sync
+    from app.rebuildability import RetainedProjectionSource
+    from app.rebuildability.product_total_loss import product_replay_provenance
+
+    repair, state, identity = _missing_repair_fixture(monkeypatch)
+    object_id = str(state.rows[0]["object_id"])
+    note = tmp_path / "outside.md"
+    raw = f"---\nuuid: {object_id}\ntitle: Captured\nreview_state: provisional\nauthority:\n  source_authoritative: true\n---\n\ncanonical body\n"
+    note.write_text(raw)
+    from app.rebuildability import parse_markdown_text
+    frontmatter, _ = parse_markdown_text(raw)
+    outputs = []
+
+    class CapturingStore:
+        vault_binding_id = COMPATIBILITY_BINDING_ID
+
+        def put(self, oid, **kwargs):
+            if producer.endswith("carrying_failure"):
+                raise RuntimeError("secondary carrying write unavailable")
+            outputs.append(kwargs["payload"])
+
+        def put_and_reconcile_source_backed(self, oid, **kwargs):
+            outputs.append(kwargs["payload"])
+            return str(oid)
+
+    monkeypatch.setattr(vault_alpha, "classify_run", lambda *args, **kwargs: {})
+    monkeypatch.setattr(vault_alpha, "index_ingest_object", lambda **kwargs: None)
+    monkeypatch.setattr(vault_alpha, "append_jsonl", lambda *args, **kwargs: None)
+    monkeypatch.setattr(vault_alpha, "load_companion_settings", lambda *args: SimpleNamespace(
+        create_cooldown_seconds=0, rename_cooldown_seconds=0))
+    monkeypatch.setattr(vault_alpha, "check_companion_eligibility", lambda *args, **kwargs: SimpleNamespace(eligible=True))
+    monkeypatch.setattr(vault_alpha, "resolve_vault_note_identity", lambda *args, **kwargs: SimpleNamespace(
+        note_uuid=object_id, companion=None))
+    monkeypatch.setattr(vault_alpha, "resolve_canonical_object_id", lambda value: value)
+    monkeypatch.setattr(vault_alpha, "get_object_store", CapturingStore)
+    monkeypatch.setattr(vault_alpha, "ObjectStore", lambda: SimpleNamespace(save_object=lambda obj, **kwargs: outputs.append(obj.payload)))
+    if producer.startswith("alpha"):
+        vault_alpha._ingest_single(note, vault_root=tmp_path, trace_id="fixture",
+            write_companion_record=False, reconcile_existing_projection=producer == "alpha_recovery")
+    elif producer == "vault_sync":
+        outputs.append(vault_sync._canonical_note_payload(frontmatter=frontmatter,
+            title="Captured", review_state="provisional", maturity=None, content="canonical body",
+            replay=product_replay_provenance(source_identity="outside.md", source_text="canonical body")))
+    elif producer == "indexer":
+        first = indexer._source_backed_projection_metadata({"source_ref": str(note)},
+            vault_root=tmp_path, source_snapshot=raw)
+        changed = raw.replace("source_authoritative: true", "source_authoritative: false")
+        second = indexer._source_backed_projection_metadata({"source_ref": str(note)},
+            vault_root=tmp_path, source_snapshot=changed)
+        assert first["replay"] == second["replay"]  # Metadata-only changes are not body provenance.
+        assert second["frontmatter"]["authority"]["source_authoritative"] is False
+        outputs.append(first)
+    elif producer.startswith("vault_root"):
+        monkeypatch.setenv("STORE_BACKEND", "pg")
+        monkeypatch.setattr(vault_root, "resolve_canonical_object_id", lambda value: value)
+        monkeypatch.setattr(vault_root, "normalize_run", lambda *args, **kwargs: dict(
+            object_id=object_id, core6={}, payload={"content": "canonical body"}))
+        monkeypatch.setattr(vault_root, "get_stores", lambda: (SimpleNamespace(upsert=lambda **kwargs: outputs.append(kwargs["payload"])), None))
+        monkeypatch.setattr(vault_root, "get_object_store", CapturingStore)
+        monkeypatch.setattr(vault_root, "classify_run", lambda *args, **kwargs: {})
+        monkeypatch.setattr(vault_root, "index_ingest_object", lambda **kwargs: None)
+        monkeypatch.setattr(vault_root, "append_jsonl", lambda *args, **kwargs: None)
+        vault_root._ingest_file(note, trace_id="fixture", vault_root=tmp_path)
+    else:
+        source = RetainedProjectionSource.from_retained_file(vault_root=tmp_path,
+            source_identity="outside.md", object_id=state.rows[0]["object_id"],
+            payload=state.rows[0]["payload"], embedding_source=SimpleNamespace(
+                identity=identity, embed_text=lambda text: [1.0, 2.0]))
+        outputs.append(source.canonical_payload)
+
+    assert outputs
+    for captured in outputs:
+        assert captured["frontmatter"] == frontmatter
+        # Every surviving payload carries actual source proof, including the
+        # primary write when a best-effort secondary carrying write fails.
+        state.rows[0]["payload"] = {**state.rows[0]["payload"], **captured,
+            "origin": "vault", "trust": "unreviewed", "review_state": "provisional"}
+        state.vectors.clear()
+        assert repair.repair_missing_vectors() == 1
+
+
+@pytest.mark.parametrize("malformed", [False, True, "no_snapshot"])
+def test_missing_only_repair_indexer_refresh_never_retains_stale_admission(monkeypatch, tmp_path, malformed):
+    from types import SimpleNamespace
+    from app.services import indexer
+
+    repair, state, _ = _missing_repair_fixture(monkeypatch)
+    row = state.rows[0]
+    object_id = str(row["object_id"])
+    note = tmp_path / "outside.md"
+    raw = ("---\ninvalid: [\n---\n\ncanonical body" if malformed is True else
+           f"---\nuuid: {object_id}\nauthority:\n  source_authoritative: false\n---\n\ncanonical body")
+    note.write_text(raw)
+    original_replay = dict(row["payload"]["replay"])
+    existing = DomainObject(uuid=object_id, kind="note", payload=row["payload"],
+        source_ref=str(note), created_at=datetime.now(timezone.utc))
+
+    class AfterStoreWrite(RuntimeError):
+        pass
+
+    monkeypatch.setattr(indexer, "resolve_event_object_id", lambda obj: object_id)
+    monkeypatch.setattr(indexer, "ObjectStore", lambda: SimpleNamespace(
+        get_object=lambda oid: existing,
+        save_object=lambda domain, **kwargs: row.update(payload=domain.payload)))
+    monkeypatch.setattr(indexer, "get_product_embedding_client", lambda: (_ for _ in ()).throw(AfterStoreWrite()))
+    with pytest.raises(AfterStoreWrite):
+        indexer.handle_ingest_object_created(dict(uuid=object_id, source_ref=str(note),
+            content="canonical body", payload={"frontmatter": {"source_authoritative": True}}),
+            vault_root=tmp_path, source_snapshot=None if malformed == "no_snapshot" else raw)
+    assert row["payload"]["replay"] == original_replay
+    if malformed:
+        assert "frontmatter" not in row["payload"]
+    else:
+        assert row["payload"]["frontmatter"]["authority"]["source_authoritative"] is False
+    with pytest.raises(repair.MissingVectorRepairFailure, match="^source_post_rebuild_failed$"):
+        repair.repair_missing_vectors()
+    assert state.embedded == [] and state.vectors == {}
+
+
+@pytest.mark.parametrize("raw", ["---\n[one, two]\n---\nbody", "---\ninvalid: [\n---\nbody", "---\ntrust: trusted\n"])
+def test_missing_only_repair_malformed_source_is_not_empty_admission(raw):
+    from app.rebuildability.product_total_loss import capture_source_frontmatter
+    assert capture_source_frontmatter(raw) is None
+    assert capture_source_frontmatter("body without frontmatter") == {}
+    assert capture_source_frontmatter("---\ncreated: 2026-10-14\n---\nbody") == {"created": "2026-10-14"}
 
 
 def _seed_object(text: str, *, source_ref: str = "tests") -> str:
