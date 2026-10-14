@@ -6641,9 +6641,11 @@ def test_local_retirement_ignores_completed_dedicated_worktree_lifecycle_prose(
         "Dedicated worktree /tmp/old is still\n~~~\n\n~~~\ndirty on branch old at head {sha}.",
         "Dedicated worktree /tmp/old\n~~~\nopaque\n~~~\nis still dirty on branch old at head {sha}.",
         "Completed delivery mentions `<!-- note` before routine cleanup.",
+        "Narrative<!-- hidden\n\nDedicated worktree /tmp/old",
         "> ~~~\n> Dedicated worktree /tmp/old is <br>\n> dirty on branch old at head {sha}.\n> ~~~",
         "- ~~~\n- Dedicated worktree /tmp/old is <br>\n- dirty on branch old at head {sha}.\n- ~~~",
         "Dedicated worktree /tmp/old is <br-widget> still dirty on branch old at head {sha}.",
+        "Example. `Dedicated worktree /tmp/old`",
         (
             "~~~~\nDedicated worktree /tmp/old is <br>\ndirty on branch old at head {sha}.\n"
             "~~~\nDedicated worktree /tmp/old is <br>\ndirty on branch old at head {sha}.\n~~~~"
@@ -7215,6 +7217,10 @@ def test_dispatcher_task_identity_uses_canonical_producer(tmp_path, monkeypatch)
         "Dedicated worktree /tmp/old is still dirty on branch old at head not-a-sha",
         "Dedicated worktree /tmp/old is still dirty on branch old",
         "Dedicated worktree /tmp/old is still dirty on branch old at head",
+        "Dedicated worktree /tmp/old",
+        "Dedicated worktree /tmp/old is",
+        "Dedicated worktree /tmp/old is still",
+        "Narrative<br>\nDedicated worktree /tmp/old",
         "Dedicated worktree tmp/old is still dirty on branch old at head " + "a" * 40,
     ],
 )

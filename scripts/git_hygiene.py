@@ -1751,6 +1751,11 @@ _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\b",
     re.IGNORECASE,
 )
+_DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE = re.compile(
+    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+`?"
+    r"/[^\s;`,]+`?(?:\s+is(?:\s+still)?)?\s*$",
+    re.IGNORECASE,
+)
 
 
 def _dispatcher_linebreak_tolerant_keyword(keyword: str) -> str:
@@ -1932,6 +1937,7 @@ def _dispatcher_mask_code_block(content: str) -> str:
 
 def _dispatcher_render_inline_tokens(
     tokens: Sequence[Any], *, strip_task_prefix: bool, mask_comment_closers: bool = False,
+    mask_code_inline: bool = False,
 ) -> str:
     parts: list[str] = []
     for token in tokens:
@@ -1942,7 +1948,7 @@ def _dispatcher_render_inline_tokens(
             code = token.content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
             if mask_comment_closers:
                 code = code.replace("-->", _DISPATCHER_HTML_COMMENT_CLOSER_MASK)
-            parts.append(code)
+            parts.append(_dispatcher_mask_code_block(code) if mask_code_inline else code)
         elif token_type == "text":
             parts.append(
                 _dispatcher_render_text_token(
@@ -1966,6 +1972,7 @@ def _dispatcher_render_inline_tokens(
                     token.children,
                     strip_task_prefix=False,
                     mask_comment_closers=mask_comment_closers,
+                    mask_code_inline=mask_code_inline,
                 )
             )
         elif token.content:
@@ -1998,7 +2005,9 @@ def _dispatcher_inline_comment_reopens_after_close(token: Any) -> bool:
     return close >= 0 and _dispatcher_html_comment_is_unclosed(source[close + 3 :])
 
 
-def _dispatcher_cross_line_scan_body(body: str) -> str:
+def _dispatcher_cross_line_scan_body(
+    body: str, *, mask_code_inline: bool = False
+) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
     tokens = _DISPATCHER_MARKDOWN.parse(
@@ -2014,6 +2023,7 @@ def _dispatcher_cross_line_scan_body(body: str) -> str:
                 token.children or [],
                 strip_task_prefix=token.level > 1,
                 mask_comment_closers=html_comment_open,
+                mask_code_inline=mask_code_inline,
             )
         elif token.type in {"fence", "code_block"}:
             rendered = _dispatcher_mask_code_block(token.content)
@@ -2219,6 +2229,18 @@ def _dispatcher_resumable_binding_resources(
             raise RuntimeError("dispatcher_activity_invalid")
         lines = body.splitlines()
         code_block_lines = _dispatcher_code_block_line_numbers(body)
+        truncated_scan_lines = [
+            line
+            for line in _dispatcher_cross_line_scan_body(
+                body, mask_code_inline=True
+            ).splitlines()
+            if line.strip()
+        ]
+        truncated_scan_line = truncated_scan_lines[-1] if truncated_scan_lines else ""
+        last_nonblank_line = max(
+            (index for index, line in enumerate(lines) if line.strip()),
+            default=-1,
+        )
         for line_number, line in enumerate(lines):
             if line_number in code_block_lines:
                 continue
@@ -2226,6 +2248,12 @@ def _dispatcher_resumable_binding_resources(
             continuation = lines[line_number + 1] if line_number + 1 < len(lines) else ""
             dedicated_worktree_fragment = bool(
                 _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(marker_scan_line)
+            )
+            dedicated_truncated_marker = bool(
+                line_number == last_nonblank_line
+                and _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(
+                    truncated_scan_line
+                )
             )
             dedicated_cross_line_marker = bool(
                 dedicated_worktree_fragment
@@ -2247,11 +2275,12 @@ def _dispatcher_resumable_binding_resources(
                 _DISPATCHER_PICKUP_RECEIPT_RE.search(line)
                 or _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
                 or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(marker_scan_line)
+                or dedicated_truncated_marker
                 or dedicated_cross_line_marker
             )
             if not explicit_binding:
                 continue
-            if dedicated_cross_line_marker:
+            if dedicated_cross_line_marker or dedicated_truncated_marker:
                 raise RuntimeError("dispatcher_activity_invalid")
             if (
                 _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
