@@ -256,7 +256,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
 
     assert "Select subsystem-scoped pytest targets" in job
     assert "scripts/select_pr_tests.py" in job
-    assert "steps.select-tests.outputs.pytest_args }} --durations=20" in job
+    assert "steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20" in job
     assert "Run shared not-pg unit tests in process shards" in job
     assert "xargs -r -n 1 -P 4 bash -c" in job
     assert "tests/invariants/test_vault_multiwriter.py" in job
@@ -1807,7 +1807,7 @@ def test_deduplicated_contract_checks_preserve_failure_and_trigger_coverage() ->
     # pytest target in the scoped Unit tests lane.
     assert "tests/architecture" in unit_job
     assert "Run scoped not-pg unit tests" in unit_job
-    assert "pytest ${{ steps.select-tests.outputs.pytest_args }} --durations=20" in unit_job
+    assert "pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20" in unit_job
 
 
 def test_ci_smoke_validates_openapi_and_contract_surfaces() -> None:
