@@ -38,6 +38,25 @@ Interpretation note:
 - attentional salience may influence ranking or resurfacing logic, but retrieval itself is not the
   whole semantics of attentional relevance.
 
+## Source-lineage proposal and shipped boundary (#4906)
+
+At validation baseline `69e23e89ce5962c556af16cdf454026c2e1380fd`, production
+`app/retrieval/hybrid.py::scoped_hybrid_search` partitions by scope/binding before
+`_rank_eligible`, applies per-document top-k, and confines optional reranking to that eligible set.
+`app/retrieval/production_bundle.py::emit_bundle_from_response` preserves ranked candidates
+separately from selected included items. These paths do not implement generic source-family
+collapse, task-specific family representatives, or cross-source evidence-independence assessment.
+Existing exact-anchor support in YouTube acquisition is source-specific and does not prove that
+every production retrieval result carries the complete target segment contract.
+
+The [family-aware target proposal](architecture/retrieval-contract.md#family-aware-retrieval-proposal-4906)
+is **proposed, not accepted and not shipped**. Its proposal-stage publication/merge cannot establish
+semantic owner acceptance, corpus quality, or performance. Acceptance must name the exact owner
+sections and [SLER evaluation/budget version](testing/invariant-tests.md#sler-proposal-evaluation-4906)
+before an implementation breakdown; later runtime proof and owner-doc writeback are separate.
+Current ranking, data shapes, compatibility scope heuristics, and store topology described here
+remain the runtime baseline for that comparison.
+
 ## Hybrid Search (Current)
 Entry point: `app/retrieval/hybrid.py:hybrid_search(query, k=8, ...)`
 
