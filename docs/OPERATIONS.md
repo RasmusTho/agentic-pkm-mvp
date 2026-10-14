@@ -311,6 +311,12 @@ When the issue is startup topology or Compose wiring, switch to `docs/INFRASTRUC
 When the issue is signal interpretation, switch to `docs/OBSERVABILITY.md`.
 When the issue is health semantics or degraded-state rules, switch to `docs/HEALTH.md`.
 
+For the nightly `k6-search` validation producer, use the disposable PG16/pgvector database,
+canonical migrations, assert-only bootstrap and generated binding-aware fixture described in
+[`DEV_WORKFLOW.md :: CI / validation expectations`](development/DEV_WORKFLOW.md#ci--validation-expectations).
+Its local equivalent requires an isolated localhost API and the real seeded-result warm-up before
+the five-VU, ten-second load run; status, result, error and p95 latency thresholds must all pass.
+
 ## ASK provenance shadow operations
 
 The ASK provenance manifest is an opt-in read-side experiment, not a canonical
