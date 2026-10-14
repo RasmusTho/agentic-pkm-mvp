@@ -255,7 +255,7 @@ def _run_json(arguments: list[str]) -> Any:
             raise SourceBootstrapFailure('source_summary_invalid')
         payload = _checkpoint('source_summary_invalid', json.loads, raw)
         if result.returncode:
-            if arguments[:2] == ['index', 'repair-missing']:
+            if arguments[:2] in (['index', 'repair-missing'], ['index', 'reconcile-legacy']):
                 reason = payload.get('reason') if isinstance(payload, dict) else None
                 if reason not in {'source_post_rebuild_failed', 'embedding_generation_failed',
                                   'vector_index_write_failed'}:
@@ -333,6 +333,10 @@ def rebuild_if_needed(selector: str) -> None:
         remaining = _run_json(['index', 'doctor', '--json'])
         missing = _checkpoint('source_doctor_failed', _diagnosis_unembedded_count, remaining)
         if missing > 0 and remaining['non_vector_issue_count'] == 0:
+            reconciled = _run_json(['index', 'reconcile-legacy', '--json'])
+            if (not isinstance(reconciled, dict) or type(reconciled.get('processed')) is not int
+                    or reconciled['processed'] < 0):
+                raise SourceBootstrapFailure('source_summary_invalid')
             repaired = _run_json(['index', 'repair-missing', '--json'])
             if (not isinstance(repaired, dict) or type(repaired.get('processed')) is not int
                     or repaired['processed'] < 0):

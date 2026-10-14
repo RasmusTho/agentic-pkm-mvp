@@ -17,6 +17,160 @@ from app.objects import DomainObject, ObjectStore
 from app.stores import get_vector_index, reset_store_backends
 
 
+def _legacy_source_fixture(monkeypatch, tmp_path, *, selected=False):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from app.rebuildability import legacy_source as recovery
+    from app.stores.pg import PgObjectStore, PgVectorIndex
+    from app.components.embeddings import EmbeddingIdentity
+
+    root = tmp_path / "vault"
+    root.mkdir()
+    layout = root / "⚙️ System" / "vault.layout.md"
+    layout.parent.mkdir()
+    layout.write_text("---\ninclude_folders: [Notes]\n---\nLayout.\n")
+    source = root / ("Notes" if selected else "Outside") / "note.md"
+    source.parent.mkdir()
+    oid = uuid4()
+    source.write_text(f"---\nuuid: {oid}\ntrust: human\nreview_state: reviewed\n---\ncanonical body\n")
+    original_bytes = source.read_bytes()
+    row = dict(object_id=oid, kind="note", source_ref=str(source), payload={"content": "canonical body"})
+    state = SimpleNamespace(rows=[row], vectors={}, calls=[], embedded=[], fail=None)
+    original = deepcopy(row)
+
+    class Store(PgObjectStore):
+        vault_binding_id = "fixture"
+
+        def __init__(self):
+            pass
+
+        def list_objects(self, **kwargs):
+            return deepcopy(state.rows)
+
+        def reconcile_legacy_source(self, expected, **kwargs):
+            if state.fail == "source":
+                source.write_text(source.read_text() + "changed")
+            kwargs["revalidate"]()
+            assert expected == row
+            if state.fail == "row":
+                raise ValueError("private-row-canary")
+            state.calls.append(kwargs)
+            if kwargs["replacement"] is None:
+                state.rows.remove(row)
+            else:
+                row["payload"] = kwargs["replacement"]
+                state.vectors[str(oid)] = kwargs["vector"]
+
+    class Index(PgVectorIndex):
+        vault_binding_id = "fixture"
+
+        def __init__(self):
+            pass
+
+        def present_object_ids(self):
+            return set(state.vectors)
+
+    identity = EmbeddingIdentity(provider="mock", model="selected", dim=2, normalize=False)
+
+    def embed(text):
+        state.embedded.append(text)
+        if state.fail == "embed":
+            raise RuntimeError("private-provider-canary")
+        return [1.0, 2.0]
+
+    binding = SimpleNamespace(backend="pg", store=Store())
+    index = Index()
+    factory = lambda **kwargs: SimpleNamespace(identity=identity, embed_text=embed)
+    monkeypatch.setattr(recovery, "resolve_vault_root", lambda: root)
+    return recovery, state, root, source, original_bytes, original, binding, index, factory
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_legacy_source_reconciliation_uses_current_canonical_eligibility(monkeypatch, tmp_path, selected):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=selected)
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert source.read_bytes() == raw
+    if selected:
+        projected = state.rows[0]
+        assert projected["object_id"] == original["object_id"]
+        assert projected["payload"]["frontmatter"]["trust"] == "human"
+        assert projected["payload"]["origin"] == "vault"
+        assert projected["payload"]["replay"]["source_identity"] == source.relative_to(root).as_posix()
+        assert state.embedded == ["canonical body"]
+    else:
+        assert state.rows == [] and state.embedded == [] and state.vectors == {}
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 0
+    assert not (root / "_system" / "companions").exists()
+
+
+def test_legacy_excluded_source_retires_only_exact_stale_projection(monkeypatch, tmp_path):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    unrelated = {**original, "object_id": uuid4(), "payload": {"text": "other", "frontmatter": {}}}
+    state.rows.append(unrelated)
+    state.vectors[str(unrelated["object_id"])] = "unchanged"
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert state.rows == [unrelated]
+    assert state.vectors == {str(unrelated["object_id"]): "unchanged"}
+    assert source.read_bytes() == raw
+
+
+@pytest.mark.parametrize("failure", ["candidate", "authority", "trust", "malformed", "missing", "symlink",
+    "outside", "duplicate", "identity", "body", "source", "row", "embed", "draft", "staged",
+    "directory-symlink", "hardlink", "duplicate-case", "profile"])
+def test_legacy_source_reconciliation_refuses_unsafe_or_racing_sources(monkeypatch, tmp_path, failure):
+    from app.cli import index_rebuild as repair
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=failure == "embed")
+    if failure in ("candidate", "authority", "trust", "draft"):
+        marker = {"candidate": "candidate_only: true", "authority": "authority: {source_authoritative: false}",
+                  "trust": "trust: external", "draft": "review_state: draft"}[failure]
+        source.write_text(raw.decode().replace("---\ncanonical", f"{marker}\n---\ncanonical"))
+    elif failure == "malformed":
+        source.write_text("---\nuuid: [\n---\ncanonical body")
+    elif failure == "missing":
+        source.unlink()
+    elif failure == "symlink":
+        target = root / "target.md"
+        source.rename(target)
+        source.symlink_to(target)
+    elif failure == "outside":
+        state.rows[0]["source_ref"] = str(tmp_path / "external.md")
+    elif failure == "duplicate":
+        (root / "duplicate.md").write_bytes(raw)
+    elif failure == "duplicate-case":
+        (root / "duplicate.md").write_text(raw.decode().replace(str(original["object_id"]), str(original["object_id"]).upper()))
+    elif failure == "directory-symlink":
+        target = root / "redirected"
+        source.parent.rename(target)
+        source.parent.symlink_to(target, target_is_directory=True)
+    elif failure == "hardlink":
+        import os
+        os.link(source, root / "alias.md")
+    elif failure == "profile":
+        monkeypatch.setattr(recovery, "assert_profile_note_ingestible", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("private-authority-canary")))
+    elif failure == "identity":
+        source.write_text(raw.decode().replace(str(original["object_id"]), "not-a-uuid"))
+    elif failure == "body":
+        source.write_text(raw.decode() + "changed")
+    elif failure == "staged":
+        staged = root / "_system" / "drafts" / "note.md"
+        staged.parent.mkdir(parents=True)
+        source.rename(staged)
+        state.rows[0]["source_ref"] = str(staged)
+    else:
+        state.fail = failure
+    before = __import__("copy").deepcopy(state.rows)
+    monkeypatch.setattr(repair.domain_objects, "resolve_object_store_port", lambda: binding)
+    monkeypatch.setattr(repair, "get_vector_index", lambda: index)
+    monkeypatch.setattr(repair, "get_product_embedding_client", factory)
+    result = CliRunner().invoke(cli, ["index", "reconcile-legacy", "--json"])
+    assert result.exit_code == 79, result.output
+    assert json.loads(result.output) == {"reason": "source_post_rebuild_failed"}
+    assert state.calls == [] and state.rows == before and state.vectors == {}
+    assert str(root) not in result.output and "canary" not in result.output
+
+
 def _missing_repair_fixture(monkeypatch):
     """Run the production ObjectStore consumer and PG insert SQL against a tiny DB double."""
     from contextlib import nullcontext

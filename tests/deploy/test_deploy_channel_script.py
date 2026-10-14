@@ -5198,6 +5198,9 @@ elif args[:2] == ["index", "doctor"]:
     print(os.environ.get(summary_name, default_summary))
     rc_name = "FAKE_SOURCE_INDEX_RC" if strict else "FAKE_SOURCE_INDEX_PREFLIGHT_RC"
     raise SystemExit(int(os.environ.get(rc_name, "0")))
+elif args[:2] == ["index", "reconcile-legacy"]:
+    print(os.environ.get("FAKE_LEGACY_RECONCILIATION_SUMMARY", '{"processed":0}'))
+    raise SystemExit(int(os.environ.get("FAKE_LEGACY_RECONCILIATION_RC", "0")))
 elif args[:2] == ["index", "repair-missing"]:
     print(os.environ.get("FAKE_MISSING_REPAIR_SUMMARY", '{"processed":1}'))
     print("hostile-child-canary /private/vault password=do-not-leak", file=sys.stderr)
@@ -5738,6 +5741,92 @@ def test_native_deploy_repairs_indexable_object_outside_selected_source_inventor
                       if "up -d --force-recreate api worker watcher" in event)
     assert replay < repair < strict < activation
     assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("summary, rc, reason", [
+    ('{"reason":"source_post_rebuild_failed"}', "79", "source_post_rebuild_failed"),
+    ('{"processed":true}', "0", "source_summary_invalid"),
+    ('{"reason":"private-canary"}', "79", "source_summary_invalid"),
+])
+def test_native_legacy_reconciliation_refusal_is_private_and_blocks_activation(tmp_path, summary, rc, reason):
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    missing = json.dumps(dict(backend="PgVectorIndex", issues=["missing vector"],
+        rebuild_required=True, unembedded_object_count=1, non_vector_issue_count=0, pg_state={}))
+    env.update(FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY=missing, FAKE_SOURCE_REPLAY_INDEX_SUMMARY=missing,
+               FAKE_LEGACY_RECONCILIATION_SUMMARY=summary, FAKE_LEGACY_RECONCILIATION_RC=rc)
+    result = _run_deploy(root, env, sha, channel="dev")
+    assert result.returncode != 0
+    assert f"YGGDRASIL_DEPLOY_FAILURE_REASON={reason}" in result.stderr
+    assert "private-canary" not in result.stdout + result.stderr
+    events = _deploy_events(env)
+    assert "api-cli index repair-missing --json" not in events
+    assert not any("up -d --force-recreate api worker watcher" in event for event in events)
+
+
+@pytest.mark.pg
+def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch):
+    """Native ordering reaches the real producer, PG CAS and strict doctor.
+
+    Retained replay/readiness are isolated here to leave one evidence-free
+    candidate for the new stage; all reconciliation and doctor SQL is real.
+    """
+    from types import SimpleNamespace
+    import psycopg
+    from click.testing import CliRunner
+    from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
+    from app.cli import cli
+    from app.cli import index_rebuild as repair
+    from app.index import doctor
+    from app.ops import native_source_bootstrap as native
+    from app.stores import pg
+    from app.db.dsn import resolve_dsn
+    from app.db.db import ensure_schema
+    from app.rebuildability.product_total_loss import evaluate_product_store_readiness
+
+    recovery, state, root, source, raw, original, _, _, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=True)
+    pg._TABLES_READY = False
+    pg._ensure_tables()
+    pg.truncate_pg_tables()
+    store, index = pg.PgObjectStore(), pg.PgVectorIndex()
+    store.put(original["object_id"], kind="note", source_ref=str(source), payload=original["payload"])
+    with psycopg.connect(resolve_dsn()) as conn:
+        ensure_schema(conn)
+        conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
+                     (original["object_id"], original["object_id"], store.vault_binding_id))
+    binding = SimpleNamespace(backend="pg", store=store)
+    monkeypatch.setattr(repair.domain_objects, "resolve_object_store_port", lambda: binding)
+    monkeypatch.setattr(repair, "get_vector_index", lambda: index)
+    monkeypatch.setattr(repair, "get_product_embedding_client", factory)
+    monkeypatch.setattr(doctor, "get_vector_index", lambda: index)
+    monkeypatch.setattr(doctor, "get_embeddings_client", lambda *args, **kwargs: factory())
+    monkeypatch.setattr(native, "preflight", lambda selector: root)
+    monkeypatch.setattr(native, "_product_ready", lambda root: True)
+    events = []
+
+    def run(arguments):
+        events.append(arguments)
+        if arguments[0] == "settings":
+            return {}
+        if arguments[0] == "vault-alpha-ingest":
+            return dict(scanned=0, ingested=0, errors=0, malformed=0, skipped_locked=0, skipped_invalid=0)
+        result = CliRunner().invoke(cli, arguments)
+        assert result.exit_code == 0, result.output
+        return json.loads(result.output)
+
+    monkeypatch.setattr(native, "_run_json", run)
+    native.rebuild_if_needed("test:" + "a" * 40)
+    assert events.index(["index", "reconcile-legacy", "--json"]) < events.index(["index", "repair-missing", "--json"])
+    assert events[-1] == ["index", "doctor", "--json", "--strict"]
+    projected = store.get(original["object_id"])
+    assert projected["payload"]["frontmatter"]["trust"] == "human"
+    assert projected["object_id"] == original["object_id"]
+    assert index.present_object_ids() == {str(original["object_id"])}
+    assert state.embedded == ["canonical body"]
+    assert source.read_bytes() == raw
+    assert evaluate_product_store_readiness(root, store.list_objects(limit=None)).ready
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 0
+    pg.truncate_pg_tables()
 
 
 @pytest.mark.parametrize("reason", ["source_post_rebuild_failed", "embedding_generation_failed",

@@ -737,6 +737,30 @@ class FsVaultAdapter:
     def read_note(self, locator: NoteLocator) -> str:
         return self._absolute_path(locator).read_text(encoding="utf-8")
 
+    def read_recovery_snapshot(self, locator: NoteLocator) -> tuple[str, tuple]:
+        """Read an in-vault regular source without following any redirected component.
+
+        Reuse the descriptor-anchored reader; retain filesystem identity as well
+        as bytes so a same-content replacement is still a stale recovery proof.
+        """
+        from app.knowledge.write_ops import read_create_once_winner_relative
+
+        root = self.vault_root.resolve(strict=True)
+        relative = Path(locator.path)
+        if relative.is_absolute() or not relative.parts or any(p in (".", "..") for p in relative.parts):
+            raise KnowledgeCapabilityError("invalid recovery locator")
+
+        def identities() -> tuple:
+            paths = [root, *(root.joinpath(*relative.parts[:i]) for i in range(1, len(relative.parts) + 1))]
+            return tuple((s.st_dev, s.st_ino, s.st_mode, s.st_nlink, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+                         for s in (path.lstat() for path in paths))
+
+        before = identities()
+        text = read_create_once_winner_relative(relative.as_posix(), vault_root=root)
+        if identities() != before:
+            raise KnowledgeCapabilityError("recovery source changed")
+        return text, before
+
     def write_note(
         self,
         locator: NoteLocator,
