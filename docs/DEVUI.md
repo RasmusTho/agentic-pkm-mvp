@@ -718,8 +718,9 @@ semantics, but not primary identity, navigation state, authority, correlation, o
 
 The Focus-side boundary lives in `docs/DEVUI_FOCUS_CONVERSATION_PORT/README.md`. The detailed
 control-lens source, state, coverage, deviation, interaction, and sequencing contracts live in
-`docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`. Both are target specifications; neither reference
-claims that the Builder System Control runtime or UI is delivered.
+`docs/DEVUI_BUILDER_SYSTEM_CONTROL/README.md`. Both preserve their target contracts. Issue #6080 delivers only the bounded managed read-only BSC
+navigation page/API described in the control-lens specification, using independently reviewed exact
+shipped reuse; broader assurance inventories, commands and live acceptance remain targets.
 
 ### DEVUI-SHAPING-BOUNDARY — pre-subject shaping (gap open, resolution withdrawn)
 
@@ -850,6 +851,12 @@ Delivered now:
   exercising production hub/Bifrost admission/read/launch with external I/O substitutions. This is
   repository proof, not live transport/bootstrap, candidate preparation, authenticated M2 UI,
   consumer grants, operation recovery or owner acceptance;
+- the #6080 managed Builder System Control page/API: Overview and Focus entry, separate system
+  identity, typed return to prior Focus, candidate document/source-state orientation and explicit
+  Inspect/recovery navigation. Original Companion assets remain unchanged; the managed package
+  applies only reviewed navigation bindings. See [bounded navigation delivery](DEVUI_BUILDER_SYSTEM_CONTROL/README.md#bounded-managed-navigation-delivery-6080)
+  and its constrained-reuse receipt. Repository proof does not establish live design, source
+  qualification, VM102 deployment, owner pilot or acceptance;
 - CKM core, query/snapshot contracts, and generated Development Overview;
 - static, inert CKM Cockpit Direction B;
 - BuilderOps Cockpit `/cockpit` as a fresh, read-only work register;
@@ -954,7 +961,7 @@ This remains delivered repository/proof truth, not production-deployed or owner-
 Not delivered now: request/preview/authenticated approval in one owner experience; complete PostgreSQL
 client-authority cutover; full live run controls; receipt-to-CKM reassessment in the unified surface;
 provider conversation runtime; authenticated command preview/Start/Hold; the Builder System
-Control route/UI and whole lens; the pre-subject shaping surface, whose one candidate resolution was
+Control whole assurance lens and command region; the pre-subject shaping surface, whose one candidate resolution was
 withdrawn at Gate 1 of #5606 and which has no accepted contract; managed DevUI production deployment; owner pilot and live
 candidate-bound owner trial/acceptance. The separate
 [outcome contract](builderops/BUILDEROPS_VAULT_OBJECT_MODEL.md#candidate-bound-owner-outcome-contract-fca-09)

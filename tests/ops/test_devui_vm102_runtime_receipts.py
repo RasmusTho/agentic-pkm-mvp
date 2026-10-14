@@ -44,6 +44,7 @@ def _package_runtime_candidate(
     for name in ASSET_SHA256:
         source = {
             "devui.css": ROOT / "app/builderops/devui_managed.css",
+            "control.html": ROOT / "app/builderops/devui_control.html",
             "yggdrasil.css": ROOT / "companion-ui/companion-app/companion_ui/workspace/devui_yggdrasil.css",
         }.get(name, historical / name)
         shutil.copyfile(source, root / "assets" / name)

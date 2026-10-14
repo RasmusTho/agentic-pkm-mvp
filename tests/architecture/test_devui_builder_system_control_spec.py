@@ -27,7 +27,7 @@ def test_spec_defines_information_architecture_and_hard_boundary() -> None:
     assert "not a tab, panel, or evidence group inside Focus" in spec
     assert "navigation, never a data join" in spec
     assert (
-        "No runtime, route, or visual implementation is delivered by this specification."
+        "this specification does not establish live qualification or whole-lens delivery."
         in normalized
     )
 
@@ -85,7 +85,8 @@ def test_spec_separates_current_target_and_authority_questions() -> None:
     assert "BSC-01 governing-document inventory composer" in spec
     assert "BSC-02 workflow-adapter and capability-binding composer" in spec
     assert "BSC-03 coverage/deviation and governed-route composer" in spec
-    assert "BSC-04 design, BSC-05 previews, route/UI, commands, and the whole lens remain undelivered" in spec
+    assert "Broader BSC-04 design, BSC-05 previews, commands, complete source inventories and the whole assurance lens remain undelivered" in spec
+    assert "### Bounded managed navigation delivery (#6080)" in spec
     assert "Target contract; partially delivered" in spec
     assert "No owner decision blocks this docs-only specification." in spec
 
