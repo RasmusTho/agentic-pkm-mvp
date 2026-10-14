@@ -639,6 +639,59 @@ See [CI Roles](../TESTING.md#ci-roles) for the fixed wrapper/fixture proof bound
 Historical Mac mini paths in that TTS contract do not override the current TARS native deployment
 and its governed runtime-env binding.
 
+The fixed TEST-only journaling extension is separate from the two web pilots:
+
+```sh
+sudo /opt/yggdrasil/bws-deploy-runtime/bin/python -m app.ops.postgres_deploy_linux \
+  qualify-journaling test <committed-native-operation-uuid>
+```
+
+The exact current committed request, mandatory PG proof and admitted SHA/digest are prerequisites.
+No other channel or caller-controlled command, profile, selector, path, provider or budget is
+admitted. The canonical disposable source producers and exact #5988 wrapper run from the admitted
+image without a host Product overlay or deterministic conftests. Actual Product model access uses
+the existing protected four-key `/etc/yggdrasil/model-access/runtime.env` and existing mTLS
+certificates; it provisions no account, model or credential. Unsupported/public/DNS endpoints,
+missing references or actual provider failure refuse. A bounded native TLS byte relay makes only
+the selected private IPv4 endpoint reachable on disposable loopback while preserving the Product
+endpoint/model/TLS identity and network-none containment. There is no host socket or arbitrary
+candidate egress. Each certificate snapshot is private, readonly and operation-owned.
+The alias is bound through the exact owned Docker namespace descriptor/inode rather than a PID
+pathname. Canonical settings compilation/ingestion precedes model admission. Actual model calls,
+including both drafts, must have successful remote preflight/responses and undegraded cognition;
+a preflight flag or usable provider-failure collation cannot produce qualified PASS.
+
+All ten original scenarios, finite observed Product effects, synthetic-actor candidate identity,
+guarded receipt and unchanged accepted-primary bytes must pass. Complete original report/JUnit
+artifacts are retained privately outside the vault under `native-journaling-results/`; the separate
+terminal receipt records operation/generation/source/image, fixture/actor, wrapper and hashes,
+bounded transport and exact cleanup. Partial evidence or drift is a refusal, never acceptance.
+Unknown cleanup retains admission; recover through the same-operation inode/flock seam, preserving
+foreign resources and re-reading exact owned IDs before cleanup and a fresh generation. This
+does not rewrite `postmerge-pg.v1`, `native-web-pilots.v1`, Daily/Deep reports or channel health.
+The original guarded review outbox is retained alongside report/JUnit and receipt-hash-bound.
+Terminal evidence uses complete/fsynced atomic no-overwrite publication; publication failure
+leaves no consumable PASS artifact. Complete owner-preparing proofs recover the exact prior
+generation across pre-rename crashes. Unknown relay worker exit remains unknown cleanup even
+after container removal, preserving admission for same-operation recovery. Journaling refusals
+have independent profile and cleanup attribution.
+An exact operation/generation-bound private relay proof records Linux boot/PID/start-time before
+listener effects. Interrupted teardown and fresh-runner retries preserve admission while that
+native owner remains live or unknown; only proved departure permits recovery, never a PID kill.
+Deadline exhaustion cannot accept late PASS logs. Terminal publication owns durable interruption
+invalidation and has no fallible sync or temporary cleanup after its acknowledgement.
+The existing shared channel-lock owner inode also records the fixed qualifier/profile before
+effects. Unknown cleanup can be retried only by that same profile; the other qualifier and generic
+deployment recovery cannot retire its admission. Legacy empty-owner recovery proves opposite-profile
+resource absence under the inode/flock before adoption, and never adopts a fresh replacement inode.
+Foreign, mismatched or partial owner bytes refuse without mutation.
+
+Repository delivery proves this mechanism only. The parent #3347 owner must invoke it after merge
+against the admitted TEST image and post the redaction-safe all-PASS or attributable refusal
+receipt there. Only actual all-PASS permits the still-gated delivered-capability owner-doc
+promotion and closure of #3347; this slice does neither acceptance nor production promotion.
+See [Testing](../TESTING.md#fixed-disposable-product-web-qualification) for evidence meaning.
+
 ### PR validation is not artifact publication (current policy)
 
 The `App Image Build` GitHub workflow has two deliberately different paths:

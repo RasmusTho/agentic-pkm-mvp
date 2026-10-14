@@ -31,6 +31,7 @@ def admitted(tmp_path, monkeypatch):
     # Admission, journal, mkdir, descriptors/flock and retirement are real.
     monkeypatch.setattr(linux, '_private_json', lambda path: json.loads(path.read_text()))
     monkeypatch.setattr(effects, 'quiescent', lambda: True)
+    monkeypatch.setattr(effects, '_qualification_other_absent', lambda _profile, _proof: True)
     return effects, operation, root / 'config/deploy/test.env.lock'
 
 
@@ -44,6 +45,28 @@ def confirmed(effects, monkeypatch):
         return {'result': 'refused', 'cleanup': 'confirmed'}
     monkeypatch.setattr(effects, 'qualify_web', qualify)
     return calls
+
+
+@pytest.mark.parametrize('profile', ['web', 'journaling'])
+def test_fixed_qualification_accepts_fresh_canonical_journal_instances(admitted, monkeypatch, profile):
+    effects, operation, lock = admitted
+    canonical = effects.config.journal
+    effects.config = linux.LinuxConfig('test', effects.config.root, canonical.directory, 1, 1,
+                                       str(uuid4()), str(uuid4()))
+    # Keep the real LinuxConfig accessor behavior (fresh objects), relocating
+    # only the durable canonical path to this test's private directory.
+    monkeypatch.setattr(linux.LinuxConfig, 'journal', property(
+        lambda config: DeployJournal(canonical.directory, config.channel)))
+    assert effects.config.journal is not effects.config.journal
+    calls = []
+    def qualify(_operation):
+        assert effects.lock_fd is not None
+        calls.append(_operation)
+        return {'result': 'refused', 'cleanup': 'confirmed'}
+    monkeypatch.setattr(effects, 'qualify_' + profile, qualify)
+    run = getattr(effects, 'run_' + profile + '_qualification')
+    assert run(operation)['result'] == 'refused'
+    assert calls == [operation] and not lock.exists()
 
 
 @pytest.mark.parametrize('reply', [{'result': 'unknown', 'cleanup': 'unknown'}, {'result': 'refused'}])
@@ -105,6 +128,7 @@ def test_fresh_foreign_inode_replacement_is_preserved(admitted, monkeypatch):
     with pytest.raises(PostgresDeployError):
         effects.run_web_qualification(operation)
     assert foreign == [(lock.stat().st_ino, (lock / 'bws-owner').stat().st_ino)]
+    assert (lock / 'bws-owner').read_bytes() == b''
     assert (original / 'bws-owner').is_file() and effects.lock_fd is None
 
 
@@ -112,7 +136,7 @@ def test_retirement_interruption_preserves_admission_for_exact_recovery(admitted
     effects, operation, lock = admitted
     confirmed(effects, monkeypatch)
     retire = effects.retire_reconciled_channel_lock
-    def interrupted(_handle):
+    def interrupted(_handle, **_kwargs):
         raise PostgresDeployError()
     monkeypatch.setattr(effects, 'retire_reconciled_channel_lock', interrupted)
     with pytest.raises(PostgresDeployError):

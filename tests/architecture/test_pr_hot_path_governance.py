@@ -8,7 +8,11 @@ skill-only changes.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
+import textwrap
 from typing import NoReturn, Sequence
 
 import pytest
@@ -804,6 +808,95 @@ def test_native_delivery_separates_review_from_executor_merge_protocol() -> None
     assert "closure attribution" in router
     assert "the PR base must be the repository's live default branch" in router
     assert "post-merge-owner-doc :: Reuse an existing assessment" in router
+
+
+@pytest.mark.parametrize(
+    "rounds,bad_closing_snapshot", [(0, False), (1, False), (2, False), (None, False), (2, True)]
+)
+def test_retired_routes_have_no_callers_and_active_routes_remain(
+    tmp_path: Path, rounds: int | None, bad_closing_snapshot: bool
+) -> None:
+    """Exercise the workflow caller behind the retired review-only instruction route."""
+    full_path = _read(".codex/skills/verification-and-closure/FULL_PATH.md")
+    assert "is a full-path exception only for its authenticated review decision" not in full_path
+    assert "For autonomous delivery, run the governing path's gate chain unattended" not in full_path
+    assert "Wait **how** matters for CI" not in full_path
+    for owner in (
+        "SKILL.md :: Routing",
+        "SKILL.md :: Validation",
+        "README.md :: Workflow continuation",
+        "CI_WAIT_CONTRACT.md :: Blessed path",
+    ):
+        assert owner in full_path
+
+    workflow = _read(".github/workflows/verification-dispatch-request.yml")
+    step = workflow.split("      - name: Fetch current PR and linked issue\n", 1)[1].split(
+        "        id: snapshots\n", 1
+    )[0]
+    command = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    repository = "RasmusTho/agentic-pkm-mvp"
+    body = f"Governing-Issue: #5858\n\nFixes #5858\n\nFinal-Review-Rounds: {rounds}"
+    (tmp_path / "pr-fixture.json").write_text(json.dumps({"body": body}))
+    closing = {
+        "data": {"repository": {"pullRequest": {"closingIssuesReferences": {
+            "nodes": [{"number": 5858, "repository": {"nameWithOwner": repository}}]
+        }}}}
+    }
+    if bad_closing_snapshot:
+        closing["errors"] = [{"message": "synthetic unavailable closing authority"}]
+    (tmp_path / "closing-fixture.json").write_text(json.dumps(closing))
+    binary_dir = tmp_path / "bin"
+    binary_dir.mkdir()
+    (binary_dir / "python3").symlink_to(sys.executable)
+    gh = binary_dir / "gh"
+    gh.write_text(
+        f"#!{sys.executable}\n" + textwrap.dedent("""\
+        import json
+        from pathlib import Path
+        import sys
+        root = Path(__file__).resolve().parents[1]
+        with (root / "gh-calls.jsonl").open("a") as output:
+            output.write(json.dumps(sys.argv[1:]) + "\\n")
+        if sys.argv[1:3] == ["api", "graphql"]:
+            print((root / "closing-fixture.json").read_text())
+        elif sys.argv[1:] == ["api", "repos/RasmusTho/agentic-pkm-mvp/pulls/5858"]:
+            print((root / "pr-fixture.json").read_text())
+        else:
+            raise SystemExit(91)
+        """)
+    )
+    gh.chmod(0o755)
+    output = tmp_path / "github-output"
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", command], cwd=tmp_path,
+        env={**os.environ, "PATH": str(binary_dir) + os.pathsep + os.environ.get("PATH", ""),
+             "PYTHONPATH": str(REPO_ROOT), "GITHUB_OUTPUT": str(output),
+             "REPOSITORY": repository, "PR_NUMBER": "5858"},
+        capture_output=True, text=True, timeout=20,
+    )
+    calls = [json.loads(line) for line in (tmp_path / "gh-calls.jsonl").read_text().splitlines()]
+    assert calls[0] == ["api", f"repos/{repository}/pulls/5858"]
+    dispatch = tmp_path / "verification-dispatch"
+    if rounds != 2:
+        assert result.returncode == 0, result.stderr
+        assert len(calls) == 1  # No closing-reference request or downstream Issue lookup.
+        assert output.read_text() == "full_path=false\n"
+        assert not (dispatch / "full-path").exists()
+        assert not (dispatch / "closing-issue-snapshot.json").exists()
+    else:
+        assert len(calls) == 2 and calls[1][:2] == ["api", "graphql"]
+        assert (dispatch / "full-path").exists()
+        if bad_closing_snapshot:
+            assert result.returncode != 0
+            assert "malformed" in result.stderr
+            assert output.read_text() == "full_path=true\n"
+            assert not (dispatch / "live-closing-issues.json").exists()
+        else:
+            assert result.returncode == 0, result.stderr
+            assert output.read_text() == "full_path=true\nissue_number=5858\n"
+            pr = json.loads((dispatch / "pr.json").read_text())
+            assert pr["live_closing_issues"] == [{"number": 5858, "repository": repository}]
+    assert "if: steps.snapshots.outputs.full_path == 'true'" in workflow
 
 
 def test_validation_policy_reuses_evidence_without_relaxing_required_checks() -> None:
