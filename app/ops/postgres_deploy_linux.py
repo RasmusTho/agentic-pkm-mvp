@@ -46,6 +46,9 @@ _DEPLOY_FAILURE_STAGES = frozenset({
     'scalar_runtime', 'embedding_configuration', 'health', 'version',
     'fleet_fitness', 'ui_smoke', 'capture_watch', 'receipt',
 })
+_SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
+    'vector_projection_failed', 'embedding_generation_failed', 'vector_index_write_failed',
+})
 _GUARD_FAILURE_CHECKPOINTS = frozenset({
     'config_runtime_file_binding', 'inherited_owner_fd_inode_flock',
     'active_journal_operation', 'selector_shape_capture_raw_migration',
@@ -58,7 +61,7 @@ _GUARD_FAILURE_CHECKPOINTS = frozenset({
 
 def _deploy_failure_stage(stderr: str) -> str:
     prefix = 'YGGDRASIL_DEPLOY_FAILURE_STAGE='
-    markers = [line[len(prefix):] for line in stderr.splitlines() if line.startswith(prefix)]
+    markers = [line.removeprefix(prefix) for line in stderr.splitlines() if prefix in line]
     # Ambiguous, malformed, or injected markers never produce free text.
     if len(markers) == 1 and markers[0] in _DEPLOY_FAILURE_STAGES:
         return markers[0]
@@ -76,14 +79,24 @@ def _emit_native_diagnostic(payload: bytes) -> None:
         pass
 
 
-def _emit_deploy_failure(stage: str) -> None:
+def _deploy_failure_reason(stderr: str, stage: str) -> str:
+    prefix = 'YGGDRASIL_DEPLOY_FAILURE_REASON='
+    markers = [line.removeprefix(prefix) for line in stderr.splitlines() if prefix in line]
+    if stage == 'source_projection' and len(markers) == 1 and markers[0] in _SOURCE_PROJECTION_FAILURE_REASONS:
+        return markers[0]
+    return 'command_failed'
+
+
+def _emit_deploy_failure(stage: str, reason: str = 'command_failed') -> None:
     # The service deliberately nulls both raw streams. Only these fixed fields
     # reach the existing native journal; no captured text or caller metadata does.
     if stage not in _DEPLOY_FAILURE_STAGES:
         stage = 'unknown'
+    if stage != 'source_projection' or reason not in _SOURCE_PROJECTION_FAILURE_REASONS:
+        reason = 'command_failed'
     payload = (
         'PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n'
-        f'MESSAGE=native deployment failure: stage={stage} class=command_failed\n'
+        f'MESSAGE=native deployment failure: stage={stage} class={reason}\n'
     ).encode('ascii')
     _emit_native_diagnostic(payload)
 
@@ -133,7 +146,8 @@ def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | 
         raise PostgresDeployError() from None
     if result.returncode:
         if deploy_diagnostics:
-            _emit_deploy_failure(_deploy_failure_stage(result.stderr))
+            stage = _deploy_failure_stage(result.stderr)
+            _emit_deploy_failure(stage, _deploy_failure_reason(result.stderr, stage))
         raise PostgresDeployError()
     return result.stdout
 

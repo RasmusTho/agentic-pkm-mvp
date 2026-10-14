@@ -3,11 +3,19 @@ from uuid import UUID, uuid4
 from typing import Any, Iterable
 import logging
 
-from app.components.retrieval import embed_query
+from app.components.retrieval import embed_docs, embed_query
 from app.index.artifact_metadata import build_indexed_unit_payload, canonicalize_indexed_text
 from app.outbox.events import DEFAULT_EMBEDDING_VIEW
 
 logger = logging.getLogger(__name__)
+
+
+class VectorProjectionFailure(RuntimeError):
+    """Finite, content-free source recovery failure; no underlying diagnostics."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason if reason in {"embedding_generation_failed", "vector_index_write_failed"} else "vector_projection_failed"
+        super().__init__(self.reason)
 
 # --- Noops om stores/bm25 saknas i minimal miljö -----------------------------
 
@@ -257,26 +265,55 @@ search_hybrid = hybrid_search  # legacy
 def search(query_text: str, k: int = 5, *_a, **_k) -> list:
     return bm25_search(query_text, k=k)
 
-def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str, **__):
+def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, text: str,
+                  source_backed_rebuild: bool = False, expected_vault_binding_id: str | None = None, **__):
     oid = object_id or uuid4()
     safe_text = canonicalize_indexed_text(text)
-    idx = get_vector_index()
+    if source_backed_rebuild:
+        try:
+            # Recovery cannot declare a durable projection via the compatibility
+            # resolver's no-op fallback. Resolve the same configured PDM store.
+            from app.stores import get_vector_index as strict_vector_index
+
+            idx = strict_vector_index()
+            if expected_vault_binding_id is not None and getattr(idx, "vault_binding_id", None) != expected_vault_binding_id:
+                raise ValueError("vector binding mismatch")
+        except Exception:
+            raise VectorProjectionFailure("vector_index_write_failed") from None
+    else:
+        idx = get_vector_index()
     if not safe_text:
-        purge = getattr(idx, "purge_vectors", None)
-        if purge is not None:
-            purge(oid, view=DEFAULT_EMBEDDING_VIEW)
+        try:
+            purge = getattr(idx, "purge_vectors", None)
+            if purge is not None:
+                purge(oid, view=DEFAULT_EMBEDDING_VIEW)
+        except Exception:
+            if source_backed_rebuild:
+                raise VectorProjectionFailure("vector_index_write_failed") from None
+            raise
         return (oid, 0)
 
-    embedding, identity = embed_query(safe_text)
-    payload_out = build_indexed_unit_payload(
-        object_id=oid,
-        kind=kind,
-        source_ref=source_ref,
-        payload=payload,
-        text=safe_text,
-        embedding_identity=identity,
-    )
+    if source_backed_rebuild:
+        try:
+            # A missing document vector is a write, not a retrieval query.
+            # The durable upsert below enforces its configured full identity.
+            vectors, identity = embed_docs([safe_text])
+            if len(vectors) != 1:
+                raise ValueError("embedding cardinality mismatch")
+            embedding = vectors[0]
+        except Exception:
+            raise VectorProjectionFailure("embedding_generation_failed") from None
+    else:
+        embedding, identity = embed_query(safe_text)
     try:
+        payload_out = build_indexed_unit_payload(
+            object_id=oid,
+            kind=kind,
+            source_ref=source_ref,
+            payload=payload,
+            text=safe_text,
+            embedding_identity=identity,
+        )
         idx.upsert(
             object_id=oid,
             kind=kind,
@@ -286,7 +323,11 @@ def ingest_object(object_id=None, *, kind: str, source_ref: str, payload: dict, 
             model=identity.model,
             identity=identity,
         )
-    except TypeError as exc:
+    except Exception as exc:
+        if source_backed_rebuild:
+            raise VectorProjectionFailure("vector_index_write_failed") from None
+        if not isinstance(exc, TypeError):
+            raise
         raise TypeError("VectorIndex upsert must accept identity to enforce embedding identity") from exc
 
     try:

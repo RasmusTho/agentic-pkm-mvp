@@ -1372,9 +1372,11 @@ native_source_projection_gate() {
   else
     return 78
   fi
-  if [ "${rc}" -eq 79 ]; then
-    printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed\n' >&2
-  fi
+  case "${rc}" in
+    79) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed\n' >&2 ;;
+    80) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=embedding_generation_failed\n' >&2 ;;
+    81) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_index_write_failed\n' >&2 ;;
+  esac
   return "${rc}"
 }
 

@@ -14,6 +14,61 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.parametrize("counts,expected", [
+    ({"embedding_generation_failed": 1}, "embedding_generation_failed"),
+    ({"vector_index_write_failed": 1}, "vector_index_write_failed"),
+    ({"unknown": 1}, None),
+    ({"vector_index_write_failed": True}, None),
+    ({"vector_index_write_failed": 2}, None),
+    ({}, None),
+    ("private-canary", None),
+])
+def test_native_source_summary_failure_counts_are_finite(monkeypatch, counts, expected) -> None:
+    import json
+    from app.ops import native_source_bootstrap as source
+
+    def run(argv, *, stdout, **kwargs):
+        stdout.write(json.dumps(dict(scanned=1, ingested=0, errors=1, malformed=0,
+            skipped_locked=0, skipped_invalid=0, vector_projection_errors=1,
+            vector_projection_failure_counts=counts)).encode())
+        return subprocess.CompletedProcess(argv, 79)
+
+    monkeypatch.setattr(source.subprocess, "run", run)
+    if expected:
+        with pytest.raises(source.SourceVectorProjectionFailure, match="^" + expected + "$"):
+            source._run_json(["vault-alpha-ingest", "--source-backed-rebuild"])
+    else:
+        with pytest.raises(ValueError, match="^source summary invalid$"):
+            source._run_json(["vault-alpha-ingest", "--source-backed-rebuild"])
+
+
+@pytest.mark.parametrize("marker,expected", [
+    ("vector_projection_failed", "vector_projection_failed"),
+    ("embedding_generation_failed", "embedding_generation_failed"),
+    ("vector_index_write_failed", "vector_index_write_failed"),
+    ("unknown", "command_failed"),
+    ("vector_index_write_failed secret-canary", "command_failed"),
+    ("vector_index_write_failed\nYGGDRASIL_DEPLOY_FAILURE_REASON=embedding_generation_failed", "command_failed"),
+    ("vector_index_write_failed\n YGGDRASIL_DEPLOY_FAILURE_REASON=secret-canary", "command_failed"),
+])
+def test_supervised_native_source_reason_is_redacted_and_allowlisted(
+    monkeypatch: pytest.MonkeyPatch, marker: str, expected: str,
+) -> None:
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    stderr = "secret-canary /private/vault\nYGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection\nYGGDRASIL_DEPLOY_FAILURE_REASON=" + marker
+    emitted: list[bytes] = []
+    monkeypatch.setattr(linux, "_emit_native_diagnostic", emitted.append)
+    monkeypatch.setattr(linux.subprocess, "run", lambda *args, **kwargs: subprocess.CompletedProcess(args, 81, "secret-canary", stderr))
+    with pytest.raises(PostgresDeployError):
+        linux._command(["private-child"], deploy_diagnostics=True)
+    assert emitted == [(
+        "PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n"
+        f"MESSAGE=native deployment failure: stage=source_projection class={expected}\n"
+    ).encode("ascii")]
+
+
 def _run_guard_child(socket_path: Path) -> subprocess.CompletedProcess[str]:
     child = """
 import sys

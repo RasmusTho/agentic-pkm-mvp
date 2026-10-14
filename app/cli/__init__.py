@@ -876,6 +876,7 @@ def vault_alpha_ingest(
                 "scanned", "ingested", "errors", "malformed", "skipped_locked", "skipped_invalid",
             )}
             payload["vector_projection_errors"] = summary.vector_projection_errors
+            payload["vector_projection_failure_counts"] = summary.vector_projection_failure_counts
         _dump(payload, True)
         if source_backed_rebuild and summary.vector_projection_errors:
             raise click.exceptions.Exit(79)

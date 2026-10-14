@@ -212,6 +212,72 @@ def test_content_hash_is_stable_for_same_text() -> None:
 
 
 @pytest.mark.pg
+def test_source_backed_existing_object_missing_vector_repair_converges(
+    tmp_path, monkeypatch, product_model_access_gateway,
+) -> None:
+    from app.cli import cli
+    from app.ingest import vault_alpha
+    from app.index.doctor import diagnose_index, reset_diagnose_cache
+    from app.stores import get_object_store, get_vector_index
+    from click.testing import CliRunner
+    from tests.indexer.test_outbox_roundtrip_pg import (
+        _configure_isolated_pg_test, _drop_schema, _reset_store_backend_cache_only,
+    )
+
+    if not _pg_available():
+        pytest.skip("Postgres backend not available")
+    base_dsn, schema = _configure_isolated_pg_test(tmp_path, monkeypatch)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    oid = uuid4()
+    note = vault / "retained.md"
+    note.write_text(f"---\nuuid: {oid}\ntitle: Retained\n---\n\nRetained source body.\n")
+    monkeypatch.setattr(vault_alpha, "classify_run", lambda *args, **kwargs: {})
+    monkeypatch.setattr(vault_alpha, "_select_candidates", lambda *args, **kwargs: ([note], ["."]))
+    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
+    try:
+        # Existing retained projection, absent derived vector. This is not a
+        # destructive rebuild and must preserve the canonical object identity.
+        get_object_store().put(oid, kind="note", source_ref=str(note), payload={
+            "text": "Retained source body.", "vault_uuid": str(oid), "origin": "vault",
+        })
+        reset_diagnose_cache()
+        assert diagnose_index()["unembedded_object_count"] == 1
+        arguments = ["vault-alpha-ingest", "--vault-root", str(vault), "--source-backed-rebuild", "--json"]
+        index = get_vector_index()
+        with monkeypatch.context() as failed_write:
+            def refuse(*args, **kwargs):
+                raise RuntimeError("synthetic unavailable index")
+            failed_write.setattr(index, "upsert", refuse)
+            failed = CliRunner().invoke(cli, arguments)
+            assert failed.exit_code == 79
+            assert json.loads(failed.stdout)["vector_projection_failure_counts"] == {"vector_index_write_failed": 1}
+            assert list(index.all_rows()) == []
+        result = CliRunner().invoke(cli, arguments)
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["ingested"] == 1
+        rows = list(get_vector_index().all_rows())
+        assert len(rows) == 1
+        assert str(rows[0]["object_id"]) == str(oid)
+        assert rows[0]["payload"]["provenance"]["content_hash"] == compute_content_hash("Retained source body.")
+        assert rows[0]["payload"]["provenance"]["embedding_identity"] == {
+            "provider": index.get_identity().provider,
+            "model": index.get_identity().model,
+            "dim": index.get_identity().dim,
+            "normalize": index.get_identity().normalize,
+        }
+        assert len(get_object_store().list_objects(limit=None)) == 1
+        reset_diagnose_cache()
+        doctor = CliRunner().invoke(cli, ["index", "doctor", "--strict", "--json"])
+        assert doctor.exit_code == 0, doctor.output
+        assert json.loads(doctor.stdout)["unembedded_object_count"] == 0
+    finally:
+        reset_diagnose_cache()
+        _reset_store_backend_cache_only()
+        _drop_schema(base_dsn, schema)
+
+
+@pytest.mark.pg
 def test_doctor_lists_stale_candidates(tmp_path, monkeypatch) -> None:
     """Index doctor reports content-hash staleness as a read-only re-embed
     candidate listing (no mutation) when store_objects text has drifted past
