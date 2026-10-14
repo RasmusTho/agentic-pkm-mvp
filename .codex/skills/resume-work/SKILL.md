@@ -240,12 +240,15 @@ while work is unfinished. Progressive and opportunistic — not a report after e
 
 Apply `.codex/skills/README.md :: Workflow continuation`.
 
-Before continuing, rebind the original requested outcome, scope, authorized effects,
-explicit prohibitions, and stopping point from the originating user request and governing
-contract. A later “continue” or “resume” authorizes progress within that mandate; it does
-not widen the scope. Review-only and planning-only tasks stop at their original boundary.
-Do not enter delivery, publication, closure, or lifecycle steps unless those effects were
-authorized by the original task or explicitly authorized later by the user.
+Before continuing, reconstruct the latest effective mandate from the originating user
+request, every explicit intervening user revision, and the governing contract. Carry forward
+its requested outcome, scope, authorized effects, explicit prohibitions, and stopping point.
+An explicit revision may change or withdraw an earlier authorization; a later “continue” or
+“resume” authorizes progress within the latest mandate and does not itself broaden it.
+Review-only and planning-only tasks remain within their current bounds unless the user
+explicitly revises them. Do not enter delivery, publication, closure, or lifecycle steps
+unless those effects remain authorized by the latest mandate or are explicitly authorized
+by the user later.
 
 Treat handoff summaries and CI summaries as leads, not evidence. Read the relevant source
 state before acting on them: inspect the exact failed logs and current diff, and verify the
