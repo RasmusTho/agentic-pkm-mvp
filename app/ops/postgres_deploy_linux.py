@@ -476,42 +476,16 @@ _BASE_DEPLOY_CONSUMERS = frozenset((*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
 
 def require_existing_authority_binding(data: dict[str, Any]) -> None:
     """Runtime-UID read-only proof; never restore, initialize or select a vault."""
-    import yaml
-    from app.instance.ownership_ledger import OwnershipLedger
-    from app.instance.vault_registry import VaultRegistryStore
+    from app.instance.runtime import require_existing_authority_cutover_ready
 
     selected = AuthorityCutover(**data['selection'])
     selected.validate()
-    root = Path(selected.root)
-    for path in (root, Path(selected.ownership_root), Path(data['registry_path'])):
-        if not path.exists() or any(p.is_symlink() for p in (path, *path.parents)):
-            raise PostgresDeployError()
-    snapshot = VaultRegistryStore(Path(data['registry_path'])).read_existing()
-    target = snapshot.registrations.get(selected.binding_id)
-    if target is None or not target.vault_id or not target.local_instance_id:
-        raise PostgresDeployError()
-    if target.path not in {selected.root, '/app/vault'}:
-        raise PostgresDeployError()
-    settings = root / 'settings'
-    for name in ('vault.md', 'local.md', 'paths.md', 'workflow.md', 'design-handoff.md', 'companion-ui.md'):
-        path = settings / name
-        if not path.is_file() or path.is_symlink() or settings.is_symlink():
-            raise PostgresDeployError()
-    identities = []
-    for name, field in (('vault.md', 'vaultId'), ('local.md', 'localInstanceId')):
-        text = (settings / name).read_text(encoding='utf-8')
-        if not text.startswith('---\n') or len(text.split('---', 2)) != 3:
-            raise PostgresDeployError()
-        payload = yaml.safe_load(text.split('---', 2)[1])
-        if not isinstance(payload, dict):
-            raise PostgresDeployError()
-        identities.append(payload.get(field))
-    if identities != [target.vault_id, target.local_instance_id]:
-        raise PostgresDeployError()
-    OwnershipLedger(Path(selected.ownership_root)).require_scalar_rollback_ready(
+    require_existing_authority_cutover_ready(
         channel_id=data['channel'],
-        registrations={key: root if key == selected.binding_id else None for key in snapshot.registrations},
-        recover_rotation=False,
+        registry_path=Path(data['registry_path']),
+        host_global_root=Path(selected.ownership_root),
+        vault_binding_id=selected.binding_id,
+        vault_root=Path(selected.root),
     )
 
 

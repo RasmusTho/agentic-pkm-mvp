@@ -265,8 +265,9 @@ applicable, remains a separate operator input and is never inferred from cutover
 
 Before effects, native admission checks the configured pin/runtime source, actual existing
 API/worker/watcher and applicable Heimdal/migration writer mounts, channel instance-state volume,
-initialized registry identities and authenticated physical ownership. It reads existing registry
-state without initialization, restoration or repair. Missing, conflicting, pending or uninitialized
+initialized registry identities and authenticated physical ownership. The public instance runtime
+readiness facade reads existing registry and ownership state with read-only locks, without
+initialization, restoration, key recovery or permission changes. Missing, conflicting, pending or uninitialized
 proof refuses; this route cannot discover, select, transfer or initialize a vault. The immutable
 plan binds the selection and ownership source to the channel, candidate and operation before the
 worker prepares. Each inherited Compose guard rechecks the request and selected configuration.
