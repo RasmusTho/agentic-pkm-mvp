@@ -334,6 +334,27 @@ migration follow-up when no route can be safely removed. Keep every unique corre
 credential, durability, current-head and closure protection; measurement uncertainty is not
 permission to remove it.
 
+### Cleanup and epic acceptance handoff (#5858)
+
+The evaluation is delivered by PR #6053, merge
+`69e23e89ce5962c556af16cdf454026c2e1380fd`. #5858 consumes that frozen report without recollecting
+the cohort or altering its measurements. Its finite disposition is in
+`docs/development/PR_ESCALATION_PATHS.md :: 8) Full Governance Receipt Repair`:
+duplicate common validation, continuation and CI-wait prose is removed from the conditional
+verification procedure, and reviewed issue-free compatibility is explicitly bound to the existing
+executor/in-flight router. Native review remains native. No executable compatibility route or
+generated proof artifact is proven unused; the named dispatch, phase/recovery, post-merge and
+release consumers remain protected.
+
+The governing #5858 Issue/PR retains exact candidate, merged SHA, current-head CI, caller/routing
+checks, review and PR-specific owner-doc evidence; its final delivery receipt is also handed to
+#5850. This completes the bounded evaluation/retirement handoff, not the entire epic's operational
+acceptance. #5850 remains the live acceptance authority for the selected dev/test recovery journey
+on #5667, the `builderops_vm_rebuild_activation.v1` proof and separately scoped infra/pilot effects.
+Preparation and this repository cleanup do not prove those live effects or close the parent.
+The comparison's unknown token/billing/escaped-defect measurements and unproven 50% reduction stay
+unknown or unproven; no further instrumentation or compatibility retirement is inferred.
+
 ## Delivery budgets and stop-loss
 
 Every delivery carries a default budget of **2 CI-repair rounds per failure mechanism** (the separate
