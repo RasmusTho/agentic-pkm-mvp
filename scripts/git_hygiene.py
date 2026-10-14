@@ -1763,6 +1763,17 @@ _DISPATCHER_DIRTY_KEYWORD = _dispatcher_linebreak_tolerant_keyword("dirty")
 _DISPATCHER_RETENTION_SEPARATOR = (
     r"(?:\s+|[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)"
 )
+_DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
+    r"^[ \t]*(?:(?:>[ \t]*)|(?:[-*+][ \t]+)|(?:\d{1,9}[.)][ \t]+))+",
+    re.MULTILINE,
+)
+
+
+def _dispatcher_cross_line_scan_body(body: str) -> str:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    return _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE.sub("", normalized)
+
+
 _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE = re.compile(
     rf"(?:^\s*|[.!?:]\s+|while\s+the\s+){_DISPATCHER_DEDICATED_KEYWORD}"
     rf"{_DISPATCHER_RETENTION_SEPARATOR}{_DISPATCHER_WORKTREE_KEYWORD}\b.*?\b"
@@ -1899,9 +1910,12 @@ def _dispatcher_resumable_binding_resources(
         if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
             raise RuntimeError("dispatcher_activity_invalid")
         body = comment["body"]
+        cross_line_scan_body = _dispatcher_cross_line_scan_body(body)
         if any(
             re.search(r"[\r\n]", match.group(0))
-            for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(body)
+            for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(
+                cross_line_scan_body
+            )
         ):
             raise RuntimeError("dispatcher_activity_invalid")
         lines = body.splitlines()
