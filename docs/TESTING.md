@@ -657,7 +657,7 @@ The deterministic Quality Wave acceptance harness belongs in `integration-nightl
 Reason:
 - it is a trusted recurring verification signal for the active memory-backed runtime posture
 - it proves the CLI-first UAT contract continues to pass outside tag/manual release events
-- it should run alongside the broader nightly `not pg and not alpha_llm` surface rather than only as a release gate
+- it should run alongside the broader nightly `not pg and not alpha_llm and not eval` surface rather than only as a release gate
 
 Current nightly harness target:
 - `tests/quality_wave/test_uat_harness.py`

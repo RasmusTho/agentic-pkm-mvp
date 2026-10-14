@@ -61,7 +61,7 @@ jobs:
 
   full-suite:
     runs-on: ubuntu-latest
-    # Leave installation, the bounded 35-minute batch, and artifact upload room.
+    # Leave installation, the bounded 40-minute batch, and artifact upload room.
     timeout-minutes: 45
     continue-on-error: ${{ matrix.experimental }}
     strategy:
@@ -132,8 +132,9 @@ jobs:
         run: mkdir -p tmp
 
       - name: Full test suite (memory, not pg)
-        # Match the existing PR batch margin; this is not a speedup claim.
-        timeout-minutes: 35
+        # Run 38638069945 completed all 132 shards at 35m06s, but timed out.
+        # Retain a finite margin for that measured complete execution.
+        timeout-minutes: 40
         continue-on-error: ${{ matrix.experimental }}
         shell: bash
         env:
