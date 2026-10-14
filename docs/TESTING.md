@@ -589,6 +589,62 @@ browser playback belong to the Daily wrapper. Unit/contract tests prove envelope
 behavior only. Actual post-merge all-scenario qualification remains on #2443/#3314; repository
 delivery establishes neither their acceptance nor currently healthy deployment.
 
+The separate fixed `native-journaling.v1` extension is invoked with
+`app.ops.postgres_deploy_linux qualify-journaling test <committed-operation-uuid>`.
+It does not add a third pilot to `native-web-pilots.v1`. It reuses the committed native
+request/PG proof, SHA/digest, baked Product code, immutable Git resources and exact
+operation/generation cleanup. No command, provider, selector, manifest, fixture or budget is
+caller-selectable. Canonical vault initialization, commitment persistence, decision receipt
+append and capture-candidate writeback supply all three current-day source families. The private
+manifest is created inside the disposable image and consumed by the exact #5988 live wrapper.
+The wrapper runs without deterministic-suite conftests: their mock provider/memory defaults are
+not qualified Product evidence. Original Product calls and returns are observed, not replaced;
+the fixed six-effect order binds two distinct sessions, primary/addendum candidates, one exact
+synthetic checkbox write and one guarded receipt-bound canonical materialization. All ten original
+scenarios, exact budgets, source hashes and accepted-primary preservation are mandatory.
+Canonical settings compilation and runtime ingestion precede provider admission in the fresh
+scratch runtime. Every original Product model call is reserved and observed at its real call
+seam, with successful remote preflight/response and undegraded actual route. Draft cognition
+provider failures or missing model calls refuse even if the original wrapper's degraded collation
+remains useful; preflight alone cannot attest model execution.
+
+The existing protected `/etc/yggdrasil/model-access/runtime.env` four-key binding must select
+an actual private IPv4 HTTPS Product executor with existing mTLS material. Only finite private
+certificate snapshots enter the image. The candidate retains its configured endpoint/model/TLS
+identity; a native-owned bounded ciphertext relay on an operation-local loopback /32 connects
+only that same executor. The candidate remains network-none, with no socket mount or general
+egress. Missing references, unsupported endpoints, provider unavailability, transport limits,
+skips, incomplete effects or drift refuse; there is no mock, host Product overlay or fallback.
+The loopback alias uses an open descriptor of the exact owned Docker namespace inode, not a
+recyclable PID pathname. Relay worker exit is part of cleanup; container absence cannot confirm
+an unknown host relay exit.
+
+Private report/JUnit retention is complete-before-rename under `native-journaling-results/`,
+outside the disposable vault. Separate terminal evidence binds operation, SHA/digest, generation,
+fixture/actor, exact wrapper, report hashes, transport budget and cleanup readback. Partial
+retention is non-PASS; unknown cleanup keeps channel admission, and foreign resources remain
+untouched. Retry uses the same committed operation and existing inode/flock reconciliation before
+a fresh generation. A deterministic mechanism test or refused receipt is not parent acceptance:
+only an actual post-merge TEST all-PASS `conversational_journaling_execution.v1` receipt on #3347
+permits delivered-capability owner-doc promotion and parent closure. PG, Daily/Deep, channel health
+and production eligibility remain separate authorities.
+The original guarded review outbox is also retained and hash-bound to the materialization receipt.
+Terminal evidence is fsynced before atomic no-overwrite publication; a failed publication leaves
+no consumable PASS file. A complete pre-rename owner-preparing proof recovers its exact generation,
+while malformed pre-owner bytes can only be retired when no durable resource exists. Foreign
+proofs remain preserved. Journaling refusals retain their own profile and cleanup attribution.
+Relay uncertainty is durable: an operation/generation-bound private proof records the native
+owner's Linux boot/PID/start-time identity before listener effects. Interrupted teardown or a
+fresh runner preserves admission until the exact owner is proved departed; no PID is killed.
+Deadline exhaustion refuses even if late container logs contain PASS. Terminal interruption
+invalidates only its own published inode and syncs absence, with no fallible cleanup after the
+publication acknowledgement.
+The shared channel lock's existing `bws-owner` inode durably binds the fixed qualifier profile
+before effects. Only that same profile can reconcile/retire it after confirmed cleanup; another
+qualifier or generic deploy recovery cannot release unknown cleanup. Legacy empty owners are
+adopted under the held inode/flock only after opposite-profile resource absence is proved.
+Foreign/nonempty mismatched owners and replacement inodes remain untouched.
+
 ### Nightly deterministic acceptance harness
 
 The deterministic Quality Wave acceptance harness belongs in `integration-nightly`, not `release-uat`.
