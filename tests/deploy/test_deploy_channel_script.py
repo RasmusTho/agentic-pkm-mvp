@@ -5723,6 +5723,73 @@ def test_native_deploy_reports_redacted_vector_projection_failure(tmp_path: Path
     assert not list((root / "ops/deployments").glob("*.json"))
 
 
+@pytest.mark.parametrize("reason,code", [("embedding_generation_failed", 80), ("vector_index_write_failed", 81)])
+def test_native_vector_write_failure_reaches_supervised_redacted_diagnostic(
+    tmp_path: Path, monkeypatch, reason: str, code: int,
+) -> None:
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import PostgresDeployError
+
+    root, env, sha = _native_source_harness(tmp_path, channel="dev")
+    # Run the real CLI, note producer, and search projection. Only the
+    # infrastructure/provider seams are isolated, not a fabricated CLI summary.
+    (root / "app/ops/__init__.py").write_text("from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n")
+    note = root / "tmp" / "retained.md"
+    note.write_text("---\nuuid: 1c2428f2-0a13-498d-ae3a-12e5ce1bfd27\ntitle: Retained\n---\n\nFixture source body.\n")
+    cli_stub = root / "app/cli.py"
+    cli_stub.write_text(cli_stub.read_text().replace(
+        'if args[:1] == ["vault-alpha-ingest"]:',
+        '''if args[:1] == ["vault-alpha-ingest"]:
+    import importlib.util
+    package = Path(os.environ["REAL_CLI_PACKAGE"])
+    spec = importlib.util.spec_from_file_location("app.cli", package / "__init__.py", submodule_search_locations=[str(package)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["app.cli"] = module
+    spec.loader.exec_module(module)
+    module.cli()
+if args[:1] == ["vault-alpha-ingest"]:''',
+    ))
+    site = tmp_path / "api-python-fixture" / "sitecustomize.py"
+    site.write_text(site.read_text() + '''
+from app.ingest import vault_alpha
+from app.search import service
+from app import stores
+from app.components.embeddings import EmbeddingIdentity
+paths.resolve_optional_vault_root = lambda **kwargs: Path(os.environ["FAKE_API_VAULT"])
+from app.settings import runtime as settings_runtime
+from app.settings.models import SettingsBundle
+settings_runtime.get_settings_bundle = lambda: SettingsBundle()
+class RecoveryStore:
+    def put_and_reconcile_source_backed(self, object_id, **kwargs):
+        return str(object_id)
+class RefusedIndex:
+    def upsert(self, **kwargs):
+        raise RuntimeError("hostile-child-canary /private/vault password=do-not-leak")
+vault_alpha.get_object_store = lambda: RecoveryStore()
+vault_alpha._select_candidates = lambda *args, **kwargs: ([Path(os.environ["REAL_SOURCE_NOTE"])], ["."])
+vault_alpha.classify_run = lambda *args, **kwargs: {}
+stores.get_vector_index = lambda: RefusedIndex()
+def embed(texts):
+    if os.environ["REAL_SOURCE_FAILURE"] == "embedding_generation_failed":
+        raise RuntimeError("hostile-child-canary /private/vault password=do-not-leak")
+    return [[1.0, 0.0, 0.0]], EmbeddingIdentity(provider="mock", model="fixture", dim=3, normalize=True)
+service.embed_docs = embed
+''')
+    env.update(REAL_CLI_PACKAGE=str(REPO_ROOT / "app/cli"), REAL_SOURCE_NOTE=str(note),
+               REAL_SOURCE_FAILURE=reason, STORE_BACKEND="memory")
+    emitted: list[bytes] = []
+    monkeypatch.setattr(linux, "_emit_native_diagnostic", emitted.append)
+    with pytest.raises(PostgresDeployError):
+        linux._command(["bash", str(root / "scripts/deploy_channel.sh"), "deploy", "dev", sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert emitted == [(
+        "PRIORITY=3\nSYSLOG_IDENTIFIER=yggdrasil-bws-deploy\n"
+        f"MESSAGE=native deployment failure: stage=source_projection class={reason}\n"
+    ).encode("ascii")]
+    assert not any("up -d --force-recreate api worker watcher" in event for event in _deploy_events(env))
+    assert not list((root / "ops/deployments").glob("*.json"))
+
+
 def test_native_deploy_vector_repair_retry_converges_before_activation(tmp_path: Path) -> None:
     root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
     missing = dict(backend="PgVectorIndex", issues=["missing vector"], rebuild_required=True,

@@ -22,6 +22,11 @@ SOURCE_TIMEOUT_SECONDS = 7200
 COMPOSE_TIMEOUT_SECONDS = SOURCE_TIMEOUT_SECONDS + 60
 _SUMMARY_LIMIT = 1024 * 1024
 _COUNTERS = ('scanned', 'ingested', 'errors', 'malformed', 'skipped_locked', 'skipped_invalid')
+SOURCE_PROJECTION_FAILURE_CODES = {
+    'vector_projection_failed': 79,
+    'embedding_generation_failed': 80,
+    'vector_index_write_failed': 81,
+}
 
 
 class SourceVectorProjectionFailure(RuntimeError):
@@ -230,7 +235,19 @@ def _run_json(arguments: list[str]) -> Any:
                 and type(failures) is int and 0 < failures <= counts[2]
                 and counts[1] + counts[2] <= counts[0]
             ):
-                raise SourceVectorProjectionFailure('vector_projection_failed')
+                reasons = payload.get('vector_projection_failure_counts')
+                if reasons is None:
+                    reason = 'vector_projection_failed'  # Prior candidate summary.
+                elif (
+                    isinstance(reasons, dict) and reasons
+                    and all(key in SOURCE_PROJECTION_FAILURE_CODES for key in reasons)
+                    and all(type(value) is int and value > 0 for value in reasons.values())
+                    and sum(reasons.values()) == failures
+                ):
+                    reason = next(iter(reasons)) if len(reasons) == 1 else 'vector_projection_failed'
+                else:
+                    raise ValueError('source summary invalid')
+                raise SourceVectorProjectionFailure(reason)
             raise ValueError('source command failed')
         return payload
 
@@ -301,8 +318,8 @@ def main(argv: list[str] | None = None) -> int:
                 [sys.executable, '-m', 'app.ops.native_source_bootstrap', '--worker', selector],
                 timeout=SOURCE_TIMEOUT_SECONDS,
             )
-    except SourceVectorProjectionFailure:
-        return 79
+    except SourceVectorProjectionFailure as exc:
+        return SOURCE_PROJECTION_FAILURE_CODES.get(str(exc), 78)
     except Exception:
         return 78
     return 0

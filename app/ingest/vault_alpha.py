@@ -20,7 +20,7 @@ from app.ingest.episode_ref import episode_ref_from_frontmatter
 from app.index.outbox import append_jsonl
 from app.observability.ingest_meta import record_ingest_run
 from app.observability.log import with_trace_id
-from app.search.service import ingest_object as index_ingest_object
+from app.search.service import VectorProjectionFailure, ingest_object as index_ingest_object
 from app.settings.runtime import get_settings_bundle
 from app.services.companion_eligibility import (
     check_companion_eligibility,
@@ -93,10 +93,15 @@ class VaultAlphaSummary:
     invalid_examples: List[str] = field(default_factory=list)
     invalid_report_path: str | None = None
     vector_projection_errors: int = 0
+    vector_projection_failure_counts: dict[str, int] = field(default_factory=dict)
 
 
 class SourceVectorProjectionError(RuntimeError):
     """Content-free failure of the required source-backed vector producer."""
+
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(reason)
 
 
 _TEST_NOTE_REL = Path("Test") / "Alpha-HumanFlows.md"
@@ -811,10 +816,14 @@ def _ingest_single(
             source_ref=str(path),
             payload=store_payload,
             text=stripped_text,
+            **({"source_backed_rebuild": True,
+                "expected_vault_binding_id": getattr(object_store, "vault_binding_id", None)}
+               if reconcile_existing_projection else {}),
         )
-    except Exception:
+    except Exception as exc:
         if reconcile_existing_projection:
-            raise SourceVectorProjectionError("vector_projection_failed") from None
+            reason = exc.reason if isinstance(exc, VectorProjectionFailure) else "vector_projection_failed"
+            raise SourceVectorProjectionError(reason) from None
 
     normalize_payload = {
         "event": "ingest.normalize",
@@ -980,6 +989,7 @@ def _ingest_candidates(
     invalid_examples: List[str] = []
     invalid_report_path = _invalid_files_log_path()
     vector_projection_errors = 0
+    vector_projection_failure_counts: dict[str, int] = {}
     _reset_invalid_files_log()
 
     def _record_locked(rel_display: str) -> None:
@@ -1124,8 +1134,9 @@ def _ingest_candidates(
                 _ingest_single(path, vault_root=vault_root, trace_id=trace_id)
             ingested += 1
             processed.add(rel_display)
-        except SourceVectorProjectionError:
+        except SourceVectorProjectionError as exc:
             vector_projection_errors += 1
+            vector_projection_failure_counts[exc.reason] = vector_projection_failure_counts.get(exc.reason, 0) + 1
             errors.append(rel_display)
             continue
         except OSError as exc:
@@ -1163,6 +1174,7 @@ def _ingest_candidates(
         invalid_examples=invalid_examples,
         invalid_report_path=str(invalid_report_path) if skipped_invalid > 0 else None,
         vector_projection_errors=vector_projection_errors,
+        vector_projection_failure_counts=vector_projection_failure_counts,
     )
     if skipped_locked > 0:
         example = locked_examples[0] if locked_examples else "-"
