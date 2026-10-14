@@ -61,7 +61,8 @@ jobs:
 
   full-suite:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Leave installation, the bounded 35-minute batch, and artifact upload room.
+    timeout-minutes: 45
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -118,16 +119,133 @@ jobs:
         run: mkdir -p tmp
 
       - name: Full test suite (memory, not pg)
-        timeout-minutes: 20
+        # Match the existing PR batch margin; this is not a speedup claim.
+        timeout-minutes: 35
         continue-on-error: ${{ matrix.experimental }}
         shell: bash
+        env:
+          PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+          PYTHONUNBUFFERED: "1"
         run: |
-          set -o pipefail
-          pytest -q \
-            -m "not pg and not alpha_llm" \
-            --import-mode=importlib \
-            --durations=30 \
-            | tee tmp/nightly-pytest.log
+          set -euo pipefail
+          marker='not pg and not alpha_llm'
+          # Reuse the PR process-isolation pattern, retaining nightly E2E and
+          # its original marker selection. Partial logs outlive a cancelled step.
+          shard_root="$RUNNER_TEMP/pytest-nightly-shards"
+          log_dir="$shard_root/logs"
+          shard_list="$shard_root/shards"
+          status_file="$shard_root/status"
+          mkdir -p "$log_dir"
+          : > "$status_file"
+          : > tmp/nightly-pytest.log
+          find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print |
+            while IFS= read -r path; do
+              case "$path" in
+                tests/*/*)
+                  relative="${path#tests/}"
+                  printf 'tests/%s\n' "${relative%%/*}"
+                  ;;
+                tests/*) printf '%s\n' "$path" ;;
+              esac
+            done |
+            LC_ALL=C sort -u |
+            while IFS= read -r shard; do
+              [[ "$shard" == tests/ops ]] || printf '%s\n' "$shard"
+            done > "$shard_list"
+          if [[ ! -s "$shard_list" ]]; then
+            echo "No collectible nightly process shards discovered" >&2
+            exit 1
+          fi
+
+          # Require one completed status and consistent JUnit result per shard.
+          # Exit 5 is valid only for a fully deselected shard; an empty whole
+          # selection, missing/duplicate status, or missing result fails closed.
+          validate_shards() {
+            python - "$shard_root" "$1" "$2" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+
+          root = Path(sys.argv[1])
+          phase = sys.argv[2]
+          expected = (root / "shards").read_text().splitlines()
+          if phase == "complete":
+              expected.append("host-sensitive")
+          logs = {shard: root / "logs" / (shard.replace("/", "_") + ".log") for shard in expected}
+          aggregate = "".join(path.read_text() for path in logs.values() if path.exists())
+          Path("tmp/nightly-pytest.log").write_text(aggregate)
+          rows = [line.split(" ", 1) for line in (root / "status").read_text().splitlines()]
+          if (int(sys.argv[3]) != 0 or any(len(row) != 2 for row in rows)
+                  or len(rows) != len(expected) or {row[1] for row in rows} != set(expected)):
+              raise SystemExit(f"Nightly process runner incomplete: expected={len(expected)} actual={len(rows)} launcher={sys.argv[3]}")
+          failed = False
+          selected = 0
+          for raw_rc, shard in rows:
+              log = logs[shard]
+              try:
+                  rc = int(raw_rc)
+                  text = log.read_text()
+                  report = ET.parse(log.with_suffix(".xml")).getroot()
+                  suites = list(report.iter("testsuite"))
+                  cases = list(report.iter("testcase"))
+                  declared = sum(int(suite.attrib["tests"]) for suite in suites)
+                  if not suites or declared != len(cases):
+                      raise ValueError("JUnit result count differs from testcase inventory")
+                  selected += declared
+                  result_failed = any(case.find("failure") is not None or case.find("error") is not None for case in cases)
+                  empty = (rc == 5 and declared == 0 and not re.search(r"FAILED|ERROR", text)
+                           and re.search(r"no tests ran|[0-9]+ deselected", text))
+                  if (rc != 0 and not empty) or result_failed:
+                      print(f"SHARD FAILED ({rc}): {shard}\n{text}", file=sys.stderr)
+                      failed = True
+              except (OSError, ValueError, KeyError, ET.ParseError) as exc:
+                  print(f"Nightly shard result incomplete: {shard} (exit={raw_rc}): {exc}", file=sys.stderr)
+                  if log.exists():
+                      print(log.read_text(), file=sys.stderr)
+                  failed = True
+          if phase == "complete" and selected == 0:
+              print("Nightly selection executed no test results", file=sys.stderr)
+              failed = True
+          print(f"Nightly {phase}: shards={len(rows)} reported_tests={selected}")
+          raise SystemExit(1 if failed else 0)
+          PY
+          }
+
+          export marker log_dir status_file
+          set +e
+          while IFS= read -r shard; do printf '%s\0' "$shard"; done < "$shard_list" |
+            xargs -0 -r -n 1 -P 4 bash -c '
+              shard="$1"
+              safe="${shard//\//_}"
+              started=$SECONDS
+              echo "SHARD START: $shard"
+              python -u -m pytest -v -m "$marker" "$shard" \
+                --import-mode=importlib --durations=30 --tb=short \
+                --junitxml="$log_dir/$safe.xml" \
+                --ignore=tests/invariants/test_vault_multiwriter.py > "$log_dir/$safe.log" 2>&1
+              rc=$?
+              echo "SHARD FINISHED ($rc): $shard in $((SECONDS - started))s"
+              printf "%s %s\n" "$rc" "$shard" >> "$status_file"
+              exit 0
+            ' _
+          xargs_status=$?
+          set -e
+          validate_shards parallel "$xargs_status"
+
+          # xargs has waited for every parallel process. Only now run tests
+          # that inspect host/process-global state or exact descriptor counts.
+          started=$SECONDS
+          set +e
+          python -u -m pytest -v -m "$marker" \
+            tests/ops tests/invariants/test_vault_multiwriter.py \
+            --import-mode=importlib --durations=30 --tb=short \
+            --junitxml="$log_dir/host-sensitive.xml" > "$log_dir/host-sensitive.log" 2>&1
+          rc=$?
+          set -e
+          echo "SHARD FINISHED ($rc): host-sensitive in $((SECONDS - started))s"
+          printf "%s host-sensitive\n" "$rc" >> "$status_file"
+          validate_shards complete 0
 
       - name: Report canary runtime
         run: |
@@ -169,7 +287,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nightly-pytest-log-py${{ matrix.python-version }}
-          path: tmp/nightly-pytest.log
+          path: |
+            tmp/nightly-pytest.log
+            ${{ runner.temp }}/pytest-nightly-shards/
 
   pg-contracts:
     runs-on: ubuntu-latest
