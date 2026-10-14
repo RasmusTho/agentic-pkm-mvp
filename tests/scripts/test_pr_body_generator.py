@@ -102,6 +102,60 @@ def test_generated_issue_identity_is_accepted_by_verification_dispatch_contract(
     assert resolve_issue_contract(body) == (3275, ())
 
 
+def test_pickup_receipt_is_in_first_generated_body() -> None:
+    dispatcher = _fixture("governance_issue.json")
+    fallback = {
+        **dispatcher,
+        "pickup_receipt": (
+            "pickup-claim-complete issue=3275 branch=codex/issue-3275-pr-body "
+            "worktree=/tmp/issue-3275-pr-body coordination_mode=github-label-only-fallback "
+            "fallback_reason=dispatcher_db_missing agent=codex-slice-implementer "
+            "session=issue-3275 evidence=github-comment:3275"
+        ),
+    }
+
+    for inputs in (dispatcher, fallback):
+        body = generate_pr_body_from_mapping(inputs)
+        assert f"Pickup-Receipt: {inputs['pickup_receipt']}" in body
+        assert body.count("Governing-Issue: #3275") == 1
+        assert body.count("Closes #3275") == 1
+
+    detached_claim = {
+        **dispatcher,
+        "pickup_receipt": dispatcher["pickup_receipt"].replace(
+            "branch=codex/issue-3275-pr-body", "branch="
+        ),
+    }
+    assert "branch= worktree=" in generate_pr_body_from_mapping(detached_claim)
+
+
+def test_pickup_receipt_validation_preserves_scope_and_issue_free_lanes() -> None:
+    issue_free = {**_fixture("governance_issue.json"), "issue_number": None, "pickup_receipt": None}
+    issue_free_body = generate_pr_body_from_mapping(issue_free)
+    assert "Pickup-Receipt:" not in issue_free_body
+    batch = {
+        **_fixture("governance_issue.json"),
+        "closing_issues": [3276, 3277],
+    }
+    batch_body = generate_pr_body_from_mapping(batch)
+    assert "Governing-Issue: #3275" in batch_body
+    assert "Closes #3275" not in batch_body
+
+    for receipt in (
+        None,
+        "TBD",
+        "pickup-claim-complete issue=3275 branch=<branch> worktree=/tmp/x "
+        "coordination_mode=dispatcher-backed fallback_reason=none task_id=t "
+        "lease_id=l holder=h evidence=not-a-lease",
+        "pickup-claim-complete issue=9999 branch=b worktree=/tmp/x "
+        "coordination_mode=dispatcher-backed fallback_reason=none task_id=t "
+        "lease_id=l holder=h evidence=verified-dispatcher-lease",
+    ):
+        invalid = {**_fixture("governance_issue.json"), "pickup_receipt": receipt}
+        with pytest.raises(PRBodyGeneratorError, match="pickup_receipt"):
+            generate_pr_body_from_mapping(invalid)
+
+
 def test_direct_repair_body_includes_required_section() -> None:
     body = generate_pr_body_from_mapping(_fixture("direct_repair.json"))
 
@@ -156,6 +210,36 @@ def test_cli_generates_body_from_fixture() -> None:
     assert completed.returncode == 0, completed.stderr
     assert "- [x] Governance lane" in completed.stdout
     assert "Closes #3275" in completed.stdout
+
+
+def test_cli_accepts_pickup_receipt_file(tmp_path: Path) -> None:
+    data = _fixture("governance_issue.json")
+    receipt_file = tmp_path / "pickup-receipt.txt"
+    receipt_file.write_text(str(data["pickup_receipt"]) + "\n", encoding="utf-8")
+    command = [
+        sys.executable,
+        "scripts/pr_body_generator.py",
+        "--lane",
+        "governance",
+        "--issue-number",
+        str(data["issue_number"]),
+        "--pickup-receipt-file",
+        str(receipt_file),
+        "--summary",
+        "generate a governed body",
+        "--owner-doc-resolution",
+        "updated",
+        "--builderops-records",
+        "none",
+        "--builderops-reason",
+        "fixture",
+    ]
+    for key, value in data["sbs_impact"].items():  # type: ignore[union-attr]
+        command.extend(["--sbs", f"{key}={value}"])
+    completed = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+
+    assert completed.returncode == 0, completed.stderr
+    assert f"Pickup-Receipt: {data['pickup_receipt']}" in completed.stdout
 
 
 def test_explicit_batch_preserves_open_governing_parent() -> None:
