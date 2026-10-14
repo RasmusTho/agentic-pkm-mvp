@@ -1751,7 +1751,8 @@ _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE = re.compile(
 
 
 def _dispatcher_linebreak_tolerant_keyword(keyword: str) -> str:
-    return r"[\r\n]*".join(re.escape(character) for character in keyword)
+    separator = r"(?:[ \t]*(?:\r\n|\r|\n)[ \t]*)*"
+    return separator.join(re.escape(character) for character in keyword)
 
 
 _DISPATCHER_DEDICATED_KEYWORD = _dispatcher_linebreak_tolerant_keyword("dedicated")
