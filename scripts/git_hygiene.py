@@ -1767,11 +1767,15 @@ _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
     r"^[ \t]*(?:(?:>[ \t]*)|(?:[-*+][ \t]+)|(?:\d{1,9}[.)][ \t]+))+",
     re.MULTILINE,
 )
+_DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE = re.compile(
+    r"(?<!\w)[*_]{1,3}(?=\w)|(?<=\w)[*_]{1,3}(?!\w)"
+)
 
 
 def _dispatcher_cross_line_scan_body(body: str) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
-    return _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE.sub("", normalized)
+    normalized = _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE.sub("", normalized)
+    return _DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE.sub("", normalized)
 
 
 _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE = re.compile(
@@ -1919,10 +1923,12 @@ def _dispatcher_resumable_binding_resources(
         ):
             raise RuntimeError("dispatcher_activity_invalid")
         lines = body.splitlines()
+        marker_scan_lines = cross_line_scan_body.splitlines()
         for line_number, line in enumerate(lines):
+            marker_scan_line = marker_scan_lines[line_number]
             continuation = lines[line_number + 1] if line_number + 1 < len(lines) else ""
             dedicated_worktree_fragment = bool(
-                _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(line)
+                _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(marker_scan_line)
             )
             dedicated_cross_line_marker = bool(
                 dedicated_worktree_fragment
@@ -1943,7 +1949,7 @@ def _dispatcher_resumable_binding_resources(
             explicit_binding = bool(
                 _DISPATCHER_PICKUP_RECEIPT_RE.search(line)
                 or _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
-                or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(line)
+                or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(marker_scan_line)
                 or dedicated_cross_line_marker
             )
             if not explicit_binding:
@@ -1954,7 +1960,7 @@ def _dispatcher_resumable_binding_resources(
                 _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
                 and not _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
             ) or (
-                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(line)
+                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(marker_scan_line)
                 and not _DISPATCHER_DEDICATED_WORKTREE_RE.search(line)
             ):
                 raise RuntimeError("dispatcher_activity_invalid")
