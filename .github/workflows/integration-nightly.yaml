@@ -231,10 +231,17 @@ jobs:
             ' _
           xargs_status=$?
           set -e
-          validate_shards parallel "$xargs_status"
+          if (( xargs_status != 0 )); then
+            # An interrupted launcher cannot prove that its pytest children
+            # exited. Retain incomplete evidence without starting the serial lane.
+            validate_shards parallel "$xargs_status"
+            exit 1
+          fi
 
           # xargs has waited for every parallel process. Only now run tests
           # that inspect host/process-global state or exact descriptor counts.
+          # Ordinary parallel failures remain in status; run the serial coverage
+          # before validating both phases together, as the original nightly did.
           started=$SECONDS
           set +e
           python -u -m pytest -v -m "$marker" \

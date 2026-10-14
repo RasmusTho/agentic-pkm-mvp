@@ -122,7 +122,10 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   step. A completed phase requires each expected shard exactly once and a JUnit testcase count
   consistent with its declared result count. A fully deselected shard may report pytest exit 5,
   but an empty whole selection, missing/duplicate status, terminated process, missing result or
-  failed test makes the producer fail. Partial logs survive those failures and step cancellation.
+  failed test makes the producer fail. After a completed launcher wait, ordinary parallel failures
+  remain recorded while the serial boundary still runs; validation then reports both phases and
+  retains the failing result. An incomplete launcher stops before that boundary because child
+  process exit cannot be established. Partial logs survive those failures and step cancellation.
   The executable nightly workflow fixtures in `tests/ops/test_ci_workflow.py` prove inventory,
   failure accounting and the serial boundary with finite synthetic populations; those producer
   proofs do not claim that unexecuted Product tests passed or replace current-head CI.

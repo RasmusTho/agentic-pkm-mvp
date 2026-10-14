@@ -296,6 +296,11 @@ identity = active / str(os.getpid())
 def record(event):
     with Path("fixture.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        for child in active.iterdir():
+            try:
+                os.kill(int(child.name), 0)
+            except ProcessLookupError:
+                child.unlink()
         if event == "start" and phase == "parallel":
             identity.touch()
         elif event == "finish":
@@ -385,6 +390,14 @@ def test_nightly_suite_failed_and_incomplete_shards_fail_closed(tmp_path: Path, 
     if mode not in {"empty-inventory", "empty-selection"}:
         assert "NODE START tests/alpha::test_synthetic" in (root / "logs/tests_alpha.log").read_text()
         assert "0 tests/beta" in (root / "status").read_text()
+    if mode not in {"empty-inventory", "unreported"}:
+        assert "host-sensitive" in (root / "status").read_text()
+        events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+        serial = [event for event in events if event["phase"] == "serial" and event["event"] == "start"]
+        assert len(serial) == 1 and serial[0]["active"] == 0
+    elif mode == "unreported":
+        events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+        assert not any(event["phase"] == "serial" for event in events)
     if mode == "failure":
         assert "AssertionError: synthetic regression" in (root / "logs/tests_alpha.log").read_text()
         assert "1 tests/alpha" in (root / "status").read_text()
