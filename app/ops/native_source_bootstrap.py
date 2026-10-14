@@ -24,6 +24,10 @@ _SUMMARY_LIMIT = 1024 * 1024
 _COUNTERS = ('scanned', 'ingested', 'errors', 'malformed', 'skipped_locked', 'skipped_invalid')
 
 
+class SourceVectorProjectionFailure(RuntimeError):
+    """Fixed private-child classification; never retain provider diagnostics."""
+
+
 def source_rebuild_counts(payload: Any) -> tuple[int, ...]:
     """Require all six actual counters; absent, coerced or negative is unknown."""
     if not isinstance(payload, dict):
@@ -210,13 +214,25 @@ def _run_json(arguments: list[str]) -> Any:
             [sys.executable, '-m', 'app.cli', *arguments],
             stdout=output, stderr=subprocess.DEVNULL, check=False,
         )
-        if result.returncode:
+        if result.returncode and result.returncode != 79:
             raise ValueError('source command failed')
         output.seek(0)
         raw = output.read(_SUMMARY_LIMIT + 1)
         if len(raw) > _SUMMARY_LIMIT:
             raise ValueError('source summary invalid')
-        return json.loads(raw)
+        payload = json.loads(raw)
+        if result.returncode:
+            counts = source_rebuild_counts(payload)
+            failures = payload.get('vector_projection_errors')
+            if (
+                arguments[:1] == ['vault-alpha-ingest']
+                and '--source-backed-rebuild' in arguments
+                and type(failures) is int and 0 < failures <= counts[2]
+                and counts[1] + counts[2] <= counts[0]
+            ):
+                raise SourceVectorProjectionFailure('vector_projection_failed')
+            raise ValueError('source command failed')
+        return payload
 
 
 def _diagnosis_unembedded_count(diagnosis: Any) -> int:
@@ -285,6 +301,8 @@ def main(argv: list[str] | None = None) -> int:
                 [sys.executable, '-m', 'app.ops.native_source_bootstrap', '--worker', selector],
                 timeout=SOURCE_TIMEOUT_SECONDS,
             )
+    except SourceVectorProjectionFailure:
+        return 79
     except Exception:
         return 78
     return 0
