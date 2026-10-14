@@ -881,6 +881,11 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "port's own guard as defense-in-depth (#3329). This is the sole production "
         "write seam for Standing Questions Question notes."
     ),
+    ("app/ops/native_journaling_acceptance.py", "bootstrap", 1): (
+        "guarded_by_port: the existing #6050 synthetic source writer uses "
+        "write_note_relative(create_once=True); its shared create-once seam "
+        "asserts WriteGuard before path resolution or I/O."
+    ),
     ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1): (
         "guarded_by_port: bootstrap_fixture writes the synthetic primary source "
         "through write_note_relative without a caller-side WriteGuard assertion; "
@@ -941,6 +946,9 @@ WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
     ),
     ("app/mcp/vault_tools.py", "append_note", 1): (
         "append_only: next-available note allocation preserves every earlier MCP artifact."
+    ),
+    ("app/ops/native_journaling_acceptance.py", "bootstrap", 1): (
+        "create_once: the existing #6050 synthetic source preserves any existing fixture target."
     ),
     ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1): (
         "create_once: the synthetic primary source preserves an existing fixture target."
