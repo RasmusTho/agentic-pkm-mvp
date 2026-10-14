@@ -166,6 +166,12 @@ def test_deploy_sequence_and_forward_only_ack_gate() -> None:
     assert run_block.index("prepare_instance_state_deployment") < run_block.index(
         "migration execution failed"
     )
+    assert run_block.index("pull_channel_images") < run_block.index(
+        "native_source_embedding_preflight_gate"
+    )
+    assert run_block.index("native_source_embedding_preflight_gate") < run_block.index(
+        "migration execution failed"
+    )
     assert run_block.index("migration execution failed") < run_block.index(
         "recreate_channel_services"
     )
@@ -235,6 +241,59 @@ def test_pin_write_preserves_channel_runtime_env() -> None:
     assert '$1 != "APP_IMAGE_REPOSITORY" && $1 != "APP_IMAGE_TAG"' in write_pin
     assert '>>"${tmp_file}"' in write_pin
     assert 'mv "${tmp_file}" "${file}"' in write_pin
+    assert '"$(mktemp "${file}.tmp.XXXXXX")" || return $?' in write_pin
+    assert "awk -F=" in write_pin and "rc=$?" in write_pin
+    assert write_pin.count('>>"${tmp_file}" || {') == 2
+
+
+@pytest.mark.parametrize(("failing_command", "failure_status"), [("mktemp", 92), ("awk", 92), ("printf", 93)])
+def test_pin_write_propagates_file_write_failures_inside_conditional_call(
+    tmp_path: Path, failing_command: str, failure_status: int
+) -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    write_pin = "write_pin() {" + text.split("write_pin() {", 1)[1].split("\n}\n", 1)[0] + "\n}\n"
+    pin_file = tmp_path / "channel.env"
+    original_pin = "APP_IMAGE_REPOSITORY=example.invalid/current\nAPP_IMAGE_TAG=old\nKEEP=exact\n"
+    pin_file.write_text(original_pin, encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    if failing_command != "printf":
+        fake_command = fake_bin / failing_command
+        fake_command.write_text(f"#!/usr/bin/env bash\nexit {failure_status}\n", encoding="utf-8")
+        fake_command.chmod(0o755)
+    harness = tmp_path / "write-pin-failure.sh"
+    harness.write_text(
+        "#!/usr/bin/env bash\n"
+        "set -euo pipefail\n"
+        f"{write_pin}"
+        + (
+            "printf() { builtin printf \"$@\"; return 93; }\n"
+            if failing_command == "printf"
+            else ""
+        )
+        +
+        "image_repository=example.invalid/target\n"
+        f"pin_file={str(pin_file)!r}\n"
+        "if write_pin \"${pin_file}\" new; then\n"
+        "  echo 'write_pin reported success after awk failure' >&2\n"
+        "  exit 99\n"
+        "else\n"
+        "  rc=$?\n"
+        f"  [ \"${{rc}}\" -eq {failure_status} ] || exit 98\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert pin_file.read_text(encoding="utf-8") == original_pin
+    assert not list(tmp_path.glob("channel.env.tmp.*"))
 
 
 def test_health_gate_requires_liveness_readiness_and_functional_health() -> None:
@@ -5006,6 +5065,8 @@ def _native_source_harness(
     tmp_path: Path, *, channel: str, ready: bool = False
 ) -> tuple[Path, dict[str, str], str]:
     root, env, sha = _deploy_harness(tmp_path)
+    ollama_model_state = tmp_path / "ollama-model-present"
+    ollama_model_state.touch()
     _configure_successful_channel_preflights(root, env, tmp_path, channel=channel)
     _install_bws_identity_guard_fixture(root)
     api_handle = tmp_path / "api-consumer.env"
@@ -5022,6 +5083,12 @@ def _native_source_harness(
         APP_IMAGE_TAG=sha,
         PKM_ENVIRONMENT=channel,
         FAKE_SOURCE_PROJECTION_READY="1" if ready else "0",
+        FAKE_EMBEDDING_PROVIDER="ollama",
+        FAKE_EMBEDDING_MODEL="nomic-embed-text:latest",
+        FAKE_OLLAMA_MODEL_STATE_FILE=str(ollama_model_state),
+        FAKE_OLLAMA_PULL_RC="0",
+        FAKE_EMBEDDING_PROBE_RC="0",
+        FAKE_EMBEDDING_IDENTITY_RC="0",
     )
     if channel == "prod":
         _configure_bws_retry_driver(tmp_path, env)
@@ -5079,6 +5146,13 @@ with open(os.environ["FAKE_DEPLOY_EVENT_LOG"], "a") as stream:
 if args[:1] == ["vault-alpha-ingest"]:
     with open(os.environ["FAKE_DEPLOY_EVENT_LOG"], "a") as stream:
         stream.write("source-rebuild\\n")
+        stream.write(
+            "source-rebuild-identity "
+            + os.environ.get("FAKE_EMBEDDING_PROVIDER", "unset")
+            + " "
+            + os.environ.get("FAKE_EMBEDDING_MODEL", "unset")
+            + "\\n"
+        )
     if os.environ.get("FAKE_SOURCE_PREADINESS", "1") == "1":
         Path(os.environ["FAKE_API_READY_FILE"]).touch()
     print(os.environ.get("FAKE_SOURCE_SUMMARY", '{"scanned":2,"ingested":2,"errors":0,"malformed":0,"skipped_locked":0,"skipped_invalid":0}'))
@@ -5124,12 +5198,91 @@ else:
   bash "${PWD}/api-command.sh"
   exit $?
 fi
+if [[ "$*" == *"native-source-embedding-identity.v1"* ]]; then
+  printf 'embedding-identity-read provider=%s model=%s\\n' \\
+    "${FAKE_EMBEDDING_PROVIDER:-ollama}" "${FAKE_EMBEDDING_MODEL:-nomic-embed-text:latest}" \\
+    >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  printf '{"contract":"native-source-embedding-identity.v1","provider":"%s","model":"%s"}\\n' \\
+    "${FAKE_EMBEDDING_PROVIDER:-ollama}" "${FAKE_EMBEDDING_MODEL:-nomic-embed-text:latest}"
+  if [ -n "${FAKE_EMBEDDING_IDENTITY_EXTRA_OUTPUT:-}" ]; then
+    printf '%s\\n' "${FAKE_EMBEDDING_IDENTITY_EXTRA_OUTPUT}"
+  fi
+  exit "${FAKE_EMBEDDING_IDENTITY_RC:-0}"
+fi
+if [[ "$*" == *" up -d --no-deps ollama"* ]]; then
+  printf 'ollama-up\\n' >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  exit "${FAKE_OLLAMA_UP_RC:-0}"
+fi
+if [[ "$*" == *"ollama list"* ]]; then
+  printf 'ollama-list\\n' >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  exit "${FAKE_OLLAMA_LIST_RC:-0}"
+fi
+if [[ "$*" == *"ollama show "* ]]; then
+  printf 'ollama-show\\n' >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  if [ -f "${FAKE_OLLAMA_MODEL_STATE_FILE:?}" ]; then
+    exit 0
+  fi
+  exit 1
+fi
+if [[ "$*" == *"ollama pull "* ]]; then
+  printf 'ollama-pull model=%s\\n' "${FAKE_EMBEDDING_MODEL:-nomic-embed-text:latest}" \\
+    >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  pull_rc="${FAKE_OLLAMA_PULL_RC:-0}"
+  if [ "${pull_rc}" = "0" ]; then
+    : > "${FAKE_OLLAMA_MODEL_STATE_FILE:?}"
+  fi
+  exit "${pull_rc}"
+fi
+if [[ "$*" == *"NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER"* ]]; then
+  printf 'embedding-probe provider=%s model=%s\\n' \\
+    "${FAKE_EMBEDDING_PROVIDER:-ollama}" "${FAKE_EMBEDDING_MODEL:-nomic-embed-text:latest}" \\
+    >> "${FAKE_DEPLOY_EVENT_LOG:?}"
+  exit "${FAKE_EMBEDDING_PROBE_RC:-0}"
+fi
 case "$*" in
 ''',
         1,
     )
     docker.write_text(text, encoding="utf-8")
     return root, env, sha
+
+
+def _native_source_harness_with_prior_deployment(
+    tmp_path: Path, *, ready: bool = True
+) -> tuple[Path, dict[str, str], str, str, str]:
+    root, env, current_sha = _native_source_harness(tmp_path, channel="dev", ready=ready)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-qm", "candidate deployment"],
+        cwd=root,
+        check=True,
+    )
+    target_sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+    (root / "config/deploy/dev.env").write_text(
+        "APP_IMAGE_REPOSITORY=example.invalid/current\n"
+        f"APP_IMAGE_TAG={current_sha}\n",
+        encoding="utf-8",
+    )
+    with (root / "config/deploy/dev.env").open("a", encoding="utf-8") as pin:
+        pin.write("CHANNEL_SETTING=preserve-exactly\n")
+    previous_pin = root / "config/deploy/dev.previous.env"
+    previous_pin_before = (
+        "APP_IMAGE_REPOSITORY=example.invalid/previous-anchor\n"
+        f"APP_IMAGE_TAG={current_sha}\n"
+        "ROLLBACK_ANCHOR_NOTE=preserve\n"
+    )
+    previous_pin.write_text(previous_pin_before, encoding="utf-8")
+    env.update(
+        APP_IMAGE_REPOSITORY="example.invalid/target-image",
+    )
+    env.update(
+        APP_IMAGE_TAG=target_sha,
+        BWS_DEPLOY_TARGET_REVISION=target_sha,
+        FAKE_SHA=target_sha,
+        VCS_REF=target_sha,
+    )
+    return root, env, current_sha, target_sha, previous_pin_before
 
 
 @pytest.mark.parametrize("channel", ["dev", "test", "prod"])
@@ -5169,6 +5322,329 @@ def test_native_deploy_rebuilds_source_projection_before_health_gate(
         assert f"api-cli vault-alpha-ingest --vault-root {(root / 'tmp').resolve()} --max-notes 0 --force --source-backed-rebuild --json" in events
     assert "hostile-child-canary" not in result.stdout + result.stderr
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("channel", ["dev", "test", "prod"])
+def test_native_source_projection_prepares_ollama_before_stopping_services(
+    tmp_path: Path, channel: str
+) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel=channel, ready=True)
+    selected_model = "nomic-embed-text:deployment-test"
+    env.update(FAKE_EMBEDDING_MODEL=selected_model)
+    Path(env["FAKE_OLLAMA_MODEL_STATE_FILE"]).unlink()
+
+    result = _run_deploy(root, env, sha, channel=channel)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    identity = events.index(f"embedding-identity-read provider=ollama model={selected_model}")
+    identity_command = next(
+        event for event in events
+        if event.startswith("docker ") and "native-source-embedding-identity.v1" in event
+    )
+    service_up = next(
+        index for index, event in enumerate(events)
+        if event.startswith("docker ") and " up -d --no-deps ollama" in event
+    )
+    model_pull = events.index(f"ollama-pull model={selected_model}")
+    embedding_probe = events.index(f"embedding-probe provider=ollama model={selected_model}")
+    embedding_probe_command = next(
+        event for event in events
+        if event.startswith("docker ") and "NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER" in event
+    )
+    first_stop = next(
+        index for index, event in enumerate(events)
+        if event.startswith("docker ") and " stop api worker watcher" in event
+    )
+    assert identity < service_up < model_pull < embedding_probe < first_stop
+    assert 'LLMRouter().route(LLMTaskIntent(task_kind="embed", strict_identity_required=True))' in identity_command
+    assert "SETTINGS_RELOAD_SIGNAL_PATH" not in identity_command
+    assert "SETTINGS_RELOAD_SIGNAL_PATH" not in embedding_probe_command
+    assert '"dim"' not in identity_command
+    assert f"ollama show {selected_model}" in "\n".join(events)
+    assert not any("hostile-child-canary" in event for event in events)
+
+
+@pytest.mark.parametrize(
+    (
+        "actual_provider",
+        "actual_model",
+        "actual_dimension",
+        "vector_length",
+        "expected_rc",
+        "embedding_runs",
+    ),
+    [
+        ("ollama", "nomic-embed-text:deployment-test", 3, 3, 0, True),
+        ("mock", "nomic-embed-text:deployment-test", 3, 3, 78, False),
+        ("ollama", "other-model", 3, 3, 78, False),
+        ("ollama", "nomic-embed-text:deployment-test", 4, 4, 0, True),
+        ("ollama", "nomic-embed-text:deployment-test", 3, 2, 78, True),
+    ],
+)
+def test_native_source_embedding_probe_checks_actual_identity_and_dimension(
+    tmp_path: Path,
+    actual_provider: str,
+    actual_model: str,
+    actual_dimension: int,
+    vector_length: int,
+    expected_rc: int,
+    embedding_runs: bool,
+) -> None:
+    assignment = next(
+        line.strip()
+        for line in SCRIPT.read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("probe_command=$'")
+    )
+    extracted = subprocess.run(
+        ["bash", "-c", f'{assignment}\nprintf "%s" "$probe_command"'],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert extracted.returncode == 0, extracted.stderr
+
+    app = tmp_path / "app"
+    components = app / "components"
+    llm = components / "llm"
+    llm.mkdir(parents=True)
+    (app / "__init__.py").write_text("", encoding="utf-8")
+    (components / "__init__.py").write_text("", encoding="utf-8")
+    (llm / "__init__.py").write_text("", encoding="utf-8")
+    (llm / "fabric.py").write_text(
+        '''import os
+from pathlib import Path
+from types import SimpleNamespace
+
+IDENTITY = SimpleNamespace(
+    provider=os.environ["FAKE_ACTUAL_PROVIDER"],
+    model=os.environ["FAKE_ACTUAL_MODEL"],
+    dim=int(os.environ["FAKE_ACTUAL_DIMENSION"]),
+)
+
+class ProductEmbeddingClient:
+    identity = IDENTITY
+
+    def embed_text(self, text):
+        Path(os.environ["FAKE_PROBE_CAPTURE"]).write_text(
+            f"{IDENTITY.provider}\\t{IDENTITY.model}\\t{text}",
+            encoding="utf-8",
+        )
+        return [0.0] * int(os.environ["FAKE_VECTOR_LENGTH"])
+
+    def close(self):
+        Path(os.environ["FAKE_PROBE_CLOSED"]).write_text("closed", encoding="utf-8")
+
+def get_product_embedding_client():
+    return ProductEmbeddingClient()
+''',
+        encoding="utf-8",
+    )
+    capture = tmp_path / "embedding-probe.txt"
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(tmp_path),
+        "NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER": "ollama",
+        "NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL": "nomic-embed-text:deployment-test",
+        "FAKE_ACTUAL_PROVIDER": actual_provider,
+        "FAKE_ACTUAL_MODEL": actual_model,
+        "FAKE_ACTUAL_DIMENSION": str(actual_dimension),
+        "FAKE_VECTOR_LENGTH": str(vector_length),
+        "FAKE_PROBE_CAPTURE": str(capture),
+        "FAKE_PROBE_CLOSED": str(tmp_path / "probe-closed"),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-c", extracted.stdout],
+        cwd=tmp_path,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == expected_rc, result.stdout + result.stderr
+    assert capture.exists() is embedding_runs
+    assert (tmp_path / "probe-closed").exists()
+    if embedding_runs:
+        assert capture.read_text(encoding="utf-8") == (
+            "ollama\tnomic-embed-text:deployment-test\tYggdrasil deployment preflight"
+        )
+
+
+@pytest.mark.parametrize("failure", ["service", "pull", "probe"])
+def test_native_source_projection_refuses_unavailable_ollama_before_stopping_services(
+    tmp_path: Path, failure: str
+) -> None:
+    root, env, _current_sha, sha, previous_pin_before = \
+        _native_source_harness_with_prior_deployment(tmp_path)
+    pin_file = root / "config/deploy/dev.env"
+    original_pin = pin_file.read_text(encoding="utf-8") if pin_file.exists() else None
+    if failure == "service":
+        env.update(FAKE_OLLAMA_UP_RC="43")
+    elif failure == "pull":
+        Path(env["FAKE_OLLAMA_MODEL_STATE_FILE"]).unlink()
+        env.update(FAKE_OLLAMA_PULL_RC="43")
+    else:
+        env.update(FAKE_EMBEDDING_PROBE_RC="44")
+
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert not any(
+        event.startswith("docker ") and " stop api worker watcher" in event
+        for event in events
+    )
+    assert not any(
+        event.startswith("docker ") and " up -d --force-recreate api worker watcher" in event
+        for event in events
+    )
+    assert "source-rebuild" not in events
+    if original_pin is None:
+        assert not pin_file.exists()
+    else:
+        assert pin_file.read_text(encoding="utf-8") == original_pin
+    assert (root / "config/deploy/dev.previous.env").read_text(encoding="utf-8") == previous_pin_before
+    assert not (root / "config/deploy/dev.migration-pending.env").exists()
+    assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+    assert "pre-migration pin state restored and app services were not stopped" in result.stderr
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+def test_native_source_projection_retains_pin_snapshot_when_restore_fails(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha, target_sha, previous_pin_before = \
+        _native_source_harness_with_prior_deployment(tmp_path)
+    primary_pin_before = (root / "config/deploy/dev.env").read_text(encoding="utf-8")
+    mv = tmp_path / "bin/mv"
+    mv.write_text(
+        '''#!/usr/bin/env bash
+set -eu
+if [ "${FAKE_FAIL_PIN_RESTORE:-0}" = "1" ] &&
+   [ "${1:-}" = "-f" ] && [ "${2:-}" = "--" ] &&
+   [[ "${3:-}" == *"/config/deploy/dev.env.preflight."* ]] &&
+   [ "${4:-}" = "${PWD}/config/deploy/dev.env" ] &&
+   grep -q "embedding-identity-read" "${FAKE_DEPLOY_EVENT_LOG:?}"; then
+  exit 91
+fi
+exec /bin/mv "$@"
+''',
+        encoding="utf-8",
+    )
+    mv.chmod(0o755)
+    env.update(FAKE_OLLAMA_UP_RC="43", FAKE_FAIL_PIN_RESTORE="1")
+
+    result = _run_deploy(root, env, target_sha, channel="dev")
+
+    assert result.returncode == 78
+    assert "pre-migration pin/marker restoration failed" in result.stderr
+    events = _deploy_events(env)
+    assert not any(
+        event.startswith("docker ") and " stop api worker watcher" in event
+        for event in events
+    )
+    assert not any(
+        event.startswith("docker ") and " up -d --force-recreate api worker watcher" in event
+        for event in events
+    )
+    assert _read_pin_tag(root / "config/deploy/dev.env") == target_sha
+    assert _read_pin_tag(root / "config/deploy/dev.previous.env") == current_sha
+    assert (root / "config/deploy/dev.env").read_text(encoding="utf-8") != primary_pin_before
+    primary_snapshots = list((root / "config/deploy").glob("dev.env.preflight.*"))
+    previous_snapshots = list((root / "config/deploy").glob("dev.previous.env.preflight.*"))
+    assert len(primary_snapshots) == len(previous_snapshots) == 1
+    assert primary_snapshots[0].read_text(encoding="utf-8") == primary_pin_before
+    assert previous_snapshots[0].read_text(encoding="utf-8") == previous_pin_before
+
+
+def test_native_same_target_preflight_failure_preserves_inherited_marker_and_pins(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha, target_sha, previous_pin_before = \
+        _native_source_harness_with_prior_deployment(tmp_path)
+    pin_file = root / "config/deploy/dev.env"
+    pin_file_before = (
+        "APP_IMAGE_REPOSITORY=example.invalid/inherited-retry\n"
+        f"APP_IMAGE_TAG={target_sha}\n"
+        "CHANNEL_SETTING=retry-pin-preserve\n"
+    )
+    pin_file.write_text(pin_file_before, encoding="utf-8")
+    marker = root / "config/deploy/dev.migration-pending.env"
+    marker_before = (
+        f"FROM_SHA={current_sha}\n"
+        f"TARGET_SHA={target_sha}\n"
+        "ACK_FORWARD_ONLY=0\n"
+    )
+    marker.write_text(marker_before, encoding="utf-8")
+    env.update(FAKE_OLLAMA_UP_RC="43")
+
+    result = _run_deploy(root, env, target_sha, channel="dev")
+
+    assert result.returncode == 78
+    assert "pre-migration pin state restored and app services were not stopped" in result.stderr
+    events = _deploy_events(env)
+    assert not any(
+        event.startswith("docker ") and " stop api worker watcher" in event
+        for event in events
+    )
+    assert pin_file.read_text(encoding="utf-8") == pin_file_before
+    assert (root / "config/deploy/dev.previous.env").read_text(encoding="utf-8") == previous_pin_before
+    assert marker.read_text(encoding="utf-8") == marker_before
+    assert not list((root / "config/deploy").glob("dev.env.preflight.*"))
+    assert not list((root / "config/deploy").glob("dev.previous.env.preflight.*"))
+
+
+def test_native_source_embedding_identity_receipt_rejects_unrelated_compose_output(
+    tmp_path: Path,
+) -> None:
+    root, env, _current_sha, sha, previous_pin_before = \
+        _native_source_harness_with_prior_deployment(tmp_path)
+    pin_file = root / "config/deploy/dev.env"
+    original_pin = pin_file.read_text(encoding="utf-8") if pin_file.exists() else None
+    canary = "private-compose-output-canary"
+    env["FAKE_EMBEDDING_IDENTITY_EXTRA_OUTPUT"] = canary
+
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode != 0
+    events = _deploy_events(env)
+    assert not any("ollama-up" in event for event in events)
+    assert not any(
+        event.startswith("docker ") and " stop api worker watcher" in event
+        for event in events
+    )
+    if original_pin is None:
+        assert not pin_file.exists()
+    else:
+        assert pin_file.read_text(encoding="utf-8") == original_pin
+    assert (root / "config/deploy/dev.previous.env").read_text(encoding="utf-8") == previous_pin_before
+    assert not (root / "config/deploy/dev.migration-pending.env").exists()
+    assert canary not in result.stdout + result.stderr
+    assert "receipt=invalid" not in result.stdout + result.stderr
+    assert "YGGDRASIL_DEPLOY_FAILURE_STAGE=source_projection" in result.stderr
+
+
+def test_native_source_projection_preserves_selected_embedding_identity(
+    tmp_path: Path,
+) -> None:
+    root, env, current_sha, sha, _previous_pin_before = \
+        _native_source_harness_with_prior_deployment(tmp_path, ready=False)
+    selected_model = "nomic-embed-text:deployment-test"
+    env.update(FAKE_EMBEDDING_MODEL=selected_model)
+
+    result = _run_deploy(root, env, sha, channel="dev")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = _deploy_events(env)
+    assert f"embedding-identity-read provider=ollama model={selected_model}" in events
+    assert f"embedding-probe provider=ollama model={selected_model}" in events
+    assert f"source-rebuild-identity ollama {selected_model}" in events
+    assert f"ollama-pull model={selected_model}" not in events
+    assert not any("provider=mock" in event for event in events)
+    assert _read_pin_tag(root / "config/deploy/dev.previous.env") == current_sha
+    assert not list((root / "config/deploy").glob("dev.previous.env.preflight.*"))
 
 
 def test_native_deploy_repairs_vector_only_gap_before_health_gate(tmp_path: Path) -> None:
