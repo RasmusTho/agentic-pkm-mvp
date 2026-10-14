@@ -1744,6 +1744,14 @@ _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE = re.compile(
     r"(?:\s*:\s*|\s+).*?\bis\s+still\s+dirty\b",
     re.IGNORECASE,
 )
+_DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE = re.compile(
+    r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\b",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE = re.compile(
+    r"^\s*is\s+still\s+dirty\b",
+    re.IGNORECASE,
+)
 _DISPATCHER_DEDICATED_WORKTREE_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+`?/[^\s;`,]+`?\s+"
     r"is\s+still\s+dirty\s+on\s+branch\s+`?[^\s;`,]+`?\s+at\s+head\s+`?[0-9a-f]{40,64}`?",
@@ -1852,14 +1860,25 @@ def _dispatcher_resumable_binding_resources(
         if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
             raise RuntimeError("dispatcher_activity_invalid")
         body = comment["body"]
-        for line in body.splitlines():
+        lines = body.splitlines()
+        for line_number, line in enumerate(lines):
+            dedicated_cross_line_marker = bool(
+                _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(line)
+                and line_number + 1 < len(lines)
+                and _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE.search(
+                    lines[line_number + 1]
+                )
+            )
             explicit_binding = bool(
                 _DISPATCHER_PICKUP_RECEIPT_RE.search(line)
                 or _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
                 or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(line)
+                or dedicated_cross_line_marker
             )
             if not explicit_binding:
                 continue
+            if dedicated_cross_line_marker:
+                raise RuntimeError("dispatcher_activity_invalid")
             if (
                 _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
                 and not _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
