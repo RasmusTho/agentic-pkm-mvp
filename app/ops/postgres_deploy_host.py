@@ -13,7 +13,7 @@ from uuid import UUID
 from app.ops.bws_secret_admin import BwsAdminConfig, BwsSecretAdmin
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
 from app.ops.host_secret_controller import HostSecretController, TerminalEvidence
-from app.ops.postgres_deploy import DeployPlan, DeployReceipt, PostgresDeployError, deploy_from_host
+from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, deploy_from_host
 from app.ops.postgres_deploy_linux import SshDeployRemote
 from app.ops.secret_admin import SecretAdmin
 
@@ -157,6 +157,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--image-digest', help='immutable published sha256 image-index digest')
     parser.add_argument('--automatic', action='store_true', help='non-production existing-secret delivery')
     parser.add_argument('--operation-id', help='stable automatic candidate/channel operation UUID')
+    parser.add_argument('--authority-cutover-binding', help='already-qualified nonprod binding')
+    parser.add_argument('--authority-cutover-root', help='exact existing selected host root')
+    parser.add_argument('--authority-cutover-ownership-root', help='qualified existing host ownership state')
     parser.add_argument(
         '--ack-forward-only', action='store_true',
         help='acknowledge forward-only migrations in this exact deployment request',
@@ -171,10 +174,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
+        cutover = None
+        if any(value is not None for value in (args.authority_cutover_binding, args.authority_cutover_root,
+                                               args.authority_cutover_ownership_root)):
+            if (not args.authority_cutover_binding or not args.authority_cutover_root
+                or not args.authority_cutover_ownership_root or not args.existing_secrets_only):
+                raise PostgresDeployError()
+            cutover = AuthorityCutover(args.authority_cutover_binding, args.authority_cutover_root,
+                                       args.authority_cutover_ownership_root)
         if args.automatic and not args.existing_secrets_only:
             raise PostgresDeployError()
         if args.operation_id is not None and (
-            not args.automatic or str(UUID(args.operation_id)) != args.operation_id
+            not (args.automatic or cutover is not None) or str(UUID(args.operation_id)) != args.operation_id
         ):
             raise PostgresDeployError()
         controller = HostSecretController()
@@ -182,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         # binding. VM-only consumers are selected from VM runtime/migration state.
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),
                           (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only,
-                          args.image_digest, args.automatic)
+                          args.image_digest, args.automatic, cutover)
         plan.validate()
         if args.reconcile_pending:
             if not args.existing_secrets_only:
