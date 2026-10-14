@@ -11,10 +11,17 @@ from typing import Any, Callable, Iterator
 from uuid import UUID
 
 from app.config.paths import resolve_vault_root
-from app.knowledge.adapters import FsVaultAdapter
-from app.knowledge.contracts import NoteLocator
+from app.knowledge.write_ops import read_recovery_snapshot_relative
 from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.rebuildability.product_total_loss import capture_source_frontmatter, canonical_product_source_text
+
+
+def _source_uuid(value: object) -> str | None:
+    """Use the producer's supported scalar/list/wikilink identity grammar."""
+    from app.ingest.vault_alpha import _normalize_uuid, _sanitize_uuid
+
+    normalized, invalid = _sanitize_uuid(_normalize_uuid(value))
+    return normalized if normalized and not invalid else None
 
 
 def assert_unique_projection_source(
@@ -49,11 +56,7 @@ def assert_unique_projection_source(
         claims = (payload.get("vault_uuid"), payload.get("artifact_id"), payload.get("stable_id"),
                   frontmatter.get("uuid"), frontmatter.get("id"), core.get("id"))
         for value in claims:
-            try:
-                other_uuid = UUID(str(value))
-            except (TypeError, AttributeError, ValueError):
-                continue
-            if other_uuid in (UUID(vault_uuid), UUID(expected_id)):
+            if _source_uuid(value) in (vault_uuid, expected_id):
                 raise ValueError("ambiguous source projection")
 
 
@@ -120,7 +123,6 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
     if not candidates:
         return 0
     root = resolve_vault_root().resolve(strict=True)
-    adapter = FsVaultAdapter(root)
     count = 0
     for row in candidates:
         payload = row["payload"]
@@ -128,8 +130,7 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
             raise ValueError("legacy source refused")
         source = Path(row["source_ref"])
         relative = source.relative_to(root) if source.is_absolute() else source
-        locator = NoteLocator(vault="active", path=relative.as_posix())
-        snapshot = adapter.read_recovery_snapshot(locator)
+        snapshot = read_recovery_snapshot_relative(relative.as_posix(), vault_root=root)
         raw, _identity = snapshot
         frontmatter = capture_source_frontmatter(raw)
         if frontmatter is None:
@@ -156,9 +157,9 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
         if note.frontmatter_invalid or not note.frontmatter_uuid:
             raise ValueError("legacy source identity unknown")
         vault_uuid = note.note_uuid
-        if parsed.get("uuid") and parsed.get("id") and str(parsed["uuid"]) != str(parsed["id"]):
+        if any(parsed.get(key) and _source_uuid(parsed[key]) != vault_uuid for key in ("uuid", "id")):
             raise ValueError("ambiguous source identity")
-        if "vault_uuid" in payload and str(payload["vault_uuid"]) != vault_uuid:
+        if "vault_uuid" in payload and _source_uuid(payload["vault_uuid"]) != vault_uuid:
             raise ValueError("legacy source identity drift")
         if "replay" in payload and payload["replay"] != producer.product_replay_for_vault_note(
             root / relative, vault_root=root, source_text=raw,
@@ -183,16 +184,11 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                 raise ValueError("ambiguous producer inventory")
             claims = 0
             for path in iter_vault_markdown_files(root):
-                text, _ = adapter.read_recovery_snapshot(NoteLocator(vault="active", path=path.relative_to(root).as_posix()))
+                text, _ = read_recovery_snapshot_relative(path.relative_to(root).as_posix(), vault_root=root)
                 fm = capture_source_frontmatter(text)
                 if fm is None:
                     raise ValueError("ambiguous source inventory")
-                identities = set()
-                for value in (fm.get("uuid"), fm.get("id")):
-                    try:
-                        identities.add(str(UUID(str(value))))
-                    except (ValueError, TypeError):
-                        continue
+                identities = {_source_uuid(fm.get(key)) for key in ("uuid", "id")}
                 if vault_uuid in identities:
                     claims += 1
             if claims != 1:
@@ -203,7 +199,7 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
 
         def revalidate() -> None:
             DEFAULT_WRITE_GUARD.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
-            if resolve_vault_root().resolve(strict=True) != root or adapter.read_recovery_snapshot(locator) != snapshot:
+            if resolve_vault_root().resolve(strict=True) != root or read_recovery_snapshot_relative(relative.as_posix(), vault_root=root) != snapshot:
                 raise ValueError("source changed")
             assert_profile_note_ingestible(root, relative.as_posix(), vault_uuid, source_text=raw)
             if eligibility() != selected:

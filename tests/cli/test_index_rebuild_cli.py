@@ -105,6 +105,31 @@ def test_legacy_source_reconciliation_uses_current_canonical_eligibility(monkeyp
     assert not (root / "_system" / "companions").exists()
 
 
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("form", ["wikilink", "list", "yaml-wikilink", "upper"])
+def test_legacy_source_uuid_forms_match_producer_and_refuse_duplicates(monkeypatch, tmp_path, selected, form):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=selected)
+    oid = str(original["object_id"])
+    encoded = {"wikilink": f"'[[{oid}]]'", "list": f"[{oid}]",
+               "yaml-wikilink": f"[[{oid}]]", "upper": oid.upper()}[form]
+    text = raw.decode().replace(f"uuid: {oid}", f"uuid: {encoded}\nid: {oid}")
+    text = text.replace("trust: human", "episode_ref: [episode-fixture]\ntrust: human")
+    source.write_text(text)
+    before = __import__("copy").deepcopy(state.rows)
+    duplicate = root / "duplicate.md"
+    duplicate.write_text(text)
+    with pytest.raises(ValueError, match="ambiguous source identity"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == before and not state.calls and not state.vectors
+    duplicate.unlink()
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    if selected:
+        assert state.rows[0]["payload"]["episode_ref"] == ["episode-fixture"]
+        assert state.vectors[oid]["payload"]["episode_ref"] == ["episode-fixture"]
+    assert source.read_text() == text
+
+
 def test_legacy_excluded_source_retires_only_exact_stale_projection(monkeypatch, tmp_path):
     recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
     unrelated = {**original, "object_id": uuid4(), "source_ref": str(root / "other.md"),
