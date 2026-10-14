@@ -879,6 +879,57 @@ raise SystemExit(1)
 PY
 }
 
+_deploy_channel_native_embedding_identity_output_requested() {
+  [ "${DEPLOY_NATIVE_SOURCE_EMBEDDING_IDENTITY_OUTPUT:-0}" = "1" ] || return 1
+  [ "$#" -eq 9 ] || return 1
+  [ "${1:-}" = "run" ] && [ "${2:-}" = "--rm" ] && \
+    [ "${3:-}" = "--no-deps" ] && [ "${4:-}" = "-T" ] && \
+    [ "${5:-}" = "--entrypoint" ] && [ "${6:-}" = "python" ] && \
+    [ "${7:-}" = "api" ] && [ "${8:-}" = "-c" ] || return 1
+  [ "${9:-}" = 'import json; from app.components.llm.router import LLMRouter, LLMTaskIntent; route = LLMRouter().route(LLMTaskIntent(task_kind="embed", strict_identity_required=True)); identity = route.embedding_identity; assert identity is not None; print(json.dumps({"contract": "native-source-embedding-identity.v1", "provider": identity.provider, "model": identity.model}, separators=(",", ":")))' ]
+}
+
+_deploy_channel_redact_native_embedding_identity() {
+  local output_file="${1:?captured output file required}"
+  "${PYTHON:-python3}" - "${output_file}" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+    raw = Path(sys.argv[1]).read_bytes()
+    if len(raw) > 4096:
+        raise ValueError
+    lines = raw.decode("utf-8").splitlines()
+except (OSError, UnicodeDecodeError, ValueError):
+    raise SystemExit(1) from None
+if len(lines) != 1:
+    raise SystemExit(1)
+try:
+    payload = json.loads(lines[0])
+except (TypeError, ValueError):
+    raise SystemExit(1) from None
+if not isinstance(payload, dict) or set(payload) != {"contract", "provider", "model"}:
+    raise SystemExit(1)
+provider, model = payload.get("provider"), payload.get("model")
+if (
+    payload.get("contract") != "native-source-embedding-identity.v1"
+    or not isinstance(provider, str)
+    or re.fullmatch(r"[a-z][a-z0-9_-]{0,31}", provider) is None
+):
+    raise SystemExit(1)
+if provider == "ollama":
+    if not isinstance(model, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", model) is None:
+        raise SystemExit(1)
+else:
+    model = ""
+print(json.dumps({"provider": provider, "model": model}, separators=(",", ":")))
+PY
+}
+
 deploy_channel_compose() {
   local root="${1:?repo root required}"
   local channel="${2:?channel required}"
@@ -1185,6 +1236,25 @@ deploy_channel_compose() {
         --output "${DEPLOY_COMPOSE_FENCE_CONFIG_OUTPUT}" \
         >"${compose_stderr_file}" 2>&1; then
         echo "governed compose config handoff failed: output=redacted" >&2
+        return 92
+      fi
+      return 0
+    fi
+    if [ "${DEPLOY_NATIVE_SOURCE_EMBEDDING_IDENTITY_OUTPUT:-0}" = "1" ]; then
+      if ! _deploy_channel_native_embedding_identity_output_requested "$@"; then
+        echo "governed compose output blocked: command=source_embedding_identity request=invalid" >&2
+        return 92
+      fi
+      set +e
+      "${compose_command[@]}" >"${compose_stdout_file}" 2>"${compose_stderr_file}"
+      compose_rc=$?
+      set -e
+      if [ "${compose_rc}" -ne 0 ]; then
+        echo "governed compose command failed: output=redacted" >&2
+        return "${compose_rc}"
+      fi
+      if ! _deploy_channel_redact_native_embedding_identity "${compose_stdout_file}"; then
+        echo "governed compose output blocked: command=source_embedding_identity receipt=invalid" >&2
         return 92
       fi
       return 0
