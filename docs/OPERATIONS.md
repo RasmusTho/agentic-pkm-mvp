@@ -482,8 +482,9 @@ Companion docs:
   path references through the four-key allowlist. Missing or invalid optional input keeps legacy
   empty bindings; see [Rollback posture](RELEASE_CHANNELS/README.md#rollback-posture) for the
   configuration and modern-caller limits.
-- A failed supervised deploy child reports only an allowlisted advisory gate stage and
-  `command_failed` class directly to the existing native journal socket, with `unknown` for absent
+- A failed supervised deploy child reports only an allowlisted advisory gate stage and the finite
+  class defined in the [Deploy procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#deploy-procedure)
+  directly to the existing native journal socket, retaining `unknown`/`command_failed` for absent
   or ambiguous markers. One nonblocking datagram carries only the finite message and fixed priority
   and identifier; both raw service streams remain null. An unavailable or full socket loses only
   the advisory diagnostic. This diagnostic does not establish a terminal result or live
