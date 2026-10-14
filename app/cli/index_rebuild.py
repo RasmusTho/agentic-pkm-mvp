@@ -204,16 +204,17 @@ class MissingVectorRepairFailure(RuntimeError):
 @index.command("reconcile-legacy", help="Reconcile evidence-free legacy mirrors against current source policy.")
 @click.option("--json", "as_json", is_flag=True, default=False)
 def reconcile_legacy(as_json: bool) -> None:
-    from app.rebuildability.legacy_source import reconcile_legacy_sources
+    from app.rebuildability.legacy_source import private_source_output, reconcile_legacy_sources
     from app.stores.pg import PgObjectStore, PgVectorIndex
     try:
-        binding = domain_objects.resolve_object_store_port()
-        vector = get_vector_index()
-        if (binding.backend != "pg" or not isinstance(binding.store, PgObjectStore)
-                or not isinstance(vector, PgVectorIndex)
-                or binding.store.vault_binding_id != vector.vault_binding_id):
-            raise ValueError("legacy binding refused")
-        processed = reconcile_legacy_sources(binding, vector, get_product_embedding_client)
+        with private_source_output():
+            binding = domain_objects.resolve_object_store_port()
+            vector = get_vector_index()
+            if (binding.backend != "pg" or not isinstance(binding.store, PgObjectStore)
+                    or not isinstance(vector, PgVectorIndex)
+                    or binding.store.vault_binding_id != vector.vault_binding_id):
+                raise ValueError("legacy binding refused")
+            processed = reconcile_legacy_sources(binding, vector, get_product_embedding_client)
     except Exception:
         click.echo(json.dumps({"reason": "source_post_rebuild_failed"}))
         raise click.exceptions.Exit(79) from None

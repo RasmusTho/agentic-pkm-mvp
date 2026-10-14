@@ -76,7 +76,7 @@ def _count(object_id) -> int:
             return int(cur.fetchone()[0])
 
 
-@pytest.mark.parametrize("mode", ["replace", "retire", "existing", "write-failure", "source-race", "row-race", "history", "identity", "retire-source-race"])
+@pytest.mark.parametrize("mode", ["replace", "retire", "existing", "write-failure", "source-race", "row-race", "history", "identity", "retire-source-race", "reverse-identity", "cross-key-alias"])
 def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, monkeypatch, mode):
     from copy import deepcopy
     from app.rebuildability.product_total_loss import product_replay_provenance
@@ -87,12 +87,16 @@ def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, 
     store.put(other, kind="note", source_ref="other.md", payload={"text": "preserved"})
     expected = dict(store.get(oid))
     original = deepcopy(expected)
+    source_uuid = uuid4() if mode == "cross-key-alias" else oid
+    retained_uuid = uuid4() if mode == "reverse-identity" else source_uuid
     # The identity seam is production SQL, not a mocked resolver.
     from app.db.db import ensure_schema
     with psycopg.connect(_dsn()) as conn:
         ensure_schema(conn)
         conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
-                     (other if mode == "identity" else oid, oid, store.vault_binding_id))
+                     (other if mode == "identity" else oid, retained_uuid, store.vault_binding_id))
+    if mode == "cross-key-alias":
+        store.put(source_uuid, kind="note", source_ref="unrelated-alias.md", payload={"text": "preserved alias"})
     replacement = dict(frontmatter={}, text="canonical body", origin="vault", trust="human", review_state="reviewed",
         replay=product_replay_provenance(source_identity="source.md", source_text="canonical body"))
     vector = dict(kind="note", source_ref="source.md", payload={"text": "canonical body"},
@@ -115,7 +119,7 @@ def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, 
     if mode == "write-failure":
         monkeypatch.setattr(pg_store.PgVectorIndex, "upsert", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("failed insert")))
     retiring = mode in ("retire", "history", "retire-source-race")
-    kwargs = dict(vault_uuid=str(oid), revalidate=revalidate,
+    kwargs = dict(vault_uuid=str(source_uuid), revalidate=revalidate,
                   replacement=None if retiring else replacement, vector=None if retiring else vector)
     if mode in ("replace", "retire"):
         store.reconcile_legacy_source(expected, **kwargs)

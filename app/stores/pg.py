@@ -1164,14 +1164,19 @@ class PgObjectStore(ObjectStore):
                 cur.execute("LOCK TABLE objects IN SHARE MODE")
                 cur.execute("LOCK TABLE store_objects IN SHARE ROW EXCLUSIVE MODE")
                 cur.execute(
-                    "SELECT object_id, kind, source_ref, payload FROM store_objects "
+                    "SELECT object_id, kind, source_ref, payload, created_at FROM store_objects "
                     "WHERE vault_binding_id = %s AND object_id = %s FOR UPDATE",
                     (self.vault_binding_id, oid),
                 )
                 current = cur.fetchone()
-                if current != {key: expected[key] for key in ("object_id", "kind", "source_ref", "payload")}:
+                if current != {key: expected[key] for key in ("object_id", "kind", "source_ref", "payload", "created_at")}:
                     raise ValueError("legacy projection changed")
-                canonical = UUID(resolve_vault_uuid_for_recovery_with_connection(
+                retained_uuid = retained_vault_uuid_with_connection(
+                    conn, str(oid), vault_binding_id=self.vault_binding_id,
+                )
+                if retained_uuid is not None and UUID(retained_uuid) != UUID(vault_uuid):
+                    raise ValueError("legacy reverse identity changed")
+                canonical = UUID(resolve_vault_uuid_with_connection(
                     conn, vault_uuid, vault_binding_id=self.vault_binding_id,
                 ))
                 if canonical != oid:

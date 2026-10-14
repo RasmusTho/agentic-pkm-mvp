@@ -328,8 +328,6 @@ def rebuild_if_needed(selector: str) -> None:
         ])
         if not _checkpoint('source_summary_invalid', source_rebuild_complete, summary):
             raise SourceBootstrapFailure('source_post_rebuild_failed')
-        if not _checkpoint('source_post_rebuild_failed', _product_ready, root):
-            raise SourceBootstrapFailure('source_post_rebuild_failed')
         remaining = _run_json(['index', 'doctor', '--json'])
         missing = _checkpoint('source_doctor_failed', _diagnosis_unembedded_count, remaining)
         if missing > 0 and remaining['non_vector_issue_count'] == 0:
@@ -341,6 +339,8 @@ def rebuild_if_needed(selector: str) -> None:
             if (not isinstance(repaired, dict) or type(repaired.get('processed')) is not int
                     or repaired['processed'] < 0):
                 raise SourceBootstrapFailure('source_summary_invalid')
+        if not _checkpoint('source_post_rebuild_failed', _product_ready, root):
+            raise SourceBootstrapFailure('source_post_rebuild_failed')
     diagnosis = _run_json(['index', 'doctor', '--json', '--strict'])
     unembedded_count = _checkpoint('source_doctor_failed', _diagnosis_unembedded_count, diagnosis)
     if (

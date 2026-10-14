@@ -171,6 +171,35 @@ def test_legacy_source_reconciliation_refuses_unsafe_or_racing_sources(monkeypat
     assert str(root) not in result.output and "canary" not in result.output
 
 
+@pytest.mark.parametrize("scope", ["same", "ancestor", "subtree"])
+def test_legacy_source_reconciliation_refuses_broader_legacy_producer_scope(monkeypatch, tmp_path, scope):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    legacy_root = {"same": root, "ancestor": root.parent, "subtree": source.parent}[scope]
+    monkeypatch.setenv("VAULT_DIR", str(legacy_root))
+    with pytest.raises(ValueError, match="ambiguous producer inventory"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == [original] and state.calls == [] and state.vectors == {}
+    assert source.read_bytes() == raw
+
+
+def test_legacy_source_reconciliation_suppresses_conflict_and_settings_logs(monkeypatch, tmp_path, caplog):
+    import logging
+    from app.settings.locations import LEGACY_COMPILED_DIR
+    from app.knowledge.multiwriter import conflict_artifact_path
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path, selected=True)
+    legacy = root / LEGACY_COMPILED_DIR / "watchers.md"
+    legacy.parent.mkdir()
+    legacy.write_text("---\ncompanion: {}\n---\nsettings")
+    conflict = root / conflict_artifact_path("private.md", written_at=datetime.now(timezone.utc), writer_identity="private-writer")
+    conflict.write_text("private conflict canary")
+    previous = logging.root.manager.disable
+    with caplog.at_level(logging.DEBUG):
+        assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert str(root) not in caplog.text and "private" not in caplog.text
+    assert logging.root.manager.disable == previous
+    assert conflict.exists() and source.read_bytes() == raw
+
+
 def _missing_repair_fixture(monkeypatch):
     """Run the production ObjectStore consumer and PG insert SQL against a tiny DB double."""
     from contextlib import nullcontext

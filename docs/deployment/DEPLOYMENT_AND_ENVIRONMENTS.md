@@ -955,11 +955,13 @@ prepares its evidence-complete vault-alpha projection without source, companion 
 embedding generation precedes atomic compare-and-swap Product replacement plus absent-only vector
 insertion. A currently excluded source may instead retire only its exact stale rebuildable mirror,
 with derived vector state absent; source files, canonical objects, receipts and accepted history
-remain untouched. History dependencies, candidate/staging or untrusted material, changed sources,
+remain untouched. Alpha exclusion is insufficient when the separate dev-only filesystem watcher's
+configured/default `VAULT_DIR` scope overlaps the active vault; unresolved broader-producer
+applicability refuses retirement. History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again
 inside the transaction, including after writes, so partial writes roll back; existing vectors
 never get overwritten. Only finite counts/refusal classes cross the private CLI boundary. Missing-only
-repair and the strict whole-binding final doctor still follow, before service activation. This is
+repair, fresh Product readiness and the strict whole-binding final doctor still follow, before service activation. This is
 repository support, not a claim that legacy live DEV/TEST gaps or parent acceptance have converged.
 Source-backed replay counts a vector-producer exception as an error, not an ingested note,
 and returns a nonzero result with numeric counters. The private native consumer validates

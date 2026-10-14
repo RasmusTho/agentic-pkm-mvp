@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import contextlib
 import io
+import logging
+import os
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from uuid import UUID
 
 from app.config.paths import resolve_vault_root
@@ -34,7 +36,27 @@ def assert_admission_layers(*layers: dict) -> None:
             raise ValueError("source admission refused")
 
 
+@contextlib.contextmanager
+def private_source_output() -> Iterator[None]:
+    """Keep the complete private one-shot, including library logs, content-free."""
+    previous_logging_disable = logging.root.manager.disable
+    try:
+        # This entrypoint belongs to a private synchronous CLI process, not a
+        # request handler. Existing log handlers can retain the old stderr, so
+        # redirecting streams alone cannot protect settings/quarantine paths.
+        logging.disable(logging.CRITICAL)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            yield
+    finally:
+        logging.disable(previous_logging_disable)
+
+
 def reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable[..., Any]) -> int:
+    with private_source_output():
+        return _reconcile_legacy_sources(binding, index, client_factory)
+
+
+def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable[..., Any]) -> int:
     """Re-prove canonical policy; never infer authority from a legacy payload.
 
     The caller owns guarded native deployment/quiescence. All source streams
@@ -107,6 +129,17 @@ def reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable[
             # Alpha, layout-aware root ingest and watcher ingestion share this
             # inventory. A missing/invalid layout is ambiguity, not exclusion.
             inventory = producer.select_source_backed_rebuild_candidates(root)
+            selected = root / relative in inventory
+            # The separate dev-only fs_watcher/vault-sync producer has a
+            # broader inventory (VAULT_DIR/**/*.md except .obsidian). Native
+            # deployment does not attest whether that optional producer is
+            # enabled. If its configured/default scope overlaps this vault,
+            # alpha exclusion alone cannot authorize retirement. Fail closed
+            # rather than enabling that producer or using alpha to bypass it.
+            legacy_root = Path(os.environ.get("VAULT_DIR", "vault")).expanduser().resolve()
+            if (not selected and (root / relative).is_relative_to(legacy_root)
+                    and not any(part.startswith(".obsidian") for part in (root / relative).parts)):
+                raise ValueError("ambiguous producer inventory")
             claims = 0
             for path in iter_vault_markdown_files(root):
                 text, _ = adapter.read_recovery_snapshot(NoteLocator(vault="active", path=path.relative_to(root).as_posix()))
@@ -123,7 +156,7 @@ def reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable[
                     claims += 1
             if claims != 1:
                 raise ValueError("ambiguous source identity")
-            return root / relative in inventory
+            return selected
 
         selected = eligibility()
 

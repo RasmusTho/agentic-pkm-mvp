@@ -5764,10 +5764,11 @@ def test_native_legacy_reconciliation_refusal_is_private_and_blocks_activation(t
 
 
 @pytest.mark.pg
-def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch):
+@pytest.mark.parametrize("selected", [True, False])
+def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch, selected):
     """Native ordering reaches the real producer, PG CAS and strict doctor.
 
-    Retained replay/readiness are isolated here to leave one evidence-free
+    Retained replay is isolated here to leave one evidence-free
     candidate for the new stage; all reconciliation and doctor SQL is real.
     """
     from types import SimpleNamespace
@@ -5784,7 +5785,7 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
     from app.rebuildability.product_total_loss import evaluate_product_store_readiness
 
     recovery, state, root, source, raw, original, _, _, factory = _legacy_source_fixture(
-        monkeypatch, tmp_path, selected=True)
+        monkeypatch, tmp_path, selected=selected)
     pg._TABLES_READY = False
     pg._ensure_tables()
     pg.truncate_pg_tables()
@@ -5801,7 +5802,6 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
     monkeypatch.setattr(doctor, "get_vector_index", lambda: index)
     monkeypatch.setattr(doctor, "get_embeddings_client", lambda *args, **kwargs: factory())
     monkeypatch.setattr(native, "preflight", lambda selector: root)
-    monkeypatch.setattr(native, "_product_ready", lambda root: True)
     events = []
 
     def run(arguments):
@@ -5819,10 +5819,14 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
     assert events.index(["index", "reconcile-legacy", "--json"]) < events.index(["index", "repair-missing", "--json"])
     assert events[-1] == ["index", "doctor", "--json", "--strict"]
     projected = store.get(original["object_id"])
-    assert projected["payload"]["frontmatter"]["trust"] == "human"
-    assert projected["object_id"] == original["object_id"]
-    assert index.present_object_ids() == {str(original["object_id"])}
-    assert state.embedded == ["canonical body"]
+    if selected:
+        assert projected["payload"]["frontmatter"]["trust"] == "human"
+        assert projected["object_id"] == original["object_id"]
+        assert index.present_object_ids() == {str(original["object_id"])}
+        assert state.embedded == ["canonical body"]
+    else:
+        assert projected is None and index.present_object_ids() == set()
+        assert state.embedded == []
     assert source.read_bytes() == raw
     assert evaluate_product_store_readiness(root, store.list_objects(limit=None)).ready
     assert recovery.reconcile_legacy_sources(binding, index, factory) == 0

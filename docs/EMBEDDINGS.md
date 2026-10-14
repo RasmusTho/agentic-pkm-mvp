@@ -474,10 +474,15 @@ The active-vault adapter reads a stable regular source without following redirec
 current profile admission, canonical identity, complete frontmatter, supported trust and the shared
 producer inventory are re-proven. Eligible sources prepare the canonical vault-alpha payload
 without companion/outbox writes and generate the embedding before one Product/vector transaction.
-Sources excluded from the current producer inventory may retire only their exact unchanged stale
+Sources excluded from all applicable current producer inventories may retire only their exact unchanged stale
 mirror, never the source file or canonical identity/history. Retained history/dependents refuse
 retirement. Changed sources, duplicate identities, candidate/staging material, malformed metadata,
 untrusted authority and ambiguous selection refuse without mutation.
+The separate dev-only filesystem watcher has a broader vault-sync inventory. If its configured
+or default `VAULT_DIR` scope overlaps the active vault, alpha exclusion alone is not retirement
+authority: recovery refuses that ambiguous producer applicability rather than enabling the optional
+producer or laundering its sources through alpha. Complete private-stage stream and logging
+suppression covers settings compatibility and conflict-quarantine diagnostics too.
 The transaction rechecks source/policy and canonical identity, compares the discovered Product
 snapshot, fences vector writes, and inserts only an absent vector. Provider/write failure or a
 failed final recheck rolls back the affected Product/vector transition. Existing vectors are never
