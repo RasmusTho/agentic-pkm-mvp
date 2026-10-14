@@ -147,7 +147,7 @@ def test_served_devui_pages_resolve_every_token_variable() -> None:
     assert used and used - defined == set()
 
 
-def test_managed_devui_asset_hash_matches_migrated_stylesheet() -> None:
+def test_managed_devui_asset_hash_matches_migrated_stylesheet(tmp_path) -> None:
     sources = {
         "devui.css": DEVUI_MANAGED,
         "yggdrasil.css": DEVUI_TOKENS,
@@ -155,5 +155,11 @@ def test_managed_devui_asset_hash_matches_migrated_stylesheet() -> None:
         "overview.js": DEVUI_CANDIDATE / "overview.js",
         "focus.js": DEVUI_CANDIDATE / "focus.js",
     }
+    import shutil
+    from app.builderops.devui_control import bind_managed_control_assets
+    for name, path in sources.items():
+        shutil.copyfile(path, tmp_path / name)
+    bind_managed_control_assets(tmp_path)
+    sources = {path.name: path for path in tmp_path.iterdir()}
     assert set(ASSET_SHA256) == set(sources)
     assert {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in sources.items()} == ASSET_SHA256
