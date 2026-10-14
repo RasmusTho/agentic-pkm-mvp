@@ -910,6 +910,15 @@ errors/malformed/locked/invalid counts must be zero. A fresh Product readiness c
 existing strict index doctor must then pass with zero missing vectors. Other index problems remain
 blocking and do not trigger an unrelated source replay. Missing summaries, partial work, refused
 context or an unready index fail the operation; child streams stay private.
+Source-backed replay counts a vector-producer exception as an error, not an ingested note,
+and returns a nonzero result with numeric counters. The private native consumer validates
+that bounded result and retains only the fixed `vector_projection_failed` reason (exit 79);
+the deploy producer reports `source_projection` with that reason after exact-operation cleanup.
+No exception text, source path, note content or child stream is forwarded. Ordinary ingest
+retains its existing best-effort vector behavior. A retry uses the same configured embedding
+identity and full selected inventory; the final strict doctor must independently prove zero
+missing vectors before candidate activation. This repository repair does not establish live
+DEV or TEST acceptance.
 Ordinary service recreation and the existing final Data health, version, UI and receipt gates
 still follow this step. Ordinary API startup clears the selector and retains migration→uvicorn.
 

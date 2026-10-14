@@ -208,6 +208,7 @@ def test_vault_multiwriter_relative_intent_census_is_closed() -> None:
         ("app/heimdal/settings_notes.py", "_write_settings_note", 1),
         ("app/services/commitment_persistence.py", "persist_commitment", 2),
         ("app/mcp/vault_tools.py", "append_note", 1),
+        ("app/ops/native_journaling_acceptance.py", "bootstrap", 1),
         ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1),
         ("app/ops/native_web_fixture.py", "bootstrap_fixture", 2),
         ("app/ops/native_web_fixture.py", "bootstrap_fixture", 3),
