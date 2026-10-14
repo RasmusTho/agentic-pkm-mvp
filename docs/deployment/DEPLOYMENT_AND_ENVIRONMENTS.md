@@ -934,8 +934,15 @@ blocking and do not trigger an unrelated source replay. Missing summaries, parti
 context or an unready index fail the operation; child streams stay private.
 Source-backed replay counts a vector-producer exception as an error, not an ingested note,
 and returns a nonzero result with numeric counters. The private native consumer validates
-that bounded result and retains only the fixed `vector_projection_failed` reason (exit 79);
-the deploy producer reports `source_projection` with that reason after exact-operation cleanup.
+that bounded result and retains only the fixed `embedding_generation_failed` (exit 80),
+`vector_index_write_failed` (exit 81), or legacy/mixed `vector_projection_failed` (exit 79)
+reason. Generation uses the configured document-embedding route; recovery resolves the durable
+index without the ordinary no-op compatibility fallback. Its binding must match the object
+producer, and the upsert still enforces provider/model/dimension/normalization identity and stamps
+provenance in the same vector write. The deploy producer reports `source_projection` with that
+reason after exact-operation cleanup; the real supervised wrapper validates the single exact
+allowlisted marker and sends only that finite class to the native journal. Missing, malformed,
+duplicate, unknown or injected markers retain `command_failed` (ambiguous stages remain `unknown`).
 No exception text, source path, note content or child stream is forwarded. Ordinary ingest
 retains its existing best-effort vector behavior. A retry uses the same configured embedding
 identity and full selected inventory; the final strict doctor must independently prove zero

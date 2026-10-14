@@ -86,7 +86,13 @@ def _configure_isolated_pg_test(tmp_path, monkeypatch) -> tuple[str, str]:
     _reset_store_backend_cache_only()
     from app.services.outbox import bootstrap
 
-    bootstrap()
+    # During fixture creation, do not let an already-migrated public.outbox
+    # satisfy the absence probe for this private schema. Keep production
+    # bootstrap unchanged, and restore the public extension lookup path when
+    # this one creation transaction closes.
+    with psycopg.connect(dsn, row_factory=psycopg.rows.dict_row) as conn:
+        conn.execute(sql.SQL("SET LOCAL search_path TO {}").format(sql.Identifier(schema)))
+        bootstrap(conn)
     return base_dsn, schema
 
 
