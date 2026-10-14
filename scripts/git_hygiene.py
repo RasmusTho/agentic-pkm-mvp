@@ -1772,6 +1772,9 @@ _DISPATCHER_RETENTION_SEPARATOR = (
     r"(?:\s+|[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)"
 )
 _DISPATCHER_MARKDOWN = MarkdownIt("commonmark", {"html": True})
+_DISPATCHER_MARKDOWN_TABLE = MarkdownIt("commonmark", {"html": True}).enable(
+    "table"
+)
 _DISPATCHER_SPLITLINES_SEPARATOR_RE = re.compile(r"[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 _DISPATCHER_MARKDOWN_TASK_PREFIX_RE = re.compile(
     r"^[ \t]*\[[ xX]\][ \t]+", re.MULTILINE
@@ -2005,11 +2008,26 @@ def _dispatcher_inline_comment_reopens_after_close(token: Any) -> bool:
     return close >= 0 and _dispatcher_html_comment_is_unclosed(source[close + 3 :])
 
 
+def _dispatcher_normalize_gfm_table_pipes(body: str) -> str:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    lines = normalized.splitlines(keepends=True)
+    table_lines: set[int] = set()
+    for token in _DISPATCHER_MARKDOWN_TABLE.parse(normalized):
+        if token.type == "table_open" and token.map is not None:
+            table_lines.update(range(token.map[0], token.map[1]))
+    return "".join(
+        line.replace("|", ". ") if index in table_lines else line
+        for index, line in enumerate(lines)
+    )
+
+
 def _dispatcher_cross_line_scan_body(
     body: str, *, mask_code_inline: bool = False
 ) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    normalized = _dispatcher_normalize_gfm_table_pipes(normalized)
     tokens = _DISPATCHER_MARKDOWN.parse(
         _dispatcher_protect_escaped_html_comments(normalized)
     )
@@ -2228,6 +2246,7 @@ def _dispatcher_resumable_binding_resources(
         ):
             raise RuntimeError("dispatcher_activity_invalid")
         lines = body.splitlines()
+        table_scan_lines = _dispatcher_normalize_gfm_table_pipes(body).splitlines()
         code_block_lines = _dispatcher_code_block_line_numbers(body)
         truncated_scan_lines = [
             line
@@ -2244,8 +2263,18 @@ def _dispatcher_resumable_binding_resources(
         for line_number, line in enumerate(lines):
             if line_number in code_block_lines:
                 continue
-            marker_scan_line = _dispatcher_cross_line_scan_body(line)
-            continuation = lines[line_number + 1] if line_number + 1 < len(lines) else ""
+            scan_line = (
+                table_scan_lines[line_number]
+                if line_number < len(table_scan_lines)
+                else line
+            )
+            marker_scan_line = _dispatcher_cross_line_scan_body(scan_line)
+            continuation_line = (
+                table_scan_lines[line_number + 1]
+                if line_number + 1 < len(table_scan_lines)
+                else ""
+            )
+            continuation = continuation_line
             dedicated_worktree_fragment = bool(
                 _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(marker_scan_line)
             )

@@ -7045,6 +7045,123 @@ def test_local_retirement_rejects_cross_line_dedicated_worktree_marker(
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
 
+@pytest.mark.parametrize(
+    "body_template",
+    [
+        (
+            "| receipt | details |\n"
+            "| --- | --- |\n"
+            "| Dedicated worktree /tmp/old is still dirty on branch old at head {sha} |"
+        ),
+        (
+            "| receipt | details |\n"
+            "| --- | --- |\n"
+            "| details | Dedicated worktree /tmp/old is still dirty on branch old at head {sha} |"
+        ),
+        (
+            "| receipt | details |\n"
+            "| --- | --- |\n"
+            "| details | `Dedicated worktree /tmp/old is still dirty on branch old at head {sha}` |"
+        ),
+    ],
+)
+def test_local_retirement_rejects_gfm_table_dedicated_worktree_marker(
+    tmp_path, monkeypatch, body_template
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": body_template.format(sha=sha)
+                    }]
+                }),
+            },
+        }
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard inactive work only when table-cell retention intent is explicit",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_local_retirement_ignores_pipe_prose_without_gfm_table_frame(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "Pipe prose | Dedicated worktree /tmp/old is still dirty "
+                            f"on branch old at head {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after ordinary pipe prose check",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_ignores_gfm_table_looking_text_inside_fence(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "```\n"
+                            "| receipt | details |\n"
+                            "| --- | --- |\n"
+                            f"| Dedicated worktree /tmp/old is still dirty on branch old at head {sha} |\n"
+                            "```"
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after fenced table prose check",
+    )
+    assert result["deleted"] == 1
+
+
 def test_local_retirement_rejects_later_cross_line_marker_after_valid_receipt(
     tmp_path, monkeypatch
 ):
