@@ -270,8 +270,12 @@ jobs:
         run: test -s "$INDEX_PERSIST_PATH"
 
       - name: Fitness report (QAS-003/QAS-010)
+        shell: bash
         run: |
-          python -m app.fitness.report | tee tmp/ci_summary.log
+          set -euo pipefail
+          python -m pytest -q -s -m "not pg" \
+            tests/fitness/test_ci_fitness.py::test_ci_report_entrypoint_uses_scoped_product_gateway_fixture \
+            2>&1 | tee tmp/ci_summary.log
 
       - name: Verify CI summary lines
         run: |
@@ -292,6 +296,13 @@ jobs:
           if ok_status != "true":
               raise SystemExit(f"CI gates failed: {gates}")
           PY
+
+      - name: Upload fitness report log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-scoped-fitness-report
+          path: tmp/ci_summary.log
 
       - name: CLI smoke commands
         run: |

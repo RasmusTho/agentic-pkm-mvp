@@ -74,6 +74,17 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Skill entrypoints and shared skill-index routing are covered by `tests/architecture/test_agent_skill_entrypoints.py`.
 - Dispatcher-oriented skill sequencing is covered by `tests/architecture/test_dispatcher_skill_integration.py`.
 - The broad runtime smoke workflow lives in `.github/workflows/ci-smoke.yaml`; it also carries the skills-consistency lint that previously ran in the retired duplicate `smoke` workflow.
+- CI Smoke and the nightly full suite produce fitness evidence with
+  `python -m pytest -q -s -m "not pg" tests/fitness/test_ci_fitness.py::test_ci_report_entrypoint_uses_scoped_product_gateway_fixture`.
+  That explicit functional test runs the actual `app.fitness.report` entrypoint with the canonical
+  `product_model_access_gateway` fixture, the full golden corpus and the existing 32-sample latency
+  probes. Only the model test boundary is isolated; metric algorithms, reranking, summary labels and
+  gate thresholds remain unchanged. Bash pipefail preserves a failed report/test exit before the
+  subsequent parser, and stderr plus the complete report are retained in `tmp/ci_summary.log` and
+  an always-uploaded artifact. The executable caller tests run both real YAML commands over finite
+  seed copies and require failure for missing/malformed metric input, failed gates and missing
+  thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
+  unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
 - Both full and scoped non-PG unit-test steps retain the verified 35-minute batch ceiling from
   #5921 / PR #5924 and the existing 120-second per-test thread watchdog. This preserves every
   target, marker, required check, assertion and failure handler. The earlier #5922 selection

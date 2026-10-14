@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -101,6 +102,112 @@ def _python_heredoc(script: str) -> str:
     match = re.search(r"<<'PY'\n(?P<body>.*?)\nPY(?:\n|$)", script, re.DOTALL)
     assert match is not None
     return match.group("body")
+
+
+CI_FITNESS_CALLERS = (
+    (CI_SMOKE_WORKFLOW, "smoke", "Fitness report (QAS-003/QAS-010)", "Verify CI summary lines"),
+    (INTEGRATION_NIGHTLY_WORKFLOW, "full-suite", "Fitness report", "Verify CI gates"),
+)
+CI_FITNESS_NODE = (
+    "tests/fitness/test_ci_fitness.py::"
+    "test_ci_report_entrypoint_uses_scoped_product_gateway_fixture"
+)
+
+
+def _run_ci_fitness_workflow(tmp_path: Path, caller: tuple, *, failure: str = ""):
+    """Execute the real producer and parser over disposable copies of the seed inputs."""
+    workflow_path, job_name, report_name, verify_name = caller
+    job = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))["jobs"][job_name]
+    report_step = next(step for step in job["steps"] if step.get("name") == report_name)
+    verify_step = next(step for step in job["steps"] if step.get("name") == verify_name)
+    for relative in (
+        "conftest.py", "pytest.ini", "tests/conftest.py", "tests/fitness/test_ci_fitness.py",
+        "ops/quality/baselines.yaml",
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO_ROOT / relative, destination)
+    shutil.copytree(REPO_ROOT / "data/golden", tmp_path / "data/golden")
+    for name in ("app", "llm_contract", "docs", "config", "configs", "companion-ui"):
+        source = REPO_ROOT / name
+        if source.exists():
+            (tmp_path / name).symlink_to(source, target_is_directory=True)
+    (tmp_path / "tmp").mkdir()
+    environment = {
+        "PATH": f"{Path(sys.executable).parent}:{os.defpath}",
+        "PYTHONPATH": str(REPO_ROOT),
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1",
+        "STORE_BACKEND": "memory",
+        "LLM_PROVIDER": "mock",
+        "REASONING_PROVIDER": "mock",
+        "PLANNER_PROVIDER": "mock",
+        "REASONING_ENABLE": "1",
+        "INDEX_PERSIST_PATH": str(tmp_path / "tmp/index.jsonl"),
+    }
+    diarization = tmp_path / "data/golden/diarization_sample.jsonl"
+    if failure == "missing_metric":
+        diarization.unlink()
+    elif failure == "malformed_metric":
+        diarization.write_text("{invalid metric input\n", encoding="utf-8")
+    elif failure == "failed_gate":
+        (tmp_path / "data/golden/relations.json").write_text(
+            '{"promoted": []}', encoding="utf-8"
+        )
+    elif failure == "missing_thresholds":
+        environment["THRESHOLDS_PATH"] = str(tmp_path / "missing-thresholds.yaml")
+    result = subprocess.run(
+        ["bash", "-c", report_step["run"] + "\n" + verify_step["run"]],
+        cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=60,
+    )
+    log = (tmp_path / "tmp/ci_summary.log").read_text(encoding="utf-8")
+    return result, log, job, report_step
+
+
+@pytest.mark.parametrize("caller", CI_FITNESS_CALLERS, ids=("smoke", "nightly"))
+def test_ci_fitness_callers_use_the_scoped_functional_producer(tmp_path: Path, caller: tuple) -> None:
+    from app.fitness.report import SUMMARY_LABELS, parse_summary_lines
+
+    result, log, job, report_step = _run_ci_fitness_workflow(tmp_path, caller)
+    assert report_step.get("shell") == "bash"
+    assert "set -euo pipefail" in report_step["run"]
+    assert "python -m pytest -q -s" in report_step["run"]
+    assert CI_FITNESS_NODE in report_step["run"]
+    assert "2>&1 | tee tmp/ci_summary.log" in report_step["run"]
+    assert "continue-on-error" not in report_step
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in log
+    assert "CI gates status: true" in result.stdout
+    parsed = parse_summary_lines(log.splitlines(), required=SUMMARY_LABELS)
+    assert set(parsed) == set(SUMMARY_LABELS)
+    assert parsed["GATES"]["ok"] is True
+    uploads = [step for step in job["steps"] if step.get("uses") == "actions/upload-artifact@v4"]
+    assert any(
+        step.get("if") == "always()" and "tmp/ci_summary.log" in step["with"]["path"]
+        for step in uploads
+    )
+
+
+@pytest.mark.parametrize("caller", CI_FITNESS_CALLERS, ids=("smoke", "nightly"))
+@pytest.mark.parametrize(
+    ("failure", "cause"),
+    (
+        ("missing_metric", "DIA_P95"),
+        ("malformed_metric", "JSONDecodeError"),
+        ("failed_gate", "REL_COV,REL_VAL"),
+        ("missing_thresholds", "FileNotFoundError"),
+    ),
+)
+def test_ci_fitness_producer_propagates_report_failure(
+    tmp_path: Path, caller: tuple, failure: str, cause: str
+) -> None:
+    result, log, _job, _step = _run_ci_fitness_workflow(tmp_path, caller, failure=failure)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert cause in log
+    assert "app/fitness/" in log
+    assert "1 failed" in log
+    assert "CI gates status:" not in result.stdout
+    assert "CI SUMMARY GATES ok=true" not in log
 
 
 def _unit_tests_job_text() -> str:
