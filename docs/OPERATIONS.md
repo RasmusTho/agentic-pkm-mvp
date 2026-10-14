@@ -495,6 +495,8 @@ Companion docs:
   sources and original Product provider. Its `native-journaling.v1` evidence cannot replace
   Daily/Deep, PG or long-lived channel health. Exact owned relay/resource cleanup and atomic
   no-overwrite evidence are required; unknown cleanup preserves same-operation admission.
+  The shared lock binds its fixed qualifier profile; cross-profile or generic recovery cannot
+  retire unknown cleanup. Retry the owning qualifier, not the other journey.
   Follow the same linked deployment/testing contracts above. Repository delivery of #6050 is
   not actual TEST PASS or parent #3347 acceptance.
 - Legacy dev stacks may include agent/redis containers; they are not part of the runtime start-system path.

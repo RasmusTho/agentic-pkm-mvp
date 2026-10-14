@@ -680,6 +680,11 @@ listener effects. Interrupted teardown and fresh-runner retries preserve admissi
 native owner remains live or unknown; only proved departure permits recovery, never a PID kill.
 Deadline exhaustion cannot accept late PASS logs. Terminal publication owns durable interruption
 invalidation and has no fallible sync or temporary cleanup after its acknowledgement.
+The existing shared channel-lock owner inode also records the fixed qualifier/profile before
+effects. Unknown cleanup can be retried only by that same profile; the other qualifier and generic
+deployment recovery cannot retire its admission. Legacy empty-owner recovery proves opposite-profile
+resource absence under the inode/flock before adoption, and never adopts a fresh replacement inode.
+Foreign, mismatched or partial owner bytes refuse without mutation.
 
 Repository delivery proves this mechanism only. The parent #3347 owner must invoke it after merge
 against the admitted TEST image and post the redaction-safe all-PASS or attributable refusal

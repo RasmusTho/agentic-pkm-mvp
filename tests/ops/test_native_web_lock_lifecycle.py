@@ -31,6 +31,7 @@ def admitted(tmp_path, monkeypatch):
     # Admission, journal, mkdir, descriptors/flock and retirement are real.
     monkeypatch.setattr(linux, '_private_json', lambda path: json.loads(path.read_text()))
     monkeypatch.setattr(effects, 'quiescent', lambda: True)
+    monkeypatch.setattr(effects, '_qualification_other_absent', lambda _profile, _proof: True)
     return effects, operation, root / 'config/deploy/test.env.lock'
 
 
@@ -105,6 +106,7 @@ def test_fresh_foreign_inode_replacement_is_preserved(admitted, monkeypatch):
     with pytest.raises(PostgresDeployError):
         effects.run_web_qualification(operation)
     assert foreign == [(lock.stat().st_ino, (lock / 'bws-owner').stat().st_ino)]
+    assert (lock / 'bws-owner').read_bytes() == b''
     assert (original / 'bws-owner').is_file() and effects.lock_fd is None
 
 
@@ -112,7 +114,7 @@ def test_retirement_interruption_preserves_admission_for_exact_recovery(admitted
     effects, operation, lock = admitted
     confirmed(effects, monkeypatch)
     retire = effects.retire_reconciled_channel_lock
-    def interrupted(_handle):
+    def interrupted(_handle, **_kwargs):
         raise PostgresDeployError()
     monkeypatch.setattr(effects, 'retire_reconciled_channel_lock', interrupted)
     with pytest.raises(PostgresDeployError):

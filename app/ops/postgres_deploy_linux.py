@@ -8,7 +8,7 @@ there is no credential-valued environment, command argument, or status response.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 import json
@@ -1168,15 +1168,18 @@ class LinuxEffects:
 
     def run_web_qualification(self, operation_id: str) -> dict[str, Any]:
         """Run/recover this fixed proof under the existing exact channel lock."""
-        self._web_admission(operation_id)  # Refuse foreign/prod before any lock/resource effect.
+        proof = self._web_admission(operation_id)  # Refuse foreign/prod before any lock/resource effect.
         self.operation_id = operation_id
+        profile_owner = self._qualification_owner(WEB_PROFILE)
         path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
         result: dict[str, Any] | None = None
         fresh_identity = None
         if not path.exists():
+            if not self._qualification_other_absent(WEB_PROFILE, proof):
+                raise NativeWebRefusal('other_qualification_cleanup_unconfirmed')
             # The committed PG receipt predates this disposable attempt; it
             # cannot retire admission after unknown cleanup or no web result.
-            with self.channel_lock(retire_terminal=False):
+            with self.channel_lock(journal=self.config.journal, owner_marker=profile_owner, retire_terminal=False):
                 if self.lock_fd is None:
                     raise PostgresDeployError()
                 directory, owner = path.lstat(), os.fstat(self.lock_fd)
@@ -1186,7 +1189,7 @@ class LinuxEffects:
                     raise PostgresDeployError()
         # An abrupt owner exit can retain native admission. Reuse its existing
         # inode/flock proof; never treat a name/PID or released lock as freeze.
-        with self.failed_reconciliation_lock() as handle:
+        with self._qualification_reconciliation_lock(profile_owner, proof, allow_legacy=fresh_identity is None) as handle:
             self.lock_fd = handle[3]
             try:
                 if fresh_identity is not None:
@@ -1201,7 +1204,7 @@ class LinuxEffects:
                     result = self.qualify_web(operation_id)
                 if not isinstance(result, dict) or result.get('cleanup') != 'confirmed':
                     raise PostgresDeployError()
-                self.retire_reconciled_channel_lock(handle)
+                self.retire_reconciled_channel_lock(handle, expected_owner=profile_owner)
                 return result
             finally:
                 self.lock_fd = None
@@ -1230,13 +1233,17 @@ class LinuxEffects:
         """Use the existing same-operation channel-lock recovery/retirement seam."""
         if self.config.channel != 'test':
             raise NativeWebRefusal('fixed_test_journaling_invocation_required')
-        self._web_admission(operation_id)
+        from app.ops.native_journaling_acceptance import PROFILE
+        proof = self._web_admission(operation_id)
         self.operation_id = operation_id
+        profile_owner = self._qualification_owner(PROFILE)
         path = self.config.root / 'config/deploy/test.env.lock'
         result: dict[str, Any] | None = None
         fresh_identity = None
         if not path.exists():
-            with self.channel_lock(retire_terminal=False):
+            if not self._qualification_other_absent(PROFILE, proof):
+                raise NativeWebRefusal('other_qualification_cleanup_unconfirmed')
+            with self.channel_lock(journal=self.config.journal, owner_marker=profile_owner, retire_terminal=False):
                 if self.lock_fd is None:
                     raise PostgresDeployError()
                 directory, owner = path.lstat(), os.fstat(self.lock_fd)
@@ -1244,7 +1251,7 @@ class LinuxEffects:
                 result = self.qualify_journaling(operation_id)
                 if result.get('cleanup') != 'confirmed':
                     raise PostgresDeployError()
-        with self.failed_reconciliation_lock() as handle:
+        with self._qualification_reconciliation_lock(profile_owner, proof, allow_legacy=fresh_identity is None) as handle:
             self.lock_fd = handle[3]
             try:
                 if fresh_identity is not None:
@@ -1259,10 +1266,58 @@ class LinuxEffects:
                     result = self.qualify_journaling(operation_id)
                 if result.get('cleanup') != 'confirmed':
                     raise PostgresDeployError()
-                self.retire_reconciled_channel_lock(handle)
+                self.retire_reconciled_channel_lock(handle, expected_owner=profile_owner)
                 return result
             finally:
                 self.lock_fd = None
+
+    def _qualification_owner(self, profile: str) -> dict[str, str]:
+        if self.operation_id is None:
+            raise NativeWebRefusal('expected_committed_native_operation_required')
+        return {'kind': 'native-qualification', 'channel': self.config.channel,
+                'operation_id': self.operation_id, 'profile_version': profile}
+
+    def _qualification_other_absent(self, profile: str, proof: dict[str, Any]) -> bool:
+        """Read-only opposite-profile census; absence is never inferred from quiescence."""
+        from app.ops.native_journaling_acceptance import PROFILE
+        from app.ops.native_journaling_acceptance_runner import NativeJournalingRunner
+        from app.ops.native_web_acceptance_runner import NativeWebRunner
+        if profile == WEB_PROFILE and self.config.channel == 'dev':
+            return True  # Journaling has no admitted DEV producer.
+        if profile not in {WEB_PROFILE, PROFILE} or self.operation_id is None:
+            raise NativeWebRefusal('qualification_owner_unqualified')
+        runner_type = NativeJournalingRunner if profile == WEB_PROFILE else NativeWebRunner
+        other = runner_type(self.config.root, self.config.journal.directory,
+            sha=proof['source_sha'], digest=proof['image_digest'], channel=self.config.channel,
+            operation_id=self.operation_id)
+        if any(path.exists() or path.is_symlink() for path in (other.marker, other.preparing, other.directory)):
+            return False
+        return all(other._owned(suffix) is None for suffix in ('tests', 'db'))
+
+    @contextmanager
+    def _qualification_reconciliation_lock(self, owner: dict[str, str], proof: dict[str, Any], *, allow_legacy: bool
+                                         ) -> Iterator[tuple[Path, int, int, int]]:
+        # Acquisition fallback only. Never retry a yielded Product operation.
+        with ExitStack() as stack:
+            try:
+                handle = stack.enter_context(self.failed_reconciliation_lock(expected_owner=owner))
+            except PostgresDeployError:
+                if not allow_legacy:
+                    raise  # Never adopt a replacement of this invocation's fresh inode.
+                try:
+                    handle = stack.enter_context(self.failed_reconciliation_lock())
+                except PostgresDeployError:
+                    raise NativeWebRefusal('qualification_owner_unqualified') from None
+                # Legacy empty owners are adopted only after opposite-profile
+                # resource absence is proved under the held inode/flock.
+                if not self._qualification_other_absent(owner['profile_version'], proof):
+                    raise NativeWebRefusal('other_qualification_cleanup_unconfirmed')
+                raw = (json.dumps(owner, sort_keys=True) + '\n').encode()
+                if os.pread(handle[3], 4097, 0) or os.pwrite(handle[3], raw, 0) != len(raw):
+                    raise PostgresDeployError()
+                for descriptor in (handle[3], handle[2], handle[1]):
+                    os.fsync(descriptor)
+            yield handle
 
     def _running_one_shots(self) -> bool:
         # Running-only inventory misses a created container that Docker may
@@ -1337,10 +1392,17 @@ class LinuxEffects:
         import fcntl
         path = self.config.root / 'config/deploy' / (self.config.channel + '.env.lock')
         if owner_marker is not None:
+            from app.ops.native_journaling_acceptance import PROFILE
+            qualification = (owner_marker.get('kind') == 'native-qualification'
+                and set(owner_marker) == {'kind', 'channel', 'operation_id', 'profile_version'}
+                and owner_marker.get('profile_version') in {WEB_PROFILE, PROFILE}
+                and (owner_marker.get('profile_version') != PROFILE or self.config.channel == 'test')
+                and journal is self.config.journal)
+            karakeep = (set(owner_marker) == {'kind', 'channel', 'operation_id'}
+                and owner_marker.get('kind') in {'karakeep-deploy', 'karakeep-boot'})
             if (journal is None or journal.channel != self.config.channel
                 or self.config.channel not in {'dev', 'test'}
-                or set(owner_marker) != {'kind', 'channel', 'operation_id'}
-                or owner_marker['kind'] not in {'karakeep-deploy', 'karakeep-boot'}
+                or not (qualification or karakeep)
                 or owner_marker['channel'] != self.config.channel
                 or owner_marker['operation_id'] != self.operation_id
                 or str(UUID(owner_marker['operation_id'])) != owner_marker['operation_id']):

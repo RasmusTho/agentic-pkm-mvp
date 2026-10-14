@@ -299,6 +299,83 @@ def test_unknown_relay_cleanup_never_retires_channel_admission(request, tmp_path
     assert not lock.exists() and effects.config.journal.read().payload() == before
 
 
+@pytest.mark.parametrize('creator', ['web', 'journaling'])
+def test_unknown_profile_cleanup_cannot_be_cross_retired(request, monkeypatch, creator):
+    effects, operation, lock = request.getfixturevalue('admitted')
+    own_run = getattr(effects, 'run_' + creator + '_qualification')
+    other = 'journaling' if creator == 'web' else 'web'
+    other_run = getattr(effects, 'run_' + other + '_qualification')
+    monkeypatch.setattr(effects, 'qualify_' + creator, lambda _operation: {'result': 'unknown', 'cleanup': 'unknown'})
+    with pytest.raises(linux.PostgresDeployError):
+        own_run(operation)
+    owner_bytes = (lock / 'bws-owner').read_bytes()
+    owner = json.loads(owner_bytes)
+    assert owner == {'kind': 'native-qualification', 'channel': 'test', 'operation_id': operation,
+                     'profile_version': linux.WEB_PROFILE if creator == 'web' else journaling.PROFILE}
+    calls = []
+    monkeypatch.setattr(effects, 'qualify_' + other, lambda _operation:
+        calls.append(_operation) or {'result': 'refused', 'cleanup': 'confirmed'})
+    with pytest.raises(web.NativeWebRefusal, match='owner_unqualified'):
+        other_run(operation)
+    with pytest.raises(linux.PostgresDeployError):
+        with effects.failed_reconciliation_lock():
+            pytest.fail('generic recovery cannot retire a qualifier-owned lock')
+    assert calls == [] and (lock / 'bws-owner').read_bytes() == owner_bytes
+    monkeypatch.setattr(effects, 'qualify_' + creator, lambda _operation: {'result': 'refused', 'cleanup': 'confirmed'})
+    assert own_run(operation)['cleanup'] == 'confirmed' and not lock.exists()
+
+
+def test_legacy_untyped_lock_cannot_hide_opposite_profile_resources(request, monkeypatch):
+    from app.ops.native_web_acceptance_runner import NativeWebRunner
+    effects, operation, lock = request.getfixturevalue('admitted')
+    effects.operation_id = operation
+    with effects.channel_lock(retire_terminal=False):
+        pass
+    proof = effects._web_admission(operation)
+    opposite = NativeWebRunner(effects.config.root, effects.config.journal.directory,
+        sha=proof['source_sha'], digest=proof['image_digest'], channel='test', operation_id=operation)
+    opposite.directory.parent.mkdir(mode=0o700, parents=True)
+    journaling.private_json(opposite.marker, opposite.identity)
+    opposite.directory.mkdir(mode=0o700)
+    monkeypatch.setattr(effects, '_qualification_other_absent',
+        linux.LinuxEffects._qualification_other_absent.__get__(effects))
+    calls = []
+    monkeypatch.setattr(effects, 'qualify_journaling', lambda _operation:
+        calls.append(_operation) or {'result': 'refused', 'cleanup': 'confirmed'})
+    with pytest.raises(linux.PostgresDeployError):
+        effects.run_journaling_qualification(operation)
+    assert calls == [] and (lock / 'bws-owner').read_bytes() == b''
+    assert opposite.directory.is_dir() and json.loads(opposite.marker.read_text()) == opposite.identity
+
+
+def test_legacy_profile_adoption_and_partial_owner_never_replay_effects(request, monkeypatch):
+    effects, operation, lock = request.getfixturevalue('admitted')
+    effects.operation_id = operation
+    with effects.channel_lock(retire_terminal=False):
+        pass
+    calls = []
+    def qualify(_operation):
+        owner = json.loads((lock / 'bws-owner').read_text())
+        assert owner['profile_version'] == journaling.PROFILE and owner['operation_id'] == operation
+        calls.append(_operation)
+        return {'result': 'refused', 'cleanup': 'confirmed'}
+    monkeypatch.setattr(effects, 'qualify_journaling', qualify)
+    assert effects.run_journaling_qualification(operation)['cleanup'] == 'confirmed'
+    assert calls == [operation] and not lock.exists()
+    with effects.channel_lock(retire_terminal=False):
+        pass
+    original = os.pwrite
+    with monkeypatch.context() as context:
+        context.setattr(os, 'pwrite', lambda descriptor, raw, offset: original(descriptor, raw[:10], offset))
+        with pytest.raises(linux.PostgresDeployError):
+            effects.run_journaling_qualification(operation)
+    partial = (lock / 'bws-owner').read_bytes()
+    assert partial and calls == [operation]
+    with pytest.raises(web.NativeWebRefusal, match='owner_unqualified'):
+        effects.run_journaling_qualification(operation)
+    assert (lock / 'bws-owner').read_bytes() == partial and calls == [operation]
+
+
 def test_terminal_fsync_failure_leaves_no_pass_file(tmp_path, monkeypatch):
     target = tmp_path / 'terminal.json'
     original = os.fsync

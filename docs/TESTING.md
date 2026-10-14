@@ -639,6 +639,11 @@ fresh runner preserves admission until the exact owner is proved departed; no PI
 Deadline exhaustion refuses even if late container logs contain PASS. Terminal interruption
 invalidates only its own published inode and syncs absence, with no fallible cleanup after the
 publication acknowledgement.
+The shared channel lock's existing `bws-owner` inode durably binds the fixed qualifier profile
+before effects. Only that same profile can reconcile/retire it after confirmed cleanup; another
+qualifier or generic deploy recovery cannot release unknown cleanup. Legacy empty owners are
+adopted under the held inode/flock only after opposite-profile resource absence is proved.
+Foreign/nonempty mismatched owners and replacement inodes remain untouched.
 
 ### Nightly deterministic acceptance harness
 
