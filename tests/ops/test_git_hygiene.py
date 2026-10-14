@@ -6628,6 +6628,39 @@ def test_local_retirement_ignores_completed_dedicated_worktree_lifecycle_prose(
     assert result["deleted"] == 1
 
 
+def test_local_retirement_rejects_relative_dedicated_worktree_marker(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            f"Dedicated worktree tmp/old is still dirty on branch old "
+                            f"at head {sha}."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard inactive work only when explicit retention intent is valid",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
 def test_local_retirement_ignores_negated_pickup_marker(
     tmp_path, monkeypatch
 ):
@@ -6765,6 +6798,7 @@ def test_dispatcher_task_identity_uses_canonical_producer(tmp_path, monkeypatch)
         "Dedicated worktree /tmp/old is still dirty on branch old at head not-a-sha",
         "Dedicated worktree /tmp/old is still dirty on branch old",
         "Dedicated worktree /tmp/old is still dirty on branch old at head",
+        "Dedicated worktree tmp/old is still dirty on branch old at head " + "a" * 40,
     ],
 )
 def test_local_retirement_rejects_malformed_explicit_marker(
