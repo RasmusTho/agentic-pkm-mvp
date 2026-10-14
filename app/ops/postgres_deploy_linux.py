@@ -1397,7 +1397,8 @@ class LinuxEffects:
                 and set(owner_marker) == {'kind', 'channel', 'operation_id', 'profile_version'}
                 and owner_marker.get('profile_version') in {WEB_PROFILE, PROFILE}
                 and (owner_marker.get('profile_version') != PROFILE or self.config.channel == 'test')
-                and journal is self.config.journal)
+                and journal is not None
+                and journal.directory == self.config.journal.directory)
             karakeep = (set(owner_marker) == {'kind', 'channel', 'operation_id'}
                 and owner_marker.get('kind') in {'karakeep-deploy', 'karakeep-boot'})
             if (journal is None or journal.channel != self.config.channel
