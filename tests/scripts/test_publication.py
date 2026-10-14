@@ -515,10 +515,33 @@ def test_publication_plan_is_canonical_hash_bound_and_read_only(
     assert all("state=all" in call for call in pr_reads)
 
 
-def test_first_publication_carries_pickup_receipt_before_any_effect(tmp_path: Path) -> None:
+class RealBodyExecutor(FakeExecutor):
+    def run(self, argv: Sequence[str], *, cwd: Path, input_text: str | None = None) -> CommandResult:
+        if any(part.endswith("scripts/pr_body_generator.py") for part in argv):
+            self.calls.append(tuple(argv))
+            result = SubprocessExecutor().run(argv, cwd=cwd, input_text=input_text)
+            if result.returncode == 0:
+                self.pr_body = result.stdout
+            return result
+        return super().run(argv, cwd=cwd, input_text=input_text)
+
+
+@pytest.mark.parametrize("mode", ["dispatcher-backed", "github-label-only-fallback"])
+def test_first_publication_carries_pickup_receipt_before_any_effect(tmp_path: Path, mode: str) -> None:
     (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
-    executor = FakeExecutor(tmp_path)
-    plan = build_publication_plan(_request(tmp_path), executor=executor)
+    pickup = str(BODY_INPUTS["pickup_receipt"]).replace(
+        "holder=codex-slice-implementer", "holder=worker holder=TBD"
+    )
+    if mode == "github-label-only-fallback":
+        pickup = (
+            "pickup-claim-complete issue=5230 branch=codex/publication-test "
+            "worktree=/tmp/publication test coordination_mode=github-label-only-fallback "
+            "fallback_reason=dispatcher unavailable agent=worker agent=TBD "
+            "session=run session=TBD evidence=github-comment:5230"
+        )
+    inputs = {**BODY_INPUTS, "pickup_receipt": pickup}
+    executor = RealBodyExecutor(tmp_path)
+    plan = build_publication_plan(replace(_request(tmp_path), pr_body_inputs=inputs), executor=executor)
     assert plan["pr"]["body"].count("Pickup-Receipt:") == 1
     generator_calls = [
         call
@@ -527,7 +550,13 @@ def test_first_publication_carries_pickup_receipt_before_any_effect(tmp_path: Pa
     ]
     assert generator_calls
     assert "--pickup-receipt" in generator_calls[-1]
-    assert BODY_INPUTS["pickup_receipt"] in generator_calls[-1]
+    assert pickup in generator_calls[-1]
+    assert plan["pr"]["body_sha256"] == hashlib.sha256(plan["pr"]["body"].encode()).hexdigest()
+    apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=executor)
+    creates = [call for call in executor.calls if call[:3] == ("gh", "pr", "create")]
+    assert len(creates) == 1
+    assert creates[0][creates[0].index("--body") + 1] == plan["pr"]["body"]
+    assert f"Pickup-Receipt: {pickup}\n" in plan["pr"]["body"]
 
     invalid = json.loads(canonical_json(plan))
     invalid["pr"]["body_inputs"]["pickup_receipt"] = None
@@ -544,6 +573,34 @@ def test_first_publication_carries_pickup_receipt_before_any_effect(tmp_path: Pa
         or _is_gh_api_call(call, "POST")
         or call[:3] == ("gh", "pr", "create")
         for call in executor.calls
+    )
+
+
+@pytest.mark.parametrize("drift", ["missing", "placeholder", "malformed", "foreign", "body-only"])
+def test_apply_rejects_receipt_drift_before_staging(tmp_path: Path, drift: str) -> None:
+    (tmp_path / "feature.txt").write_text("new\n", encoding="utf-8")
+    executor = RealBodyExecutor(tmp_path)
+    plan = build_publication_plan(_request(tmp_path), executor=executor)
+    pickup = str(BODY_INPUTS["pickup_receipt"])
+    if drift == "body-only":
+        plan["pr"]["body"] = plan["pr"]["body"].replace(f"Pickup-Receipt: {pickup}\n", "")
+    else:
+        replacement = {
+            "missing": None, "placeholder": "TBD", "malformed": pickup.replace("evidence=", "unknown="),
+            "foreign": pickup.replace("5230", "9999"),
+        }[drift]
+        plan["pr"]["body_inputs"]["pickup_receipt"] = replacement
+        plan["pr"]["body"] = plan["pr"]["body"].replace(pickup, replacement or "")
+    plan["pr"]["body_sha256"] = hashlib.sha256(plan["pr"]["body"].encode()).hexdigest()
+    plan["plan_sha256"] = publication_plan_hash(plan)
+    executor.calls.clear()
+    with pytest.raises(PublicationRefusal):
+        apply_publication_plan(plan, expected_plan_sha256=plan["plan_sha256"], executor=executor)
+    assert executor.phase == "uncommitted"
+    assert not any(
+        call[:2] in {("git", "add"), ("git", "commit"), ("git", "push")}
+        or _is_gh_api_call(call, "POST") or _is_gh_api_call(call, "PATCH")
+        or call[:3] == ("gh", "pr", "create") for call in executor.calls
     )
 
 

@@ -90,10 +90,13 @@ opens or updates a PR. Required lane inputs must be concrete:
 - issue-backed bodies require the exact successful `pickup-claim-complete` line emitted by
   `scripts/issue_pickup_claim.sh` under the `pickup_receipt` input. The generator validates the
   dispatcher-backed or GitHub-label-only fallback form and binds its Issue to the declared
-  governing Issue before any commit, branch reservation, push, or PR creation. Capture the final
-  wrapper line when the wrapper's preflight report is also printed, or use the generator's
-  `--pickup-receipt-file` convenience input. Issue-free bodies omit the receipt; explicit
-  multi-Issue bodies keep it bound to their governing Issue and do not fabricate a parent claim.
+  governing or explicit closing Issue before any staging, commit, branch reservation, push, or PR
+  creation. Free-text wrapper values, including spaces, are preserved unchanged. Capture the final
+  wrapper line or use `--pickup-receipt-file` with the captured stdout: the file must contain exactly
+  one success line, alongside any preflight output. Issue-free bodies omit the receipt; explicit
+  multi-Issue bodies may use a closing child's receipt without fabricating a claim on an open parent.
+  The receipt remains provenance, not checkout authentication or live lease authority. Native apply
+  checks the generated body and digest before effects and retains its later post-commit drift check.
 
 Neither the generator nor a publication plan weakens `pr-contract`, infers issues silently, or
 becomes PR authority. CI remains the authority for whether the final live PR body satisfies the

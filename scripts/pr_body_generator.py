@@ -9,7 +9,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 
 LANES = frozenset({"implementation", "docs-authoring", "governance", "direct-repair"})
@@ -150,7 +150,7 @@ def _validate_inputs(inputs: PRBodyInputs) -> None:
             raise PRBodyGeneratorError(
                 "pickup_receipt is required for issue-backed publication"
             )
-        _validate_pickup_receipt(inputs.pickup_receipt, inputs.issue_number)
+        _validate_pickup_receipt(inputs.pickup_receipt, inputs.issue_number, inputs.closing_issues)
     if not inputs.summary or any(not item.strip() for item in inputs.summary):
         raise PRBodyGeneratorError("summary must contain at least one non-empty item")
     if inputs.owner_doc_resolution not in OWNER_DOC_RESOLUTIONS:
@@ -260,55 +260,69 @@ def _require_text(value: str | None, field: str) -> None:
         raise PRBodyGeneratorError(f"{field} is required")
 
 
-def _validate_pickup_receipt(receipt: str, issue_number: int) -> str:
-    """Validate one exact successful pickup-wrapper receipt for its Issue."""
+def _separator_candidates(text: str, marker: str) -> Iterator[tuple[str, str]]:
+    """Try ordered delimiters from the right, retaining earlier viable parses."""
+    end = len(text)
+    while (position := text.rfind(marker, 0, end)) >= 0:
+        yield text[:position], text[position + len(marker):]
+        end = position
 
-    text = receipt.strip()
-    if not text or "\n" in text or "\r" in text:
+
+def _validate_pickup_receipt(
+    receipt: str, issue_number: int, closing_issues: Sequence[int] | None = None,
+) -> str:
+    """Validate the existing unescaped wrapper line as provenance, not authority."""
+    if not receipt or "\n" in receipt or "\r" in receipt:
         raise PRBodyGeneratorError("pickup_receipt is malformed")
-    tokens = text.split()
-    if not tokens or tokens[0] != PICKUP_RECEIPT_PREFIX:
+    prefix = re.fullmatch(
+        rf"{PICKUP_RECEIPT_PREFIX} issue=([1-9][0-9]*) branch=(\S*) worktree=(.+)", receipt
+    )
+    if prefix is None:
         raise PRBodyGeneratorError("pickup_receipt must be a successful pickup-claim-complete receipt")
-    fields: dict[str, str] = {}
-    for token in tokens[1:]:
-        if "=" not in token:
-            raise PRBodyGeneratorError("pickup_receipt is malformed")
-        key, value = token.split("=", 1)
-        if not key or (not value and key != "branch") or key in fields:
-            raise PRBodyGeneratorError("pickup_receipt is malformed")
-        fields[key] = value
+    claimed_issue, branch, remainder = prefix.groups()
+    if int(claimed_issue) not in {issue_number, *(closing_issues or ())}:
+        raise PRBodyGeneratorError("pickup_receipt Issue scope does not match governing or closing Issues")
+    if branch and _is_missing_value(branch):
+        raise PRBodyGeneratorError("pickup_receipt branch is malformed")
 
-    common = {"issue", "branch", "worktree", "coordination_mode", "fallback_reason", "evidence"}
-    mode = fields.get("coordination_mode")
-    if mode == "dispatcher-backed":
-        expected = common | {"task_id", "lease_id", "holder"}
-        if set(fields) != expected:
-            raise PRBodyGeneratorError("pickup_receipt dispatcher fields are malformed")
-        if fields.get("fallback_reason") != "none":
-            raise PRBodyGeneratorError("pickup_receipt dispatcher fallback_reason is malformed")
-        if fields.get("evidence") != "verified-dispatcher-lease":
-            raise PRBodyGeneratorError("pickup_receipt dispatcher evidence is malformed")
-    elif mode == "github-label-only-fallback":
-        expected = common | {"agent", "session"}
-        if set(fields) != expected:
-            raise PRBodyGeneratorError("pickup_receipt fallback fields are malformed")
-        if _is_missing_value(fields.get("fallback_reason")) or fields.get("fallback_reason") == "none":
-            raise PRBodyGeneratorError("pickup_receipt fallback reason is malformed")
-        if re.fullmatch(r"github-comment:[1-9][0-9]*", fields.get("evidence", "")) is None:
-            raise PRBodyGeneratorError("pickup_receipt fallback evidence is malformed")
-    else:
-        raise PRBodyGeneratorError("pickup_receipt coordination_mode is malformed")
+    # The wrapper does not escape its free-text values. Accept a semantically
+    # valid ordered decomposition and always render the original line unchanged.
+    for worktree, tail in _separator_candidates(remainder, " coordination_mode="):
+        if _is_missing_value(worktree) or not Path(worktree).is_absolute():
+            continue
+        dispatcher = re.fullmatch(
+            r"dispatcher-backed fallback_reason=none task_id=(\S+) lease_id=(\S+) "
+            r"holder=(.+) evidence=verified-dispatcher-lease", tail,
+        )
+        if dispatcher:
+            task, lease, holder = dispatcher.groups()
+            if any(_is_missing_value(value) for value in (task, lease, holder)):
+                continue
+            task_issue = re.search(r"-issue-([0-9]+)$", task)
+            if task_issue and task_issue[1] != claimed_issue:
+                continue
+            return receipt
+        fallback = re.fullmatch(
+            r"github-label-only-fallback fallback_reason=(.+) evidence=github-comment:[1-9][0-9]*", tail,
+        )
+        if fallback:
+            for before_session, session in _separator_candidates(fallback[1], " session="):
+                if _is_missing_value(session):
+                    continue
+                for reason, agent in _separator_candidates(before_session, " agent="):
+                    if reason.strip() != "none" and not any(
+                        _is_missing_value(value) for value in (reason, agent)
+                    ):
+                        return receipt
+    raise PRBodyGeneratorError("pickup_receipt fields are malformed")
 
-    if fields.get("issue") != str(issue_number):
-        raise PRBodyGeneratorError("pickup_receipt Issue scope does not match governing Issue")
-    for field in ("worktree", "holder", "agent", "session", "task_id", "lease_id"):
-        field_value = fields.get(field)
-        if field_value is not None and _is_missing_value(field_value):
-            raise PRBodyGeneratorError(f"pickup_receipt {field} is malformed")
-    worktree = fields.get("worktree", "")
-    if not Path(worktree).is_absolute():
-        raise PRBodyGeneratorError("pickup_receipt worktree must be absolute")
-    return text
+
+def _read_pickup_receipt_file(path: Path) -> str:
+    lines = [line for line in path.read_text(encoding="utf-8").splitlines()
+             if line.startswith(PICKUP_RECEIPT_PREFIX + " ")]
+    if len(lines) != 1:
+        raise PRBodyGeneratorError("pickup_receipt file must contain exactly one successful receipt line")
+    return lines[0]
 
 
 def _is_missing_value(value: str | None) -> bool:
@@ -380,7 +394,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     args.pickup_receipt
                     if args.pickup_receipt is not None
                     else (
-                        args.pickup_receipt_file.read_text(encoding="utf-8")
+                        _read_pickup_receipt_file(args.pickup_receipt_file)
                         if args.pickup_receipt_file is not None
                         else None
                     )

@@ -104,12 +104,12 @@ change. Merge commits and unrelated history use the protected full path.
 For an issue-backed publication, the JSON must carry the exact successful wrapper output under
 `pickup_receipt`. Use the pickup-claim-complete line captured from
 `scripts/issue_pickup_claim.sh`; the generator accepts both dispatcher-backed and
-GitHub-label-only fallback receipts, validates that the receipt's Issue matches the governing
-Issue, and refuses missing, malformed, placeholder, or foreign-scope input before commit, branch
+GitHub-label-only fallback receipts, validates that the receipt's Issue matches the governing or an
+explicit closing Issue, and refuses missing, malformed, placeholder, or foreign-scope input before staging, commit, branch
 reservation, push, or PR creation. The standalone generator also supports
-`--pickup-receipt-file` for a captured line. Issue-free bodies omit this field, and an explicit
-multi-Issue body keeps the receipt bound to its declared governing Issue rather than fabricating a
-claim for an open parent.
+`--pickup-receipt-file` for captured wrapper stdout containing exactly one success line. Issue-free
+bodies omit this field. An explicit multi-Issue body may use a closing child's receipt without
+fabricating a claim for an open governing parent.
 
 The two completion flags are explicit caller attestations, not defaults; supply them only after the
 named local prerequisites have actually completed. `plan` is read-only. It emits canonical

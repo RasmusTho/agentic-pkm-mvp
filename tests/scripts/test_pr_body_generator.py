@@ -102,15 +102,22 @@ def test_generated_issue_identity_is_accepted_by_verification_dispatch_contract(
     assert resolve_issue_contract(body) == (3275, ())
 
 
-def test_pickup_receipt_is_in_first_generated_body() -> None:
+@pytest.mark.parametrize("free_text", [
+    "plain", "two words", "worker agent=TBD session=TBD", "  spaced\t value  ",
+    "worker coordination_mode=github-label-only-fallback fallback_reason=x agent=TBD session=TBD",
+])
+def test_pickup_receipt_is_in_first_generated_body(free_text: str, tmp_path: Path) -> None:
     dispatcher = _fixture("governance_issue.json")
+    dispatcher["pickup_receipt"] = str(dispatcher["pickup_receipt"]).replace(
+        "holder=codex-slice-implementer", f"holder={free_text}"
+    ).replace("worktree=/tmp/issue-3275-pr-body", f"worktree=/tmp/{free_text}/worktree")
     fallback = {
         **dispatcher,
         "pickup_receipt": (
             "pickup-claim-complete issue=3275 branch=codex/issue-3275-pr-body "
             "worktree=/tmp/issue-3275-pr-body coordination_mode=github-label-only-fallback "
-            "fallback_reason=dispatcher_db_missing agent=codex-slice-implementer "
-            "session=issue-3275 evidence=github-comment:3275"
+            f"fallback_reason={free_text} agent={free_text} "
+            f"session={free_text} evidence=github-comment:3275"
         ),
     }
 
@@ -119,6 +126,14 @@ def test_pickup_receipt_is_in_first_generated_body() -> None:
         assert f"Pickup-Receipt: {inputs['pickup_receipt']}" in body
         assert body.count("Governing-Issue: #3275") == 1
         assert body.count("Closes #3275") == 1
+        inputs_file = tmp_path / "inputs.json"
+        inputs_file.write_text(json.dumps(inputs), encoding="utf-8")
+        cli = subprocess.run(
+            [sys.executable, "scripts/pr_body_generator.py", "--input-json", str(inputs_file)],
+            cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+        )
+        assert cli.returncode == 0, cli.stderr
+        assert cli.stdout == body
 
     detached_claim = {
         **dispatcher,
@@ -140,10 +155,16 @@ def test_pickup_receipt_validation_preserves_scope_and_issue_free_lanes() -> Non
     batch_body = generate_pr_body_from_mapping(batch)
     assert "Governing-Issue: #3275" in batch_body
     assert "Closes #3275" not in batch_body
+    child_claim = {**batch, "pickup_receipt": str(batch["pickup_receipt"]).replace("3275", "3276")}
+    child_body = generate_pr_body_from_mapping(child_claim)
+    assert "Pickup-Receipt: pickup-claim-complete issue=3276" in child_body
+    assert "Closes #3275" not in child_body
 
     for receipt in (
         None,
         "TBD",
+        str(batch["pickup_receipt"]).replace("branch=codex/issue-3275-pr-body", "branch=<branch>"),
+        str(batch["pickup_receipt"]).replace("-issue-3275 lease_id", "-issue-9999 lease_id"),
         "pickup-claim-complete issue=3275 branch=<branch> worktree=/tmp/x "
         "coordination_mode=dispatcher-backed fallback_reason=none task_id=t "
         "lease_id=l holder=h evidence=not-a-lease",
@@ -212,10 +233,14 @@ def test_cli_generates_body_from_fixture() -> None:
     assert "Closes #3275" in completed.stdout
 
 
-def test_cli_accepts_pickup_receipt_file(tmp_path: Path) -> None:
+@pytest.mark.parametrize("success_count", [0, 1, 2])
+def test_cli_accepts_pickup_receipt_file(tmp_path: Path, success_count: int) -> None:
     data = _fixture("governance_issue.json")
     receipt_file = tmp_path / "pickup-receipt.txt"
-    receipt_file.write_text(str(data["pickup_receipt"]) + "\n", encoding="utf-8")
+    receipt_file.write_text(
+        '{"workspace_preflight": "passed"}\n' + (str(data["pickup_receipt"]) + "\n") * success_count,
+        encoding="utf-8",
+    )
     command = [
         sys.executable,
         "scripts/pr_body_generator.py",
@@ -238,8 +263,12 @@ def test_cli_accepts_pickup_receipt_file(tmp_path: Path) -> None:
         command.extend(["--sbs", f"{key}={value}"])
     completed = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, check=False)
 
-    assert completed.returncode == 0, completed.stderr
-    assert f"Pickup-Receipt: {data['pickup_receipt']}" in completed.stdout
+    if success_count == 1:
+        assert completed.returncode == 0, completed.stderr
+        assert f"Pickup-Receipt: {data['pickup_receipt']}\nCloses" in completed.stdout
+    else:
+        assert completed.returncode == 2
+        assert "exactly one" in completed.stderr
 
 
 def test_explicit_batch_preserves_open_governing_parent() -> None:

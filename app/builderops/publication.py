@@ -298,6 +298,12 @@ def apply_publication_plan(
     runner = executor or SubprocessExecutor()
     normalized = _validated_plan(plan, expected_plan_sha256)
     worktree = Path(normalized["worktree"])
+    admitted_body = _generate_pr_body(runner, worktree, normalized["pr"]["body_inputs"])
+    if (
+        admitted_body != normalized["pr"]["body"]
+        or _sha256_text(admitted_body) != normalized["pr"]["body_sha256"]
+    ):
+        raise PublicationRefusal("drift", "generated PR body drifted from the plan")
     authority = _assert_authority_unchanged(runner, worktree, normalized)
     local_state, commit_sha = _observe_local_state(runner, worktree, normalized)
     _assert_issue_unchanged(runner, worktree, normalized)
@@ -604,7 +610,7 @@ def _validate_pr_body_inputs(request: PublicationRequest, values: Mapping[str, A
         )
     else:
         try:
-            _validate_pickup_receipt(pickup_receipt, request.governing_issue)
+            _validate_pickup_receipt(pickup_receipt, request.governing_issue, _closing_numbers(request))
         except PRBodyGeneratorError as exc:
             raise PublicationRefusal("drift", f"invalid pickup receipt: {exc}") from exc
     if values.get("final_review_rounds", 0) not in {0, 1}:
