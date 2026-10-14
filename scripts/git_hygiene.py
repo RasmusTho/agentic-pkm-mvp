@@ -1769,7 +1769,7 @@ _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
     re.MULTILINE,
 )
 _DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE = re.compile(
-    r"(?<!\w)[*_]{1,3}(?=\w)|(?<=\w)[*_]{1,3}(?!\w)"
+    r"(?<!\w)[`*_]{1,3}(?=\w)|(?<=\w)[`*_]{1,3}(?!\w)"
 )
 _DISPATCHER_SPLITLINES_SEPARATOR_RE = re.compile(r"[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 
