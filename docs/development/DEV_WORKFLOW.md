@@ -374,6 +374,16 @@ success cannot replace the native PG receipt. The independently bounded PG and i
 remain on `integration-nightly.yaml` (nightly schedule plus `workflow_dispatch`). See
 [`TESTING.md`](../TESTING.md) and the [deployment owner](../deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
 
+The nightly `k6-search` job provisions pgvector in its disposable `k6_search` database, applies
+`alembic upgrade head`, and runs assert-only outbox bootstrap before seeding canonical object and
+vector rows through `scripts.k6_search_fixture`. The finite fixture uses generated binding/object
+identities and the deterministic embedding profile. Its manifest feeds both the real `/search`
+compatibility-route readiness/warm-up probe and `scripts/k6_search.js`; each requires the seeded
+UUID and title. k6 retains five VUs, ten seconds, and `p(95)<250` ms, with zero HTTP errors and all
+status/result checks passing. An equivalent local run must use an explicitly admitted localhost
+database named `k6_search_<12 hex characters>`, the same producer commands, and a real isolated API;
+never enable schema autocreation or substitute a successful empty response for the fixture result.
+
 ## Documentation rules
 
 - Update the owner doc first.
