@@ -61,7 +61,7 @@ def target(tmp_path, monkeypatch, request):
     for i, service in enumerate(('api', 'worker', 'watcher'), 1):
         rows.append({'Id': str(i) * 64, 'Config': {'Labels': {
             'com.docker.compose.project': 'pkm-test', 'com.docker.compose.service': service,
-            'com.docker.compose.oneoff': 'False'}, 'Env': ['VAULT_ROOT=/app/vault', 'WATCHER_VAULT_PATH=/app/vault']},
+            'com.docker.compose.oneoff': 'False'}, 'Env': ['PKM_ENVIRONMENT=test', 'VAULT_ROOT=/app/vault', 'WATCHER_VAULT_PATH=/app/vault']},
             'Mounts': [{'Destination': '/app/vault', 'Source': str(vault), 'Type': 'bind'},
                        {'Destination': '/app/instance-ownership', 'Source': str(owner), 'Type': 'bind'},
                        {'Destination': '/app/instance-state', 'Source': str(state.parent), 'Type': 'volume',
@@ -107,7 +107,7 @@ def _mount_mode(target, mode):
     target.runtime.write_text('VAULT_ROOT=' + destination + '\nWATCHER_VAULT_PATH=' + destination + '\n')
     for row in target.rows:
         row['Mounts'][0]['Destination'] = destination
-        row['Config']['Env'] = ['VAULT_ROOT=' + destination, 'WATCHER_VAULT_PATH=' + destination]
+        row['Config']['Env'] = ['PKM_ENVIRONMENT=test', 'VAULT_ROOT=' + destination, 'WATCHER_VAULT_PATH=' + destination]
 
 
 def request(plan, operation_id, action='prepare'):

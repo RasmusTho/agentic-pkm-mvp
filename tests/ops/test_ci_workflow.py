@@ -140,7 +140,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
     assert "tests/eval/test_classification_golden.py" in job
 
 
-def _run_full_suite_workflow(tmp_path: Path, *, failing_shard: str = ""):
+def _run_full_suite_workflow(tmp_path: Path, *, failing_shard: str = "", mode: str = "success"):
     """Execute the checked-in shell with a fake pytest, including nested tests."""
     files = (
         "tests/alpha/test_root.py", "tests/alpha/nested/test_child.py",
@@ -160,16 +160,34 @@ def _run_full_suite_workflow(tmp_path: Path, *, failing_shard: str = ""):
         f"#!{sys.executable}\n" + r'''
 import os
 from pathlib import Path
+import signal
 import sys
+import time
 args = sys.argv[1:]
 targets = [arg for arg in args if arg.startswith("tests/")]
 ignored = {arg.split("=", 1)[1] for arg in args if arg.startswith("--ignore=")}
+assert os.environ["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+active = Path("active")
+active.mkdir(exist_ok=True)
+token = active / str(os.getpid())
+if targets[0] == "tests/ops":
+    assert not list(active.iterdir()), "serial boundary overlapped parallel pytest"
+else:
+    token.touch()
+    time.sleep(0.05)
 for target in targets:
     path = Path(target)
     files = sorted(path.rglob("test_*.py")) if path.is_dir() else [path]
     for file in files:
         if str(file) not in ignored:
             print(f"EXECUTED {file}")
+if os.environ.get("MODE") == "incomplete" and targets[0] == "tests/alpha":
+    print("PARTIAL synthetic regression", flush=True)
+    token.unlink()
+    os.kill(os.getppid(), signal.SIGKILL)
+    sys.exit(1)
+if token.exists():
+    token.unlink()
 if targets[0] == os.environ.get("FAILING_SHARD"):
     print("FAILED synthetic regression")
     sys.exit(1)
@@ -184,6 +202,7 @@ print("1 passed")
     result = subprocess.run(
         ["bash", "-c", script], cwd=tmp_path, capture_output=True, text=True,
         env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             **step["env"], "GITHUB_SHA": "fixture-sha", "MODE": mode,
              "RUNNER_TEMP": str(tmp_path / "runner"), "FAILING_SHARD": failing_shard},
         timeout=30,
     )
@@ -204,6 +223,25 @@ def test_full_suite_shards_cover_test_files_once(tmp_path: Path) -> None:
                              "tests/invariants/test_vault_multiwriter.py"]
 
 
+def test_required_unit_full_suite_phase_budget_preserves_complete_coverage(tmp_path: Path) -> None:
+    result, _files, job = _run_full_suite_workflow(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    step = next(s for s in job["steps"] if s.get("name") ==
+                "Run shared not-pg unit tests in process shards")
+    # Two measured 35-minute cancellations followed successful parallel shards;
+    # the slowest observed parallel phase alone took nearly 31 minutes.
+    assert step["timeout-minutes"] == 60
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert "xargs -r -n 1 -P 4 bash -c" in step["run"]
+    receipt = json.loads((tmp_path / "runner/pytest-not-pg-shards/phase-margin.json").read_text())
+    assert receipt["schema"] == "required-unit-phase-margin.v1"
+    assert receipt["github_sha"] == "fixture-sha"
+    assert receipt["outer_budget_seconds"] == step["timeout-minutes"] * 60
+    assert receipt["per_test_timeout_seconds"] == 120
+    assert receipt["phase"] == "complete" and receipt["exit_status"] == 0
+    assert receipt["total_seconds"] >= receipt["parallel_seconds"] + receipt["serial_seconds"]
+
+
 @pytest.mark.parametrize(
     "step_name",
     ["Run shared not-pg unit tests in process shards", "Run scoped not-pg unit tests"],
@@ -219,14 +257,27 @@ def test_not_pg_steps_have_room_for_selected_coverage(step_name: str) -> None:
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
 
 
-def test_full_suite_shards_retain_failure_logs(tmp_path: Path) -> None:
-    result, _files, job = _run_full_suite_workflow(tmp_path, failing_shard="tests/alpha")
+@pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])
+def test_full_suite_shards_retain_failure_logs(tmp_path: Path, mode: str) -> None:
+    failing_shard = "tests/ops" if mode == "serial-failure" else "tests/alpha"
+    result, _files, job = _run_full_suite_workflow(tmp_path, failing_shard=failing_shard, mode=mode)
     assert result.returncode == 1
-    assert "SHARD FAILED (1): tests/alpha" in result.stderr
     shard_root = tmp_path / "runner" / "pytest-not-pg-shards"
-    assert "FAILED synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
-    assert "1 tests/alpha" in (shard_root / "status").read_text()
-    assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
+    receipt = json.loads((shard_root / "phase-margin.json").read_text())
+    assert receipt["exit_status"] == 1
+    assert receipt["phase"] != "complete"
+    if mode == "incomplete":
+        assert "Process-shard runner incomplete" in result.stderr
+        assert "PARTIAL synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
+        assert "tests/alpha" not in (shard_root / "status").read_text()
+    elif mode == "shard-failure":
+        assert "SHARD FAILED (1): tests/alpha" in result.stderr
+        assert "FAILED synthetic regression" in (shard_root / "logs/tests_alpha.log").read_text()
+        assert "1 tests/alpha" in (shard_root / "status").read_text()
+        assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
+    else:
+        assert receipt["phase"] == "serial"
+        assert "FAILED synthetic regression" in (tmp_path / "pytest-not-pg.log").read_text()
     upload = next(s for s in job["steps"] if s.get("name") == "Upload process shard logs")
     assert "always()" in upload["if"]
     assert "${{ runner.temp }}/pytest-not-pg-shards/" in upload["with"]["path"]
