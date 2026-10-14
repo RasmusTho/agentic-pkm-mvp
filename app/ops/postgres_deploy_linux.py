@@ -848,7 +848,46 @@ class LinuxEffects:
                 or labels.get('com.docker.compose.oneoff', 'False').lower() != 'false'):
                 raise PostgresDeployError()
             seen.add(service)
+            config = row['Config']
+            entries = config.get('Env', [])
+            if not isinstance(entries, list):
+                raise PostgresDeployError()
+            selectors: dict[str, str] = {}
+            for entry in entries:
+                if not isinstance(entry, str) or '\x00' in entry:
+                    raise PostgresDeployError()
+                key, separator, value = entry.partition('=')
+                # Docker can retain an optional unset variable as a bare key.
+                # Track its presence as empty so duplicates still refuse and it
+                # cannot supply a required authority/channel/source selector.
+                if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or key in selectors:
+                    raise PostgresDeployError()
+                if not separator and (key in {'PKM_ENVIRONMENT', 'VAULT_HOST_ROOT', 'WATCHER_VAULT_PATH', *_CUTOVER_ENV}
+                                      or key == 'VAULT_ROOT' or key.startswith('VAULT_ROOT_')):
+                    raise PostgresDeployError()
+                selectors[key] = value
+            if selectors.get('PKM_ENVIRONMENT') != cfg.channel:
+                raise PostgresDeployError()
             mounts = row.get('Mounts', [])
+            if not isinstance(mounts, list) or any(not isinstance(mount, dict) for mount in mounts):
+                raise PostgresDeployError()
+            if service == 'migrate':
+                # Canonical Alembic/SQL (including representation backfill) has
+                # no filesystem content or registry access. Bind the exemption
+                # to its producer ownership, entrypoint and actual access, never
+                # its name, age or running state alone. Only the managed read-only
+                # DB password file may be mounted; code/content overlays refuse.
+                if (labels.get('com.agentic-pkm.mvr05.db-role') != 'migration-runner'
+                    or config.get('Cmd') != ['/bin/bash', '/app/scripts/run_migrations.sh']
+                    or config.get('Entrypoint') not in (None, [])
+                    or config.get('WorkingDir') != '/app'
+                    or len(mounts) > 1
+                    or any(mount.get('Type') != 'bind'
+                           or mount.get('Destination') != '/run/secrets/postgres_password'
+                           or mount.get('Source') != str(cfg.password_file)
+                           or mount.get('RW') is not False for mount in mounts)):
+                    raise PostgresDeployError()
+                continue
             for destinations, source in (({selected.root, '/app/vault'}, selected.root),
                                          ({'/app/instance-ownership'}, env['INSTANCE_OWNERSHIP_HOST_STATE_DIR'])):
                 bound = [mount for mount in mounts if mount.get('Destination') in destinations]
@@ -861,12 +900,6 @@ class LinuxEffects:
                 or bound[0].get('Name') != 'pkm-' + cfg.channel + '_instance-state'):
                 raise PostgresDeployError()
             registry_roots.add(bound[0]['Source'])
-            selectors: dict[str, str] = {}
-            for entry in row['Config'].get('Env', []):
-                key, separator, value = entry.partition('=')
-                if not separator or key in selectors:
-                    raise PostgresDeployError()
-                selectors[key] = value
             container_roots = [selectors.get(key, '') for key in
                                ('VAULT_ROOT', 'VAULT_ROOT_' + cfg.channel.upper(), 'WATCHER_VAULT_PATH')]
             if (not any(container_roots) or any(value and value != selected_destination for value in container_roots)
