@@ -47,6 +47,7 @@ from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
 from app.vault.manager import iter_vault_markdown_files
 from app.write_guard import SOURCE_BACKED_REBUILD_ACTION
+from app.rebuildability.product_total_loss import capture_source_frontmatter
 
 #: Sentinel written to created_by_instance when runtime identity is unavailable.
 _UNKNOWN_INSTANCE = "unknown"
@@ -710,6 +711,7 @@ def _ingest_single(
 
     payload = {
         "core6": core6,
+        "frontmatter": capture_source_frontmatter(raw_text),
         "raw_text": stripped_text,
         "text": stripped_text,
         "replay_text_kind": "extracted_body",
@@ -742,6 +744,7 @@ def _ingest_single(
         object_uuid = uuid.uuid4()
 
     store_payload = {
+        "frontmatter": capture_source_frontmatter(raw_text),
         "artifact_id": str(object_uuid),
         "stable_id": str(object_uuid),
         "title": title,

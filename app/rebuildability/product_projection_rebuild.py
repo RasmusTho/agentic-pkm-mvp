@@ -27,6 +27,7 @@ from app.rebuildability.product_total_loss import (
     canonical_product_source_text,
     parse_markdown_text,
     product_replay_provenance,
+    capture_source_frontmatter,
 )
 RECONSTRUCTABLE_QUEUE_EVENTS = frozenset(
     {
@@ -164,6 +165,7 @@ class RetainedProjectionSource:
         embedding = list(embedding_source.embed_text(text))
         embedding_identity = embedding_source.identity
         stamped = dict(payload)
+        stamped["frontmatter"] = capture_source_frontmatter(raw_text)
         stamped["text"] = text
         stamped["episode_ref"] = episode_ref_from_frontmatter(frontmatter)
         stamped["replay"] = product_replay_provenance(
