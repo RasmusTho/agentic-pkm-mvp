@@ -903,6 +903,11 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "expected_version rewrite, but does not assert WriteGuard itself; the "
         "shared port supplies that guard check (#6027)."
     ),
+    ("app/ops/native_journaling_acceptance.py", "bootstrap", 1): (
+        "guarded_by_port: the fixed TEST journaling bootstrap introduced in "
+        "6d8d3 writes its synthetic anchor through write_note_relative; its "
+        "create-once seam asserts WriteGuard before path resolution or I/O."
+    ),
 }
 
 # VMW create-intent census. This is deliberately separate from the existing
@@ -950,6 +955,9 @@ WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
     ),
     ("app/ops/native_web_fixture.py", "bootstrap_fixture", 3): (
         "create_once: the fixed synthetic episode seed preserves an existing fixture target."
+    ),
+    ("app/ops/native_journaling_acceptance.py", "bootstrap", 1): (
+        "create_once: the fixed TEST journaling synthetic anchor preserves an existing target."
     ),
 }
 
