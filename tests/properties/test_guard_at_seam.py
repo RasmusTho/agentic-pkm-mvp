@@ -211,7 +211,6 @@ def test_vault_multiwriter_relative_intent_census_is_closed() -> None:
         ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1),
         ("app/ops/native_web_fixture.py", "bootstrap_fixture", 2),
         ("app/ops/native_web_fixture.py", "bootstrap_fixture", 3),
-        ("app/ops/native_journaling_acceptance.py", "bootstrap", 1),
     }
     live = set(find_write_note_relative_call_sites())
     assert set(WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION) == expected
