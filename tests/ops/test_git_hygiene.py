@@ -6596,6 +6596,38 @@ def test_local_retirement_ignores_narrative_binding_words(
     assert result["deleted"] == 1
 
 
+def test_local_retirement_ignores_completed_dedicated_worktree_lifecycle_prose(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5850",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5850,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "Completed delivery. Dedicated worktree lifecycle is complete "
+                            "and managed archive is verified."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work after completed lifecycle prose check",
+    )
+    assert result["deleted"] == 1
+
+
 def test_local_retirement_ignores_negated_pickup_marker(
     tmp_path, monkeypatch
 ):
@@ -6731,6 +6763,8 @@ def test_dispatcher_task_identity_uses_canonical_producer(tmp_path, monkeypatch)
     [
         "Preserved worktree: relative; branch: old; base HEAD: " + "a" * 40,
         "Dedicated worktree /tmp/old is still dirty on branch old at head not-a-sha",
+        "Dedicated worktree /tmp/old is still dirty on branch old",
+        "Dedicated worktree /tmp/old is still dirty on branch old at head",
     ],
 )
 def test_local_retirement_rejects_malformed_explicit_marker(
