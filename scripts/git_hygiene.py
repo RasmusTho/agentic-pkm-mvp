@@ -1771,6 +1771,9 @@ _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
 _DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE = re.compile(
     r"(?<!\w)[`*_]{1,3}(?=\w)|(?<=\w)[`*_]{1,3}(?!\w)"
 )
+_DISPATCHER_MARKDOWN_INLINE_LINK_RE = re.compile(
+    r"\[([^\]\r\n]+)\]\((?:[^()\r\n]|\([^()\r\n]*\))*\)"
+)
 _DISPATCHER_SPLITLINES_SEPARATOR_RE = re.compile(r"[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 
 
@@ -1778,6 +1781,7 @@ def _dispatcher_cross_line_scan_body(body: str) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
     normalized = _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE.sub("", normalized)
+    normalized = _DISPATCHER_MARKDOWN_INLINE_LINK_RE.sub(r"\1", normalized)
     return _DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE.sub("", normalized)
 
 
