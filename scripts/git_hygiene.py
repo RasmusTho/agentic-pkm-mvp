@@ -9,6 +9,7 @@ import argparse
 import datetime as dt
 import fcntl
 import hashlib
+from html.parser import HTMLParser
 import json
 import math
 import os
@@ -25,6 +26,8 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
+
+from markdown_it import MarkdownIt
 
 if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -1763,26 +1766,138 @@ _DISPATCHER_DIRTY_KEYWORD = _dispatcher_linebreak_tolerant_keyword("dirty")
 _DISPATCHER_RETENTION_SEPARATOR = (
     r"(?:\s+|[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)"
 )
-_DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
-    r"^[ \t]*(?:(?:>[ \t]*)|(?:[-*+][ \t]+)|(?:\d{1,9}[.)][ \t]+))+"
-    r"(?:\[[ xX]\][ \t]+)?",
-    re.MULTILINE,
-)
-_DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE = re.compile(
-    r"(?<!\w)[`*_]{1,3}(?=\w)|(?<=\w)[`*_]{1,3}(?!\w)"
-)
-_DISPATCHER_MARKDOWN_INLINE_LINK_RE = re.compile(
-    r"\[([^\]\r\n]+)\]\((?:[^()\r\n]|\([^()\r\n]*\))*\)"
-)
+_DISPATCHER_MARKDOWN = MarkdownIt("commonmark", {"html": True})
 _DISPATCHER_SPLITLINES_SEPARATOR_RE = re.compile(r"[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+_DISPATCHER_MARKDOWN_TASK_PREFIX_RE = re.compile(
+    r"^[ \t]*\[[ xX]\][ \t]+", re.MULTILINE
+)
+_DISPATCHER_HTML_BREAK_TOKEN_RE = re.compile(
+    r"<br(?=[\s/>])(?:[\s]+(?:[^\"'>]|\"[^\"]*\"|'[^']*')*)?[\s]*/?>",
+    re.IGNORECASE | re.DOTALL,
+)
+_DISPATCHER_HTML_TAG_NAME_RE = re.compile(r"<\s*/?\s*([A-Za-z][A-Za-z0-9:-]*)")
+_DISPATCHER_OPAQUE_CODE_MARKER = "\x00"
+
+
+def _dispatcher_is_html_break_token(content: str) -> bool:
+    return bool(_DISPATCHER_HTML_BREAK_TOKEN_RE.fullmatch(content.strip()))
+
+
+def _dispatcher_render_html_token(content: str) -> str:
+    if _dispatcher_is_html_break_token(content):
+        return "\n"
+    name = _DISPATCHER_HTML_TAG_NAME_RE.match(content)
+    if name is not None and not name.group(1).lower().startswith("br-"):
+        return ""
+    return content
+
+
+class _DispatcherHTMLBlockTextParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "br":
+            self.parts.append("\n")
+
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag.lower() == "br":
+            self.parts.append("\n")
+
+
+def _dispatcher_render_html_block(content: str) -> str:
+    parser = _DispatcherHTMLBlockTextParser()
+    parser.feed(content)
+    parser.close()
+    return "".join(parser.parts)
+
+
+def _dispatcher_mask_code_block(content: str) -> str:
+    masked = re.sub(r"[^\n]", " ", content)
+    return f"{_DISPATCHER_OPAQUE_CODE_MARKER}{masked}{_DISPATCHER_OPAQUE_CODE_MARKER}"
+
+
+def _dispatcher_render_inline_tokens(
+    tokens: Sequence[Any], *, strip_task_prefix: bool,
+) -> str:
+    parts: list[str] = []
+    for token in tokens:
+        token_type = token.type
+        if token_type in {"softbreak", "hardbreak"}:
+            parts.append("\n")
+        elif token_type in {"code_inline", "text"}:
+            parts.append(token.content)
+        elif token_type in {"html_inline", "html_block"}:
+            parts.append(_dispatcher_render_html_token(token.content))
+        elif token_type in {"link_open", "link_close", "image", "em_open", "em_close", "strong_open", "strong_close", "s_open", "s_close", "del_open", "del_close"}:
+            if token_type == "image":
+                parts.append(token.content)
+        elif token.children:
+            parts.append(
+                _dispatcher_render_inline_tokens(
+                    token.children, strip_task_prefix=False
+                )
+            )
+        elif token.content:
+            parts.append(token.content)
+    rendered = "".join(parts)
+    if strip_task_prefix:
+        rendered = _DISPATCHER_MARKDOWN_TASK_PREFIX_RE.sub("", rendered)
+    return rendered
 
 
 def _dispatcher_cross_line_scan_body(body: str) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
-    normalized = _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE.sub("", normalized)
-    normalized = _DISPATCHER_MARKDOWN_INLINE_LINK_RE.sub(r"\1", normalized)
-    return _DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE.sub("", normalized)
+    tokens = _DISPATCHER_MARKDOWN.parse(normalized)
+    parts: list[str] = []
+    previous_end = 0
+    rendered_block = False
+    for token in tokens:
+        if token.type == "inline":
+            rendered = _dispatcher_render_inline_tokens(
+                token.children or [], strip_task_prefix=token.level > 1
+            )
+        elif token.type in {"fence", "code_block"}:
+            rendered = _dispatcher_mask_code_block(token.content)
+        elif token.type == "html_block":
+            rendered = _dispatcher_render_html_block(token.content)
+        else:
+            continue
+        if token.map is None:
+            parts.append(rendered)
+            continue
+        start, end = token.map
+        expected_lines = max(1, end - start)
+        while len(rendered.splitlines()) < expected_lines:
+            rendered += "\n"
+        if rendered_block:
+            gap = max(1, start - previous_end + 1)
+            if parts[-1].endswith("\n"):
+                gap -= 1
+            parts.append("\n" * max(0, gap))
+        elif start:
+            parts.append("\n" * start)
+        parts.append(rendered)
+        previous_end = end
+        rendered_block = True
+    return "".join(parts)
+
+
+def _dispatcher_code_block_line_numbers(body: str) -> set[int]:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    line_numbers: set[int] = set()
+    for token in _DISPATCHER_MARKDOWN.parse(normalized):
+        if token.type in {"fence", "code_block"} and token.map is not None:
+            line_numbers.update(range(token.map[0], token.map[1]))
+    return line_numbers
 
 
 _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE = re.compile(
@@ -1925,15 +2040,20 @@ def _dispatcher_resumable_binding_resources(
         cross_line_scan_body = _dispatcher_cross_line_scan_body(body)
         if any(
             re.search(r"[\r\n]", match.group(0))
+            for scan_segment in cross_line_scan_body.split(
+                _DISPATCHER_OPAQUE_CODE_MARKER
+            )
             for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(
-                cross_line_scan_body
+                scan_segment
             )
         ):
             raise RuntimeError("dispatcher_activity_invalid")
         lines = body.splitlines()
-        marker_scan_lines = cross_line_scan_body.splitlines()
+        code_block_lines = _dispatcher_code_block_line_numbers(body)
         for line_number, line in enumerate(lines):
-            marker_scan_line = marker_scan_lines[line_number]
+            if line_number in code_block_lines:
+                continue
+            marker_scan_line = _dispatcher_cross_line_scan_body(line)
             continuation = lines[line_number + 1] if line_number + 1 < len(lines) else ""
             dedicated_worktree_fragment = bool(
                 _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(marker_scan_line)
