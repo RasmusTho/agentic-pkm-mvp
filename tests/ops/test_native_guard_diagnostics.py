@@ -63,10 +63,12 @@ def test_guard_diagnostic_preserves_success_and_original_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from types import SimpleNamespace
+    from uuid import uuid4
 
     from app.ops import postgres_deploy_linux as linux
     from app.ops.bws_secret_reader import BwsItemAbsent
-    from app.ops.postgres_deploy import PostgresDeployError
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
 
     directory = tmp_path / "config" / "deploy"
     directory.mkdir(parents=True)
@@ -79,15 +81,20 @@ def test_guard_diagnostic_preserves_success_and_original_failure(
     password.write_text("fixture-password")
     runtime = tmp_path / "runtime.env"
     runtime.write_text("LLM_PROVIDER=mock\n")
+    identifier = str(uuid4())
+    plan = DeployPlan("test", "a" * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, "heimdal-api-ingress"))
+    journal = DeployJournal(tmp_path / "journal", "test")
+    journal.bind_request(identifier, plan, False, create=True)
+    for stage in ("prepared", "preflighted", "materialized", "activating"):
+        journal.write(identifier, stage)
     cfg = SimpleNamespace(
         root=tmp_path,
         channel="test",
         password_file=password,
         runtime_env_file=runtime,
         reader=None,
-        journal=SimpleNamespace(
-            read=lambda: SimpleNamespace(stage="activating", operation_id="operation"),
-        ),
+        journal=journal,
     )
     monkeypatch.setattr(linux.LinuxConfig, "load", lambda channel: cfg)
     monkeypatch.setattr(linux, "_capture_watch_configured", lambda config: False)
@@ -106,7 +113,7 @@ def test_guard_diagnostic_preserves_success_and_original_failure(
     environment = {
         "BWS_DEPLOY_RUNTIME_ENV_FILE": str(runtime),
         "BWS_DEPLOY_LOCK_FD": "0",
-        "BWS_DEPLOY_OPERATION_ID": "operation",
+        "BWS_DEPLOY_OPERATION_ID": identifier,
         "BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED": "0",
         "BWS_EXPECTED_RAW_MIGRATION_PENDING": "0",
         "BWS_DEPLOY_TARGET_REVISION": "a" * 40,
