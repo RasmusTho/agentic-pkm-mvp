@@ -482,13 +482,13 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "then MARR-11 (#5794) added a clone-local model-profile definition "
         "earlier in the file."
     ),
-    ("app/instance/vault_registry.py", 2977): (
+    ("app/instance/vault_registry.py", 2995): (
         "out_of_scope: AppLocalSettingsStore persists the app-local device "
         "registry (default_app_local_settings_path(), typically an XDG data "
         "dir) -- a machine-local app config store outside the vault content "
         "plane Sigma (formal-model.md sec 2.3), not a Human Knowledge Artifact. "
-        "Line drifted 1373 -> 1394 -> 1403 -> 1953 -> 2266 -> 2330 -> 2357 -> 2496 -> 2503 -> 2745 -> 2838 -> 2893 -> 2926 -> 2930 -> 2935 -> 2948 -> 2977 "
-        "(site unchanged); #5432 adds the transaction-refusal lock option. Re-pinned after directly related SETTINGS-05A (#4967) inserted "
+        "Line drifted 1373 -> 1394 -> 1403 -> 1953 -> 2266 -> 2330 -> 2357 -> 2496 -> 2503 -> 2745 -> 2838 -> 2893 -> 2926 -> 2930 -> 2935 -> 2948 -> 2977 -> 2995 "
+        "(site unchanged); #6056 adds the read-only existing-registry reader; #5432 adds the transaction-refusal lock option. Re-pinned after directly related SETTINGS-05A (#4967) inserted "
         "the durable dormant-rebind schema and producers earlier in vault_registry.py. "
         "SETTINGS-05A adds no new "
         "write_frontmatter site: like MVR-02/MVR-04, it writes the registry through "

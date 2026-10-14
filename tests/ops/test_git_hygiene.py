@@ -925,15 +925,39 @@ def test_gh_transport_peer_identity_is_explicit(monkeypatch) -> None:
     assert _gh_peer_identity(None) == {"status": "unavailable", "pid": None}
 
 
+@pytest.mark.parametrize("ambient_telemetry", ["enabled", "disabled"])
 def test_targeted_remote_cleanup_installed_gh_ignores_configured_unix_socket(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, ambient_telemetry
 ) -> None:
+    # Use synthetic config/state and authentication even for CLI setup/version
+    # commands; the real API child must retain the selected ambient telemetry.
+    initial_config = tmp_path / "initial-gh-config"
+    initial_config.mkdir(mode=0o700)
+    monkeypatch.setenv("GH_CONFIG_DIR", str(initial_config))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "gh-state"))
+    monkeypatch.setenv("GH_TOKEN", "invalid-token-for-fixed-host-test")
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("GH_TELEMETRY", ambient_telemetry)
+    monkeypatch.setenv("GH_TELEMETRY_SAMPLE_RATE", "100")
     peer_identities = []
     child_diagnostics = []
+    setup_diagnostics = []
+    original_diagnostic = _gh_child_diagnostic
+
+    def telemetry_diagnostic(argv, environment):
+        record, config = original_diagnostic(argv, environment)
+        record["telemetry_disabled"] = environment.get("GH_TELEMETRY") == "disabled"
+        record["telemetry_matches_ambient"] = (
+            environment.get("GH_TELEMETRY") == ambient_telemetry
+        )
+        return record, config
+
+    monkeypatch.setattr(sys.modules[__name__], "_gh_child_diagnostic", telemetry_diagnostic)
     diagnostics = {
         "gh_version": _gh_cli_version(),
         "caller": _gh_caller_diagnostic(),
         "children": child_diagnostics,
+        "setup_children": setup_diagnostics,
         "socket_peers": peer_identities,
     }
     attacker_config = tmp_path / "attacker-gh-config"
@@ -945,15 +969,22 @@ def test_targeted_remote_cleanup_installed_gh_ignores_configured_unix_socket(
     )
     repro_environment = os.environ.copy()
     repro_environment["GH_CONFIG_DIR"] = str(attacker_config)
-    repro = subprocess.run(
-        ["gh", "config", "get", "http_unix_socket"],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=repro_environment,
-    )
+    # v2.102 can detach setup telemetry which races the later socket listener.
+    # Isolate that setup command, preserving the production API environment.
+    repro_environment["GH_TELEMETRY"] = "disabled"
+    with _observe_gh_transport(monkeypatch, setup_diagnostics):
+        repro = subprocess.run(
+            ["gh", "config", "get", "http_unix_socket"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=repro_environment,
+        )
     assert repro.returncode == 0
     assert repro.stdout.strip() == str(attacker_socket)
+    assert len(setup_diagnostics) == 1
+    assert setup_diagnostics[0]["telemetry_disabled"] is True
+    assert setup_diagnostics[0]["telemetry_matches_ambient"] is (ambient_telemetry == "disabled")
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(str(attacker_socket))
     server.listen(1)
@@ -1007,6 +1038,8 @@ def test_targeted_remote_cleanup_installed_gh_ignores_configured_unix_socket(
     assert not (isinstance(payload, dict) and payload.get("attacker") is True)
     assert len(child_diagnostics) == 1
     child = child_diagnostics[0]
+    assert child["telemetry_matches_ambient"] is True
+    assert child["telemetry_disabled"] is (ambient_telemetry == "disabled")
     assert child["expected_api_argv"] is True and child["pid"] > 0
     assert child["private_config_shape"] is True and child["config_empty"] is True
     assert child["config_mode_0700"] is True and child["config_removed_after_call"] is True

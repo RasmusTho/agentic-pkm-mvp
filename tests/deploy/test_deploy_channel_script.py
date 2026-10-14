@@ -4646,8 +4646,10 @@ def test_linux_effects_empty_proof_is_bound_to_default_local_initialization(tmp_
 ])
 def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, monkeypatch, host, target, profiles, accepted):
     from types import SimpleNamespace
+    from uuid import uuid4
     from app.ops import postgres_deploy_linux as linux
-    from app.ops.postgres_deploy import PostgresDeployError
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
     directory = tmp_path / 'config/deploy'
     directory.mkdir(parents=True)
     (directory / 'test.env').write_text('APP_IMAGE_TAG=' + 'a' * 40 + '\n')
@@ -4657,10 +4659,16 @@ def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, 
     password.write_text('fake-target-binding-password')
     runtime_env_file = tmp_path / 'runtime.env'
     runtime_env_file.write_text('LLM_PROVIDER=mock\n', encoding='utf-8')
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    identifier = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+                      (*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+    journal.bind_request(identifier, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(identifier, stage)
     cfg = SimpleNamespace(root=tmp_path, channel='test', password_file=password,
                           runtime_env_file=runtime_env_file,
-                          reader=lambda: object(), journal=SimpleNamespace(read=lambda:
-                          SimpleNamespace(stage='activating', operation_id='operation')))
+                          reader=lambda: object(), journal=journal)
     monkeypatch.setattr(linux.LinuxConfig, 'load', lambda channel: cfg)
     reads = []
     monkeypatch.setattr(linux.PasswordSource, 'verify', lambda self: reads.append('source'))
@@ -4669,7 +4677,7 @@ def test_bws_worker_guard_binds_compose_target_before_provider_access(tmp_path, 
     monkeypatch.setattr(linux, 'require_file_protocol', lambda *args: None)
     with (lock / 'bws-owner').open('w+') as owner:
         monkeypatch.setattr(os, 'environ', {'DATABASE_URL': 'postgresql://app@' + host + ':5432/app_test',
-            'BWS_DEPLOY_LOCK_FD': str(owner.fileno()), 'BWS_DEPLOY_OPERATION_ID': 'operation',
+            'BWS_DEPLOY_LOCK_FD': str(owner.fileno()), 'BWS_DEPLOY_OPERATION_ID': identifier,
             'BWS_DEPLOY_RUNTIME_ENV_FILE': str(runtime_env_file),
             'BWS_DATABASE_TARGET': target, 'COMPOSE_PROFILES': profiles,
             'BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED': '0',

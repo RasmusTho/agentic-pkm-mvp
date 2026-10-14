@@ -394,6 +394,24 @@ class VaultRegistryStore:
                 return self._restore_or_initialize_missing_locked()
             return self._read_current_locked(recover=True)
 
+    def read_existing(self) -> RegistrySnapshot:
+        """Read existing qualified state without initialization or repair."""
+        _assert_private(self.path.parent, directory=True)
+        _assert_private(self.path, directory=False)
+        _assert_private(self.lock_path, directory=False)
+        descriptor = os.open(self.lock_path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            _assert_private_stat(os.fstat(descriptor), self.lock_path, directory=False)
+            fcntl.flock(descriptor, fcntl.LOCK_SH)
+            try:
+                if os.path.lexists(self.transaction_path):
+                    raise RegistryError("registry transaction requires normal recovery")
+                return self._read_current_locked(recover=False)
+            finally:
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
+
     def install_settings_rebind_dormant(
         self,
         *,

@@ -32,11 +32,12 @@ from app.ops.bws_secret_reader import BwsReaderConfig, BwsSecretReader
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
 from app.ops.native_web_acceptance import NativeWebRefusal, WEB_PROFILE
 from app.ops.postgres_deploy import (
-    DeployJournal, DeployPlan, DeployReceipt, DeployWorker, PostgresDeployError,
+    AuthorityCutover, DeployJournal, DeployPlan, DeployReceipt, DeployWorker, PostgresDeployError,
     password_authenticate, vm_selected_values,
 )
 
 _ONE_SHOT_COMPOSE_SERVICES = frozenset({'instance-state-init', 'migrate'})
+_CUTOVER_ENV = ('MVR01C_ROLLBACK_VAULT_BINDING_ID', 'MVR01C_ROLLBACK_VAULT_ROOT')
 _DEPLOY_JOURNAL_SOCKET = '/run/systemd/journal/socket'
 _DEPLOY_FAILURE_STAGES = frozenset({
     'preflight', 'runtime_identity', 'model_access', 'migration_inventory',
@@ -51,6 +52,7 @@ _GUARD_FAILURE_CHECKPOINTS = frozenset({
     'selected_image_file_protocol', 'database_target_binding',
     'password_source_read', 'credential_free_database_input',
     'selected_bws_consumer_scope', 'password_equality',
+    'authority_request_binding',
 })
 
 
@@ -281,12 +283,24 @@ def inherited_worker_guard(channel: str, compose_command: str | None = None) -> 
         receipt = cfg.journal.read()
         if receipt is None or receipt.stage != 'activating' or receipt.operation_id != os.environ.get('BWS_DEPLOY_OPERATION_ID'):
             raise PostgresDeployError()
+        checkpoint['name'] = 'authority_request_binding'
+        bound_plan = cfg.journal.bound_plan(receipt.operation_id)
+        cutover = bound_plan.authority_cutover
+        expected_cutover = (cutover.binding_id, cutover.root) if cutover else ('', '')
+        if tuple(os.environ.get(key, '') for key in _CUTOVER_ENV) != expected_cutover:
+            raise PostgresDeployError()
+        if cutover and os.environ.get('INSTANCE_OWNERSHIP_HOST_STATE_DIR') != cutover.ownership_root:
+            raise PostgresDeployError()
+        if cutover:
+            require_cutover_target_config(cfg, cutover)
         checkpoint['name'] = 'selector_shape_capture_raw_migration'
         expected_capture = os.environ.get('BWS_EXPECTED_CAPTURE_WATCH_CONFIGURED')
         expected_migration = os.environ.get('BWS_EXPECTED_RAW_MIGRATION_PENDING')
         target_revision = os.environ.get('BWS_DEPLOY_TARGET_REVISION', '')
         if (expected_capture not in {'0', '1'} or expected_migration not in {'0', '1'}
             or not re.fullmatch(r'[0-9a-f]{40}', target_revision)):
+            raise PostgresDeployError()
+        if cutover and target_revision != bound_plan.revision:
             raise PostgresDeployError()
         # The worker selected these consumers before any deployment mutation. Check
         # capture config again for every Compose call. Before the shell runs its
@@ -458,6 +472,48 @@ def _runtime_user_ownership_state_dir(runtime_uid: int, xdg_state_home: str | No
 
 
 _BASE_DEPLOY_CONSUMERS = frozenset((*DATABASE_CONSUMERS, 'heimdal-api-ingress'))
+
+
+def require_existing_authority_binding(data: dict[str, Any]) -> None:
+    """Runtime-UID read-only proof; never restore, initialize or select a vault."""
+    from app.instance.runtime import require_existing_authority_cutover_ready
+
+    selected = AuthorityCutover(**data['selection'])
+    selected.validate()
+    require_existing_authority_cutover_ready(
+        channel_id=data['channel'],
+        registry_path=Path(data['registry_path']),
+        host_global_root=Path(selected.ownership_root),
+        vault_binding_id=selected.binding_id,
+        vault_root=Path(selected.root),
+    )
+
+
+def require_cutover_target_config(config: LinuxConfig, selected: AuthorityCutover) -> None:
+    """Match the shell's pin-before-runtime selected source, without selecting it."""
+    from scripts.compose_env import compose_env_value
+
+    sources = []
+    for path in database_input_files(config):
+        values: dict[str, str] = {}
+        for line in path.read_text(encoding='utf-8').splitlines():
+            key, separator, value = line.partition('=')
+            if separator and key in {'VAULT_HOST_ROOT', 'VAULT_ROOT', 'VAULT_ROOT_' + config.channel.upper(),
+                                     'WATCHER_VAULT_PATH', 'INSTANCE_OWNERSHIP_HOST_STATE_DIR'}:
+                if key in values:
+                    raise PostgresDeployError()
+                values[key] = compose_env_value(value)
+        sources.append(values)
+    root = sources[0].get('VAULT_HOST_ROOT') or sources[1].get('VAULT_HOST_ROOT')
+    if root != selected.root:
+        raise PostgresDeployError()
+    for values in sources:
+        if any(value and value not in {selected.root, '/app/vault'} for key, value in values.items()
+               if key in {'VAULT_ROOT', 'VAULT_ROOT_' + config.channel.upper(), 'WATCHER_VAULT_PATH'}):
+            raise PostgresDeployError()
+        owner = values.get('INSTANCE_OWNERSHIP_HOST_STATE_DIR')
+        if owner and owner != selected.ownership_root:
+            raise PostgresDeployError()
 
 
 def _git_bytes(root: Path, *args: str) -> bytes:
@@ -672,10 +728,17 @@ class LinuxEffects:
         self.capture_watch_configured: bool | None = None
         self.raw_migration_pending: bool | None = None
 
-    def environment(self) -> dict[str, str]:
+    def environment(self, cutover: AuthorityCutover | None = None) -> dict[str, str]:
         cfg = self.config
         runtime_env_file = database_input_files(cfg)[1]
         env = dict(os.environ)
+        # Native authority is never inherited from the supervisor or shell.
+        for key in _CUTOVER_ENV:
+            env.pop(key, None)
+        if cutover is not None:
+            if env.get('DOCKER_HOST', 'unix:///var/run/docker.sock') != 'unix:///var/run/docker.sock' or env.get('DOCKER_CONTEXT'):
+                raise PostgresDeployError()
+            env['INSTANCE_OWNERSHIP_HOST_STATE_DIR'] = cutover.ownership_root
         # Refuse ambient password-bearing DSNs before invoking Compose.
         for key in ('DATABASE_URL', 'DB_DSN'):
             if env.get(key):
@@ -749,6 +812,107 @@ class LinuxEffects:
                 raise PostgresDeployError()
             ensure_candidate_object(self.config, plan.revision)
         require_file_protocol(self.config.root, plan.revision)
+        self.qualify_authority_cutover(plan)
+
+    def qualify_authority_cutover(self, plan: DeployPlan) -> None:
+        if plan.authority_cutover is None:
+            return
+        cfg = self.config
+        selected = plan.authority_cutover
+        selected.validate()
+        if plan.channel != cfg.channel:
+            raise PostgresDeployError()
+        require_cutover_target_config(cfg, selected)
+        # Existing stopped/running writer bindings are the source of qualification.
+        # Neither Compose creation nor a vault-discovery/default-selection path is used.
+        ids = _command(['docker', 'ps', '--all', '--no-trunc', '--filter',
+                        'label=com.docker.compose.project=pkm-' + cfg.channel,
+                        '--format', '{{.ID}}']).splitlines()
+        if not ids or len(set(ids)) != len(ids) or any(not re.fullmatch(r'[0-9a-f]{64}', item) for item in ids):
+            raise PostgresDeployError()
+        rows = json.loads(_command(['docker', 'inspect', '--type', 'container', *ids]))
+        if not isinstance(rows, list) or {row.get('Id') for row in rows} != set(ids) or len(rows) != len(ids):
+            raise PostgresDeployError()
+        expected_services = {'api', 'worker', 'watcher'}
+        if _capture_watch_configured(cfg):
+            expected_services.add('heimdal-capture-watch')
+        seen: set[str] = set()
+        registry_roots: set[str] = set()
+        env = self.environment(selected)
+        for row in rows:
+            labels = row.get('Config', {}).get('Labels', {})
+            service = labels.get('com.docker.compose.service')
+            if service not in {'api', 'worker', 'watcher', 'heimdal-capture-watch', 'migrate'}:
+                continue
+            if (service in seen or labels.get('com.docker.compose.project') != 'pkm-' + cfg.channel
+                or labels.get('com.docker.compose.oneoff', 'False').lower() != 'false'):
+                raise PostgresDeployError()
+            seen.add(service)
+            mounts = row.get('Mounts', [])
+            for destinations, source in (({selected.root, '/app/vault'}, selected.root),
+                                         ({'/app/instance-ownership'}, env['INSTANCE_OWNERSHIP_HOST_STATE_DIR'])):
+                bound = [mount for mount in mounts if mount.get('Destination') in destinations]
+                if len(bound) != 1 or bound[0].get('Type') != 'bind' or bound[0].get('Source') != source:
+                    raise PostgresDeployError()
+                if source == selected.root:
+                    selected_destination = bound[0]['Destination']
+            bound = [mount for mount in mounts if mount.get('Destination') == '/app/instance-state']
+            if (len(bound) != 1 or bound[0].get('Type') != 'volume'
+                or bound[0].get('Name') != 'pkm-' + cfg.channel + '_instance-state'):
+                raise PostgresDeployError()
+            registry_roots.add(bound[0]['Source'])
+            selectors: dict[str, str] = {}
+            for entry in row['Config'].get('Env', []):
+                key, separator, value = entry.partition('=')
+                if not separator or key in selectors:
+                    raise PostgresDeployError()
+                selectors[key] = value
+            container_roots = [selectors.get(key, '') for key in
+                               ('VAULT_ROOT', 'VAULT_ROOT_' + cfg.channel.upper(), 'WATCHER_VAULT_PATH')]
+            if (not any(container_roots) or any(value and value != selected_destination for value in container_roots)
+                or selectors.get('VAULT_HOST_ROOT', selected.root) != selected.root):
+                raise PostgresDeployError()
+        if not expected_services <= seen or len(registry_roots) != 1:
+            raise PostgresDeployError()
+        registry_root = next(iter(registry_roots))
+        volume = json.loads(_command(['docker', 'volume', 'inspect', 'pkm-' + cfg.channel + '_instance-state']))
+        if (not isinstance(volume, list) or len(volume) != 1
+            or volume[0].get('Mountpoint') != registry_root):
+            raise PostgresDeployError()
+        data = {'channel': cfg.channel, 'selection': {'binding_id': selected.binding_id, 'root': selected.root,
+                                                   'ownership_root': selected.ownership_root},
+                'registry_path': 'vault-registry.md'}
+        # Registry/ledger are owned by the Compose runtime, not root. No protected
+        # input is placed on argv or returned in the child/status diagnostics.
+        # Docker's host volume ancestry is root-private even when the mounted
+        # registry directory/files belong to the runtime UID. Open only this
+        # already-qualified directory as supervisor, then let that UID read its
+        # existing view through the inherited descriptor. No permissions/groups,
+        # content mounts or storage-mutation capability are added.
+        registry_directory = Path(registry_root) / 'agentic-pkm'
+        if any(path.is_symlink() for path in (registry_directory, *registry_directory.parents)):
+            raise PostgresDeployError()
+        descriptor = os.open(registry_directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            info = os.fstat(descriptor)
+            if info.st_uid != cfg.uid or stat.S_IMODE(info.st_mode) != 0o700:
+                raise PostgresDeployError()
+            result = subprocess.run([sys.executable, '-c',
+                'import json,os,sys; from app.ops.postgres_deploy_linux import require_existing_authority_binding; '
+                'sys.path=[path for path in sys.path if path]; '
+                'os.fchdir(int(sys.argv[1])); require_existing_authority_binding(json.load(sys.stdin))',
+                str(descriptor)],
+                input=json.dumps(data), text=True, cwd=cfg.root, pass_fds=(descriptor,),
+                env={'PATH': os.defpath, 'PYTHONPATH': str(Path(__file__).resolve().parents[2]),
+                     'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONNOUSERSITE': '1'},
+                user=cfg.uid, group=cfg.gid, extra_groups=[], capture_output=True, check=False, timeout=30)
+            current = registry_directory.stat()
+            if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+                raise PostgresDeployError()
+        finally:
+            os.close(descriptor)
+        if result.returncode:
+            raise PostgresDeployError()
 
     def select_active_plan(self, plan: DeployPlan) -> DeployPlan:
         self.validate_plan(plan)
@@ -773,7 +937,7 @@ class LinuxEffects:
         self.capture_watch_configured = capture
         self.raw_migration_pending = migration
         return DeployPlan(plan.channel, plan.revision, plan.services, candidate, plan.ack_forward_only,
-                          plan.image_digest, plan.automatic)
+                          plan.image_digest, plan.automatic, plan.authority_cutover)
 
     def preflight(self, plan: DeployPlan) -> str:
         selected_plan = self.select_active_plan(plan)
@@ -1029,14 +1193,20 @@ class LinuxEffects:
             or self.active_consumers is None):
             raise PostgresDeployError()
         self.source.verify()
-        env = self.environment()
+        env = self.environment(plan.authority_cutover) if plan.authority_cutover else self.environment()
         # A supervisor environment variable is ambient to every operation. Only
         # the persisted request may authorize this one deployment's migration.
         env.pop('DEPLOY_ACK_FORWARD_ONLY', None)
         env['BWS_DEPLOY_LOCK_FD'] = str(self.lock_fd)
         receipt = self.config.journal.read()
-        if receipt is None or receipt.stage != 'activating':
+        if (receipt is None or receipt.stage != 'activating'
+            or plan.authority_cutover is not None and receipt.operation_id != self.operation_id):
             raise PostgresDeployError()
+        if plan.authority_cutover is not None:
+            self.config.journal.bind_request(receipt.operation_id, plan, False)
+        self.qualify_authority_cutover(plan)
+        if plan.authority_cutover is not None:
+            env.update(zip(_CUTOVER_ENV, (plan.authority_cutover.binding_id, plan.authority_cutover.root)))
         env['BWS_DEPLOY_OPERATION_ID'] = receipt.operation_id
         self._reclaim_image_cache(plan)
         # Only declared consumer bindings are handed to Compose, as private
@@ -1579,11 +1749,14 @@ class SupervisedOperation:
             self.finished.set()
 
     def result(self) -> dict[str, Any]:
+        self.effects.config.journal.bind_request(self.operation_id, self.plan, self.bootstrap)
         receipt = self.effects.config.journal.read()
         if receipt and receipt.operation_id == self.operation_id and receipt.terminal_result:
             receipt.require_profile(self.plan)
             return {'receipt': receipt.payload()}
         if self.failed:
+            if self.plan.authority_cutover is not None:
+                return {'pending': True, 'empty': False, 'ready': False}
             raise PostgresDeployError()
         return {'pending': True, 'empty': self.empty, 'ready': self.ready.is_set()}
 
@@ -1625,6 +1798,10 @@ class DeploymentSupervisor:
                         raise PostgresDeployError()
                     effects.retire_reconciled_channel_lock(lock)
             return {'receipt': previous.payload()}
+        if plan.authority_cutover is not None:
+            # Quiescent services cannot establish the outcome of authority cutover.
+            # Preserve the request, journal and admission lock for operator recovery.
+            return {'pending': True, 'empty': False, 'ready': False}
         if previous.stage not in {'activating', 'verifying'}:
             raise PostgresDeployError()
         if operation is not None and (
@@ -1662,21 +1839,8 @@ class DeploymentSupervisor:
         operation_id = str(data['operation_id'])
         if str(UUID(operation_id)) != operation_id or type(data['bootstrap']) is not bool:
             raise PostgresDeployError()
-        raw = data['plan']
-        legacy_keys = {'channel', 'revision', 'services', 'consumers', 'ack_forward_only'}
-        if not isinstance(raw, dict) or set(raw) not in (
-            legacy_keys, legacy_keys | {'image_digest', 'automatic'},
-            legacy_keys | {'image_digest', 'automatic', 'verification_profile'},
-        ):
-            raise PostgresDeployError()
-        plan = DeployPlan(raw['channel'], raw['revision'], tuple(raw['services']),
-                          tuple(raw['consumers']), raw['ack_forward_only'],
-                          raw.get('image_digest'), raw.get('automatic', False))
-        plan.validate()
-        if (plan.automatic and raw != json.loads(json.dumps(plan.payload()))
-            or not plan.automatic and 'verification_profile' in raw):
-            raise PostgresDeployError()
-        if plan.automatic and data['bootstrap']:
+        plan = DeployPlan.from_payload(data['plan'])
+        if (plan.automatic or plan.authority_cutover is not None) and data['bootstrap']:
             raise PostgresDeployError()
         if plan.channel != self.config.channel or data['action'] not in {
             'prepare', 'activate', 'join', 'reconcile-failed'
@@ -1686,6 +1850,11 @@ class DeploymentSupervisor:
             if data['action'] == 'reconcile-failed':
                 return self._reconcile_failed(operation_id, plan, data['bootstrap'])
             previous = self.config.journal.read()
+            if previous and previous.operation_id == operation_id:
+                self.config.journal.bind_request(operation_id, plan, data['bootstrap'])
+                if (plan.authority_cutover is not None and previous.terminal_result is None
+                    and self.operation is None):
+                    return {'pending': True, 'empty': False, 'ready': False}
             if previous and previous.operation_id == operation_id and previous.terminal_result:
                 self.config.journal.bind_request(operation_id, plan, data['bootstrap'])
                 previous.require_profile(plan)
@@ -1811,6 +1980,10 @@ class SshDeployRemote:
         # or host-side timeout turns a pending operation into a terminal result.
         response = self._request(action, operation_id, plan)
         while response.get('pending'):
+            if plan.authority_cutover is not None and response.get('ready') is False:
+                # A lost worker cannot make progress through another join RPC.
+                # Return control with the existing host operation still pending.
+                raise PostgresDeployError()
             response = self._request('join', operation_id, plan)
         receipt = DeployReceipt(**response['receipt'])
         receipt.validate()
