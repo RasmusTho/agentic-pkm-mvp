@@ -1745,11 +1745,11 @@ _DISPATCHER_PRESERVED_WORKTREE_RE = re.compile(
 _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree"
     r"(?:\s*:\s*|\s+).*?\bis\s+still\s+dirty\b",
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
 )
 _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\b",
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
 )
 _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\s+`?"
@@ -1792,9 +1792,11 @@ _DISPATCHER_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _DISPATCHER_HTML_COMMENT_OPEN_RE = re.compile(r"<!--[^\r\n]*")
 _DISPATCHER_HTML_TAG_NAME_RE = re.compile(r"<\s*/?\s*([A-Za-z][A-Za-z0-9:-]*)")
 _DISPATCHER_OPAQUE_CODE_MARKER = "\x00"
+_DISPATCHER_TABLE_CELL_BOUNDARY = "\x1f"
 _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER = "\x02"
 _DISPATCHER_HTML_COMMENT_CLOSER_MASK = "\x03"
 _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER = "\x04"
+_DISPATCHER_CODED_ABSOLUTE_PATH_RE = re.compile(r"/[^\s;`,]+")
 
 
 def _dispatcher_is_html_break_token(content: str) -> bool:
@@ -1951,7 +1953,12 @@ def _dispatcher_render_inline_tokens(
             code = token.content.replace(_DISPATCHER_ESCAPED_HTML_COMMENT_MARKER, "<!--")
             if mask_comment_closers:
                 code = code.replace("-->", _DISPATCHER_HTML_COMMENT_CLOSER_MASK)
-            parts.append(_dispatcher_mask_code_block(code) if mask_code_inline else code)
+            if mask_code_inline and not _DISPATCHER_CODED_ABSOLUTE_PATH_RE.fullmatch(
+                code.strip()
+            ):
+                parts.append(_dispatcher_mask_code_block(code))
+            else:
+                parts.append(code)
         elif token_type == "text":
             parts.append(
                 _dispatcher_render_text_token(
@@ -2016,10 +2023,56 @@ def _dispatcher_normalize_gfm_table_pipes(body: str) -> str:
     for token in _DISPATCHER_MARKDOWN_TABLE.parse(normalized):
         if token.type == "table_open" and token.map is not None:
             table_lines.update(range(token.map[0], token.map[1]))
-    return "".join(
-        line.replace("|", ". ") if index in table_lines else line
-        for index, line in enumerate(lines)
+    rendered_lines: list[str] = []
+    for index, line in enumerate(lines):
+        if index not in table_lines:
+            rendered_lines.append(line)
+            continue
+        rendered = line.replace("|", _DISPATCHER_TABLE_CELL_BOUNDARY)
+        if rendered.endswith("\n"):
+            rendered = (
+                rendered[:-1] + _DISPATCHER_TABLE_CELL_BOUNDARY + "\n"
+            )
+        else:
+            rendered += _DISPATCHER_TABLE_CELL_BOUNDARY
+        rendered_lines.append(rendered)
+    return "".join(rendered_lines)
+
+
+def _dispatcher_gfm_table_line_numbers(body: str) -> set[int]:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    return {
+        line_number
+        for token in _DISPATCHER_MARKDOWN_TABLE.parse(normalized)
+        if token.type == "table_open" and token.map is not None
+        for line_number in range(token.map[0], token.map[1])
+    }
+
+
+def _dispatcher_split_scan_segments(text: str) -> list[str]:
+    return re.split(
+        rf"[{re.escape(_DISPATCHER_OPAQUE_CODE_MARKER)}{re.escape(_DISPATCHER_TABLE_CELL_BOUNDARY)}]",
+        text,
     )
+
+
+def _dispatcher_marker_search(pattern: re.Pattern[str], text: str) -> re.Match[str] | None:
+    for segment in _dispatcher_split_scan_segments(text):
+        match = pattern.search(segment)
+        if match is not None:
+            return match
+    return None
+
+
+def _dispatcher_table_marker_search(
+    pattern: re.Pattern[str], text: str
+) -> re.Match[str] | None:
+    for segment in text.split(_DISPATCHER_TABLE_CELL_BOUNDARY):
+        match = pattern.search(segment)
+        if match is not None:
+            return match
+    return None
 
 
 def _dispatcher_cross_line_scan_body(
@@ -2237,9 +2290,7 @@ def _dispatcher_resumable_binding_resources(
         cross_line_scan_body = _dispatcher_cross_line_scan_body(body)
         if any(
             re.search(r"[\r\n]", match.group(0))
-            for scan_segment in cross_line_scan_body.split(
-                _DISPATCHER_OPAQUE_CODE_MARKER
-            )
+            for scan_segment in _dispatcher_split_scan_segments(cross_line_scan_body)
             for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(
                 scan_segment
             )
@@ -2247,6 +2298,7 @@ def _dispatcher_resumable_binding_resources(
             raise RuntimeError("dispatcher_activity_invalid")
         lines = body.splitlines()
         table_scan_lines = _dispatcher_normalize_gfm_table_pipes(body).splitlines()
+        table_line_numbers = _dispatcher_gfm_table_line_numbers(body)
         code_block_lines = _dispatcher_code_block_line_numbers(body)
         truncated_scan_lines = [
             line
@@ -2274,36 +2326,51 @@ def _dispatcher_resumable_binding_resources(
                 if line_number + 1 < len(table_scan_lines)
                 else ""
             )
-            continuation = continuation_line
-            dedicated_worktree_fragment = bool(
-                _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(marker_scan_line)
-            )
+            marker_segments = _dispatcher_split_scan_segments(marker_scan_line)
+            continuation_segments = _dispatcher_split_scan_segments(continuation_line)
             dedicated_truncated_marker = bool(
                 line_number == last_nonblank_line
-                and _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE.search(
-                    truncated_scan_line
+                and _dispatcher_table_marker_search(
+                    _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE,
+                    truncated_scan_line,
                 )
             )
             dedicated_cross_line_marker = bool(
-                dedicated_worktree_fragment
-                and (
-                    _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE.search(continuation)
-                    or (
-                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_RE.search(line)
-                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_RE.search(continuation)
+                line_number not in table_line_numbers
+                and line_number + 1 not in table_line_numbers
+                and any(
+                    _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE.search(
+                        continuation_segments[index]
+                        if index < len(continuation_segments)
+                        else ""
                     )
                     or (
-                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_STILL_RE.search(line)
-                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_STILL_RE.search(
-                            continuation
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_RE.search(segment)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_RE.search(
+                            continuation_segments[index]
+                            if index < len(continuation_segments)
+                            else ""
                         )
                     )
+                    or (
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_STILL_RE.search(segment)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_STILL_RE.search(
+                            continuation_segments[index]
+                            if index < len(continuation_segments)
+                            else ""
+                        )
+                    )
+                    for index, segment in enumerate(marker_segments)
+                    if _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(segment)
                 )
             )
             explicit_binding = bool(
                 _DISPATCHER_PICKUP_RECEIPT_RE.search(line)
                 or _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
-                or _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(marker_scan_line)
+                or _dispatcher_marker_search(
+                    _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE,
+                    marker_scan_line,
+                )
                 or dedicated_truncated_marker
                 or dedicated_cross_line_marker
             )
@@ -2315,7 +2382,10 @@ def _dispatcher_resumable_binding_resources(
                 _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
                 and not _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
             ) or (
-                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE.search(marker_scan_line)
+                _dispatcher_marker_search(
+                    _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE,
+                    marker_scan_line,
+                )
                 and not _DISPATCHER_DEDICATED_WORKTREE_RE.search(line)
             ):
                 raise RuntimeError("dispatcher_activity_invalid")

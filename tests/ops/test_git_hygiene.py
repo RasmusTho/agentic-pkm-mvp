@@ -7095,6 +7095,142 @@ def test_local_retirement_rejects_gfm_table_dedicated_worktree_marker(
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
 
+def test_local_retirement_ignores_completed_and_dirty_text_in_separate_gfm_cells(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "| receipt | status |\n"
+                            "| --- | --- |\n"
+                            "| Dedicated worktree lifecycle is complete. | "
+                            f"Another checkout is still dirty on branch old at head {sha} |"
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard ordinary prose without joining GFM cells",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_ignores_split_retention_words_in_separate_gfm_cells(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "receipt | details\n"
+                            "--- | ---\n"
+                            "Dedicated worktree /tmp/old | unrelated is\n"
+                            f"still dirty on branch old at head {sha} | unrelated"
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard split words from separate GFM cells",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_ignores_split_retention_words_across_gfm_rows(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "receipt | details\n"
+                            "--- | ---\n"
+                            "Dedicated worktree /tmp/old is | unrelated\n"
+                            f"still dirty on branch old at head {sha} | unrelated"
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard split retention words across GFM rows",
+    )
+    assert result["deleted"] == 1
+
+
+def test_local_retirement_ignores_split_retention_words_across_pipe_omitted_gfm_rows(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "receipt | details\n"
+                            "--- | ---\n"
+                            "Dedicated worktree /tmp/old is\n"
+                            f"still dirty on branch old at head {sha}"
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard split retention words across pipe-omitted GFM rows",
+    )
+    assert result["deleted"] == 1
+
+
 def test_local_retirement_ignores_pipe_prose_without_gfm_table_frame(
     tmp_path, monkeypatch
 ):
@@ -7338,6 +7474,8 @@ def test_dispatcher_task_identity_uses_canonical_producer(tmp_path, monkeypatch)
         "Dedicated worktree /tmp/old is",
         "Dedicated worktree /tmp/old is still",
         "Narrative<br>\nDedicated worktree /tmp/old",
+        "Dedicated worktree `/tmp/old`",
+        "Narrative<br>Dedicated worktree /tmp/old is still dirty on branch old at head {sha}",
         "Dedicated worktree tmp/old is still dirty on branch old at head " + "a" * 40,
     ],
 )
