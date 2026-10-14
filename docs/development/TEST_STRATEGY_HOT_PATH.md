@@ -108,6 +108,27 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   runner temporary directory and are uploaded even when a later shard fails or the test step is
   cancelled. The aggregate log remains available on normally completed runs. This removes known
   duplicate execution; it does not promise a particular wall-clock speedup or suppress failures.
+- The nightly full suite reuses that non-overlapping process pattern with four parallel pytest
+  processes and the same serial `tests/ops` / `test_vault_multiwriter.py` boundary. It preserves
+  `not pg and not alpha_llm` exactly, including E2E and the other marker classes omitted on the
+  PR path. Every invocation retains the canonical temporary namespace, plugin autoload and
+  importlib collection; each has the existing 120-second thread watchdog, verbose node IDs,
+  short tracebacks, unbuffered output and the slowest 30 durations. The batch ceiling is 35 minutes
+  with a 45-minute job ceiling for installation, later checks and uploads. The triggering #6063
+  run exhausted the former 20-minute step after partial execution; the new batch margin matches
+  the existing PR baseline and does not establish a measured speedup.
+- Nightly shard inventory, raw exit statuses, per-shard logs and JUnit results live under
+  `$RUNNER_TEMP/pytest-nightly-shards` and are uploaded with the aggregate log by an `always()`
+  step. A completed phase requires each expected shard exactly once and a JUnit testcase count
+  consistent with its declared result count. A fully deselected shard may report pytest exit 5,
+  but an empty whole selection, missing/duplicate status, terminated process, missing result or
+  failed test makes the producer fail. After a completed launcher wait, ordinary parallel failures
+  remain recorded while the serial boundary still runs; validation then reports both phases and
+  retains the failing result. An incomplete launcher stops before that boundary because child
+  process exit cannot be established. Partial logs survive those failures and step cancellation.
+  The executable nightly workflow fixtures in `tests/ops/test_ci_workflow.py` prove inventory,
+  failure accounting and the serial boundary with finite synthetic populations; those producer
+  proofs do not claim that unexecuted Product tests passed or replace current-head CI.
 - A docs-only PR may include a changed `tests/e2e/**` scenario as its executable acceptance companion. That E2E path is scope-neutral for selection and remains deferred; the docs lane still runs its non-E2E contract targets and must not fall through to the unowned/full-suite refusal.
 - The startup-redesign contract owner selects both its static contract suites and the exact docs-index Verify target `tests/architecture/test_docs_index.py::test_all_docs_are_listed_in_docs_index`. Its selector regression must include the mixed shape of startup docs, `docs/DOCS_INDEX.md`, the selector, and governance tests so a docs-index proof cannot disappear behind a green scoped run.
 - Statically declared selector file and node-id targets must be collectable. Before pytest receives a selected node id, the selector checks its file portion exists; its always-selected selector fitness test collect-checks every static file/node-id target so a rename or deletion fails in the changing PR rather than an unrelated downstream selection.
