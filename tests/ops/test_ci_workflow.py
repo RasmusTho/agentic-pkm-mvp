@@ -232,6 +232,216 @@ def test_full_suite_shards_retain_failure_logs(tmp_path: Path) -> None:
     assert "${{ runner.temp }}/pytest-not-pg-shards/" in upload["with"]["path"]
 
 
+def _run_nightly_suite_workflow(tmp_path: Path, *, mode: str = "success"):
+    """Run the actual nightly shell against finite, isolated pytest populations."""
+    population = {
+        "tests/alpha/test_root.py": [],
+        "tests/alpha/nested/test_pg.py": ["pg"],
+        "tests/beta/deep/test_child.py": [],
+        "tests/gamma/test_llm.py": ["alpha_llm"],
+        "tests/test_standalone.py": ["e2e"],
+        "tests/standalone_test.py": ["eval"],
+        "tests/ops/test_host.py": [],
+        "tests/ops/nested/test_host_child.py": ["human_uat"],
+        "tests/invariants/test_vault_multiwriter.py": [],
+        "tests/invariants/test_other.py": [],
+        "tests/e2e/test_root.py": ["e2e"],
+        "tests/e2e/nested/test_child.py": [],
+    }
+    for marker in (
+        "alpha_llm_live", "panel_llm_e2e", "eval", "browser_runtime",
+        "human_uat", "uat_integrated_runtime",
+    ):
+        population[f"tests/optin/test_{marker}.py"] = [marker]
+    if mode == "empty-inventory":
+        population = {}
+    elif mode == "empty-selection":
+        population = {name: ["pg"] for name in population}
+    for name in population:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    (tmp_path / "population.json").write_text(json.dumps(population), encoding="utf-8")
+    (tmp_path / "tmp").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_python = bin_dir / "python"
+    fake_python.write_text(
+        f"#!{sys.executable}\n" + r'''
+import fcntl
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import time
+import xml.etree.ElementTree as ET
+from _pytest.mark.expression import Expression
+
+args = sys.argv[1:]
+if Path(sys.argv[0]).name != "pytest" and args[:2] not in (["-m", "pytest"], ["-u", "-m"]):
+    os.execv(sys.executable, [sys.executable, *args])
+population = json.loads(Path("population.json").read_text())
+targets = [arg for arg in args if arg.startswith("tests/")] or ["tests"]
+ignored = {arg.split("=", 1)[1] for arg in args if arg.startswith("--ignore=")}
+marker = args[args.index("-m", args.index("pytest") + 1 if "pytest" in args else 0) + 1]
+expression = Expression.compile(marker)
+selected = [name for name, markers in population.items()
+            if any(name == target or name.startswith(target + "/") for target in targets)
+            and name not in ignored and expression.evaluate(lambda name, **_: name in markers)]
+phase = "serial" if "tests/ops" in targets else "parallel"
+active = Path("active")
+active.mkdir(exist_ok=True)
+identity = active / str(os.getpid())
+def record(event):
+    with Path("fixture.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for child in active.iterdir():
+            try:
+                os.kill(int(child.name), 0)
+            except ProcessLookupError:
+                child.unlink()
+        if event == "start" and phase == "parallel":
+            identity.touch()
+        elif event == "finish":
+            identity.unlink(missing_ok=True)
+        with Path("events.jsonl").open("a") as events:
+            events.write(json.dumps({"event": event, "phase": phase, "targets": targets,
+                                     "active": len(list(active.iterdir())), "args": args,
+                                     "marker": marker,
+                                     "addopts": os.getenv("PYTEST_ADDOPTS"),
+                                     "unbuffered": os.getenv("PYTHONUNBUFFERED")}) + "\n")
+record("start")
+print(f"NODE START {targets[0]}::test_synthetic", flush=True)
+mode = os.environ["NIGHTLY_FIXTURE_MODE"]
+if targets[0] == "tests/alpha":
+    if mode == "terminated":
+        os.kill(os.getpid(), signal.SIGTERM)
+    if mode == "unreported":
+        os.kill(os.getppid(), signal.SIGTERM)
+    if mode == "incomplete":
+        record("finish")
+        sys.exit(0)
+time.sleep(0.1)
+failed = (mode == "failure" and targets[0] == "tests/alpha"
+          or mode == "serial-failure" and targets[0] == "tests/ops")
+for name in selected:
+    print(f"EXECUTED {name}", flush=True)
+    print(f"{name}::test_synthetic {'FAILED' if failed else 'PASSED'}", flush=True)
+if failed:
+    print("AssertionError: synthetic regression", flush=True)
+report = next((arg.split("=", 1)[1] for arg in args if arg.startswith("--junitxml=")), None)
+if report:
+    count = len(selected) + (mode == "miscount" and targets[0] == "tests/alpha")
+    suite = ET.Element("testsuite", tests=str(count), failures=str(len(selected) if failed else 0),
+                       errors="0", skipped="0")
+    for name in selected:
+        case = ET.SubElement(suite, "testcase", classname=name, name="test_synthetic")
+        if failed:
+            ET.SubElement(case, "failure").text = "synthetic regression"
+    ET.ElementTree(suite).write(report)
+print(f"{len(selected)} {'failed' if failed else 'passed'}" if selected else "no tests ran", flush=True)
+print("slowest durations: 0.01s test_synthetic", flush=True)
+record("finish")
+sys.exit(1 if failed else 0 if selected else 5)
+''', encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    (bin_dir / "pytest").symlink_to(fake_python)
+    job = yaml.safe_load(INTEGRATION_NIGHTLY_WORKFLOW.read_text())["jobs"]["full-suite"]
+    step = next(s for s in job["steps"] if s.get("name") == "Full test suite (memory, not pg)")
+    result = subprocess.run(
+        ["bash", "-c", step["run"]], cwd=tmp_path, capture_output=True, text=True,
+        env={**os.environ, **step.get("env", {}),
+             "PATH": f"{bin_dir}:{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path / "runner"),
+             "NIGHTLY_FIXTURE_MODE": mode}, timeout=30,
+    )
+    return result, population, job, step
+
+
+def test_nightly_suite_shards_preserve_the_full_marker_inventory(tmp_path: Path) -> None:
+    result, population, job, step = _run_nightly_suite_workflow(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    executed = re.findall(r"^EXECUTED (.+)$", (tmp_path / "tmp/nightly-pytest.log").read_text(), re.MULTILINE)
+    expected = [name for name, markers in population.items() if not {"pg", "alpha_llm"}.intersection(markers)]
+    assert sorted(executed) == sorted(expected)
+    shards = (tmp_path / "runner/pytest-nightly-shards/shards").read_text().splitlines()
+    expected_shards = {"/".join(name.split("/")[:2]) if name.count("/") > 1 else name
+                       for name in population if not name.startswith("tests/ops/")}
+    assert set(shards) == expected_shards and len(shards) == len(expected_shards)
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    for event in events:
+        assert event["marker"] == "not pg and not alpha_llm"
+        assert "-v" in event["args"] and "--tb=short" in event["args"]
+        assert "--import-mode=importlib" in event["args"] and "--durations=30" in event["args"]
+        assert event["addopts"] == "--timeout=120 --timeout-method=thread"
+        assert event["unbuffered"] == "1"
+    assert step["timeout-minutes"] == 35 and job["timeout-minutes"] >= 45
+    assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in job.get("env", {})
+
+
+@pytest.mark.parametrize("mode", ["failure", "serial-failure", "terminated", "unreported",
+                                  "incomplete", "miscount", "empty-selection", "empty-inventory"])
+def test_nightly_suite_failed_and_incomplete_shards_fail_closed(tmp_path: Path, mode: str) -> None:
+    result, _population, job, _step = _run_nightly_suite_workflow(tmp_path, mode=mode)
+    assert result.returncode != 0, result.stdout + result.stderr
+    root = tmp_path / "runner/pytest-nightly-shards"
+    assert (root / "shards").exists() and (root / "status").exists()
+    if mode not in {"empty-inventory", "empty-selection"}:
+        assert "NODE START tests/alpha::test_synthetic" in (root / "logs/tests_alpha.log").read_text()
+        assert "0 tests/beta" in (root / "status").read_text()
+    if mode not in {"empty-inventory", "unreported"}:
+        assert "host-sensitive" in (root / "status").read_text()
+        events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+        serial = [event for event in events if event["phase"] == "serial" and event["event"] == "start"]
+        assert len(serial) == 1 and serial[0]["active"] == 0
+    elif mode == "unreported":
+        events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+        assert not any(event["phase"] == "serial" for event in events)
+    if mode == "failure":
+        assert "AssertionError: synthetic regression" in (root / "logs/tests_alpha.log").read_text()
+        assert "1 tests/alpha" in (root / "status").read_text()
+        assert "AssertionError: synthetic regression" in result.stderr
+    elif mode == "serial-failure":
+        assert "1 host-sensitive" in (root / "status").read_text()
+        assert "AssertionError: synthetic regression" in (root / "logs/host-sensitive.log").read_text()
+        assert "AssertionError: synthetic regression" in result.stderr
+    elif mode == "terminated":
+        assert "143 tests/alpha" in (root / "status").read_text()
+    elif mode == "unreported":
+        assert "tests/alpha" not in (root / "status").read_text()
+        assert "incomplete" in result.stderr
+    elif mode in {"incomplete", "miscount"}:
+        assert "0 tests/alpha" in (root / "status").read_text()
+        assert "incomplete" in result.stderr
+    upload = next(s for s in job["steps"] if s.get("name") == "Upload test log")
+    assert upload["if"] == "always()"
+    assert "${{ runner.temp }}/pytest-nightly-shards/" in upload["with"]["path"]
+
+
+def test_nightly_suite_keeps_host_sensitive_tests_serial(tmp_path: Path) -> None:
+    result, _population, job, step = _run_nightly_suite_workflow(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
+    starts = [event for event in events if event["event"] == "start"]
+    parallel = [event for event in starts if event["phase"] == "parallel"]
+    assert 1 < max(event["active"] for event in parallel) <= 4
+    serial = [event for event in starts if event["phase"] == "serial"]
+    assert len(serial) == 1 and serial[0]["active"] == 0
+    assert serial[0]["targets"] == ["tests/ops", "tests/invariants/test_vault_multiwriter.py"]
+    first_serial = events.index(serial[0])
+    assert all(event["phase"] == "parallel" for event in events[:first_serial])
+    assert sum(event["event"] == "finish" for event in events[:first_serial]) == len(parallel)
+    assert job["strategy"]["fail-fast"] is False
+    assert job["strategy"]["matrix"]["include"] == [
+        {"python-version": "3.12", "experimental": False},
+        {"python-version": "3.13", "experimental": True},
+    ]
+    assert job["continue-on-error"] == step["continue-on-error"] == "${{ matrix.experimental }}"
+    workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text()
+    assert '- cron: "0 2 * * *"' in workflow and "workflow_dispatch:" in workflow
+
+
 def test_pg_contracts_have_bounded_diagnostics() -> None:
     from app.ops.pg_acceptance import pytest_arguments
 
