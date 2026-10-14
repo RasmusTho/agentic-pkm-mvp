@@ -196,6 +196,7 @@ def test_every_write_note_relative_seam_has_port_coverage(tmp_path) -> None:
 def test_vault_multiwriter_relative_intent_census_is_closed() -> None:
     """Every registered producer has one explicit create-once/append-only intent."""
     expected = {
+        ("app/ops/native_journaling_acceptance.py", "bootstrap", 1),
         ("app/agent_memory/materialization.py", "materialize_promoted_memory", 1),
         ("app/agent_memory/provisional_write.py", "write_provisional_memory", 1),
         ("app/chat/session_log.py", "SessionLogWriter.open_session", 1),
