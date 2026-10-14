@@ -94,7 +94,7 @@ def _assert_outbox_schema(conn: Any) -> None:
     depends only on the db service), so it must crash-retry under supervision,
     never spend poison budget or dead-letter.
     """
-    cur = _exec(conn, "SELECT to_regclass('outbox') AS oid")
+    cur = _exec(conn, "SELECT to_regclass('outbox')::oid AS oid")
     row = cur.fetchone() if hasattr(cur, "fetchone") else None
     oid = None
     if row is not None:
@@ -103,8 +103,9 @@ def _assert_outbox_schema(conn: Any) -> None:
         raise OutboxSchemaMissingError(f"Missing table 'outbox' in the configured Postgres. {_OUTBOX_MIGRATION_HINT}")
     cur = _exec(
         conn,
-        "SELECT column_name FROM information_schema.columns "
-        "WHERE table_schema = current_schema() AND table_name = 'outbox'",
+        "SELECT attname AS column_name FROM pg_attribute "
+        "WHERE attrelid = %s AND attnum > 0 AND NOT attisdropped",
+        (oid,),
     )
     rows = cur.fetchall() if hasattr(cur, "fetchall") else []
     present = {(r[0] if not isinstance(r, dict) else r.get("column_name")) for r in rows}
@@ -338,12 +339,6 @@ def bootstrap(conn: Any = None) -> None:
         # No longer swallowed (KERNEL-05, #2850): a failure here must surface,
         # not silently mask a broken connection/legacy-schema seam.
         ensure_schema(conn)  # type: ignore[arg-type]
-        cur = _exec(conn, "SELECT to_regclass('outbox') AS oid")
-        row = cur.fetchone() if hasattr(cur, "fetchone") else None
-        oid = row.get("oid") if isinstance(row, dict) else (row[0] if row else None)
-        if oid:
-            _assert_outbox_schema(conn)
-            return
         if not _outbox_schema_autocreate_enabled():
             _assert_outbox_schema(conn)
             return
@@ -369,7 +364,13 @@ def bootstrap(conn: Any = None) -> None:
             ),
         )
         for table_name, statements in table_groups:
-            cur = _exec(conn, "SELECT to_regclass(%s) AS oid", (table_name,))
+            # A later search_path relation must not suppress fixture creation
+            # in the active schema. PostgreSQL quotes both identifiers here.
+            cur = _exec(
+                conn,
+                "SELECT to_regclass(quote_ident(current_schema()) || '.' || quote_ident(%s))::oid AS oid",
+                (table_name,),
+            )
             row = cur.fetchone() if hasattr(cur, "fetchone") else None
             table_present = bool(
                 row.get("oid") if isinstance(row, dict) else (row[0] if row else None)
@@ -378,6 +379,7 @@ def bootstrap(conn: Any = None) -> None:
                 continue
             for statement in statements:
                 _exec(conn, statement)
+        _assert_outbox_schema(conn)
     finally:
         if close:
             conn.close()
