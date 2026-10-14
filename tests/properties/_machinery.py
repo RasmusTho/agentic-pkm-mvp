@@ -110,7 +110,7 @@ REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
         "hardcoded _EMBED_MODEL phantom with the _requested_embedding_identity() resolver "
         "defined above this call."
     ),
-    ("app/ingest/vault_alpha.py", 781): (
+    ("app/ingest/vault_alpha.py", 786): (
         "Legacy vault-alpha compatibility save; the alpha ingest pipeline emits the "
         "corresponding ingest event upstream in the same run, so this mirror suppresses "
         "a duplicate."
@@ -881,6 +881,11 @@ WRITE_NOTE_RELATIVE_SITE_CLASSIFICATION: dict[tuple[str, str, int], str] = {
         "port's own guard as defense-in-depth (#3329). This is the sole production "
         "write seam for Standing Questions Question notes."
     ),
+    ("app/ops/native_journaling_acceptance.py", "bootstrap", 1): (
+        "guarded_by_port: the existing #6050 synthetic source writer uses "
+        "write_note_relative(create_once=True); its shared create-once seam "
+        "asserts WriteGuard before path resolution or I/O."
+    ),
     ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1): (
         "guarded_by_port: bootstrap_fixture writes the synthetic primary source "
         "through write_note_relative without a caller-side WriteGuard assertion; "
@@ -946,6 +951,9 @@ WRITE_NOTE_RELATIVE_INTENT_CLASSIFICATION: dict[tuple[str, str, int], str] = {
     ),
     ("app/mcp/vault_tools.py", "append_note", 1): (
         "append_only: next-available note allocation preserves every earlier MCP artifact."
+    ),
+    ("app/ops/native_journaling_acceptance.py", "bootstrap", 1): (
+        "create_once: the existing #6050 synthetic source preserves any existing fixture target."
     ),
     ("app/ops/native_web_fixture.py", "bootstrap_fixture", 1): (
         "create_once: the synthetic primary source preserves an existing fixture target."
@@ -1615,16 +1623,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_frontmatter: same payload (store_payload = {**payload, 'text': ...}) -> store.put "
         "-> store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 781): (
+    ("app/ingest/vault_alpha.py", 786): (
         "carries_frontmatter: obj.payload carries episode_ref_from_frontmatter(frontmatter); "
         "ObjectStore().save_object(obj) -> (pg) store.put -> store_objects (round-5: the carrying "
         "get_object_store().put below is in try/except:pass, so THIS row must carry it too)."
     ),
-    ("app/ingest/vault_alpha.py", 784): (
+    ("app/ingest/vault_alpha.py", 789): (
         "carries_frontmatter: store_payload carries episode_ref; get_object_store().put -> "
         "store_objects."
     ),
-    ("app/ingest/vault_alpha.py", 803): (
+    ("app/ingest/vault_alpha.py", 808): (
         "carries_frontmatter: same store_payload -> index_ingest_object -> store_vector_index."
     ),
     ("app/ingest/vault_root.py", 194): (
