@@ -880,6 +880,19 @@ does not establish a usable answer path.
 
 The deploy procedure is the same shape for every channel; only the pin target and the migration-ack posture differ (`prod` is the strictest). It assumes the build-once/promote model above.
 
+For BWS deploys, the target image's native-source embedding dependency is preflighted before the
+migration writer drain. A strict Product embedding route selects the current provider/model; the
+redacted Compose handoff exposes only those two fields. If Ollama is selected, the deploy starts the
+existing channel Ollama service, verifies or pulls that exact model, and probes the Product
+embedding client once with the fixed text `Yggdrasil deployment preflight`. The probe does not read
+or send vault notes and does not select a fallback. If readiness fails, the deploy exits at
+`source_projection` before draining writers or stopping/recreating app services, and attempts to
+restore the prior channel pins and remove only a migration marker created by that attempt. If that
+compensation fails, the deploy exits closed while preserving recovery snapshots and the pending
+marker. The Ollama service may remain running and its model cache may remain populated. This
+preflight leaves the source-backed
+repair operation below unchanged; that operation still runs after migrations.
+
 Repository support for native BWS source recovery (#5918) adds one fixed API-consumer one-shot
 after instance-state finalization and migrations, before ordinary API/worker/watcher/capture/UI
 recreation. The candidate image must contain `scripts/start_api.sh`'s source-only mode and
