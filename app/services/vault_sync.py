@@ -168,11 +168,13 @@ def _hash_text(text: str) -> str:
 
 
 def _read_note(path: Path) -> tuple[dict[str, Any], str]:
+    from app.rebuildability.product_total_loss import capture_source_frontmatter
     raw = path.read_text(encoding="utf-8") if path.exists() else ""
     frontmatter, body, error = parse_bounded_frontmatter(raw)
-    if error is not None:
+    captured = capture_source_frontmatter(raw)
+    if error is not None or captured is None:
         raise ValueError("malformed frontmatter")
-    return frontmatter, body
+    return captured, body
 
 
 def _canonical_note_title(frontmatter: dict[str, Any], body: str, path: Path) -> str:

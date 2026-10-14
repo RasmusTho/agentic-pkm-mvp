@@ -197,6 +197,106 @@ def index() -> None:
     """Index maintenance command group."""
 
 
+class MissingVectorRepairFailure(RuntimeError):
+    """Only fixed, content-free failure classes cross the private CLI boundary."""
+
+
+def repair_missing_vectors() -> int:
+    """Repair admitted vault-note projections only; never replay or promote meaning."""
+    from app.stores.pg import PgVectorIndex
+    from app.rebuildability.product_total_loss import (
+        PRODUCT_REPLAY_RECIPE_VERSION, _canonical_payload_text, _row_replay,
+    )
+    from app.index.artifact_metadata import compute_content_hash
+    from app.write_guard import DEFAULT_WRITE_GUARD, SOURCE_BACKED_REBUILD_ACTION
+
+    DEFAULT_WRITE_GUARD.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
+    binding = domain_objects.resolve_object_store_port()
+    index_store = get_vector_index()
+    if (binding.backend != "pg" or not isinstance(index_store, PgVectorIndex)
+            or getattr(binding.store, "vault_binding_id", None) != index_store.vault_binding_id):
+        raise MissingVectorRepairFailure("source_post_rebuild_failed")
+    present = index_store.present_object_ids()
+    client = get_product_embedding_client(profile="default")
+    identity = client.identity
+    processed = 0
+    for row in binding.store.list_objects(limit=None):
+        if str(row.get("object_id")) in present:
+            continue
+        payload = row.get("payload")
+        if not isinstance(payload, dict):
+            raise MissingVectorRepairFailure("source_post_rebuild_failed")
+        text = canonicalize_indexable_text(payload)
+        if not text:
+            continue
+        frontmatter = payload.get("frontmatter")
+        if not isinstance(frontmatter, dict):
+            # Body-only replay hashes cannot reconstruct omitted source
+            # authority. Legacy absence is unknown, not captured empty metadata.
+            raise MissingVectorRepairFailure("source_post_rebuild_failed")
+        core = payload.get("core6")
+        if core is not None and not isinstance(core, dict):
+            raise MissingVectorRepairFailure("source_post_rebuild_failed")
+        core = core if isinstance(core, dict) else {}
+        layers = (frontmatter, core, payload)
+        for layer in layers:
+            authority = layer.get("authority")
+            if (
+                ("candidate_only" in layer and layer["candidate_only"] is not False)
+                or layer.get("artifact_class") in ("youtube_source_note", "youtube_source_note_proposal")
+                or ("authority" in layer and not isinstance(authority, dict))
+                or (isinstance(authority, dict) and (
+                    ("source_authoritative" in authority and type(authority["source_authoritative"]) is not bool)
+                    or ("requires_review" in authority and type(authority["requires_review"]) is not bool)
+                    or authority.get("source_authoritative") is False
+                    or authority.get("requires_review") is True
+                ))
+                or ("trust" in layer and layer["trust"] not in ("unreviewed", "trusted", "reviewed", "human", "own"))
+                or ("review_state" in layer and layer["review_state"] not in ("provisional", "reviewed", "protected", "archived"))
+            ):
+                raise MissingVectorRepairFailure("source_post_rebuild_failed")
+        metadata = {**frontmatter, **core, **payload}
+        replay = _row_replay(payload)
+        if (
+            row.get("kind") != "note"
+            or metadata.get("origin") != "vault"
+            or metadata.get("review_state") not in {"provisional", "reviewed", "protected", "archived"}
+            or metadata.get("trust") not in {"unreviewed", "trusted", "reviewed", "human", "own"}
+            or replay is None or replay.recipe_version != PRODUCT_REPLAY_RECIPE_VERSION
+            or replay.source_generation != compute_content_hash(_canonical_payload_text(payload))
+        ):
+            raise MissingVectorRepairFailure("source_post_rebuild_failed")
+        try:
+            embedding = client.embed_text(text)
+        except Exception:
+            raise MissingVectorRepairFailure("embedding_generation_failed") from None
+        try:
+            index_store.insert_missing(
+                UUID(str(row["object_id"])), kind=row["kind"],
+                source_ref=row["source_ref"], source_payload=payload,
+                payload=build_indexed_unit_payload(
+                    object_id=row["object_id"], kind=row["kind"],
+                    source_ref=row["source_ref"], payload=metadata, text=text,
+                    embedding_identity=identity,
+                ), embedding=embedding, model=identity.model, identity=identity,
+            )
+        except Exception:
+            raise MissingVectorRepairFailure("vector_index_write_failed") from None
+        processed += 1
+    return processed
+
+
+@index.command("repair-missing", help="Insert absent admitted vault-note vectors without resetting or overwriting.")
+@click.option("--json", "as_json", is_flag=True, default=False)
+def repair_missing(as_json: bool) -> None:
+    try:
+        processed = repair_missing_vectors()
+    except MissingVectorRepairFailure as exc:
+        click.echo(json.dumps({"reason": str(exc)}))
+        raise SystemExit(79) from None
+    click.echo(json.dumps({"processed": processed}) if as_json else f"processed={processed}")
+
+
 @index.command("rebuild", help="Rebuild vector index embeddings from stored objects.")
 @click.option("--backend", type=click.Choice(["memory", "pg"]), default=None, help="Override STORE_BACKEND for this run")
 @click.option("--outbox", "outbox_path", type=click.Path(path_type=Path), default=None, help="Override INDEX_OUTBOX_PATH")

@@ -1262,6 +1262,7 @@ class PgVectorIndex(VectorIndex):
         model: str,
         identity: EmbeddingIdentity | None = None,
         reconcilable_fallback: bool = False,
+        _missing_source: dict | None = None,
     ) -> None:
         _ensure_tables()
         embedding_floats = coerce_floats(embedding)
@@ -1277,6 +1278,17 @@ class PgVectorIndex(VectorIndex):
         model_value = model or resolved_identity.model
         with _connect() as conn:
             with conn.cursor() as cur:
+                if _missing_source is not None:
+                    # Lock the authoritative object through the insert. A stale
+                    # embedding must not become a projection of changed meaning.
+                    cur.execute(
+                        "SELECT kind, source_ref, payload FROM store_objects "
+                        "WHERE vault_binding_id = %s AND object_id = %s FOR SHARE",
+                        (self.vault_binding_id, object_id),
+                    )
+                    source = cur.fetchone()
+                    if source != _missing_source:
+                        raise ValueError("missing vector source changed")
                 # The index keeps a stable PRIMARY identity in vector_index_meta,
                 # used for queries and allow_create. An ordinary upsert must match
                 # that primary identity. A reconcilable fallback write may diverge in
@@ -1300,8 +1312,7 @@ class PgVectorIndex(VectorIndex):
                     embedding_values = l2_normalize(embedding_floats)
                 else:
                     embedding_values = embedding_floats
-                cur.execute(
-                    """
+                statement = """
                     INSERT INTO store_vector_index (
                         vault_binding_id, object_id, kind, source_ref, payload, embedding,
                         dim, model, provider, normalize, updated_at
@@ -1317,7 +1328,11 @@ class PgVectorIndex(VectorIndex):
                         provider = EXCLUDED.provider,
                         normalize = EXCLUDED.normalize,
                         updated_at = now()
-                    """,
+                    """
+                if _missing_source is not None:
+                    statement = statement[:statement.index("DO UPDATE")] + "DO NOTHING"
+                cur.execute(
+                    statement,
                     (
                         self.vault_binding_id,
                         object_id,
@@ -1331,6 +1346,23 @@ class PgVectorIndex(VectorIndex):
                         resolved_identity.normalize,
                     ),
                 )
+
+    def present_object_ids(self) -> set[str]:
+        """Include even malformed existing rows: missing repair never replaces one."""
+        with _connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT object_id FROM store_vector_index WHERE vault_binding_id = %s",
+                    (self.vault_binding_id,),
+                )
+                return {str(row["object_id"]) for row in cur.fetchall()}
+
+    def insert_missing(self, object_id: UUID, *, source_payload: dict, **kwargs) -> None:
+        """Atomic insert-only projection, bound to an unchanged stored source."""
+        self.upsert(object_id, _missing_source={
+            "kind": kwargs["kind"], "source_ref": kwargs["source_ref"],
+            "payload": source_payload,
+        }, **kwargs)
 
     def search(
         self, vector: list[float], *, k: int = 5, identity: EmbeddingIdentity | None = None

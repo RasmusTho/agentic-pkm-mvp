@@ -383,6 +383,25 @@ def test_not_pg_steps_have_room_for_selected_coverage(step_name: str) -> None:
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
 
 
+def test_scoped_unit_budget_preserves_selected_coverage() -> None:
+    job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
+    step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
+    assert step["timeout-minutes"] == 60
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert step["if"] == (
+        "steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'"
+    )
+    assert step["shell"] == "bash"
+    assert "continue-on-error" not in step
+    assert step["run"] == (
+        "set -o pipefail\n"
+        'echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"\n'
+        'echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"\n'
+        "pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20 | tee pytest-not-pg.log\n"
+    )
+
+
+
 @pytest.mark.parametrize("pytest_exit", [0, 7])
 def test_scoped_unit_budget_preserves_selected_command_and_failure(
     tmp_path: Path, pytest_exit: int,
