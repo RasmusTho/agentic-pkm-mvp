@@ -2148,7 +2148,10 @@ def _dispatcher_table_marker_search(
 
 
 def _dispatcher_cross_line_scan_body(
-    body: str, *, mask_code_inline: bool = False
+    body: str,
+    *,
+    mask_code_inline: bool = False,
+    source_lines: list[str] | None = None,
 ) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
@@ -2199,6 +2202,20 @@ def _dispatcher_cross_line_scan_body(
         expected_lines = max(1, end - start)
         while len(rendered.splitlines()) < expected_lines:
             rendered += "\n"
+        if source_lines is not None:
+            rendered_lines = rendered.splitlines(keepends=True)
+            if not rendered_lines:
+                rendered_lines = [""]
+            for offset in range(expected_lines):
+                if offset < len(rendered_lines):
+                    source_line = rendered_lines[offset]
+                    if offset == expected_lines - 1:
+                        source_line += "".join(rendered_lines[expected_lines:])
+                else:
+                    source_line = "\n"
+                source_index = start + offset
+                if source_index < len(source_lines):
+                    source_lines[source_index] += source_line
         if rendered_block:
             gap = max(1, start - previous_end + 1)
             if parts[-1].endswith("\n"):
@@ -2212,6 +2229,18 @@ def _dispatcher_cross_line_scan_body(
     return "".join(parts)
 
 
+def _dispatcher_cross_line_scan_source_lines(
+    body: str, *, mask_code_inline: bool = False
+) -> list[str]:
+    normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
+    source_lines = [""] * (normalized.count("\n") + 1)
+    _dispatcher_cross_line_scan_body(
+        body, mask_code_inline=mask_code_inline, source_lines=source_lines
+    )
+    return source_lines
+
+
 def _dispatcher_code_block_line_numbers(body: str) -> set[int]:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
@@ -2220,6 +2249,13 @@ def _dispatcher_code_block_line_numbers(body: str) -> set[int]:
         if token.type in {"fence", "code_block"} and token.map is not None:
             line_numbers.update(range(token.map[0], token.map[1]))
     return line_numbers
+
+
+def _dispatcher_container_fence_line(line: str) -> bool:
+    content = re.sub(
+        r"^\s*(?:(?:>\s*)|(?:[-+*]\s+)|(?:\d+[.)]\s+))*", "", line
+    ).strip()
+    return bool(re.match(r"^(?:`{3,}|~{3,})(?:\s|$)", content))
 
 
 _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE = re.compile(
@@ -2368,19 +2404,14 @@ def _dispatcher_resumable_binding_resources(
             )
         ):
             raise RuntimeError("dispatcher_activity_invalid")
+        truncated_scan_lines = _dispatcher_cross_line_scan_source_lines(
+            body, mask_code_inline=True
+        )
         lines = body.splitlines()
         table_scan_lines = _dispatcher_normalize_gfm_table_pipes(body).splitlines()
         table_line_numbers = _dispatcher_gfm_table_line_numbers(body)
         table_line_numbers.update(_dispatcher_html_table_line_numbers(body))
         code_block_lines = _dispatcher_code_block_line_numbers(body)
-        truncated_scan_lines = [
-            line
-            for line in _dispatcher_cross_line_scan_body(
-                body, mask_code_inline=True
-            ).splitlines()
-            if line.strip()
-        ]
-        truncated_scan_line = truncated_scan_lines[-1] if truncated_scan_lines else ""
         last_nonblank_line = max(
             (index for index, line in enumerate(lines) if line.strip()),
             default=-1,
@@ -2394,6 +2425,19 @@ def _dispatcher_resumable_binding_resources(
                 else line
             )
             marker_scan_line = _dispatcher_cross_line_scan_body(scan_line)
+            truncated_scan_line = _dispatcher_cross_line_scan_body(
+                scan_line, mask_code_inline=True
+            )
+            visible_truncated_line = (
+                truncated_scan_lines[line_number]
+                if line_number < len(truncated_scan_lines)
+                else ""
+            )
+            next_visible_truncated_line = (
+                truncated_scan_lines[line_number + 1]
+                if line_number + 1 < len(truncated_scan_lines)
+                else ""
+            )
             continuation_line = (
                 table_scan_lines[line_number + 1]
                 if line_number + 1 < len(table_scan_lines)
@@ -2401,12 +2445,24 @@ def _dispatcher_resumable_binding_resources(
             )
             marker_segments = _dispatcher_split_scan_segments(marker_scan_line)
             continuation_segments = _dispatcher_split_scan_segments(continuation_line)
-            dedicated_truncated_marker = bool(
-                line_number == last_nonblank_line
-                and _dispatcher_table_marker_search(
+            truncated_marker_lines = truncated_scan_line.splitlines()
+            container_fence_context = any(
+                _dispatcher_container_fence_line(lines[adjacent_line])
+                for adjacent_line in (line_number - 1, line_number + 1)
+                if 0 <= adjacent_line < len(lines)
+            )
+            dedicated_truncated_marker = bool(visible_truncated_line.strip()) and (
+                line_number not in table_line_numbers
+                or line_number == last_nonblank_line
+            ) and not (
+                _DISPATCHER_OPAQUE_CODE_MARKER in next_visible_truncated_line
+                or container_fence_context
+            ) and any(
+                _dispatcher_table_marker_search(
                     _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE,
-                    truncated_scan_line,
+                    rendered_line,
                 )
+                for rendered_line in truncated_marker_lines
             )
             dedicated_cross_line_marker = bool(
                 line_number not in table_line_numbers

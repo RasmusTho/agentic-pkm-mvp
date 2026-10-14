@@ -7557,6 +7557,7 @@ def test_dispatcher_task_identity_uses_canonical_producer(tmp_path, monkeypatch)
         "Dedicated worktree /tmp/old",
         "Dedicated worktree /tmp/old is",
         "Dedicated worktree /tmp/old is still",
+        "Dedicated worktree /tmp/old is still\nPaused pending follow-up.",
         "Narrative<br>\nDedicated worktree /tmp/old",
         "Dedicated worktree `/tmp/old`",
         "Narrative<br>Dedicated worktree /tmp/old is still dirty on branch old at head {sha}",
