@@ -932,6 +932,18 @@ errors/malformed/locked/invalid counts must be zero. A fresh Product readiness c
 existing strict index doctor must then pass with zero missing vectors. Other index problems remain
 blocking and do not trigger an unrelated source replay. Missing summaries, partial work, refused
 context or an unready index fail the operation; child streams stay private.
+After retained-source replay, a fresh non-strict doctor may identify a remaining vector-only gap
+outside that inventory. The same supervised, stopped-writer SourceAction then invokes
+`index repair-missing --json` across canonical ObjectStore rows in the selected binding. Only
+provenance-complete admitted vault notes with canonical text are eligible: vault origin, a retained
+replay recipe/generation matching stored meaning, non-draft review state, and supported existing
+trust metadata are preserved, not upgraded. Candidate-only, untrusted, malformed and incomplete
+rows remain absent and refuse the operation. The repair uses the configured embedding identity,
+locks and rechecks the source snapshot, and inserts vector plus provenance atomically with
+`ON CONFLICT DO NOTHING`. It never resets, overwrites or deletes an existing vector or Product
+object. Embedding/write failures retain only the existing finite redacted failure classes; the
+strict final doctor still proves whole-binding coverage before any service activation. Repository
+delivery does not substitute for parent-owned live DEV/TEST acceptance.
 Source-backed replay counts a vector-producer exception as an error, not an ingested note,
 and returns a nonzero result with numeric counters. The private native consumer validates
 that bounded result and retains only the fixed `embedding_generation_failed` (exit 80),

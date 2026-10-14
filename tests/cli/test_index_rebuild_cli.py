@@ -17,6 +17,135 @@ from app.objects import DomainObject, ObjectStore
 from app.stores import get_vector_index, reset_store_backends
 
 
+def _missing_repair_fixture(monkeypatch):
+    """Run the production ObjectStore consumer and PG insert SQL against a tiny DB double."""
+    from contextlib import nullcontext
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from app.cli import index_rebuild as repair
+    from app.components.embeddings import EmbeddingIdentity
+    from app.rebuildability.product_total_loss import product_replay_provenance
+    from app.stores import pg
+
+    identity = EmbeddingIdentity(provider="mock", model="selected-model", dim=2, normalize=False)
+    payload = dict(content="canonical body", text="stale alias", origin="vault",
+                   trust="unreviewed", review_state="provisional", episode_ref="unbound",
+                   replay=product_replay_provenance(source_identity="outside.md", source_text="canonical body"))
+    row = dict(object_id=uuid4(), kind="note", source_ref="outside.md", payload=payload)
+    state = SimpleNamespace(rows=[row], vectors={}, embedded=[], statements=[], fail=None)
+
+    class Cursor:
+        result = None
+
+        def execute(self, statement, params):
+            state.statements.append(statement)
+            if "SELECT object_id FROM store_vector_index" in statement:
+                self.result = [dict(object_id=key) for key in state.vectors]
+            elif "SELECT kind, source_ref, payload" in statement:
+                self.result = {key: row[key] for key in ("kind", "source_ref", "payload")}
+                if state.fail == "stale":
+                    self.result = {**self.result, "payload": {"content": "changed"}}
+            elif "SELECT identity_json" in statement:
+                self.result = dict(identity_json=json.dumps(asdict(identity)))
+            elif "INSERT INTO store_vector_index" in statement:
+                if state.fail == "write":
+                    raise RuntimeError("private provider canary")
+                assert "DO NOTHING" in statement and "DO UPDATE" not in statement
+                state.vectors.setdefault(str(params[1]), params)
+            else:
+                raise AssertionError(statement)
+
+        def fetchone(self):
+            return self.result
+
+        def fetchall(self):
+            return self.result
+
+    cursor = Cursor()
+    monkeypatch.setattr(pg, "_ensure_tables", lambda: None)
+    monkeypatch.setattr(pg, "_connect", lambda: nullcontext(SimpleNamespace(cursor=lambda: nullcontext(cursor))))
+    index = pg.PgVectorIndex()
+    binding = SimpleNamespace(backend="pg", store=SimpleNamespace(
+        vault_binding_id=index.vault_binding_id, list_objects=lambda **kwargs: state.rows))
+    monkeypatch.setattr(repair.domain_objects, "resolve_object_store_port", lambda: binding)
+    monkeypatch.setattr(repair, "get_vector_index", lambda: index)
+
+    def embed(text):
+        state.embedded.append(text)
+        if state.fail == "embed":
+            raise RuntimeError("private provider canary")
+        if state.fail == "race":
+            state.vectors[str(row["object_id"])] = "racing winner"
+        return [1.0, 2.0]
+
+    monkeypatch.setattr(repair, "get_product_embedding_client", lambda **kwargs: SimpleNamespace(
+        identity=identity, embed_text=embed))
+    return repair, state, identity
+
+
+def test_missing_only_repair_never_overwrites_existing_vectors(monkeypatch):
+    import copy
+    repair, state, identity = _missing_repair_fixture(monkeypatch)
+    original = copy.deepcopy(state.rows)
+    old_id = str(uuid4())
+    state.vectors[old_id] = "preserved"
+    state.rows.append({**state.rows[0], "object_id": old_id, "payload": {"content": "existing"}})
+    assert repair.repair_missing_vectors() == 1
+    assert state.vectors[old_id] == "preserved"
+    assert state.rows[0] == original[0]
+    assert state.embedded == ["canonical body"]
+    inserted = state.vectors[str(state.rows[0]["object_id"])]
+    assert inserted[7:10] == (identity.model, identity.provider, identity.normalize)
+    projected = json.loads(inserted[4])
+    assert projected["text"] == projected["content"] == "canonical body"
+    assert projected["replay"] == original[0]["payload"]["replay"]
+    assert projected["trust"] == "unreviewed"
+    assert repair.repair_missing_vectors() == 0
+    assert state.embedded == ["canonical body"]
+
+
+@pytest.mark.parametrize("failure", ["embed", "write", "stale", "race"])
+def test_missing_only_repair_atomic_or_absent(monkeypatch, failure):
+    repair, state, _ = _missing_repair_fixture(monkeypatch)
+    state.fail = failure
+    if failure == "race":
+        repair.repair_missing_vectors()
+        assert list(state.vectors.values()) == ["racing winner"]
+    else:
+        with pytest.raises(repair.MissingVectorRepairFailure):
+            repair.repair_missing_vectors()
+        assert state.vectors == {}
+
+
+def test_missing_only_repair_preserves_core6_metadata(monkeypatch):
+    repair, state, _ = _missing_repair_fixture(monkeypatch)
+    payload = state.rows[0]["payload"]
+    payload["core6"] = {"origin": payload.pop("origin"), "trust": "human",
+                        "review_state": "protected", "title": "preserved title"}
+    payload.pop("trust")
+    payload.pop("review_state")
+    repair.repair_missing_vectors()
+    projected = json.loads(state.vectors[str(state.rows[0]["object_id"])][4])
+    assert projected["origin"] == "vault"
+    assert projected["trust"] == "human"
+    assert projected["review_state"] == "protected"
+    assert projected["title"] == "preserved title"
+    assert "trust" not in payload and "review_state" not in payload
+
+
+@pytest.mark.parametrize("change", [
+    {"origin": "external"}, {"trust": "untrusted"}, {"review_state": "draft"},
+    {"candidate_only": True}, {"authority": {"source_authoritative": False}},
+    {"replay": {}}, {"replay": {"source_identity": "secret"}},
+])
+def test_missing_only_repair_refuses_unadmitted_payload(monkeypatch, change):
+    repair, state, _ = _missing_repair_fixture(monkeypatch)
+    state.rows[0]["payload"].update(change)
+    with pytest.raises(repair.MissingVectorRepairFailure, match="^source_post_rebuild_failed$"):
+        repair.repair_missing_vectors()
+    assert state.vectors == {} and state.embedded == []
+
+
 def _seed_object(text: str, *, source_ref: str = "tests") -> str:
     store = ObjectStore()
     obj_id = uuid4()

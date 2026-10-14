@@ -5190,10 +5190,18 @@ if args[:1] == ["vault-alpha-ingest"]:
 elif args[:2] == ["index", "doctor"]:
     strict = "--strict" in args
     summary_name = "FAKE_SOURCE_INDEX_SUMMARY" if strict else "FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"
+    if not strict and Path(os.environ["FAKE_API_READY_FILE"]).exists():
+        events = Path(os.environ["FAKE_DEPLOY_EVENT_LOG"]).read_text()
+        if "source-rebuild\\n" in events:
+            summary_name = "FAKE_SOURCE_REPLAY_INDEX_SUMMARY"
     default_summary = '{"backend":"PgVectorIndex","issues":[],"rebuild_required":false,"unembedded_object_count":0,"non_vector_issue_count":0,"pg_state":{"rows":2}}'
     print(os.environ.get(summary_name, default_summary))
     rc_name = "FAKE_SOURCE_INDEX_RC" if strict else "FAKE_SOURCE_INDEX_PREFLIGHT_RC"
     raise SystemExit(int(os.environ.get(rc_name, "0")))
+elif args[:2] == ["index", "repair-missing"]:
+    print(os.environ.get("FAKE_MISSING_REPAIR_SUMMARY", '{"processed":1}'))
+    print("hostile-child-canary /private/vault password=do-not-leak", file=sys.stderr)
+    raise SystemExit(int(os.environ.get("FAKE_MISSING_REPAIR_RC", "0")))
 elif args[:2] == ["settings", "validate"]:
     print('{}')
     raise SystemExit(int(os.environ.get("FAKE_SOURCE_SETTINGS_RC", "0")))
@@ -5675,6 +5683,82 @@ def test_native_source_projection_preserves_selected_embedding_identity(
     assert not any("provider=mock" in event for event in events)
     assert _read_pin_tag(root / "config/deploy/dev.previous.env") == current_sha
     assert not list((root / "config/deploy").glob("dev.previous.env.preflight.*"))
+
+
+def _wire_real_missing_repair(root: Path, env: dict[str, str]) -> None:
+    # Exercise the real CLI, canonical-store consumer and PgVectorIndex insert.
+    # Only provider/database infrastructure is replaced by the focused SQL fixture.
+    (root / "app/ops/__init__.py").write_text("from pkgutil import extend_path\n__path__ = extend_path(__path__, __name__)\n")
+    site = root.parent / "api-python-fixture/sitecustomize.py"
+    site.write_text(site.read_text() + '''
+paths.resolve_optional_vault_root = lambda **kwargs: Path(os.environ["FAKE_API_VAULT"])
+from app.settings import runtime as settings_runtime
+from app.settings.models import SettingsBundle
+settings_runtime.get_settings_bundle = lambda: SettingsBundle()
+''')
+    stub = root / "app/cli.py"
+    stub.write_text(stub.read_text().replace(
+        'elif args[:2] == ["index", "repair-missing"]:',
+        '''elif args[:2] == ["index", "repair-missing"]:
+    import importlib.util, pytest
+    package = Path(os.environ["REAL_CLI_PACKAGE"])
+    spec = importlib.util.spec_from_file_location("app.cli", package / "__init__.py", submodule_search_locations=[str(package)])
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["app.cli"] = module
+    spec.loader.exec_module(module)
+    fixture_spec = importlib.util.spec_from_file_location("missing_repair_fixture", os.environ["REAL_REPAIR_FIXTURE"])
+    fixture = importlib.util.module_from_spec(fixture_spec)
+    fixture_spec.loader.exec_module(fixture)
+    patch = pytest.MonkeyPatch()
+    repair, state, identity = fixture._missing_repair_fixture(patch)
+    state.fail = os.environ.get("REAL_REPAIR_FAILURE")
+    if state.fail == "ineligible":
+        state.rows[0]["payload"]["candidate_only"] = True
+    module.cli()
+elif args[:2] == ["index", "repair-missing"]:'''))
+    env.update(REAL_CLI_PACKAGE=str(REPO_ROOT / "app/cli"),
+               REAL_REPAIR_FIXTURE=str(REPO_ROOT / "tests/cli/test_index_rebuild_cli.py"))
+
+
+def test_native_deploy_repairs_indexable_object_outside_selected_source_inventory(tmp_path: Path) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    missing = json.dumps(dict(backend="PgVectorIndex", issues=["missing vector"],
+        rebuild_required=True, unembedded_object_count=1, non_vector_issue_count=0,
+        pg_state={"rows": 79}))
+    env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = missing
+    env["FAKE_SOURCE_REPLAY_INDEX_SUMMARY"] = missing
+    _wire_real_missing_repair(root, env)
+    result = _run_deploy(root, env, sha, channel="dev")
+    assert result.returncode == 0, result.stderr
+    events = _deploy_events(env)
+    replay = events.index("source-rebuild")
+    repair = events.index("api-cli index repair-missing --json")
+    strict = events.index("api-cli index doctor --json --strict")
+    activation = next(i for i, event in enumerate(events)
+                      if "up -d --force-recreate api worker watcher" in event)
+    assert replay < repair < strict < activation
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("reason", ["source_post_rebuild_failed", "embedding_generation_failed",
+                                  "vector_index_write_failed"])
+def test_native_missing_vector_repair_refuses_ineligible_or_failed_rows(tmp_path: Path, reason) -> None:
+    root, env, sha = _native_source_harness(tmp_path, channel="dev", ready=True)
+    missing = json.dumps(dict(backend="PgVectorIndex", issues=["private-object-canary"],
+        rebuild_required=True, unembedded_object_count=1, non_vector_issue_count=0, pg_state={}))
+    env["FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"] = missing
+    env["FAKE_SOURCE_REPLAY_INDEX_SUMMARY"] = missing
+    _wire_real_missing_repair(root, env)
+    env["REAL_REPAIR_FAILURE"] = {"source_post_rebuild_failed": "ineligible",
+        "embedding_generation_failed": "embed", "vector_index_write_failed": "write"}[reason]
+    result = _run_deploy(root, env, sha, channel="dev")
+    assert result.returncode != 0
+    assert f"YGGDRASIL_DEPLOY_FAILURE_REASON={reason}" in result.stderr
+    assert "hostile-child-canary" not in result.stdout + result.stderr
+    assert "private-object-canary" not in result.stdout + result.stderr
+    assert not any("up -d --force-recreate api worker watcher" in event
+                   for event in _deploy_events(env))
+    assert not list((root / "ops/deployments").glob("*.json"))
 
 
 def test_native_deploy_repairs_vector_only_gap_before_health_gate(tmp_path: Path) -> None:

@@ -452,6 +452,13 @@ Recommended checks:
 During native deployment, a vector-only finding can trigger the existing guarded source-backed
 rebuild of the selected retained-source inventory. The strict doctor must then pass before service
 activation; see [the deployment procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
+If replay leaves a vector-only gap elsewhere in the selected binding, `index repair-missing`
+reads canonical ObjectStore payloads and inserts only absent, provenance-complete admitted vault-note
+vectors under the current configured identity. It does not reset, overwrite or delete vectors,
+rewrite Product objects, synthesize source provenance, or promote candidate-only/untrusted material.
+Each insert locks and rechecks the source snapshot and commits vector plus derived provenance
+atomically; failures leave that vector absent. Existing rows, including malformed vectors, remain
+untouched and the strict final doctor remains authoritative.
 
 ## Rebuild playbook (when identity changes)
 
