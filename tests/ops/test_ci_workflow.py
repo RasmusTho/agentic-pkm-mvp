@@ -567,6 +567,7 @@ def test_nightly_memory_producer_respects_qualified_eval_lane() -> None:
     )
     suite = next(step for step in job["steps"] if step.get("name") == "Full test suite (memory, not pg)")
 
+    assert job["env"]["PYTHON"] == "python"
     assert checkout["with"] == {"fetch-depth": 0}
     assert install["run"] == (
         "pip install --requirement mimer-mcp-sidecar/requirements.txt\n"
@@ -580,6 +581,8 @@ def test_nightly_memory_producer_respects_qualified_eval_lane() -> None:
                 sys.executable,
                 "-m",
                 "pytest",
+                "-p",
+                "pytest_timeout",
                 "-p",
                 "pytest_asyncio.plugin",
                 "-p",

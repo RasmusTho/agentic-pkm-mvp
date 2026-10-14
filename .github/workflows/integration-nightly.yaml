@@ -74,6 +74,9 @@ jobs:
             experimental: true
     env:
       PYTHONPATH: ${{ github.workspace }}
+      # Keep nested Make/bootstrap producers on the matrix interpreter.  The
+      # Makefile otherwise prefers a host-installed python3.12 on 3.13 runs.
+      PYTHON: python
       STORE_BACKEND: memory
       LLM_PROVIDER: mock
       REASONING_PROVIDER: mock
