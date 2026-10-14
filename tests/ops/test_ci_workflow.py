@@ -19,6 +19,7 @@ BROWSER_WORKFLOW = WORKFLOWS_DIR / "browser-runtime.yml"
 IMAGE_WORKFLOW = WORKFLOWS_DIR / "app-image-build.yml"
 IMPORT_LINTER_WORKFLOW = WORKFLOWS_DIR / "import-linter.yaml"
 INTEGRATION_NIGHTLY_WORKFLOW = WORKFLOWS_DIR / "integration-nightly.yaml"
+RELEASE_UAT_WORKFLOW = WORKFLOWS_DIR / "release-uat.yaml"
 ARCHITECTURE_CI_WORKFLOW = WORKFLOWS_DIR / "architecture-ci.yaml"
 FAILURE_CONTEXT_WORKFLOW = WORKFLOWS_DIR / "pr-ci-failure-context.yml"
 OVERVIEW_JOURNEY_MODULE = "tests/companion_ui/test_devui_overview_journeys.py"
@@ -107,6 +108,7 @@ def _python_heredoc(script: str) -> str:
 CI_FITNESS_CALLERS = (
     (CI_SMOKE_WORKFLOW, "smoke", "Fitness report (QAS-003/QAS-010)", "Verify CI summary lines"),
     (INTEGRATION_NIGHTLY_WORKFLOW, "full-suite", "Fitness report", "Verify CI gates"),
+    (RELEASE_UAT_WORKFLOW, "uat-gate", "Fitness report", "Verify CI gates"),
 )
 CI_FITNESS_NODE = (
     "tests/fitness/test_ci_fitness.py::"
@@ -164,10 +166,26 @@ def _run_ci_fitness_workflow(tmp_path: Path, caller: tuple, *, failure: str = ""
     return result, log, job, report_step
 
 
-@pytest.mark.parametrize("caller", CI_FITNESS_CALLERS, ids=("smoke", "nightly"))
+@pytest.mark.parametrize("caller", CI_FITNESS_CALLERS, ids=("smoke", "nightly", "release-uat"))
 def test_ci_fitness_callers_use_the_scoped_functional_producer(tmp_path: Path, caller: tuple) -> None:
     from app.fitness.report import SUMMARY_LABELS, parse_summary_lines
 
+    discovered = set()
+    for workflow_path in WORKFLOWS_DIR.iterdir():
+        if workflow_path.suffix not in {".yaml", ".yml"}:
+            continue
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        for job_name, job_definition in workflow.get("jobs", {}).items():
+            for step in job_definition.get("steps", []):
+                command = step.get("run", "")
+                if CI_FITNESS_NODE in command or re.search(
+                    r"\bpython(?:3)?\s+-m\s+app\.fitness\.report\b", command
+                ):
+                    discovered.add((workflow_path, job_name, step.get("name")))
+    assert discovered == {
+        (path, job_name, report_name)
+        for path, job_name, report_name, _verify_name in CI_FITNESS_CALLERS
+    }
     result, log, job, report_step = _run_ci_fitness_workflow(tmp_path, caller)
     assert report_step.get("shell") == "bash"
     assert "set -euo pipefail" in report_step["run"]
@@ -188,7 +206,7 @@ def test_ci_fitness_callers_use_the_scoped_functional_producer(tmp_path: Path, c
     )
 
 
-@pytest.mark.parametrize("caller", CI_FITNESS_CALLERS, ids=("smoke", "nightly"))
+@pytest.mark.parametrize("caller", CI_FITNESS_CALLERS, ids=("smoke", "nightly", "release-uat"))
 @pytest.mark.parametrize(
     ("failure", "cause"),
     (
