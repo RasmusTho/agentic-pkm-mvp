@@ -264,7 +264,7 @@ grant setup or migration authority. The existing explicit forward-only acknowled
 applicable, remains a separate operator input and is never inferred from cutover selection.
 
 Before effects, native admission checks the configured pin/runtime source, actual existing
-API/worker/watcher and applicable Heimdal/migration writer mounts, channel instance-state volume,
+API/worker/watcher and applicable Heimdal writer mounts, channel instance-state volume,
 initialized registry identities and authenticated physical ownership. The public instance runtime
 readiness facade reads existing registry and ownership state with read-only locks, without
 initialization, restoration, key recovery or permission changes. Missing, conflicting, pending or uninitialized
@@ -274,6 +274,15 @@ worker prepares. Each inherited Compose guard rechecks the request and selected 
 Native workers discard ambient MVR-01C binding/root variables and supply only the frozen request
 to the existing public stopped-window producer. That producer retains the actual all-owner
 inventory, drained-writer proof, rollback guards, deployment lease and finalization order.
+
+Docker optional unset environment entries may be bare valid keys; duplicates, malformed entries,
+and missing or conflicting required channel/source selectors refuse. Stopped content writers receive
+identical proof. The canonical SQL/representation-only `migrate` producer is excluded from content
+mount proof only when its migration-runner ownership, exact `run_migrations.sh` command, working
+directory and absent entrypoint match, with no mounts except the optional managed read-only database
+password file. A changed command, code/content/registry mount or foreign secret mount refuses rather
+than gaining an exemption by service name or container state. This classification leaves the later
+complete owner inventory and writer drain unchanged.
 
 Qualification accepts the existing same-path content mount and the legacy `/app/vault` alias only
 when each writer's selectors match its actual mount of that exact host source. It does not rebind
