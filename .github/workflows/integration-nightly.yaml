@@ -270,8 +270,12 @@ jobs:
             tests/fitness/test_runtime_contract.py
 
       - name: Fitness report
+        shell: bash
         run: |
-          python -m app.fitness.report | tee tmp/ci_summary.log
+          set -euo pipefail
+          python -m pytest -q -s -m "not pg" \
+            tests/fitness/test_ci_fitness.py::test_ci_report_entrypoint_uses_scoped_product_gateway_fixture \
+            2>&1 | tee tmp/ci_summary.log
 
       - name: Verify CI gates
         run: |
@@ -296,6 +300,7 @@ jobs:
           name: nightly-pytest-log-py${{ matrix.python-version }}
           path: |
             tmp/nightly-pytest.log
+            tmp/ci_summary.log
             ${{ runner.temp }}/pytest-nightly-shards/
 
   pg-contracts:
