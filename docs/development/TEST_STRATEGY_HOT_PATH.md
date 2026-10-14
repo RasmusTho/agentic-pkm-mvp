@@ -106,6 +106,14 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   partial logs, and status inventory survive cancellation for the always-run artifact upload;
   normal EXIT handling adds final timings/status when the shell can execute it. Actual current-head
   CI completion remains required; the ceiling and fixture receipt alone are not runtime proof.
+  PR #6083's scoped serial job [115940412928](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38531981018/job/115940412928)
+  separately reached 93% at the old 35-minute cutoff, with one failed result whose traceback
+  was lost. The scoped command keeps the exact selector arguments and adds verbose node IDs,
+  short tracebacks and unbuffered output; pipefail and the always-uploaded log retain failure
+  evidence. Its increased ceiling is execution margin, not a completed-run measurement or a
+  speedup. `tests/ops/test_ci_workflow.py::test_scoped_unit_budget_preserves_selected_command_and_failure`
+  executes that YAML command against finite success/failure producers to verify selected arguments,
+  watchdog, visible diagnostics, retained log and failure exit propagation.
 - The shared native PostgreSQL acceptance profile retains the former `pr-index-pg-contracts`
   surface (#5587), including FCA-06 second-consumer conformance (#5405) and dormant host-candidate
   admission/history/live-refusal and managed-source proofs (#5593). Each test retains the

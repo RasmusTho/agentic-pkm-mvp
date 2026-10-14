@@ -19,6 +19,7 @@ from app.dispatcher.verification_contract import (
     has_closing_issue_attempt,
     resolve_issue_authority,
 )
+from scripts.pr_body_generator import PRBodyGeneratorError, _validate_pickup_receipt
 
 
 PLAN_SCHEMA = "builder.publication-plan.v1"
@@ -297,6 +298,12 @@ def apply_publication_plan(
     runner = executor or SubprocessExecutor()
     normalized = _validated_plan(plan, expected_plan_sha256)
     worktree = Path(normalized["worktree"])
+    admitted_body = _generate_pr_body(runner, worktree, normalized["pr"]["body_inputs"])
+    if (
+        admitted_body != normalized["pr"]["body"]
+        or _sha256_text(admitted_body) != normalized["pr"]["body_sha256"]
+    ):
+        raise PublicationRefusal("drift", "generated PR body drifted from the plan")
     authority = _assert_authority_unchanged(runner, worktree, normalized)
     local_state, commit_sha = _observe_local_state(runner, worktree, normalized)
     _assert_issue_unchanged(runner, worktree, normalized)
@@ -591,6 +598,21 @@ def _validate_pr_body_inputs(request: PublicationRequest, values: Mapping[str, A
         raise PublicationRefusal("drift", "PR body lane does not match publication lane")
     if values.get("issue_number") != request.governing_issue:
         raise PublicationRefusal("drift", "PR body Issue does not match governing Issue")
+    pickup_receipt = values.get("pickup_receipt")
+    if request.governing_issue is None:
+        if pickup_receipt is not None:
+            raise PublicationRefusal(
+                "drift", "issue-free publication must not carry a pickup receipt"
+            )
+    elif not isinstance(pickup_receipt, str) or not pickup_receipt.strip():
+        raise PublicationRefusal(
+            "drift", "issue-backed publication requires a pickup receipt"
+        )
+    else:
+        try:
+            _validate_pickup_receipt(pickup_receipt, request.governing_issue, _closing_numbers(request))
+        except PRBodyGeneratorError as exc:
+            raise PublicationRefusal("drift", f"invalid pickup receipt: {exc}") from exc
     if values.get("final_review_rounds", 0) not in {0, 1}:
         raise PublicationRefusal(
             "unsupported", "native publication supports Final-Review-Rounds 0 or 1"
@@ -1129,6 +1151,8 @@ def _generate_pr_body(executor: CommandExecutor, cwd: Path, values: Mapping[str,
         argv.extend(["--builderops-reason", str(values["builderops_reason"])])
     if values.get("notes") is not None:
         argv.extend(["--notes", str(values["notes"])])
+    if values.get("pickup_receipt") is not None:
+        argv.extend(["--pickup-receipt", str(values["pickup_receipt"])])
     return _checked(executor, argv, cwd).stdout
 
 

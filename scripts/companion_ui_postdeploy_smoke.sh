@@ -63,7 +63,8 @@ except Exception:
     0)
       ;;
     5)
-      if ! printf '%s\n' "${collect_output}" | grep -q 'SKIPPED'; then
+      # A short-circuiting grep can SIGPIPE printf and fail under pipefail.
+      if [[ "${collect_output}" != *SKIPPED* ]]; then
         printf '%s\n' "${collect_output}" >&2
         echo "companion UI pytest smoke preflight: tests/companion_ui/test_companion_ui_live_smoke.py collected nothing without its intentional COMPANION_UI_SMOKE_URL self-skip (emptied smoke module or inherited pytest selection options; pytest exit 5)" >&2
         return 86
