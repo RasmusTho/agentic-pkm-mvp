@@ -5191,7 +5191,7 @@ elif args[:2] == ["index", "doctor"]:
     strict = "--strict" in args
     summary_name = "FAKE_SOURCE_INDEX_SUMMARY" if strict else "FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY"
     if not strict and Path(os.environ["FAKE_API_READY_FILE"]).exists():
-        events = Path(os.environ["FAKE_DEPLOY_EVENT_LOG"]).read_text()
+        events = Path(os.environ["FAKE_DEPLOY_EVENT_LOG"]).read_text().rsplit("api-cli settings validate --json\\n", 1)[-1]
         if "source-rebuild\\n" in events:
             summary_name = "FAKE_SOURCE_REPLAY_INDEX_SUMMARY"
     default_summary = '{"backend":"PgVectorIndex","issues":[],"rebuild_required":false,"unembedded_object_count":0,"non_vector_issue_count":0,"pg_state":{"rows":2}}'
