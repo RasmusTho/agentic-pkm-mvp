@@ -62,7 +62,7 @@ def test_scanner_recognizes_all_store_write_methods() -> None:
     here AND teach the scanner, or producers reached through it silently escape the census (the
     round-3 failure mode: only put/ingest_object were recognized)."""
     assert _SINK_METHOD_NAMES == frozenset(
-        {"put", "upsert", "save_object", "ingest_object", "index_ingest_object"}
+        {"put", "upsert", "insert_missing", "save_object", "ingest_object", "index_ingest_object"}
     )
 
 
