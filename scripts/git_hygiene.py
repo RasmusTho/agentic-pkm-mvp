@@ -1771,16 +1771,19 @@ _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE = re.compile(
 _DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE = re.compile(
     r"(?<!\w)[*_]{1,3}(?=\w)|(?<=\w)[*_]{1,3}(?!\w)"
 )
+_DISPATCHER_SPLITLINES_SEPARATOR_RE = re.compile(r"[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 
 
 def _dispatcher_cross_line_scan_body(body: str) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
     normalized = _DISPATCHER_MARKDOWN_CONTAINER_PREFIX_RE.sub("", normalized)
     return _DISPATCHER_MARKDOWN_INLINE_DELIMITER_RE.sub("", normalized)
 
 
 _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE = re.compile(
-    rf"(?:^\s*|[.!?:]\s+|while\s+the\s+){_DISPATCHER_DEDICATED_KEYWORD}"
+    rf"(?:^[ \t]*|[.!?:][ \t]+|while[ \t]+the[ \t]+|"
+    rf"while[ \t]*(?:\n[ \t]*)+the[ \t]+){_DISPATCHER_DEDICATED_KEYWORD}"
     rf"{_DISPATCHER_RETENTION_SEPARATOR}{_DISPATCHER_WORKTREE_KEYWORD}\b.*?\b"
     rf"{_DISPATCHER_IS_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
     rf"{_DISPATCHER_STILL_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"

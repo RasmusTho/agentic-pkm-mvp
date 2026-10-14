@@ -6727,8 +6727,18 @@ def test_local_retirement_rejects_whitespace_dedicated_worktree_marker(
         ("Dedicated worktree /tmp/old is st", "ill dirty", "\r\t"),
         ("Dedicated worktree /tmp/old is st", "ill dirty", "\r\n \t"),
         ("Dedicated worktree /tmp/old is still dir", "ty", "\n"),
+        ("while", "the dedicated worktree /tmp/old is still dirty", "\n"),
+        ("while", "the dedicated worktree /tmp/old is still dirty", "\n\n"),
         ("Dedicated worktree /tmp/old is", "still dirty", "\r"),
         ("Dedicated worktree /tmp/old is", "still dirty", "\r\n"),
+        ("Dedicated worktree /tmp/old is", "still dirty", "\v"),
+        ("Dedicated worktree /tmp/old is", "still dirty", "\f"),
+        ("Dedicated worktree /tmp/old is", "still dirty", "\x1c"),
+        ("Dedicated worktree /tmp/old is", "still dirty", "\x1d"),
+        ("Dedicated worktree /tmp/old is", "still dirty", "\x1e"),
+        ("Dedicated worktree /tmp/old is", "still dirty", "\x85"),
+        ("Dedicated worktree /tmp/old is", "still dirty", "\u2028"),
+        ("Dedicated worktree /tmp/old is", "still dirty", "\u2029"),
         ("Dedicated worktree /tmp/old is", "> still dirty", "\n"),
         ("Dedicated worktree /tmp/old is", "- still dirty", "\r"),
         ("Dedicated worktree /tmp/old is", "> > still dirty", "\r\n"),
@@ -7009,6 +7019,40 @@ def test_local_retirement_preserves_backticked_dedicated_binding(
     result = git_hygiene.retire_inactive_local_branches(
         repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
         owner_discard="discard inactive work only when the dedicated binding is absent",
+    )
+    assert result["deleted"] == 0
+    assert result["retained"][ref] == "live_or_resumable_activity"
+
+
+def test_local_retirement_preserves_dedicated_binding_after_blank_line(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5067",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5067,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "Stopped for now.\n\nDedicated worktree "
+                            f"`{tmp_path / 'old-checkout'}` is still dirty on branch "
+                            f"`old` at HEAD `{sha}`, with local changes."
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    result = git_hygiene.retire_inactive_local_branches(
+        repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard inactive work only when the dedicated binding is valid",
     )
     assert result["deleted"] == 0
     assert result["retained"][ref] == "live_or_resumable_activity"
