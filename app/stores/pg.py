@@ -1143,6 +1143,7 @@ class PgObjectStore(ObjectStore):
 
     def reconcile_legacy_source(
         self, expected: dict, *, vault_uuid: str, revalidate: Callable[[], None],
+        check_sources: Callable[[list[dict]], None],
         replacement: dict | None = None, vector: dict | None = None,
     ) -> None:
         """CAS one legacy mirror; source proof and Product/vector effects commit together.
@@ -1181,13 +1182,11 @@ class PgObjectStore(ObjectStore):
                 ))
                 if canonical != oid:
                     raise ValueError("legacy identity changed")
-                cur.execute(
-                    "SELECT object_id FROM store_objects WHERE vault_binding_id = %s "
-                    "AND object_id <> %s AND (source_ref = %s OR payload->>'vault_uuid' = %s) FOR UPDATE",
-                    (self.vault_binding_id, oid, expected["source_ref"], vault_uuid),
-                )
-                if cur.fetchone() is not None:
-                    raise ValueError("ambiguous legacy projection")
+                cur.execute("SELECT object_id, source_ref, payload FROM store_objects WHERE vault_binding_id = %s",
+                            (self.vault_binding_id,))
+                # The source adapter owns locator normalization; the table
+                # fence keeps that complete binding inventory stable here.
+                check_sources(cur.fetchall())
                 cur.execute(
                     "SELECT object_id FROM store_vector_index WHERE vault_binding_id = %s AND object_id = %s",
                     (self.vault_binding_id, oid),

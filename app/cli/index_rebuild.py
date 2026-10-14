@@ -206,8 +206,10 @@ class MissingVectorRepairFailure(RuntimeError):
 def reconcile_legacy(as_json: bool) -> None:
     from app.rebuildability.legacy_source import private_source_output, reconcile_legacy_sources
     from app.stores.pg import PgObjectStore, PgVectorIndex
+    from app.write_guard import DEFAULT_WRITE_GUARD, SOURCE_BACKED_REBUILD_ACTION
     try:
         with private_source_output():
+            DEFAULT_WRITE_GUARD.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
             binding = domain_objects.resolve_object_store_port()
             vector = get_vector_index()
             if (binding.backend != "pg" or not isinstance(binding.store, PgObjectStore)

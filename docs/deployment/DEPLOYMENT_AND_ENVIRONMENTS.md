@@ -959,6 +959,7 @@ remain untouched. Alpha exclusion is insufficient when the separate dev-only fil
 configured/default `VAULT_DIR` scope overlaps the active vault; unresolved broader-producer
 applicability refuses retirement. History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again
+alongside forward/reverse canonical identity and binding-wide canonical source-locator checks,
 inside the transaction, including after writes, so partial writes roll back; existing vectors
 never get overwritten. Only finite counts/refusal classes cross the private CLI boundary. Missing-only
 repair, fresh Product readiness and the strict whole-binding final doctor still follow, before service activation. This is

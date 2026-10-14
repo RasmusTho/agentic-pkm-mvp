@@ -76,7 +76,7 @@ def _count(object_id) -> int:
             return int(cur.fetchone()[0])
 
 
-@pytest.mark.parametrize("mode", ["replace", "retire", "existing", "write-failure", "source-race", "row-race", "history", "identity", "retire-source-race", "reverse-identity", "cross-key-alias"])
+@pytest.mark.parametrize("mode", ["replace", "retire", "existing", "write-failure", "source-race", "row-race", "history", "identity", "retire-source-race", "reverse-identity", "cross-key-alias", "replace-source-alias", "retire-source-alias"])
 def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, monkeypatch, mode):
     from copy import deepcopy
     from app.rebuildability.product_total_loss import product_replay_provenance
@@ -97,12 +97,20 @@ def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, 
                      (other if mode == "identity" else oid, retained_uuid, store.vault_binding_id))
     if mode == "cross-key-alias":
         store.put(source_uuid, kind="note", source_ref="unrelated-alias.md", payload={"text": "preserved alias"})
+    from pathlib import Path
+    from app.rebuildability.legacy_source import assert_unique_projection_source
+    source_root = Path("/synthetic-issue6096-vault")
+    alias_id = uuid4()
+    if mode.endswith("source-alias"):
+        store.put(alias_id, kind="note", source_ref=str(source_root / "source.md"), payload={"text": "preserved alias"})
     replacement = dict(frontmatter={}, text="canonical body", origin="vault", trust="human", review_state="reviewed",
         replay=product_replay_provenance(source_identity="source.md", source_text="canonical body"))
     vector = dict(kind="note", source_ref="source.md", payload={"text": "canonical body"},
                   embedding=[1., 0., 0., 0.], model=PRIMARY.model, identity=PRIMARY)
     if mode == "existing":
         _pg_index.upsert(oid, **vector)
+    if mode.endswith("source-alias"):
+        _pg_index.upsert(alias_id, **{**vector, "source_ref": str(source_root / "source.md")})
     if mode == "row-race":
         store.put(oid, kind="note", source_ref="source.md", payload={"text": "racing state"})
     if mode == "history":
@@ -118,8 +126,10 @@ def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, 
 
     if mode == "write-failure":
         monkeypatch.setattr(pg_store.PgVectorIndex, "upsert", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("failed insert")))
-    retiring = mode in ("retire", "history", "retire-source-race")
+    retiring = mode in ("retire", "history", "retire-source-race", "retire-source-alias")
     kwargs = dict(vault_uuid=str(source_uuid), revalidate=revalidate,
+                  check_sources=lambda rows: assert_unique_projection_source(rows, expected_id=str(oid),
+                      root=source_root, source_identity="source.md", vault_uuid=str(source_uuid)),
                   replacement=None if retiring else replacement, vector=None if retiring else vector)
     if mode in ("replace", "retire"):
         store.reconcile_legacy_source(expected, **kwargs)
@@ -140,6 +150,9 @@ def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, 
     if mode == "history":
         with psycopg.connect(_dsn()) as conn:
             assert conn.execute("SELECT object_id FROM decisions WHERE key = 'receipt' AND object_id = %s", (oid,)).fetchone()[0] == oid
+    if mode.endswith("source-alias"):
+        assert store.get(alias_id)["payload"] == {"text": "preserved alias"}
+        assert _count(alias_id) == 1
 
 
 def test_upsert_records_full_identity_columns(_pg_index):

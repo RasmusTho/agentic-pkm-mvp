@@ -483,7 +483,8 @@ or default `VAULT_DIR` scope overlaps the active vault, alpha exclusion alone is
 authority: recovery refuses that ambiguous producer applicability rather than enabling the optional
 producer or laundering its sources through alpha. Complete private-stage stream and logging
 suppression covers settings compatibility and conflict-quarantine diagnostics too.
-The transaction rechecks source/policy and canonical identity, compares the discovered Product
+The transaction rechecks source/policy and forward/reverse canonical identity, compares equivalent
+absolute/relative source locators across the locked binding inventory, compares the discovered Product
 snapshot, fences vector writes, and inserts only an absent vector. Provider/write failure or a
 failed final recheck rolls back the affected Product/vector transition. Existing vectors are never
 overwritten; retry sees either the prior legacy row or the completed replacement/retirement.

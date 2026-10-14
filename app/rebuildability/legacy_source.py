@@ -5,6 +5,7 @@ import contextlib
 import io
 import logging
 import os
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from uuid import UUID
@@ -14,6 +15,46 @@ from app.knowledge.adapters import FsVaultAdapter
 from app.knowledge.contracts import NoteLocator
 from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.rebuildability.product_total_loss import capture_source_frontmatter, canonical_product_source_text
+
+
+def assert_unique_projection_source(
+    rows: list[dict], *, expected_id: str, root: Path, source_identity: str, vault_uuid: str,
+) -> None:
+    """Compare discovery locators canonically, never as raw stored spellings."""
+    def normalized(value: str) -> str:
+        # Conservative on case-sensitive hosts; ambiguous portable spellings
+        # must not authorize retirement of either projection.
+        return unicodedata.normalize("NFC", value).casefold()
+
+    def source_key(value: str) -> str:
+        path = Path(value.strip().replace("\\", "/")).expanduser()
+        return normalized(str((path if path.is_absolute() else root / path).resolve()))
+
+    target = source_key(source_identity)
+    for row in rows:
+        if str(row["object_id"]) == expected_id:
+            continue
+        payload = row.get("payload")
+        payload = payload if isinstance(payload, dict) else {}
+        replay = payload.get("replay")
+        replay = replay if isinstance(replay, dict) else {}
+        locators = (row.get("source_ref"), replay.get("source_identity"))
+        if any(source_key(value) == target
+               for value in locators if isinstance(value, str)):
+            raise ValueError("ambiguous source projection")
+        frontmatter = payload.get("frontmatter")
+        frontmatter = frontmatter if isinstance(frontmatter, dict) else {}
+        core = payload.get("core6")
+        core = core if isinstance(core, dict) else {}
+        claims = (payload.get("vault_uuid"), payload.get("artifact_id"), payload.get("stable_id"),
+                  frontmatter.get("uuid"), frontmatter.get("id"), core.get("id"))
+        for value in claims:
+            try:
+                other_uuid = UUID(str(value))
+            except (TypeError, AttributeError, ValueError):
+                continue
+            if other_uuid in (UUID(vault_uuid), UUID(expected_id)):
+                raise ValueError("ambiguous source projection")
 
 
 def assert_admission_layers(*layers: dict) -> None:
@@ -190,6 +231,8 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                           embedding=embedding, model=client.identity.model, identity=client.identity)
         revalidate()
         binding.store.reconcile_legacy_source(row, vault_uuid=str(UUID(vault_uuid)), revalidate=revalidate,
+            check_sources=lambda rows: assert_unique_projection_source(rows, expected_id=str(row["object_id"]),
+                root=root, source_identity=relative.as_posix(), vault_uuid=vault_uuid),
                                               replacement=replacement, vector=vector)
         count += 1
     return count

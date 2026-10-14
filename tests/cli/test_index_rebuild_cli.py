@@ -51,6 +51,7 @@ def _legacy_source_fixture(monkeypatch, tmp_path, *, selected=False):
             if state.fail == "source":
                 source.write_text(source.read_text() + "changed")
             kwargs["revalidate"]()
+            kwargs["check_sources"](state.rows)
             assert expected == row
             if state.fail == "row":
                 raise ValueError("private-row-canary")
@@ -106,7 +107,8 @@ def test_legacy_source_reconciliation_uses_current_canonical_eligibility(monkeyp
 
 def test_legacy_excluded_source_retires_only_exact_stale_projection(monkeypatch, tmp_path):
     recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
-    unrelated = {**original, "object_id": uuid4(), "payload": {"text": "other", "frontmatter": {}}}
+    unrelated = {**original, "object_id": uuid4(), "source_ref": str(root / "other.md"),
+                 "payload": {"text": "other", "frontmatter": {}}}
     state.rows.append(unrelated)
     state.vectors[str(unrelated["object_id"])] = "unchanged"
     assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
@@ -198,6 +200,54 @@ def test_legacy_source_reconciliation_suppresses_conflict_and_settings_logs(monk
     assert str(root) not in caplog.text and "private" not in caplog.text
     assert logging.root.manager.disable == previous
     assert conflict.exists() and source.read_bytes() == raw
+
+
+@pytest.mark.parametrize("selected", [True, False])
+@pytest.mark.parametrize("alias", ["relative", "absolute", "replay", "case", "frontmatter", "stable-id"])
+def test_legacy_source_reconciliation_refuses_projection_locator_aliases(monkeypatch, tmp_path, selected, alias):
+    from copy import deepcopy
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=selected)
+    if alias == "absolute":
+        state.rows[0]["source_ref"] = source.relative_to(root).as_posix()
+    other = {**original, "object_id": uuid4(), "payload": {"content": "other"},
+             "source_ref": str(source) if alias == "absolute" else source.relative_to(root).as_posix()}
+    if alias == "replay":
+        other["source_ref"] = "other.md"
+        other["payload"]["replay"] = {"source_identity": source.relative_to(root).as_posix()}
+    if alias == "case":
+        other["source_ref"] = other["source_ref"].upper()
+    if alias in ("frontmatter", "stable-id"):
+        other["source_ref"] = "other.md"
+        if alias == "frontmatter":
+            other["payload"]["frontmatter"] = {"uuid": str(original["object_id"])}
+        else:
+            other["payload"]["stable_id"] = str(original["object_id"])
+    state.rows.append(other)
+    state.vectors[str(other["object_id"])] = "existing vector preserved"
+    before = deepcopy(state.rows)
+    with pytest.raises(ValueError, match="ambiguous source projection"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == before and state.calls == []
+    assert state.vectors == {str(other["object_id"]): "existing vector preserved"}
+    assert source.read_bytes() == raw
+
+
+def test_legacy_source_reconciliation_checks_write_guard_before_store_resolution(monkeypatch):
+    from app.cli import index_rebuild as repair
+    from app.write_guard import DEFAULT_WRITE_GUARD
+
+    def denied(action):
+        raise RuntimeError("private guard diagnostic")
+
+    def unexpected_store():
+        pytest.fail("store constructed before write admission")
+
+    monkeypatch.setattr(DEFAULT_WRITE_GUARD, "assert_writes_allowed", denied)
+    monkeypatch.setattr(repair.domain_objects, "resolve_object_store_port", unexpected_store)
+    result = CliRunner().invoke(cli, ["index", "reconcile-legacy", "--json"])
+    assert result.exit_code == 79
+    assert json.loads(result.output) == {"reason": "source_post_rebuild_failed"}
 
 
 def _missing_repair_fixture(monkeypatch):
