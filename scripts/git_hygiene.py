@@ -1751,7 +1751,7 @@ _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE = re.compile(
 
 
 def _dispatcher_linebreak_tolerant_keyword(keyword: str) -> str:
-    separator = r"(?:[ \t]*(?:\r\n|\r|\n)[ \t]*)*"
+    separator = r"(?:[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)*"
     return separator.join(re.escape(character) for character in keyword)
 
 
@@ -1760,10 +1760,15 @@ _DISPATCHER_WORKTREE_KEYWORD = _dispatcher_linebreak_tolerant_keyword("worktree"
 _DISPATCHER_IS_KEYWORD = _dispatcher_linebreak_tolerant_keyword("is")
 _DISPATCHER_STILL_KEYWORD = _dispatcher_linebreak_tolerant_keyword("still")
 _DISPATCHER_DIRTY_KEYWORD = _dispatcher_linebreak_tolerant_keyword("dirty")
+_DISPATCHER_RETENTION_SEPARATOR = (
+    r"(?:\s+|[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)"
+)
 _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE = re.compile(
     rf"(?:^\s*|[.!?:]\s+|while\s+the\s+){_DISPATCHER_DEDICATED_KEYWORD}"
-    rf"\s+{_DISPATCHER_WORKTREE_KEYWORD}\b.*?\b{_DISPATCHER_IS_KEYWORD}"
-    rf"\s+{_DISPATCHER_STILL_KEYWORD}\s+{_DISPATCHER_DIRTY_KEYWORD}\b",
+    rf"{_DISPATCHER_RETENTION_SEPARATOR}{_DISPATCHER_WORKTREE_KEYWORD}\b.*?\b"
+    rf"{_DISPATCHER_IS_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
+    rf"{_DISPATCHER_STILL_KEYWORD}{_DISPATCHER_RETENTION_SEPARATOR}"
+    rf"{_DISPATCHER_DIRTY_KEYWORD}\b",
     re.IGNORECASE | re.MULTILINE | re.DOTALL,
 )
 _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE = re.compile(
