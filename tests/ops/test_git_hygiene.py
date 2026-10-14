@@ -6702,16 +6702,24 @@ def test_local_retirement_rejects_whitespace_dedicated_worktree_marker(
 
 
 @pytest.mark.parametrize(
-    "fragment",
+    ("fragment", "continuation", "separator"),
     [
-        "Dedicated worktree /tmp/old",
-        "Dedicated worktree tmp/old",
-        "Dedicated worktree /tmp/old checkout",
-        "Dedicated worktree /tmp/old; checkout",
+        ("Dedicated worktree /tmp/old", "is still dirty", "\n"),
+        ("Dedicated worktree tmp/old", "is still dirty", "\n"),
+        ("Dedicated worktree /tmp/old checkout", "is still dirty", "\n"),
+        ("Dedicated worktree /tmp/old; checkout", "is still dirty", "\n"),
+        ("Dedicated worktree /tmp/old is", "still dirty", "\n"),
+        ("Dedicated worktree /tmp/old is still", "dirty", "\n"),
+        ("Dedicated worktree", "/tmp/old is still dirty", "\n"),
+        ("Dedicated", "worktree /tmp/old is still dirty", "\n"),
+        ("Dedicated worktree /tmp/old i", "s still dirty", "\n"),
+        ("Note: Dedicated worktree /tmp/old is", "still dirty", "\n"),
+        ("Dedicated worktree", "/tmp/old is still dirty", "\r"),
+        ("Dedicated worktree", "/tmp/old is still dirty", "\r\n"),
     ],
 )
 def test_local_retirement_rejects_cross_line_dedicated_worktree_marker(
-    tmp_path, monkeypatch, fragment
+    tmp_path, monkeypatch, fragment, continuation, separator
 ):
     repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
     monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
@@ -6727,8 +6735,8 @@ def test_local_retirement_rejects_cross_line_dedicated_worktree_marker(
                 "sync_state": json.dumps({
                     "comments": [{
                         "body": (
-                            f"{fragment}\n"
-                            f"is still dirty on branch old at head {sha}."
+                            f"{fragment}{separator}"
+                            f"{continuation} on branch old at head {sha}."
                         )
                     }]
                 }),

@@ -1748,8 +1748,29 @@ _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE = re.compile(
     r"(?:^\s*|[.!?]\s+|while\s+the\s+)dedicated\s+worktree\b",
     re.IGNORECASE,
 )
+_DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE = re.compile(
+    r"(?:^\s*|[.!?:]\s+|while\s+the\s+)dedicated\s+worktree\b"
+    r".*?\bi\s*s\s+still\s+dirty\b",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL,
+)
 _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE = re.compile(
     r"^\s*is\s+still\s+dirty\b",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_RE = re.compile(
+    r"^\s*still\s+dirty\b",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_STILL_RE = re.compile(
+    r"^\s*dirty\b",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_RE = re.compile(
+    r"\bis\s*$",
+    re.IGNORECASE,
+)
+_DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_STILL_RE = re.compile(
+    r"\bis\s+still\s*$",
     re.IGNORECASE,
 )
 _DISPATCHER_DEDICATED_WORKTREE_RE = re.compile(
@@ -1860,13 +1881,29 @@ def _dispatcher_resumable_binding_resources(
         if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
             raise RuntimeError("dispatcher_activity_invalid")
         body = comment["body"]
+        cross_line_match = _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.search(body)
+        if cross_line_match and re.search(r"[\r\n]", cross_line_match.group(0)):
+            raise RuntimeError("dispatcher_activity_invalid")
         lines = body.splitlines()
         for line_number, line in enumerate(lines):
-            dedicated_cross_line_marker = bool(
+            continuation = lines[line_number + 1] if line_number + 1 < len(lines) else ""
+            dedicated_worktree_fragment = bool(
                 _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(line)
-                and line_number + 1 < len(lines)
-                and _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE.search(
-                    lines[line_number + 1]
+            )
+            dedicated_cross_line_marker = bool(
+                dedicated_worktree_fragment
+                and (
+                    _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE.search(continuation)
+                    or (
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_RE.search(line)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_RE.search(continuation)
+                    )
+                    or (
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_STILL_RE.search(line)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_STILL_RE.search(
+                            continuation
+                        )
+                    )
                 )
             )
             explicit_binding = bool(
