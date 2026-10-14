@@ -878,8 +878,21 @@ def _schema_autocreate_enabled() -> bool:
     return (os.environ.get("STORE_SCHEMA_AUTOCREATE") or "").strip().lower() in {"1", "true", "yes"}
 
 
+def _tuple_cursor(conn: Any) -> Any:
+    """Use the registry's positional row contract on any supplied connection.
+
+    The canonical ``conn_rw`` connection uses ``dict_row``. RSS finalization
+    shares that connection with outbox writes, while this backend decodes rows
+    positionally. A cursor-local factory preserves both contracts without
+    changing the shared connection's row factory.
+    """
+    from psycopg.rows import tuple_row  # noqa: PLC0415
+
+    return conn.cursor(row_factory=tuple_row)
+
+
 def _assert_pg_schema(conn: Any) -> None:
-    cur = conn.cursor()
+    cur = _tuple_cursor(conn)
     cur.execute("SELECT to_regclass(%s)", (_TABLE,))
     row = cur.fetchone()
     oid = row[0] if row else None
@@ -1349,7 +1362,7 @@ class _PgSourceRegistryBackend:
         try:
             _assert_pg_schema(conn)
             now = _now_iso()
-            cur = conn.cursor()
+            cur = _tuple_cursor(conn)
             cur.execute(
                 f"""
                 UPDATE {_TABLE}
@@ -1382,7 +1395,7 @@ class _PgSourceRegistryBackend:
         try:
             _assert_pg_schema(conn)
             now = _now_iso()
-            cur = conn.cursor()
+            cur = _tuple_cursor(conn)
             cur.execute(
                 f"""
                 UPDATE {_TABLE}

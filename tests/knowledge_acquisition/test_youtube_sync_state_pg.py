@@ -29,6 +29,7 @@ from alembic.config import Config
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from sqlalchemy.engine import URL
 
+from app.knowledge_acquisition import channel_rss_discovery
 from app.knowledge_acquisition.acquisition_requests import (
     AcquisitionRequests,
     DiscoveryTrigger,
@@ -120,6 +121,87 @@ def test_pg_state_store_reads_its_own_rows(scratch_database: Config) -> None:
     assert replaced is not None
     assert replaced["consecutive_failures"] == 0
     assert "last_attempt_at" not in replaced, "set replaces the row rather than merging"
+
+
+@pytest.mark.pg
+def test_pg_rss_finalizers_keep_canonical_dict_row_connection_usable(
+    scratch_database: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """RSS polls commit receipts atomically on the canonical dict-row connection."""
+    command.upgrade(scratch_database, YSS06_HEAD)
+    registry = SourceRegistry.for_runtime()
+    source = registry.register(
+        collection_kind="subscription_feed",
+        collection_ref="UC" + "a" * 22,
+        title="Synthetic RSS finalization source",
+    )
+    requests = AcquisitionRequests.for_runtime()
+    initial_cursor = {"version": 1, "recent_entry_ids": ["yt:video:aaaaaaaaaaa"]}
+    registry.record_poll_success(source.binding_id, cursor=initial_cursor)
+    valid_empty_feed = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<feed xmlns="http://www.w3.org/2005/Atom" '
+        'xmlns:yt="http://www.youtube.com/xml/schemas/2015">'
+        f"<yt:channelId>{source.collection_ref}</yt:channelId></feed>"
+    ).encode()
+
+    completed_result = channel_rss_discovery.poll_source(
+        source,
+        registry=registry,
+        requests=requests,
+        fetch_feed=lambda _channel_id: valid_empty_feed,
+    )
+    completed = registry.get(source.binding_id)
+    assert not completed_result.degraded
+    assert completed is not None
+    assert completed.cursor != initial_cursor
+    assert completed.cursor["recent_entry_ids"] == initial_cursor["recent_entry_ids"]
+    assert completed.last_success_at is not None
+
+    def outbox_topics(run_id: str) -> list[str]:
+        with _scratch_connection() as conn:
+            rows = conn.execute(
+                "SELECT topic FROM outbox WHERE payload #>> '{payload,run_id}' = %s",
+                (run_id,),
+            ).fetchall()
+        return [row[0] for row in rows]
+
+    assert outbox_topics(completed_result.run_id) == ["youtube.sync.completed"]
+
+    malformed_result = channel_rss_discovery.poll_source(
+        completed,
+        registry=registry,
+        requests=requests,
+        fetch_feed=lambda _channel_id: b"<broken",
+    )
+    degraded = registry.get(source.binding_id)
+    assert malformed_result.degraded
+    assert degraded is not None and degraded.cursor == completed.cursor
+    assert degraded.last_error is not None
+    assert outbox_topics(malformed_result.run_id) == ["youtube.sync.degraded"]
+
+    real_write_outbox_event = channel_rss_discovery.write_outbox_event
+
+    def fail_after_completion_insert(event, conn=None, *, idempotency_key: str, **kwargs):
+        result = real_write_outbox_event(
+            event, conn=conn, idempotency_key=idempotency_key, **kwargs
+        )
+        if event.event_type == "youtube.sync.completed":
+            raise RuntimeError("injected completion receipt failure")
+        return result
+
+    monkeypatch.setattr(channel_rss_discovery, "write_outbox_event", fail_after_completion_insert)
+    rolled_back_result = channel_rss_discovery.poll_source(
+        degraded,
+        registry=registry,
+        requests=requests,
+        fetch_feed=lambda _channel_id: valid_empty_feed,
+    )
+    after_rollback = registry.get(source.binding_id)
+    assert rolled_back_result.degraded
+    assert after_rollback is not None and after_rollback.cursor == degraded.cursor
+    assert after_rollback.last_error is not None
+    assert outbox_topics(rolled_back_result.run_id) == ["youtube.sync.degraded"]
 
 
 @pytest.mark.pg
