@@ -871,8 +871,17 @@ def vault_alpha_ingest(
             "invalid_examples": summary.invalid_examples,
             "invalid_report_path": summary.invalid_report_path,
         }
+        if source_backed_rebuild:
+            payload = {key: payload[key] for key in (
+                "scanned", "ingested", "errors", "malformed", "skipped_locked", "skipped_invalid",
+            )}
+            payload["vector_projection_errors"] = summary.vector_projection_errors
         _dump(payload, True)
+        if source_backed_rebuild and summary.vector_projection_errors:
+            raise click.exceptions.Exit(79)
         return
+    if source_backed_rebuild and summary.vector_projection_errors:
+        raise click.ClickException("vector_projection_failed")
     if summary.ingested == 0 and not summary.force:
         click.echo(
             f"Scanned {summary.scanned} files; ingested {summary.ingested} notes (already up to date; run with --force to resync if the store is empty)"
