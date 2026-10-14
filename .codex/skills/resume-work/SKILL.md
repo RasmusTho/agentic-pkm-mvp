@@ -240,6 +240,18 @@ while work is unfinished. Progressive and opportunistic — not a report after e
 
 Apply `.codex/skills/README.md :: Workflow continuation`.
 
+Before continuing, rebind the original requested outcome, scope, authorized effects,
+explicit prohibitions, and stopping point from the originating user request and governing
+contract. A later “continue” or “resume” authorizes progress within that mandate; it does
+not widen the scope. Review-only and planning-only tasks stop at their original boundary.
+Do not enter delivery, publication, closure, or lifecycle steps unless those effects were
+authorized by the original task or explicitly authorized later by the user.
+
+Treat handoff summaries and CI summaries as leads, not evidence. Read the relevant source
+state before acting on them: inspect the exact failed logs and current diff, and verify the
+worktree root, branch, and HEAD. When claiming that a candidate reflects current `main`,
+fetch `origin/main` and compare the candidate with that current ref.
+
 Execute the recovered owning workflow at its next incomplete step. An open delivery PR proceeds
 through `pr-integration` when repair is needed and then `verification-and-closure`; a scratch
 handoff or queued verifier is not completion. Preserve the authenticated lifecycle-owner transfer
