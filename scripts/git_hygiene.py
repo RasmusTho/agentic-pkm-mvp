@@ -1756,6 +1756,10 @@ _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE = re.compile(
     r"/[^\s;`,]+`?(?:\s+is(?:\s+still)?)?\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+_DISPATCHER_TABLE_TRUNCATED_CONTINUATION_RE = re.compile(
+    r"^\s*(?:is(?:\s+still)?(?:\s+dirty)?|still(?:\s+dirty)?)\b",
+    re.IGNORECASE,
+)
 
 
 def _dispatcher_linebreak_tolerant_keyword(keyword: str) -> str:
@@ -2128,7 +2132,19 @@ def _dispatcher_table_marker_search(
         for segment in text.split(_DISPATCHER_TABLE_CELL_BOUNDARY)
         if segment.strip()
     ]
-    return pattern.search(segments[-1]) if segments else None
+    for index, segment in enumerate(segments):
+        match = pattern.search(segment)
+        if match is not None:
+            if (
+                pattern is _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE
+                and any(
+                    _DISPATCHER_TABLE_TRUNCATED_CONTINUATION_RE.match(following)
+                    for following in segments[index + 1 :]
+                )
+            ):
+                continue
+            return match
+    return None
 
 
 def _dispatcher_cross_line_scan_body(

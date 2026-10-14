@@ -7142,6 +7142,11 @@ def test_local_retirement_rejects_cross_line_dedicated_worktree_marker(
             "| --- | --- |\n"
             "| Dedicated worktree `/tmp/a\\|b` is still dirty on branch old at head {sha} |"
         ),
+        (
+            "| receipt | details |\n"
+            "| --- | --- |\n"
+            "| Dedicated worktree /tmp/old | follow-up pending |"
+        ),
     ],
 )
 def test_local_retirement_rejects_gfm_table_dedicated_worktree_marker(
