@@ -539,7 +539,10 @@ def test_nightly_suite_shards_preserve_the_full_marker_inventory(tmp_path: Path)
     result, population, job, step = _run_nightly_suite_workflow(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     executed = re.findall(r"^EXECUTED (.+)$", (tmp_path / "tmp/nightly-pytest.log").read_text(), re.MULTILINE)
-    expected = [name for name, markers in population.items() if not {"pg", "alpha_llm"}.intersection(markers)]
+    expected = [
+        name for name, markers in population.items()
+        if not {"pg", "alpha_llm", "eval"}.intersection(markers)
+    ]
     assert sorted(executed) == sorted(expected)
     shards = (tmp_path / "runner/pytest-nightly-shards/shards").read_text().splitlines()
     expected_shards = {"/".join(name.split("/")[:2]) if name.count("/") > 1 else name
@@ -547,13 +550,61 @@ def test_nightly_suite_shards_preserve_the_full_marker_inventory(tmp_path: Path)
     assert set(shards) == expected_shards and len(shards) == len(expected_shards)
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     for event in events:
-        assert event["marker"] == "not pg and not alpha_llm"
+        assert event["marker"] == "not pg and not alpha_llm and not eval"
         assert "-v" in event["args"] and "--tb=short" in event["args"]
         assert "--import-mode=importlib" in event["args"] and "--durations=30" in event["args"]
         assert event["addopts"] == "--timeout=120 --timeout-method=thread"
         assert event["unbuffered"] == "1"
     assert step["timeout-minutes"] == 35 and job["timeout-minutes"] >= 45
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in job.get("env", {})
+
+
+def test_nightly_memory_producer_respects_qualified_eval_lane() -> None:
+    job = yaml.safe_load(INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["full-suite"]
+    checkout = next(step for step in job["steps"] if step.get("name") == "Checkout")
+    install = next(
+        step for step in job["steps"] if step.get("name") == "Install standalone sidecar test dependencies"
+    )
+    suite = next(step for step in job["steps"] if step.get("name") == "Full test suite (memory, not pg)")
+
+    assert checkout["with"] == {"fetch-depth": 0}
+    assert install["run"] == (
+        "pip install --requirement mimer-mcp-sidecar/requirements.txt\n"
+        "pip install --no-deps --editable mimer-mcp-sidecar\n"
+    )
+    assert "marker='not pg and not alpha_llm and not eval'" in suite["run"]
+
+    def collect(marker: str) -> list[str]:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-p",
+                "pytest_asyncio.plugin",
+                "-p",
+                "anyio.pytest_plugin",
+                "--collect-only",
+                "-q",
+                "tests/evals/test_sv_en_retrieval_eval.py",
+                "-m",
+                marker,
+            ],
+            cwd=REPO_ROOT,
+            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        prefix = "tests/evals/test_sv_en_retrieval_eval.py::"
+        return [line for line in result.stdout.splitlines() if line.startswith(prefix)]
+
+    deterministic = collect("not eval")
+    qualified_live = collect("eval")
+    assert len(deterministic) == 10
+    assert len(qualified_live) == 2
+    assert set(deterministic).isdisjoint(qualified_live)
 
 
 @pytest.mark.parametrize("mode", ["failure", "serial-failure", "terminated", "unreported",

@@ -87,6 +87,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Provenance, promotion-fixture and review-gate tests inspect the
+          # candidate's historical objects and parent; shallow tips cannot
+          # provide that evidence.
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -115,6 +120,11 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           if [ -f pyproject.toml ]; then pip install -e ".[dev]"; fi
 
+      - name: Install standalone sidecar test dependencies
+        run: |
+          pip install --requirement mimer-mcp-sidecar/requirements.txt
+          pip install --no-deps --editable mimer-mcp-sidecar
+
       - name: Prepare tmp dir
         run: mkdir -p tmp
 
@@ -128,7 +138,7 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           set -euo pipefail
-          marker='not pg and not alpha_llm'
+          marker='not pg and not alpha_llm and not eval'
           # Reuse the PR process-isolation pattern, retaining nightly E2E and
           # its original marker selection. Partial logs outlive a cancelled step.
           shard_root="$RUNNER_TEMP/pytest-nightly-shards"
