@@ -11,6 +11,41 @@ can_parallelize_with: [Surface Push-to-Talk Companion]
 
 # Carry Session Followup Context
 
+## Repository implementation
+
+VOICE-04 is implemented in `app/api/routes/ask.py::ask_voice` and
+`app/chat/voice_session.py::VoiceSessions`. A successful question turn on an initialized,
+selected vault returns a server-minted `session_id`; callers pass it on later turns.
+`end_session=true` appends the existing writer's close marker and retires the live
+context. Unknown, closed, restarted, or differently scoped/selected sessions return
+`409 voice_session_context_lost`; the caller starts a new session and restates context.
+Session context is process-local, so a different API worker also refuses an unknown id.
+
+Within one API process, the shared `VaultManager.selection_window()` holds the
+selection stable from context lookup through ASK retrieval and transcript
+create/append/close. Concurrent selection and lazy selection loading wait until
+those effects finish. Derived TTS runs after the window is released. This is an
+ephemeral mutex, not durable session state or a cross-process recovery promise.
+
+Standalone voice logs use `SessionLogWriter.open_session(None, "voice")` under
+`.chats/voice/`, without creating an anchor note or healing a human note's UUID.
+Each voice `append_turn` supplies one UTC timestamp for both the question and answer
+line and quotes their Markdown bodies. The existing note-linked canvas call shape is
+unchanged. Citations are retained in both the live Q&A and the transcript.
+`SessionStore(durable=False)` holds only in-process pointers: voice turns never write
+or restore `.canvas-sessions` pointers and never reconstruct live context from disk.
+
+The transcript is best effort per `README.md :: Cross-Task Invariants / Interaction
+Safety`: a write refusal, unselected/uninitialized vault, or failed append leaves the
+grounded answer available and reports `session_error: session_transcript_unavailable`.
+That marker is separate from `reason: tts_unavailable`, so simultaneous degradation
+does not conceal a missing log. Capture-intent suggestions create no transcript.
+The scoped mutation seal remains active on this compatibility route.
+
+The five task tests below exercise the shipped route and writer. Repository delivery
+does not establish qualified TEST audio acceptance or current ERE consumption;
+`chat.sessions` remains a planned adapter and parent #3335 retains those gates.
+
 ## Purpose
 
 Spoken conversation is inherently follow-up-shaped: "what did I decide about the project?" → "and the second option?". A single-turn endpoint answers each question in a vacuum. This task adds **session-scoped** context so a follow-up resolves against the current voice session's prior Q&A — and persists the conversation through the **existing chat-session path**, preserving the shape the planned ERE adapter will later consume.
@@ -45,13 +80,41 @@ Without in-session context, every spoken follow-up must be a fully-restated ques
 
 ## How to Verify (Pre-Merge)
 
+```bash
+ruff check app tests companion-ui/companion-app
+mypy app
+python3 scripts/docs_guard.py --language-only
+python3 -m pytest -q tests/voice/ tests/chat/
+python3 scripts/select_pr_tests.py --base-ref <immutable-main-sha> --head-ref <candidate-sha>
 ```
-ruff check app tests && mypy app
-pytest -q tests/voice/test_session_followup.py tests/voice/test_session_transcript.py
-pytest -q tests/chat/            # regression guard: session_log writer behavior unchanged for existing callers
-pytest -q -m "not pg"
-RUN_INTEGRATED_RUNTIME_UAT=1 pytest -q -m "not pg" tests/uat   # vault-write path (append-only) → opt-in UAT gate
-```
+
+Run the selector's emitted `pytest_args` through the canonical host lease:
+`python3 scripts/run_with_host_lease.py --resource pytest-not-pg --execution-id issue3336:<candidate-sha> -- python3 -m pytest <emitted-args>`.
+Retain the complete selection and its marker expression from
+`docs/development/TEST_STRATEGY_HOT_PATH.md`; record the base, candidate, command
+and actual terminal result. Every task `Verify:` target and the selected tests
+must pass, with an independent review of the current contract and implementation
+and current-head CI before merge. The full voice and chat suites protect existing
+turn callers and note-linked session-log behavior.
+
+The append-only integration proof is
+`tests/voice/test_session_transcript.py::test_only_write_is_appendonly_transcript`:
+HTTP requests use the real selected-vault resolver, `SessionLogWriter` and guarded
+create/append/close operations on an isolated initialized vault. It checks existing
+human/config bytes, the `.chats/voice/` write boundary and absence of
+`.canvas-sessions` writes. The voice suites also check scope/vault isolation,
+restart and close refusal, concurrent HTTP selection/ASK/transcript ordering,
+capture-intent zero writes, write refusal/append failure
+and quoted timestamped Markdown framing. ASR, ASK synthesis and TTS doubles in
+these tests prove session wiring and failure boundaries, not live model/audio quality.
+
+The generic `tests/uat` Canvas/Panel journeys do not exercise voice sessions or
+this transcript seam, so they are not VOICE-04 pre-merge proof. Parent #3335 still
+owns composed UI and qualified TARS TEST sv/en audio acceptance through the actual
+configured routes. Its acceptance remains pending until that proof passes;
+repository slice verification does not replace it or any required real-model
+qualification. Broader E2E/live/eval/UAT lanes retain their dedicated owners under
+the repository test strategy.
 
 ## Restart / Durability Posture (required — in-memory state)
 
@@ -71,4 +134,7 @@ The durable, cross-session **"hot cache"** primitive (fable5-audit **G6** — a 
 
 ## Related GitHub Issues
 
-One issue: `[Mimer Voice Loop] session-followup: in-session voice context + transcript persisted as an ERE chat-session`. `agent:blocked` until VOICE-01 merges (consumes the turn contract; parallelizable with VOICE-03). TCD hint: **sonnet, high reasoning** — bounded surface, but the in-memory/durable split, the ERE stream-shape match, and the read-only append-only enforcement each carry correctness risk that rewards careful reasoning.
+Child #3336 owns this repository implementation; VOICE-01 was delivered by PR #3490.
+Parent #3335 owns capability validation and qualified TEST acceptance. TCD capability
+selection follows the configured resolver: the in-memory/durable split, future ERE
+shape, and append-only enforcement justify an independent review of the bounded change.

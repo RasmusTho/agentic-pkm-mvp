@@ -462,7 +462,7 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "census's own directly-related-repair convention when #3451 bound "
         "write_frontmatter to the exact NoteRead version."
     ),
-    ("app/vault/manager.py", 973): (
+    ("app/vault/manager.py", 991): (
         "guarded: _ensure_frontmatter_id asserts DEFAULT_WRITE_GUARD."
         "assert_writes_allowed('vault.identity_heal') immediately before this "
         "call (#2910 identity-heal fix); a denying/raising guard raises before "
@@ -470,7 +470,8 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
         "#3452 added conflict-quarantine receipt policy above the manager. "
         "Current main has the same site at line 959; #5996 adds fourteen lines "
         "above the method (including the dormant selection producer), moving it "
-        "to 973."
+        "to 973. #3336 adds the process-local selection window above the "
+        "unchanged guarded site, moving it to 991."
     ),
     ("app/vault/settings_service.py", 629): (
         "guarded: SettingsService.update_setting asserts "
@@ -503,13 +504,15 @@ WRITE_FRONTMATTER_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
 # closed so moving a write from ``write_frontmatter`` cannot make it disappear
 # from the WriteGuard inventory.
 WRITE_MISSING_SITE_CLASSIFICATION: dict[tuple[str, int], str] = {
-    ("app/vault/manager.py", 753): (
+    ("app/vault/manager.py", 771): (
         "bootstrap: VaultManager.initialize_vault is the explicit human/operator "
         "pre-selection initialization transition; O_EXCL preserves existing owner files. "
         "Line drifted 496 -> 621 -> 623 -> 704 -> 714 -> 720 (site unchanged) when #3164 added the "
         "nested canonical prompt seed, #3452 added conflict-quarantine receipt policy, and "
         "SETTINGS-05C added the activation seam above the manager. Current main has the same "
-        "site at line 739; #5996 adds fourteen lines above it, moving it to 753."
+        "site at line 739; #5996 adds fourteen lines above it, moving it to 753. "
+        "#3336 adds the process-local selection window above the unchanged "
+        "bootstrap site, moving it to 771."
     ),
     ("app/vault/settings_service.py", 708): (
         "guarded: _scaffold_missing_settings_file asserts DEFAULT_WRITE_GUARD."
