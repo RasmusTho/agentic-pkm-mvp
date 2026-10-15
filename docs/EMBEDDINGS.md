@@ -503,6 +503,14 @@ Overlapping enabled producers must bind the same active root; conflicting roots,
 or configuration drift refuse. Enabled legacy filesystem sources prepare through the ordinary vault-sync
 payload builder with complete current admission evidence, never through alpha's excluded inventory.
 When every enabled producer excludes the source, exact CAS retirement remains available.
+Origin evidence is effect-sensitive: an explicit non-vault, unknown or malformed stored origin
+still refuses replacement/reprojection with `legacy_origin_refused` before payload preparation or
+embedding. Only the already-governed exact retirement path may disregard that marker after every
+producer excludes the source and all source, admission, identity, race, dependency/history,
+relation/membership and reverse-reference proofs succeed. This does not normalize or rewrite origin,
+infer vault authority from matching source text/identity, or launder provenance. Retirement creates
+no replacement or embedding, never mutates the source, and retains the same atomic-or-absent,
+retrieval-invisible and never-overwrite protections.
 The private boundary retains only `legacy_producer_policy_refused`, `legacy_source_refused`,
 `legacy_admission_refused`, `legacy_identity_refused`, `legacy_race_refused`,
 `embedding_generation_failed` or `legacy_write_failed`; no path, identity or raw diagnostic is emitted.

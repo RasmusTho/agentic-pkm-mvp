@@ -54,7 +54,8 @@ def test_admission_refusals_preserve_finite_branch_specific_reason(monkeypatch, 
     ("profile", "legacy_profile_refused"),
 ])
 def test_admission_context_refusals_are_private_and_preserve_source(monkeypatch, tmp_path, branch, reason):
-    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=branch == "origin")
     if branch == "origin":
         state.rows[0]["payload"]["origin"] = "private-canary"
     elif branch == "core6":
@@ -105,6 +106,88 @@ def _enable_registry(monkeypatch, root, *, scope="*.md,**/*.md"):
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(root))
     monkeypatch.setenv("WATCHER_SCOPE_GLOB", scope)
     monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
+
+
+@pytest.mark.parametrize("origin", ["external", "unknown", "", None, False, [], {"source": "vault"}])
+def test_non_vault_origin_allows_only_exact_excluded_retirement(monkeypatch, tmp_path, origin):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    state.rows[0]["payload"]["origin"] = origin
+    discovered = state.rows[0]
+    before = deepcopy(discovered)
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert state.rows == [] and state.vectors == {} and state.embedded == []
+    assert len(state.calls) == 1
+    assert state.calls[0]["replacement"] is None and state.calls[0]["vector"] is None
+    # Retirement must not normalize the discovered payload, even transiently.
+    assert discovered == before
+    assert source.read_bytes() == raw
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 0
+
+
+@pytest.mark.parametrize("producer", ["alpha", "filesystem", "registry"])
+@pytest.mark.parametrize("origin", ["external", "unknown", "", None, False, [], {"source": "vault"}])
+def test_non_vault_origin_never_authorizes_reprojection(monkeypatch, tmp_path, producer, origin):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=producer == "alpha")
+    if producer == "filesystem":
+        monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+        monkeypatch.setenv("VAULT_DIR", str(root))
+    elif producer == "registry":
+        _enable_registry(monkeypatch, root)
+    state.rows[0]["payload"]["origin"] = origin
+    before = deepcopy(state.rows)
+    with pytest.raises(recovery.LegacySourceRefusal, match="^legacy_origin_refused$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == before and not state.calls and not state.vectors and not state.embedded
+    assert source.read_bytes() == raw
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("body", "legacy_race_refused"), ("source", "legacy_race_refused"),
+    ("row", "legacy_write_failed"), ("identity", "legacy_identity_refused"),
+    ("policy", "legacy_producer_policy_refused"), ("selection-race", "legacy_producer_policy_refused"),
+    ("producer-race", "legacy_producer_policy_refused"),
+    ("candidate", "legacy_candidate_refused"), ("profile", "legacy_profile_refused"),
+])
+def test_origin_retirement_preserves_all_existing_refusals(monkeypatch, tmp_path, failure, reason):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    state.rows[0]["payload"]["origin"] = "external"
+    if failure == "body":
+        source.write_bytes(raw + b"changed")
+    elif failure in ("source", "row"):
+        state.fail = failure
+    elif failure == "identity":
+        (root / "duplicate.md").write_bytes(raw)
+    elif failure == "policy":
+        monkeypatch.setenv("FS_WATCHER_ENABLE", "ambiguous")
+    elif failure == "selection-race":
+        from app.ingest import vault_alpha
+        select = vault_alpha.select_source_backed_rebuild_candidates
+        selections = []
+
+        def racing_inventory(vault_root):
+            selections.append(True)
+            return [source] if len(selections) > 2 else select(vault_root)
+
+        monkeypatch.setattr(vault_alpha, "select_source_backed_rebuild_candidates", racing_inventory)
+    elif failure == "producer-race":
+        reconcile = binding.store.reconcile_legacy_source
+
+        def racing_producer(*args, **kwargs):
+            monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+            monkeypatch.setenv("VAULT_DIR", str(root))
+            reconcile(*args, **kwargs)
+
+        monkeypatch.setattr(binding.store, "reconcile_legacy_source", racing_producer)
+    elif failure == "candidate":
+        state.rows[0]["payload"]["candidate_only"] = True
+    else:
+        monkeypatch.setattr(recovery, "assert_profile_note_ingestible", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("private-canary")))
+    before = deepcopy(state.rows)
+    with pytest.raises(recovery.LegacySourceRefusal, match=f"^{reason}$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == before and not state.calls and not state.vectors and not state.embedded
+    assert source.read_bytes() == raw + (b"changed" if failure in ("body", "source") else b"")
 
 
 def test_producer_applicability_uses_canonical_runtime_configuration(monkeypatch, tmp_path):

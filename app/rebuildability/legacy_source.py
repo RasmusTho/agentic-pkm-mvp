@@ -183,8 +183,6 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
             raise LegacySourceRefusal("legacy_source_refused")
         assert_admission_layers(frontmatter, payload)
         assert_admission_layers({"review_state": producer._canonical_review_state(parsed)})
-        if "origin" in payload and payload["origin"] != "vault":
-            raise LegacySourceRefusal("legacy_origin_refused")
         if "core6" in payload:
             if not isinstance(payload["core6"], dict):
                 raise LegacySourceRefusal("legacy_payload_shape_refused")
@@ -283,6 +281,11 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
         replacement = None
         vector = None
         if selected:
+            # Origin cannot authorize replacement, even when source/identity
+            # coincide. Excluded sources take only the existing exact CAS
+            # retirement below; no origin is normalized or projection built.
+            if "origin" in payload and payload["origin"] != "vault":
+                raise LegacySourceRefusal("legacy_origin_refused")
             prepared: list[dict] = []
             if registry_policy.includes(root / relative):
                 from app.services.indexer import prepare_ingest_projection, watched_note_ingest_object
