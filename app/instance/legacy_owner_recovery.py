@@ -85,7 +85,9 @@ def _capture_geometry(path: Path) -> _Geometry:
     path = Path(path).expanduser()
     try:
         canonical = path.resolve(strict=True)
-    except OSError as exc:
+    except (OSError, RuntimeError) as exc:
+        # pathlib on Python 3.12 reports a symlink loop as RuntimeError,
+        # not OSError. It is unsafe input, never a public traceback/path.
         raise _test_refusal() from exc
     if not path.is_absolute() or path != canonical:
         raise _test_refusal()

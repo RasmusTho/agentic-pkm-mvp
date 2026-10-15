@@ -422,6 +422,61 @@ def test_initializer_output_and_effect_scope_are_bounded(tmp_path, capsys):
     assert str(tmp_path) not in refusal and key['secret'] not in refusal
 
 
+@pytest.mark.parametrize(('command', 'selector'), [
+    ('deployment-initialize-dormant-ownership', 'instance_state_root'),
+    ('deployment-initialize-dormant-ownership', 'host_global_root'),
+    ('deployment-initialize-dormant-ownership', 'backup_parent'),
+    ('deployment-initialize-dormant-ownership', 'proof_lease'),
+    ('deployment-bind-owner-proof', 'instance_state_root'),
+    ('deployment-bind-owner-proof', 'host_global_root'),
+    ('deployment-bind-owner-proof', 'proof_lease'),
+    ('deployment-qualify-native', 'source_root'),
+    ('deployment-qualify-native', 'instance_state_root'),
+    ('deployment-qualify-native', 'host_global_root'),
+])
+def test_new_cli_symlink_loops_are_redacted_typed_refusals_before_effects(tmp_path, command, selector):
+    runtime, args, content = fixture(tmp_path)
+    source = Path(__file__).resolve().parents[2]
+    loop = tmp_path.resolve() / 'protected-loop'
+    loop.symlink_to(loop)
+    if command == 'deployment-bind-owner-proof':
+        args = {key: value for key, value in args.items() if key in {
+            'channel', 'instance_state_root', 'host_global_root', 'owner_receipt_path',
+            'expected_owner_receipt_sha256', 'quiescence_proof_path'}}
+    elif command == 'deployment-qualify-native':
+        args = dict(channel='test', instance_state_root=runtime.layout.root.parent,
+            host_global_root=runtime.ledger.root, source_root=source, expected_revision='a' * 40,
+            controller_pid=os.getpid(), controller_start_token=inventory.controller_token(os.getpid()),
+            runtime_uid=os.geteuid(), runtime_gid=os.getegid())
+    if selector == 'proof_lease':
+        proof = json.loads(args['quiescence_proof_path'].read_bytes())
+        proof['lease_path'] = str(loop)
+        write(args['quiescence_proof_path'], proof)
+    elif selector == 'backup_parent':
+        args['backup_root'] = loop / 'backup'
+    else:
+        args[selector] = loop
+    # Acquiring the existing coordination lock may create its empty lock file;
+    # provision that fixture artifact before the authority/evidence snapshot.
+    with runtime.ledger._locked(recover_rotation=False):
+        pass
+    roots = (runtime.layout.root.parent, runtime.ledger.root, content)
+    before = {str(path): path.read_bytes() for root in roots for path in root.rglob('*') if path.is_file()}
+    cli = [sys.executable, '-m', 'app.instance.runtime', command]
+    for name, value in args.items():
+        cli.append('--' + name.replace('_', '-'))
+        if not isinstance(value, bool):
+            cli.append(str(value))
+    result = subprocess.run(cli, cwd=source, capture_output=True, text=True, check=False)
+    assert result.returncode == 1
+    assert result.stderr == ''
+    assert json.loads(result.stdout) == {'channel': 'test', 'outcome': 'refused', 'prepared': False}
+    assert str(loop) not in result.stdout
+    assert {str(path): path.read_bytes() for root in roots for path in root.rglob('*') if path.is_file()} == before
+    assert not runtime.ledger.key_path.exists() and not runtime.ledger.path.exists()
+    assert not list(tmp_path.glob('.backup-prepared-*'))
+
+
 def test_prospective_destination_change_refuses_before_staging(tmp_path, monkeypatch):
     runtime, args, content = fixture(tmp_path)
     original = recovery.require_test_controller

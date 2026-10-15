@@ -5464,7 +5464,9 @@ def main(argv: list[str] | None = None) -> int:
                 test_result = qualify_test_native_source(**values)
             else:
                 test_result = initialize_dormant_ownership(**values)
-        except (InstanceStatePreflightError, RegistryError, LedgerError, OSError, ValueError, KeyError, TypeError):
+        # Expected pathlib canonicalization failures can be RuntimeError on
+        # supported Python versions; the explicit TEST envelope stays redacted.
+        except (InstanceStatePreflightError, RegistryError, LedgerError, OSError, RuntimeError, ValueError, KeyError, TypeError):
             print(json.dumps({"channel": "test", "outcome": "refused", "prepared": False}))
             return 1
         print(json.dumps(test_result, sort_keys=True))
