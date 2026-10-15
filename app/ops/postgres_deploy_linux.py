@@ -49,6 +49,10 @@ _DEPLOY_FAILURE_STAGES = frozenset({
 _SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
     'legacy_producer_policy_refused', 'legacy_source_refused', 'legacy_admission_refused',
     'legacy_identity_refused', 'legacy_race_refused', 'legacy_write_failed',
+    'legacy_candidate_refused', 'legacy_authority_refused', 'legacy_trust_refused',
+    'legacy_origin_refused', 'legacy_payload_shape_refused', 'legacy_system_path_refused',
+    'legacy_profile_refused', 'legacy_dependency_shape_refused',
+    'legacy_retained_history_refused', 'legacy_relation_retention_refused',
     'vector_projection_failed', 'embedding_generation_failed', 'vector_index_write_failed',
     'source_preflight_failed', 'source_readiness_failed', 'source_command_failed',
     'source_summary_invalid', 'source_post_rebuild_failed', 'source_doctor_failed',

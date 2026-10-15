@@ -506,6 +506,26 @@ When every enabled producer excludes the source, exact CAS retirement remains av
 The private boundary retains only `legacy_producer_policy_refused`, `legacy_source_refused`,
 `legacy_admission_refused`, `legacy_identity_refused`, `legacy_race_refused`,
 `embedding_generation_failed` or `legacy_write_failed`; no path, identity or raw diagnostic is emitted.
+Bounded admission refusals additionally distinguish these remediation classes:
+
+| Fixed reason | Required area of source-authorized investigation |
+| --- | --- |
+| `legacy_candidate_refused` | Candidate-only or proposal classification |
+| `legacy_authority_refused` | Malformed, non-authoritative or review-required authority evidence |
+| `legacy_trust_refused` | Unsupported trust or review-state evidence |
+| `legacy_origin_refused` | Non-vault origin evidence |
+| `legacy_payload_shape_refused` | Malformed retained admission envelope |
+| `legacy_system_path_refused` | Source excluded by system/staging path admission |
+| `legacy_profile_refused` | Profile authority admission or unavailable profile proof |
+| `legacy_dependency_shape_refused` | Unsupported retained dependency shape |
+| `legacy_retained_history_refused` | Retained foreign-key history prevents retirement |
+| `legacy_relation_retention_refused` | Retained relation or membership prevents retirement |
+
+These are finite content-free diagnostic classes, not source values or exception details.
+Multiple refusing markers retain the first observed class; classification does not inventory every
+problem. Unknown/private failures retain the generic fail-closed fallback. Diagnosis grants no
+repair, admission, retirement or acceptance authority: never synthesize approval or delete protected
+history, relations or memberships to clear a refusal. Any subsequent repair remains separately governed.
 Complete private-stage stream and logging
 suppression covers settings compatibility and conflict-quarantine diagnostics too.
 The transaction rechecks source/policy and forward/reverse canonical identity, compares equivalent

@@ -7,6 +7,97 @@ import pytest
 from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
 
 
+@pytest.mark.parametrize("location", ["source", "payload", "core6"])
+@pytest.mark.parametrize("marker,reason", [
+    ({"candidate_only": True}, "legacy_candidate_refused"),
+    ({"candidate_only": "false"}, "legacy_candidate_refused"),
+    ({"artifact_class": "youtube_source_note"}, "legacy_candidate_refused"),
+    ({"artifact_class": "youtube_source_note_proposal"}, "legacy_candidate_refused"),
+    ({"authority": "private-canary"}, "legacy_authority_refused"),
+    ({"authority": {"source_authoritative": False}}, "legacy_authority_refused"),
+    ({"authority": {"requires_review": True}}, "legacy_authority_refused"),
+    ({"authority": {"source_authoritative": "true"}}, "legacy_authority_refused"),
+    ({"authority": {"requires_review": "false"}}, "legacy_authority_refused"),
+    ({"trust": "private-canary"}, "legacy_trust_refused"),
+    ({"review_state": "draft"}, "legacy_trust_refused"),
+])
+def test_admission_refusals_preserve_finite_branch_specific_reason(monkeypatch, tmp_path, location, marker, reason):
+    from copy import deepcopy
+    import json
+    import yaml
+    from click.testing import CliRunner
+    from app.cli import cli, index_rebuild
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    if location == "source":
+        source.write_text(raw.decode().replace("---\ncanonical", yaml.safe_dump(marker) + "---\ncanonical"))
+    elif location == "core6":
+        state.rows[0]["payload"]["core6"] = marker
+    else:
+        state.rows[0]["payload"].update(marker)
+    before = deepcopy(state.rows)
+    source_before = source.read_bytes()
+    monkeypatch.setattr(index_rebuild.domain_objects, "resolve_object_store_port", lambda: binding)
+    monkeypatch.setattr(index_rebuild, "get_vector_index", lambda: index)
+    monkeypatch.setattr(index_rebuild, "get_product_embedding_client", factory)
+    result = CliRunner().invoke(cli, ["index", "reconcile-legacy", "--json"])
+    assert result.exit_code == 79
+    assert json.loads(result.output) == {"reason": reason}
+    assert state.rows == before and not state.calls and not state.vectors and not state.embedded
+    assert source.read_bytes() == source_before
+
+
+@pytest.mark.parametrize("branch,reason", [
+    ("origin", "legacy_origin_refused"),
+    ("core6", "legacy_payload_shape_refused"),
+    ("system", "legacy_system_path_refused"),
+    ("profile", "legacy_profile_refused"),
+])
+def test_admission_context_refusals_are_private_and_preserve_source(monkeypatch, tmp_path, branch, reason):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    if branch == "origin":
+        state.rows[0]["payload"]["origin"] = "private-canary"
+    elif branch == "core6":
+        state.rows[0]["payload"]["core6"] = "private-canary"
+    elif branch == "system":
+        target = root / "_system" / "drafts" / "private-canary.md"
+        target.parent.mkdir(parents=True)
+        source.rename(target)
+        source = target
+        state.rows[0]["source_ref"] = str(target)
+    else:
+        monkeypatch.setattr(recovery, "assert_profile_note_ingestible", lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("private-canary")))
+    from copy import deepcopy
+    before = deepcopy(state.rows)
+    with pytest.raises(recovery.LegacySourceRefusal) as caught:
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert str(caught.value) == reason
+    assert state.rows == before and not state.calls and not state.vectors and not state.embedded
+    assert source.read_bytes() == raw
+
+
+@pytest.mark.parametrize("typed", [False, True])
+def test_unexpected_private_failure_retains_generic_fallback(monkeypatch, tmp_path, typed):
+    import json
+    from click.testing import CliRunner
+    from app.cli import cli, index_rebuild
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    monkeypatch.setattr(index_rebuild.domain_objects, "resolve_object_store_port", lambda: binding)
+    monkeypatch.setattr(index_rebuild, "get_vector_index", lambda: index)
+    monkeypatch.setattr(index_rebuild, "get_product_embedding_client", factory)
+
+    def refuse():
+        raise recovery.LegacySourceRefusal("private-canary") if typed else RuntimeError("private-canary")
+
+    monkeypatch.setattr(index, "present_object_ids", refuse)
+    result = CliRunner().invoke(cli, ["index", "reconcile-legacy", "--json"])
+    assert result.exit_code == 79
+    assert json.loads(result.output) == {"reason": "legacy_source_refused"}
+    assert state.rows == [original] and not state.calls and not state.vectors
+    assert source.read_bytes() == raw
+
+
 def _enable_registry(monkeypatch, root, *, scope="*.md,**/*.md"):
     from tests.helpers.vault_settings import initialize_test_vault
     initialize_test_vault(root)
@@ -199,7 +290,7 @@ def test_filesystem_incomplete_inventory_refuses_without_constructing_writer(mon
 
 @pytest.mark.parametrize("failure, reason", [
     ("policy", "legacy_producer_policy_refused"), ("source", "legacy_source_refused"),
-    ("candidate", "legacy_admission_refused"), ("identity", "legacy_identity_refused"),
+    ("candidate", "legacy_candidate_refused"), ("identity", "legacy_identity_refused"),
     ("drift", "legacy_race_refused"), ("row", "legacy_write_failed"),
     ("embed", "embedding_generation_failed"),
 ])
@@ -319,13 +410,14 @@ def test_native_registry_policy_ambiguity_or_drift_refuses_atomically(monkeypatc
     assert {path: path.read_bytes() for path in (root / "settings").glob("*.md")} == settings_before
 
 
-@pytest.mark.parametrize("marker", ["candidate_only: true", "authority: {source_authoritative: false}",
-                                 "trust: external", "review_state: draft"])
-def test_native_registry_claim_does_not_bypass_source_admission(monkeypatch, tmp_path, marker):
+@pytest.mark.parametrize("marker,reason", [("candidate_only: true", "legacy_candidate_refused"),
+    ("authority: {source_authoritative: false}", "legacy_authority_refused"),
+    ("trust: external", "legacy_trust_refused"), ("review_state: draft", "legacy_trust_refused")])
+def test_native_registry_claim_does_not_bypass_source_admission(monkeypatch, tmp_path, marker, reason):
     recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
     _enable_registry(monkeypatch, root)
     source.write_text(raw.decode().replace("trust: human\nreview_state: reviewed", marker))
-    with pytest.raises(recovery.LegacySourceRefusal, match="legacy_admission_refused"):
+    with pytest.raises(recovery.LegacySourceRefusal, match=reason):
         recovery.reconcile_legacy_sources(binding, index, factory)
     assert state.rows == [original] and state.vectors == {} and state.calls == [] and state.embedded == []
 

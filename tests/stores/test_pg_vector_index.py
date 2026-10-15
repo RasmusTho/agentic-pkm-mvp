@@ -76,6 +76,61 @@ def _count(object_id) -> int:
             return int(cur.fetchone()[0])
 
 
+@pytest.mark.parametrize("branch,reason", [
+    ("shape", "legacy_dependency_shape_refused"),
+    ("history", "legacy_retained_history_refused"),
+    ("relation", "legacy_relation_retention_refused"),
+    ("membership", "legacy_relation_retention_refused"),
+])
+def test_legacy_retirement_refusal_distinguishes_dependency_and_relation(_pg_index, branch, reason):
+    from app.db.db import ensure_schema
+    from app.rebuildability.legacy_source import LegacySourceRefusal
+
+    store = pg_store.PgObjectStore()
+    oid, other = uuid4(), uuid4()
+    store.put(oid, kind="note", source_ref="private-canary.md", payload={"content": "private-canary"})
+    store.put(other, kind="note", source_ref="healthy.md", payload={"content": "healthy"})
+    expected = dict(store.get(oid))
+    healthy = dict(store.get(other))
+    with psycopg.connect(_dsn()) as conn:
+        ensure_schema(conn)
+        conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
+                     (oid, oid, store.vault_binding_id))
+        if branch == "shape":
+            # Reversed composite key is intentionally unsupported, even empty.
+            conn.execute("CREATE TABLE legacy_retirement_fixture (object_id uuid, vault_binding_id text, "
+                         "FOREIGN KEY (object_id, vault_binding_id) REFERENCES store_objects (object_id, vault_binding_id))")
+        elif branch == "history":
+            conn.execute("INSERT INTO decisions (object_id, vault_binding_id, key, value) VALUES (%s, %s, 'private-canary', '{}')",
+                         (oid, store.vault_binding_id))
+        elif branch == "relation":
+            conn.execute("INSERT INTO store_relations (vault_binding_id, src_id, dst_id, rel) VALUES (%s, %s, %s, 'private-canary')",
+                         (store.vault_binding_id, other, oid))
+        else:
+            conn.execute("INSERT INTO store_relation_memberships (vault_binding_id, src_id, rel, value) VALUES (%s, %s, 'private-canary', 'private-canary')",
+                         (store.vault_binding_id, oid))
+    try:
+        for _ in range(2):
+            with pytest.raises(LegacySourceRefusal) as caught:
+                store.reconcile_legacy_source(expected, vault_uuid=str(oid), revalidate=lambda: None,
+                                              check_sources=lambda rows: None)
+            assert str(caught.value) == reason
+            assert store.get(oid) == expected and store.get(other) == healthy
+            assert _count(oid) == 0
+            with psycopg.connect(_dsn()) as conn:
+                assert conn.execute("SELECT uuid FROM objects WHERE id = %s", (oid,)).fetchone()[0] == oid
+                if branch == "history":
+                    assert conn.execute("SELECT object_id FROM decisions WHERE object_id = %s", (oid,)).fetchone()[0] == oid
+                elif branch == "relation":
+                    assert conn.execute("SELECT dst_id FROM store_relations WHERE dst_id = %s", (oid,)).fetchone()[0] == oid
+                elif branch == "membership":
+                    assert conn.execute("SELECT src_id FROM store_relation_memberships WHERE src_id = %s", (oid,)).fetchone()[0] == oid
+    finally:
+        if branch == "shape":
+            with psycopg.connect(_dsn()) as conn:
+                conn.execute("DROP TABLE legacy_retirement_fixture")
+
+
 @pytest.mark.parametrize("mode", ["replace", "retire", "existing", "write-failure", "source-race", "row-race", "history", "identity", "retire-source-race", "reverse-identity", "cross-key-alias", "replace-source-alias", "retire-source-alias"])
 def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, monkeypatch, mode):
     from copy import deepcopy

@@ -1218,12 +1218,12 @@ class PgObjectStore(ObjectStore):
                         if table in ("chunks", "embeddings"):
                             continue
                         if len(columns) != 2 or columns[0] != "vault_binding_id":
-                            raise LegacySourceRefusal("legacy_admission_refused")
+                            raise LegacySourceRefusal("legacy_dependency_shape_refused")
                         cur.execute(sql.SQL("SELECT 1 FROM {} WHERE {} = %s AND {} = %s LIMIT 1").format(
                             sql.Identifier(*table.split(".")), sql.Identifier(columns[0]), sql.Identifier(columns[1]),
                         ), (self.vault_binding_id, oid))
                         if cur.fetchone() is not None:
-                            raise LegacySourceRefusal("legacy_admission_refused")
+                            raise LegacySourceRefusal("legacy_retained_history_refused")
                     cur.execute(
                         "SELECT 1 FROM store_relations WHERE vault_binding_id = %s AND (src_id = %s OR dst_id = %s) "
                         "UNION ALL SELECT 1 FROM store_relation_memberships WHERE vault_binding_id = %s "
@@ -1231,7 +1231,7 @@ class PgObjectStore(ObjectStore):
                         (self.vault_binding_id, oid, oid, self.vault_binding_id, oid),
                     )
                     if cur.fetchone() is not None:
-                        raise LegacySourceRefusal("legacy_admission_refused")
+                        raise LegacySourceRefusal("legacy_relation_retention_refused")
                     cur.execute(
                         "DELETE FROM store_objects WHERE vault_binding_id = %s AND object_id = %s",
                         (self.vault_binding_id, oid),

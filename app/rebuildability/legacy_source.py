@@ -20,6 +20,10 @@ LEGACY_RECONCILIATION_REASONS = frozenset({
     "legacy_producer_policy_refused", "legacy_source_refused", "legacy_admission_refused",
     "legacy_identity_refused", "legacy_race_refused", "legacy_write_failed",
     "embedding_generation_failed",
+    "legacy_candidate_refused", "legacy_authority_refused", "legacy_trust_refused",
+    "legacy_origin_refused", "legacy_payload_shape_refused", "legacy_system_path_refused",
+    "legacy_profile_refused", "legacy_dependency_shape_refused",
+    "legacy_retained_history_refused", "legacy_relation_retention_refused",
 })
 
 
@@ -98,17 +102,23 @@ def assert_admission_layers(*layers: dict) -> None:
         if (
             ("candidate_only" in layer and layer["candidate_only"] is not False)
             or layer.get("artifact_class") in ("youtube_source_note", "youtube_source_note_proposal")
-            or ("authority" in layer and not isinstance(authority, dict))
+        ):
+            raise LegacySourceRefusal("legacy_candidate_refused")
+        if (
+            ("authority" in layer and not isinstance(authority, dict))
             or (isinstance(authority, dict) and (
                 ("source_authoritative" in authority and type(authority["source_authoritative"]) is not bool)
                 or ("requires_review" in authority and type(authority["requires_review"]) is not bool)
                 or authority.get("source_authoritative") is False
                 or authority.get("requires_review") is True
             ))
-            or ("trust" in layer and layer["trust"] not in ("unreviewed", "trusted", "reviewed", "human", "own"))
+        ):
+            raise LegacySourceRefusal("legacy_authority_refused")
+        if (
+            ("trust" in layer and layer["trust"] not in ("unreviewed", "trusted", "reviewed", "human", "own"))
             or ("review_state" in layer and layer["review_state"] not in ("provisional", "reviewed", "protected", "archived"))
         ):
-            raise LegacySourceRefusal("legacy_admission_refused")
+            raise LegacySourceRefusal("legacy_trust_refused")
 
 
 @contextlib.contextmanager
@@ -174,13 +184,13 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
         assert_admission_layers(frontmatter, payload)
         assert_admission_layers({"review_state": producer._canonical_review_state(parsed)})
         if "origin" in payload and payload["origin"] != "vault":
-            raise LegacySourceRefusal("legacy_admission_refused")
+            raise LegacySourceRefusal("legacy_origin_refused")
         if "core6" in payload:
             if not isinstance(payload["core6"], dict):
-                raise LegacySourceRefusal("legacy_admission_refused")
+                raise LegacySourceRefusal("legacy_payload_shape_refused")
             assert_admission_layers(payload["core6"])
         if producer._is_unindexed_system_path(relative, system_root=Path(get_vault_system_dir_rel(root))):
-            raise LegacySourceRefusal("legacy_admission_refused")
+            raise LegacySourceRefusal("legacy_system_path_refused")
         # Only an exact current meaning/identity match proves this old row is a
         # rebuildable projection of this source rather than accepted history.
         if canonicalize_indexable_text(payload) != canonical_product_source_text(raw):
@@ -202,7 +212,7 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
             try:
                 assert_profile_note_ingestible(root, relative.as_posix(), vault_uuid, source_text=raw)
             except Exception:
-                raise LegacySourceRefusal("legacy_admission_refused") from None
+                raise LegacySourceRefusal("legacy_profile_refused") from None
 
         admission()
 
