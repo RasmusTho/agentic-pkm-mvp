@@ -88,7 +88,7 @@ def test_legacy_retirement_refusal_distinguishes_dependency_and_relation(_pg_ind
 
     store = pg_store.PgObjectStore()
     oid, other = uuid4(), uuid4()
-    store.put(oid, kind="note", source_ref="private-canary.md", payload={"content": "private-canary"})
+    store.put(oid, kind="note", source_ref="private-canary.md", payload={"content": "private-canary", "origin": "external"})
     store.put(other, kind="note", source_ref="healthy.md", payload={"content": "healthy"})
     expected = dict(store.get(oid))
     healthy = dict(store.get(other))
@@ -137,7 +137,7 @@ def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, 
     from app.rebuildability.product_total_loss import product_replay_provenance
     store = pg_store.PgObjectStore()
     oid, other = uuid4(), uuid4()
-    legacy = {"content": "canonical body"}
+    legacy = {"content": "canonical body", "origin": "external"} if mode.startswith("retire") or mode == "history" else {"content": "canonical body"}
     store.put(oid, kind="note", source_ref="source.md", payload=legacy)
     store.put(other, kind="note", source_ref="other.md", payload={"text": "preserved"})
     expected = dict(store.get(oid))
