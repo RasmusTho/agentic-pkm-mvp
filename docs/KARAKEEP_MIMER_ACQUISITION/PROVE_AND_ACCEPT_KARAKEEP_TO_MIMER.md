@@ -86,6 +86,12 @@ duplicate.
   selecting or repairing a vault, database or credential.
   Producer preflight checks only its published log/schema; Mimer's consumer cursor/read check
   belongs solely to the consumer invocation, so an isolated cursor fault does not stop publication.
+- Native reader admission accepts well-formed optional Docker environment names without `=` as
+  unset: they supply no value and are omitted from the closed child environment. Unset selectors
+  cannot establish revision, channel, database or vault authority; existing validated vault-root
+  fallback still applies. Duplicate names (including unset/assigned combinations), malformed
+  metadata and valued direct credential/source inputs refuse. The child retains its PG/GOV ready
+  gates, and this metadata compatibility does not establish live TEST acceptance or a source grant.
 - Acquisition additionally requires an observed existing route to Karakeep in that namespace:
   a matching shared Docker network, or the host namespace with loopback port 3000. Missing topology
   refuses; this slice does not connect networks or grant egress. The saved service `server_url` is
