@@ -311,9 +311,25 @@ def test_candidate_resources_and_imports_match_admitted_image(tmp_path, monkeypa
     runner.cleanup()
 
 
-@pytest.mark.parametrize('field,value', [('profile_version', 'smoke.v0'), ('selection_hash', '0' * 64),
-                                       ('source_sha', '0' * 40), ('image_digest', 'sha256:' + '0' * 64),
-                                       ('channel', 'test'), ('operation_id', str(uuid4()))])
+@pytest.mark.parametrize(
+    'field,value',
+    [
+        ('profile_version', 'smoke.v0'),
+        ('selection_hash', '0' * 64),
+        ('source_sha', '0' * 40),
+        ('image_digest', 'sha256:' + '0' * 64),
+        ('channel', 'test'),
+        ('operation_id', str(uuid4())),
+    ],
+    ids=[
+        'profile-version',
+        'selection-hash',
+        'source-sha',
+        'image-digest',
+        'channel',
+        'operation-id',
+    ],
+)
 def test_recovery_cannot_reuse_smoke_only_or_foreign_profile_evidence(tmp_path, field, value):
     sha, operation_id = 'a' * 40, str(uuid4())
     plan = DeployPlan('dev', sha, ('db', 'api'), ('postgres-db', 'postgres-api'), image_digest=DIGEST, automatic=True)
