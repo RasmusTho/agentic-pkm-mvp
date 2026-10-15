@@ -156,6 +156,19 @@ def _runner(tmp_path, monkeypatch, *, channel='dev', operation_id=None):
     return runner, boundary, sha, operation_id
 
 
+def _native_source_absent(monkeypatch, channel, operation_id):
+    # PG qualification fixtures never create a channel source-bootstrap one-off.
+    # Keep its new independent census at the transport seam, not by skipping
+    # production recovery or contacting the ambient Docker daemon.
+    def command(argv, **kwargs):
+        assert argv == ['docker', 'ps', '--all', '--filter',
+                        f'name=^/pkm-{channel}-source-bootstrap-{operation_id}$',
+                        '--format', '{{.ID}}']
+        assert kwargs == {'timeout': 15}
+        return ''
+    monkeypatch.setattr(linux, '_command', command)
+
+
 @pytest.mark.parametrize('fault', [None, 'timeout', 'incomplete', 'dependency', 'provision', 'profile', 'resource', 'image'])
 def test_native_automatic_operation_requires_profile_before_commit(tmp_path, monkeypatch, fault):
     runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
@@ -332,6 +345,7 @@ def test_recovery_cannot_reuse_smoke_only_or_foreign_profile_evidence(tmp_path, 
 
 def test_interrupted_cleanup_preserves_other_channel_resources(tmp_path, monkeypatch):
     runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
+    _native_source_absent(monkeypatch, 'dev', operation_id)
     other = runner_module.PgAcceptanceRunner(runner.repository, tmp_path / 'journal', sha=sha,
                                             digest=DIGEST, channel='test', operation_id=operation_id)
     monkeypatch.setattr(other, '_docker', boundary.command)
@@ -401,6 +415,7 @@ def test_database_startup_waits_for_candidate_tcp_listener(tmp_path, monkeypatch
                                   'after_directory_creation', 'partial_rmtree', 'directory_removed'])
 def test_resource_creation_and_removal_crashes_recover_same_native_operation(tmp_path, monkeypatch, crash):
     runner, boundary, sha, operation_id = _runner(tmp_path, monkeypatch)
+    _native_source_absent(monkeypatch, 'dev', operation_id)
     if crash in {'partial_rmtree', 'directory_removed'}:
         runner.resources(IMAGE_ID)
     with monkeypatch.context() as interrupted:

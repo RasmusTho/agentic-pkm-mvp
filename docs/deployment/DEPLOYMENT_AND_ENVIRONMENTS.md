@@ -1015,14 +1015,33 @@ service availability/readiness, configured-model availability/readiness and the 
 exit codes 82–89 to `source_preflight_failed`, `source_readiness_failed`, `source_command_failed`,
 `source_summary_invalid`, `source_post_rebuild_failed`, `source_doctor_failed`,
 `source_settings_failed` and `source_worker_failed`. Writer-stop and exact-operation cleanup
-failures are `source_writer_stop_failed` and `source_quiescence_failed`; unknown child exits,
-timeouts and termination signals remain failed with `source_worker_failed` after cleanup.
+failures are `source_writer_stop_failed` and `source_quiescence_failed`. Supervised timeouts
+and TERM/INT are distinct `source_worker_timeout` and `source_worker_terminated`; an exact owned
+container's validated Docker `OOMKilled=true` is `source_worker_oom`. Other unknown nonzero
+exits remain `source_worker_failed`; exit 137 alone does not establish OOM.
+Observer result codes 96–98 are not worker evidence: a raw worker exit in that range remains
+unknown. A validated stopped worker checkpoint takes precedence over a generic Compose transport
+failure; only supervised timeout/INT/TERM retain transport precedence. Unexpected observer-process
+exits never prove quiescence or admit runtime-writer restart.
+The source one-shot is not auto-removed. Under the inherited current-operation lock/guard,
+the wrapper validates its exact name, Compose labels, operation and revision, proves stoppage,
+reads only bounded exit status and OOM boolean, and durably fsyncs the fixed `source_failure`
+on the existing operation journal before removal. An evidence-write or cleanup failure preserves
+the container/admission rather than declaring successful cleanup. The field survives failed-state
+reconciliation and same-ID reads without worker replay; old receipts without it remain valid.
+The DEV-to-TEST controller accepts only an allowlisted failed-receipt class and preserves it in
+fresh and resumed failure outcomes/checkpoints; malformed or success-attached metadata refuses.
+Missing container state never turns a zero status into success. Foreign, drifted or ambiguous
+resources remain untouched. No Docker error text, logs or untrusted metadata is retained.
 The supervisor accepts these reasons only with one exact `source_projection` stage and one
 exact allowlisted reason marker. Other stages or malformed, duplicate, injected or unknown
 markers retain `command_failed`. These content-free reasons identify checkpoints, not root
 causes or repair authority: they never authorize source replay, semantic fallback, data/vector
 mutation or candidate activation. Raw stdout/stderr suppression, candidate/operation binding,
 compensation and no-replay semantics are unchanged.
+Repository tests establish attribution only. Parent #3347 owns the fresh exact-main DEV-to-TEST
+retry and TEST journaling acceptance after reviewed host convergence; these classifications neither
+identify the previous live root cause nor establish that acceptance.
 Legacy reconciliation additionally preserves the finite classes `legacy_producer_policy_refused`
 (exit 90), `legacy_source_refused` (91), `legacy_admission_refused` (92),
 `legacy_identity_refused` (93), `legacy_race_refused` (94), and `legacy_write_failed` (95).

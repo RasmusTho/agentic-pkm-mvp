@@ -57,6 +57,7 @@ _SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
     'embedding_identity_unavailable', 'embedding_identity_invalid',
     'embedding_service_unavailable', 'embedding_service_not_ready',
     'embedding_model_unavailable', 'embedding_model_not_ready', 'embedding_probe_failed',
+    'source_worker_timeout', 'source_worker_terminated', 'source_worker_oom',
 })
 _GUARD_FAILURE_CHECKPOINTS = frozenset({
     'config_runtime_file_binding', 'inherited_owner_fd_inode_flock',
@@ -94,6 +95,41 @@ def _deploy_failure_reason(stderr: str, stage: str) -> str:
     if stage == 'source_projection' and len(markers) == 1 and markers[0] in _SOURCE_PROJECTION_FAILURE_REASONS:
         return markers[0]
     return 'command_failed'
+
+
+def record_source_terminal(channel: str, name: str, status: int) -> int:
+    """Retain exact operation evidence before destructive one-shot cleanup."""
+    from app.ops.native_source_bootstrap import (
+        SOURCE_PROJECTION_FAILURE_CODES, quiesce_owned_container, source_terminal_reason,
+    )
+    inherited_worker_guard(channel)
+    cfg = LinuxConfig.load(channel)
+    operation = os.environ['BWS_DEPLOY_OPERATION_ID']
+    revision = os.environ['BWS_DEPLOY_TARGET_REVISION']
+    if type(status) is not int or not 0 <= status <= 255:
+        raise PostgresDeployError()
+    observed = False
+    reason = source_terminal_reason(status)
+
+    def retain(exit_status: int, oom: bool) -> None:
+        nonlocal reason, observed
+        # The supervisor's timeout/signal is authoritative even when Docker's
+        # child acknowledged TERM with zero. OOM is admitted only from Docker.
+        effective = status if status in {124, 130, 143} else exit_status or status
+        reason = source_terminal_reason(effective, oom_killed=oom)
+        if reason is not None:
+            cfg.journal.record_source_failure(operation, revision, reason)
+        observed = True
+
+    if not quiesce_owned_container(channel, name, operation, revision, observe_terminal=retain):
+        raise PostgresDeployError()
+    if not observed:
+        # No container was created (or it is already absent). Retain only the
+        # supervised fixed status; absence alone is not proof of success.
+        if status == 0:
+            raise PostgresDeployError()
+        retain(status, False)
+    return SOURCE_PROJECTION_FAILURE_CODES[reason] if reason else 0
 
 
 def _emit_deploy_failure(stage: str, reason: str = 'command_failed') -> None:
@@ -1611,6 +1647,29 @@ class LinuxEffects:
         except Exception:
             return False
 
+    def recover_source_terminal(self, operation_id: str, plan: DeployPlan) -> None:
+        """Observe a retained completed source one-shot, never replay it.
+
+        Caller holds the same-ID reconciliation lock and has proved all
+        one-shots quiescent. Absence creates no source-failure inference.
+        """
+        from app.ops.native_source_bootstrap import quiesce_owned_container, source_terminal_reason
+        receipt = self.config.journal.read()
+        if (receipt is None or receipt.operation_id != operation_id
+            or receipt.stage not in {'activating', 'verifying', 'failed'}
+            or self.config.journal.bound_plan(operation_id) != plan):
+            raise PostgresDeployError()
+        name = f'pkm-{plan.channel}-source-bootstrap-{operation_id}'
+
+        def retain(status: int, oom: bool) -> None:
+            reason = receipt.source_failure or source_terminal_reason(status, oom_killed=oom)
+            if reason:
+                self.config.journal.record_source_failure(operation_id, plan.revision, reason)
+
+        if not quiesce_owned_container(plan.channel, name, operation_id, plan.revision,
+                                       observe_terminal=retain, docker_command=_command):
+            raise PostgresDeployError()
+
     @contextmanager
     def channel_lock(self, *, journal: DeployJournal | None = None,
                      owner_marker: dict[str, str] | None = None,
@@ -1852,6 +1911,12 @@ class DeploymentSupervisor:
                         effects.cleanup_verification(operation_id, plan)
                     if not effects.quiescent():
                         raise PostgresDeployError()
+                    effects.recover_source_terminal(operation_id, plan)
+                    recovered = self.config.journal.read()
+                    if (recovered is None or recovered.operation_id != operation_id
+                        or recovered.terminal_result != 'failed'):
+                        raise PostgresDeployError()
+                    previous = recovered
                     effects.retire_reconciled_channel_lock(lock)
             return {'receipt': previous.payload()}
         if plan.authority_cutover is not None:
@@ -1871,6 +1936,7 @@ class DeploymentSupervisor:
                 effects.cleanup_verification(operation_id, plan)
             if not effects.quiescent():
                 raise PostgresDeployError()
+            effects.recover_source_terminal(operation_id, plan)
             receipt = self.config.journal.write(operation_id, 'failed')
             effects.retire_reconciled_channel_lock(lock)
         return {'receipt': receipt.payload()}

@@ -267,6 +267,46 @@ def test_native_child_keeps_github_token_outside_deployment(monkeypatch):
     assert 'GH_TOKEN' not in options['env'] and 'GITHUB_TOKEN' not in options['env']
 
 
+@pytest.mark.parametrize('resume', [False, True])
+def test_native_source_failure_survives_controller_receipt_and_checkpoint(tmp_path, monkeypatch, capsys, resume):
+    tmp_path.chmod(0o700)
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    receipt = {**_native_receipt('dev', candidate, 'failed'), 'kind': 'deploy', 'stage': 'failed',
+               'source_failure': 'source_worker_timeout'}
+    monkeypatch.setattr(driver.subprocess, 'run', lambda *a, **kw: SimpleNamespace(
+        returncode=78, stdout=json.dumps(receipt), stderr='private output'))
+    assert driver.native_deploy('dev', candidate) == receipt
+    path = tmp_path / 'postmerge-dev-test.json'
+    if resume:
+        driver._save_outcome(path, candidate, {
+            'source_sha': SHA, 'image_digest': DIGEST, 'source_run_id': 123,
+            'source_run_attempt': 1, 'artifact_id': 456, 'channel': 'dev',
+            'result': 'pending', 'operation_id': candidate.operation_id('dev'),
+        })
+    assert driver.poll(tmp_path, build=lambda: 123, load=lambda _: candidate,
+                       current_main=lambda: SHA) == 78
+    checkpoint = json.loads(path.read_text())
+    assert checkpoint['phase'] == 'failed'
+    assert checkpoint['outcome']['source_failure'] == 'source_worker_timeout'
+    assert 'private output' not in capsys.readouterr().out
+    driver._validate_checkpoint(checkpoint)
+    checkpoint['outcome']['source_failure'] = 'private payload'
+    with pytest.raises(driver.CandidateRefused):
+        driver._validate_checkpoint(checkpoint)
+
+
+@pytest.mark.parametrize('reason,terminal', [('private payload', 'failed'), (None, 'failed'),
+                                          ('source_worker_timeout', 'committed')])
+def test_native_source_failure_controller_rejects_untrusted_or_success_metadata(monkeypatch, reason, terminal):
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    receipt = {**_native_receipt('dev', candidate, terminal), 'kind': 'deploy', 'stage': terminal,
+               'source_failure': reason}
+    monkeypatch.setattr(driver.subprocess, 'run', lambda *a, **kw: SimpleNamespace(
+        returncode=0 if terminal == 'committed' else 78, stdout=json.dumps(receipt), stderr=''))
+    with pytest.raises(driver.CandidateRefused):
+        driver.native_deploy('dev', candidate)
+
+
 def test_controller_checkpoint_deduplicates_and_resumes_same_candidate(tmp_path):
     tmp_path.chmod(0o700)
     candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
@@ -496,7 +536,7 @@ def test_controller_crash_reuses_exact_native_id_and_terminal_receipt(tmp_path, 
         if crash == 'after_host_finish' and channel == 'dev' and not lost:
             lost = True
             raise RuntimeError('checkpoint gap')
-        return receipt.__dict__
+        return receipt.payload()
 
     options = {'build': lambda: 123, 'load': lambda _run: candidate, 'deploy': deploy,
                'resume': deploy, 'current_main': lambda: SHA}

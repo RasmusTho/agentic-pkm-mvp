@@ -1386,6 +1386,18 @@ raise SystemExit(0 if quiesce_owned_container(*sys.argv[1:]) else 78)
 ' "${channel}" "$1" "${BWS_DEPLOY_OPERATION_ID}" "${target_sha}" >/dev/null 2>&1
 }
 
+native_source_terminal_cleanup() {
+  PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON}" -c '
+import sys
+from app.ops.postgres_deploy_linux import record_source_terminal
+try:
+    status = record_source_terminal(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+except Exception:
+    raise SystemExit(78) from None
+raise SystemExit(status)
+' "${channel}" "$1" "$2" >/dev/null 2>&1
+}
+
 restore_pre_migration_deploy_pin() {
   if [ "${CURRENT_PIN_SNAPSHOT_TAKEN}" = "1" ]; then
     if [ "${CURRENT_PIN_SNAPSHOT_EXISTED}" = "1" ]; then
@@ -1565,16 +1577,24 @@ native_source_projection_gate() {
     return "${rc}"
   }
   NATIVE_SOURCE_QUIESCENT=0
-  compose run --rm --no-deps -T --name "${name}" \
+  compose run --no-deps -T --name "${name}" \
     --label "yggdrasil.native.operation=${operation}" \
     --label "yggdrasil.native.revision=${target_sha}" \
     -e "NATIVE_SOURCE_BOOTSTRAP=${channel}:${target_sha}" api || rc=$?
-  if native_source_container_quiescence "${name}"; then
-    NATIVE_SOURCE_QUIESCENT=1
-  else
-    native_source_failure source_quiescence_failed
-    return 78
-  fi
+  local terminal_rc=0
+  native_source_terminal_cleanup "${name}" "${rc}" || terminal_rc=$?
+  # Only the observer's documented result namespace proves cleanup. A Python
+  # import/crash or signal must never admit compensation/runtime writers.
+  case "${terminal_rc}" in
+    0|79|8[0-9]|9[0-8])
+      NATIVE_SOURCE_QUIESCENT=1
+      rc="${terminal_rc}"
+      ;;
+    *)
+      native_source_failure source_quiescence_failed
+      return 78
+      ;;
+  esac
   case "${rc}" in
     79) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed\n' >&2 ;;
     80) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=embedding_generation_failed\n' >&2 ;;
@@ -1586,13 +1606,16 @@ native_source_projection_gate() {
     86) native_source_failure source_post_rebuild_failed ;;
     87) native_source_failure source_doctor_failed ;;
     88) native_source_failure source_settings_failed ;;
-    89|124|130|143) native_source_failure source_worker_failed ;;
+    89) native_source_failure source_worker_failed ;;
     90) native_source_failure legacy_producer_policy_refused ;;
     91) native_source_failure legacy_source_refused ;;
     92) native_source_failure legacy_admission_refused ;;
     93) native_source_failure legacy_identity_refused ;;
     94) native_source_failure legacy_race_refused ;;
     95) native_source_failure legacy_write_failed ;;
+    96) native_source_failure source_worker_timeout ;;
+    97) native_source_failure source_worker_terminated ;;
+    98) native_source_failure source_worker_oom ;;
     0) ;;
     *) native_source_failure source_worker_failed ;;
   esac
