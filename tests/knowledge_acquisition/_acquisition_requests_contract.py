@@ -13,6 +13,7 @@ the suite is self-contained against a shared database.
 from __future__ import annotations
 
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -23,6 +24,7 @@ from app.knowledge_acquisition.acquisition_requests import (
     ACQUISITION_REQUESTED_TOPIC,
     ACQUISITION_STARTED_TOPIC,
     DEFAULT_MAX_ATTEMPTS,
+    AcquisitionRequestPolicyConflictError,
     AcquisitionRequests,
     DiscoveryTrigger,
     request_identity,
@@ -143,6 +145,68 @@ def assert_identity_and_trigger_merge(make_queue: MakeQueue) -> None:
     assert len(r3.discovery_triggers) == 2
     assert len(conn.rows_for(ACQUISITION_REQUESTED_TOPIC)) == 1
     _terminalize(q, conn, r1)
+
+
+def assert_policy_conflicts_fail_closed(make_queue: MakeQueue) -> None:
+    """One item/version cannot silently inherit another source's policy."""
+    from threading import Barrier
+
+    q = make_queue()
+    conn = FakeOutboxConn()
+    completed: list[Any] = []
+    for modes in (
+        ("candidate_metadata_only", "acquire_transcript"),
+        ("acquire_transcript", "candidate_metadata_only"),
+    ):
+        item = _item()
+        first = _enqueue(
+            q,
+            conn,
+            item,
+            policy_snapshot={"mode": modes[0], "policy_version": 1},
+            trigger=_trigger(binding_id=str(uuid.uuid4()), collection_kind="subscription_feed"),
+        )
+        with pytest.raises(AcquisitionRequestPolicyConflictError):
+            _enqueue(
+                q,
+                conn,
+                item,
+                policy_snapshot={"mode": modes[1], "policy_version": 1},
+                trigger=_trigger(binding_id=str(uuid.uuid4()), collection_kind="inbox_playlist"),
+            )
+        stored = q.get(first.request_id)
+        assert stored is not None
+        assert stored.policy_snapshot["mode"] == modes[0]
+        assert len(stored.discovery_triggers) == 1
+        completed.append(stored)
+
+    item = _item()
+    barrier = Barrier(2)
+
+    def enqueue_concurrently(mode: str) -> tuple[str, Any | None]:
+        local_conn = FakeOutboxConn()
+        barrier.wait(timeout=5)
+        try:
+            row = _enqueue(
+                q,
+                local_conn,
+                item,
+                policy_snapshot={"mode": mode, "policy_version": 1},
+                trigger=_trigger(binding_id=str(uuid.uuid4()), collection_kind="subscription_feed"),
+            )
+        except AcquisitionRequestPolicyConflictError:
+            return "conflict", None
+        return "inserted", row
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(enqueue_concurrently, ("candidate_metadata_only", "acquire_transcript")))
+    assert sorted(result for result, _row in results) == ["conflict", "inserted"]
+    concurrent_row = q.get(request_identity("youtube_url", item, 1))
+    assert concurrent_row is not None
+    assert concurrent_row.policy_snapshot["mode"] in {"candidate_metadata_only", "acquire_transcript"}
+    assert len(concurrent_row.discovery_triggers) == 1
+    completed.append(concurrent_row)
+    _terminalize(q, conn, *completed)
 
 
 def assert_durable_completed_lifecycle(make_queue: MakeQueue) -> None:
@@ -455,6 +519,7 @@ def assert_pending_dead_letter_cannot_dispose_concurrent_claim(make_queue: MakeQ
 
 ALL_CONTRACT_ASSERTIONS = (
     assert_identity_and_trigger_merge,
+    assert_policy_conflicts_fail_closed,
     assert_durable_completed_lifecycle,
     assert_claim_order_and_backoff_gate,
     assert_retry_then_exhaustion_dead_letter,
