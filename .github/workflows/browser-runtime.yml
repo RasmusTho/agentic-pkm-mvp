@@ -11,6 +11,7 @@ on:
       - 'tests/companion_ui/**'
       - 'tests/builderops/focus_owner_facts_fixture.py'
       - '.github/workflows/browser-runtime.yml'
+      - 'scripts/devui_component_browser_smoke.py'
       - 'scripts/run_jev_browser_advisory.py'
       - 'scripts/ygg_jev.py'
   pull_request:
@@ -22,6 +23,7 @@ on:
       - 'tests/companion_ui/**'
       - 'tests/builderops/focus_owner_facts_fixture.py'
       - '.github/workflows/browser-runtime.yml'
+      - 'scripts/devui_component_browser_smoke.py'
       - 'scripts/run_jev_browser_advisory.py'
       - 'scripts/ygg_jev.py'
   workflow_dispatch:

@@ -49,6 +49,8 @@ class External:
         self.host_extra = {}
         self.drift_after_up = None
         self.expected_baseline = None
+        self.replace_candidate_on_attestation = None
+        self.attested_contents = []
 
     def container(self):
         return {"Id": str(self.identity), "Image": "sha256:" + "a" * 64,
@@ -86,6 +88,11 @@ class External:
         self.commands.append(list(argv))
         if "gh" in argv:
             if "attestation" in argv:
+                snapshot = Path(argv[argv.index("verify") + 1])
+                assert snapshot.stat().st_mode & 0o222 == 0
+                if self.replace_candidate_on_attestation is not None:
+                    self.replace_candidate_on_attestation.write_text('{"replaced":true}')
+                self.attested_contents.append(snapshot.read_bytes())
                 if self.fail_attestation:
                     raise deploy.Refusal("attestation_failed")
                 return "verified"
@@ -336,3 +343,19 @@ def test_host_compose_serialization_and_legacy_baseline(operator):
     compact = world.config(full)
     world.compact_compose = False
     assert deploy.validate_config(compact, full) == deploy.validate_config(world.config(full), full)
+
+
+def test_candidate_snapshot_binds_parse_hash_and_attestation(operator):
+    import hashlib
+    world, candidate = operator
+    original = candidate.read_bytes()
+    world.replace_candidate_on_attestation = candidate
+    plan = deploy.prepare(candidate, "owner mandate")
+    assert candidate.read_bytes() != original
+    assert world.attested_contents == [original]
+    assert plan["candidate"] == json.loads(original)
+    assert plan["candidate_file_sha256"] == hashlib.sha256(original).hexdigest()
+    candidate.write_bytes(original)
+    assert deploy.apply(plan, candidate, plan["plan_sha256"])["outcome"] == "deployed"
+    assert world.attested_contents == [original, original]
+    assert candidate.read_bytes() != original

@@ -107,8 +107,9 @@ def boundary() -> str:
                ).strip()
 
 
-def pair(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text())
+def pair(path: Path) -> tuple[dict[str, Any], str]:
+    contents = path.read_bytes()
+    data = json.loads(contents)
     expected = {"receipt_version": 1, "repository": REPOSITORY,
                 "workflow": ".github/workflows/app-image-build.yml", "event_name": "push",
                 "source_ref": "refs/heads/main", "durability_posture": "rebuildable", "platform": "linux/amd64"}
@@ -117,10 +118,17 @@ def pair(path: Path) -> dict[str, Any]:
     for key in ("control_plane_image_digest", "postgres_image_digest"):
         if not re.fullmatch(r"sha256:[a-f0-9]{64}", data.get(key, "")):
             raise Refusal("candidate_digest_refused")
-    gh(["attestation", "verify", str(path), "--repo", REPOSITORY, "--signer-workflow",
-        REPOSITORY + "/.github/workflows/app-image-build.yml", "--source-ref", "refs/heads/main",
-        "--source-digest", data["source_sha"]])
-    return data
+    # The normal operator can read this public receipt, but cannot replace/write it.
+    # Parse, hash and attest one snapshot even if the caller's path is replaced.
+    with tempfile.TemporaryDirectory(prefix="devui-candidate-") as directory:
+        snapshot = Path(directory) / "candidate-pair.json"
+        snapshot.write_bytes(contents)
+        snapshot.chmod(0o444)
+        Path(directory).chmod(0o755)
+        gh(["attestation", "verify", str(snapshot), "--repo", REPOSITORY, "--signer-workflow",
+            REPOSITORY + "/.github/workflows/app-image-build.yml", "--source-ref", "refs/heads/main",
+            "--source-digest", data["source_sha"]])
+    return data, hashlib.sha256(contents).hexdigest()
 
 
 def pending() -> None:
@@ -264,7 +272,7 @@ def prepare(candidate_file: Path, authorization: str) -> dict[str, Any]:
     pending()
     if not authorization.strip():
         raise Refusal("operator_reference_missing")
-    candidate = pair(candidate_file)
+    candidate, candidate_hash = pair(candidate_file)
     baseline = observed()
     probe(baseline["environment"])
     browser(candidate["source_sha"], preflight=True)
@@ -284,7 +292,7 @@ def prepare(candidate_file: Path, authorization: str) -> dict[str, Any]:
     target_env["DEVUI_CONFIG_FINGERPRINT"] = validate_config(rendered, target_env)
     validate_config(json.loads(compose(Path(baseline["directory"]), baseline["environment"], ["config", "--format", "json"])), baseline["environment"], baseline=True)
     body = {"contract": "devui_component_promotion_plan.v1", "candidate": candidate,
-            "candidate_file_sha256": hashlib.sha256(candidate_file.read_bytes()).hexdigest(),
+            "candidate_file_sha256": candidate_hash,
             "engine_id": engine, "authorization_reference": authorization, "baseline": baseline,
             "target_environment": target_env, "target_directory": str(directory), "target_compose": files}
     return {**body, "plan_sha256": digest(body)}
@@ -296,8 +304,8 @@ def apply(plan: dict[str, Any], candidate_file: Path, expected_digest: str) -> d
         raise Refusal("plan_digest_refused")
     engine = boundary()
     pending()
-    candidate = pair(candidate_file)
-    if candidate != plan["candidate"] or hashlib.sha256(candidate_file.read_bytes()).hexdigest() != plan["candidate_file_sha256"]:
+    candidate, candidate_hash = pair(candidate_file)
+    if candidate != plan["candidate"] or candidate_hash != plan["candidate_file_sha256"]:
         raise Refusal("candidate_plan_drift")
     if engine != plan["engine_id"] or observed() != plan["baseline"]:
         raise Refusal("baseline_plan_drift")
