@@ -113,6 +113,62 @@ def test_enabled_producer_companion_claim_is_not_hidden_as_metadata(monkeypatch,
     assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
 
 
+def _effective_producer_collision(monkeypatch, root, source, raw, original, producer_kind):
+    from app.ingest import vault_alpha as producer
+    from app.rebuildability.product_total_loss import parse_bounded_frontmatter
+
+    other = root / "Notes" / str(original["object_id"]) / "other.md"
+    other.parent.mkdir(parents=True)
+    declaration = "uuid: invalid\n" if producer_kind == "alpha-invalid" else ""
+    derived = "agent_maintained: true\nread_only: true\nauthority_role: derived\n" if producer_kind == "registry-derived" else ""
+    other.write_text(f"---\n{declaration}{derived}trust: human\n---\nunrelated producer body\n")
+    parsed, body, _ = parse_bounded_frontmatter(other.read_text())
+    effective = producer.resolve_vault_note_identity(other, vault_root=root, frontmatter=parsed, body=body).note_uuid
+    if producer_kind == "registry-derived":
+        from app.ingest.producer_policy import registry_producer_policy
+        from app.services.note_uuid import ensure_note_uuid
+        # Prove the real read-only derived branch, not alpha's applicability.
+        effective = ensure_note_uuid(other, vault_root=root)
+        (root / "Alpha").mkdir()
+        (root / "⚙️ System" / "vault.layout.md").write_text("---\ninclude_folders: [Alpha]\n---\nLayout.\n")
+        _enable_registry(monkeypatch, root, scope="Notes/*.md,Notes/**/*.md")
+        assert registry_producer_policy(root).includes(other)
+        assert other not in producer.select_source_backed_rebuild_candidates(root)
+    else:
+        assert other in producer.select_source_backed_rebuild_candidates(root)
+    assert source not in producer.select_source_backed_rebuild_candidates(root)
+    source.write_text(raw.decode().replace(str(original["object_id"]), effective))
+    return effective
+
+
+@pytest.mark.parametrize("producer_kind", ["alpha", "alpha-invalid", "registry-derived"])
+@pytest.mark.parametrize("phase", ["discovery", "transaction"])
+def test_effective_producer_identity_is_a_denial_claim_not_retirement_authority(monkeypatch, tmp_path, producer_kind, phase):
+    from uuid import UUID
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    effective = _effective_producer_collision(monkeypatch, root, source, raw, original, producer_kind)
+    state.rows[0]["object_id"] = UUID(effective)
+    other = next((root / "Notes").rglob("other.md"))
+    other_bytes = other.read_bytes()
+    if phase == "transaction":
+        other.unlink()
+        reconcile = binding.store.reconcile_legacy_source
+        def racing(*args, **kwargs):
+            other.write_bytes(other_bytes)
+            return reconcile(*args, **kwargs)
+        monkeypatch.setattr(binding.store, "reconcile_legacy_source", racing)
+    before_rows = deepcopy(state.rows)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    reason = "legacy_producer_policy_refused" if phase == "transaction" and producer_kind == "registry-derived" else "legacy_identity_ambiguous_refused"
+    with pytest.raises(recovery.LegacySourceRefusal, match=f"^{reason}$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == before_rows and not state.calls and not state.vectors and not state.embedded
+    if phase == "transaction":
+        before[other] = other_bytes  # Only the simulated concurrent writer changed this source.
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
 @pytest.mark.parametrize("failure,reason", [
     ("missing", "legacy_identity_persistence_refused"),
     ("unpersisted-fingerprint", "legacy_identity_persistence_refused"),

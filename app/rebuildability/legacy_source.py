@@ -345,6 +345,23 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                 other_note, persisted = identity_evidence(path, other_parsed, other_body, require_binding=False)
                 if persisted:
                     identities.add(_source_uuid(other_note.note_uuid))
+                # Producer decisions are denial claims, not positive recovery
+                # authority. Alpha can persist a deterministic fallback even
+                # when this source has no valid declared/companion identity.
+                if path in inventory:
+                    actual = producer.resolve_vault_note_identity(
+                        path, vault_root=root, frontmatter=other_parsed, body=other_body)
+                    identities.add(_source_uuid(actual.note_uuid))
+                if registry_policy.includes(path):
+                    from app.services.note_uuid import is_read_only_derived_artifact, resolve_read_only_derived_uuid
+                    from app.workers.outbox_worker import _normalize_uuid_value
+                    if (is_read_only_derived_artifact(other_parsed)
+                            and not _normalize_uuid_value(other_parsed.get("uuid") or other_parsed.get("id"))
+                            and not str(other_parsed.get("uuid") or "").strip()):
+                        # The actual worker's ensure_note_uuid is read-only for
+                        # derived artifacts and returns this exact UUID5. Do
+                        # not call its healing writer during recovery.
+                        identities.add(resolve_read_only_derived_uuid(path, vault_root=root))
                 if _source_uuid(vault_uuid) in identities:
                     claims += 1
             if claims != 1:

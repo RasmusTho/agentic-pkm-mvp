@@ -986,7 +986,8 @@ selector; an id-only inbox source refuses without healing or borrowing another p
 For sources excluded from every producer, exact retirement also accepts an already persisted
 valid companion UUID matching both the legacy row and canonical Product mapping. Hardened source
 and companion snapshots, unique source claims (excluding only metadata sidecars outside every
-producer inventory), unambiguous companion
+producer inventory), including actual producer-emitted deterministic/fallback identities as
+duplicate-denial claims only, unambiguous companion
 evidence and all existing profile/history/relation/CAS fences remain mandatory.
 The persisted companion observation must bind the exact current source in the active root;
 hash/title discovery alone cannot authorize a moved/reused or foreign source observation.

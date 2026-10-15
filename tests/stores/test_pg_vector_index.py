@@ -15,7 +15,7 @@ These tests require a live Postgres backend; they are skipped under `not pg`.
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import pytest
@@ -81,6 +81,9 @@ def _count(object_id) -> int:
     ("reverse", "legacy_identity_canonical_refused"),
     ("duplicate", "legacy_identity_ambiguous_refused"),
     ("producer-companion", "legacy_identity_ambiguous_refused"),
+    ("producer-alpha", "legacy_identity_ambiguous_refused"),
+    ("producer-alpha-invalid", "legacy_identity_ambiguous_refused"),
+    ("producer-registry-derived", "legacy_identity_ambiguous_refused"),
     ("row-race", "legacy_race_refused"), ("companion-race", "legacy_race_refused"),
     ("history", "legacy_retained_history_refused"),
 ])
@@ -88,11 +91,14 @@ def test_legacy_retirement_identity_refusals_are_atomic(_pg_index, monkeypatch, 
     from types import SimpleNamespace
     from app.db.db import ensure_schema
     from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
-    from tests.rebuildability.test_legacy_source_reconciliation import _persist_companion_identity
+    from tests.rebuildability.test_legacy_source_reconciliation import _persist_companion_identity, _effective_producer_collision
 
     recovery, state, root, source, raw, original, _, _, _ = _legacy_source_fixture(monkeypatch, tmp_path)
     oid, other = original["object_id"], uuid4()
-    companion = _persist_companion_identity(root, source, oid)
+    effective_mode = mode.removeprefix("producer-") in {"alpha", "alpha-invalid", "registry-derived"}
+    companion = None if effective_mode else _persist_companion_identity(root, source, oid)
+    if effective_mode:
+        oid = UUID(_effective_producer_collision(monkeypatch, root, source, raw, original, mode.removeprefix("producer-")))
     if mode == "retire-legacy":
         destination = root / "_system/companions" / companion.name
         destination.parent.mkdir(parents=True)

@@ -513,7 +513,9 @@ observations must still bind this exact source in the active root: matching body
 discovery only, not identity authority for a moved/reused or foreign observation. Companion
 sidecars excluded by every producer are not second source claims. A sidecar actually claimed by
 an enabled producer (including the optional legacy filesystem writer) remains in the identity
-census; duplicate claims refuse. Ambiguous matching companions refuse. Invalid
+census; duplicate claims refuse. The census also counts identities each actual selected producer
+would emit, including alpha fallbacks and read-only-derived registry identities, as denial claims
+only; those unpersisted identities never authorize retirement. Ambiguous matching companions refuse. Invalid
 declarations and unpersisted path/fingerprint-only identities always refuse. No source metadata
 is created, healed, normalized or rewritten, and every existing atomic/history/race fence remains.
 Read-only companion discovery includes both the configured canonical and supported legacy
