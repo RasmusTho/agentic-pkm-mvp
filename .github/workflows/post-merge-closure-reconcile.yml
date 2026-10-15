@@ -1,0 +1,90 @@
+name: Post-Merge Closure Reconciliation
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      cursor:
+        description: 'Opaque bounded recovery cursor from the previous artifact'
+        required: false
+        type: string
+      window_end:
+        description: 'Reuse the prior artifact window end when resuming its cursor'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Collect bounded closed-PR pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          WINDOW_END_INPUT: ${{ inputs.window_end }}
+        run: |
+          mkdir -p post-merge-closure-recovery/pages
+          MAX_PAGES=3
+          MAX_ITEMS_PER_PAGE=100
+          for page in $(seq 1 "${MAX_PAGES}"); do
+            gh api "repos/${REPOSITORY}/pulls?state=closed&sort=updated&direction=desc&per_page=${MAX_ITEMS_PER_PAGE}&page=${page}" \
+              > "post-merge-closure-recovery/pages/${page}.json"
+            count="$(jq 'length' "post-merge-closure-recovery/pages/${page}.json")"
+            if [ "${count}" -lt "${MAX_ITEMS_PER_PAGE}" ]; then
+              break
+            fi
+          done
+          python3 - <<'PY'
+          import json
+          import os
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          pages = []
+          for path in sorted(Path("post-merge-closure-recovery/pages").glob("*.json")):
+              value = json.loads(path.read_text())
+              pages.append(value if isinstance(value, list) else [])
+          classifications = {}
+          for page in pages:
+              for pr in page:
+                  if pr.get("merged_at") and pr.get("merge_commit_sha"):
+                      classifications[str(pr.get("number"))] = {
+                          "repository": os.environ["REPOSITORY"],
+                          "pr_number": pr.get("number"),
+                          "merge_sha": pr.get("merge_commit_sha"),
+                          "artifact_name": f"post-merge-docs-classifier-{pr.get('number')}",
+                          "impact_classification": "pending-live-classification",
+                      }
+          window_end = os.environ.get("WINDOW_END_INPUT") or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+          payload = {
+              "repository": os.environ["REPOSITORY"],
+              "window_end": window_end,
+              "window_start": None,
+              "pages": pages,
+              "classifications": classifications,
+          }
+          Path("post-merge-closure-recovery/input.json").write_text(
+              json.dumps(payload, sort_keys=True) + "\n"
+          )
+          PY
+      - name: Emit bounded recovery requests
+        env:
+          RECOVERY_CURSOR: ${{ inputs.cursor }}
+        run: |
+          args=(--input-json post-merge-closure-recovery/input.json --output-json post-merge-closure-recovery/result.json)
+          if [ -n "${RECOVERY_CURSOR}" ]; then args+=(--cursor "${RECOVERY_CURSOR}"); fi
+          python3 -m scripts.reconcile_post_merge_closure "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: post-merge-closure-recovery-${{ github.run_id }}
+          path: post-merge-closure-recovery/result.json
