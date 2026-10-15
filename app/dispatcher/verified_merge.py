@@ -1939,6 +1939,32 @@ def _phase_contract_mode_for_authority(
     return cast(str, next(iter(contracts)))
 
 
+def _validate_single_advancing_convergence_chain(
+    phase_receipts: Sequence[Mapping[str, object]],
+    *,
+    authority_digest: str,
+    convergence_digest: str,
+    phase: str,
+) -> None:
+    """Allow only one current-authority convergence chain past ``prepared``."""
+
+    if phase == "prepared":
+        return
+    advancing_convergences = {
+        receipt.get("projection_convergence_sha256")
+        for receipt in phase_receipts
+        if (
+            receipt.get("authority_sha256") == authority_digest
+            and receipt.get("phase") != "prepared"
+            and isinstance(receipt.get("projection_convergence_sha256"), str)
+        )
+    }
+    if advancing_convergences and convergence_digest not in advancing_convergences:
+        raise ValueError(
+            "one authority-scoped convergence chain may advance beyond prepared"
+        )
+
+
 def _validate_phase_history_mode(
     comments: Sequence[Mapping[str, object]],
     *,
@@ -2039,10 +2065,16 @@ def validate_manual_phase_inputs(
     )
     if phase not in _PHASES:
         raise ValueError("manual mode phase is malformed")
+    authority_digest = _canonical_digest(authority_receipt)
+    _validate_single_advancing_convergence_chain(
+        phase_receipts,
+        authority_digest=authority_digest,
+        convergence_digest=convergence_digest,
+        phase=phase,
+    )
     if phase == "prepared":
         return
     predecessor = _PHASES[_PHASES.index(phase) - 1]
-    authority_digest = _canonical_digest(authority_receipt)
     predecessor_receipts = [
         receipt
         for receipt in phase_receipts
@@ -2091,6 +2123,12 @@ def validate_consumer_phase_inputs(
         return
     predecessor = _PHASES[_PHASES.index(phase) - 1]
     authority_digest = _canonical_digest(authority_receipt)
+    _validate_single_advancing_convergence_chain(
+        phase_receipts,
+        authority_digest=authority_digest,
+        convergence_digest=convergence_digest,
+        phase=phase,
+    )
     predecessor_receipts = [
         receipt
         for receipt in phase_receipts
@@ -2136,12 +2174,14 @@ def _validate_phase_transition_identity(
         != list(reopened_unauthorized_issues)
     ):
         raise ValueError("restored phase must preserve reconciled evidence")
-    if phase == "restored" and post_effect_authority is not None and (
-        predecessor_receipt.get("post_effect_authority") != post_effect_authority
-    ):
-        raise ValueError(
-            "restored phase must preserve reconciled post-effect authority"
-        )
+    if phase == "restored" and predecessor_receipt.get("contract") == VERIFIED_MERGE_PHASE_V2_CONTRACT:
+        if (
+            post_effect_authority is None
+            or predecessor_receipt.get("post_effect_authority") != post_effect_authority
+        ):
+            raise ValueError(
+                "restored phase must preserve reconciled post-effect authority"
+            )
 
 
 def validate_consumer_phase_mode(

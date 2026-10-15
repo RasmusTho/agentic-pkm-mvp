@@ -166,6 +166,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
             ledger.require_post_effect_capability()
+            if args.phase in {"reconciled", "restored"}:
+                post_effect = ledger.post_effect_authority(
+                    args.post_effect_operation_key,
+                    run_id=str(authority_receipt["run_id"]),
+                )
             validate_consumer_phase_inputs(
                 comments,
                 phase=args.phase,
@@ -176,11 +181,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 reopened_unauthorized_issues=reopened_unauthorized_issues,
                 post_effect_authority=post_effect,
             )
-            if args.phase in {"reconciled", "restored"}:
-                post_effect = ledger.post_effect_authority(
-                    args.post_effect_operation_key,
-                    run_id=str(authority_receipt["run_id"]),
-                )
         phase_version = 2
     result = build_verified_merge_phase(
         authority_receipt=authority_receipt,

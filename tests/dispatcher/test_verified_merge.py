@@ -30,6 +30,7 @@ from app.dispatcher.verified_merge import (
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
     validate_consumer_phase_inputs,
+    validate_manual_phase_inputs,
     restored_body_matches_authority,
     verified_merge_body_sha256,
 )
@@ -2313,6 +2314,19 @@ def test_consumer_v2_transition_preserves_merge_reconcile_and_post_effect_identi
             reopened_unauthorized_issues=[4999],
             post_effect_authority={**post_effect, "operation_key": "a" * 64},
         )
+    with pytest.raises(ValueError, match="preserve reconciled post-effect authority"):
+        validate_consumer_phase_inputs(
+            comments,
+            phase="restored",
+            authority_receipt=authority,
+            projection_convergence_receipt=convergence[
+                "projection_convergence_receipt"
+            ],
+            pr=restored_pr,
+            closed_issues=[3820, 3823],
+            reopened_unauthorized_issues=[4999],
+            post_effect_authority=None,
+        )
     validate_consumer_phase_inputs(
         comments,
         phase="restored",
@@ -2323,6 +2337,92 @@ def test_consumer_v2_transition_preserves_merge_reconcile_and_post_effect_identi
         reopened_unauthorized_issues=[4999],
         post_effect_authority=post_effect,
     )
+
+
+def test_phase_validators_reject_second_authority_convergence_advancement() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+
+    for phase_version in (1, 2):
+        first = projection_phase_kwargs(authority, neutral_pr)
+        second = projection_phase_kwargs(
+            authority,
+            neutral_pr,
+            body_edit={
+                "node_id": f"UCE_fixture_3822_second_v{phase_version}",
+                "edited_at": "2026-08-12T04:59:59Z",
+                "editor_login": "RasmusTho",
+                "editor_association": "OWNER",
+            },
+        )
+        first_prepared = build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="prepared",
+            pr=neutral_pr,
+            phase_version=phase_version,
+            **first,
+        )
+        first_merged = build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="merged",
+            pr=merged_pr,
+            phase_version=phase_version,
+            **first,
+        )
+        second_prepared = build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="prepared",
+            pr=neutral_pr,
+            phase_version=phase_version,
+            **second,
+        )
+        comments = [
+            projection_convergence_comment(first),
+            projection_convergence_comment(second),
+            _trusted_comment(str(first_prepared["phase_receipt_comment"])),
+            _trusted_comment(str(first_merged["phase_receipt_comment"])),
+            _trusted_comment(str(second_prepared["phase_receipt_comment"])),
+        ]
+        kwargs = {
+            "comments": comments,
+            "phase": "merged",
+            "authority_receipt": authority,
+            "projection_convergence_receipt": second[
+                "projection_convergence_receipt"
+            ],
+            "pr": merged_pr,
+            "closed_issues": [],
+            "reopened_unauthorized_issues": [],
+        }
+        with pytest.raises(
+            ValueError,
+            match="one authority-scoped convergence chain may advance beyond prepared",
+        ):
+            if phase_version == 1:
+                validate_manual_phase_inputs(**kwargs)
+            else:
+                validate_consumer_phase_inputs(**kwargs)
+
+        # A prepared retry on the second authenticated convergence remains admissible.
+        prepared_kwargs = {**kwargs, "phase": "prepared", "pr": neutral_pr}
+        if phase_version == 1:
+            validate_manual_phase_inputs(**prepared_kwargs)
+        else:
+            validate_consumer_phase_inputs(**prepared_kwargs)
 
 
 def test_post_merge_race_reopens_only_closures_attributed_to_current_pr() -> None:
