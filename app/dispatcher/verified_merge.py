@@ -1973,15 +1973,39 @@ def validate_manual_phase_inputs(
             "manual mode requires the immediately preceding authenticated v1 phase"
         )
     predecessor_receipt = predecessor_receipts[0]
-    if phase == "restored" and (
+    if phase in {"reconciled", "restored"} and (
         predecessor_receipt.get("merge_commit_sha") != pr.get("merge_commit_sha")
-        or predecessor_receipt.get("closed_issues") != list(closed_issues)
+    ):
+        raise ValueError(
+            "manual mode phase must preserve predecessor merge identity"
+        )
+    if phase == "restored" and (
+        predecessor_receipt.get("closed_issues") != list(closed_issues)
         or predecessor_receipt.get("reopened_unauthorized_issues")
         != list(reopened_unauthorized_issues)
     ):
         raise ValueError(
             "manual mode restored phase must preserve reconciled evidence"
         )
+
+
+def validate_consumer_phase_inputs(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    authority_receipt: Mapping[str, object],
+    projection_convergence_receipt: Mapping[str, object],
+) -> None:
+    """Reject a manual v1 chain from the recoverable consumer route."""
+
+    authority_digest = _canonical_digest(authority_receipt)
+    convergence_digest = projection_convergence_receipt.get("receipt_sha256")
+    if any(
+        receipt.get("contract") == VERIFIED_MERGE_PHASE_CONTRACT
+        and receipt.get("authority_sha256") == authority_digest
+        and receipt.get("projection_convergence_sha256") == convergence_digest
+        for receipt in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER)
+    ):
+        raise ValueError("consumer mode refuses manual v1 or mixed phase history")
 
 
 def _projection_phase_matches_authority(

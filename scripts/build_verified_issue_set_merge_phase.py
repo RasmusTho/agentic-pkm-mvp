@@ -11,6 +11,7 @@ from typing import Mapping, Sequence
 from app.dispatcher.verified_merge import (
     build_verified_merge_phase,
     resolve_verified_merge_projection_convergence_receipt,
+    validate_consumer_phase_inputs,
     validate_manual_phase_inputs,
 )
 
@@ -140,6 +141,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             reopened_unauthorized_issues=reopened_unauthorized_issues,
             post_effect_deployment_supplied=args.post_effect_deployment_json is not None,
             post_effect_operation_key_supplied=args.post_effect_operation_key is not None,
+        )
+    else:
+        validate_consumer_phase_inputs(
+            comments,
+            authority_receipt=authority_receipt,
+            projection_convergence_receipt=durable_convergence,
         )
     post_effect = None
     phase_version = 1
