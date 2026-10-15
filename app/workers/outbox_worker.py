@@ -57,6 +57,7 @@ from app.workers.outbox_binding_gate import (
 )
 from app.services.indexer import (
     handle_ingest_object_created,
+    watched_note_ingest_object,
     purge_object_vectors,
     resolve_event_object_id,
 )
@@ -1842,22 +1843,8 @@ def handle_ingest_vault_changed(
             else:
                 raise
 
-    ingest_obj: dict[str, Any] = {
-        "uuid": note_uuid,
-        "content": content,
-        "title": frontmatter.get("title") or note_path.stem,
-        "review_state": frontmatter.get("review_state"),
-        "maturity": frontmatter.get("maturity") or None,
-        "trace_id": payload.get("trace_id"),
-        "payload": {
-            "frontmatter": frontmatter,
-            "raw_text": raw_text,
-            "hash": payload.get("hash"),
-            "watcher": payload.get("watcher"),
-        },
-        "source_ref": str(note_path),
-        "kind": "note",
-    }
+    ingest_obj = watched_note_ingest_object(note_path, frontmatter, body, note_uuid=note_uuid,
+                                          source_text=raw_text, observation=payload)
 
     handle_ingest_object_created(
         ingest_obj,

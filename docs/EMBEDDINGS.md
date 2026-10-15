@@ -472,18 +472,30 @@ Native recovery can run the separate guarded `index reconcile-legacy` stage befo
 repair. For an evidence-free, vector-missing note mirror, its stored locator is discovery only.
 The active-vault adapter reads a stable regular source without following redirected components;
 current profile admission, canonical identity, complete frontmatter, supported trust and the shared
-producer inventory are re-proven. Eligible sources prepare the canonical vault-alpha payload
+producer inventory are re-proven. Alpha-selected sources prepare the canonical vault-alpha payload
 without companion/outbox writes and generate the embedding before one Product/vector transaction.
 Sources excluded from all applicable current producer inventories may retire only their exact unchanged stale
 mirror, never the source file or canonical identity/history. Retained history/dependents refuse
 retirement. Changed sources, duplicate identities, candidate/staging material, malformed metadata,
 untrusted authority and ambiguous selection refuse without mutation.
 The separate dev-only `scripts/fs_watcher.py` producer has a broader vault-sync inventory.
-Its entrypoint and recovery share one strict activation/inventory reader: unset or explicitly false
+The default native registry watcher is independently broader too: `WATCHER_ENABLE`,
+`WATCHER_VAULT_PATH`, the canonical `configs/watchers.yaml` entrypoint and effective scope resolve
+through its ordinary registry loader. Recovery uses its read-only mode, requiring persisted vault
+identities and denying the normal settings identity-heal seam, then privately drains that same incremental scanner with
+memory-only state, never a second interpretation of nested-vault, hidden-path, settings-root,
+companion, conflict or scope exclusions. Registry claims prepare through the ordinary
+`ingest.vault.changed` worker/indexer payload factories without emitting events, healing a UUID,
+writing companions or saving Product state. Native registry claims take the native recipe; alpha
+and optional filesystem preparation remain available when that registry does not claim the source.
+The supported native Compose graph shares the governed runtime-env and selected-root binding
+across API, worker and watcher; recovery does not synthesize another service's environment.
+The legacy filesystem entrypoint and recovery share one strict activation/inventory reader: unset or explicitly false
 `FS_WATCHER_ENABLE` disables that optional producer; true requires an explicit absolute existing
 `VAULT_DIR`. Merely setting `VAULT_DIR`, or a default `./vault` path, never enables a producer.
-Enabled overlapping producers must bind the same active root; conflicting roots, malformed settings
-or configuration drift refuse. Enabled broader sources prepare through the ordinary vault-sync
+Every enabled source producer must be excluded before retirement. Enabled overlapping producers
+must bind the same active root; conflicting roots, malformed settings
+or configuration drift refuse. Enabled legacy filesystem sources prepare through the ordinary vault-sync
 payload builder with complete current admission evidence, never through alpha's excluded inventory.
 When every enabled producer excludes the source, exact CAS retirement remains available.
 The private boundary retains only `legacy_producer_policy_refused`, `legacy_source_refused`,

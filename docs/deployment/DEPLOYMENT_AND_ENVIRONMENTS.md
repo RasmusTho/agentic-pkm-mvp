@@ -951,13 +951,23 @@ even when body replay provenance is complete. Missing-only repair cannot invent 
 or read raw sources to fill it. Before that repair, stopped-writer native recovery invokes the
 separate `index reconcile-legacy --json` stage. It resolves only the stored locator beneath the
 active vault through the hardened source adapter, re-proves current profile/source admission and
-unambiguous canonical identity, and checks the canonical producer inventory. An eligible source
+unambiguous canonical identity, and checks every applicable canonical producer inventory. An alpha-selected source
 prepares its evidence-complete vault-alpha projection without source, companion or outbox writes;
 embedding generation precedes atomic compare-and-swap Product replacement plus absent-only vector
 insertion. A currently excluded source may instead retire only its exact stale rebuildable mirror,
 with derived vector state absent; source files, canonical objects, receipts and accepted history
 remain untouched. Producer applicability uses the same strict configuration and inventory reader as
-the optional `scripts/fs_watcher.py` entrypoint: `FS_WATCHER_ENABLE` unset/false means disabled;
+the default native registry and optional legacy entrypoints, not an assumption that the registry is
+alpha-gated. Native registry activation, selected root, configured event specs and effective scope
+come from its ordinary loader's read-only mode: persisted vault identities are required and the
+normal settings identity-heal seam is denied. Recovery drains its actual incremental scanner using memory-only
+state and prepares claimed sources through the ordinary registry worker/indexer payload factories.
+No source heal, companion, event or ordinary store-write path is invoked. The supported native
+Compose graph shares the governed runtime-env and selected-root binding across API/worker/watcher;
+no environment synthesis is used as applicability evidence. Missing, unknown, contradictory or
+drifting enabled-producer configuration refuses the legacy transition. Registry claims use the
+native recipe; otherwise applicable alpha or optional filesystem recipes remain available.
+For the optional `scripts/fs_watcher.py` entrypoint, `FS_WATCHER_ENABLE` unset/false means disabled;
 true requires an explicit absolute existing `VAULT_DIR`, matching the active root when overlapping.
 No default path or presence of `VAULT_DIR` enables that writer. Enabled broader sources prepare
 through vault-sync's canonical payload path; excluded sources are not laundered through alpha.

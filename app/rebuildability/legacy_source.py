@@ -10,7 +10,7 @@ from typing import Any, Callable, Iterator
 from uuid import UUID
 
 from app.config.paths import resolve_vault_root
-from app.ingest.producer_policy import FilesystemProducerPolicy
+from app.ingest.producer_policy import FilesystemProducerPolicy, RegistryProducerPolicy
 from app.knowledge.write_ops import read_recovery_snapshot_relative
 from app.knowledge.profile_authority_store import assert_profile_note_ingestible
 from app.rebuildability.product_total_loss import capture_source_frontmatter, canonical_product_source_text
@@ -35,6 +35,14 @@ def _producer_policy() -> FilesystemProducerPolicy:
     from app.ingest.producer_policy import filesystem_producer_policy
     try:
         return filesystem_producer_policy()
+    except Exception:
+        raise LegacySourceRefusal("legacy_producer_policy_refused") from None
+
+
+def _registry_policy(root: Path) -> RegistryProducerPolicy:
+    from app.ingest.producer_policy import registry_producer_policy
+    try:
+        return registry_producer_policy(root)
     except Exception:
         raise LegacySourceRefusal("legacy_producer_policy_refused") from None
 
@@ -147,6 +155,7 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
         return 0
     root = resolve_vault_root().resolve(strict=True)
     policy = _producer_policy()
+    registry_policy = _registry_policy(root)
     count = 0
     for row in candidates:
         payload = row["payload"]
@@ -198,11 +207,13 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
         admission()
 
         def eligibility() -> bool:
-            # Alpha, layout-aware root ingest and watcher ingestion share this
-            # inventory. A missing/invalid layout is ambiguity, not exclusion.
+            # Alpha/targeted-alpha and native registry are distinct producers.
+            # Every enabled producer must exclude a source before retirement.
             inventory = producer.select_source_backed_rebuild_candidates(root)
             selected = root / relative in inventory
             if _producer_policy() != policy:
+                raise LegacySourceRefusal("legacy_producer_policy_refused")
+            if _registry_policy(root) != registry_policy:
                 raise LegacySourceRefusal("legacy_producer_policy_refused")
             if policy.includes(root / relative) and policy.root != root:
                 # A producer bound to another source root cannot borrow this
@@ -219,7 +230,7 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                     claims += 1
             if claims != 1:
                 raise LegacySourceRefusal("legacy_identity_refused")
-            return selected or policy.includes(root / relative)
+            return selected or registry_policy.includes(root / relative) or policy.includes(root / relative)
 
         selected = eligibility()
         alpha_selected = root / relative in producer.select_source_backed_rebuild_candidates(root)
@@ -238,7 +249,15 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
         vector = None
         if selected:
             prepared: list[dict] = []
-            if alpha_selected:
+            if registry_policy.includes(root / relative):
+                from app.services.indexer import prepare_ingest_projection, watched_note_ingest_object
+                event = watched_note_ingest_object(root / relative, parsed, body, note_uuid=vault_uuid,
+                                                  source_text=raw, observation={})
+                projection, _text, metadata = prepare_ingest_projection(event,
+                    incoming_uuid=str(row["object_id"]), vault_root=root, source_snapshot=raw)
+                projection.update(metadata)
+                prepared.append(projection)
+            elif alpha_selected:
                 with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                     producer._ingest_single(root / relative, vault_root=root, trace_id="legacy-reconciliation",
                                            raw_text=raw, write_companion_record=False,

@@ -5771,7 +5771,7 @@ def test_native_legacy_reconciliation_refusal_is_private_and_blocks_activation(t
 
 @pytest.mark.pg
 @pytest.mark.parametrize("selected", [True, False])
-def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch, selected, *, broader=False, preserve_existing=False):
+def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch, selected, *, broader=False, preserve_existing=False, registry_enabled=False):
     """Native ordering reaches the real producer, PG CAS and strict doctor.
 
     Retained replay is isolated here to leave one evidence-free
@@ -5794,6 +5794,9 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
         monkeypatch, tmp_path, selected=selected)
     monkeypatch.setenv("FS_WATCHER_ENABLE", "1" if broader else "0")
     monkeypatch.setenv("VAULT_DIR", str(root))
+    if registry_enabled:
+        from tests.rebuildability.test_legacy_source_reconciliation import _enable_registry
+        _enable_registry(monkeypatch, root)
     pg._TABLES_READY = False
     pg._ensure_tables()
     pg.truncate_pg_tables()
@@ -5860,7 +5863,7 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
     assert events.index(["index", "reconcile-legacy", "--json"]) < events.index(["index", "repair-missing", "--json"])
     assert events[-1] == ["index", "doctor", "--json", "--strict"]
     projected = store.get(original["object_id"])
-    if selected or broader:
+    if selected or broader or registry_enabled:
         assert projected["payload"]["frontmatter"]["trust"] == "human"
         assert projected["object_id"] == original["object_id"]
         assert index.present_object_ids() == ({str(original["object_id"])} | ({str(healthy_id)} if healthy_id else set()))
@@ -5879,10 +5882,11 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
 
 
 @pytest.mark.pg
-@pytest.mark.parametrize("broader", [False, True])
-def test_native_legacy_reconciliation_reports_producer_policy_and_converges(tmp_path, monkeypatch, broader):
+@pytest.mark.parametrize("producer_kind", ["disabled", "filesystem", "registry"])
+def test_native_legacy_reconciliation_reports_producer_policy_and_converges(tmp_path, monkeypatch, producer_kind):
     test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(
-        tmp_path, monkeypatch, selected=False, broader=broader, preserve_existing=True,
+        tmp_path, monkeypatch, selected=False, broader=producer_kind == "filesystem", preserve_existing=True,
+        registry_enabled=producer_kind == "registry",
     )
 
 

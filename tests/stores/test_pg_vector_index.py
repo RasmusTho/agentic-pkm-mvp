@@ -156,13 +156,20 @@ def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, 
 
 
 @pytest.mark.parametrize("mode", ["replace", "retire", "existing", "policy-race", "write-failure"])
-def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_pg_index, monkeypatch, tmp_path, mode):
+@pytest.mark.parametrize("producer_kind", ["filesystem", "registry"])
+def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_pg_index, monkeypatch, tmp_path, mode, producer_kind):
     from types import SimpleNamespace
     from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
     from app.db.db import ensure_schema
     recovery, state, root, source, raw, original, _, _, _ = _legacy_source_fixture(monkeypatch, tmp_path)
     monkeypatch.setenv("FS_WATCHER_ENABLE", "0" if mode == "retire" else "1")
     monkeypatch.setenv("VAULT_DIR", str(root))
+    if producer_kind == "registry":
+        from tests.rebuildability.test_legacy_source_reconciliation import _enable_registry
+        _enable_registry(monkeypatch, root)
+        monkeypatch.setenv("FS_WATCHER_ENABLE", "0")
+        if mode == "retire":
+            monkeypatch.setenv("WATCHER_ENABLE", "0")
     store, index = pg_store.PgObjectStore(), _pg_index
     oid, other = original["object_id"], uuid4()
     store.put(oid, kind="note", source_ref=str(source), payload=original["payload"])
@@ -186,7 +193,7 @@ def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_p
                 nonlocal calls
                 calls += 1
                 if calls == 2:
-                    monkeypatch.setenv("FS_WATCHER_ENABLE", "0")
+                    monkeypatch.setenv("WATCHER_ENABLE" if producer_kind == "registry" else "FS_WATCHER_ENABLE", "0")
                 revalidate()
             original_reconcile(expected, **{**kwargs, "revalidate": raced})
         monkeypatch.setattr(store, "reconcile_legacy_source", reconcile)

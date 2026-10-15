@@ -25,6 +25,7 @@ def _legacy_source_fixture(monkeypatch, tmp_path, *, selected=False):
     from app.components.embeddings import EmbeddingIdentity
 
     monkeypatch.delenv("FS_WATCHER_ENABLE", raising=False)
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
 
     root = tmp_path / "vault"
     root.mkdir()
@@ -586,7 +587,7 @@ def _seed_object(text: str, *, source_ref: str = "tests") -> str:
     return str(obj_id)
 
 
-def test_index_rebuild_dry_run(monkeypatch) -> None:
+def test_index_rebuild_dry_run(monkeypatch, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -611,7 +612,7 @@ def test_index_rebuild_dry_run(monkeypatch) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_populates_index(monkeypatch) -> None:
+def test_index_rebuild_populates_index(monkeypatch, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -637,7 +638,7 @@ def test_index_rebuild_populates_index(monkeypatch) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_json_summary(monkeypatch) -> None:
+def test_index_rebuild_json_summary(monkeypatch, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -657,7 +658,7 @@ def test_index_rebuild_json_summary(monkeypatch) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_reports_failures(monkeypatch, tmp_path) -> None:
+def test_index_rebuild_reports_failures(monkeypatch, tmp_path, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -706,7 +707,7 @@ def test_index_rebuild_reports_failures(monkeypatch, tmp_path) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_strict_fails_on_error(monkeypatch, tmp_path) -> None:
+def test_index_rebuild_strict_fails_on_error(monkeypatch, tmp_path, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
