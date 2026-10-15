@@ -292,9 +292,11 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                 raise LegacySourceRefusal("legacy_producer_policy_refused")
             if _registry_policy(root) != registry_policy:
                 raise LegacySourceRefusal("legacy_producer_policy_refused")
-            if policy.includes(root / relative) and policy.root != root:
-                # A producer bound to another source root cannot borrow this
-                # active binding's relative replay/identity authority.
+            if policy.enabled and policy.root != root:
+                # The legacy FS writer still uses compatibility Product
+                # binding authority: a nested/disjoint root is not isolation.
+                # Its foreign inventory cannot borrow this root's relative
+                # snapshot authority or silently disappear from the census.
                 raise LegacySourceRefusal("legacy_producer_policy_refused")
             if (selected or registry_policy.includes(root / relative) or policy.includes(root / relative)) and not note.frontmatter_uuid:
                 # Companion continuity proves only excluded retirement, never

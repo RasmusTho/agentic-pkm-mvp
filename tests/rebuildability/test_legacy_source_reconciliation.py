@@ -211,6 +211,42 @@ def test_producer_claim_of_canonical_object_alias_refuses_before_reprojection(mo
     assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
 
 
+def _foreign_filesystem_root(monkeypatch, root, raw, root_kind, *, enabled=True):
+    from app.ingest.producer_policy import filesystem_producer_policy
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    foreign = {"nested": root / "Nested", "parent": root.parent, "disjoint": root.parent / "Other"}[root_kind]
+    foreign.mkdir(parents=True, exist_ok=True)
+    if root_kind == "nested":
+        initialize_test_vault(foreign)
+    claim = foreign / "claim.md"
+    claim.write_bytes(raw)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1" if enabled else "0")
+    monkeypatch.setenv("VAULT_DIR", str(foreign))
+    policy = filesystem_producer_policy()
+    assert policy.enabled == enabled and policy.includes(claim) == enabled
+    return claim
+
+
+@pytest.mark.parametrize("root_kind", ["nested", "parent", "disjoint"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_foreign_filesystem_root_never_implies_product_binding_isolation(monkeypatch, tmp_path, root_kind, enabled):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    _foreign_filesystem_root(monkeypatch, root, raw, root_kind, enabled=enabled)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.md")}
+    if enabled:
+        with pytest.raises(recovery.LegacySourceRefusal, match="^legacy_producer_policy_refused$"):
+            recovery.reconcile_legacy_sources(binding, index, factory)
+        assert state.rows == [original] and not state.calls
+    else:
+        # A configured VAULT_DIR alone does not activate the foreign writer;
+        # its claim remains outside the active vault's own inventory.
+        assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+        assert not state.rows
+    assert not state.vectors and not state.embedded
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*.md")} == before
+
+
 @pytest.mark.parametrize("failure,reason", [
     ("missing", "legacy_identity_persistence_refused"),
     ("unpersisted-fingerprint", "legacy_identity_persistence_refused"),

@@ -981,6 +981,8 @@ only when their existing UUID form is preserved by the actual filesystem adapter
 encoded UUIDs refuse without healing. Uniqueness covers the union of enabled producer inventories,
 including nested-vault files in the legacy filesystem inventory. Applicable filesystem sources
 use vault-sync's canonical payload path; excluded sources are not laundered through alpha.
+An enabled filesystem root different from the active root (nested, parent or disjoint) refuses
+recovery rather than implying Product isolation: vault-sync still owns the compatibility binding.
 Native registry claims also prove identity preservation against the ordinary worker's inbox-heal
 selector; an id-only inbox source refuses without healing or borrowing another producer's recipe.
 For sources excluded from every producer, exact retirement also accepts an already persisted

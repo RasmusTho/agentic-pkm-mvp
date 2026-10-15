@@ -89,6 +89,9 @@ def _count(object_id) -> int:
     ("producer-registry-uuid-integer", "legacy_identity_ambiguous_refused"),
     ("producer-filesystem-integer", "legacy_identity_ambiguous_refused"),
     ("producer-canonical-alias", "legacy_identity_ambiguous_refused"),
+    ("foreign-fs-nested", "legacy_producer_policy_refused"),
+    ("foreign-fs-parent", "legacy_producer_policy_refused"),
+    ("foreign-fs-disjoint", "legacy_producer_policy_refused"),
     ("row-race", "legacy_race_refused"), ("companion-race", "legacy_race_refused"),
     ("history", "legacy_retained_history_refused"),
 ])
@@ -96,7 +99,7 @@ def test_legacy_retirement_identity_refusals_are_atomic(_pg_index, monkeypatch, 
     from types import SimpleNamespace
     from app.db.db import ensure_schema
     from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
-    from tests.rebuildability.test_legacy_source_reconciliation import _persist_companion_identity, _effective_producer_collision
+    from tests.rebuildability.test_legacy_source_reconciliation import _persist_companion_identity, _effective_producer_collision, _foreign_filesystem_root
 
     recovery, state, root, source, raw, original, _, _, _ = _legacy_source_fixture(
         monkeypatch, tmp_path, selected=mode == "producer-canonical-alias")
@@ -118,6 +121,8 @@ def test_legacy_retirement_identity_refusals_are_atomic(_pg_index, monkeypatch, 
         source.write_bytes(raw)
         monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
         monkeypatch.setenv("VAULT_DIR", str(root))
+    if mode.startswith("foreign-fs-"):
+        _foreign_filesystem_root(monkeypatch, root, raw, mode.removeprefix("foreign-fs-"))
     source_before = source.read_bytes()
     store = pg_store.PgObjectStore()
     store.put(oid, kind="note", source_ref=str(source), payload=original["payload"])

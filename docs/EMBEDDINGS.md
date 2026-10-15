@@ -518,6 +518,8 @@ would emit, including alpha fallbacks and read-only-derived registry identities,
 only; those unpersisted identities never authorize retirement. Ambiguous matching companions refuse. Invalid
 declarations and unpersisted path/fingerprint-only identities always refuse. No source metadata
 is created, healed, normalized or rewritten, and every existing atomic/history/race fence remains.
+An enabled filesystem producer on a different root refuses recovery, including nested or disjoint
+roots: its legacy compatibility Product binding does not prove isolation from the active root.
 Read-only companion discovery includes both the configured canonical and supported legacy
 `_system/companions/` directories; a legacy-only persisted observation is not treated as absent.
 Discovery filters the complete set by body hash and title before selection; an unrelated title
