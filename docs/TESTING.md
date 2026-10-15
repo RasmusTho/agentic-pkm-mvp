@@ -666,22 +666,31 @@ Current nightly harness target:
 
 The first recurring Postgres lane is intentionally small and contract-focused. It exists to establish a credible recurring PG signal without broadening nightly into all PG coverage at once.
 
-Lane membership:
+The required `integration-nightly / pg-contracts` step invokes
+`python -m app.ops.pg_acceptance --ci --nightly`. Its complete bounded target inventory is
+`app/ops/pg_acceptance.py::NIGHTLY_SELECTORS`; the original entry targets include:
 - `tests/int/test_pg_backend.py`
 - `tests/api/test_status_store_pg.py`
 - `tests/indexer/test_outbox_roundtrip_pg.py`
 
 Required service/env contract:
-- GitHub Actions service container: `postgres:16`
+- GitHub Actions service container: `pgvector/pgvector:pg16`
 - `POSTGRES_USER=app`
 - `POSTGRES_PASSWORD=app`
-- `POSTGRES_DB=app`
+- `POSTGRES_DB=app_test`
 - `DATABASE_URL` or `DB_DSN` points at the target Postgres endpoint; the repo DB abstraction normalizes psycopg/SQLAlchemy forms
 - `STORE_BACKEND=pg`
 - schema prepared with `alembic upgrade head`
 
+The shared `RequiredResults` guard requires every target to collect and every selected node to
+pass, including setup and teardown. Imported fixture skips, missing or deselected targets, xfails,
+collection errors and watchdog failures refuse the required invocation. The nightly log records
+the required selector inventory and passed node IDs. Ordinary optional developer pytest keeps its
+explicit environment skips. The separate native dev/test profile retains its existing `SELECTORS`
+inventory and immutable disposable-resource contract.
+
 First-green definition:
-- all three PG lane tests pass against the provisioned Postgres service in `integration-nightly`
+- every required selector collects and every selected node passes against the provisioned Postgres service in `integration-nightly`, with zero required skips, xfails or errors
 - the deterministic acceptance harness step is green in the same nightly workflow run
 - the existing memory-backed nightly suite and runtime contract regressions remain green
 

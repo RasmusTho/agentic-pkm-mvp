@@ -822,7 +822,7 @@ def test_ci_smoke_installs_acl_tools_for_linux_acl_fixture() -> None:
 
 
 def test_pg_acceptance_handoff_preserves_required_coverage() -> None:
-    from app.ops.pg_acceptance import SELECTORS, pytest_arguments
+    from app.ops.pg_acceptance import NIGHTLY_SELECTORS, SELECTORS, pytest_arguments
 
     # Accepted PR coverage at the handoff. New selectors may add coverage;
     # neither a permanent test count nor another manual stage gate is added.
@@ -899,9 +899,10 @@ def test_pg_acceptance_handoff_preserves_required_coverage() -> None:
     assert "pr-index-pg-contracts" not in jobs
     assert pytest_arguments()[pytest_arguments().index('-m') + 1] == 'pg'
     nightly = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
-    assert "tests/migrations/test_heimdal_raw_representation_migration.py" in nightly
-    assert "tests/heimdal/test_entity_review_operation_journal.py" in nightly
-    assert "tests/migrations/test_entity_review_operation_journal_schema_parity.py" in nightly
+    assert "python -m app.ops.pg_acceptance --ci --nightly" in nightly
+    assert "tests/migrations/test_heimdal_raw_representation_migration.py" in NIGHTLY_SELECTORS
+    assert "tests/heimdal/test_entity_review_operation_journal.py" in NIGHTLY_SELECTORS
+    assert "tests/migrations/test_entity_review_operation_journal_schema_parity.py" in NIGHTLY_SELECTORS
 
 
 def test_pr_ci_fetches_base_ref_before_diff_selection() -> None:
@@ -2036,13 +2037,16 @@ def test_integration_nightly_prepares_pgvector_before_migrations() -> None:
 
 
 def test_integration_nightly_runs_yss01_pg_contract_targets() -> None:
+    from app.ops.pg_acceptance import NIGHTLY_SELECTORS
+
     workflow = INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
     pg_contracts = workflow[
         workflow.index("pg-contracts:") : workflow.index("  k6-search:")
     ]
 
-    assert "tests/knowledge_acquisition/test_source_registry_pg.py::test_pg_backend_contract" in pg_contracts
+    assert "python -m app.ops.pg_acceptance --ci --nightly" in pg_contracts
+    assert "tests/knowledge_acquisition/test_source_registry_pg.py::test_pg_backend_contract" in NIGHTLY_SELECTORS
     assert (
         "tests/migrations/test_yss01_source_registry_schema_parity.py::"
         "test_yss01_migration_bootstrap_parity_and_legacy_repair"
-    ) in pg_contracts
+    ) in NIGHTLY_SELECTORS
