@@ -47,6 +47,8 @@ _DEPLOY_FAILURE_STAGES = frozenset({
     'fleet_fitness', 'ui_smoke', 'capture_watch', 'receipt',
 })
 _SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
+    'legacy_producer_policy_refused', 'legacy_source_refused', 'legacy_admission_refused',
+    'legacy_identity_refused', 'legacy_race_refused', 'legacy_write_failed',
     'vector_projection_failed', 'embedding_generation_failed', 'vector_index_write_failed',
     'source_preflight_failed', 'source_readiness_failed', 'source_command_failed',
     'source_summary_invalid', 'source_post_rebuild_failed', 'source_doctor_failed',

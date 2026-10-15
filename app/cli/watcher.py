@@ -13,7 +13,7 @@ from app.settings.validate import validate_settings
 from app.vault.manager import VaultManager
 from app.watcher.config import WatcherConfig
 from app.watcher.events import emit_watcher_run_event
-from app.watcher.registry import load_registry_config, run_registry_forever
+from app.watcher.registry import DEFAULT_REGISTRY_CONFIG_PATH, load_registry_config, run_registry_forever
 from app.watcher.vault_watcher import run_watcher_daemon, run_watcher_tick
 from app.watcher.watcher import run_once as watcher_run_once
 
@@ -123,7 +123,7 @@ def watcher_once() -> None:
 @click.option(
     "--config",
     type=click.Path(path_type=Path),
-    default=Path("configs/watchers.yaml"),
+    default=DEFAULT_REGISTRY_CONFIG_PATH,
     show_default=True,
     help="Watcher registry config file.",
 )

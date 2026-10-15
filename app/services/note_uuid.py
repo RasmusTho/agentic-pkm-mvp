@@ -43,6 +43,17 @@ def is_read_only_derived_artifact(frontmatter: dict[str, object]) -> bool:
     )
 
 
+def inbox_uuid_heal_applies(note_path: Path, vault_root: Path) -> bool:
+    """The ordinary watched-note worker's UUID-heal selection, without effects."""
+    from app.vault.paths import get_vault_inbox_dir_rel
+    try:
+        relative = note_path.relative_to(vault_root)
+    except Exception:
+        return False
+    inbox = Path(get_vault_inbox_dir_rel(vault_root))
+    return relative.is_relative_to(inbox)
+
+
 def ensure_note_uuid(
     path: Path,
     *,

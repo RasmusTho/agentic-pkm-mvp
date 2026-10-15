@@ -331,6 +331,22 @@ def canonical_note_replay(
     )
 
 
+def prepare_note_projection(
+    note_path: Path, frontmatter: dict[str, Any], body: str, *, vault_root: Path | None,
+) -> dict[str, Any]:
+    """Prepare the ordinary vault-sync projection without any filesystem/DB effects."""
+    normalized = normalize_artifact_state_axes(frontmatter, default_review_state="provisional")
+    payload = _canonical_note_payload(
+        frontmatter=normalized,
+        title=_canonical_note_title(frontmatter, body, note_path),
+        review_state=normalized["review_state"], maturity=normalized.get("maturity"), content=body,
+        replay=canonical_note_replay(note_path, vault_root=vault_root, source_body=body),
+    )
+    payload.update(origin="vault", trust=normalized.get("trust", "unreviewed"),
+                   vault_uuid=frontmatter.get("uuid"))
+    return payload
+
+
 def _object_materialization_state(
     conn: psycopg.Connection,
     *,
@@ -787,9 +803,7 @@ def upsert_object_from_note(
     path_str = str(note_path)
     uuid_value = frontmatter["uuid"]
     title = _canonical_note_title(frontmatter, body, note_path)
-    replay = canonical_note_replay(
-        note_path, vault_root=vault_root, source_body=body
-    )
+    canonical_payload = prepare_note_projection(note_path, frontmatter, body, vault_root=vault_root)
     normalized_frontmatter = normalize_artifact_state_axes(
         frontmatter, default_review_state="provisional"
     )
@@ -808,14 +822,6 @@ def upsert_object_from_note(
         state = _get_state_by_uuid(conn, uuid_value, binding_id=binding_id)
         canonical_object_id = _canonical_object_id(conn, uuid_value)
         with conn.cursor() as cur:
-            canonical_payload = _canonical_note_payload(
-                frontmatter=normalized_frontmatter,
-                title=title,
-                review_state=review_state,
-                maturity=normalized_frontmatter.get("maturity"),
-                content=body,
-                replay=replay,
-            )
             payload_json = json.dumps(canonical_payload)
             try:
                 cur.execute(

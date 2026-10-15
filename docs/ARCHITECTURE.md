@@ -365,7 +365,7 @@ See also:
 - Settings tiering enforcement: watcher dev/lab tuning env vars are ignored in normal runtime (`PKM_SETTINGS_PROFILE=operator`) and require explicit `PKM_SETTINGS_PROFILE=lab`. See `docs/ENVIRONMENTS.md`; this current settings-profile split is a partial control mechanism, not the full environment contract.
 - Legacy snapshot watchers (`vault-watcher-run`, `vault-watcher-daemon`, runtime-loop) are dev-only, require `PKM_SETTINGS_PROFILE=lab`, and are not used in runtime start-system flows or as production surfaces.
 - Store object table is canonicalized to `store_objects`; legacy `objects` rows are best-effort backfilled when `store_objects` is empty so runtime reads/writes stay on one table.
-- Legacy `scripts/fs_watcher.py` note lifecycle operations route through `VaultPort` (`FilesystemVaultAdapter`) rather than direct sink/pass-through writes.
+- Legacy `scripts/fs_watcher.py` note lifecycle operations route through `VaultPort` (`FilesystemVaultAdapter`) rather than direct sink/pass-through writes. Its optional activation and inventory share the strict producer-policy reader used by guarded legacy recovery; a default vault path is not producer applicability. The configuration, canonical reprojection and refusal contract is owned by [Embedding operational guardrails](EMBEDDINGS.md#operational-guardrails).
 - DB outbox is canonical in runtime; JSONL outbox is audit/diagnostic only.
 
 ### Environment contract (current architecture reading)

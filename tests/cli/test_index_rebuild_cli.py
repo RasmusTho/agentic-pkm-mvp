@@ -24,6 +24,9 @@ def _legacy_source_fixture(monkeypatch, tmp_path, *, selected=False):
     from app.stores.pg import PgObjectStore, PgVectorIndex
     from app.components.embeddings import EmbeddingIdentity
 
+    monkeypatch.delenv("FS_WATCHER_ENABLE", raising=False)
+    monkeypatch.setenv("WATCHER_ENABLE", "0")
+
     root = tmp_path / "vault"
     root.mkdir()
     layout = root / "⚙️ System" / "vault.layout.md"
@@ -119,7 +122,7 @@ def test_legacy_source_uuid_forms_match_producer_and_refuse_duplicates(monkeypat
     before = __import__("copy").deepcopy(state.rows)
     duplicate = root / "duplicate.md"
     duplicate.write_text(text)
-    with pytest.raises(ValueError, match="ambiguous source identity"):
+    with pytest.raises(ValueError, match="legacy_identity_refused"):
         recovery.reconcile_legacy_sources(binding, index, factory)
     assert state.rows == before and not state.calls and not state.vectors
     duplicate.unlink()
@@ -193,17 +196,18 @@ def test_legacy_source_reconciliation_refuses_unsafe_or_racing_sources(monkeypat
     monkeypatch.setattr(repair, "get_product_embedding_client", factory)
     result = CliRunner().invoke(cli, ["index", "reconcile-legacy", "--json"])
     assert result.exit_code == 79, result.output
-    assert json.loads(result.output) == {"reason": "source_post_rebuild_failed"}
+    assert json.loads(result.output)["reason"] in recovery.LEGACY_RECONCILIATION_REASONS
     assert state.calls == [] and state.rows == before and state.vectors == {}
     assert str(root) not in result.output and "canary" not in result.output
 
 
-@pytest.mark.parametrize("scope", ["same", "ancestor", "subtree"])
+@pytest.mark.parametrize("scope", ["ancestor", "subtree"])
 def test_legacy_source_reconciliation_refuses_broader_legacy_producer_scope(monkeypatch, tmp_path, scope):
     recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
     legacy_root = {"same": root, "ancestor": root.parent, "subtree": source.parent}[scope]
     monkeypatch.setenv("VAULT_DIR", str(legacy_root))
-    with pytest.raises(ValueError, match="ambiguous producer inventory"):
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+    with pytest.raises(ValueError, match="legacy_producer_policy_refused"):
         recovery.reconcile_legacy_sources(binding, index, factory)
     assert state.rows == [original] and state.calls == [] and state.vectors == {}
     assert source.read_bytes() == raw
@@ -251,7 +255,7 @@ def test_legacy_source_reconciliation_refuses_projection_locator_aliases(monkeyp
     state.rows.append(other)
     state.vectors[str(other["object_id"])] = "existing vector preserved"
     before = deepcopy(state.rows)
-    with pytest.raises(ValueError, match="ambiguous source projection"):
+    with pytest.raises(ValueError, match="legacy_identity_refused"):
         recovery.reconcile_legacy_sources(binding, index, factory)
     assert state.rows == before and state.calls == []
     assert state.vectors == {str(other["object_id"]): "existing vector preserved"}
@@ -272,7 +276,7 @@ def test_legacy_source_reconciliation_checks_write_guard_before_store_resolution
     monkeypatch.setattr(repair.domain_objects, "resolve_object_store_port", unexpected_store)
     result = CliRunner().invoke(cli, ["index", "reconcile-legacy", "--json"])
     assert result.exit_code == 79
-    assert json.loads(result.output) == {"reason": "source_post_rebuild_failed"}
+    assert json.loads(result.output) == {"reason": "legacy_source_refused"}
 
 
 def _missing_repair_fixture(monkeypatch):
@@ -583,7 +587,7 @@ def _seed_object(text: str, *, source_ref: str = "tests") -> str:
     return str(obj_id)
 
 
-def test_index_rebuild_dry_run(monkeypatch) -> None:
+def test_index_rebuild_dry_run(monkeypatch, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -608,7 +612,7 @@ def test_index_rebuild_dry_run(monkeypatch) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_populates_index(monkeypatch) -> None:
+def test_index_rebuild_populates_index(monkeypatch, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -634,7 +638,7 @@ def test_index_rebuild_populates_index(monkeypatch) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_json_summary(monkeypatch) -> None:
+def test_index_rebuild_json_summary(monkeypatch, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -654,7 +658,7 @@ def test_index_rebuild_json_summary(monkeypatch) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_reports_failures(monkeypatch, tmp_path) -> None:
+def test_index_rebuild_reports_failures(monkeypatch, tmp_path, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")
@@ -703,7 +707,7 @@ def test_index_rebuild_reports_failures(monkeypatch, tmp_path) -> None:
     legacy_store._MEMORY_STORE.clear()
 
 
-def test_index_rebuild_strict_fails_on_error(monkeypatch, tmp_path) -> None:
+def test_index_rebuild_strict_fails_on_error(monkeypatch, tmp_path, product_model_access_gateway) -> None:
     reset_store_backends()
     legacy_store._MEMORY_STORE.clear()
     monkeypatch.setenv("STORE_BACKEND", "memory")

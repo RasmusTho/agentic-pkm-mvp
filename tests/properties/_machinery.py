@@ -50,8 +50,9 @@ APP_ROOT = REPO_ROOT / "app"
 # and event/payload justifications remain unchanged.
 # #6091 re-pins unchanged calls after admission-metadata preservation.
 # #6096 re-pins unchanged calls after the side-effect-free preparation hook.
+# #6100 re-pins the same sinks after extracting canonical native preparation.
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 385): (
+    ("app/services/indexer.py", 418): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize). "
@@ -1688,16 +1689,16 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "derived-artifact payload; ingest_object -> store_vector_index."
     ),
     # -- carries_via_indexed_unit_builder: payload = build_indexed_unit_payload(...) (the choke) --
-    ("app/cli/index_rebuild.py", 285): (
+    ("app/cli/index_rebuild.py", 286): (
         "carries_via_indexed_unit_builder: missing-only repair constructs the derived payload "
         "through build_indexed_unit_payload before insert_missing -> store_vector_index."
     ),
-    ("app/cli/index_rebuild.py", 432): (
+    ("app/cli/index_rebuild.py", 433): (
         "carries_via_indexed_unit_builder: cold rebuild re-embeds store_objects rows through "
         "build_indexed_unit_payload (defaults episode_ref) -> idx.upsert -> store_vector_index. "
         "Line shifted 320 -> 321 when #5820 routed Product embedding through the portal client."
     ),
-    ("app/cli/index_rebuild.py", 838): (
+    ("app/cli/index_rebuild.py", 839): (
         "carries_via_indexed_unit_builder: fallback rebuild upsert via build_indexed_unit_payload "
         "-> store_vector_index. Line shifted 726 -> 727 when #5820 routed Product embedding "
         "through the portal client."
@@ -1716,13 +1717,13 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 385): (
+    ("app/services/indexer.py", 418): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
         "into the input on the vault-changed path and preserves an existing binding via the merge. "
         "Line moved to 379 when #5927 added source-backed metadata and binding checks before the sink."
     ),
-    ("app/services/indexer.py", 467): (
+    ("app/services/indexer.py", 500): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
         "'payload'] = build_indexed_unit_payload(...) -> store_vector_index. Line shifted 256 -> 257 "
         "when #5820 routed Product embedding through the portal client, then moved to 461 when #5927 "
@@ -1769,12 +1770,12 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "-> store_objects. Verified by test_plan_to_object_carries_episode_ref."
     ),
     # -- transport_passthrough: facade/plumbing forwarding a caller-built (verified) payload ------
-    ("app/stores/pg.py", 1242): (
+    ("app/stores/pg.py", 1246): (
         "transport_passthrough: legacy reconciliation forwards the canonical vault-alpha "
         "producer's prepared vector payload unchanged inside its atomic transaction; "
         "test_legacy_source_uuid_forms_match_producer_and_refuse_duplicates proves episode_ref carry."
     ),
-    ("app/stores/pg.py", 1472): (
+    ("app/stores/pg.py", 1476): (
         "transport_passthrough: PgVectorIndex.insert_missing forwards the caller-built payload "
         "unchanged to upsert with an atomic absent-only source snapshot; its only producer "
         "repair_missing_vectors uses build_indexed_unit_payload and is classified above."
