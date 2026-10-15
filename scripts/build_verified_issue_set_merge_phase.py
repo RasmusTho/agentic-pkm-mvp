@@ -11,6 +11,7 @@ from typing import Mapping, Sequence
 from app.dispatcher.verified_merge import (
     build_verified_merge_phase,
     resolve_verified_merge_projection_convergence_receipt,
+    validate_phase_candidate_against_resolver,
     validate_consumer_phase_inputs,
     validate_consumer_phase_mode,
     validate_manual_phase_inputs,
@@ -204,6 +205,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         closed_issues=closed_issues,
         reopened_unauthorized_issues=reopened_unauthorized_issues,
+    )
+    current_body_edit = durable_convergence.get("body_edit")
+    if not isinstance(current_body_edit, Mapping):
+        raise ValueError("phase requires authenticated convergence body edit")
+    validate_phase_candidate_against_resolver(
+        comments,
+        authority_receipt=authority_receipt,
+        pr=pr,
+        current_body_edit=current_body_edit,
+        candidate=result,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(

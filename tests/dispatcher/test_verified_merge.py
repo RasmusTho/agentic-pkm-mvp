@@ -29,6 +29,7 @@ from app.dispatcher.verified_merge import (
     resolve_verified_merge_projection_convergence_receipt,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
+    validate_phase_candidate_against_resolver,
     validate_consumer_phase_inputs,
     validate_manual_phase_inputs,
     restored_body_matches_authority,
@@ -2423,6 +2424,82 @@ def test_phase_validators_reject_second_authority_convergence_advancement() -> N
             validate_manual_phase_inputs(**prepared_kwargs)
         else:
             validate_consumer_phase_inputs(**prepared_kwargs)
+
+
+def test_phase_candidate_parity_allows_idempotent_retry_and_rejects_conflict() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence = projection_phase_kwargs(authority, neutral_pr)
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        phase_version=1,
+        **convergence,
+    )
+    comments = [projection_convergence_comment(convergence)]
+    validate_phase_candidate_against_resolver(
+        comments,
+        authority_receipt=authority,
+        pr=neutral_pr,
+        current_body_edit=convergence["projection_convergence_receipt"]["body_edit"],
+        candidate=prepared,
+    )
+    idempotent_comments = [
+        *comments,
+        {"author_association": "OWNER", "body": prepared["phase_receipt_comment"]},
+    ]
+    validate_phase_candidate_against_resolver(
+        idempotent_comments,
+        authority_receipt=authority,
+        pr=neutral_pr,
+        current_body_edit=convergence["projection_convergence_receipt"]["body_edit"],
+        candidate=prepared,
+    )
+
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_pr,
+        phase_version=1,
+        **convergence,
+    )
+    conflicting = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr={**merged_pr, "merge_commit_sha": "c" * 40},
+        phase_version=1,
+        **convergence,
+    )
+    with pytest.raises(
+        ValueError,
+        match="does not match the authenticated resolver",
+    ):
+        validate_phase_candidate_against_resolver(
+            [
+                *comments,
+                {"author_association": "OWNER", "body": prepared["phase_receipt_comment"]},
+                {"author_association": "OWNER", "body": merged["phase_receipt_comment"]},
+            ],
+            authority_receipt=authority,
+            pr={**merged_pr, "merge_commit_sha": "c" * 40},
+            current_body_edit=convergence["projection_convergence_receipt"]["body_edit"],
+            candidate=conflicting,
+        )
 
 
 def test_post_merge_race_reopens_only_closures_attributed_to_current_pr() -> None:

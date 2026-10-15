@@ -2997,6 +2997,38 @@ def resolve_verified_merge_phase(
     return highest
 
 
+def validate_phase_candidate_against_resolver(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    authority_receipt: Mapping[str, object],
+    pr: Mapping[str, object],
+    current_body_edit: Mapping[str, object],
+    candidate: Mapping[str, object],
+) -> None:
+    """Require the exact candidate payload to resolve from prospective history."""
+
+    phase_receipt = candidate.get("phase_receipt")
+    phase_receipt_comment = candidate.get("phase_receipt_comment")
+    if not isinstance(phase_receipt, Mapping) or not isinstance(
+        phase_receipt_comment, str
+    ):
+        raise ValueError("verified merge phase candidate is malformed")
+    prospective_comments = [
+        *comments,
+        {"author_association": "OWNER", "body": phase_receipt_comment},
+    ]
+    resolved = resolve_verified_merge_phase(
+        prospective_comments,
+        authority_receipt=authority_receipt,
+        pr=pr,
+        current_body_edit=current_body_edit,
+    )
+    if resolved != dict(phase_receipt):
+        raise ValueError(
+            "verified merge phase candidate does not match the authenticated resolver"
+        )
+
+
 def prepare_verified_merge(
     *,
     context: Mapping[str, object],
