@@ -417,7 +417,12 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   exact outbox record through the authenticated client after capability preflight; it does not
   accept a caller-authored terminal record. The watchdog's executor target selection requires this
   deployed reconciled v2 authority. Historical v1 parsing remains available for audit, while native
-  single-closer delivery keeps its separate existing path.
+  single-closer delivery keeps its separate existing path. The session-owned manual FULL_PATH
+  producer is the explicit public CLI mode
+  `scripts/build_verified_issue_set_merge_phase.py --mode manual`; it emits a continuous,
+  authenticated `verified_issue_set_merge_phase.v1` chain without deployed post-effect capability
+  or an operation key. Manual mode rejects post-effect inputs, consumer/in-flight v2 predecessors,
+  and mixed v1/v2 history, and is never a recoverable-consumer authority path.
 
 - Verification dispatch request v3 binds one non-empty, sorted set of at most 10 closing issues and
   one authenticated `final_review_rounds` value to

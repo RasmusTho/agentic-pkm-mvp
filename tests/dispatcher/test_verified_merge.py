@@ -1568,6 +1568,8 @@ def test_merge_phase_cli_refuses_without_deployed_capability(tmp_path: Path) -> 
             str(authority_path),
             "--phase",
             "restored",
+            "--post-effect-operation-key",
+            "f" * 64,
             "--projection-convergence-json",
             str(convergence_path),
             "--comments-json",
@@ -1588,6 +1590,224 @@ def test_merge_phase_cli_refuses_without_deployed_capability(tmp_path: Path) -> 
     assert completed.returncode != 0
     assert "ControlPlaneConfigError" in completed.stderr
     assert not output_path.exists()
+
+
+def _run_phase_builder_cli(
+    *,
+    tmp_path: Path,
+    authority: dict[str, object],
+    comments: list[dict[str, object]],
+    convergence: dict[str, object],
+    phase: str,
+    pr: dict[str, object],
+    closed_issues: list[int] | None = None,
+    final_observation: dict[str, object] | None = None,
+    mode: str | None = None,
+    post_effect_operation_key: str | None = None,
+    post_effect_deployment_json: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    token = f"{phase}-{len(comments)}"
+    authority_path = tmp_path / f"{token}-authority.json"
+    comments_path = tmp_path / f"{token}-comments.json"
+    convergence_path = tmp_path / f"{token}-convergence.json"
+    pr_path = tmp_path / f"{token}-pr.json"
+    output_path = tmp_path / f"{token}-output.json"
+    authority_path.write_text(json.dumps(authority), encoding="utf-8")
+    comments_path.write_text(json.dumps(comments), encoding="utf-8")
+    convergence_path.write_text(json.dumps(convergence), encoding="utf-8")
+    pr_path.write_text(json.dumps(pr), encoding="utf-8")
+    argv = [
+        sys.executable,
+        "-m",
+        "scripts.build_verified_issue_set_merge_phase",
+        "--authority-json",
+        str(authority_path),
+        "--phase",
+        phase,
+        "--projection-convergence-json",
+        str(convergence_path),
+        "--comments-json",
+        str(comments_path),
+        "--pr-json",
+        str(pr_path),
+        "--output-json",
+        str(output_path),
+    ]
+    if mode is not None:
+        argv.extend(("--mode", mode))
+    if post_effect_operation_key is not None:
+        argv.extend(("--post-effect-operation-key", post_effect_operation_key))
+    if post_effect_deployment_json is not None:
+        argv.extend(("--post-effect-deployment-json", str(post_effect_deployment_json)))
+    if phase == "prepared":
+        assert final_observation is not None
+        final_path = tmp_path / f"{token}-final.json"
+        final_path.write_text(json.dumps(final_observation), encoding="utf-8")
+        argv.extend(("--final-projection-observation-json", str(final_path)))
+    if closed_issues is not None:
+        closed_path = tmp_path / f"{token}-closed.json"
+        closed_path.write_text(json.dumps(closed_issues), encoding="utf-8")
+        argv.extend(("--closed-issues-json", str(closed_path)))
+    return subprocess.run(
+        argv,
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_manual_full_path_phase_cli_builds_continuous_v1_chain(tmp_path: Path) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
+    convergence = convergence_kwargs["projection_convergence_receipt"]
+    final_observation = convergence_kwargs["final_projection_observation"]
+    comments = [projection_convergence_comment(convergence_kwargs)]
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    phase_inputs = {
+        "prepared": (neutral_pr, None),
+        "merged": (merged_pr, None),
+        "reconciled": (merged_pr, [3820, 3823]),
+        "restored": ({**merged_pr, "body": plan["original_body"]}, [3820, 3823]),
+    }
+    receipts: list[dict[str, object]] = []
+    for phase, (pr, closed) in phase_inputs.items():
+        completed = _run_phase_builder_cli(
+            tmp_path=tmp_path,
+            authority=authority,
+            comments=comments,
+            convergence=convergence,
+            phase=phase,
+            pr=pr,
+            closed_issues=closed,
+            final_observation=final_observation,
+            mode="manual",
+        )
+        assert completed.returncode == 0, completed.stderr
+        output = json.loads((tmp_path / f"{phase}-{len(comments)}-output.json").read_text())
+        receipt = output["phase_receipt"]
+        assert receipt["contract"] == "verified_issue_set_merge_phase.v1"
+        assert "post_effect_authority" not in receipt
+        receipts.append(receipt)
+        comments.append({"author_association": "OWNER", "body": output["phase_receipt_comment"]})
+
+    resolved = resolve_verified_merge_phase(comments, authority_receipt=authority, pr=phase_inputs["restored"][0])
+    assert resolved == receipts[-1]
+
+
+def test_consumer_v2_phase_cli_requires_exact_operation_key(tmp_path: Path) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    completed = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=[projection_convergence_comment(convergence_kwargs)],
+        convergence=convergence_kwargs["projection_convergence_receipt"],
+        phase="reconciled",
+        pr=merged_pr,
+        closed_issues=[3820, 3823],
+    )
+    assert completed.returncode != 0
+    assert "exact outbox operation" in completed.stderr
+
+
+def test_manual_full_path_phase_cli_rejects_consumer_or_mixed_history(tmp_path: Path) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    v2_predecessor = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        phase_version=2,
+        **convergence_kwargs,
+    )["phase_receipt_comment"]
+    comments = [
+        projection_convergence_comment(convergence_kwargs),
+        {"author_association": "OWNER", "body": v2_predecessor},
+    ]
+    completed = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=comments,
+        convergence=convergence_kwargs["projection_convergence_receipt"],
+        phase="merged",
+        pr=merged_pr,
+        mode="manual",
+    )
+    assert completed.returncode != 0
+    assert "manual mode" in completed.stderr
+
+    completed = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=[projection_convergence_comment(convergence_kwargs)],
+        convergence=convergence_kwargs["projection_convergence_receipt"],
+        phase="merged",
+        pr=merged_pr,
+        mode="manual",
+        post_effect_operation_key="f" * 64,
+    )
+    assert completed.returncode != 0
+    assert "post-effect" in completed.stderr
+
+    deployment_path = tmp_path / "deployment.json"
+    deployment_path.write_text("{}", encoding="utf-8")
+    completed = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=[projection_convergence_comment(convergence_kwargs)],
+        convergence=convergence_kwargs["projection_convergence_receipt"],
+        phase="merged",
+        pr=merged_pr,
+        mode="manual",
+        post_effect_deployment_json=deployment_path,
+    )
+    assert completed.returncode != 0
+    assert "post-effect" in completed.stderr
 
 
 def test_post_merge_race_reopens_only_closures_attributed_to_current_pr() -> None:
