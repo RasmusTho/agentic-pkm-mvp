@@ -90,12 +90,22 @@ def _container(project: str, service: str) -> dict[str, Any]:
 
 
 def _environment(row: dict[str, Any]) -> dict[str, str]:
+    entries = row['Config']['Env']
+    if not isinstance(entries, list):
+        raise RuntimeRefused()
     values: dict[str, str] = {}
-    for entry in row['Config']['Env']:
-        key, value = entry.split('=', 1)
-        if key in values:
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, str) or '\0' in entry:
             raise RuntimeRefused()
-        values[key] = value
+        key, separator, value = entry.partition('=')
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or key in seen:
+            raise RuntimeRefused()
+        seen.add(key)
+        # Docker preserves optional unset names. They supply no value, but
+        # still participate in duplicate detection with assigned entries.
+        if separator:
+            values[key] = value
     if any(values.get(key) for key in ('PGPASSWORD', 'POSTGRES_PASSWORD', 'PGPASSFILE',
                                       'PGSERVICE', 'PGSERVICEFILE', 'KARAKEEP_API_TOKEN', 'KARAKEEP_BASE_URL')):
         raise RuntimeRefused()
