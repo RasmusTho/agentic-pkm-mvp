@@ -1025,6 +1025,8 @@ reads only bounded exit status and OOM boolean, and durably fsyncs the fixed `so
 on the existing operation journal before removal. An evidence-write or cleanup failure preserves
 the container/admission rather than declaring successful cleanup. The field survives failed-state
 reconciliation and same-ID reads without worker replay; old receipts without it remain valid.
+The DEV-to-TEST controller accepts only an allowlisted failed-receipt class and preserves it in
+fresh and resumed failure outcomes/checkpoints; malformed or success-attached metadata refuses.
 Missing container state never turns a zero status into success. Foreign, drifted or ambiguous
 resources remain untouched. No Docker error text, logs or untrusted metadata is retained.
 The supervisor accepts these reasons only with one exact `source_projection` stage and one

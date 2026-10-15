@@ -6952,6 +6952,38 @@ def test_native_source_terminal_evidence_failure_preserves_container(tmp_path, m
     assert journal.read().source_failure is None
 
 
+def test_native_source_terminal_retry_reestablishes_durability_before_removal(tmp_path, monkeypatch):
+    import stat
+    from app.ops import postgres_deploy_linux as linux
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    removed = []
+    _source_terminal_docker(monkeypatch, journal, operation, plan.revision, 137, True, removed)
+    original_fsync = os.fsync
+    directory_identity = journal.directory.stat()
+    failed = False
+    directory_syncs = []
+    def fsync(descriptor):
+        nonlocal failed
+        renamed = json.loads((journal.directory / 'test.json').read_text()).get('source_failure') == 'source_worker_oom'
+        info = os.fstat(descriptor)
+        if (stat.S_ISDIR(info.st_mode) and renamed
+            and (info.st_dev, info.st_ino) == (directory_identity.st_dev, directory_identity.st_ino)):
+            if not failed:
+                failed = True
+                raise OSError('private sync diagnostic')
+            directory_syncs.append('synced')
+        return original_fsync(descriptor)
+    monkeypatch.setattr(os, 'fsync', fsync)
+    with pytest.raises(Exception):
+        linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, 137)
+    # Read bytes directly: journal.read itself re-fsyncs the directory, so using
+    # it here would repair the injected failure before the production retry.
+    assert json.loads((journal.directory / 'test.json').read_text())['source_failure'] == 'source_worker_oom'
+    assert removed == []
+    assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, 137) == 98
+    assert directory_syncs and removed == ['source_worker_oom']
+
+
 def test_native_source_failure_after_embedding_progress_keeps_only_fixed_reason(tmp_path, monkeypatch):
     from app.ops import postgres_deploy_linux as linux
     from app.ops.postgres_deploy import PostgresDeployError
