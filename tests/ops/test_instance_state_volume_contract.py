@@ -4044,8 +4044,15 @@ def test_linux_actual_harmless_process_with_empty_argv_is_enumerated(tmp_path) -
         executable=sys.executable,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        # Python 3.13's posix_spawn path rejects empty argv[0]. A new session
+        # uses the supported fork/exec path in a separate process group.
+        start_new_session=True,
     )
     try:
+        assert process.poll() is None
+        assert (Path("/proc") / str(process.pid) / "cmdline").read_bytes() == (
+            b"\0-c\0import time; time.sleep(30)\0\0tail\0\0"
+        )
         env = {**os.environ, "PATH": _empty_docker_path(tmp_path)}
         controller_pid = os.getpid()
         result, _ = _run_quiescence_helper(

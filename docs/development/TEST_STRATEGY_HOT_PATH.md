@@ -145,13 +145,30 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   duplicate execution; it does not promise a particular wall-clock speedup or suppress failures.
 - The nightly full suite reuses that non-overlapping process pattern with four parallel pytest
   processes and the same serial `tests/ops` / `test_vault_multiwriter.py` boundary. It preserves
-  `not pg and not alpha_llm` exactly, including E2E and the other marker classes omitted on the
-  PR path. Every invocation retains the canonical temporary namespace, plugin autoload and
-  importlib collection; each has the existing 120-second thread watchdog, verbose node IDs,
-  short tracebacks, unbuffered output and the slowest 30 durations. The batch ceiling is 35 minutes
-  with a 45-minute job ceiling for installation, later checks and uploads. The triggering #6063
-  run exhausted the former 20-minute step after partial execution; the new batch margin matches
-  the existing PR baseline and does not establish a measured speedup.
+  every selected test while discovering `tests/deploy` at file granularity; other top-level
+  groups keep their existing discovery. The measured longest deploy file,
+  `test_deploy_channel_script.py`, is queued first, with the remaining discovered paths sorted.
+  Fully deselected files remain in the finite inventory and require their empty JUnit result.
+  The selection remains
+  `not pg and not alpha_llm and not eval`, including E2E and the other marker classes omitted on
+  the PR path. The qualified real-eval lane remains opt-in; the ten deterministic SV/EN checks
+  stay in this nightly selection. Every invocation retains the canonical temporary namespace,
+  plugin autoload and importlib collection; each has the existing 120-second thread watchdog, verbose node IDs,
+  short tracebacks, unbuffered output and the slowest 30 durations. The batch ceiling is 50 minutes
+  with a 60-minute job ceiling for installation, later checks and uploads. The triggering #6063
+  run exhausted the former 20-minute step after partial execution. Later, #6090's
+  [Python 3.12 job](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38638069945/job/116106250882)
+  completed all 132 shards and 20,208 reported cases at 35 minutes 6 seconds but timed out at the
+  35-minute ceiling. A [later run](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38649149411)
+  exhausted the 40-minute limit on both versions after their deploy groups took 31m31s and
+  32m46s, leaving the serial phase incomplete. After file grouping,
+  [run 38658078391](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38658078391)
+  completed all 155 shards and 20,343 reported cases on both versions with zero failures, but
+  Python 3.12 still timed out at 40m06s; Python 3.13 completed at 39m34s. The measured envelope
+  allows 20% beyond the slower complete run plus one minute, with separate setup and upload
+  reserves. Prior failed proof and timeout accounting remain unwaived. Neither grouping nor
+  a larger ceiling establishes acceptance: complete current-head inventories, failure-free
+  required targets, no timeout, and successful later checks still qualify the producer.
 - Nightly shard inventory, raw exit statuses, per-shard logs and JUnit results live under
   `$RUNNER_TEMP/pytest-nightly-shards` and are uploaded with the aggregate log by an `always()`
   step. A completed phase requires each expected shard exactly once and a JUnit testcase count
