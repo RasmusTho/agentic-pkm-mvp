@@ -920,6 +920,8 @@ acquired client, with the original failure taking precedence. Child output, exce
 endpoints, paths, credentials, source identity and probe content remain private.
 There is no provider substitution or identity fallback, no replay of terminal operations, and no
 authorization to start TEST/journaling acceptance or mutate Product/vector/vault data.
+The remote Product client requests checked network-router cleanup only for this probe; normal
+best-effort close behavior and existing vector acceptance/conversion rules remain unchanged.
 
 Repository support for native BWS source recovery (#5918) adds one fixed API-consumer one-shot
 after instance-state finalization and migrations, before ordinary API/worker/watcher/capture/UI

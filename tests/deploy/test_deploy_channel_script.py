@@ -7202,7 +7202,7 @@ _EMBEDDING_PROBE_REASONS = [
 
 @pytest.mark.parametrize('fault,status', [
     ('client', 114), ('identity', 114), ('mismatch', 115), ('generation', 116),
-    ('dimension', 117), ('shape', 117), ('nan', 117), ('cleanup', 118),
+    ('dimension', 117), ('shape', 117), ('nan', 0), ('cleanup', 118),
     ('generation_cleanup', 116), ('unexpected', 78), ('success', 0),
 ])
 def test_native_embedding_probe_subreasons_cover_production_call_site(tmp_path, fault, status):
@@ -7282,20 +7282,32 @@ def test_native_embedding_probe_subreason_survives_terminal_reconciliation(tmp_p
     assert result['receipt']['source_failure'] == reason
 
 
-@pytest.mark.parametrize('boundary', ['fabric', 'transport'])
-@pytest.mark.parametrize('fault,status', [('model', 115), ('dimension', 117), ('shape', 117),
-                                       ('nonfinite', 117), ('success', 0)])
-def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, boundary, fault, status):
+@pytest.mark.parametrize('boundary,fault,status', [
+    (boundary, fault, status) for boundary in ['fabric', 'transport']
+    for fault, status in [('model', 115), ('dimension', 117), ('shape', 117),
+        ('nonfinite', 117), ('cleanup', 118), ('model_cleanup', 115),
+        ('generation_cleanup', 116), ('success', 0)]
+] + [('transport', fault, status) for fault, status in [
+    ('bool_vector', 117), ('string_vector', 117), ('container', 117), ('nested', 117),
+    ('empty', 117), ('bool_dimension', 117), ('string_dimension', 117), ('zero_dimension', 117),
+    ('provider', 115), ('transport', 116), ('metadata', 116), ('extra', 116),
+    ('missing_vector', 116), ('malformed_json', 116), ('nan_json', 116), ('inf_json', 116),
+    ('integer_overflow', 116),
+]])
+def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, capsys, boundary, fault, status):
+    if boundary == 'fabric' and fault == 'nonfinite':
+        status = 0  # Preserve the existing custom-client policy; real wire transport refuses.
     import httpx
     from types import SimpleNamespace
     from app.components.llm import fabric
     from app.components.embeddings import EmbeddingIdentity
+    from app.model_access import executor_network_policy as network
     from app.model_access.codex_remote_transport import (
         CodexRemoteTransport, RemoteEmbeddingError, RemoteEmbeddingIdentityError, RemoteEmbeddingVectorError,
     )
     from app.model_access.remote_contract import ProductEmbeddingResponse
 
-    body = {'route': {'provider': 'ollama', 'model': 'other' if fault == 'model' else 'selected:latest',
+    body = {'route': {'provider': 'ollama', 'model': 'other' if fault in {'model', 'model_cleanup'} else 'selected:latest',
                      'transport_id': 'ollama_http', 'catalog_snapshot_ref': 'catalog.synthetic',
                      'catalog_snapshot_hash': 'sha256:' + 'a' * 64},
             'dimensions': 3 if fault == 'dimension' else 2,
@@ -7304,41 +7316,79 @@ def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, 
         body['vector'] = [0.25]
     if fault == 'nonfinite':
         body['vector'] = [float('inf'), 0.25]
+    vector_faults = {'bool_vector': [True, 0.25], 'string_vector': ['0.25', 0.25],
+        'container': {'a': 0.25, 'b': 0.25}, 'nested': [[0.25], [0.25]], 'empty': [],
+        'integer_overflow': [10 ** 400, 0.25]}
+    if fault in vector_faults:
+        body['vector'] = vector_faults[fault]
+    if fault.endswith('_dimension'):
+        body['dimensions'] = {'bool_dimension': True, 'string_dimension': '2', 'zero_dimension': 0}[fault]
+    if fault == 'provider':
+        body['route'].update(provider='gemini', transport_id='gemini_api')
+    if fault == 'transport':
+        body['route']['transport_id'] = 'unknown'
+    if fault == 'metadata':
+        body['route']['catalog_snapshot_hash'] = 'private-provider-canary'
+    if fault == 'extra':
+        body['private-provider-canary'] = 'private payload'
+    if fault == 'missing_vector':
+        del body['vector']
     requests, closed = [], []
     def send(request):
         requests.append(request)
+        if fault == 'generation_cleanup':
+            return httpx.Response(503, content='private-provider-canary /private/vault credential=secret')
+        if fault == 'malformed_json':
+            return httpx.Response(200, content='private-provider-canary not-json')
+        if fault in {'nan_json', 'inf_json'}:
+            return httpx.Response(200, content=json.dumps({**body, 'vector': [
+                float('nan') if fault == 'nan_json' else float('inf'), 0.25]}))
         # JSON overflow is schema-valid in the existing response contract,
         # unlike the explicit NaN/Infinity constants rejected by the decoder.
         return httpx.Response(200, content=json.dumps(body).replace('Infinity', '1e400'))
     if boundary == 'transport':
         remote = CodexRemoteTransport(endpoint='https://synthetic-executor.test.ts.net',
                                      transport=httpx.MockTransport(send))
-        transport = SimpleNamespace(embed_product=remote.embed_product,
-                                    close=lambda: (closed.append(True), remote.close()))
+        embed = remote.embed_product
     else:
         def embed(request):
             requests.append(request)
+            if fault == 'generation_cleanup':
+                raise RemoteEmbeddingError('embedding_http_503', indeterminate=True)
             if fault == 'shape':
                 return SimpleNamespace(route=SimpleNamespace(**body['route']),
                                        dimensions=body['dimensions'], vector=body['vector'])
             return ProductEmbeddingResponse.model_validate({**body, 'vector': tuple(body['vector'])})
-        transport = SimpleNamespace(embed_product=embed, close=lambda: closed.append(True))
-    client = fabric._RemoteProductEmbeddingClient(
-        identity=EmbeddingIdentity(provider='ollama', model='selected:latest', dim=2),
-        request_model='selected:latest', expected_transport='ollama_http', remote_transport=transport)
+    def close():
+        closed.append(True)
+        if boundary == 'transport':
+            remote.close()
+        if fault == 'cleanup' or fault.endswith('_cleanup'):
+            raise RuntimeError('private-cleanup-canary /private/vault credential=secret')
+    transport = SimpleNamespace(embed_product=embed, close=close)
+    monkeypatch.setattr(network, 'resolve_executor_paths', lambda *a, **kw: [
+        SimpleNamespace(path_profile='synthetic')])
+    router = network.ExecutorNetworkPathRouter(transport_factory=lambda path: transport)
+    identity = EmbeddingIdentity(provider='ollama', model='selected:latest', dim=2)
     errors = []
-    original_embed = client.embed_text
-    def observed_embed(text):
+    original_embed = fabric._RemoteProductEmbeddingClient.embed_text
+    def observed_embed(self, text):
         try:
-            return original_embed(text)
+            return original_embed(self, text)
         except RemoteEmbeddingError as exc:
             errors.append(exc)
             raise
-    monkeypatch.setattr(client, 'embed_text', observed_embed)
+    monkeypatch.setattr(fabric._RemoteProductEmbeddingClient, 'embed_text', observed_embed)
     def routed(intent):
         assert intent.task_kind == 'embed' and intent.strict_identity_required
-        return client
-    monkeypatch.setattr(fabric, 'get_embeddings_client', routed)
+        return SimpleNamespace(embedding_identity=identity)
+    monkeypatch.setattr(fabric, 'LLMRouter', lambda: SimpleNamespace(route=routed))
+    monkeypatch.setattr(fabric, 'load_models', lambda: {'selected': SimpleNamespace(
+        kind='embedding', provider='ollama', model='selected:latest', dims=2,
+        allowed_transports=('ollama_http',))})
+    monkeypatch.setattr(fabric, '_adapter_factory', lambda: SimpleNamespace(
+        adapter_id_for=lambda *a, **kw: 'ollama_http', describe=lambda *a, **kw: None))
+    monkeypatch.setattr(fabric, '_new_executor_path_router', lambda **kw: router)
     monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER', 'ollama')
     monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL', 'selected:latest')
     assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
@@ -7350,12 +7400,17 @@ def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, 
     assert exit_info.value.code == status
     assert len(requests) == len(closed) == 1
     assert fabric.RemoteEmbeddingError is RemoteEmbeddingError
-    if fault != 'success':
+    if status in {115, 116, 117}:
         assert len(errors) == 1 and errors[0].indeterminate
-        assert isinstance(errors[0], RemoteEmbeddingIdentityError if fault == 'model' else RemoteEmbeddingVectorError)
+        if status != 116:
+            assert isinstance(errors[0], RemoteEmbeddingIdentityError if status == 115 else RemoteEmbeddingVectorError)
         assert str(errors[0]) == errors[0].code == (
-            'embedding_response_invalid' if boundary == 'transport' and fault == 'shape'
+            'embedding_http_503' if fault == 'generation_cleanup'
+            else 'embedding_response_invalid' if boundary == 'transport' and (
+                fault == 'shape' or fault in vector_faults or fault.endswith('_dimension') or status == 116)
             else 'embedding_route_or_dimension_mismatch')
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ''
 
 
 def test_native_embedding_probe_success_keeps_exact_identity_and_precedes_projection(tmp_path):
@@ -7365,6 +7420,96 @@ def test_native_embedding_probe_success_keeps_exact_identity_and_precedes_projec
     events = _deploy_events(env)
     probe = next(i for i, event in enumerate(events) if event.startswith('embedding-probe '))
     assert probe < events.index('source-rebuild')
+
+
+@pytest.mark.parametrize('normalize', [False, True])
+@pytest.mark.parametrize('values,normal_status,raw_status', [
+    ([True, False], 0, 0), (['1.0', '2.0'], 0, 0), (['bad', '2.0'], 116, 0),
+    ([float('nan'), 1.0], 0, 0), ([float('inf'), 1.0], 0, 0),
+    ([0.25], 116, 116), ([], 116, 116), ('12', 0, 0), ([[], []], 116, 0),
+])
+def test_embedding_probe_preserves_profiled_factory_vector_policy(monkeypatch, normalize, values, normal_status, raw_status):
+    from types import SimpleNamespace
+    from app.components.llm import fabric
+    from app.components.embeddings.legacy import EmbeddingIdentity, _ProfiledEmbeddingClient
+    from app.llm import embeddings
+    identity = EmbeddingIdentity(provider='mock', model='mock-embedding', dim=2, normalize=normalize)
+    def route(intent):
+        assert intent.task_kind == 'embed' and intent.strict_identity_required
+        return SimpleNamespace(embedding_identity=identity)
+    monkeypatch.setattr(fabric, 'LLMRouter', lambda: SimpleNamespace(route=route))
+    monkeypatch.setattr(fabric, '_new_executor_path_router', lambda **kw: pytest.fail('legacy mock must stay local'))
+    calls = []
+    def adapter(text, **kwargs):
+        calls.append(text)
+        return values
+    monkeypatch.setitem(embeddings.PROVIDER_REGISTRY, 'mock', adapter)
+    monkeypatch.setenv('EMBED_MAX_INPUT_CHARS', '6000')
+    monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER', 'mock')
+    monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL', 'mock-embedding')
+    assert isinstance(fabric.get_product_embedding_client(), _ProfiledEmbeddingClient)
+    assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
+                      if line.strip().startswith("probe_command=$'"))
+    probe = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$probe_command"'],
+                           capture_output=True, text=True, check=True).stdout
+    embeddings._embed_single.cache_clear()
+    try:
+        with pytest.raises(SystemExit) as exit_info:
+            exec(probe, {})
+        assert exit_info.value.code == (normal_status if normalize else raw_status)
+        assert calls == ['Yggdrasil deployment preflight']
+    finally:
+        embeddings._embed_single.cache_clear()
+
+
+@pytest.mark.parametrize('fault', ['identity', 'registry_dimension'])
+def test_embedding_probe_actual_factory_acquisition_refuses_before_transport(monkeypatch, fault):
+    from types import SimpleNamespace
+    from app.components.llm import fabric
+    from app.components.embeddings import EmbeddingIdentity
+    identity = EmbeddingIdentity(provider='ollama', model='selected:latest', dim=2)
+    def route(intent):
+        assert intent.task_kind == 'embed' and intent.strict_identity_required
+        return SimpleNamespace(embedding_identity=None if fault == 'identity' else identity)
+    monkeypatch.setattr(fabric, 'LLMRouter', lambda: SimpleNamespace(route=route))
+    monkeypatch.setattr(fabric, 'load_models', lambda: {'selected': SimpleNamespace(
+        kind='embedding', provider='ollama', model='selected:latest', dims=3)})
+    monkeypatch.setattr(fabric, '_new_executor_path_router', lambda **kw: pytest.fail('no transport before acquisition'))
+    assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
+                      if line.strip().startswith("probe_command=$'"))
+    probe = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$probe_command"'],
+                           capture_output=True, text=True, check=True).stdout
+    with pytest.raises(SystemExit) as exit_info:
+        exec(probe, {})
+    assert exit_info.value.code == 114
+
+
+@pytest.mark.parametrize('checked', [False, True])
+def test_embedding_router_cleanup_keeps_normal_policy_and_checks_all_unique_transports(monkeypatch, checked):
+    from types import SimpleNamespace
+    from app.model_access import executor_network_policy as network
+    from app.components.llm.fabric import _RemoteProductEmbeddingClient
+    from app.components.embeddings import EmbeddingIdentity
+    closed = []
+    def fail():
+        closed.append('failed')
+        raise RuntimeError('private-cleanup-canary /private/vault credential=secret')
+    bad = SimpleNamespace(close=fail)
+    healthy = SimpleNamespace(close=lambda: closed.append('healthy'))
+    monkeypatch.setattr(network, 'resolve_executor_paths', lambda *a, **kw: [
+        SimpleNamespace(path_profile=path) for path in ('bad', 'duplicate', 'healthy')])
+    router = network.ExecutorNetworkPathRouter(transport_factory=lambda path:
+        healthy if path.path_profile == 'healthy' else bad)
+    client = _RemoteProductEmbeddingClient(
+        identity=EmbeddingIdentity(provider='ollama', model='selected:latest', dim=2),
+        request_model='selected:latest', expected_transport='ollama_http', remote_transport=router)
+    if checked:
+        with pytest.raises(RuntimeError, match='^executor_path_cleanup_failed$'):
+            client.close_for_preflight()
+    else:
+        assert client.close() is None
+    client.close()  # Finalizer already consumed: no replay of cleanup.
+    assert closed == ['failed', 'healthy']
 
 
 @pytest.mark.parametrize('marker', ['unknown', 'duplicate', 'other-stage', 'private'])

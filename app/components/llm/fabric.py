@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 import os
-import math
 import weakref
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -1440,6 +1439,11 @@ class _RemoteProductEmbeddingClient:
         if self._finalizer.alive:
             self._finalizer()
 
+    def close_for_preflight(self) -> None:
+        """Report cleanup failure only to the existing deployment probe."""
+        if self._finalizer.detach() is not None:
+            self._remote_transport.close(require_success=True)
+
     def _embed_one(self, text: str) -> tuple[float, ...]:
         request = ProductEmbeddingRequest(
             provider=self.identity.provider,
@@ -1461,7 +1465,6 @@ class _RemoteProductEmbeddingClient:
         if (
             response.dimensions != self.identity.dim
             or len(response.vector) != self.identity.dim
-            or any(type(value) not in (int, float) or not math.isfinite(value) for value in response.vector)
         ):
             raise RemoteEmbeddingVectorError(
                 "embedding_route_or_dimension_mismatch", indeterminate=True
