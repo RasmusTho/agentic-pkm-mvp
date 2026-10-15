@@ -7187,6 +7187,12 @@ def test_local_retirement_rejects_cross_line_dedicated_worktree_marker(
             "| Dedicated worktree /tmp/old | is pending review |\n"
             "| later | row |"
         ),
+        (
+            "| receipt | details |\n"
+            "| --- | --- |\n"
+            "| Dedicated worktree /tmp/old | is on hold |\n"
+            "| later | row |"
+        ),
     ],
 )
 def test_local_retirement_rejects_gfm_table_dedicated_worktree_marker(

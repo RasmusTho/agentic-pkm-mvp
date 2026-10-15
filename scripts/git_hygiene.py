@@ -1758,9 +1758,9 @@ _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE = re.compile(
 )
 _DISPATCHER_TABLE_TRUNCATED_CONTINUATION_RE = re.compile(
     r"^\s*(?:"
-    r"is(?:\s+still(?:\s+dirty)?\b)?"
-    r"|still(?:\s+dirty\b)?"
-    r")(?:\s+on\b|\s+at\b|\s*$)",
+    r"(?:is|still)\s*$"
+    r"|(?:is\s+still\s+dirty|still\s+dirty)(?:\s+on\b|\s+at\b|\s*$)"
+    r")",
     re.IGNORECASE,
 )
 
