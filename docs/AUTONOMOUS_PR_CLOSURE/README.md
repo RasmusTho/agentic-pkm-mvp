@@ -1,7 +1,7 @@
-State: Filed target-state Builder System capability specification. Existing parent #3224 remains
-`agent:blocked`; producer #3602 is delivered, execution-authority prerequisite #3603 is
-`agent:needs-human`, and post-merge closure #3604 is `agent:blocked` on #3603. No new parent or
-child Issue was created because these live, authoritative Issues already cover the bounded chain.
+State: Filed target-state Builder System capability specification. #3603 is closed for topology
+reconciliation only; #3604 retains the incomplete closure capability. Artifact-only producer work
+can be delivered independently of the credentialed VM102 consumer and live pilot. No repository
+contract, CI result, or component activation proves executor qualification or deployment.
 Doc role: Builder System capability specification
 Authority: This directory owns the capability boundary, decomposition, cross-task invariants,
 verification path, and acceptance path. GitHub Issues own executable lifecycle truth; GitHub PR,
@@ -10,7 +10,7 @@ Owner: Builder System governance
 Temporal class: Target-state implementation contract
 Source of truth: #3224, #3603, #3604, `verification-and-closure`, live GitHub delivery evidence,
 and the BuilderOps API/outbox contract for durable execution state.
-Last reviewed: 2026-08-15
+Last reviewed: 2026-10-15
 
 # Autonomous PR verification and closure
 
@@ -31,12 +31,21 @@ operate that policy safely.
 
 - [#3602](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3602) delivered the artifact-only,
   current-head verification dispatch producer. It never invokes a model or mutates GitHub.
-- [#3603](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3603) is the exclusive existing
-  prerequisite for the API-backed, host-fenced `verification_closer` execution authority. Its
-  installed-main Demerzel cycle is not yet proved, so it is currently `agent:needs-human`.
-- [#3604](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3604) is the exclusive existing
-  owner for post-merge dispatch, `merged_closure_pending`, orphan recovery, and the owner-document
-  terminal gate. It is dependency-blocked on #3603.
+- [#3603](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3603) closed the bounded BCP-05
+  topology reconciliation with `REWRITE_FOR_VM`; its receipt does not qualify an executor.
+  [#5056](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5056) establishes bounded component
+  activation, not an installed-main verifier cycle. The current target is VM102 (`bob-1`, guest
+  identity `builder-system`); Demerzel is a control/development/client/operator computer.
+- [#3604](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3604) retains post-merge dispatch,
+  `merged_closure_pending`, orphan recovery, and the owner-document terminal gate. Its producer can
+  be a bounded child; consumer and end-to-end pilot acceptance remain incomplete on #3604.
+- [#4897](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4897) owns post-effect recovery,
+  continuous v2 phase authority and the owner-doc watchdog; #3604 consumes that authority without
+  duplicating it. [#4893](https://github.com/RasmusTho/agentic-pkm-mvp/issues/4893) owns later native
+  single-closer integration.
+- [#5181](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5181) owns complete VM102 candidate,
+  source/model/system qualification and operator gates; [#3793](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3793)
+  owns canonical-writer/no-fallback cutover. Neither is discharged by a producer delivery.
 - [#3224](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3224) remains the live parent
   validation hub for autonomous review, repair, and closure gates. This directory does not turn it
   into a pickup Issue.
@@ -114,16 +123,20 @@ repair accounting.
 
 ## Implementation tasks and order
 
-1. Existing [BCP-05 / #3603](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3603) is the
-   external execution-authority prerequisite. Its canonical task contract remains
-   `docs/BUILDEROPS_CONTROL_PLANE/DEMERZEL_REVIEW_MERGE_ORCHESTRATION.md`; this directory does not
-   remap that Issue or duplicate its acceptance ledger.
-2. [Dispatch and reconcile post-merge closure](DISPATCH_AND_RECONCILE_POST_MERGE_CLOSURE.md)
-   (AVC-01, existing #3604) consumes that authority to make post-merge closure self-healing.
+1. Deliver the artifact-only producer slice defined in
+   [AVC-01](DISPATCH_AND_RECONCILE_POST_MERGE_CLOSURE.md#artifact-only-producer-slice). It builds
+   the versioned request, links classification, and supports bounded scheduled/manual recovery
+   from explicit read-only evidence. It grants no executor or lifecycle-mutation authority.
+2. Deliver the separate VM102 closure consumer against the qualified existing BuilderOps
+   API/PostgreSQL/outbox authority, preserving ChatGPT subscription/keyring authentication and the
+   one-active-chain invariant. #5181 qualification and #3793 cutover gates apply before their
+   respective runtime effects; #4897 and #4893 retain their named integration ownership.
+3. Prove #3604's consumer, owner-doc terminal gate, active-delivery lane release, and governed
+   pilot/replay acceptance. Only complete evidence can discharge #3604 and feed #3224 validation.
 
-BCP-05 / #3603 must finish its host-authority and pilot proof before AVC-01 becomes ready. The
-dependency and AVC-01 intentionally do not run in parallel because they share the same execution
-authority and one-active-chain safety invariant.
+Producer implementation may precede consumer qualification because it emits inert artifacts only.
+Consumer activation and a live pilot remain separately gated; no artifact-only test substitutes for
+those proofs. Existing BCP-05 source names remain historical identifiers, not Demerzel placement.
 
 ## Verification and pilot / acceptance path
 
@@ -145,7 +158,7 @@ owner-document gate still has current evidence.
 
 ## Relationship to GitHub Issues
 
-No duplicate parent or child backlog was filed in this specification pass. #3224 is the existing
-parent validation hub; #3603 and #3604 are the existing independently deliverable issue contracts
-in dependency order. Their live GitHub labels and exact-head evidence, rather than this document's
-status line, govern pickup and completion.
+#3224 remains the parent validation hub; #3603 retains its completed reconciliation record and
+#3604 retains the full closure capability acceptance. A bounded producer child must reference the
+committed producer contract and #3604, pass strict readiness, and leave #3604 open for the consumer
+and pilot. Live GitHub state and exact-head evidence govern pickup and completion.
