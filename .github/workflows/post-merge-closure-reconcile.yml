@@ -107,6 +107,9 @@ jobs:
           for page in pages:
               for pr in page:
                   if pr.get("merged_at") and pr.get("merge_commit_sha"):
+                      # This producer has no consumer receipt source and must not
+                      # synthesize one. Missing terminal evidence stays pending;
+                      # repeated request identity is the bounded recovery contract.
                       result = classify(
                           pr=pr,
                           files_payload=[],

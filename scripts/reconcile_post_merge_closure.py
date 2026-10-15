@@ -27,6 +27,7 @@ MAX_BACKOFF_ATTEMPTS = 3
 MAX_BACKOFF_SECONDS = 300
 CURSOR_VERSION = "closure-reconcile-cursor.v1"
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+_REPOSITORY = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 def _dict(value: object) -> dict[str, object]:
@@ -62,6 +63,23 @@ def _merge_sha(pr: Mapping[str, object]) -> str:
     return merge_sha if isinstance(merge_sha, str) else ""
 
 
+def _repository(pr: Mapping[str, object]) -> str:
+    value = pr.get("repository")
+    if isinstance(value, str):
+        return value
+    if isinstance(value, Mapping):
+        for key in ("full_name", "name_with_owner"):
+            candidate = value.get(key)
+            if isinstance(candidate, str) and candidate:
+                return candidate
+    base = _dict(pr.get("base"))
+    return (
+        _nested_str(base, "repo", "full_name")
+        or _nested_str(base, "repository", "full_name")
+        or _nested_str(base, "repo", "name_with_owner")
+    )
+
+
 def _receipt_identity_matches(receipt: object, *, repository: str, pr_number: int, merge_sha: str) -> bool:
     data = _dict(receipt)
     return (
@@ -91,15 +109,7 @@ def classify_pending(
     PR. Missing, unavailable, malformed, or conflicting evidence is pending.
     """
 
-    repository_value = pr.get("repository")
-    repository = repository_value if isinstance(repository_value, str) else ""
-    if isinstance(repository_value, Mapping):
-        repository = str(repository_value.get("full_name") or repository_value.get("name_with_owner") or "")
-    if not repository:
-        base = _dict(pr.get("base"))
-        repository = _nested_str(base, "repo", "full_name") or _nested_str(base, "repository", "full_name")
-    if not repository:
-        repository = _nested_str(pr, "base", "repo", "name_with_owner")
+    repository = _repository(pr)
     number = pr.get("number")
     merge_sha = _merge_sha(pr)
     evidence = _dict(authoritative_evidence)
@@ -231,7 +241,7 @@ def recover(
         return {"requests": [], "pending": [], "overflow": True, "continuation_cursor": None, "error": cursor_error}
     if page_start < pages_start:
         return {"requests": [], "pending": [], "overflow": True, "continuation_cursor": None, "error": "cursor precedes collected pages"}
-    if rest_attempt < 0 or rest_attempt >= MAX_BACKOFF_ATTEMPTS:
+    if rest_attempt < 0:
         return {
             "requests": [],
             "pending": [],
@@ -239,8 +249,9 @@ def recover(
             "overflow": True,
             "continuation_cursor": encode_cursor(page=page_start, offset=item_start, window_end=window_end),
             "backoff": backoff,
-            "error": "REST backoff cap reached",
+            "error": "REST backoff attempt is invalid",
         }
+    rest_exhausted = rest_attempt >= MAX_BACKOFF_ATTEMPTS
     requests: list[dict[str, object]] = []
     pending: list[dict[str, object]] = []
     complete: list[dict[str, object]] = []
@@ -248,6 +259,26 @@ def recover(
     scanned_requests = 0
     labels = classifications or {}
     local_start = page_start - pages_start
+    if not _REPOSITORY.fullmatch(repository):
+        return {
+            "requests": [],
+            "pending": [],
+            "complete": [],
+            "overflow": True,
+            "continuation_cursor": None,
+            "backoff": backoff,
+            "error": "repository identity is malformed",
+        }
+    if local_start > len(pages):
+        return {
+            "requests": [],
+            "pending": [],
+            "complete": [],
+            "overflow": True,
+            "continuation_cursor": None,
+            "backoff": backoff,
+            "error": "cursor is beyond collected pages",
+        }
     for offset, page in enumerate(pages[local_start : local_start + max_pages], start=page_start):
         scanned_pages += 1
         if len(page) > MAX_ITEMS_PER_PAGE:
@@ -268,10 +299,13 @@ def recover(
             scanned_requests += 1
             if not _merged(pr):
                 continue
+            number = pr.get("number")
+            if _repository(pr) != repository:
+                pending.append({"pr_number": number, "reason": "foreign or missing repository evidence"})
+                continue
             merged_at = _parse_timestamp(pr.get("merged_at"))
             if merged_at is None or merged_at < start or merged_at > end:
                 continue
-            number = pr.get("number")
             classification = labels.get(str(number)) if isinstance(number, int) else None
             if not isinstance(classification, Mapping):
                 pending.append({"pr_number": number, "reason": "missing classification evidence"})
@@ -292,20 +326,24 @@ def recover(
             )
             if request is not None:
                 requests.append(request)
+                pending.append({"pr_number": number, "reason": pending_state["reason"]})
             else:
                 pending.append({"pr_number": number, "reason": "missing or mismatched classification/merge evidence"})
-    more = page_start - pages_start + scanned_pages < len(pages)
+    collected_next_page = page_start + scanned_pages
+    more = page_start - pages_start + scanned_pages < len(pages) or rest_exhausted
+    continuation = encode_cursor(page=collected_next_page, window_end=window_end) if more else None
     return {
         "requests": requests,
         "pending": pending,
         "complete": complete,
         "overflow": more,
-        "continuation_cursor": encode_cursor(page=page_start + scanned_pages, window_end=window_end) if more else None,
+        "continuation_cursor": continuation,
         "scanned_pages": scanned_pages,
         "scanned_requests": scanned_requests,
         "window_end": window_end,
         "window_start": start.isoformat().replace("+00:00", "Z"),
         "backoff": backoff,
+        **({"error": "REST backoff cap reached"} if rest_exhausted else {}),
     }
 
 

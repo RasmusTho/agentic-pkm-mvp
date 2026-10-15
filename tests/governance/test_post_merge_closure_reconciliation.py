@@ -36,6 +36,15 @@ def test_bounded_recovery_rediscovers_orphaned_merge() -> None:
     assert result["overflow"] is False
     assert len(result["requests"]) == 1
     assert result["requests"][0]["stage"] == "closure"
+    assert result["pending"] == [{"pr_number": 6113, "reason": "terminal closure evidence is incomplete"}]
+    replay = recover(
+        repository=REPOSITORY,
+        pages=[[_pr()]],
+        classifications={"6113": _classification()},
+        window_end="2026-10-15T08:00:00Z",
+    )
+    assert replay["requests"][0]["idempotency_key"] == result["requests"][0]["idempotency_key"]
+    assert replay["complete"] == []
 
 
 def test_cursor_overflow_and_backoff_preserve_scan_bounds() -> None:
@@ -69,7 +78,9 @@ def test_cursor_overflow_and_backoff_preserve_scan_bounds() -> None:
         window_end="2026-10-15T08:00:00Z",
         rest_attempt=3,
     )
-    assert capped["requests"] == []
+    assert len(capped["requests"]) == 1
+    assert capped["pending"] == [{"pr_number": 6113, "reason": "terminal closure evidence is incomplete"}]
+    assert capped["continuation_cursor"]
     assert capped["backoff"]["retry"] is False
 
 
@@ -138,3 +149,55 @@ def test_invalid_offset_and_exhausted_backoff_preserve_continuation() -> None:
     )
     assert exhausted["overflow"] is True
     assert exhausted["continuation_cursor"]
+
+
+def test_retry_exhaustion_keeps_collected_pages_and_advances_cursor() -> None:
+    pages = [[_pr(6113)], [_pr(6114)]]
+    classifications = {str(number): _classification(number) for number in (6113, 6114)}
+    result = recover(
+        repository=REPOSITORY,
+        pages=pages,
+        classifications=classifications,
+        window_end="2026-10-15T08:00:00Z",
+        rest_attempt=3,
+    )
+    assert len(result["requests"]) == 2
+    assert result["overflow"] is True
+    assert result["error"] == "REST backoff cap reached"
+    assert result["continuation_cursor"]
+    resumed = recover(
+        repository=REPOSITORY,
+        pages=[[_pr(6115)]],
+        classifications={"6115": _classification(6115)},
+        cursor=result["continuation_cursor"],
+        pages_start=3,
+        window_end="2026-10-15T08:00:00Z",
+    )
+    assert len(resumed["requests"]) == 1
+
+
+def test_foreign_repository_cannot_complete_from_terminal_receipt() -> None:
+    foreign_repository = "other/example"
+    foreign_pr = {**_pr(), "repository": foreign_repository}
+    foreign_classification = {
+        **_classification(),
+        "repository": foreign_repository,
+        "authoritative_evidence": {
+            "closure_receipt": {
+                "contract": "closure_delivery_receipt.v1",
+                "repository": foreign_repository,
+                "pr_number": 6113,
+                "merge_sha": MERGE_SHA,
+                "status": "complete",
+            }
+        },
+    }
+    result = recover(
+        repository=REPOSITORY,
+        pages=[[foreign_pr]],
+        classifications={"6113": foreign_classification},
+        window_end="2026-10-15T08:00:00Z",
+    )
+    assert result["complete"] == []
+    assert result["requests"] == []
+    assert result["pending"] == [{"pr_number": 6113, "reason": "foreign or missing repository evidence"}]

@@ -93,9 +93,12 @@ or delivery state.
 
 The request identity is `repository + PR number + exact merge SHA + closure stage + contract
 version`. Event and recovery requests therefore converge on the same idempotency key. The
-classifier keeps missing, unavailable, or conflicting terminal evidence pending. The producer
-does not establish the VM102 consumer, durable consumer deduplication, owner-doc terminal receipt,
-lane release, or the governed live pilot/replay; those remain open acceptance gates on #3604.
+classifier keeps missing, unavailable, or conflicting terminal evidence pending. The scheduled
+producer has no consumer receipt source and must not synthesize one: a missing
+`closure_delivery_receipt.v1` remains pending and bounded recovery may re-emit the same request
+identity. The producer does not establish the VM102 consumer, durable consumer deduplication,
+owner-doc terminal receipt, lane release, or the governed live pilot/replay; those remain open
+acceptance gates on #3604.
 
 ## VM102 consumer and remaining acceptance
 
