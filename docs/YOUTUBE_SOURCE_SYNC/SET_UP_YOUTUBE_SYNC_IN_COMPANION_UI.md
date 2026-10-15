@@ -101,7 +101,7 @@ A UI that shows "up to date" while the runner is dead, leaks a token, or lets a 
 
 ## How to Verify (Pre-Merge)
 
-- `pytest -q tests/companion_ui/test_youtube_sync_section.py tests/api/test_companion_youtube_routes.py`
+- `pytest -q tests/companion_ui/test_youtube_sync_setup.py tests/api/test_companion_youtube_routes.py`
 - `pytest -q -m "not pg"` (companion routes + UI are hot-path; full default suite)
 - `ruff check app tests && mypy app`
 
