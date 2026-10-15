@@ -3541,6 +3541,186 @@ def test_rest_pagination_bound_fails_closed(monkeypatch: pytest.MonkeyPatch) -> 
     with pytest.raises(known_defects.KnownDefectsError, match="pagination bound"):
         gateway._list_paginated("repos/RasmusTho/agentic-pkm-mvp/issues")
 
+    monkeypatch.setattr(
+        gateway,
+        "_request",
+        lambda _method, endpoint: (
+            [{"id": number, "body": "ordinary comment"} for number in range(1, 101)]
+            if "/issues/comments?" in endpoint
+            else []
+        ),
+    )
+    with pytest.raises(known_defects.KnownDefectsError, match="pagination repeated"):
+        gateway.refresh_registry_identities()
+    assert gateway._registry_identity_numbers is None
+
+
+def test_authoritative_comment_discovery_exhausts_more_than_100_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    pages: list[int] = []
+
+    def request(method: str, endpoint: str) -> Any:
+        assert method == "GET"
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+        ):
+            return []
+        assert endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        )
+        assert "&sort=created&direction=asc" in endpoint
+        page = int(endpoint.rsplit("page=", 1)[1])
+        pages.append(page)
+        if page <= 102:
+            return [
+                {"id": (page - 1) * 100 + offset, "body": "ordinary comment"}
+                for offset in range(1, 101)
+            ]
+        assert page == 103
+        return [{
+            "id": 10201,
+            "created_at": "2026-10-15T01:02:03Z",
+            "author_association": "OWNER",
+            "body": _defect().render_entry(phase="final"),
+            "issue_url": (
+                "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/899"
+            ),
+        }]
+
+    monkeypatch.setattr(gateway, "_request", request)
+    gateway.refresh_registry_identities()
+
+    assert pages == list(range(1, 104)) * 2
+    assert gateway._registry_identity_numbers == {899}
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ["not-list", "not-comment", "missing-id", "boolean-id", "oversized", "repeat", "overlap", "timeout"],
+)
+def test_authoritative_comment_pagination_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    mutations: list[str] = []
+    pages: list[int] = []
+    clock_reads = 0
+
+    def clock() -> float:
+        nonlocal clock_reads
+        clock_reads += 1
+        return 0.0 if clock_reads <= 2 else 1000.0
+
+    if failure == "timeout":
+        monkeypatch.setattr(known_defects, "monotonic", clock)
+
+    def request(method: str, endpoint: str) -> Any:
+        if method != "GET":
+            mutations.append(method)
+            raise AssertionError(endpoint)
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+        ):
+            return []
+        assert endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        )
+        page = int(endpoint.rsplit("page=", 1)[1])
+        pages.append(page)
+        if failure == "not-list":
+            return {"message": "unexpected response"}
+        if failure == "not-comment":
+            return [None]
+        if failure == "missing-id":
+            return [{"body": "ordinary comment"}]
+        if failure == "boolean-id":
+            return [{"id": True, "body": "ordinary comment"}]
+        if failure == "oversized":
+            return [{"id": offset, "body": "ordinary comment"} for offset in range(1, 102)]
+        if page == 1 or failure == "repeat":
+            return [{"id": offset, "body": "ordinary comment"} for offset in range(1, 101)]
+        if failure == "overlap":
+            return [{"id": 100, "body": "overlap on a short page"}]
+        raise AssertionError("non-terminating pagination was not refused")
+
+    monkeypatch.setattr(gateway, "_request", request)
+    with pytest.raises(known_defects.KnownDefectsError):
+        known_defects.intake_defect(_defect(), gateway)
+
+    assert pages in ([1], [1, 2])
+    assert mutations == []
+    assert gateway._registry_identity_numbers is None
+
+
+@pytest.mark.parametrize("registry_issue", [None, 899])
+def test_intake_preflight_handles_extended_comment_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+    registry_issue: int | None,
+) -> None:
+    gateway = known_defects.GhRegistryGateway("RasmusTho/agentic-pkm-mvp")
+    defect = _defect()
+    registry = {
+        "number": 899,
+        "title": known_defects.REGISTRY_TITLE,
+        "state": "open",
+        "locked": True,
+        "body": known_defects.render_registry_body(),
+        "labels": [{"name": "type:bug"}, {"name": known_defects.REGISTRY_LABEL}],
+    }
+    comment = {
+        "id": 10201,
+        "created_at": "2026-10-15T01:02:03Z",
+        "author_association": "OWNER",
+        "body": defect.render_entry(phase="final"),
+        "html_url": "https://github.com/RasmusTho/agentic-pkm-mvp/issues/899#issuecomment-10201",
+        "issue_url": "https://api.github.com/repos/RasmusTho/agentic-pkm-mvp/issues/899",
+    }
+    completed_scans = 0
+    mutations: list[str] = []
+
+    def request(method: str, endpoint: str, _payload: Any = None) -> Any:
+        nonlocal completed_scans
+        if method != "GET":
+            mutations.append(method)
+            raise AssertionError(endpoint)
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues?state=all&since="
+        ):
+            return []
+        if endpoint.startswith(
+            "repos/RasmusTho/agentic-pkm-mvp/issues/comments?since="
+        ):
+            page = int(endpoint.rsplit("page=", 1)[1])
+            if page <= 102:
+                return [
+                    {"id": (page - 1) * 100 + offset, "body": "ordinary comment"}
+                    for offset in range(1, 101)
+                ]
+            assert page == 103
+            completed_scans += 1
+            return [comment]
+        if "issues?state=" in endpoint and "&labels=" in endpoint:
+            return [registry]
+        if endpoint.endswith("/labels/state%3Aknown-defect"):
+            return {"name": known_defects.REGISTRY_LABEL}
+        if endpoint.endswith("/issues/899"):
+            return registry
+        if "/issues/899/comments?" in endpoint:
+            return [comment]
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(gateway, "_request", request)
+    receipt = known_defects.intake_defect(defect, gateway, registry_issue=registry_issue)
+
+    assert receipt["status"] == "duplicate"
+    assert receipt["registry_issue"] == 899
+    assert completed_scans >= 2
+    assert gateway._registry_identity_numbers == {899}
+    assert mutations == []
+
 
 def test_rest_selector_discovery_is_cached_before_label_loss(
     monkeypatch: pytest.MonkeyPatch,

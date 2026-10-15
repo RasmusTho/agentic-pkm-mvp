@@ -1586,7 +1586,7 @@ native_source_projection_gate() {
   # Only the observer's documented result namespace proves cleanup. A Python
   # import/crash or signal must never admit compensation/runtime writers.
   case "${terminal_rc}" in
-    0|79|8[0-9]|9[0-9]|10[0-8])
+    0|79|8[0-9]|9[0-9]|10[0-9]|11[0-3])
       NATIVE_SOURCE_QUIESCENT=1
       rc="${terminal_rc}"
       ;;
@@ -1626,6 +1626,11 @@ native_source_projection_gate() {
     106) native_source_failure legacy_dependency_shape_refused ;;
     107) native_source_failure legacy_retained_history_refused ;;
     108) native_source_failure legacy_relation_retention_refused ;;
+    109) native_source_failure legacy_identity_persistence_refused ;;
+    110) native_source_failure legacy_identity_mismatch_refused ;;
+    111) native_source_failure legacy_identity_ambiguous_refused ;;
+    112) native_source_failure legacy_identity_producer_refused ;;
+    113) native_source_failure legacy_identity_canonical_refused ;;
     0) ;;
     *) native_source_failure source_worker_failed ;;
   esac
