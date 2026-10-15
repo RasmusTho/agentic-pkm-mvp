@@ -61,12 +61,15 @@ def test_required_pg_lane_rejects_imported_fixture_skip(tmp_path, case: str) -> 
         marker = "@pytest.mark.pg\n" if case == "pass" else ""
         source += marker + "def test_required():\n    assert True\n"
     (tmp_path / "test_required.py").write_text(source)
+    (tmp_path / "test_anchor.py").write_text(
+        "import pytest\n@pytest.mark.pg\ndef test_anchor():\n    assert True\n"
+    )
     env = {**os.environ, "PYTHONPATH": str(REPO_ROOT), "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"}
     for key in ("DATABASE_URL", "DB_DSN", "PYTEST_ADDOPTS"):
         env.pop(key, None)
     command = (
         "from app.ops import pg_acceptance as p; "
-        "p.NIGHTLY_SELECTORS=('test_required.py',); "
+        "p.NIGHTLY_SELECTORS=('test_required.py', 'test_anchor.py'); "
         "raise SystemExit(p.main(['--ci', '--nightly']))"
     )
     result = subprocess.run(
@@ -80,17 +83,28 @@ def test_required_pg_lane_rejects_imported_fixture_skip(tmp_path, case: str) -> 
     assert result.returncode == (0 if case == "pass" else 78), result.stdout + result.stderr
     if case == "pass":
         summary = json.loads(result.stdout.split("YGGDRASIL_PG_ACCEPTANCE=")[-1])
-        assert summary["selected"] == summary["passed"] == 1
-        assert summary["required_selectors"] == ["test_required.py"]
-        assert summary["passed_nodeids"] == ["test_required.py::test_required"]
+        assert summary["selected"] == summary["passed"] == 2
+        assert summary["required_selectors"] == ["test_required.py", "test_anchor.py"]
+        assert summary["passed_nodeids"] == [
+            "test_anchor.py::test_anchor",
+            "test_required.py::test_required",
+        ]
     else:
         assert "YGGDRASIL_PG_ACCEPTANCE=refused" in result.stdout
-    if case == "imported-skip":
-        assert "1 skipped" in result.stdout
+    if case in {"imported-skip", "uncollected"}:
         # The optional developer invocation retains its explicit skip; only the
         # required lane turns that incomplete result into a delivery refusal.
         optional = subprocess.run(
-            [sys.executable, "-m", "pytest", "-q", "test_required.py"],
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "test_required.py",
+                "test_anchor.py",
+                "-m",
+                "pg",
+            ],
             cwd=tmp_path,
             env=env,
             capture_output=True,
@@ -98,4 +112,5 @@ def test_required_pg_lane_rejects_imported_fixture_skip(tmp_path, case: str) -> 
             timeout=30,
         )
         assert optional.returncode == 0, optional.stdout + optional.stderr
-        assert "1 skipped" in optional.stdout
+        assert "1 passed" in optional.stdout
+        assert ("1 skipped" if case == "imported-skip" else "1 deselected") in optional.stdout
