@@ -61,6 +61,41 @@ def test_persisted_companion_identity_never_authorizes_reprojection(monkeypatch,
     assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
 
 
+@pytest.mark.parametrize("location", ["canonical", "legacy"])
+@pytest.mark.parametrize("other_first", [False, True])
+def test_companion_discovery_filters_title_before_selection_in_every_location(monkeypatch, tmp_path, location, other_first):
+    from dataclasses import replace
+    from pathlib import Path
+    from uuid import uuid4
+    from app.services.companion_note import read_companion, write_companion
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    companion_path = _persist_companion_identity(root, source, original["object_id"])
+    companion = read_companion(root, str(original["object_id"]))
+    source.write_text(source.read_text().replace("---\n", "---\ntitle: Target\n", 1))
+    write_companion(root, replace(companion, title="Target"))
+    # An unrelated continuity observation can share template body text while
+    # declaring a different title. It must not shadow the one eligible match.
+    other_uuid = str(uuid4())
+    write_companion(root, replace(companion, uuid=other_uuid, title="Other", source_ref="other.md"))
+    canonical_dir = companion_path.parent
+    if location == "legacy":
+        destination = root / "_system/companions" / companion_path.name
+        destination.parent.mkdir(parents=True)
+        companion_path.rename(destination)
+    glob = Path.glob
+    def ordered_glob(path, pattern):
+        found = list(glob(path, pattern))
+        if path == canonical_dir and pattern == "*.md":
+            found.sort(key=lambda item: (item.stem == other_uuid) != other_first)
+        return iter(found)
+    monkeypatch.setattr(Path, "glob", ordered_glob)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert not state.rows and not state.embedded and not state.vectors
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
 @pytest.mark.parametrize("failure,reason", [
     ("missing", "legacy_identity_persistence_refused"),
     ("unpersisted-fingerprint", "legacy_identity_persistence_refused"),

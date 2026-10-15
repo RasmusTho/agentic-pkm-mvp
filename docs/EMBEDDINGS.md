@@ -516,6 +516,8 @@ declarations and unpersisted path/fingerprint-only identities always refuse. No 
 is created, healed, normalized or rewritten, and every existing atomic/history/race fence remains.
 Read-only companion discovery includes both the configured canonical and supported legacy
 `_system/companions/` directories; a legacy-only persisted observation is not treated as absent.
+Discovery filters the complete set by body hash and title before selection; an unrelated title
+with identical template body text cannot shadow the unique matching persisted observation.
 Origin evidence is effect-sensitive: an explicit non-vault, unknown or malformed stored origin
 still refuses replacement/reprojection with `legacy_origin_refused` before payload preparation or
 embedding. Only the already-governed exact retirement path may disregard that marker after every

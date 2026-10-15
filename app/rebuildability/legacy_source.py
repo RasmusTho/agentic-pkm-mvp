@@ -170,38 +170,44 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
         from app.services.companion_note import _fm_to_companion, companion_path
 
         note = producer.resolve_vault_note_identity(path, vault_root=root, frontmatter=parsed, body=body)
-        if not note.frontmatter_uuid and note.companion is None:
-            # The ordinary hash discovery scans only the canonical directory;
-            # retained legacy sidecars remain a supported read surface. Discover
-            # persisted evidence there, never turn a hash/path fallback into UUID
-            # authority. The same binding, snapshot and ambiguity proofs below
-            # still apply, and selected replacement producers still refuse.
-            text = producer.strip_ai_status_block(producer.strip_ai_panels(body)).strip()
-            fingerprint = producer._compute_ingest_fingerprint(text, path)["text_sha256"]
-            title = producer._frontmatter_title(parsed) or producer._derive_title(body, path)
-            legacy_matches = []
-            for candidate in (root / "_system/companions").glob("*.md"):
-                retained_text, _ = read_recovery_snapshot_relative(candidate.relative_to(root).as_posix(), vault_root=root)
-                candidate_fm = capture_source_frontmatter(retained_text)
-                if (candidate_fm and candidate_fm.get("content_hash") == fingerprint
-                        and producer._normalize_title(str(candidate_fm.get("title") or ""))
-                        == producer._normalize_title(title)):
-                    retained_companion = _fm_to_companion(candidate_fm)
-                    if retained_companion is not None:
-                        legacy_matches.append(retained_companion)
-            if len(legacy_matches) > 1:
-                raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
-            if legacy_matches:
-                note = replace(note, note_uuid=legacy_matches[0].uuid, companion=legacy_matches[0])
-        if note.frontmatter_uuid or note.companion is None:
+        if note.frontmatter_uuid:
             return note, None
-        companion = note.companion
+        # Recovery discovers the complete persisted set itself. Ordinary hash
+        # lookup is first-match and canonical-only, so it cannot prove either
+        # absence or uniqueness here. Filter hash AND title before choosing,
+        # across both supported directories, independent of enumeration order.
+        text = producer.strip_ai_status_block(producer.strip_ai_panels(body)).strip()
+        fingerprint = producer._compute_ingest_fingerprint(text, path)["text_sha256"]
+        title = producer._frontmatter_title(parsed) or producer._derive_title(body, path)
+        matches = []
+        directories = {companion_path("", root).parent, Path("_system/companions")}
+        for directory in directories:
+            for candidate in (root / directory).glob("*.md"):
+                relative_companion = candidate.relative_to(root)
+                try:
+                    retained = read_recovery_snapshot_relative(relative_companion.as_posix(), vault_root=root)
+                except Exception:
+                    raise LegacySourceRefusal("legacy_identity_persistence_refused") from None
+                fm = capture_source_frontmatter(retained[0])
+                if (fm and fm.get("content_hash") == fingerprint
+                        and producer._normalize_title(str(fm.get("title") or ""))
+                        == producer._normalize_title(title)):
+                    companion = _fm_to_companion(fm)
+                    if companion is None:
+                        raise LegacySourceRefusal("legacy_identity_persistence_refused")
+                    matches.append((companion, relative_companion, retained))
+        if len(matches) > 1:
+            raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
+        if not matches:
+            return replace(note, companion=None), None
+        companion, relative_companion, retained = matches[0]
         try:
-            identity = str(UUID(companion.uuid))
+            UUID(companion.uuid)
         except (TypeError, ValueError, AttributeError):
             raise LegacySourceRefusal("legacy_identity_persistence_refused") from None
-        if identity != _source_uuid(note.note_uuid):
+        if relative_companion.name != f"{companion.uuid}.md":
             raise LegacySourceRefusal("legacy_identity_persistence_refused")
+        note = replace(note, note_uuid=companion.uuid, companion=companion)
         # A hash/title lookup is discovery, not a binding proof. The retained
         # continuity observation must name this source in this active root;
         # stale moved/reused or foreign observations cannot authorize deletion.
@@ -214,32 +220,6 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                     raise LegacySourceRefusal("legacy_identity_mismatch_refused") from None
             if companion_source != path.relative_to(root):
                 raise LegacySourceRefusal("legacy_identity_mismatch_refused")
-        relative_companion = companion_path(companion.uuid, root)
-        if not (root / relative_companion).exists():
-            relative_companion = Path("_system/companions") / f"{companion.uuid}.md"
-        try:
-            retained = read_recovery_snapshot_relative(relative_companion.as_posix(), vault_root=root)
-            fm = capture_source_frontmatter(retained[0])
-            if fm is None or _source_uuid(fm.get("uuid")) != identity:
-                raise ValueError("invalid companion identity")
-            # Bind the resolver's parsed evidence to the hardened read, not just
-            # a coincident UUID in a companion changed between those reads.
-            if _fm_to_companion(fm) != companion:
-                raise ValueError("changed companion")
-        except Exception:
-            raise LegacySourceRefusal("legacy_identity_persistence_refused") from None
-        matches = 0
-        directories = {companion_path(companion.uuid, root).parent, Path("_system/companions")}
-        for directory in directories:
-            for candidate in (root / directory).glob("*.md"):
-                text, _ = read_recovery_snapshot_relative(candidate.relative_to(root).as_posix(), vault_root=root)
-                candidate_fm = capture_source_frontmatter(text)
-                if (candidate_fm and candidate_fm.get("content_hash") == companion.content_hash
-                        and producer._normalize_title(str(candidate_fm.get("title") or ""))
-                        == producer._normalize_title(companion.title)):
-                    matches += 1
-        if matches != 1:
-            raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
         return note, (relative_companion, retained)
 
     present = index.present_object_ids()
