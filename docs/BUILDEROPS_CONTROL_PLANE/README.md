@@ -437,6 +437,13 @@ gaps visible on #5181/#4076; never fabricate their observations with a repositor
 
 ### Normative receipt dependency order
 
+The separate owner-authorized [bounded manual DevUI component promotion](INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+from #6105 may install and browser-verify only `builderops-devui/devui`. Its
+`devui_component_deployment.v1` operational record is not an input to any full-system receipt below,
+does not supply source qualification or Ready to try, and never establishes owner pilot, trial or
+acceptance. It retains the complete inventory and its unresolved gaps. This bounded install path
+does not change the ordered complete-system chain.
+
 The full-system successful-deployment path is ordered by evidence dependency, not merely by receipt
 appearance. It remains unchanged by the target
 [M1 first-read boundary](#m1-first-read-qualification-target): the complete inventory and existing
