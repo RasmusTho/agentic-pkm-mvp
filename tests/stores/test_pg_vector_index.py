@@ -84,6 +84,11 @@ def _count(object_id) -> int:
     ("producer-alpha", "legacy_identity_ambiguous_refused"),
     ("producer-alpha-invalid", "legacy_identity_ambiguous_refused"),
     ("producer-registry-derived", "legacy_identity_ambiguous_refused"),
+    ("producer-registry-uuid-multi", "legacy_identity_ambiguous_refused"),
+    ("producer-registry-id-nested", "legacy_identity_ambiguous_refused"),
+    ("producer-registry-uuid-integer", "legacy_identity_ambiguous_refused"),
+    ("producer-filesystem-integer", "legacy_identity_ambiguous_refused"),
+    ("producer-canonical-alias", "legacy_identity_ambiguous_refused"),
     ("row-race", "legacy_race_refused"), ("companion-race", "legacy_race_refused"),
     ("history", "legacy_retained_history_refused"),
 ])
@@ -93,12 +98,18 @@ def test_legacy_retirement_identity_refusals_are_atomic(_pg_index, monkeypatch, 
     from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
     from tests.rebuildability.test_legacy_source_reconciliation import _persist_companion_identity, _effective_producer_collision
 
-    recovery, state, root, source, raw, original, _, _, _ = _legacy_source_fixture(monkeypatch, tmp_path)
+    recovery, state, root, source, raw, original, _, _, _ = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=mode == "producer-canonical-alias")
     oid, other = original["object_id"], uuid4()
-    effective_mode = mode.removeprefix("producer-") in {"alpha", "alpha-invalid", "registry-derived"}
-    companion = None if effective_mode else _persist_companion_identity(root, source, oid)
+    effective_mode = mode.removeprefix("producer-") in {"alpha", "alpha-invalid", "filesystem-integer"} or mode.startswith("producer-registry-")
+    companion = None if effective_mode or mode == "producer-canonical-alias" else _persist_companion_identity(root, source, oid)
     if effective_mode:
         oid = UUID(_effective_producer_collision(monkeypatch, root, source, raw, original, mode.removeprefix("producer-")))
+    canonical_uuid = oid
+    if mode == "producer-canonical-alias":
+        canonical_uuid = uuid4()
+        source.write_text(raw.decode().replace(str(oid), str(canonical_uuid)))
+        (source.parent / "other.md").write_text(f"---\nuuid: {oid}\n---\nunrelated source\n")
     if mode == "retire-legacy":
         destination = root / "_system/companions" / companion.name
         destination.parent.mkdir(parents=True)
@@ -114,7 +125,7 @@ def test_legacy_retirement_identity_refusals_are_atomic(_pg_index, monkeypatch, 
     with psycopg.connect(_dsn()) as conn:
         ensure_schema(conn)
         conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
-            (other if mode == "canonical" else oid, uuid4() if mode == "reverse" else oid, store.vault_binding_id))
+            (other if mode == "canonical" else oid, uuid4() if mode == "reverse" else canonical_uuid, store.vault_binding_id))
         if mode == "history":
             conn.execute("INSERT INTO decisions (object_id, vault_binding_id, key, value) VALUES (%s, %s, 'identity-fixture', '{}')",
                 (oid, store.vault_binding_id))

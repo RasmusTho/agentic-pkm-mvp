@@ -352,17 +352,28 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                     actual = producer.resolve_vault_note_identity(
                         path, vault_root=root, frontmatter=other_parsed, body=other_body)
                     identities.add(_source_uuid(actual.note_uuid))
+                if policy.includes(path):
+                    try:
+                        # The filesystem adapter preserves the literal scalar
+                        # after str conversion, not alpha's declaration grammar.
+                        identities.add(str(UUID(str(other_parsed.get("uuid") or "").strip())))
+                    except (ValueError, TypeError, AttributeError):
+                        pass
                 if registry_policy.includes(path):
                     from app.services.note_uuid import is_read_only_derived_artifact, resolve_read_only_derived_uuid
                     from app.workers.outbox_worker import _normalize_uuid_value
+                    registry_uuid = _normalize_uuid_value(other_parsed.get("uuid") or other_parsed.get("id"))
+                    # Registry accepts first-of-list and stringified scalar
+                    # declarations that alpha's grammar intentionally rejects.
+                    identities.add(_source_uuid(registry_uuid))
                     if (is_read_only_derived_artifact(other_parsed)
-                            and not _normalize_uuid_value(other_parsed.get("uuid") or other_parsed.get("id"))
+                            and not registry_uuid
                             and not str(other_parsed.get("uuid") or "").strip()):
                         # The actual worker's ensure_note_uuid is read-only for
                         # derived artifacts and returns this exact UUID5. Do
                         # not call its healing writer during recovery.
                         identities.add(resolve_read_only_derived_uuid(path, vault_root=root))
-                if _source_uuid(vault_uuid) in identities:
+                if identities & {_source_uuid(vault_uuid), _source_uuid(str(row["object_id"]))}:
                     claims += 1
             if claims != 1:
                 raise LegacySourceRefusal("legacy_identity_ambiguous_refused")

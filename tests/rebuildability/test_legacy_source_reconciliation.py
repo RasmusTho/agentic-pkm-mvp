@@ -120,19 +120,45 @@ def _effective_producer_collision(monkeypatch, root, source, raw, original, prod
     other = root / "Notes" / str(original["object_id"]) / "other.md"
     other.parent.mkdir(parents=True)
     declaration = "uuid: invalid\n" if producer_kind == "alpha-invalid" else ""
+    if (producer_kind.startswith("registry-") and producer_kind != "registry-derived") or producer_kind == "filesystem-integer":
+        from uuid import UUID
+        identity = str(original["object_id"])
+        key = "id" if "-id-" in producer_kind else "uuid"
+        value = f"[{identity}, 00000000-0000-0000-0000-000000000000]"
+        if producer_kind.endswith("nested"):
+            value = f"[{value}]"
+        elif producer_kind.endswith("integer"):
+            value = f"{original['object_id'].int:039d}"[-32:]
+            identity = str(UUID(value))
+        declaration = f"{key}: {value}\n"
     derived = "agent_maintained: true\nread_only: true\nauthority_role: derived\n" if producer_kind == "registry-derived" else ""
     other.write_text(f"---\n{declaration}{derived}trust: human\n---\nunrelated producer body\n")
     parsed, body, _ = parse_bounded_frontmatter(other.read_text())
     effective = producer.resolve_vault_note_identity(other, vault_root=root, frontmatter=parsed, body=body).note_uuid
-    if producer_kind == "registry-derived":
+    if producer_kind.startswith("registry-") or producer_kind == "filesystem-integer":
         from app.ingest.producer_policy import registry_producer_policy
         from app.services.note_uuid import ensure_note_uuid
         # Prove the real read-only derived branch, not alpha's applicability.
-        effective = ensure_note_uuid(other, vault_root=root)
+        if producer_kind == "registry-derived":
+            effective = ensure_note_uuid(other, vault_root=root)
+        elif producer_kind.startswith("registry-"):
+            from app.workers.outbox_worker import _normalize_uuid_value
+            effective = str(UUID(_normalize_uuid_value(parsed.get("uuid") or parsed.get("id"))))
+            assert effective == identity
+        else:
+            from app.ports.filesystem_vault_adapter import FilesystemVaultAdapter
+            adapter = FilesystemVaultAdapter(vault_root=root, backend_writes_enabled=False)
+            preserved = adapter.ensure_uuid(adapter.read_note(other))
+            assert not preserved.wrote
+            effective = str(UUID(preserved.uuid_value))
         (root / "Alpha").mkdir()
         (root / "⚙️ System" / "vault.layout.md").write_text("---\ninclude_folders: [Alpha]\n---\nLayout.\n")
-        _enable_registry(monkeypatch, root, scope="Notes/*.md,Notes/**/*.md")
-        assert registry_producer_policy(root).includes(other)
+        if producer_kind.startswith("registry-"):
+            _enable_registry(monkeypatch, root, scope="Notes/*.md,Notes/**/*.md")
+            assert registry_producer_policy(root).includes(other)
+        else:
+            monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+            monkeypatch.setenv("VAULT_DIR", str(root))
         assert other not in producer.select_source_backed_rebuild_candidates(root)
     else:
         assert other in producer.select_source_backed_rebuild_candidates(root)
@@ -141,7 +167,8 @@ def _effective_producer_collision(monkeypatch, root, source, raw, original, prod
     return effective
 
 
-@pytest.mark.parametrize("producer_kind", ["alpha", "alpha-invalid", "registry-derived"])
+@pytest.mark.parametrize("producer_kind", ["alpha", "alpha-invalid", "registry-derived",
+    "registry-uuid-multi", "registry-id-multi", "registry-uuid-nested", "registry-id-nested", "registry-uuid-integer", "filesystem-integer"])
 @pytest.mark.parametrize("phase", ["discovery", "transaction"])
 def test_effective_producer_identity_is_a_denial_claim_not_retirement_authority(monkeypatch, tmp_path, producer_kind, phase):
     from uuid import UUID
@@ -160,12 +187,27 @@ def test_effective_producer_identity_is_a_denial_claim_not_retirement_authority(
         monkeypatch.setattr(binding.store, "reconcile_legacy_source", racing)
     before_rows = deepcopy(state.rows)
     before = {p: p.read_bytes() for p in root.rglob("*.md")}
-    reason = "legacy_producer_policy_refused" if phase == "transaction" and producer_kind == "registry-derived" else "legacy_identity_ambiguous_refused"
+    reason = "legacy_producer_policy_refused" if phase == "transaction" and (producer_kind.startswith("registry-") or producer_kind == "filesystem-integer") else "legacy_identity_ambiguous_refused"
     with pytest.raises(recovery.LegacySourceRefusal, match=f"^{reason}$"):
         recovery.reconcile_legacy_sources(binding, index, factory)
-    assert state.rows == before_rows and not state.calls and not state.vectors and not state.embedded
+    assert state.rows == before_rows and not state.calls and not state.vectors
+    if phase != "transaction" or producer_kind != "filesystem-integer":
+        assert not state.embedded
     if phase == "transaction":
         before[other] = other_bytes  # Only the simulated concurrent writer changed this source.
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
+def test_producer_claim_of_canonical_object_alias_refuses_before_reprojection(monkeypatch, tmp_path):
+    from uuid import uuid4
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path, selected=True)
+    source.write_text(raw.decode().replace(str(original["object_id"]), str(uuid4())))
+    other = source.parent / "other.md"
+    other.write_text(f"---\nuuid: {original['object_id']}\n---\nunrelated source\n")
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    with pytest.raises(recovery.LegacySourceRefusal, match="^legacy_identity_ambiguous_refused$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == [original] and not state.calls and not state.vectors and not state.embedded
     assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
 
 
