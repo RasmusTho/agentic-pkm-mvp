@@ -202,6 +202,42 @@ class HeimdalIngressStatus(BaseModel):
     checked_at: Optional[datetime] = None
 
 
+class YouTubeSyncStatus(BaseModel):
+    """Typed optional YSS-09 projection carried by ``SystemStatus``."""
+
+    status: str = "degraded"
+    ok: bool = False
+    reason_code: str | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    enabled: bool = False
+    runner_enabled: bool = False
+    auth: Dict[str, Any] = Field(default_factory=dict)
+    auth_status: str | None = None
+    auth_reason_code: str | None = None
+    token_store_key_present: bool = False
+    sources: Dict[str, Any] = Field(default_factory=dict)
+    sources_total: int = 0
+    sources_enabled: int = 0
+    sources_degraded: int = 0
+    queue: Dict[str, Any] = Field(default_factory=dict)
+    queue_depth: int = 0
+    dead_letters: int = 0
+    health_contract: Dict[str, Any] = Field(default_factory=dict)
+    quota: Dict[str, Any] = Field(default_factory=dict)
+    last_tick_at: str | None = None
+    last_success_at: str | None = None
+    latest_error: Dict[str, str] | None = None
+    runner_offline: bool = False
+    staleness_seconds: int | None = None
+    channel: str | None = None
+    channel_database: str | None = None
+    suggested_actions: list[Dict[str, str]] = Field(default_factory=list)
+
+    def __getitem__(self, key: str) -> Any:
+        """Keep CLI/test callers able to inspect the JSON-shaped projection."""
+        return getattr(self, key)
+
+
 class SystemStatus(BaseModel):
     timestamp: datetime
     environment: str
@@ -231,10 +267,12 @@ class SystemStatus(BaseModel):
     v6_0_seams: Optional[Dict[str, str]] = None
     integrated_runtime_v1: Optional[Dict[str, IntegratedRuntimeCapabilityStatus]] = None
     heimdal_ingress: Optional[HeimdalIngressStatus] = None
+    youtube_sync: Optional[YouTubeSyncStatus] = None
 
 
 __all__ = [
     "HeimdalIngressStatus",
+    "YouTubeSyncStatus",
     "IngestionPlaneStatus",
     "StoreStatus",
     "IngestionStatus",
