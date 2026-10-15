@@ -267,12 +267,15 @@ def test_native_child_keeps_github_token_outside_deployment(monkeypatch):
     assert 'GH_TOKEN' not in options['env'] and 'GITHUB_TOKEN' not in options['env']
 
 
+@pytest.mark.parametrize('reason', ['embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
+    'embedding_probe_generation_failed', 'embedding_probe_vector_invalid', 'embedding_probe_cleanup_failed',
+    'embedding_probe_failed', 'source_worker_timeout'])
 @pytest.mark.parametrize('resume', [False, True])
-def test_native_source_failure_survives_controller_receipt_and_checkpoint(tmp_path, monkeypatch, capsys, resume):
+def test_embedding_probe_subreason_survives_controller_receipt_and_checkpoint(tmp_path, monkeypatch, capsys, resume, reason):
     tmp_path.chmod(0o700)
     candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
     receipt = {**_native_receipt('dev', candidate, 'failed'), 'kind': 'deploy', 'stage': 'failed',
-               'source_failure': 'source_worker_timeout'}
+               'source_failure': reason}
     monkeypatch.setattr(driver.subprocess, 'run', lambda *a, **kw: SimpleNamespace(
         returncode=78, stdout=json.dumps(receipt), stderr='private output'))
     assert driver.native_deploy('dev', candidate) == receipt
@@ -287,7 +290,7 @@ def test_native_source_failure_survives_controller_receipt_and_checkpoint(tmp_pa
                        current_main=lambda: SHA) == 78
     checkpoint = json.loads(path.read_text())
     assert checkpoint['phase'] == 'failed'
-    assert checkpoint['outcome']['source_failure'] == 'source_worker_timeout'
+    assert checkpoint['outcome']['source_failure'] == reason
     assert 'private output' not in capsys.readouterr().out
     driver._validate_checkpoint(checkpoint)
     checkpoint['outcome']['source_failure'] = 'private payload'

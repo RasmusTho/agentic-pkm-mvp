@@ -1474,7 +1474,7 @@ native_source_embedding_preflight_gate() {
   fi
 
   local operation="${BWS_DEPLOY_OPERATION_ID:-}" identity_json identity_result
-  local provider="" model="" identity_command probe_command service_ready=0 attempt
+  local provider="" model="" identity_command probe_command probe_status=0 probe_reason service_ready=0 attempt
   [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure embedding_context_invalid; return 78; }
   [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure embedding_context_invalid; return 78; }
   [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
@@ -1547,12 +1547,23 @@ PY
     return 78
   fi
 
-  probe_command=$'import os\nfrom app.components.llm.fabric import get_product_embedding_client\nclient = get_product_embedding_client()\ntry:\n    identity = client.identity\n    expected = (os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER"), os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL"))\n    if (identity.provider, identity.model) != expected:\n        raise SystemExit(78)\n    vector = client.embed_text("Yggdrasil deployment preflight")\n    if len(vector) != identity.dim:\n        raise SystemExit(78)\nfinally:\n    close = getattr(client, "close", None)\n    if callable(close):\n        close()'
-  if ! compose run --rm --no-deps -T \
+  # Only fixed process statuses cross the private child boundary. Retain the
+  # first failure if closing an already-failed client also fails.
+  probe_command=$'import math\nimport os\nclient = None\nstatus = 0\nphase = 114\ntry:\n    from app.components.llm.fabric import get_product_embedding_client, RemoteEmbeddingIdentityError, RemoteEmbeddingVectorError\n    client = get_product_embedding_client()\n    identity = client.identity\n    actual = (identity.provider, identity.model)\n    dimension = identity.dim\n    expected = (os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER"), os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL"))\n    if actual != expected:\n        status = 115\n    else:\n        phase = 116\n        vector = client.embed_text("Yggdrasil deployment preflight")\n        phase = 117\n        if type(dimension) is not int or dimension <= 0 or not isinstance(vector, (list, tuple)) or len(vector) != dimension or any(type(value) not in (int, float) or not math.isfinite(value) for value in vector):\n            status = 117\nexcept Exception as exc:\n    status = phase\n    if phase == 116 and isinstance(exc, RemoteEmbeddingIdentityError):\n        status = 115\n    elif phase == 116 and isinstance(exc, RemoteEmbeddingVectorError):\n        status = 117\nfinally:\n    if client is not None:\n        try:\n            close = getattr(client, "close", None)\n            if callable(close):\n                close()\n        except Exception:\n            if status == 0:\n                status = 118\nraise SystemExit(status)'
+  compose run --rm --no-deps -T \
       -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER=${provider}" \
       -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL=${model}" \
-      --entrypoint python api -c "${probe_command}" >/dev/null 2>&1; then
-    native_source_failure embedding_probe_failed
+      --entrypoint python api -c "${probe_command}" >/dev/null 2>&1 || probe_status=$?
+  if [ "${probe_status}" != 0 ]; then
+    case "${probe_status}" in
+      114) probe_reason=embedding_probe_client_failed ;;
+      115) probe_reason=embedding_probe_identity_mismatch ;;
+      116) probe_reason=embedding_probe_generation_failed ;;
+      117) probe_reason=embedding_probe_vector_invalid ;;
+      118) probe_reason=embedding_probe_cleanup_failed ;;
+      *) probe_reason=embedding_probe_failed ;;
+    esac
+    native_source_failure "${probe_reason}"
     return 78
   fi
 

@@ -59,6 +59,12 @@ SOURCE_PROJECTION_FAILURE_CODES = {
     'legacy_identity_ambiguous_refused': 111,
     'legacy_identity_producer_refused': 112,
     'legacy_identity_canonical_refused': 113,
+    'embedding_probe_client_failed': 114,
+    'embedding_probe_identity_mismatch': 115,
+    'embedding_probe_generation_failed': 116,
+    'embedding_probe_vector_invalid': 117,
+    'embedding_probe_cleanup_failed': 118,
+    'embedding_probe_failed': 119,
 }
 
 

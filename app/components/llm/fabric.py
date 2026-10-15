@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from functools import lru_cache
 import os
+import math
 import weakref
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -28,7 +29,8 @@ from app.llm.preflight_fallback import (
 from app.model_access.codex_remote_transport import (
     CodexRemoteTransport,
     RemoteCompletionError,
-    RemoteEmbeddingError,
+    RemoteEmbeddingIdentityError,
+    RemoteEmbeddingVectorError,
 )
 from app.model_access.executor_network_policy import (
     EXECUTOR_NETWORK_PROFILE,
@@ -1451,10 +1453,16 @@ class _RemoteProductEmbeddingClient:
             route.provider != self.identity.provider
             or route.model != self._request_model
             or route.transport_id != self._expected_transport
-            or response.dimensions != self.identity.dim
-            or len(response.vector) != self.identity.dim
         ):
-            raise RemoteEmbeddingError(
+            raise RemoteEmbeddingIdentityError(
+                "embedding_route_or_dimension_mismatch", indeterminate=True
+            )
+        if (
+            response.dimensions != self.identity.dim
+            or len(response.vector) != self.identity.dim
+            or any(type(value) not in (int, float) or not math.isfinite(value) for value in response.vector)
+        ):
+            raise RemoteEmbeddingVectorError(
                 "embedding_route_or_dimension_mismatch", indeterminate=True
             )
         self._route_provenance = {

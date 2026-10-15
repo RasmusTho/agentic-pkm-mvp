@@ -23,7 +23,7 @@ import stat
 import subprocess
 import sys
 import threading
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 from uuid import UUID, uuid4
 from urllib.parse import urlencode, quote
 
@@ -64,6 +64,9 @@ _SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
     'embedding_identity_unavailable', 'embedding_identity_invalid',
     'embedding_service_unavailable', 'embedding_service_not_ready',
     'embedding_model_unavailable', 'embedding_model_not_ready', 'embedding_probe_failed',
+    'embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
+    'embedding_probe_generation_failed', 'embedding_probe_vector_invalid',
+    'embedding_probe_cleanup_failed',
     'source_worker_timeout', 'source_worker_terminated', 'source_worker_oom',
 })
 _GUARD_FAILURE_CHECKPOINTS = frozenset({
@@ -189,7 +192,8 @@ def _guard_failure_boundary() -> Iterator[dict[str, str]]:
 
 def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | None = None,
              pass_fds: tuple[int, ...] = (), deploy_diagnostics: bool = False,
-             timeout: int | None = None) -> str:
+             timeout: int | None = None,
+             retain_source_failure: Callable[[str], None] | None = None) -> str:
     try:
         result = subprocess.run(argv, cwd=cwd, env=env, pass_fds=pass_fds, capture_output=True,
                                 text=True, errors='replace' if deploy_diagnostics else 'strict',
@@ -199,7 +203,11 @@ def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | 
     if result.returncode:
         if deploy_diagnostics:
             stage = _deploy_failure_stage(result.stderr)
-            _emit_deploy_failure(stage, _deploy_failure_reason(result.stderr, stage))
+            reason = _deploy_failure_reason(result.stderr, stage)
+            _emit_deploy_failure(stage, reason)
+            from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_CODES
+            if retain_source_failure is not None and reason in SOURCE_PROJECTION_FAILURE_CODES:
+                retain_source_failure(reason)
         raise PostgresDeployError()
     return result.stdout
 
@@ -1342,7 +1350,9 @@ class LinuxEffects:
             if plan.automatic:
                 argv.append('--automatic')
             _command(argv, cwd=self.config.root, env=env, pass_fds=(self.lock_fd,),
-                     deploy_diagnostics=True)
+                     deploy_diagnostics=True,
+                     retain_source_failure=lambda reason: self.config.journal.record_source_failure(
+                         receipt.operation_id, plan.revision, reason))
         finally:
             for path in paths:
                 path.unlink()

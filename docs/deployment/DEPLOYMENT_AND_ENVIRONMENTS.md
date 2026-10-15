@@ -910,6 +910,17 @@ marker. The Ollama service may remain running and its model cache may remain pop
 preflight leaves the source-backed
 repair operation below unchanged; that operation still runs after migrations.
 
+The probe's fixed child exit statuses 114–118 map respectively to
+`embedding_probe_client_failed`, `embedding_probe_identity_mismatch`,
+`embedding_probe_generation_failed`, `embedding_probe_vector_invalid`, and
+`embedding_probe_cleanup_failed`; unknown exits retain `embedding_probe_failed`.
+Only these allowlisted reasons cross the supervised wrapper into the native operation journal,
+same-operation reconciliation and post-merge controller checkpoint. Cleanup is attempted for an
+acquired client, with the original failure taking precedence. Child output, exceptions, responses,
+endpoints, paths, credentials, source identity and probe content remain private.
+There is no provider substitution or identity fallback, no replay of terminal operations, and no
+authorization to start TEST/journaling acceptance or mutate Product/vector/vault data.
+
 Repository support for native BWS source recovery (#5918) adds one fixed API-consumer one-shot
 after instance-state finalization and migrations, before ordinary API/worker/watcher/capture/UI
 recreation. The candidate image must contain `scripts/start_api.sh`'s source-only mode and

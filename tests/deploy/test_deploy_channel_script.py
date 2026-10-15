@@ -3895,6 +3895,11 @@ def test_bws_activation_uses_only_request_bound_forward_only_ack(tmp_path, monke
 
     journal = DeployJournal(tmp_path / 'journal', 'test')
     operation_id = str(uuid4())
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), ack_forward_only,
+    )
+    journal.bind_request(operation_id, plan, False, create=True)
     journal.write(operation_id, 'prepared')
     journal.write(operation_id, 'preflighted')
     journal.write(operation_id, 'materialized')
@@ -3912,10 +3917,6 @@ def test_bws_activation_uses_only_request_bound_forward_only_ack(tmp_path, monke
         'heimdal-api-ingress': {}, 'heimdal-capture-watch': {}, 'heimdal-raw-migrate': {},
     }
     effects.active_consumers = (*DATABASE_CONSUMERS, 'heimdal-api-ingress')
-    plan = DeployPlan(
-        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
-        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), ack_forward_only,
-    )
     calls = []
 
     def command(argv, **kwargs):
@@ -3931,6 +3932,8 @@ def test_bws_activation_uses_only_request_bound_forward_only_ack(tmp_path, monke
     argv, kwargs = calls[0]
     assert ('--ack-forward-only' in argv) is ack_forward_only
     assert 'DEPLOY_ACK_FORWARD_ONLY' not in kwargs['env']
+    kwargs['retain_source_failure']('embedding_probe_cleanup_failed')
+    assert journal.read().source_failure == 'embedding_probe_cleanup_failed'
     assert list(source.iterdir()) == []
 
 
@@ -5431,10 +5434,10 @@ def test_native_source_projection_prepares_ollama_before_stopping_services(
     ),
     [
         ("ollama", "nomic-embed-text:deployment-test", 3, 3, 0, True),
-        ("mock", "nomic-embed-text:deployment-test", 3, 3, 78, False),
-        ("ollama", "other-model", 3, 3, 78, False),
+        ("mock", "nomic-embed-text:deployment-test", 3, 3, 115, False),
+        ("ollama", "other-model", 3, 3, 115, False),
         ("ollama", "nomic-embed-text:deployment-test", 4, 4, 0, True),
-        ("ollama", "nomic-embed-text:deployment-test", 3, 2, 78, True),
+        ("ollama", "nomic-embed-text:deployment-test", 3, 2, 117, True),
     ],
 )
 def test_native_source_embedding_probe_checks_actual_identity_and_dimension(
@@ -5476,6 +5479,8 @@ IDENTITY = SimpleNamespace(
     model=os.environ["FAKE_ACTUAL_MODEL"],
     dim=int(os.environ["FAKE_ACTUAL_DIMENSION"]),
 )
+class RemoteEmbeddingIdentityError(Exception): pass
+class RemoteEmbeddingVectorError(Exception): pass
 
 class ProductEmbeddingClient:
     identity = IDENTITY
@@ -7186,6 +7191,180 @@ def test_native_source_failure_after_embedding_progress_keeps_only_fixed_reason(
     assert len(emitted) == 1 and b'class=source_command_failed' in emitted[0]
     assert _deploy_events(env).count('embedding-success') == 400
     assert b'private' not in b''.join(emitted) and b'payload' not in b''.join(emitted)
+
+
+_EMBEDDING_PROBE_REASONS = [
+    'embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
+    'embedding_probe_generation_failed', 'embedding_probe_vector_invalid',
+    'embedding_probe_cleanup_failed',
+]
+
+
+@pytest.mark.parametrize('fault,status', [
+    ('client', 114), ('identity', 114), ('mismatch', 115), ('generation', 116),
+    ('dimension', 117), ('shape', 117), ('nan', 117), ('cleanup', 118),
+    ('generation_cleanup', 116), ('unexpected', 78), ('success', 0),
+])
+def test_native_embedding_probe_subreasons_cover_production_call_site(tmp_path, fault, status):
+    assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
+                      if line.strip().startswith("probe_command=$'"))
+    extracted = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$probe_command"'],
+                               capture_output=True, text=True, check=True)
+    # Replace only the provider factory at the actual production import seam.
+    setup = '''import sys, types
+from types import SimpleNamespace
+fault = sys.argv[1]
+events = []
+def fail():
+    raise RuntimeError('private-provider-canary /private/vault credential=secret')
+class Client:
+    @property
+    def identity(self):
+        events.append('identity')
+        if fault == 'identity': fail()
+        return SimpleNamespace(provider='mock' if fault == 'mismatch' else 'ollama', model='selected', dim=2)
+    def embed_text(self, text):
+        events.append('embed')
+        assert text == 'Yggdrasil deployment preflight'
+        if fault in {'generation', 'generation_cleanup'}: fail()
+        if fault == 'unexpected': raise SystemExit(78)
+        return {'dimension': [0.0], 'shape': 'xx', 'nan': [float('nan'), 0.0]}.get(fault, [0.0, 1.0])
+    def close(self):
+        events.append('close')
+        if fault in {'cleanup', 'generation_cleanup'}: fail()
+def factory():
+    events.append('client')
+    if fault == 'client': fail()
+    return Client()
+module = types.ModuleType('app.components.llm.fabric')
+module.get_product_embedding_client = factory
+module.RemoteEmbeddingIdentityError = type('RemoteEmbeddingIdentityError', (Exception,), {})
+module.RemoteEmbeddingVectorError = type('RemoteEmbeddingVectorError', (Exception,), {})
+sys.modules['app.components.llm.fabric'] = module
+'''
+    # Even refusal must close an acquired client; no exception payload escapes.
+    wrapper = (setup + '\ntry:\n    exec(' + repr(extracted.stdout)
+               + ')\nfinally:\n    assert events.count("embed") <= 1\n'
+               + '    assert events.count("close") == (0 if fault == "client" else 1)\n')
+    result = subprocess.run([sys.executable, '-c', wrapper, fault], cwd=tmp_path,
+                            env={**os.environ, 'NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER': 'ollama',
+                                 'NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL': 'selected'},
+                            capture_output=True, text=True)
+    assert result.returncode == status
+    assert result.stdout == result.stderr == ''
+
+
+@pytest.mark.parametrize('status,reason', list(enumerate(_EMBEDDING_PROBE_REASONS, 114)) + [(42, 'embedding_probe_failed')])
+def test_native_embedding_probe_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, status, reason):
+    from dataclasses import asdict
+    from app.ops import postgres_deploy_linux as linux
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path)
+    journal, operation, plan = _source_terminal_journal(tmp_path / 'journal-test', monkeypatch)
+    env['FAKE_EMBEDDING_PROBE_RC'] = str(status)
+    diagnostics = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', diagnostics.append)
+    with pytest.raises(linux.PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True,
+                       retain_source_failure=lambda value: journal.record_source_failure(
+                           operation, plan.revision, value))
+    assert len(diagnostics) == 1 and ('class=' + reason + '\n').encode() in diagnostics[0]
+    assert 'source-rebuild' not in _deploy_events(env)
+    assert not any('stop' in event for event in _deploy_events(env))
+    # Journal exactly the supervised, allowlisted result; reconciliation cannot replay it.
+    assert journal.read().source_failure == reason
+    journal.write(operation, 'failed')
+    config = linux.LinuxConfig.load('test')
+    monkeypatch.setattr(linux.LinuxEffects, 'activate', lambda *args: pytest.fail('must not replay'))
+    supervisor = linux.DeploymentSupervisor(config)
+    result = supervisor.request({'action': 'join', 'operation_id': operation,
+                                 'plan': asdict(plan), 'bootstrap': False})
+    assert result['receipt']['source_failure'] == reason
+
+
+@pytest.mark.parametrize('boundary', ['fabric', 'transport'])
+@pytest.mark.parametrize('fault,status', [('model', 115), ('dimension', 117), ('shape', 117), ('success', 0)])
+def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, boundary, fault, status):
+    import httpx
+    from types import SimpleNamespace
+    from app.components.llm import fabric
+    from app.components.embeddings import EmbeddingIdentity
+    from app.model_access.codex_remote_transport import CodexRemoteTransport
+    from app.model_access.remote_contract import ProductEmbeddingResponse
+
+    body = {'route': {'provider': 'ollama', 'model': 'other' if fault == 'model' else 'selected:latest',
+                     'transport_id': 'ollama_http', 'catalog_snapshot_ref': 'catalog.synthetic',
+                     'catalog_snapshot_hash': 'sha256:' + 'a' * 64},
+            'dimensions': 3 if fault == 'dimension' else 2,
+            'vector': [0.25] * (3 if fault == 'dimension' else 2)}
+    if fault == 'shape':
+        body['vector'] = [0.25]
+    requests, closed = [], []
+    def send(request):
+        requests.append(request)
+        return httpx.Response(200, json=body)
+    if boundary == 'transport':
+        remote = CodexRemoteTransport(endpoint='https://synthetic-executor.test.ts.net',
+                                     transport=httpx.MockTransport(send))
+        transport = SimpleNamespace(embed_product=remote.embed_product,
+                                    close=lambda: (closed.append(True), remote.close()))
+    else:
+        def embed(request):
+            requests.append(request)
+            if fault == 'shape':
+                return SimpleNamespace(route=SimpleNamespace(**body['route']),
+                                       dimensions=body['dimensions'], vector=body['vector'])
+            return ProductEmbeddingResponse.model_validate({**body, 'vector': tuple(body['vector'])})
+        transport = SimpleNamespace(embed_product=embed, close=lambda: closed.append(True))
+    client = fabric._RemoteProductEmbeddingClient(
+        identity=EmbeddingIdentity(provider='ollama', model='selected:latest', dim=2),
+        request_model='selected:latest', expected_transport='ollama_http', remote_transport=transport)
+    def routed(intent):
+        assert intent.task_kind == 'embed' and intent.strict_identity_required
+        return client
+    monkeypatch.setattr(fabric, 'get_embeddings_client', routed)
+    monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER', 'ollama')
+    monkeypatch.setenv('NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL', 'selected:latest')
+    assignment = next(line.strip() for line in SCRIPT.read_text().splitlines()
+                      if line.strip().startswith("probe_command=$'"))
+    probe = subprocess.run(['bash', '-c', assignment + '\nprintf "%s" "$probe_command"'],
+                           capture_output=True, text=True, check=True).stdout
+    with pytest.raises(SystemExit) as exit_info:
+        exec(probe, {})
+    assert exit_info.value.code == status
+    assert len(requests) == len(closed) == 1
+
+
+def test_native_embedding_probe_success_keeps_exact_identity_and_precedes_projection(tmp_path):
+    root, env, _prior, sha, _previous = _native_source_harness_with_prior_deployment(tmp_path, ready=False)
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 0, result.stderr
+    events = _deploy_events(env)
+    probe = next(i for i, event in enumerate(events) if event.startswith('embedding-probe '))
+    assert probe < events.index('source-rebuild')
+
+
+@pytest.mark.parametrize('marker', ['unknown', 'duplicate', 'other-stage', 'private'])
+def test_embedding_probe_untrusted_markers_cannot_reach_operation_journal(monkeypatch, marker):
+    from app.ops import native_source_bootstrap as source, postgres_deploy_linux as linux
+    codes = source.SOURCE_PROJECTION_FAILURE_CODES
+    assert len(codes) == len(set(codes.values()))
+    reason = 'embedding_probe_client_failed'
+    stage = 'health' if marker == 'other-stage' else 'source_projection'
+    line = 'YGGDRASIL_DEPLOY_FAILURE_REASON=' + (reason if marker != 'unknown' else 'unknown') + '\n'
+    if marker == 'duplicate':
+        line += line
+    if marker == 'private':
+        line = 'private-provider-canary /private/vault credential=secret ' + line
+    monkeypatch.setattr(linux.subprocess, 'run', lambda *a, **kw: subprocess.CompletedProcess(
+        a, 78, 'private-provider-canary', 'YGGDRASIL_DEPLOY_FAILURE_STAGE=' + stage + '\n' + line))
+    diagnostics, retained = [], []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', diagnostics.append)
+    with pytest.raises(linux.PostgresDeployError):
+        linux._command(['deployment'], deploy_diagnostics=True, retain_source_failure=retained.append)
+    assert not retained
+    assert len(diagnostics) == 1 and b'class=command_failed' in diagnostics[0]
+    assert b'private-provider-canary' not in diagnostics[0]
 
 
 def test_full_startup_uses_same_strict_source_summary_parser() -> None:
