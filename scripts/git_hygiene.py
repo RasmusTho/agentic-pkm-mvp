@@ -1757,7 +1757,10 @@ _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _DISPATCHER_TABLE_TRUNCATED_CONTINUATION_RE = re.compile(
-    r"^\s*(?:is(?:\s+still)?(?:\s+dirty)?|still(?:\s+dirty)?)\b",
+    r"^\s*(?:"
+    r"is(?:\s+still(?:\s+dirty)?\b)?"
+    r"|still(?:\s+dirty\b)?"
+    r")(?:\s+on\b|\s+at\b|\s*$)",
     re.IGNORECASE,
 )
 
@@ -2125,13 +2128,22 @@ def _dispatcher_marker_search(pattern: re.Pattern[str], text: str) -> re.Match[s
 
 
 def _dispatcher_table_marker_search(
-    pattern: re.Pattern[str], text: str
+    pattern: re.Pattern[str], text: str, *, next_text: str | None = None
 ) -> re.Match[str] | None:
     segments = [
         segment
         for segment in text.split(_DISPATCHER_TABLE_CELL_BOUNDARY)
         if segment.strip()
     ]
+    next_segments = (
+        [
+            segment
+            for segment in next_text.split(_DISPATCHER_TABLE_CELL_BOUNDARY)
+            if segment.strip()
+        ]
+        if next_text is not None
+        else []
+    )
     for index, segment in enumerate(segments):
         match = pattern.search(segment)
         if match is not None:
@@ -2140,6 +2152,14 @@ def _dispatcher_table_marker_search(
                 and any(
                     _DISPATCHER_TABLE_TRUNCATED_CONTINUATION_RE.match(following)
                     for following in segments[index + 1 :]
+                )
+            ):
+                continue
+            if (
+                pattern is _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE
+                and index < len(next_segments)
+                and _DISPATCHER_TABLE_TRUNCATED_CONTINUATION_RE.match(
+                    next_segments[index]
                 )
             ):
                 continue
@@ -2412,10 +2432,6 @@ def _dispatcher_resumable_binding_resources(
         table_line_numbers = _dispatcher_gfm_table_line_numbers(body)
         table_line_numbers.update(_dispatcher_html_table_line_numbers(body))
         code_block_lines = _dispatcher_code_block_line_numbers(body)
-        last_nonblank_line = max(
-            (index for index, line in enumerate(lines) if line.strip()),
-            default=-1,
-        )
         for line_number, line in enumerate(lines):
             if line_number in code_block_lines:
                 continue
@@ -2451,16 +2467,14 @@ def _dispatcher_resumable_binding_resources(
                 for adjacent_line in (line_number - 1, line_number + 1)
                 if 0 <= adjacent_line < len(lines)
             )
-            dedicated_truncated_marker = bool(visible_truncated_line.strip()) and (
-                line_number not in table_line_numbers
-                or line_number == last_nonblank_line
-            ) and not (
+            dedicated_truncated_marker = bool(visible_truncated_line.strip()) and not (
                 _DISPATCHER_OPAQUE_CODE_MARKER in next_visible_truncated_line
                 or container_fence_context
             ) and any(
                 _dispatcher_table_marker_search(
                     _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE,
                     rendered_line,
+                    next_text=next_visible_truncated_line,
                 )
                 for rendered_line in truncated_marker_lines
             )

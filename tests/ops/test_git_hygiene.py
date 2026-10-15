@@ -6758,6 +6758,40 @@ def test_local_retirement_rejects_html_block_dedicated_worktree_marker(
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
 
+def test_local_retirement_rejects_nonfinal_html_table_truncated_marker(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "<table>\n<tr><td>Dedicated worktree /tmp/old</td>"
+                            "<td>follow-up pending</td></tr>\n"
+                            "<tr><td>later</td><td>row</td></tr>\n</table>"
+                        )
+                    }]
+                }),
+            },
+        }
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard non-final HTML table truncated receipt intent",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
 def test_local_retirement_ignores_completed_and_dirty_text_in_separate_html_table_cells(
     tmp_path, monkeypatch
 ):
@@ -6810,8 +6844,8 @@ def test_local_retirement_ignores_split_retention_words_across_html_table_cells(
                     "comments": [{
                         "body": (
                             "<table>\n"
-                            "<tr><td>Dedicated worktree /tmp/old</td>"
-                            "<td>is still dirty on branch old at head "
+                            "<tr><td>Dedicated worktree lifecycle is complete.</td>"
+                            "<td>Another checkout is still dirty on branch old at head "
                             f"{sha}</td></tr>\n"
                             "</table>"
                         )
@@ -7146,6 +7180,12 @@ def test_local_retirement_rejects_cross_line_dedicated_worktree_marker(
             "| receipt | details |\n"
             "| --- | --- |\n"
             "| Dedicated worktree /tmp/old | follow-up pending |"
+        ),
+        (
+            "| receipt | details |\n"
+            "| --- | --- |\n"
+            "| Dedicated worktree /tmp/old | is pending review |\n"
+            "| later | row |"
         ),
     ],
 )
