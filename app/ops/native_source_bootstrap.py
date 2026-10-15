@@ -169,9 +169,9 @@ def quiesce_owned_container(channel: str, name: str, operation: str, revision: s
     def inventory() -> str:
         result = docker(
             'ps', '--all', '--filter', f'name=^/{name}$',
-            '--filter', f'label=com.docker.compose.project=pkm-{channel}',
-            '--filter', 'label=com.docker.compose.service=api',
-            '--filter', 'label=com.docker.compose.oneoff=True', '--format', '{{.ID}}',
+            # Labels are ownership evidence, never census filters: a foreign
+            # exact-name resource must not disappear into "proved absent".
+            '--format', '{{.ID}}',
         )
         if result and re.fullmatch(r'[0-9a-f]{12,64}', result) is None:
             raise ValueError('source inventory invalid')

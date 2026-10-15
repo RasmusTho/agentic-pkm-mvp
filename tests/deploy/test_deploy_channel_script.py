@@ -6893,14 +6893,19 @@ def _source_terminal_docker(monkeypatch, journal, operation, revision, status, o
         command = argv[1]
         output = ''
         if command == 'ps':
-            output = '' if removed else '0123456789ab'
+            hidden_foreign = fault in {'project', 'service', 'oneoff'} and any(
+                value.startswith('label=com.docker.compose.') for value in argv)
+            output = '' if removed or hidden_foreign else '0123456789ab'
         elif command == 'inspect':
             if 'ExitCode' in argv[3]:
                 state = fault if fault in {'created', 'removing', 'unknown'} else 'exited'
                 output = f'{state} {status} {str(oom).lower()}' if fault != 'malformed' else 'private output'
             else:
                 op = operation if fault != 'foreign' else '00000000-0000-4000-8000-000000000002'
-                output = f'/pkm-test-source-bootstrap-{operation} pkm-test api True {op} {revision} false'
+                project = 'pkm-foreign' if fault == 'project' else 'pkm-test'
+                service = 'worker' if fault == 'service' else 'api'
+                oneoff = 'False' if fault == 'oneoff' else 'True'
+                output = f'/pkm-test-source-bootstrap-{operation} {project} {service} {oneoff} {op} {revision} false'
         elif command == 'rm':
             removed.append(journal.read().source_failure)
         else:
@@ -6943,7 +6948,7 @@ def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliati
     assert journal.read().source_failure == reason
 
 
-@pytest.mark.parametrize('fault', ['foreign', 'malformed', 'created', 'removing', 'unknown', 'journal_unavailable'])
+@pytest.mark.parametrize('fault', ['foreign', 'project', 'service', 'oneoff', 'malformed', 'created', 'removing', 'unknown', 'journal_unavailable'])
 def test_native_source_terminal_evidence_failure_preserves_container(tmp_path, monkeypatch, fault):
     from app.ops import postgres_deploy_linux as linux
     journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
@@ -7011,6 +7016,28 @@ def test_native_source_unexpected_cleanup_helper_exit_never_admits_writer_restar
     env['FAKE_SOURCE_RC'] = '42'
     adapter = root / 'app/ops/postgres_deploy_linux.py'
     adapter.write_text(adapter.read_text() + f'\ndef record_source_terminal(*args):\n    raise SystemExit({helper_status})\n')
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 78
+    assert 'YGGDRASIL_DEPLOY_FAILURE_REASON=source_quiescence_failed' in result.stderr
+    assert 'native source producer quiescence is unproven' in result.stderr
+    assert not any('up -d --force-recreate api' in event for event in _deploy_events(env))
+
+
+def test_native_source_foreign_exact_name_cannot_hide_behind_ownership_filters(tmp_path):
+    root, env, sha = _native_source_harness(tmp_path, channel='dev')
+    env['FAKE_SOURCE_RC'] = '42'
+    docker = tmp_path / 'bin/docker'
+    docker.write_text(docker.read_text().replace('case "$*" in\n', '''if [ "${1:-}" = ps ] && [[ "$*" == *source-bootstrap* ]]; then
+  if [[ "$*" != *label=com.docker.compose.* ]]; then printf '0123456789ab\\n'; fi
+  exit 0
+fi
+if [ "${1:-}" = inspect ] && [[ "$*" == *State.Running* ]]; then
+  printf '/pkm-dev-source-bootstrap-%s pkm-foreign api True %s %s false\\n' \\
+    "${BWS_DEPLOY_OPERATION_ID}" "${BWS_DEPLOY_OPERATION_ID}" "${BWS_DEPLOY_TARGET_REVISION}"
+  exit 0
+fi
+case "$*" in
+''', 1))
     result = _run_deploy(root, env, sha)
     assert result.returncode == 78
     assert 'YGGDRASIL_DEPLOY_FAILURE_REASON=source_quiescence_failed' in result.stderr
