@@ -113,12 +113,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.phase in {"reconciled", "restored"} and not args.post_effect_operation_key:
         if args.mode == "consumer":
             raise ValueError("v2 terminal phase requires the exact outbox operation")
-    if args.mode == "manual":
-        validate_manual_phase_inputs(
-            comments,
-            post_effect_deployment_supplied=args.post_effect_deployment_json is not None,
-            post_effect_operation_key_supplied=args.post_effect_operation_key is not None,
-        )
     supplied_convergence = _nested_mapping(
         args.projection_convergence_json, "convergence_receipt"
     )
@@ -132,6 +126,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if durable_convergence is None or durable_convergence != supplied_convergence:
         raise ValueError("phase requires one authenticated durable projection convergence")
+    if args.mode == "manual":
+        validate_manual_phase_inputs(
+            comments,
+            phase=args.phase,
+            authority_receipt=authority_receipt,
+            projection_convergence_receipt=durable_convergence,
+            post_effect_deployment_supplied=args.post_effect_deployment_json is not None,
+            post_effect_operation_key_supplied=args.post_effect_operation_key is not None,
+        )
     post_effect = None
     phase_version = 1
     if args.mode == "consumer":
