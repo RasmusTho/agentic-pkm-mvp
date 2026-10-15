@@ -329,11 +329,11 @@ def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
 
 
 def _source_failure(receipt: dict[str, Any]) -> dict[str, str]:
-    from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_CODES
+    from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_REASONS
     if 'source_failure' not in receipt:
         return {}
     reason = receipt['source_failure']
-    if (type(reason) is not str or reason not in SOURCE_PROJECTION_FAILURE_CODES
+    if (type(reason) is not str or reason not in SOURCE_PROJECTION_FAILURE_REASONS
         or receipt.get('terminal_result', receipt.get('result')) != 'failed'):
         raise CandidateRefused('native_terminal_evidence_refused')
     return {'source_failure': reason}

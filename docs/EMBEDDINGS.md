@@ -438,6 +438,22 @@ VectorIndex is rebuildable cache: if identity changes, vectors are invalid until
 
 ## Operational guardrails
 
+The native deployment pre-mutation probe uses only the strict routed Product embedding client
+and the selected provider/model; no diagnostic permits provider substitution or fallback.
+Its fixed content-free reasons are `embedding_probe_client_failed` (client/identity acquisition),
+`embedding_probe_identity_mismatch`, `embedding_probe_generation_failed` (generation/transport),
+`embedding_probe_vector_invalid` (shape/dimension and existing routed-client vector refusals), and
+`embedding_probe_cleanup_failed`. An earlier failure takes precedence over cleanup failure;
+unknown process outcomes retain `embedding_probe_failed`. The wrapper discards child streams
+and retains only allowlisted codes in native diagnostics and same-operation/controller receipts.
+Probe reasons are receipt-only, not source-worker exit codes; unknown worker exits remain
+`source_worker_failed` and cannot assert a probe failure.
+Never include exceptions, responses, endpoints, paths, credentials, source identity or probe content.
+Failure remains before source projection, PostgreSQL acceptance, TEST and journaling qualification;
+these diagnostics neither authorize Product writes nor prove live model acceptance.
+The remote Product client uses checked router cleanup for this probe only; ordinary client cleanup
+retains its best-effort behavior. Existing vector conversion/validation policy is not tightened.
+
 Recommended checks:
 - `/api/health` confirms backend reachable and models visible
 - Index preflight warns on:
