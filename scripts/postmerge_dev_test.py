@@ -236,6 +236,8 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
             outcome = {**checkpoint['outcome'], 'result': result, 'operation_id': receipt['operation_id']}
             if result == 'passed':
                 outcome['pg_acceptance'] = receipt['pg_acceptance']
+            else:
+                outcome.update(_source_failure(receipt))
             _save_outcome(path, candidate, outcome)
             checkpoint.update(phase=result, outcome=outcome)
             if result != 'passed':
@@ -278,6 +280,7 @@ def _save_outcome(path: Path, candidate: Candidate, outcome: dict[str, Any]) -> 
 
 def _validate_checkpoint(checkpoint: dict[str, Any]) -> None:
     try:
+        _source_failure(checkpoint['outcome'])
         candidate = Candidate(**checkpoint['candidate'])
         if (set(checkpoint) != {'candidate', 'phase', 'channel', 'outcome'}
             or re.fullmatch(r'[0-9a-f]{40}', candidate.sha) is None or not _digest(candidate.digest)
@@ -308,7 +311,7 @@ def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
     result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
     try:
         receipt = json.loads(result.stdout)
-        if (set(receipt) not in ({'operation_id', 'channel', 'kind', 'stage', 'terminal_result'},
+        if (set(receipt) - {'source_failure'} not in ({'operation_id', 'channel', 'kind', 'stage', 'terminal_result'},
                                 {'operation_id', 'channel', 'kind', 'stage', 'terminal_result', 'pg_acceptance'})
             or receipt['channel'] != channel or receipt['kind'] != 'deploy'
             or receipt['stage'] != receipt['terminal_result']
@@ -325,7 +328,19 @@ def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
         raise CandidateRefused('native_terminal_evidence_refused') from None
 
 
+def _source_failure(receipt: dict[str, Any]) -> dict[str, str]:
+    from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_REASONS
+    if 'source_failure' not in receipt:
+        return {}
+    reason = receipt['source_failure']
+    if (type(reason) is not str or reason not in SOURCE_PROJECTION_FAILURE_REASONS
+        or receipt.get('terminal_result', receipt.get('result')) != 'failed'):
+        raise CandidateRefused('native_terminal_evidence_refused')
+    return {'source_failure': reason}
+
+
 def _require_terminal_profile(receipt: dict[str, Any], channel: str, candidate: Candidate) -> None:
+    _source_failure(receipt)
     if (receipt.get('channel') != channel or receipt.get('operation_id') != candidate.operation_id(channel)
         or receipt.get('terminal_result') not in {'committed', 'failed', 'aborted'}):
         raise CandidateRefused('native_terminal_evidence_refused')
@@ -358,6 +373,7 @@ def deliver(candidate: Candidate, *, deploy: Callable[[str, Candidate], dict[str
             return 78
         if receipt['terminal_result'] != 'committed':
             emit({**identity, 'channel': channel, 'result': 'failed', 'operation_id': receipt['operation_id'],
+                  **_source_failure(receipt),
                   'failure_reference': f'https://github.com/{REPOSITORY}/actions/runs/{candidate.run_id}'})
             return 78
         emit({**identity, 'channel': channel, 'result': 'passed', 'operation_id': receipt['operation_id'],

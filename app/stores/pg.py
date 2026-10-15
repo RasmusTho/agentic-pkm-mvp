@@ -1181,11 +1181,11 @@ class PgObjectStore(ObjectStore):
                         conn, vault_uuid, vault_binding_id=self.vault_binding_id,
                     ))
                 except Exception:
-                    raise LegacySourceRefusal("legacy_identity_refused") from None
+                    raise LegacySourceRefusal("legacy_identity_canonical_refused") from None
                 if retained_uuid is not None and UUID(retained_uuid) != UUID(vault_uuid):
-                    raise LegacySourceRefusal("legacy_identity_refused")
+                    raise LegacySourceRefusal("legacy_identity_canonical_refused")
                 if canonical != oid:
-                    raise LegacySourceRefusal("legacy_identity_refused")
+                    raise LegacySourceRefusal("legacy_identity_canonical_refused")
                 cur.execute("SELECT object_id, source_ref, payload FROM store_objects WHERE vault_binding_id = %s",
                             (self.vault_binding_id,))
                 # The source adapter owns locator normalization; the table
@@ -1218,12 +1218,12 @@ class PgObjectStore(ObjectStore):
                         if table in ("chunks", "embeddings"):
                             continue
                         if len(columns) != 2 or columns[0] != "vault_binding_id":
-                            raise LegacySourceRefusal("legacy_admission_refused")
+                            raise LegacySourceRefusal("legacy_dependency_shape_refused")
                         cur.execute(sql.SQL("SELECT 1 FROM {} WHERE {} = %s AND {} = %s LIMIT 1").format(
                             sql.Identifier(*table.split(".")), sql.Identifier(columns[0]), sql.Identifier(columns[1]),
                         ), (self.vault_binding_id, oid))
                         if cur.fetchone() is not None:
-                            raise LegacySourceRefusal("legacy_admission_refused")
+                            raise LegacySourceRefusal("legacy_retained_history_refused")
                     cur.execute(
                         "SELECT 1 FROM store_relations WHERE vault_binding_id = %s AND (src_id = %s OR dst_id = %s) "
                         "UNION ALL SELECT 1 FROM store_relation_memberships WHERE vault_binding_id = %s "
@@ -1231,7 +1231,7 @@ class PgObjectStore(ObjectStore):
                         (self.vault_binding_id, oid, oid, self.vault_binding_id, oid),
                     )
                     if cur.fetchone() is not None:
-                        raise LegacySourceRefusal("legacy_admission_refused")
+                        raise LegacySourceRefusal("legacy_relation_retention_refused")
                     cur.execute(
                         "DELETE FROM store_objects WHERE vault_binding_id = %s AND object_id = %s",
                         (self.vault_binding_id, oid),

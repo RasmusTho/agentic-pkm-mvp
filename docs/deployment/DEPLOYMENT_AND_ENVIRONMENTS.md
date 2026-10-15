@@ -910,6 +910,21 @@ marker. The Ollama service may remain running and its model cache may remain pop
 preflight leaves the source-backed
 repair operation below unchanged; that operation still runs after migrations.
 
+The probe's fixed child exit statuses 114–118 map respectively to
+`embedding_probe_client_failed`, `embedding_probe_identity_mismatch`,
+`embedding_probe_generation_failed`, `embedding_probe_vector_invalid`, and
+`embedding_probe_cleanup_failed`; unknown exits retain `embedding_probe_failed`.
+This probe-only status namespace is separate from source-worker checkpoints: worker exits
+114–119 or other unsupported statuses retain generic worker failure, never probe attribution.
+Only these allowlisted reasons cross the supervised wrapper into the native operation journal,
+same-operation reconciliation and post-merge controller checkpoint. Cleanup is attempted for an
+acquired client, with the original failure taking precedence. Child output, exceptions, responses,
+endpoints, paths, credentials, source identity and probe content remain private.
+There is no provider substitution or identity fallback, no replay of terminal operations, and no
+authorization to start TEST/journaling acceptance or mutate Product/vector/vault data.
+The remote Product client requests checked network-router cleanup only for this probe; normal
+best-effort close behavior and existing vector acceptance/conversion rules remain unchanged.
+
 Repository support for native BWS source recovery (#5918) adds one fixed API-consumer one-shot
 after instance-state finalization and migrations, before ordinary API/worker/watcher/capture/UI
 recreation. The candidate image must contain `scripts/start_api.sh`'s source-only mode and
@@ -981,8 +996,29 @@ only when their existing UUID form is preserved by the actual filesystem adapter
 encoded UUIDs refuse without healing. Uniqueness covers the union of enabled producer inventories,
 including nested-vault files in the legacy filesystem inventory. Applicable filesystem sources
 use vault-sync's canonical payload path; excluded sources are not laundered through alpha.
+An enabled filesystem root different from the active root (nested, parent or disjoint) refuses
+recovery rather than implying Product isolation: vault-sync still owns the compatibility binding.
 Native registry claims also prove identity preservation against the ordinary worker's inbox-heal
 selector; an id-only inbox source refuses without healing or borrowing another producer's recipe.
+For sources excluded from every producer, exact retirement also accepts an already persisted
+valid companion UUID matching both the legacy row and canonical Product mapping. Hardened source
+and companion snapshots, unique source claims (excluding only metadata sidecars outside every
+producer inventory), including actual producer-emitted deterministic/fallback identities as
+duplicate-denial claims only, unambiguous companion
+evidence and all existing profile/history/relation/CAS fences remain mandatory.
+The persisted companion observation must bind the exact current source in the active root;
+hash/title discovery alone cannot authorize a moved/reused or foreign source observation.
+Replacement still requires explicit producer-preserved frontmatter identity. Invalid declarations and unpersisted
+path/fingerprint-only fallbacks never authorize retirement or replacement. No source healing,
+identity synthesis/normalization, metadata write or acceptance authority is introduced.
+Identity refusals retain five finite remediation classes: `legacy_identity_persistence_refused`,
+`legacy_identity_mismatch_refused`, `legacy_identity_ambiguous_refused`,
+`legacy_identity_producer_refused` and `legacy_identity_canonical_refused` (worker exits 109–113).
+They distinguish absent/invalid persistence, stored/source mismatch, duplicate/ambiguous claims,
+producer preservation/heal mismatch and canonical Product disagreement respectively. The private
+CLI, bootstrap, deploy diagnostic and operation journal preserve only those fixed classes through
+cleanup and same-operation terminal reconciliation; unexpected/private failures remain generic
+and fail closed. The legacy generic identity class remains accepted for older worker evidence.
 Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
 History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again
@@ -1015,17 +1051,46 @@ service availability/readiness, configured-model availability/readiness and the 
 exit codes 82–89 to `source_preflight_failed`, `source_readiness_failed`, `source_command_failed`,
 `source_summary_invalid`, `source_post_rebuild_failed`, `source_doctor_failed`,
 `source_settings_failed` and `source_worker_failed`. Writer-stop and exact-operation cleanup
-failures are `source_writer_stop_failed` and `source_quiescence_failed`; unknown child exits,
-timeouts and termination signals remain failed with `source_worker_failed` after cleanup.
+failures are `source_writer_stop_failed` and `source_quiescence_failed`. Supervised timeouts
+and TERM/INT are distinct `source_worker_timeout` and `source_worker_terminated`; an exact owned
+container's validated Docker `OOMKilled=true` is `source_worker_oom`. Other unknown nonzero
+exits remain `source_worker_failed`; exit 137 alone does not establish OOM.
+Observer result codes 96–98 are not worker evidence: a raw worker exit in that range remains
+unknown. A validated stopped worker checkpoint takes precedence over a generic Compose transport
+failure; only supervised timeout/INT/TERM retain transport precedence. Unexpected observer-process
+exits never prove quiescence or admit runtime-writer restart.
+The source one-shot is not auto-removed. Under the inherited current-operation lock/guard,
+the wrapper validates its exact name, Compose labels, operation and revision, proves stoppage,
+reads only bounded exit status and OOM boolean, and durably fsyncs the fixed `source_failure`
+on the existing operation journal before removal. An evidence-write or cleanup failure preserves
+the container/admission rather than declaring successful cleanup. The field survives failed-state
+reconciliation and same-ID reads without worker replay; old receipts without it remain valid.
+The DEV-to-TEST controller accepts only an allowlisted failed-receipt class and preserves it in
+fresh and resumed failure outcomes/checkpoints; malformed or success-attached metadata refuses.
+Missing container state never turns a zero status into success. Foreign, drifted or ambiguous
+resources remain untouched. No Docker error text, logs or untrusted metadata is retained.
 The supervisor accepts these reasons only with one exact `source_projection` stage and one
 exact allowlisted reason marker. Other stages or malformed, duplicate, injected or unknown
 markers retain `command_failed`. These content-free reasons identify checkpoints, not root
 causes or repair authority: they never authorize source replay, semantic fallback, data/vector
 mutation or candidate activation. Raw stdout/stderr suppression, candidate/operation binding,
 compensation and no-replay semantics are unchanged.
+Repository tests establish attribution only. Parent #3347 owns the fresh exact-main DEV-to-TEST
+retry and TEST journaling acceptance after reviewed host convergence; these classifications neither
+identify the previous live root cause nor establish that acceptance.
 Legacy reconciliation additionally preserves the finite classes `legacy_producer_policy_refused`
 (exit 90), `legacy_source_refused` (91), `legacy_admission_refused` (92),
 `legacy_identity_refused` (93), `legacy_race_refused` (94), and `legacy_write_failed` (95).
+Remediation-specific legacy admission reasons use fixed native exits 99–108, respectively:
+`legacy_candidate_refused`, `legacy_authority_refused`, `legacy_trust_refused`,
+`legacy_origin_refused`, `legacy_payload_shape_refused`, `legacy_system_path_refused`,
+`legacy_profile_refused`, `legacy_dependency_shape_refused`, `legacy_retained_history_refused`,
+and `legacy_relation_retention_refused`. Their meanings are owned by
+[embedding operational guardrails](../EMBEDDINGS.md#operational-guardrails).
+Each survives operation-bound journal retention, cleanup and same-operation terminal reconciliation;
+unexpected/private failures retain the generic fail-closed classification. These diagnostics grant
+no repair, admission, retirement or acceptance authority, and cannot authorize rewriting protected
+history or replaying a failed operation. Parent-owned fresh DEV-to-TEST acceptance remains separate.
 The CLI's private exit remains 79 with an allowlisted JSON reason; bootstrap maps that reason to
 the fixed native code, and the deploy wrapper/supervisor retains only its exact allowlisted marker.
 Provider generation retains `embedding_generation_failed`. These classifications expose no source

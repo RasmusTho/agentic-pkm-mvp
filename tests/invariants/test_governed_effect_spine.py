@@ -9,9 +9,17 @@ from typing import Any, Callable
 
 import pytest
 
+import app.agent_memory.materialization as memory_materialization_module
 import app.eval.failure_capture as failure_capture_module
 import app.orchestrator.executor as executor_module
 import app.receipts.outbox_sources as receipt_sources
+from app.agent_memory.candidate import MemoryCandidate, MemoryType
+from app.agent_memory.materialization import (
+    MemoryMaterializationError,
+    materialize_promoted_memory,
+)
+from app.agent_memory.review_decision_store import ReviewDecisionStore
+from app.agent_memory.review_queue import MemoryCandidateReviewQueue, ReviewDecision
 from app.governance.governed_write import GovernedWriteAdapter
 from app.eval.failure_capture import (
     AuthorityReceiptPersistenceError,
@@ -31,11 +39,342 @@ from app.orchestrator.runtime import Orchestrator
 from app.orchestrator.v2_runtime import OrchestratorV2
 from app.planner.provider import build_vault_append_steps
 from app.planner.schema import Plan, PlanMetadata
+from app.receipts.promotion_receipts import PromotionReceiptQueryResult
 from app.services.outbox import append_jsonl_record
+from app.vault.manager import VaultContext
 from app.write_guard import WriteGuard
 from scripts.yaml_roundtrip import dump_frontmatter, load_frontmatter
 
 pytestmark = pytest.mark.not_pg
+
+
+def _promoted_memory_case(
+    tmp_path: Path,
+    *,
+    candidate_id: str,
+) -> tuple[VaultContext, ReviewDecisionStore, Any, Path]:
+    vault_root = tmp_path / "vault"
+    vault_root.mkdir()
+    vault = VaultContext(
+        status="selected",
+        active_vault_id="vault-governed-memory",
+        active_vault_name="Governed Memory Vault",
+        active_vault_path=str(vault_root),
+    )
+    candidate = MemoryCandidate(
+        candidate_id=candidate_id,
+        title="Governed semantic memory",
+        memory_type=MemoryType.SEMANTIC_MEMORY,
+        inferred=False,
+        content="The user explicitly approved this retained knowledge.",
+        source_refs=["note:source.md"],
+        derived_from="vault:source.md",
+        generated_by="companion_agent",
+        scope_id="scope:test/governed-memory",
+    )
+    queue = MemoryCandidateReviewQueue()
+    queue.enqueue(candidate)
+    entry = queue.decide(
+        candidate.candidate_id,
+        ReviewDecision.PROMOTE,
+        decided_by="human:memory-reviewer",
+        notes="Approved for durable HKA materialization.",
+    )
+    store = ReviewDecisionStore(tmp_path / "review-decisions.sqlite3")
+    store.record_decision(entry, vault_context=vault, channel="test")
+    return vault, store, entry, tmp_path / "materialization-outbox.jsonl"
+
+
+def test_memory_promotion_uses_production_governed_chain(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The real MEM materializer binds GOV before HKA and receipts before terminal."""
+    vault, store, entry, outbox_path = _promoted_memory_case(
+        tmp_path,
+        candidate_id="memory-governed-chain",
+    )
+    transitions: list[str] = []
+    real_grant = memory_materialization_module._materialization_grant
+    real_write = memory_materialization_module.write_note_relative
+    real_authority_append = (
+        memory_materialization_module._append_materialization_authority_receipt
+    )
+
+    def record_grant(*args: Any, **kwargs: Any) -> Any:
+        transitions.append("decision-token")
+        return real_grant(*args, **kwargs)
+
+    def record_write(*args: Any, **kwargs: Any) -> Any:
+        transitions.append("hka-write")
+        return real_write(*args, **kwargs)
+
+    def record_authority_append(*args: Any, **kwargs: Any) -> Any:
+        transitions.append("authority-receipt")
+        return real_authority_append(*args, **kwargs)
+
+    monkeypatch.setattr(
+        memory_materialization_module,
+        "_materialization_grant",
+        record_grant,
+    )
+    monkeypatch.setattr(
+        memory_materialization_module,
+        "write_note_relative",
+        record_write,
+    )
+    monkeypatch.setattr(
+        memory_materialization_module,
+        "_append_materialization_authority_receipt",
+        record_authority_append,
+    )
+
+    result = materialize_promoted_memory(
+        entry,
+        vault_context=vault,
+        channel="test",
+        decision_store=store,
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+        outbox_path=outbox_path,
+    )
+
+    assert result.artifact_path is not None
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    promotion = next(
+        record for record in records if record["event"] == "promotion.transition.applied"
+    )
+    governed = next(
+        record
+        for record in records
+        if record["event"] == "governance.authority_receipt.recorded"
+    )
+    assert promotion["event_id"] != governed["event_id"]
+    promotion_payload = promotion["payload"]
+    governed_payload = governed["payload"]
+    token = promotion_payload["decision_token"]
+    policy = promotion_payload["policy_decision"]
+    mutation = promotion_payload["state_owner_receipt"]
+    authority = governed_payload["authority_receipt"]
+    assert policy["source"] == "human_review"
+    assert token["actor"] == "human:memory-reviewer"
+    assert token["action"] == "memory.materialize"
+    assert token["write_class"] == "semantic_memory_materialization"
+    assert token["resource"] == result.artifact_path
+    assert mutation["operation"] == "write_note"
+    assert mutation["locator"]["path"] == result.artifact_path
+    assert mutation["outcome"] == "written"
+    assert authority["decision_token_id"] == token["token_id"]
+    assert authority["actor"] == token["actor"]
+    assert authority["resource"] == result.artifact_path
+    assert authority["write_class"] == "semantic_memory_materialization"
+    assert authority["state_owner"] == "HKA"
+    assert authority["source_receipt_ref"]
+    assert governed_payload["promotion_receipt_id"] == result.receipt_id
+    decision = store.get_decision(
+        entry.candidate_id,
+        vault_context=vault,
+        channel="test",
+    )
+    assert transitions == ["decision-token", "hka-write", "authority-receipt"]
+    assert decision is not None and decision.terminal is True
+
+
+def test_memory_promotion_reconciles_without_duplicate_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A missing GOV receipt reuses the durable promotion facts and HKA artifact."""
+    vault, store, entry, outbox_path = _promoted_memory_case(
+        tmp_path,
+        candidate_id="memory-governed-retry",
+    )
+    real_write = memory_materialization_module.write_note_relative
+    writes: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def count_write(*args: Any, **kwargs: Any) -> Any:
+        writes.append((args, kwargs))
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(memory_materialization_module, "write_note_relative", count_write)
+    real_append = memory_materialization_module._append_materialization_authority_receipt
+    attempts = 0
+
+    def fail_authority_receipt_once(*args: Any, **kwargs: Any) -> Any:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("fault injection after HKA mutation and promotion receipt")
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(
+        memory_materialization_module,
+        "_append_materialization_authority_receipt",
+        fail_authority_receipt_once,
+    )
+    with pytest.raises(MemoryMaterializationError, match="interrupted"):
+        materialize_promoted_memory(
+            entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+            outbox_path=outbox_path,
+        )
+
+    vault_root = Path(vault.active_vault_path or "")
+    artifact = next(vault_root.rglob("*.md"))
+    artifact_before = artifact.read_bytes()
+    first_records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [record["event"] for record in first_records] == [
+        "promotion.transition.applied"
+    ]
+    original_token_id = first_records[0]["payload"]["decision_token"]["token_id"]
+    assert len(writes) == 1
+    interrupted = store.get_decision(
+        entry.candidate_id,
+        vault_context=vault,
+        channel="test",
+    )
+    assert interrupted is not None and interrupted.terminal is False
+
+    result = materialize_promoted_memory(
+        entry,
+        vault_context=vault,
+        channel="test",
+        decision_store=store,
+        write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+        outbox_path=outbox_path,
+    )
+
+    assert result.artifact_path == artifact.relative_to(vault_root).as_posix()
+    assert artifact.read_bytes() == artifact_before
+    assert len(list(vault_root.rglob("*.md"))) == 1
+    assert len(writes) == 1
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [record["event"] for record in records] == [
+        "promotion.transition.applied",
+        "governance.authority_receipt.recorded",
+    ]
+    assert records[0] == first_records[0]
+    assert (
+        records[1]["payload"]["authority_receipt"]["decision_token_id"]
+        == original_token_id
+    )
+    completed = store.get_decision(
+        entry.candidate_id,
+        vault_context=vault,
+        channel="test",
+    )
+    assert completed is not None and completed.terminal is True
+
+
+def test_memory_promotion_refuses_legacy_ungoverned_receipt(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A pre-chain promotion receipt cannot become retroactive GOV authority."""
+    vault, store, entry, outbox_path = _promoted_memory_case(
+        tmp_path,
+        candidate_id="memory-legacy-ungoverned",
+    )
+    real_append = memory_materialization_module._append_promotion_receipt
+
+    def append_without_governed_facts(*args: Any, **kwargs: Any) -> Any:
+        kwargs.pop("governed_facts", None)
+        return real_append(*args, **kwargs)
+
+    monkeypatch.setattr(
+        memory_materialization_module,
+        "_append_promotion_receipt",
+        append_without_governed_facts,
+    )
+    with pytest.raises(MemoryMaterializationError, match="explicit remediation"):
+        materialize_promoted_memory(
+            entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+            outbox_path=outbox_path,
+        )
+
+    monkeypatch.setattr(
+        memory_materialization_module,
+        "_append_promotion_receipt",
+        real_append,
+    )
+    with pytest.raises(MemoryMaterializationError, match="explicit remediation"):
+        materialize_promoted_memory(
+            entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+            outbox_path=outbox_path,
+        )
+
+    records = [
+        json.loads(line)
+        for line in outbox_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [record["event"] for record in records] == [
+        "promotion.transition.applied"
+    ]
+    assert len(list(Path(vault.active_vault_path or "").rglob("*.md"))) == 1
+    persisted = store.get_decision(
+        entry.candidate_id,
+        vault_context=vault,
+        channel="test",
+    )
+    assert persisted is not None and persisted.terminal is False
+
+
+def test_memory_promotion_fails_closed_when_receipt_source_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An unavailable durable source is not evidence that no receipt exists."""
+    vault, store, entry, outbox_path = _promoted_memory_case(
+        tmp_path,
+        candidate_id="memory-unavailable-receipts",
+    )
+    monkeypatch.setattr(
+        memory_materialization_module,
+        "query_promotion_receipts",
+        lambda *args, **kwargs: PromotionReceiptQueryResult(source_available=False),
+    )
+
+    with pytest.raises(MemoryMaterializationError, match="source is unavailable"):
+        materialize_promoted_memory(
+            entry,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=WriteGuard(snapshot_fn=lambda: {"state": "healthy"}),
+            outbox_path=outbox_path,
+        )
+
+    assert outbox_path.read_text(encoding="utf-8") == ""
+    assert not list(Path(vault.active_vault_path or "").rglob("*.md"))
+    persisted = store.get_decision(
+        entry.candidate_id,
+        vault_context=vault,
+        channel="test",
+    )
+    assert persisted is not None and persisted.terminal is False
 
 
 def _plan() -> Plan:

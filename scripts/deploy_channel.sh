@@ -1386,6 +1386,18 @@ raise SystemExit(0 if quiesce_owned_container(*sys.argv[1:]) else 78)
 ' "${channel}" "$1" "${BWS_DEPLOY_OPERATION_ID}" "${target_sha}" >/dev/null 2>&1
 }
 
+native_source_terminal_cleanup() {
+  PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}" "${PYTHON}" -c '
+import sys
+from app.ops.postgres_deploy_linux import record_source_terminal
+try:
+    status = record_source_terminal(sys.argv[1], sys.argv[2], int(sys.argv[3]))
+except Exception:
+    raise SystemExit(78) from None
+raise SystemExit(status)
+' "${channel}" "$1" "$2" >/dev/null 2>&1
+}
+
 restore_pre_migration_deploy_pin() {
   if [ "${CURRENT_PIN_SNAPSHOT_TAKEN}" = "1" ]; then
     if [ "${CURRENT_PIN_SNAPSHOT_EXISTED}" = "1" ]; then
@@ -1462,7 +1474,7 @@ native_source_embedding_preflight_gate() {
   fi
 
   local operation="${BWS_DEPLOY_OPERATION_ID:-}" identity_json identity_result
-  local provider="" model="" identity_command probe_command service_ready=0 attempt
+  local provider="" model="" identity_command probe_command probe_status=0 probe_reason service_ready=0 attempt
   [[ "${operation}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || { native_source_failure embedding_context_invalid; return 78; }
   [ "${BWS_DEPLOY_TARGET_REVISION:-}" = "${target_sha}" ] || { native_source_failure embedding_context_invalid; return 78; }
   [ -n "${HOST_SECRET_RUNTIME_ENV_FILE_API:-}" ] && \
@@ -1535,12 +1547,23 @@ PY
     return 78
   fi
 
-  probe_command=$'import os\nfrom app.components.llm.fabric import get_product_embedding_client\nclient = get_product_embedding_client()\ntry:\n    identity = client.identity\n    expected = (os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER"), os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL"))\n    if (identity.provider, identity.model) != expected:\n        raise SystemExit(78)\n    vector = client.embed_text("Yggdrasil deployment preflight")\n    if len(vector) != identity.dim:\n        raise SystemExit(78)\nfinally:\n    close = getattr(client, "close", None)\n    if callable(close):\n        close()'
-  if ! compose run --rm --no-deps -T \
+  # Only fixed process statuses cross the private child boundary. Retain the
+  # first failure if closing an already-failed client also fails.
+  probe_command=$'import os\nclient = None\nstatus = 0\nphase = 114\ntry:\n    from app.components.llm.fabric import get_product_embedding_client, RemoteEmbeddingIdentityError, RemoteEmbeddingVectorError\n    client = get_product_embedding_client()\n    identity = client.identity\n    actual = (identity.provider, identity.model)\n    dimension = identity.dim\n    expected = (os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER"), os.environ.get("NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL"))\n    if actual != expected:\n        status = 115\n    else:\n        phase = 116\n        vector = client.embed_text("Yggdrasil deployment preflight")\n        phase = 117\n        if not isinstance(vector, (list, tuple)) or len(vector) != dimension:\n            status = 117\nexcept Exception as exc:\n    status = phase\n    if phase == 116 and isinstance(exc, RemoteEmbeddingIdentityError):\n        status = 115\n    elif phase == 116 and isinstance(exc, RemoteEmbeddingVectorError):\n        status = 117\nfinally:\n    if client is not None:\n        try:\n            close = getattr(client, "close_for_preflight", None)\n            if not callable(close):\n                close = getattr(client, "close", None)\n            if callable(close):\n                close()\n        except Exception:\n            if status == 0:\n                status = 118\nraise SystemExit(status)'
+  compose run --rm --no-deps -T \
       -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_PROVIDER=${provider}" \
       -e "NATIVE_SOURCE_EXPECTED_EMBEDDING_MODEL=${model}" \
-      --entrypoint python api -c "${probe_command}" >/dev/null 2>&1; then
-    native_source_failure embedding_probe_failed
+      --entrypoint python api -c "${probe_command}" >/dev/null 2>&1 || probe_status=$?
+  if [ "${probe_status}" != 0 ]; then
+    case "${probe_status}" in
+      114) probe_reason=embedding_probe_client_failed ;;
+      115) probe_reason=embedding_probe_identity_mismatch ;;
+      116) probe_reason=embedding_probe_generation_failed ;;
+      117) probe_reason=embedding_probe_vector_invalid ;;
+      118) probe_reason=embedding_probe_cleanup_failed ;;
+      *) probe_reason=embedding_probe_failed ;;
+    esac
+    native_source_failure "${probe_reason}"
     return 78
   fi
 
@@ -1565,16 +1588,24 @@ native_source_projection_gate() {
     return "${rc}"
   }
   NATIVE_SOURCE_QUIESCENT=0
-  compose run --rm --no-deps -T --name "${name}" \
+  compose run --no-deps -T --name "${name}" \
     --label "yggdrasil.native.operation=${operation}" \
     --label "yggdrasil.native.revision=${target_sha}" \
     -e "NATIVE_SOURCE_BOOTSTRAP=${channel}:${target_sha}" api || rc=$?
-  if native_source_container_quiescence "${name}"; then
-    NATIVE_SOURCE_QUIESCENT=1
-  else
-    native_source_failure source_quiescence_failed
-    return 78
-  fi
+  local terminal_rc=0
+  native_source_terminal_cleanup "${name}" "${rc}" || terminal_rc=$?
+  # Only the observer's documented result namespace proves cleanup. A Python
+  # import/crash or signal must never admit compensation/runtime writers.
+  case "${terminal_rc}" in
+    0|79|8[0-9]|9[0-9]|10[0-9]|11[0-3])
+      NATIVE_SOURCE_QUIESCENT=1
+      rc="${terminal_rc}"
+      ;;
+    *)
+      native_source_failure source_quiescence_failed
+      return 78
+      ;;
+  esac
   case "${rc}" in
     79) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed\n' >&2 ;;
     80) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=embedding_generation_failed\n' >&2 ;;
@@ -1586,13 +1617,31 @@ native_source_projection_gate() {
     86) native_source_failure source_post_rebuild_failed ;;
     87) native_source_failure source_doctor_failed ;;
     88) native_source_failure source_settings_failed ;;
-    89|124|130|143) native_source_failure source_worker_failed ;;
+    89) native_source_failure source_worker_failed ;;
     90) native_source_failure legacy_producer_policy_refused ;;
     91) native_source_failure legacy_source_refused ;;
     92) native_source_failure legacy_admission_refused ;;
     93) native_source_failure legacy_identity_refused ;;
     94) native_source_failure legacy_race_refused ;;
     95) native_source_failure legacy_write_failed ;;
+    96) native_source_failure source_worker_timeout ;;
+    97) native_source_failure source_worker_terminated ;;
+    98) native_source_failure source_worker_oom ;;
+    99) native_source_failure legacy_candidate_refused ;;
+    100) native_source_failure legacy_authority_refused ;;
+    101) native_source_failure legacy_trust_refused ;;
+    102) native_source_failure legacy_origin_refused ;;
+    103) native_source_failure legacy_payload_shape_refused ;;
+    104) native_source_failure legacy_system_path_refused ;;
+    105) native_source_failure legacy_profile_refused ;;
+    106) native_source_failure legacy_dependency_shape_refused ;;
+    107) native_source_failure legacy_retained_history_refused ;;
+    108) native_source_failure legacy_relation_retention_refused ;;
+    109) native_source_failure legacy_identity_persistence_refused ;;
+    110) native_source_failure legacy_identity_mismatch_refused ;;
+    111) native_source_failure legacy_identity_ambiguous_refused ;;
+    112) native_source_failure legacy_identity_producer_refused ;;
+    113) native_source_failure legacy_identity_canonical_refused ;;
     0) ;;
     *) native_source_failure source_worker_failed ;;
   esac

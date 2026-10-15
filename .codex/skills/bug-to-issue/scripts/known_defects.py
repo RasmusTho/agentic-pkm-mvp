@@ -20,6 +20,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any, Protocol, Sequence
 from urllib.parse import quote, urlparse
 
@@ -45,6 +46,7 @@ REGISTRY_TITLE = "Known Defects Registry (rolling)"
 REGISTRY_MARKER = "<!-- known-defects-registry:v1 -->"
 REGISTRY_ROLLOUT_SINCE = "2026-07-27T00:00:00Z"
 REGISTRY_DISCOVERY_MAX_PASSES = 4
+REGISTRY_COMMENT_DISCOVERY_TIMEOUT_SECONDS = 300
 ENTRY_MARKER_TEMPLATE = (
     "<!-- known-defect-entry:v1 id={defect_id} phase={phase} -->"
 )
@@ -419,12 +421,21 @@ class GhRegistryGateway:
             f"repos/{self.repo}/issues/comments"
             f"?since={encoded_since}&sort=created&direction=asc"
         )
-        for page in range(1, 101):
+        page = 1
+        seen_comment_ids: set[int] = set()
+        deadline = monotonic() + REGISTRY_COMMENT_DISCOVERY_TIMEOUT_SECONDS
+        while True:
+            # Exhaust finite inventories without a page-count ceiling. Refuse
+            # an endlessly growing feed instead of accepting partial authority.
+            if monotonic() >= deadline:
+                raise KnownDefectsError(
+                    "registry comment discovery pagination did not terminate"
+                )
             batch = self._request(
                 "GET",
                 f"{comments_endpoint}&per_page=100&page={page}",
             )
-            if not isinstance(batch, list):
+            if not isinstance(batch, list) or len(batch) > 100:
                 raise KnownDefectsError(
                     "expected list response from registry comment discovery"
                 )
@@ -433,6 +444,16 @@ class GhRegistryGateway:
                     raise KnownDefectsError(
                         "registry comment discovery returned a malformed comment"
                     )
+                comment_id = comment.get("id")
+                if type(comment_id) is not int or comment_id <= 0:
+                    raise KnownDefectsError(
+                        "registry comment discovery returned an invalid comment id"
+                    )
+                if comment_id in seen_comment_ids:
+                    raise KnownDefectsError(
+                        "registry comment discovery pagination repeated a comment"
+                    )
+                seen_comment_ids.add(comment_id)
                 body = str(comment.get("body") or "")
                 first_line = body.splitlines()[0] if body.splitlines() else ""
                 if not (
@@ -478,9 +499,7 @@ class GhRegistryGateway:
                 numbers.add(int(issue_number_text))
             if len(batch) < 100:
                 return numbers
-        raise KnownDefectsError(
-            "pagination bound exceeded for registry comment discovery"
-        )
+            page += 1
 
     def refresh_registry_identities(self) -> None:
         previous: set[int] | None = None

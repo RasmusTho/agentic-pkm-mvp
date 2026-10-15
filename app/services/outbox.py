@@ -40,6 +40,32 @@ class JsonlOutboxEventIdConflictError(RuntimeError):
 class JsonlOutboxCorruptionError(RuntimeError):
     """Raised when a JSONL outbox cannot be inspected safely before append."""
 
+
+def _reject_duplicate_json_object_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    """Build one JSON object while refusing ambiguous repeated keys."""
+
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise JsonlOutboxCorruptionError(
+                f"JSON contains duplicate object key: {key}"
+            )
+        result[key] = value
+    return result
+
+
+def loads_json_without_duplicate_keys(raw: str | bytes | bytearray) -> Any:
+    """Decode JSON without silently choosing one value for a repeated key.
+
+    ``object_pairs_hook`` is invoked for every object in the document, so the
+    rejection also covers nested authority evidence rather than only its outer
+    event envelope.
+    """
+
+    return json.loads(raw, object_pairs_hook=_reject_duplicate_json_object_keys)
+
 # Optional DB helpers (tests kan ge FakeConn). Import the real implementations
 # from app.db.db directly: the package-level names (`from app.db import
 # conn_rw`) resolve through app/db/__init__.py::__getattr__ to the permanent
@@ -568,7 +594,7 @@ def _read_jsonl_records_unlocked(
         if not line.strip():
             continue
         try:
-            existing = json.loads(line)
+            existing = loads_json_without_duplicate_keys(line)
         except (TypeError, ValueError) as exc:
             raise JsonlOutboxCorruptionError(
                 f"JSONL outbox contains malformed JSON: {outbox_path}"
@@ -650,7 +676,7 @@ def iter_jsonl_outbox_records(outbox_path: Path) -> Generator[dict[str, Any], No
                     if not line.strip():
                         continue
                     try:
-                        record = json.loads(line)
+                        record = loads_json_without_duplicate_keys(line)
                     except (TypeError, ValueError) as exc:
                         raise JsonlOutboxCorruptionError(
                             f"JSONL outbox contains malformed JSON: {canonical_path}"

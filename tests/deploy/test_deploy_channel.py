@@ -51,6 +51,17 @@ def test_failed_reconciliation_remains_quiescent_and_non_replaying(tmp_path, mon
 
     monkeypatch.setattr(linux.LinuxEffects, "compose", compose)
     monkeypatch.setattr(linux.LinuxEffects, "_running_one_shots", lambda _self: False)
+    original_command = linux._command
+
+    def source_absent(argv, **kwargs):
+        if argv[0] != "docker":
+            return original_command(argv, **kwargs)
+        assert argv == ["docker", "ps", "--all", "--filter",
+                        f"name=^/pkm-test-source-bootstrap-{operation_id}$", "--format", "{{.ID}}"]
+        assert kwargs == {"timeout": 15}
+        return ""
+
+    monkeypatch.setattr(linux, "_command", source_absent)
     supervisor = linux.DeploymentSupervisor(config)
     request = {"action": "reconcile-failed", "operation_id": operation_id,
                "plan": asdict(plan), "bootstrap": False}
