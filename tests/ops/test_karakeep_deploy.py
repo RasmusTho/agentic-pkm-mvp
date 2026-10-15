@@ -614,6 +614,15 @@ def test_postgres_failed_reconciliation_cannot_borrow_another_actor_lock(runtime
     monkeypatch.setattr(LinuxEffects, 'quiescent', lambda self: True)
     request = {'action': 'reconcile-failed', 'operation_id': operation_id, 'plan': plan.payload(), 'bootstrap': False}
     if actor == 'postgres':
+        from app.ops import postgres_deploy_linux as linux
+
+        def source_absent(argv, **kwargs):
+            assert argv == ['docker', 'ps', '--all', '--filter',
+                            f'name=^/pkm-dev-source-bootstrap-{operation_id}$', '--format', '{{.ID}}']
+            assert kwargs == {'timeout': 15}
+            return ''
+
+        monkeypatch.setattr(linux, '_command', source_absent)
         assert owner.request(request)['receipt']['terminal_result'] == 'failed'
         assert not path.exists()
     else:

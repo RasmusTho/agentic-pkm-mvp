@@ -4141,6 +4141,13 @@ def test_failed_bws_activation_reconciles_only_after_worker_and_channel_quiescen
         'action': 'reconcile-failed', 'operation_id': operation_id,
         'plan': asdict(plan), 'bootstrap': False,
     }
+    def source_absent(argv, **kwargs):
+        assert argv == ['docker', 'ps', '--all', '--filter',
+                        f'name=^/pkm-test-source-bootstrap-{operation_id}$', '--format', '{{.ID}}']
+        assert kwargs == {'timeout': 15}
+        return ''
+
+    monkeypatch.setattr(linux, '_command', source_absent)
     original_retire = linux.LinuxEffects.retire_reconciled_channel_lock
 
     def interrupt_cleanup(_handle):
