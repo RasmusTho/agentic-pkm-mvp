@@ -417,7 +417,33 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   exact outbox record through the authenticated client after capability preflight; it does not
   accept a caller-authored terminal record. The watchdog's executor target selection requires this
   deployed reconciled v2 authority. Historical v1 parsing remains available for audit, while native
-  single-closer delivery keeps its separate existing path.
+  single-closer delivery uses the bounded integration below.
+
+- The API-backed merge executor admits a native single-closer route only for an authenticated v3
+  full-review run with exactly one open governing closer and no parent, supporting or second Issue.
+  The complete bounded GitHub closing-reference and resolved-review-thread pages must agree with
+  exact repository, PR, head, base, title, raw body digest, Issue contract digest/update identity and
+  review depth. Existing verified-merge authority or phase comments preserve the in-flight protocol;
+  legacy and multi-Issue runs retain verified-merge. Incomplete pagination, duplicate identities,
+  cursor failures or snapshot drift confer no authority.
+- Closure mechanics do not relax the independent ledger review gate, required current-head CI,
+  protected-base/manifest/credential gates, exact Issue contract checks, review-thread resolution,
+  owner-doc receipt or final delivery readback. Admission rereads the freshly deployed #4897
+  capability and binds its source/image/schema/epoch identity. The existing task-bound effect intent
+  remains the sole durable writer fence. One serialized final reread precedes REST merge with the
+  exact expected head SHA and fixed non-closing title/message; expected-head conflict is not a retry
+  authorization. Returned and fetched merge SHAs must agree, and the fetched commit text must match.
+  A contradictory returned identity preserves the existing outbox terminal-unknown/dead-letter
+  refusal, permits only exact-attributed defensive compensation, and requires governed repair;
+  generic transport recovery cannot turn that contradiction into a successful merge receipt.
+- Before returning a native merge receipt, the executor requires the same operation's authenticated
+  #4897 reconciled post-effect authority and unchanged deployed identity. It reuses bounded repository
+  event enumeration and exact PR/repository/merge-SHA closure attribution, verifies the sole closer
+  closed by that PR, and reopens only an unexpected closure attributed to that PR. Compensation or
+  ambiguous attribution withholds the merge receipt. Restart performs readback and reconciliation,
+  never another merge. A merge receipt is not terminal delivery: PR-specific owner-doc receipts and
+  the governing verification workflow's final lifecycle/readback gates still apply. Repository
+  delivery of this integration does not claim deployment.
 
 - Verification dispatch request v3 binds one non-empty, sorted set of at most 10 closing issues and
   one authenticated `final_review_rounds` value to

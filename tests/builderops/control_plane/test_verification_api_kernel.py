@@ -21,7 +21,12 @@ from app.builderops.control_plane.service import create_app
 from app.builderops.control_plane.store import _operation_key
 from app.dispatcher.verification_api import BuilderOpsVerificationLedger
 from app.dispatcher.verification_merge import BuilderOpsOutboxExecutor
-from tests.dispatcher.verification_helpers import HEAD, REPO, request
+from tests.dispatcher.verification_helpers import (
+    HEAD,
+    REPO,
+    admitted_verified_attempt_receipt,
+    request,
+)
 
 pytestmark = pytest.mark.pg
 
@@ -1138,6 +1143,256 @@ def test_post_effect_api_readback_preserves_exact_merge_identity(control_plane_s
     projected_phase = json.loads(output.read_text())["phase_receipt"]
     assert projected_phase["contract"] == "verified_issue_set_merge_phase.v2"
     assert projected_phase["post_effect_authority"] == projection
+
+
+@pytest.mark.parametrize("takeover", [False, True], ids=["expired", "takeover"])
+def test_native_effect_refusal_reacquires_current_fence_before_terminalizing(
+    control_plane_store, tmp_path, takeover
+) -> None:
+    from app.builderops.control_plane import AuthorityEnvelope
+    from tests.builderops.control_plane.test_outbox_recovery import (
+        _commit_outbox_task,
+    )
+
+    ledger, client, outbox = _authenticated_api_ledger(
+        control_plane_store, tmp_path
+    )
+    envelope = AuthorityEnvelope(
+        repository=REPO,
+        scope="verification-executor",
+        stack="builderops-control-plane",
+        actor="executor:demerzel-verifier",
+        source_refs=("github-issue:4893",),
+        schema_version=1,
+    )
+    task_id = f"native-effect-refusal-{'takeover' if takeover else 'expired'}"
+    payload = {
+        "repository": REPO.lower(),
+        "pr_number": 4893,
+        "head_sha": HEAD,
+    }
+    result = _commit_outbox_task(
+        control_plane_store,
+        envelope,
+        task_id=task_id,
+        key=task_id,
+        effect_type="github.merge",
+        payload=payload,
+    )
+    original = outbox.claim(result.operation_key)
+    refreshed = outbox.revalidate_effect(original)
+    assert refreshed["effect_eligible"] is True
+    assert "payload" not in refreshed
+
+    _expire_outbox_claim(control_plane_store, REPO, result.operation_key)
+    assert outbox.revalidate_effect(original)["effect_eligible"] is False
+    latest_token = original["fencing_token"]
+    if takeover:
+        contender = BuilderOpsOutboxExecutor(
+            client,
+            repository=REPO,
+            worker_id="native-refusal-takeover",
+        )
+        replacement = contender.recover(result.operation_key)
+        latest_token = replacement["fencing_token"]
+        with pytest.raises(StaleLeaseError, match="LeaseUnavailable"):
+            ledger.recover_effect(
+                result.operation_key,
+                run_id=task_id,
+                effect_type="github.merge",
+                expected_payload=payload,
+                force_current_fence=True,
+            )
+        _expire_outbox_claim(
+            control_plane_store,
+            REPO,
+            result.operation_key,
+        )
+
+    recovered = ledger.recover_effect(
+        result.operation_key,
+        run_id=task_id,
+        effect_type="github.merge",
+        expected_payload=payload,
+        force_current_fence=True,
+    )
+    assert recovered["fencing_token"] > latest_token
+    evidence = {
+        "outcome": "terminal_no_effect",
+        "reason": "native_effect_fence_refused",
+    }
+    ledger.finish_effect(
+        result.operation_key,
+        observed_applied=True,
+        evidence=evidence,
+    )
+    persisted = client.get_outbox_status(
+        repository=REPO,
+        operation_key=result.operation_key,
+    )
+    assert persisted["status"] == "succeeded"
+    assert persisted["reconciliation_evidence"] == evidence
+
+
+@pytest.mark.parametrize(
+    "ordering",
+    ["concurrent", "response-first", "conflict-first"],
+)
+def test_native_merge_observation_conflict_converges_and_blocks_terminal_cas(
+    control_plane_store, tmp_path, ordering
+) -> None:
+    ledger, client, outbox = _authenticated_api_ledger(control_plane_store, tmp_path)
+    run = ledger.ingest(request())
+    claimed = ledger.claim(run.run_id, "ignored-client-holder")
+    holder = claimed.claimed_by or ""
+    assert claimed.lease_id is not None
+    ledger.record_attempt(
+        run.run_id,
+        "verification",
+        "native-pg-verification",
+        "gpt-5.6-sol",
+        "high",
+        {"head_sha": HEAD},
+        "launched",
+        admitted_verified_attempt_receipt(
+            ledger,
+            run.run_id,
+            "native-pg-verification",
+            holder=holder,
+            lease_id=claimed.lease_id,
+        ),
+        holder=holder,
+        lease_id=claimed.lease_id,
+        idempotency_key="native-pg-verification",
+    )
+    anchor = ledger.attempts(run.run_id)[-1]["attempt_id"]
+    ledger.record_attempt(
+        run.run_id,
+        "review",
+        "native-pg-review",
+        "gpt-5.6-sol",
+        "xhigh",
+        {"head_sha": HEAD},
+        "clean",
+        {"head_sha": HEAD, "reviewed_attempt_id": anchor},
+        holder=holder,
+        lease_id=claimed.lease_id,
+        idempotency_key="native-pg-review",
+    )
+    ready = ledger.mark_merge_ready(
+        run.run_id,
+        {
+            "verdict": "verified",
+            "head_sha": HEAD,
+            "summary": "native PostgreSQL CAS proof",
+            "receipt_ids": ["native-pg-review"],
+            "retry_after": None,
+            "review_events": [],
+            "human_exception": None,
+        },
+        holder=holder,
+        lease_id=claimed.lease_id,
+    )
+    marker = ledger.merge_ready_receipt(run.run_id)
+    assert marker is not None
+    operation_key = ledger.begin_effect(
+        run.run_id,
+        effect_type="github.merge",
+        payload={
+            "repository": REPO.lower(),
+            "pr_number": run.pr_number,
+            "head_sha": HEAD,
+            "verified_merge_prepared": {
+                "contract": "native_single_closer_gate.v1",
+                "run_id": run.run_id,
+                "head_sha": HEAD,
+                "closing_issues": list(run.closing_authority),
+            },
+        },
+        holder=holder,
+        lease_id=claimed.lease_id,
+        idempotency_key="native-pg-effect",
+        merge_ready_receipt=marker,
+    )
+    prearmed = ledger.pending_effect_binding(run.run_id)
+    assert prearmed is not None
+    assert prearmed["native_merge_response_sha"] is None
+    assert prearmed["native_merge_identity_conflict"] is False
+    assert prearmed["native_merge_effect_refusal"] is None
+
+    response_writer = BuilderOpsVerificationLedger(
+        client, repository=REPO, effect_outbox=outbox
+    )
+    conflict_writer = BuilderOpsVerificationLedger(
+        client, repository=REPO, effect_outbox=outbox
+    )
+    barrier = Barrier(2)
+
+    def record_response() -> None:
+        response_writer.record_native_merge_response(
+            run.run_id,
+            operation_key,
+            response_sha="c" * 40,
+            holder=holder,
+            lease_id=claimed.lease_id or "",
+        )
+
+    def write_response() -> str:
+        barrier.wait()
+        try:
+            record_response()
+        except ValueError:
+            return "response-refused"
+        return "response-recorded"
+
+    def record_conflict() -> None:
+        conflict_writer.record_native_merge_conflict(
+            run.run_id,
+            operation_key,
+            holder=holder,
+            lease_id=claimed.lease_id or "",
+        )
+
+    def write_conflict() -> str:
+        barrier.wait()
+        record_conflict()
+        return "conflict-recorded"
+
+    if ordering == "concurrent":
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            response_future = executor.submit(write_response)
+            conflict_future = executor.submit(write_conflict)
+            outcomes = {response_future.result(), conflict_future.result()}
+    elif ordering == "response-first":
+        record_response()
+        record_conflict()
+        outcomes = {"response-recorded", "conflict-recorded"}
+    else:
+        record_conflict()
+        outcomes = {"conflict-recorded"}
+        with pytest.raises(
+            ValueError,
+            match="native response cannot replace captured identity or refusal",
+        ):
+            record_response()
+        outcomes.add("response-refused")
+    assert "conflict-recorded" in outcomes
+    restarted = BuilderOpsVerificationLedger(
+        client, repository=REPO, effect_outbox=outbox
+    )
+    persisted = restarted.pending_effect_binding(run.run_id)
+    assert persisted is not None
+    assert persisted["native_merge_identity_conflict"] is True
+    assert persisted["native_merge_response_sha"] in {None, "c" * 40}
+    assert persisted["native_merge_effect_refusal"] is None
+    with pytest.raises(ValueError, match="exact captured merge authority"):
+        restarted.terminal(
+            ready.run_id,
+            "completed",
+            {"operation_key": operation_key, "merge_commit_sha": "c" * 40},
+            holder=holder,
+            lease_id=claimed.lease_id,
+        )
 
 
 def test_authenticated_status_supplies_launcher_deployment_readback(control_plane_store, tmp_path, monkeypatch):
