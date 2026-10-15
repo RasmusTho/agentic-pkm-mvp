@@ -1918,6 +1918,95 @@ def valid_post_effect_authority(value: object, authority: Mapping[str, object], 
     )
 
 
+def _phase_contract_mode_for_authority(
+    phase_receipts: Sequence[Mapping[str, object]],
+    *,
+    authority_digest: str,
+) -> str | None:
+    """Return one contract mode for one authority, or ``None`` if ambiguous."""
+
+    contracts = {
+        receipt.get("contract")
+        for receipt in phase_receipts
+        if receipt.get("authority_sha256") == authority_digest
+    }
+    if not contracts:
+        return None
+    if len(contracts) != 1 or not contracts.issubset(
+        {VERIFIED_MERGE_PHASE_CONTRACT, VERIFIED_MERGE_PHASE_V2_CONTRACT}
+    ):
+        return None
+    return cast(str, next(iter(contracts)))
+
+
+def _validate_phase_history_mode(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    mode: str,
+    authority_receipt: Mapping[str, object],
+    projection_convergence_receipt: Mapping[str, object],
+) -> tuple[list[Mapping[str, object]], str]:
+    """Fence phase production to one authority/version across all chains.
+
+    Projection convergence is deliberately retryable: a body-only edit can
+    leave more than one authenticated convergence receipt on the PR.  That
+    does not make the phase producer free to select a version from only the
+    supplied digest.  Every phase belonging to the current authority is part
+    of the mode fence, including phases attached to an alternate convergence
+    chain.  This is the single producer-side guard that keeps manual v1 and
+    recoverable v2 histories mutually exclusive.
+    """
+
+    if mode not in {"manual", "consumer"}:
+        raise ValueError("verified merge phase mode is malformed")
+    phase_receipts = _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER)
+    if len(phase_receipts) != _trusted_structural_marker_occurrences(
+        comments, VERIFIED_MERGE_PHASE_MARKER
+    ):
+        raise ValueError("phase history contains an unauthenticated receipt")
+    authenticated_convergences = _authenticated_projection_convergence_receipts(
+        comments, authority_receipt=authority_receipt
+    )
+    if authenticated_convergences is None:
+        raise ValueError("phase history contains unauthenticated convergence evidence")
+    convergence_digests = {
+        receipt.get("receipt_sha256")
+        for receipt in authenticated_convergences
+        if isinstance(receipt.get("receipt_sha256"), str)
+    }
+    convergence_digest = projection_convergence_receipt.get("receipt_sha256")
+    if not isinstance(convergence_digest, str) or convergence_digest not in convergence_digests:
+        raise ValueError("phase requires one authenticated durable projection convergence")
+    authority_digest = _canonical_digest(authority_receipt)
+    current_authority_phases = [
+        receipt
+        for receipt in phase_receipts
+        if receipt.get("authority_sha256") == authority_digest
+    ]
+    contract_mode = _phase_contract_mode_for_authority(
+        phase_receipts,
+        authority_digest=authority_digest,
+    )
+    if current_authority_phases and contract_mode is None:
+        if mode == "manual":
+            raise ValueError("manual mode refuses consumer v2 or mixed phase history")
+        raise ValueError("consumer mode refuses manual v1 or mixed phase history")
+    expected_contract = (
+        VERIFIED_MERGE_PHASE_CONTRACT
+        if mode == "manual"
+        else VERIFIED_MERGE_PHASE_V2_CONTRACT
+    )
+    if contract_mode is not None and contract_mode != expected_contract:
+        if mode == "manual":
+            raise ValueError("manual mode refuses consumer v2 or mixed phase history")
+        raise ValueError("consumer mode refuses manual v1 or mixed phase history")
+    for receipt in current_authority_phases:
+        receipt_digest = receipt.get("projection_convergence_sha256")
+        if not isinstance(receipt_digest, str) or receipt_digest not in convergence_digests:
+            raise ValueError("phase history references unauthenticated convergence evidence")
+    return current_authority_phases, cast(str, convergence_digest)
+
+
 def validate_manual_phase_inputs(
     comments: Sequence[Mapping[str, object]],
     *,
@@ -1942,22 +2031,18 @@ def validate_manual_phase_inputs(
         raise ValueError(
             "manual mode refuses post-effect deployment or operation-key inputs"
         )
-    phase_receipts = _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER)
-    if any(
-        receipt.get("contract") == VERIFIED_MERGE_PHASE_V2_CONTRACT
-        or "post_effect_authority" in receipt
-        for receipt in phase_receipts
-    ):
-        raise ValueError(
-            "manual mode refuses consumer v2 or mixed phase history"
-        )
+    phase_receipts, convergence_digest = _validate_phase_history_mode(
+        comments,
+        mode="manual",
+        authority_receipt=authority_receipt,
+        projection_convergence_receipt=projection_convergence_receipt,
+    )
     if phase not in _PHASES:
         raise ValueError("manual mode phase is malformed")
     if phase == "prepared":
         return
     predecessor = _PHASES[_PHASES.index(phase) - 1]
     authority_digest = _canonical_digest(authority_receipt)
-    convergence_digest = projection_convergence_receipt.get("receipt_sha256")
     predecessor_receipts = [
         receipt
         for receipt in phase_receipts
@@ -1973,39 +2058,106 @@ def validate_manual_phase_inputs(
             "manual mode requires the immediately preceding authenticated v1 phase"
         )
     predecessor_receipt = predecessor_receipts[0]
-    if phase in {"reconciled", "restored"} and (
-        predecessor_receipt.get("merge_commit_sha") != pr.get("merge_commit_sha")
-    ):
-        raise ValueError(
-            "manual mode phase must preserve predecessor merge identity"
-        )
-    if phase == "restored" and (
-        predecessor_receipt.get("closed_issues") != list(closed_issues)
-        or predecessor_receipt.get("reopened_unauthorized_issues")
-        != list(reopened_unauthorized_issues)
-    ):
-        raise ValueError(
-            "manual mode restored phase must preserve reconciled evidence"
-        )
+    _validate_phase_transition_identity(
+        predecessor_receipt,
+        phase=phase,
+        pr=pr,
+        closed_issues=closed_issues,
+        reopened_unauthorized_issues=reopened_unauthorized_issues,
+    )
 
 
 def validate_consumer_phase_inputs(
     comments: Sequence[Mapping[str, object]],
     *,
+    phase: str,
+    authority_receipt: Mapping[str, object],
+    projection_convergence_receipt: Mapping[str, object],
+    pr: Mapping[str, object],
+    closed_issues: Sequence[int],
+    reopened_unauthorized_issues: Sequence[int],
+    post_effect_authority: Mapping[str, object] | None = None,
+) -> None:
+    """Reject a manual v1 chain from the recoverable consumer route."""
+    if phase not in _PHASES:
+        raise ValueError("consumer mode phase is malformed")
+    phase_receipts, convergence_digest = _validate_phase_history_mode(
+        comments,
+        mode="consumer",
+        authority_receipt=authority_receipt,
+        projection_convergence_receipt=projection_convergence_receipt,
+    )
+    if phase == "prepared":
+        return
+    predecessor = _PHASES[_PHASES.index(phase) - 1]
+    authority_digest = _canonical_digest(authority_receipt)
+    predecessor_receipts = [
+        receipt
+        for receipt in phase_receipts
+        if (
+            receipt.get("contract") == VERIFIED_MERGE_PHASE_V2_CONTRACT
+            and receipt.get("phase") == predecessor
+            and receipt.get("authority_sha256") == authority_digest
+            and receipt.get("projection_convergence_sha256") == convergence_digest
+        )
+    ]
+    if len({_canonical_digest(receipt) for receipt in predecessor_receipts}) != 1:
+        raise ValueError(
+            "consumer mode requires the immediately preceding authenticated v2 phase"
+        )
+    _validate_phase_transition_identity(
+        predecessor_receipts[0],
+        phase=phase,
+        pr=pr,
+        closed_issues=closed_issues,
+        reopened_unauthorized_issues=reopened_unauthorized_issues,
+        post_effect_authority=post_effect_authority,
+    )
+
+
+def _validate_phase_transition_identity(
+    predecessor_receipt: Mapping[str, object],
+    *,
+    phase: str,
+    pr: Mapping[str, object],
+    closed_issues: Sequence[int],
+    reopened_unauthorized_issues: Sequence[int],
+    post_effect_authority: Mapping[str, object] | None = None,
+) -> None:
+    """Preserve immutable merge/reconcile identity across either phase mode."""
+
+    if phase in {"reconciled", "restored"} and (
+        predecessor_receipt.get("merge_commit_sha") != pr.get("merge_commit_sha")
+    ):
+        raise ValueError("phase must preserve predecessor merge identity")
+    if phase == "restored" and (
+        predecessor_receipt.get("closed_issues") != list(closed_issues)
+        or predecessor_receipt.get("reopened_unauthorized_issues")
+        != list(reopened_unauthorized_issues)
+    ):
+        raise ValueError("restored phase must preserve reconciled evidence")
+    if phase == "restored" and post_effect_authority is not None and (
+        predecessor_receipt.get("post_effect_authority") != post_effect_authority
+    ):
+        raise ValueError(
+            "restored phase must preserve reconciled post-effect authority"
+        )
+
+
+def validate_consumer_phase_mode(
+    comments: Sequence[Mapping[str, object]],
+    *,
     authority_receipt: Mapping[str, object],
     projection_convergence_receipt: Mapping[str, object],
 ) -> None:
-    """Reject a manual v1 chain from the recoverable consumer route."""
+    """Fence consumer mode before capability lookup without emitting a phase."""
 
-    authority_digest = _canonical_digest(authority_receipt)
-    convergence_digest = projection_convergence_receipt.get("receipt_sha256")
-    if any(
-        receipt.get("contract") == VERIFIED_MERGE_PHASE_CONTRACT
-        and receipt.get("authority_sha256") == authority_digest
-        and receipt.get("projection_convergence_sha256") == convergence_digest
-        for receipt in _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER)
-    ):
-        raise ValueError("consumer mode refuses manual v1 or mixed phase history")
+    _validate_phase_history_mode(
+        comments,
+        mode="consumer",
+        authority_receipt=authority_receipt,
+        projection_convergence_receipt=projection_convergence_receipt,
+    )
 
 
 def _projection_phase_matches_authority(
@@ -2169,6 +2321,25 @@ def _authenticated_projection_convergence_receipts(
     if len(phases) != _trusted_structural_marker_occurrences(
         comments, VERIFIED_MERGE_PHASE_MARKER
     ):
+        return None
+    phase_receipts_by_authority: dict[str, list[Mapping[str, object]]] = {}
+    for phase, _comment in phases:
+        phase_authority_digest = phase.get("authority_sha256")
+        if isinstance(phase_authority_digest, str):
+            phase_receipts_by_authority.setdefault(
+                phase_authority_digest, []
+            ).append(phase)
+    if any(
+        _phase_contract_mode_for_authority(
+            authority_phases,
+            authority_digest=phase_authority_digest,
+        )
+        is None
+        for phase_authority_digest, authority_phases in phase_receipts_by_authority.items()
+    ):
+        # A body-edit retry may create independent chains, but one exact
+        # authority can never change producer contract between them.  An
+        # unrelated historical authority remains valid audit history.
         return None
     phases_by_chain: dict[str, dict[str, Mapping[str, object]]] = {}
     for phase, _comment in phases:

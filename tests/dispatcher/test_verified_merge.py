@@ -26,12 +26,15 @@ from app.dispatcher.verified_merge import (
     resolve_neutralized_body_restoration,
     resolve_post_merge_governing_issue,
     resolve_post_merge_issue_authority,
+    resolve_verified_merge_projection_convergence_receipt,
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
+    validate_consumer_phase_inputs,
     restored_body_matches_authority,
     verified_merge_body_sha256,
 )
 from tests.dispatcher.verified_merge_projection_helpers import (
+    post_effect_authority,
     projection_convergence_comment,
     projection_phase_kwargs,
 )
@@ -1998,6 +2001,328 @@ def test_consumer_phase_cli_rejects_manual_v1_history(tmp_path: Path) -> None:
     )
     assert completed.returncode != 0
     assert "post-effect" in completed.stderr
+
+
+def test_consumer_phase_cli_rejects_manual_v1_across_authenticated_convergence_chains(
+    tmp_path: Path,
+) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    first_convergence = projection_phase_kwargs(authority, neutral_pr)
+    comments = [projection_convergence_comment(first_convergence)]
+    prepared = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=comments,
+        convergence=first_convergence["projection_convergence_receipt"],
+        phase="prepared",
+        pr=neutral_pr,
+        final_observation=first_convergence["final_projection_observation"],
+        mode="manual",
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    prepared_output = json.loads(
+        (tmp_path / "prepared-1-output.json").read_text()
+    )
+    comments.append(
+        {
+            "author_association": "OWNER",
+            "body": prepared_output["phase_receipt_comment"],
+        }
+    )
+
+    second_convergence = projection_phase_kwargs(
+        authority,
+        neutral_pr,
+        body_edit={
+            "node_id": "UCE_fixture_3822_second",
+            "edited_at": "2026-08-12T04:59:59Z",
+            "editor_login": "RasmusTho",
+            "editor_association": "OWNER",
+        },
+    )
+    comments.append(projection_convergence_comment(second_convergence))
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    completed = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=comments,
+        convergence=second_convergence["projection_convergence_receipt"],
+        phase="merged",
+        pr=merged_pr,
+    )
+    assert completed.returncode != 0
+    assert "consumer mode refuses manual v1" in completed.stderr
+
+
+def test_resolver_rejects_same_authority_mixed_contracts_across_convergence_chains() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    first_convergence = projection_phase_kwargs(authority, neutral_pr)
+    second_convergence = projection_phase_kwargs(
+        authority,
+        neutral_pr,
+        body_edit={
+            "node_id": "UCE_fixture_3822_second",
+            "edited_at": "2026-08-12T04:59:59Z",
+            "editor_login": "RasmusTho",
+            "editor_association": "OWNER",
+        },
+    )
+    v1_phase = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        phase_version=1,
+        **first_convergence,
+    )
+    v2_phase = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        phase_version=2,
+        **second_convergence,
+    )
+    comments = [
+        projection_convergence_comment(first_convergence),
+        projection_convergence_comment(second_convergence),
+        _trusted_comment(str(v1_phase["phase_receipt_comment"])),
+        _trusted_comment(str(v2_phase["phase_receipt_comment"])),
+    ]
+
+    assert (
+        resolve_verified_merge_projection_convergence_receipt(
+            comments,
+            authority_receipt=authority,
+            pr_contract=second_convergence["projection_convergence_receipt"][
+                "pr_contract"
+            ],
+        )
+        is None
+    )
+    assert (
+        resolve_verified_merge_phase(
+            comments,
+            authority_receipt=authority,
+            pr=neutral_pr,
+            current_body_edit=second_convergence["projection_convergence_receipt"][
+                "body_edit"
+            ],
+        )
+        is None
+    )
+
+
+def test_manual_mode_ignores_other_authority_v2_history(tmp_path: Path) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    current_convergence = projection_phase_kwargs(authority, neutral_pr)
+
+    other_context = _context()
+    other_context["run_id"] = "vrun-other-authority"
+    other_context["head_sha"] = "c" * 40
+    other_pr = {**_pr(), "head": {"sha": "c" * 40}}
+    other_plan = prepare_verified_merge(
+        context=other_context,
+        pr=other_pr,
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness("c" * 40),
+    )
+    other_authority = other_plan["authority_receipt"]
+    assert isinstance(other_authority, dict)
+    other_neutral_pr = {**other_pr, "body": other_plan["neutralized_body"]}
+    other_convergence = projection_phase_kwargs(
+        other_authority, other_neutral_pr
+    )
+    other_v2_phase = build_verified_merge_phase(
+        authority_receipt=other_authority,
+        phase="prepared",
+        pr=other_neutral_pr,
+        phase_version=2,
+        **other_convergence,
+    )
+    comments = [
+        projection_convergence_comment(current_convergence),
+        _trusted_comment(str(other_plan["authority_receipt_comment"])),
+        projection_convergence_comment(other_convergence),
+        _trusted_comment(str(other_v2_phase["phase_receipt_comment"])),
+    ]
+    assert (
+        resolve_verified_merge_projection_convergence_receipt(
+            comments,
+            authority_receipt=authority,
+            pr_contract=current_convergence["projection_convergence_receipt"][
+                "pr_contract"
+            ],
+        )
+        is not None
+    )
+    completed = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=comments,
+        convergence=current_convergence["projection_convergence_receipt"],
+        phase="prepared",
+        pr=neutral_pr,
+        final_observation=current_convergence["final_projection_observation"],
+        mode="manual",
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_consumer_phase_requires_immediate_v2_predecessor() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence = projection_phase_kwargs(authority, neutral_pr)
+    with pytest.raises(
+        ValueError, match="immediately preceding authenticated v2 phase"
+    ):
+        validate_consumer_phase_inputs(
+            [projection_convergence_comment(convergence)],
+            phase="merged",
+            authority_receipt=authority,
+            projection_convergence_receipt=convergence[
+                "projection_convergence_receipt"
+            ],
+            pr=neutral_pr,
+            closed_issues=[],
+            reopened_unauthorized_issues=[],
+        )
+
+
+def test_consumer_v2_transition_preserves_merge_reconcile_and_post_effect_identity() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence = projection_phase_kwargs(authority, neutral_pr)
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    post_effect = post_effect_authority(authority, "b" * 40)
+    prepared = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="prepared",
+        pr=neutral_pr,
+        phase_version=2,
+        **convergence,
+    )
+    merged = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="merged",
+        pr=merged_pr,
+        phase_version=2,
+        **convergence,
+    )
+    reconciled = build_verified_merge_phase(
+        authority_receipt=authority,
+        phase="reconciled",
+        pr=merged_pr,
+        phase_version=2,
+        closed_issues=[3820, 3823],
+        reopened_unauthorized_issues=[4999],
+        post_effect_authority=post_effect,
+        **convergence,
+    )
+    comments = [
+        projection_convergence_comment(convergence),
+        _trusted_comment(str(prepared["phase_receipt_comment"])),
+        _trusted_comment(str(merged["phase_receipt_comment"])),
+        _trusted_comment(str(reconciled["phase_receipt_comment"])),
+    ]
+    restored_pr = {**merged_pr, "body": plan["original_body"]}
+    with pytest.raises(ValueError, match="preserve predecessor merge identity"):
+        validate_consumer_phase_inputs(
+            comments,
+            phase="restored",
+            authority_receipt=authority,
+            projection_convergence_receipt=convergence[
+                "projection_convergence_receipt"
+            ],
+            pr={**restored_pr, "merge_commit_sha": "c" * 40},
+            closed_issues=[3820, 3823],
+            reopened_unauthorized_issues=[4999],
+            post_effect_authority=post_effect,
+        )
+    with pytest.raises(ValueError, match="preserve reconciled evidence"):
+        validate_consumer_phase_inputs(
+            comments,
+            phase="restored",
+            authority_receipt=authority,
+            projection_convergence_receipt=convergence[
+                "projection_convergence_receipt"
+            ],
+            pr=restored_pr,
+            closed_issues=[3820],
+            reopened_unauthorized_issues=[4999],
+            post_effect_authority=post_effect,
+        )
+    with pytest.raises(ValueError, match="preserve reconciled post-effect authority"):
+        validate_consumer_phase_inputs(
+            comments,
+            phase="restored",
+            authority_receipt=authority,
+            projection_convergence_receipt=convergence[
+                "projection_convergence_receipt"
+            ],
+            pr=restored_pr,
+            closed_issues=[3820, 3823],
+            reopened_unauthorized_issues=[4999],
+            post_effect_authority={**post_effect, "operation_key": "a" * 64},
+        )
+    validate_consumer_phase_inputs(
+        comments,
+        phase="restored",
+        authority_receipt=authority,
+        projection_convergence_receipt=convergence["projection_convergence_receipt"],
+        pr=restored_pr,
+        closed_issues=[3820, 3823],
+        reopened_unauthorized_issues=[4999],
+        post_effect_authority=post_effect,
+    )
 
 
 def test_post_merge_race_reopens_only_closures_attributed_to_current_pr() -> None:

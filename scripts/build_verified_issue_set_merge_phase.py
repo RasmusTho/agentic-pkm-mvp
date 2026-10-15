@@ -12,6 +12,7 @@ from app.dispatcher.verified_merge import (
     build_verified_merge_phase,
     resolve_verified_merge_projection_convergence_receipt,
     validate_consumer_phase_inputs,
+    validate_consumer_phase_mode,
     validate_manual_phase_inputs,
 )
 
@@ -143,7 +144,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             post_effect_operation_key_supplied=args.post_effect_operation_key is not None,
         )
     else:
-        validate_consumer_phase_inputs(
+        validate_consumer_phase_mode(
             comments,
             authority_receipt=authority_receipt,
             projection_convergence_receipt=durable_convergence,
@@ -165,6 +166,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
             )
             ledger.require_post_effect_capability()
+            validate_consumer_phase_inputs(
+                comments,
+                phase=args.phase,
+                authority_receipt=authority_receipt,
+                projection_convergence_receipt=durable_convergence,
+                pr=pr,
+                closed_issues=closed_issues,
+                reopened_unauthorized_issues=reopened_unauthorized_issues,
+                post_effect_authority=post_effect,
+            )
             if args.phase in {"reconciled", "restored"}:
                 post_effect = ledger.post_effect_authority(
                     args.post_effect_operation_key,
