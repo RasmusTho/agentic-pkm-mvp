@@ -1918,6 +1918,35 @@ def valid_post_effect_authority(value: object, authority: Mapping[str, object], 
     )
 
 
+def validate_manual_phase_inputs(
+    comments: Sequence[Mapping[str, object]],
+    *,
+    post_effect_deployment_supplied: bool = False,
+    post_effect_operation_key_supplied: bool = False,
+) -> None:
+    """Reject consumer-owned evidence from the explicit manual producer route.
+
+    The session-owned manual route is intentionally v1-only.  A caller must
+    start a fresh continuous chain; it may not mix in a recoverable consumer
+    phase or post-effect input and thereby make the two authority paths
+    indistinguishable.
+    """
+
+    if post_effect_deployment_supplied or post_effect_operation_key_supplied:
+        raise ValueError(
+            "manual mode refuses post-effect deployment or operation-key inputs"
+        )
+    phase_receipts = _comment_receipts(comments, VERIFIED_MERGE_PHASE_MARKER)
+    if any(
+        receipt.get("contract") == VERIFIED_MERGE_PHASE_V2_CONTRACT
+        or "post_effect_authority" in receipt
+        for receipt in phase_receipts
+    ):
+        raise ValueError(
+            "manual mode refuses consumer v2 or mixed phase history"
+        )
+
+
 def _projection_phase_matches_authority(
     phase: Mapping[str, object],
     *,
