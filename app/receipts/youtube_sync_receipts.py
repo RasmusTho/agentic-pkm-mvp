@@ -168,10 +168,17 @@ def _field(obj: Any, name: str, default: Any = None) -> Any:
 
 def _trigger(value: Any, *, fallback: Mapping[str, Any] | None = None) -> YouTubeSyncTrigger | None:
     data = value if isinstance(value, Mapping) else (fallback or {})
+    envelope = fallback or {}
     binding_id = first_str(data.get("binding_id"))
     collection_kind = first_str(data.get("collection_kind"), data.get("source_kind"))
     collection_ref = first_str(data.get("collection_ref"), data.get("source_ref"))
-    at = first_str(data.get("discovered_at"), data.get("at"), data.get("timestamp"))
+    at = first_str(
+        data.get("discovered_at"),
+        data.get("at"),
+        data.get("timestamp"),
+        envelope.get("timestamp"),
+        envelope.get("created_at"),
+    )
     trigger = first_str(data.get("trigger"))
     if not any((binding_id, collection_kind, collection_ref, at, trigger)):
         return None
@@ -183,6 +190,12 @@ def _trigger(value: Any, *, fallback: Mapping[str, Any] | None = None) -> YouTub
         trigger=trigger,
         playlist_item_id=first_str(data.get("playlist_item_id")),
     )
+
+
+def _trigger_identity(trigger: YouTubeSyncTrigger) -> tuple[str | None, str | None, str | None]:
+    """Identity follows the stored trigger contract, not projection timestamps."""
+
+    return (trigger.binding_id, trigger.trigger, trigger.playlist_item_id)
 
 
 def _request_rows(requests: Iterable[Any] | None) -> dict[str, Any]:
@@ -240,7 +253,7 @@ def _rows_from_records(
         if event == YOUTUBE_SOURCE_DISCOVERED:
             group = group_for(item_ref, request_id)
             if group is not None:
-                trigger = _trigger(payload)
+                trigger = _trigger(payload, fallback=record)
                 if trigger is not None:
                     group["triggers"].append(trigger)
                     group["events"].append(first_str(record.get("event_id")))
@@ -256,7 +269,21 @@ def _rows_from_records(
             continue
         group = group_for(item_ref, request_id)
         if group is None:
-            diagnostics.append({"event_id": first_str(record.get("event_id")), "trace_id": first_str(record.get("trace_id")), "reason": "missing_item_ref_and_request_id"})
+            if is_sync_event and not item_ref and not request_id:
+                diagnostics.append(
+                    {
+                        "event_id": first_str(record.get("event_id")),
+                        "trace_id": first_str(record.get("trace_id")),
+                        "event": event,
+                        "at": first_str(record.get("timestamp"), record.get("created_at"), payload.get("at")),
+                        "reason_code": first_str(payload.get("reason_code"), payload.get("code")),
+                        "reason": "source_level_sync_receipt",
+                        "binding_id": first_str(payload.get("binding_id")),
+                        "run_id": first_str(payload.get("run_id")),
+                    }
+                )
+            else:
+                diagnostics.append({"event_id": first_str(record.get("event_id")), "trace_id": first_str(record.get("trace_id")), "reason": "missing_item_ref_and_request_id"})
             continue
         group["events"].append(first_str(record.get("event_id")))
         event_channel_database = first_str(
@@ -280,11 +307,20 @@ def _rows_from_records(
         if group is None:
             continue
         triggers = []
+        trigger_identities = set()
         for value in _field(request, "discovery_triggers", ()) or ():
             trigger = _trigger(value)
-            if trigger is not None:
+            if trigger is not None and _trigger_identity(trigger) not in trigger_identities:
                 triggers.append(trigger)
-        group["triggers"] = triggers + [trigger for trigger in group["triggers"] if trigger not in triggers]
+                trigger_identities.add(_trigger_identity(trigger))
+        for trigger in group["triggers"]:
+            if trigger is None:
+                continue
+            identity = _trigger_identity(trigger)
+            if identity not in trigger_identities:
+                triggers.append(trigger)
+                trigger_identities.add(identity)
+        group["triggers"] = triggers
 
     rows: list[YouTubeSyncReceiptRow] = []
     for group in groups.values():
@@ -311,7 +347,7 @@ def _rows_from_records(
                 source_successes.append(success)
             cursor = _field(source, "cursor", {})
             if isinstance(cursor, Mapping):
-                frontier = first_str(cursor.get("frontier"), cursor.get("newest_published_at"), cursor.get("last_published_at"))
+                frontier = first_str(cursor.get("frontier"), cursor.get("newest_published_seen"), cursor.get("newest_published_at"), cursor.get("last_published_at"))
                 if frontier:
                     frontiers.append(frontier)
         discovered_times = [trigger.discovered_at for trigger in projected_triggers if trigger.discovered_at]

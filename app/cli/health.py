@@ -1225,8 +1225,13 @@ def _check_companion_diagnostics() -> Dict[str, Any]:
 def _check_youtube_sync(*, vault_context: Any = None) -> Dict[str, Any]:
     """Read-only YSS-09 doctor check over existing sync substrates."""
     try:
-        from app.knowledge_acquisition.sync_observability import collect_youtube_sync_status
+        from app.knowledge_acquisition.sync_observability import (
+            collect_youtube_sync_status,
+            resolve_active_vault_context,
+        )
 
+        if vault_context is None:
+            vault_context = resolve_active_vault_context()
         payload = collect_youtube_sync_status(vault_context=vault_context)
     except Exception as exc:
         return _result(

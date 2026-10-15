@@ -56,3 +56,118 @@ def test_projection_answers_audit_questions_secret_free() -> None:
     assert row.account_binding_ids == ("account-a", "account-b")
     assert row.channel_database == "isolated-test-db"
     assert "refresh-token-super-secret" not in json.dumps(projection)
+
+
+def test_discovery_event_envelope_timestamp_merges_request_trigger() -> None:
+    request = SimpleNamespace(
+        request_id="request-rss",
+        item_ref="video-rss",
+        status="pending",
+        requested_at="2026-10-15T00:00:01+00:00",
+        completed_at=None,
+        attempts=0,
+        next_attempt_at=None,
+        artifact_path=None,
+        content_identity=None,
+        discovery_triggers=(
+            {
+                "binding_id": "binding-rss",
+                "collection_kind": "subscription_feed",
+                "collection_ref": "UC-rss",
+                "discovered_at": "2026-10-15T00:00:01+00:00",
+                "trigger": "poll",
+            },
+        ),
+    )
+    records = [
+        {
+            "event": "youtube.source.discovered",
+            "event_id": "discover-rss",
+            "timestamp": "2026-10-15T00:00:00+00:00",
+            "payload": {
+                "item_ref": "video-rss",
+                "binding_id": "binding-rss",
+                "collection_kind": "subscription_feed",
+                "collection_ref": "UC-rss",
+                "trigger": "poll",
+            },
+        }
+    ]
+
+    result = query_youtube_sync_receipts(
+        records=records,
+        requests=(request,),
+        sources=(),
+    )
+
+    assert len(result.rows) == 1
+    row = result.rows[0]
+    assert row.deduplicated is False
+    assert len(row.triggers) == 1
+    assert row.triggers[0].discovered_at == "2026-10-15T00:00:01+00:00"
+
+
+def test_failed_rss_completion_does_not_report_cursor_advanced() -> None:
+    sources = (
+        SimpleNamespace(
+            binding_id="binding-rss",
+            account_binding_id="account-rss",
+            cursor={"newest_published_seen": "2026-10-15T00:00:00+00:00"},
+            last_success_at="2026-10-15T00:00:00+00:00",
+        ),
+    )
+    records = [
+        {
+            "event": "youtube.source.discovered",
+            "event_id": "discover-new-item",
+            "timestamp": "2026-10-15T00:05:00+00:00",
+            "payload": {
+                "item_ref": "video-new",
+                "binding_id": "binding-rss",
+                "collection_kind": "subscription_feed",
+                "collection_ref": "UC-rss",
+                "trigger": "poll",
+            },
+        }
+    ]
+
+    result = query_youtube_sync_receipts(records=records, requests=(), sources=sources)
+
+    assert len(result.rows) == 1
+    row = result.rows[0]
+    assert row.cursor_advanced is False
+    assert row.cursor_frontier == "2026-10-15T00:00:00+00:00"
+    assert row.triggers[0].discovered_at == "2026-10-15T00:05:00+00:00"
+
+
+def test_rss_sync_receipt_uses_registered_source_shape() -> None:
+    records = [
+        {
+            "event": "youtube.sync.degraded",
+            "event_id": "sync-rss-degraded",
+            "trace_id": "trace-rss",
+            "timestamp": "2026-10-15T00:05:00+00:00",
+            "payload": {
+                "binding_id": "binding-rss",
+                "run_id": "rss:run-1",
+                "reason_code": "persistence_failed",
+                "detail": "cursor transaction failed",
+            },
+        }
+    ]
+
+    result = query_youtube_sync_receipts(records=records, requests=(), sources=())
+
+    assert result.rows == ()
+    assert result.non_authoritative_records == (
+        {
+            "event_id": "sync-rss-degraded",
+            "trace_id": "trace-rss",
+            "event": "youtube.sync.degraded",
+            "at": "2026-10-15T00:05:00+00:00",
+            "reason_code": "persistence_failed",
+            "reason": "source_level_sync_receipt",
+            "binding_id": "binding-rss",
+            "run_id": "rss:run-1",
+        },
+    )
