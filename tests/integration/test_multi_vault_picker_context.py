@@ -688,6 +688,10 @@ def test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(
         assert len(hints) == 2
 
     assert not watcher_errors
+    # The deployed long-lived watcher entrypoint (startup reconciliation plus its in-memory
+    # loop) treats the completed no-target handoff as stable idle state, not a crash.
+    watcher_registry.run_registry_forever(config_path, max_ticks=3)
+    assert runtime.open_settings_rebind_store().read() == cleared
     # Default mutations never wrote picker history; only the picker did.
     assert runtime.registry.load().last_active_vault_ref == picked_ref(runtime, "binding-b")
 

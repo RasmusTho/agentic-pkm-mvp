@@ -386,6 +386,12 @@ class DormantSettingsRebindReconciler:
         if record.phase == "no_lifecycle":
             return RebindCycle(record=record, mode="no_lifecycle", receipt=None)
         if not cfg.enable:
+            if record.phase == "committed" and record.candidate_binding_id is None:
+                # A completed no-target handoff (MVR-02 default CLEAR) is what turned
+                # this watcher idle; it is stable state, not a revision to reconcile.
+                receipt = self._load_matching_receipt(record)
+                if receipt is not None and receipt.stage == "completed":
+                    return RebindCycle(record=record, mode="stable", receipt=receipt)
             if record.phase != "prepared":
                 raise RegistryError(
                     "disabled watcher encountered a committed settings rebind revision"
@@ -591,10 +597,11 @@ class DormantSettingsRebindReconciler:
         committed revision cannot be cancelled, so it would stay stuck.
 
         Only the durable watcher history may move the root: the most recent *completed*
-        receipt must name the record's prior binding as its candidate. Revisions after it
-        can only have been cancelled (prepare requires the previous committed revision to
-        complete first), and a cancel restores that same binding. Anything else keeps the
-        boot root and lets ``_validate_old_root`` refuse as before.
+        receipt must name the record's prior binding as its candidate, so the adopted root
+        is always the durable prior binding itself. Later revisions were cancelled (which
+        restores that binding) or ran as ``no_lifecycle``; in either case the bracket opens
+        on the durable prior root. Anything else keeps the boot root and lets
+        ``_validate_old_root`` refuse as before.
         """
 
         prior = record.prior_binding_id
