@@ -56,8 +56,12 @@ def source_terminal_reason(status: int, *, oom_killed: bool = False) -> str | No
         return 'source_worker_timeout'
     if status in {130, 143, -2, -15}:
         return 'source_worker_terminated'
+    # 96–98 encode the host observer's result, not worker checkpoint exits.
+    # In particular a raw 98 cannot assert Docker's OOMKilled state.
     return next((reason for reason, code in SOURCE_PROJECTION_FAILURE_CODES.items()
-                 if code == status), 'source_worker_failed')
+                 if code == status and reason not in {
+                     'source_worker_timeout', 'source_worker_terminated', 'source_worker_oom',
+                 }), 'source_worker_failed')
 
 
 class SourceVectorProjectionFailure(RuntimeError):
@@ -211,11 +215,13 @@ def quiesce_owned_container(channel: str, name: str, operation: str, revision: s
             # state fields. Never parse Error, logs, labels or free-form output.
             if owned_state(cid) != 'false':
                 return False
-            fields = docker('inspect', '--format', '{{.State.ExitCode}} {{.State.OOMKilled}}', cid).split()
-            if (len(fields) != 2 or re.fullmatch(r'[0-9]{1,3}', fields[0]) is None
-                or not 0 <= int(fields[0]) <= 255 or fields[1] not in {'true', 'false'}):
+            fields = docker('inspect', '--format',
+                            '{{.State.Status}} {{.State.ExitCode}} {{.State.OOMKilled}}', cid).split()
+            if (len(fields) != 3 or fields[0] not in {'exited', 'dead'}
+                or re.fullmatch(r'[0-9]{1,3}', fields[1]) is None
+                or not 0 <= int(fields[1]) <= 255 or fields[2] not in {'true', 'false'}):
                 return False
-            observe_terminal(int(fields[0]), fields[1] == 'true')
+            observe_terminal(int(fields[1]), fields[2] == 'true')
         docker('rm', cid)
         return True
     except (subprocess.SubprocessError, OSError, ValueError):

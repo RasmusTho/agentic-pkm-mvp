@@ -6833,6 +6833,8 @@ def test_supervised_source_projection_reasons_are_finite_and_fail_closed(monkeyp
     (79, False, 'vector_projection_failed'), (124, False, 'source_worker_timeout'),
     (143, False, 'source_worker_terminated'), (130, False, 'source_worker_terminated'),
     (137, True, 'source_worker_oom'), (137, False, 'source_worker_failed'),
+    (96, False, 'source_worker_failed'), (97, False, 'source_worker_failed'),
+    (98, False, 'source_worker_failed'),
     (42, False, 'source_worker_failed'),
 ])
 def test_native_source_worker_terminal_classes_survive_supervision(tmp_path, status, oom, reason, monkeypatch):
@@ -6894,7 +6896,8 @@ def _source_terminal_docker(monkeypatch, journal, operation, revision, status, o
             output = '' if removed else '0123456789ab'
         elif command == 'inspect':
             if 'ExitCode' in argv[3]:
-                output = f'{status} {str(oom).lower()}' if fault != 'malformed' else 'private output'
+                state = fault if fault in {'created', 'removing', 'unknown'} else 'exited'
+                output = f'{state} {status} {str(oom).lower()}' if fault != 'malformed' else 'private output'
             else:
                 op = operation if fault != 'foreign' else '00000000-0000-4000-8000-000000000002'
                 output = f'/pkm-test-source-bootstrap-{operation} pkm-test api True {op} {revision} false'
@@ -6908,16 +6911,20 @@ def _source_terminal_docker(monkeypatch, journal, operation, revision, status, o
 
 
 @pytest.mark.parametrize('interrupted_before_observation', [False, True])
-def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliation(tmp_path, monkeypatch, interrupted_before_observation):
+@pytest.mark.parametrize('worker_status,oom,reason', [(137, True, 'source_worker_oom'),
+    (96, False, 'source_worker_failed'), (97, False, 'source_worker_failed'),
+    (98, False, 'source_worker_failed')])
+def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliation(tmp_path, monkeypatch, interrupted_before_observation, worker_status, oom, reason):
     from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux
+    from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_CODES
     from app.ops.postgres_deploy import PostgresDeployError
     journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
     removed = []
-    docker = _source_terminal_docker(monkeypatch, journal, operation, plan.revision, 137, True, removed)
+    docker = _source_terminal_docker(monkeypatch, journal, operation, plan.revision, worker_status, oom, removed)
     if not interrupted_before_observation:
-        assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, 137) == 98
-        assert removed == ['source_worker_oom']
+        assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, worker_status) == SOURCE_PROJECTION_FAILURE_CODES[reason]
+        assert removed == [reason]
     config = linux.LinuxConfig.load('test')
     lock = config.root / 'config/deploy/test.env.lock'
     lock.mkdir(parents=True, mode=0o700)
@@ -6928,15 +6935,15 @@ def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliati
     supervisor = linux.DeploymentSupervisor(config)
     request = {'action': 'reconcile-failed', 'operation_id': operation, 'plan': asdict(plan), 'bootstrap': False}
     result = supervisor.request(request)
-    assert result['receipt']['source_failure'] == 'source_worker_oom'
-    assert removed == ['source_worker_oom'] and not lock.exists()
+    assert result['receipt']['source_failure'] == reason
+    assert removed == [reason] and not lock.exists()
     assert supervisor.request({**request, 'action': 'join'}) == result
     with pytest.raises(PostgresDeployError):
         journal.record_source_failure(operation, 'f' * 40, 'source_worker_failed')
-    assert journal.read().source_failure == 'source_worker_oom'
+    assert journal.read().source_failure == reason
 
 
-@pytest.mark.parametrize('fault', ['foreign', 'malformed', 'journal_unavailable'])
+@pytest.mark.parametrize('fault', ['foreign', 'malformed', 'created', 'removing', 'unknown', 'journal_unavailable'])
 def test_native_source_terminal_evidence_failure_preserves_container(tmp_path, monkeypatch, fault):
     from app.ops import postgres_deploy_linux as linux
     journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
@@ -6982,6 +6989,33 @@ def test_native_source_terminal_retry_reestablishes_durability_before_removal(tm
     assert removed == []
     assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, 137) == 98
     assert directory_syncs and removed == ['source_worker_oom']
+
+
+@pytest.mark.parametrize('compose_status,worker_status,reason', [
+    (1, 82, 'source_preflight_failed'), (1, 79, 'vector_projection_failed'),
+    (1, 0, 'source_worker_failed'), (124, 0, 'source_worker_timeout'),
+    (143, 0, 'source_worker_terminated'), (1, 98, 'source_worker_failed'),
+])
+def test_native_source_docker_worker_state_survives_compose_transport_failure(tmp_path, monkeypatch, compose_status, worker_status, reason):
+    from app.ops import native_source_bootstrap as source, postgres_deploy_linux as linux
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    removed = []
+    _source_terminal_docker(monkeypatch, journal, operation, plan.revision, worker_status, False, removed)
+    assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, compose_status) == source.SOURCE_PROJECTION_FAILURE_CODES[reason]
+    assert removed == [reason]
+
+
+@pytest.mark.parametrize('helper_status', [1, 42, 78, 124, 130, 137, 143])
+def test_native_source_unexpected_cleanup_helper_exit_never_admits_writer_restart(tmp_path, helper_status):
+    root, env, sha = _native_source_harness(tmp_path, channel='dev')
+    env['FAKE_SOURCE_RC'] = '42'
+    adapter = root / 'app/ops/postgres_deploy_linux.py'
+    adapter.write_text(adapter.read_text() + f'\ndef record_source_terminal(*args):\n    raise SystemExit({helper_status})\n')
+    result = _run_deploy(root, env, sha)
+    assert result.returncode == 78
+    assert 'YGGDRASIL_DEPLOY_FAILURE_REASON=source_quiescence_failed' in result.stderr
+    assert 'native source producer quiescence is unproven' in result.stderr
+    assert not any('up -d --force-recreate api' in event for event in _deploy_events(env))
 
 
 def test_native_source_failure_after_embedding_progress_keeps_only_fixed_reason(tmp_path, monkeypatch):

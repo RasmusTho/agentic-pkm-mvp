@@ -1019,6 +1019,10 @@ failures are `source_writer_stop_failed` and `source_quiescence_failed`. Supervi
 and TERM/INT are distinct `source_worker_timeout` and `source_worker_terminated`; an exact owned
 container's validated Docker `OOMKilled=true` is `source_worker_oom`. Other unknown nonzero
 exits remain `source_worker_failed`; exit 137 alone does not establish OOM.
+Observer result codes 96–98 are not worker evidence: a raw worker exit in that range remains
+unknown. A validated stopped worker checkpoint takes precedence over a generic Compose transport
+failure; only supervised timeout/INT/TERM retain transport precedence. Unexpected observer-process
+exits never prove quiescence or admit runtime-writer restart.
 The source one-shot is not auto-removed. Under the inherited current-operation lock/guard,
 the wrapper validates its exact name, Compose labels, operation and revision, proves stoppage,
 reads only bounded exit status and OOM boolean, and durably fsyncs the fixed `source_failure`

@@ -115,7 +115,8 @@ def record_source_terminal(channel: str, name: str, status: int) -> int:
         nonlocal reason, observed
         # The supervisor's timeout/signal is authoritative even when Docker's
         # child acknowledged TERM with zero. OOM is admitted only from Docker.
-        reason = source_terminal_reason(status or exit_status, oom_killed=oom)
+        effective = status if status in {124, 130, 143} else exit_status or status
+        reason = source_terminal_reason(effective, oom_killed=oom)
         if reason is not None:
             cfg.journal.record_source_failure(operation, revision, reason)
         observed = True

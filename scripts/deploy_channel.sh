@@ -1583,13 +1583,18 @@ native_source_projection_gate() {
     -e "NATIVE_SOURCE_BOOTSTRAP=${channel}:${target_sha}" api || rc=$?
   local terminal_rc=0
   native_source_terminal_cleanup "${name}" "${rc}" || terminal_rc=$?
-  if [ "${terminal_rc}" != 78 ]; then
-    NATIVE_SOURCE_QUIESCENT=1
-    rc="${terminal_rc}"
-  else
-    native_source_failure source_quiescence_failed
-    return 78
-  fi
+  # Only the observer's documented result namespace proves cleanup. A Python
+  # import/crash or signal must never admit compensation/runtime writers.
+  case "${terminal_rc}" in
+    0|79|8[0-9]|9[0-8])
+      NATIVE_SOURCE_QUIESCENT=1
+      rc="${terminal_rc}"
+      ;;
+    *)
+      native_source_failure source_quiescence_failed
+      return 78
+      ;;
+  esac
   case "${rc}" in
     79) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=vector_projection_failed\n' >&2 ;;
     80) printf 'YGGDRASIL_DEPLOY_FAILURE_REASON=embedding_generation_failed\n' >&2 ;;

@@ -536,7 +536,7 @@ def test_controller_crash_reuses_exact_native_id_and_terminal_receipt(tmp_path, 
         if crash == 'after_host_finish' and channel == 'dev' and not lost:
             lost = True
             raise RuntimeError('checkpoint gap')
-        return receipt.__dict__
+        return receipt.payload()
 
     options = {'build': lambda: 123, 'load': lambda _run: candidate, 'deploy': deploy,
                'resume': deploy, 'current_main': lambda: SHA}
