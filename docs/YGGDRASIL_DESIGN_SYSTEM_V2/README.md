@@ -49,7 +49,7 @@ Observed on `origin/main` 22a8928e8 and `RasmusTho/bifrost` `main`:
 | Surfaces bypass the tokens | Hex literals at time of writing: `serve_dev_page.py` 143 (with an inlined token subset), `settings_drawer.py` 27, `system_map_overlay.py` 24, `memory_review_drawer.py` 24, `receipts_history.py` 16, `app/web/static/signboard.css` 19, `devui_candidate/devui.css` 18, `app/web/static/index.html` 17. |
 | Internal inconsistencies | Heading comment says "DM Sans" while `--font-ui` is Space Grotesk; JetBrains Mono loads from `fonts.bunny.net`, outside the Google Fonts host most sandboxes (including Claude artifacts) admit. |
 | Glow is a default, not a signal | `.glow-*`, `.text-glow-*`, `.border-cyan`, and the `:focus-visible` glow ship as general utilities, while the converse handoff says glow is only for state. |
-| Bifrost is outside the system | `YggTheme` uses iOS system colours (`systemBackground`, `accentColor`, `.orange`, `.green`), not Yggdrasil values. It cannot consume CSS. |
+| Bifrost is outside the system | Bifrost is a native SwiftUI client: it vendors the generated Yggdrasil Swift tokens rather than consuming CSS. |
 
 ## Architecture
 
@@ -242,21 +242,23 @@ Other type steps and spacing are unchanged between profiles.
 | Legacy web dashboard (`app/web/static/index.html`) | this | Partial | compact | S4 |
 | DevUI candidate (`companion_ui/workspace/devui_candidate/`) and served managed DevUI (`app/builderops/devui_managed.css`, hash-pinned in `devui_assets.py`) | this | Generated tokens-only sheet without the web-font import (`companion_ui/workspace/devui_yggdrasil.css`, served as `/devui/assets/yggdrasil.css` by both DevUI gateways); only the three system-font stacks stay local under the strict CSP. No density or focus-ring opt-in yet | compact | #5637 (delivered) |
 | CKM overview (`app/builderops/ckm/overview_html.py`) | this | Own inlined token copy | compact | S4 |
-| Bifrost: Heimdal capture, Mimer knowledge (`Yggdrasil/DesignSystem/Theme.swift`) | `RasmusTho/bifrost` | iOS system colours | native (Dynamic Type) | S5 |
+| Bifrost: Heimdal capture, Mimer knowledge (`Yggdrasil/DesignSystem/Theme.swift`) | `RasmusTho/bifrost` | Yggdrasil Dark default and Light “Shell” per-user choice; Swift tokens pinned to 2.2.1; Space Grotesk, EB Garamond, and JetBrains Mono bundled | native (Dynamic Type) | S5 |
 | Claude Design live system `f2b13410-…` | Claude Design | Reconciled to v2.0.0 on 2026-09-23 (token SHA-256 parity; DS-1 closed; DS-2 kept with reason); re-reconciled to v2.1.0 (#5652) and v2.2.0 (#5662, night city) on 2026-09-24, and v2.2.1 (#5673, trial label removed) on 2026-09-25 | — | S2 (delivered) |
 
 ### Bifrost
 
 Bifrost stays native. It adopts Yggdrasil **colours, spacing, and radius** through the generated
-`YggdrasilTokens.swift`. Bifrost ships Dark first, with `.preferredColorScheme(.dark)`. Shell
-follows on iOS only after the web trial graduates. It graduated on 2026-09-25, and iOS Shell is
-now a separate Bifrost decision outside v2 (city backdrop and rim light map to SwiftUI
-gradients and shadows). Typography keeps iOS Dynamic Type sizes, mapped onto Yggdrasil
-roles (`display` → New York serif as the closest native analogue to EB Garamond unless the font
-is bundled; UI → SF Pro). Bifrost vendors the generated Swift file from a named hub commit and
-records the token `VERSION` and commit SHA. A Bifrost CI check compares its vendored file against
-that commit. No release or tag is required. The cross-repo contract lives under
-the ecosystem authority Bifrost already declares (ADR-0050). This spec does not override it.
+`YggdrasilTokens.swift`. Yggdrasil Dark is the default; people can choose Dark, Light “Shell,”
+or System in Bifrost's per-user appearance setting. The iOS Shell maps the static night-city
+backdrop, translucent porcelain sheet with cyan/red rim light, and dark-glass chrome to SwiftUI.
+Typography keeps iOS Dynamic Type sizing and uses the bundled Yggdrasil faces: EB Garamond for
+`display`, Space Grotesk for UI, and JetBrains Mono for monospace. Bifrost vendors the generated
+Swift file from [hub commit `be8bebde`](https://github.com/RasmusTho/agentic-pkm-mvp/commit/be8bebde4f26d70150bbfa1c27e0ca7015cef4f5),
+pins token version 2.2.1, and its CI check compares the vendored file against that commit. No
+release or tag is required. This delivery is recorded in
+[`RasmusTho/bifrost#75`](https://github.com/RasmusTho/bifrost/pull/75). The cross-repo contract
+lives under the ecosystem authority Bifrost already declares (ADR-0050). This spec does not
+override it.
 
 ## Rollout
 
@@ -266,7 +268,7 @@ the ecosystem authority Bifrost already declares (ADR-0050). This spec does not 
 | **S2** Live system reconciliation | **Delivered (#5628).** The owner confirmed on 2026-09-25 that the live project no longer shows as Legacy (#5626). The owner-started `/design-sync` run (finalized plan: 11 named paths plus the recompile marker, no deletes) uploaded the generated `colors_and_type.css`, rewrote the live `README.md` and `SKILL.md` from the tokens (Dark and Shell, density, ink/mark tones, effects rule; closes DS-1), added three Shell cards plus density and focus/effects cards, corrected two drifted card labels, and replaced the stale Signboard stylesheet that had overridden the live `--accent` index with Signboard green. **Live-parity evidence:** the live `colors_and_type.css` read back on 2026-09-23 hashes to SHA-256 `99120ff9bb29dc0b497cd09802cc2e6ea87dcd9814a1afdf22690126fa837243` (17,439 bytes), equal to both repo copies; the gate records it with version 2.0.0. DS-2 keeps its limitation with a reason. Authored sources and the sync pin live in `design-system/yggdrasil/claude-design/` and `.design-sync/`. | S1 | Re-reconciled per token version (2.1.0 #5652, 2.2.0 #5662); the gate records the current hash. |
 | **S3** Companion migration | **Delivered (#5629).** The workspace and orientation pages link the generated tokens-only sheet (served at `/static/yggdrasil-tokens.css`) and opt in to the v2 focus ring; 50 inlined token copies and 210 `var(--x, #hex)` fallbacks are gone, and the remaining free hex literals map to tokens except four justified exceptions (help-guide error page, two authority-state colours). 171 readable `fg-3` uses moved to `fg-2` across the Companion modules and pages. Theme is a `companion.displayPreferences.v1` preference (Dark canonical; Light "Shell" as a per-user choice in the settings drawer, applied before first paint), and under Light the workspace renders porcelain sheets with rim light on the city backdrop. Since the #5652 follow-up the orientation door applies the same stored theme and surface tokens (it previously stayed Dark). | S1 | **Trial gate closed:** the owner used Shell and chose to keep it on 2026-09-25 (#5626). |
 | **S4** Builder UI migration | **Delivered (#5630).** Signboard and the legacy dashboard load the tokens-only sheet and drop their local palettes; the CKM overview embeds the generated tokens at render time (standalone file, no web-font `@import`); readable `fg-3` moved to `fg-2` in Signboard, dashboard, CKM, and Cockpit; every page opts in to compact density and the v2 focus ring. No hex literals remain outside print styles. The managed DevUI was split to #5637 (it already renders Yggdrasil Dark; its change needs a new constrained-reuse revision, browser proof, and VM102 receipts). | S1 | Ran in parallel with S3. The managed DevUI migration (#5637) was moved out of v2 scope by the owner on 2026-09-25 (option B): the DevUI already renders Dark with 41/44 identical tokens. The owner reprioritized it on 2026-09-28, and #5637 delivered it outside v2 on 2026-09-30. Both DevUI pages load the generated CSP-compatible sheet before `devui.css`. The inline token copy is gone, except the three system-font stacks. `.empty` moved from `fg-3` to `fg-2`. The work also shipped a new constrained-reuse revision, a refreshed browser proof, and pinned asset hashes. It does not claim live VM102 serving: the VM102 runtime receipts refresh only with the next operator-authorized VM102 deploy (#5181). |
-| **S5** Bifrost adoption | **Delivered (`RasmusTho/bifrost#70`).** `YggTheme` is backed by the generated Swift tokens with a version pin and CI parity check. Bifrost ships Dark. | S1 | Bifrost stays pinned to 2.0.0 until it needs later tokens. |
+| **S5** Bifrost adoption | **Delivered (`RasmusTho/bifrost#70`; updated in [`RasmusTho/bifrost#75`](https://github.com/RasmusTho/bifrost/pull/75)).** `YggTheme` uses the generated Swift tokens pinned to 2.2.1 with a CI parity check. Dark is the default; Dark, Shell, and System are per-user appearance choices. Space Grotesk, EB Garamond, and JetBrains Mono are bundled. | S1 | Shell maps the static night city, translucent porcelain sheet, and dark-glass chrome to native SwiftUI. |
 | **S6** Governance promotion | **Delivered (#5631).** DP-11, `DESIGN_HANDOFF_GOVERNANCE.md`, and the `yggdrasil-design-handoff` skill point at the token source, `VERSION`, themes, and effects rule; the owner's Shell outcome (keep) is recorded; this document is the owner doc. | S1, S2 | Parent #5626 handed to `verification-and-closure`. |
 
 Sequencing risk: S1 changes the bytes of the binding sheet, so the live gate fails closed until S2
@@ -305,7 +307,7 @@ These invariants hold across the tasks, which all read or write the same token o
    `ASSET_SHA256` entry ship in the same YDS-04 change. A stylesheet change without the hash
    update fails the DevUI provenance tests.
 5. **Shell stays opt-in.** Shell graduated on 2026-09-25 but no surface defaults to it; it is a
-   per-user choice. Bifrost ships Dark only.
+   per-user choice. Bifrost keeps Dark as its default.
 
 ## Relationship to GitHub Issues
 
@@ -320,5 +322,4 @@ changes to this system are ordinary issues that cite this owner doc.
 - Renaming existing tokens (reserved for a later major version).
 - Rewriting historical `design_handoff/*` packages. They keep their recorded token copies under
   the gate's adoption boundary.
-- Bundling custom fonts into Bifrost (a Bifrost-local decision).
-- Shell as a default for any surface, or on Bifrost (a separate Bifrost decision after graduation).
+- Shell as a default for any surface; Bifrost keeps Dark as its default.
