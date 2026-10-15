@@ -37,4 +37,3 @@ def test_workflows_are_artifact_only_and_least_privilege() -> None:
         assert "codex exec" not in lowered
         assert "agent launch" not in lowered
         assert "actions/upload-artifact" in text
-
