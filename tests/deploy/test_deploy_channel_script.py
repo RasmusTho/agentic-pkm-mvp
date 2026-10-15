@@ -7283,7 +7283,8 @@ def test_native_embedding_probe_subreason_survives_terminal_reconciliation(tmp_p
 
 
 @pytest.mark.parametrize('boundary', ['fabric', 'transport'])
-@pytest.mark.parametrize('fault,status', [('model', 115), ('dimension', 117), ('shape', 117), ('success', 0)])
+@pytest.mark.parametrize('fault,status', [('model', 115), ('dimension', 117), ('shape', 117),
+                                       ('nonfinite', 117), ('success', 0)])
 def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, boundary, fault, status):
     import httpx
     from types import SimpleNamespace
@@ -7301,10 +7302,14 @@ def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, 
             'vector': [0.25] * (3 if fault == 'dimension' else 2)}
     if fault == 'shape':
         body['vector'] = [0.25]
+    if fault == 'nonfinite':
+        body['vector'] = [float('inf'), 0.25]
     requests, closed = [], []
     def send(request):
         requests.append(request)
-        return httpx.Response(200, json=body)
+        # JSON overflow is schema-valid in the existing response contract,
+        # unlike the explicit NaN/Infinity constants rejected by the decoder.
+        return httpx.Response(200, content=json.dumps(body).replace('Infinity', '1e400'))
     if boundary == 'transport':
         remote = CodexRemoteTransport(endpoint='https://synthetic-executor.test.ts.net',
                                      transport=httpx.MockTransport(send))

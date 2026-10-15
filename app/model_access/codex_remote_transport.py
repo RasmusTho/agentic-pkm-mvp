@@ -764,7 +764,7 @@ class CodexRemoteTransport:
                 vector, dimensions = value['vector'], value['dimensions']
                 if (type(dimensions) is not int or not 1 <= dimensions <= 4096
                     or not isinstance(vector, tuple) or len(vector) != dimensions
-                    or any(type(item) not in (int, float) or not math.isfinite(item) for item in vector)):
+                    or any(type(item) not in (int, float) for item in vector)):
                     raise RemoteEmbeddingVectorError(
                         "embedding_response_invalid", indeterminate=True
                     )
