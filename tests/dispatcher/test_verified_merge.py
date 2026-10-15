@@ -1794,6 +1794,60 @@ def test_manual_full_path_phase_cli_rejects_consumer_or_mixed_history(tmp_path: 
     assert completed.returncode != 0
     assert "post-effect" in completed.stderr
 
+
+def test_manual_full_path_phase_cli_requires_immediate_predecessor(tmp_path: Path) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
+    convergence = convergence_kwargs["projection_convergence_receipt"]
+    comments = [projection_convergence_comment(convergence_kwargs)]
+    prepared = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=comments,
+        convergence=convergence,
+        phase="prepared",
+        pr=neutral_pr,
+        final_observation=convergence_kwargs["final_projection_observation"],
+        mode="manual",
+    )
+    assert prepared.returncode == 0, prepared.stderr
+    prepared_output = json.loads(
+        (tmp_path / "prepared-1-output.json").read_text()
+    )
+    comments.append(
+        {
+            "author_association": "OWNER",
+            "body": prepared_output["phase_receipt_comment"],
+        }
+    )
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    completed = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=comments,
+        convergence=convergence,
+        phase="reconciled",
+        pr=merged_pr,
+        closed_issues=[3820, 3823],
+        mode="manual",
+    )
+    assert completed.returncode != 0
+    assert "immediately preceding authenticated v1 phase" in completed.stderr
+
     deployment_path = tmp_path / "deployment.json"
     deployment_path.write_text("{}", encoding="utf-8")
     completed = _run_phase_builder_cli(

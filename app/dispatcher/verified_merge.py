@@ -1921,6 +1921,9 @@ def valid_post_effect_authority(value: object, authority: Mapping[str, object], 
 def validate_manual_phase_inputs(
     comments: Sequence[Mapping[str, object]],
     *,
+    phase: str,
+    authority_receipt: Mapping[str, object],
+    projection_convergence_receipt: Mapping[str, object],
     post_effect_deployment_supplied: bool = False,
     post_effect_operation_key_supplied: bool = False,
 ) -> None:
@@ -1944,6 +1947,27 @@ def validate_manual_phase_inputs(
     ):
         raise ValueError(
             "manual mode refuses consumer v2 or mixed phase history"
+        )
+    if phase not in _PHASES:
+        raise ValueError("manual mode phase is malformed")
+    if phase == "prepared":
+        return
+    predecessor = _PHASES[_PHASES.index(phase) - 1]
+    authority_digest = _canonical_digest(authority_receipt)
+    convergence_digest = projection_convergence_receipt.get("receipt_sha256")
+    predecessor_receipts = [
+        receipt
+        for receipt in phase_receipts
+        if (
+            receipt.get("contract") == VERIFIED_MERGE_PHASE_CONTRACT
+            and receipt.get("phase") == predecessor
+            and receipt.get("authority_sha256") == authority_digest
+            and receipt.get("projection_convergence_sha256") == convergence_digest
+        )
+    ]
+    if len({_canonical_digest(receipt) for receipt in predecessor_receipts}) != 1:
+        raise ValueError(
+            "manual mode requires the immediately preceding authenticated v1 phase"
         )
 
 
