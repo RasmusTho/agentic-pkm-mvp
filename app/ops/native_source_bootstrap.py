@@ -7,6 +7,7 @@ database consumer remain the admission boundaries. No child output escapes.
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Callable
 import json
 import os
 from pathlib import Path
@@ -40,7 +41,23 @@ SOURCE_PROJECTION_FAILURE_CODES = {
     'legacy_identity_refused': 93,
     'legacy_race_refused': 94,
     'legacy_write_failed': 95,
+    'source_worker_timeout': 96,
+    'source_worker_terminated': 97,
+    'source_worker_oom': 98,
 }
+
+
+def source_terminal_reason(status: int, *, oom_killed: bool = False) -> str | None:
+    if oom_killed:
+        return 'source_worker_oom'
+    if status == 0:
+        return None
+    if status == 124:
+        return 'source_worker_timeout'
+    if status in {130, 143, -2, -15}:
+        return 'source_worker_terminated'
+    return next((reason for reason, code in SOURCE_PROJECTION_FAILURE_CODES.items()
+                 if code == status), 'source_worker_failed')
 
 
 class SourceVectorProjectionFailure(RuntimeError):
@@ -125,7 +142,9 @@ def wait_for_owned_child(argv: list[str], *, timeout: float) -> int:
             signal.signal(signum, handler)
 
 
-def quiesce_owned_container(channel: str, name: str, operation: str, revision: str) -> bool:
+def quiesce_owned_container(channel: str, name: str, operation: str, revision: str, *,
+                            observe_terminal: Callable[[int, bool], None] | None = None,
+                            docker_command: Callable[..., str] | None = None) -> bool:
     """Prove absence/stoppage of only this operation's Docker API one-shot."""
     if (
         channel not in {'dev', 'test', 'prod'}
@@ -136,6 +155,8 @@ def quiesce_owned_container(channel: str, name: str, operation: str, revision: s
         return False
 
     def docker(*arguments: str, timeout: int = 15) -> str:
+        if docker_command is not None:
+            return docker_command(['docker', *arguments], timeout=timeout).strip()
         return subprocess.run(
             ['docker', *arguments], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             text=True, check=True, timeout=timeout,
@@ -185,6 +206,16 @@ def quiesce_owned_container(channel: str, name: str, operation: str, revision: s
             state = owned_state(cid)
         if state != 'false':
             return False
+        if observe_terminal is not None:
+            # Revalidate exact ownership after stop, then read only fixed Docker
+            # state fields. Never parse Error, logs, labels or free-form output.
+            if owned_state(cid) != 'false':
+                return False
+            fields = docker('inspect', '--format', '{{.State.ExitCode}} {{.State.OOMKilled}}', cid).split()
+            if (len(fields) != 2 or re.fullmatch(r'[0-9]{1,3}', fields[0]) is None
+                or not 0 <= int(fields[0]) <= 255 or fields[1] not in {'true', 'false'}):
+                return False
+            observe_terminal(int(fields[0]), fields[1] == 'true')
         docker('rm', cid)
         return True
     except (subprocess.SubprocessError, OSError, ValueError):

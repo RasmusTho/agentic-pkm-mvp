@@ -141,11 +141,14 @@ class DeployReceipt:
     stage: str
     terminal_result: str | None
     pg_acceptance: dict[str, Any] | None = None
+    source_failure: str | None = None
 
     def payload(self) -> dict[str, Any]:
         payload = asdict(self)
         if self.pg_acceptance is None:
             del payload['pg_acceptance']
+        if self.source_failure is None:
+            del payload['source_failure']
         return payload
 
     def require_profile(self, plan: DeployPlan) -> None:
@@ -157,6 +160,12 @@ class DeployReceipt:
                 raise PostgresDeployError() from None
 
     def validate(self) -> None:
+        from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_CODES
+        if self.source_failure is not None and (
+            self.source_failure not in SOURCE_PROJECTION_FAILURE_CODES
+            or self.stage not in {'activating', 'failed'}
+        ):
+            raise PostgresDeployError()
         if (str(UUID(self.operation_id)) != self.operation_id or self.channel not in CHANNEL_PROJECTS
             or self.kind != 'deploy'
             or self.stage not in {'prepared', 'preflighted', 'materialized', 'authenticating', 'activating', 'verifying', 'committed', 'aborted', 'failed'}
@@ -298,8 +307,11 @@ class DeployJournal:
               pg_acceptance: dict[str, Any] | None = None) -> DeployReceipt:
         receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
                                 stage if stage in {'committed', 'aborted', 'failed'} else None, pg_acceptance)
-        receipt.validate()
         previous = self.read()
+        if previous and previous.operation_id == operation_id and previous.source_failure is not None:
+            receipt = DeployReceipt(operation_id, self.channel, 'deploy', stage,
+                                    receipt.terminal_result, pg_acceptance, previous.source_failure)
+        receipt.validate()
         successors = {
             'prepared': {'preflighted', 'aborted'}, 'preflighted': {'materialized', 'aborted'},
             'materialized': {'authenticating', 'activating', 'aborted'},
@@ -311,6 +323,22 @@ class DeployJournal:
                 raise PostgresDeployError()
         elif stage != 'prepared' or (previous and previous.operation_id == operation_id):
             raise PostgresDeployError()
+        return self._persist(receipt)
+
+    def record_source_failure(self, operation_id: str, revision: str, reason: str) -> None:
+        previous = self.read()
+        plan = self.bound_plan(operation_id)
+        if (previous is None or previous.operation_id != operation_id or previous.stage not in {'activating', 'failed'}
+            or plan.revision != revision or previous.source_failure not in {None, reason}):
+            raise PostgresDeployError()
+        if previous.source_failure == reason:
+            return
+        receipt = DeployReceipt(operation_id, self.channel, 'deploy', previous.stage, previous.terminal_result,
+                                source_failure=reason)
+        receipt.validate()
+        self._persist(receipt)
+
+    def _persist(self, receipt: DeployReceipt) -> DeployReceipt:
         with self._directory() as directory:
             temporary = self.channel + '.' + str(uuid4()) + '.tmp'
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
