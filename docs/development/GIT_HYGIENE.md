@@ -245,9 +245,12 @@ prose, not an artifact registry. It contributes a binding only for an exact,
 line-bounded `Pickup intent receipt:` or explicit
 `Preserved worktree: /...; branch: ...; base HEAD: ...` / dedicated-worktree
 receipt shape. Delivery receipts, narrative mentions, embedded or negated
-marker text, and cross-line fragments do not preserve a target. Missing or
-malformed task identity, status, JSON, or explicit binding evidence fails
-closed before any CAS.
+marker text, and completed lifecycle prose without the retention-shaped
+`is still dirty` wording do not preserve a target. A retention-shaped
+dedicated-worktree line is explicit intent even when its path token is malformed:
+its path must be absolute and its branch/HEAD must be valid, or the line remains
+fail-closed. Cross-line fragments and missing or malformed task identity, status,
+JSON, or explicit binding evidence fail closed before any CAS.
 
 
 ## Rescue-backed serial maintenance policy
