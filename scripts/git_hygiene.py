@@ -1778,10 +1778,12 @@ _DISPATCHER_DIRTY_KEYWORD = _dispatcher_linebreak_tolerant_keyword("dirty")
 _DISPATCHER_RETENTION_SEPARATOR = (
     r"(?:\s+|[ \t]*(?:\\)?(?:\r\n|\r|\n)[ \t]*)"
 )
-_DISPATCHER_MARKDOWN = MarkdownIt("commonmark", {"html": True})
+_DISPATCHER_MARKDOWN = MarkdownIt("commonmark", {"html": True}).enable(
+    "strikethrough"
+)
 _DISPATCHER_MARKDOWN_TABLE = MarkdownIt("commonmark", {"html": True}).enable(
     "table"
-)
+).enable("strikethrough")
 _DISPATCHER_SPLITLINES_SEPARATOR_RE = re.compile(r"[\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 _DISPATCHER_MARKDOWN_TASK_PREFIX_RE = re.compile(
     r"^[ \t]*\[[ xX]\][ \t]+", re.MULTILINE
