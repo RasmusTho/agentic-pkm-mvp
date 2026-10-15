@@ -690,7 +690,7 @@ explicit environment skips. The separate native dev/test profile retains its exi
 inventory and immutable disposable-resource contract.
 
 First-green definition:
-- all three PG lane tests pass against the provisioned Postgres service in `integration-nightly`
+- every required selector collects and every selected node passes against the provisioned Postgres service in `integration-nightly`, with zero required skips, xfails or errors
 - the deterministic acceptance harness step is green in the same nightly workflow run
 - the existing memory-backed nightly suite and runtime contract regressions remain green
 
