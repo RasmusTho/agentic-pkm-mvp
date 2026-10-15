@@ -533,22 +533,32 @@ def test_session_selection_reuses_bindings_with_per_request_server_scope(
 
 
 @contextmanager
-def _running_watcher(config_path: Path):
+def _running_watcher(config_path: Path, *, long_lived: bool = False):
     """Run the production watcher reconciler as an independent, separately ticking loop.
 
     The picker never calls it: it only observes the durable receipts this loop publishes,
-    exactly as it would observe a separately deployed watcher container. Every tick reloads
-    its configuration from the environment, so each tick is also a watcher *restart*: the
-    loop converges only from durable state, never from in-memory carry-over.
+    exactly as it would observe a separately deployed watcher container. By default every
+    tick reloads its configuration from the environment, so each tick is also a watcher
+    *restart*: the loop converges only from durable state. ``long_lived`` instead keeps one
+    in-memory configuration across ticks, like the deployed ``watcher run`` loop.
     """
 
     stop = threading.Event()
     errors: list[BaseException] = []
+    loaded = watcher_registry.load_registry_config(config_path) if long_lived else None
 
     def loop() -> None:
         while not stop.is_set():
             try:
-                watcher_registry.run_registry_once(config_path)
+                if loaded is None:
+                    watcher_registry.run_registry_once(config_path)
+                else:
+                    # The entrypoint decorator reloads config per call; keep the one
+                    # in-memory config under the same single-writer lock instead.
+                    with watcher_registry._registry_writer_lock(loaded.state_dir):
+                        watcher_registry.run_registry_once.__wrapped__(
+                            config_path, _loaded_config=loaded
+                        )
             except BaseException as exc:  # pragma: no cover - asserted by caller
                 errors.append(exc)
                 return
@@ -690,8 +700,11 @@ def test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(
     assert not watcher_errors
     # The deployed long-lived watcher entrypoint (startup reconciliation plus its in-memory
     # loop) treats the completed no-target handoff as stable idle state, not a crash.
+    reloads_before_restart = len(reloads)
     watcher_registry.run_registry_forever(config_path, max_ticks=3)
     assert runtime.open_settings_rebind_store().read() == cleared
+    # ...and its startup does not recompile the cleared vault's settings.
+    assert reloads[reloads_before_restart:] == []
     # Default mutations never wrote picker history; only the picker did.
     assert runtime.registry.load().last_active_vault_ref == picked_ref(runtime, "binding-b")
 
@@ -772,6 +785,28 @@ def test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(
         )
     # The foreground SETTINGS-01 reload ran for each new compatibility root.
     assert {vault_a, vault_b} <= set(reloads)
+
+    # -- 7. after a completed CLEAR, a long-lived watcher re-arms for the next pick ----
+    # Activation and reconciliation must agree: the configured watcher acknowledges the
+    # next first selection of its own root instead of silently answering no_lifecycle.
+    with _running_watcher(config_path, long_lived=True) as long_lived_errors:
+        reselected = VaultManager().select_vault(vault_a)
+        assert reselected.active_vault_path == str(vault_a)
+        readopted = runtime.open_settings_rebind_store().read()
+        assert (readopted.phase, readopted.prior_binding_id, readopted.candidate_binding_id) == (
+            "committed",
+            None,
+            "binding-a",
+        )
+        assert readopted.reload_revision == readopted.desired_revision
+        assert (
+            load_settings_rebind_watcher_receipt(
+                _revision_receipt_path(tmp_path, readopted.desired_revision)
+            ).stage
+            == "completed"
+        )
+        _wait_until(lambda: _heartbeat_root(tmp_path) == str(vault_a))
+    assert not long_lived_errors
 
 
 def picked_ref(runtime, binding_id: str) -> str:  # type: ignore[no-untyped-def]

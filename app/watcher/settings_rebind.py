@@ -386,6 +386,10 @@ class DormantSettingsRebindReconciler:
         if record.phase == "no_lifecycle":
             return RebindCycle(record=record, mode="no_lifecycle", receipt=None)
         if not cfg.enable:
+            # A configured watcher idle after a completed CLEAR reconciles the next
+            # selection exactly as a freshly started configured watcher would.
+            self._rearm_configured_watcher(record, cfg)
+        if not cfg.enable:
             if record.phase == "committed" and record.candidate_binding_id is None:
                 # A completed no-target handoff (MVR-02 default CLEAR) is what turned
                 # this watcher idle; it is stable state, not a revision to reconcile.
@@ -580,6 +584,36 @@ class DormantSettingsRebindReconciler:
         ):
             raise RegistryError("settings rebind watcher receipt does not match durable authority")
         return receipt
+
+    @staticmethod
+    def _rearm_configured_watcher(
+        record: SettingsRebindRecord,
+        cfg: RegistryConfig,
+    ) -> bool:
+        """Re-arm a configured watcher that went idle after a completed CLEAR.
+
+        The foreground activation derives "a watcher exists" from the deployment
+        configuration (``WATCHER_ENABLE`` plus ``WATCHER_VAULT_PATH``). After a completed
+        no-target handoff the long-lived loop turns itself idle in memory; if it then
+        answered the next prepared selection with ``no_lifecycle``, the API would wait for
+        a receipt that is never written. Restore the configured posture instead, so the
+        selection is acknowledged (or refused) exactly as by a freshly started watcher.
+        """
+
+        if record.phase != "prepared" or record.prior_binding_id is not None:
+            return False
+        enabled = (os.getenv("WATCHER_ENABLE") or "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        configured_root = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
+        if not enabled or not configured_root:
+            return False
+        cfg.enable = True
+        cfg.vault_path = Path(configured_root).expanduser()
+        return True
 
     def _resume_completed_prior_root(
         self,
