@@ -128,7 +128,7 @@ def _effective_producer_collision(monkeypatch, root, source, raw, original, prod
         if producer_kind.endswith("nested"):
             value = f"[{value}]"
         elif producer_kind.endswith("integer"):
-            value = f"{original['object_id'].int:039d}"[-32:]
+            value = "1" + f"{original['object_id'].int:039d}"[-31:]
             identity = str(UUID(value))
         declaration = f"{key}: {value}\n"
     derived = "agent_maintained: true\nread_only: true\nauthority_role: derived\n" if producer_kind == "registry-derived" else ""
