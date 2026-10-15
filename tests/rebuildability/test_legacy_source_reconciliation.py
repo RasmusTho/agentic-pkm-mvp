@@ -22,9 +22,14 @@ def _persist_companion_identity(root, source, oid):
     return root / companion_path(str(oid), root)
 
 
-def test_persisted_companion_identity_allows_only_exact_excluded_retirement(monkeypatch, tmp_path):
+@pytest.mark.parametrize("location", ["canonical", "legacy"])
+def test_persisted_companion_identity_allows_only_exact_excluded_retirement(monkeypatch, tmp_path, location):
     recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
-    _persist_companion_identity(root, source, original["object_id"])
+    companion = _persist_companion_identity(root, source, original["object_id"])
+    if location == "legacy":
+        destination = root / "_system/companions" / companion.name
+        destination.parent.mkdir(parents=True)
+        companion.rename(destination)
     before = {p: p.read_bytes() for p in root.rglob("*.md")}
     assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
     assert not state.rows and not state.vectors and not state.embedded
@@ -35,10 +40,15 @@ def test_persisted_companion_identity_allows_only_exact_excluded_retirement(monk
 
 
 @pytest.mark.parametrize("producer", ["alpha", "filesystem", "registry"])
-def test_persisted_companion_identity_never_authorizes_reprojection(monkeypatch, tmp_path, producer):
+@pytest.mark.parametrize("location", ["canonical", "legacy"])
+def test_persisted_companion_identity_never_authorizes_reprojection(monkeypatch, tmp_path, producer, location):
     recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
         monkeypatch, tmp_path, selected=producer == "alpha")
-    _persist_companion_identity(root, source, original["object_id"])
+    companion = _persist_companion_identity(root, source, original["object_id"])
+    if location == "legacy":
+        destination = root / "_system/companions" / companion.name
+        destination.parent.mkdir(parents=True)
+        companion.rename(destination)
     if producer == "filesystem":
         monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
         monkeypatch.setenv("VAULT_DIR", str(root))
@@ -62,6 +72,7 @@ def test_persisted_companion_identity_never_authorizes_reprojection(monkeypatch,
     ("stored-mismatch", "legacy_identity_mismatch_refused"),
     ("duplicate", "legacy_identity_ambiguous_refused"),
     ("companion-duplicate", "legacy_identity_ambiguous_refused"),
+    ("legacy-companion-duplicate", "legacy_identity_ambiguous_refused"),
     ("companion-foreign-source", "legacy_identity_mismatch_refused"),
     ("companion-moved-source", "legacy_identity_mismatch_refused"),
     ("companion-symlink", "legacy_identity_persistence_refused"),
@@ -90,6 +101,10 @@ def test_identity_retirement_preserves_all_authority_refusals(monkeypatch, tmp_p
         (root / "duplicate.md").write_bytes(source.read_bytes())
     elif failure == "companion-duplicate":
         other = companion.with_name(f"{uuid4()}.md")
+        other.write_bytes(companion.read_bytes())
+    elif failure == "legacy-companion-duplicate":
+        other = root / "_system/companions" / companion.name
+        other.parent.mkdir(parents=True)
         other.write_bytes(companion.read_bytes())
     elif failure in {"companion-foreign-source", "companion-moved-source"}:
         destination = "/foreign-root/note.md" if failure == "companion-foreign-source" else "old-source.md"

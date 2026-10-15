@@ -5,6 +5,7 @@ import contextlib
 import io
 import logging
 import unicodedata
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Iterator
 from uuid import UUID
@@ -166,9 +167,32 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
         Read the companion through the same hardened snapshot adapter as sources,
         including when the ordinary resolver found a legacy companion location.
         """
-        from app.services.companion_note import companion_path
+        from app.services.companion_note import _fm_to_companion, companion_path
 
         note = producer.resolve_vault_note_identity(path, vault_root=root, frontmatter=parsed, body=body)
+        if not note.frontmatter_uuid and note.companion is None:
+            # The ordinary hash discovery scans only the canonical directory;
+            # retained legacy sidecars remain a supported read surface. Discover
+            # persisted evidence there, never turn a hash/path fallback into UUID
+            # authority. The same binding, snapshot and ambiguity proofs below
+            # still apply, and selected replacement producers still refuse.
+            text = producer.strip_ai_status_block(producer.strip_ai_panels(body)).strip()
+            fingerprint = producer._compute_ingest_fingerprint(text, path)["text_sha256"]
+            title = producer._frontmatter_title(parsed) or producer._derive_title(body, path)
+            legacy_matches = []
+            for candidate in (root / "_system/companions").glob("*.md"):
+                retained_text, _ = read_recovery_snapshot_relative(candidate.relative_to(root).as_posix(), vault_root=root)
+                candidate_fm = capture_source_frontmatter(retained_text)
+                if (candidate_fm and candidate_fm.get("content_hash") == fingerprint
+                        and producer._normalize_title(str(candidate_fm.get("title") or ""))
+                        == producer._normalize_title(title)):
+                    retained_companion = _fm_to_companion(candidate_fm)
+                    if retained_companion is not None:
+                        legacy_matches.append(retained_companion)
+            if len(legacy_matches) > 1:
+                raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
+            if legacy_matches:
+                note = replace(note, note_uuid=legacy_matches[0].uuid, companion=legacy_matches[0])
         if note.frontmatter_uuid or note.companion is None:
             return note, None
         companion = note.companion
@@ -200,7 +224,6 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                 raise ValueError("invalid companion identity")
             # Bind the resolver's parsed evidence to the hardened read, not just
             # a coincident UUID in a companion changed between those reads.
-            from app.services.companion_note import _fm_to_companion
             if _fm_to_companion(fm) != companion:
                 raise ValueError("changed companion")
         except Exception:

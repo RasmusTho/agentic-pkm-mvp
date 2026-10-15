@@ -77,7 +77,7 @@ def _count(object_id) -> int:
 
 
 @pytest.mark.parametrize("mode,reason", [
-    ("retire", None), ("canonical", "legacy_identity_canonical_refused"),
+    ("retire", None), ("retire-legacy", None), ("canonical", "legacy_identity_canonical_refused"),
     ("reverse", "legacy_identity_canonical_refused"),
     ("duplicate", "legacy_identity_ambiguous_refused"),
     ("row-race", "legacy_race_refused"), ("companion-race", "legacy_race_refused"),
@@ -92,6 +92,10 @@ def test_legacy_retirement_identity_refusals_are_atomic(_pg_index, monkeypatch, 
     recovery, state, root, source, raw, original, _, _, _ = _legacy_source_fixture(monkeypatch, tmp_path)
     oid, other = original["object_id"], uuid4()
     companion = _persist_companion_identity(root, source, oid)
+    if mode == "retire-legacy":
+        destination = root / "_system/companions" / companion.name
+        destination.parent.mkdir(parents=True)
+        companion.rename(destination)
     store = pg_store.PgObjectStore()
     store.put(oid, kind="note", source_ref=str(source), payload=original["payload"])
     store.put(other, kind="note", source_ref="healthy.md", payload={"content": "healthy", "frontmatter": {}})
