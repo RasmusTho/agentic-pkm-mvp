@@ -42,6 +42,7 @@ RUN pip install --no-cache-dir -r requirements-builderops.txt
 COPY pyproject.toml ./
 COPY app ./app
 COPY scripts/validate_issue_readiness.py ./scripts/validate_issue_readiness.py
+COPY scripts/pr_body_generator.py ./scripts/pr_body_generator.py
 COPY docs/settings/models/providers.yaml ./docs/settings/models/providers.yaml
 COPY .codex/agents/slice-implementer.toml ./.codex/agents/slice-implementer.toml
 COPY .codex/skills/start-model-inquiry/SKILL.md ./.codex/skills/start-model-inquiry/SKILL.md

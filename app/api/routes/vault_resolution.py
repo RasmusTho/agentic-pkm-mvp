@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from fastapi.responses import JSONResponse
 
@@ -25,6 +27,13 @@ class SelectedVaultUninitializedError(RuntimeError):
     def __init__(self, selected_path: Path | None = None) -> None:
         self.selected_path = selected_path
         super().__init__("selected vault is not initialized")
+
+
+@contextmanager
+def active_vault_selection_window() -> Iterator[None]:
+    """Coordinate a scalar route's effects with the real shared selector."""
+    with get_vault_manager().selection_window():
+        yield
 
 
 def resolve_active_vault_root(*, require_initialized: bool = False) -> Path:

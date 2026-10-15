@@ -5,13 +5,13 @@ Owner: Runtime / operator playbook
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: mixed
-Last reviewed: 2026-10-14 (native MVR-01C entry for #6056, native BWS embedding preflight for #6069, and fixed native TEST journaling entry for #6050, repository-only; prior #5969 web qualification, #5993 placement and other section reviews retained; no new live host or service verification)
+Last reviewed: 2026-10-15 (Companion collection-preflight output classification for #6079, repository-only; prior 2026-10-14 VOICE-04 session/transcript guidance, native MVR-01C entry for #6056, native BWS embedding preflight for #6069, and fixed native TEST journaling entry for #6050, repository-only; prior #5969 web qualification, #5993 placement and other section reviews retained; no new live host or service verification)
 Last live runtime verification: 2026-08-22 (see `docs/ENVIRONMENTS.md`)
 BWS child-runtime repository evidence: requirements-bws-deploy.txt; scripts/install_bws_deploy_runtime.sh; tests/deploy/test_deploy_channel.py::test_bws_runtime_setup_covers_mandatory_browser_smoke and tests/deploy/test_deploy_channel_script.py::test_managed_deploy_child_uses_declared_supervisor_interpreter; Issue #5905 / PR #5906 (repository validation only; no live host installation or channel acceptance).
 Native web entry repository evidence (2026-10-12): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_web, app/ops/native_web_acceptance_runner.py::NativeWebRunner, and tests/ops/test_native_web_acceptance.py; runtime pilot qualification remains with #2443/#3314.
 Native journaling entry repository evidence (2026-10-14): app/ops/postgres_deploy_linux.py::LinuxEffects.qualify_journaling, app/ops/native_journaling_acceptance_runner.py::NativeJournalingRunner, and tests/ops/test_native_journaling_acceptance.py; actual-image/provider TEST acceptance remains with #3347.
 Native authority-cutover repository evidence (2026-10-14): app/ops/postgres_deploy.py::DeployPlan, app/ops/postgres_deploy_linux.py::DeploymentSupervisor and tests/deploy/test_postgres_deploy_authority_cutover.py; live nonprod qualification remains with #3367.
-Last verified against: docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/KARAKEEP_MIMER_ACQUISITION/README.md, docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md, docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md, config/secrets/host_secret_contract.json, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, tests/deploy/test_deploy_channel_script.py::test_native_api_source_selector_refuses_before_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_unbound_api_preserves_idle_without_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_prepares_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_refuses_unavailable_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_preserves_selected_embedding_identity, Issue #6069 candidate containing origin/main 8ec709f (repository-only; no live channel verification), tests/ops/test_ci_workflow.py::test_scoped_not_pg_step_has_room_for_multi-subsystem_selection, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-14
+Last verified against: scripts/companion_ui_postdeploy_smoke.sh::preflight and tests/companion_ui/test_gateway_postdeploy_smoke.py::test_collection_preflight_classifies_captured_output_without_pipe_race (#6079 repository-only evidence), docs/MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md, app/api/routes/ask.py::ask_voice, app/chat/voice_session.py::VoiceSessions, tests/voice/test_session_transcript.py::test_only_write_is_appendonly_transcript (VOICE-04 repository evidence), docs/STATUS.md, docs/ARCHITECTURE.md, docs/ROADMAP.md, docs/HEALTH.md, docs/INFRASTRUCTURE.md, docs/ENVIRONMENTS.md, docs/OBSERVABILITY.md, docs/DEV_TEST_PROD_STARTUP_REDESIGN/README.md, docs/ASK_PROVENANCE_MANIFEST/README.md, docs/CONTEXTUAL_RELEVANCE_ENGINE/README.md, docs/deployment/DEPLOYMENT_AND_ENVIRONMENTS.md, docs/KARAKEEP_MIMER_ACQUISITION/README.md, docs/KARAKEEP_MIMER_ACQUISITION/DEPLOY_KARAKEEP_AS_A_MANAGED_SERVICE.md, docs/KARAKEEP_MIMER_ACQUISITION/PROVE_AND_ACCEPT_KARAKEEP_TO_MIMER.md, config/secrets/host_secret_contract.json, app/release_channels/ordinary_boot.py, app/ops/test_channel_bootstrap.py, app/agent_memory/ask_provenance_manifest.py, app/relevance/now_surface.py, app/instance/runtime.py, app/instance/ownership_ledger.py, app/ops/postgres_deploy_linux.py, app/ops/native_source_bootstrap.py, scripts/deploy_channel.sh, tests/deploy/test_deploy_channel_script.py::test_native_deploy_rebuilds_source_projection_before_health_gate, tests/deploy/test_deploy_channel_script.py::test_native_api_source_selector_refuses_before_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_unbound_api_preserves_idle_without_source_write, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_prepares_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_refuses_unavailable_ollama_before_stopping_services, tests/deploy/test_deploy_channel_script.py::test_native_source_projection_preserves_selected_embedding_identity, Issue #6069 candidate containing origin/main 8ec709f (repository-only; no live channel verification), tests/ops/test_ci_workflow.py::test_not_pg_steps_have_room_for_selected_coverage, scripts/instance_state_writer_inventory.py, scripts/lib/instance_ownership_host_state.sh, scripts/lib/instance_state_deployment.sh, scripts/start_full_system.sh, scripts/verify_runtime_stack.sh, tests/ops/test_instance_state_volume_contract.py, tests/ops/test_mvr05_mixed_version_fence.py, tests/ops/test_instance_state_writer_inventory.py, Issue #5823 / PR #5825, Issue #5442 / PR #5450, Issue #5511 / PR #5513, Issue #5885 / PR #5887 and Issue #5888 (repository-only; no live host verification), merged PRs #1948/#1977/#2115/#2127/#2128/#2129/#2131/#2135/#2140/#2142, and current repo state on 2026-10-14
 TypeSafe credential boundary evidence: config/secrets/host_secret_contract.json; tests/ops/test_host_secret_contract.py::test_typesafe_key_uses_non_prod_project_and_marr_only_consumer, tests/ops/test_secret_admin.py::test_typesafe_import_targets_non_prod_and_rejects_other_channels, and tests/architecture/test_typesafe_runtime_boundary.py::test_runtime_key_stays_on_marr_and_callers_keep_separate_policy; Issue #5808 follows Issue #5801 / PR #5803 on 2026-10-07. Repository-only fake/injected-source evidence; no live BWS permission or host/provider verification.
 TypeSafe Builder CKM repository evidence: app/builderops/ckm/judgment.py, app/model_access/ckm_judgment_executor.py, tests/builderops/ckm/test_semantic_typesafe.py, and Issue #5768 on 2026-10-05; fake-provider proofs only, with runtime disabled and no live host or provider verification.
 # Operations Playbook
@@ -47,6 +47,31 @@ CLI note:
 - `python -m app.cli --help` and `python -m app.cli <command> --help` remain the authoritative command discovery surface because the CLI evolves faster than the docs.
 - Runtime verification note: `make verify-runtime` is the authoritative local operator check for the live Docker stack because it verifies service health plus in-container CLI health, rather than the host shell environment.
 - Canvas note: `python -m app.cli canvas ...` and `/api/canvas/*` now exist as bounded session surfaces behind `CANVAS_ENABLED`; they are materially supported for bounded co-authoring, but still not part of the default production operator surface.
+
+### Mimer voice sessions (VOICE-04)
+
+`POST /api/ask/voice` returns a `session_id` when a question turn opens a transcript
+on an initialized selected vault. Pass that id for follow-ups; `end_session=true`
+closes the transcript and retires the live context. Context and pointers are
+process-local: restart, another API worker, a changed vault/scope or an already
+closed id returns `409 voice_session_context_lost`. Start a new session and
+restate the missing context; the durable transcript is never replayed as live memory.
+
+A process-local window on the actual shared vault manager keeps selection stable
+through context lookup, ASK retrieval and transcript create/append/close. A
+concurrent legacy select or lazy selection load waits for those effects; derived
+TTS runs after release. This is not a persistent lease or cross-worker recovery.
+
+Voice persistence uses the existing guarded `SessionLogWriter` only under
+`.chats/voice/`, with per-turn UTC timestamps. It creates no human-note anchor,
+UUID repair or `.canvas-sessions` pointer. Logging refusal/failure preserves the
+grounded answer and reports `session_error: session_transcript_unavailable`,
+independently of TTS degradation. Capture-intent suggestions perform no write.
+See [the client contract](contracts/MIMER_CLIENT_CONTRACT.md#43-post-apiaskvoice)
+and [the session owner spec](MIMER_VOICE_LOOP/CARRY_SESSION_FOLLOWUP_CONTEXT.md)
+for semantics and production-path verification. These are repository contracts;
+parent #3335 retains qualified TARS TEST voice/UI acceptance, and ERE
+`chat.sessions` consumption remains planned.
 
 ### Heimdal raw-store capacity receipt
 
@@ -498,8 +523,12 @@ Companion docs:
 - Before a Linux BWS deployment, operator setup must qualify the complete isolated host runtime,
   including Python helpers, Chromium headless payload, exact browser-smoke collection and tuning
   imports. Follow [Linux channel secret provisioning](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md#linux-channel-secret-provisioning)
-  for the setup/runtime binding and infrastructure-owned OS prerequisites. Missing dependencies or
-  an unavailable browser refuse setup before launcher replacement; application-image selection,
+  for the setup/runtime binding and infrastructure-owned OS prerequisites. The offline collection
+  preflight accepts exit 0 or exit 5 with its intentional `SKIPPED` marker, checking captured output
+  without a short-circuiting pipe; missing-marker and other-error outcomes still refuse setup.
+  Repository regression checks cover this classification without establishing live host or channel
+  qualification. Missing dependencies or an unavailable browser refuse setup before launcher
+  replacement; application-image selection,
   credential/grant and migration authority remain with their existing operator gates.
 - Fixed native `qualify-web` uses an already committed dev/test operation/image and its exact
   native lock/resource admission. Disposable baked API/UI services bootstrap canonical sources
@@ -540,13 +569,14 @@ Companion docs:
 - The repository resolves the MARR-only `typesafe.api-key` binding from the exact
   `dev/typesafe.api-key` identity in the existing `non-prod` BWS project through the existing
   read-only `non-prod-reader` account (#5801 / #5808). Its BWS reader token remains a
-  separate Mac Keychain bootstrap credential. The existing admin writer may access this project only
-  through the designated controller after #5667 qualification. Product and Builder callers receive no
+  separate Mac Keychain bootstrap credential. The #5667 receipts #6114638077 and #6114787299 verify
+  the current entitlement, existing reader scopes, exact MARR binding, and accepted Demerzel normal
+  writer with its same-user residual. Product and Builder callers receive no
   provider key; Linux reader identities retain accepted store-level access to the existing projects,
   while the application code-level MARR grant remains the sole runtime binding. Codex and Claude
-  receive no code-level provider-key grant. Fake-backed repository proofs do not establish
-  live entitlement or permissions. Verify the BWS entitlement and sole-writer boundary under #5667,
-  then the existing MARR host and separate caller bindings under #5764. The already-authorized
+  receive no code-level provider-key grant. Fake-backed repository proofs do not establish the broader
+  integrated channel deployment/runtime acceptance, which remains open under #5667. Product/Builder
+  caller acceptance remains a separate #5764 gate. The already-authorized
   synthetic Product and Builder attempts remain single-shot and require separate redacted acceptance
   receipts before either route is activated. Follow `docs/LOCAL_SECRET_PROVISIONING/README.md`
   (`Declared identifier contract`) and `docs/TYPESAFE_SYSTEM_ONE/README.md`

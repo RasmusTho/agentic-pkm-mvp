@@ -1180,6 +1180,22 @@ def _suggested_actions(checks: dict[str, dict[str, Any]], runtime: dict[str, dic
             }
         )
 
+    youtube_sync = checks.get("youtube_sync", {})
+    youtube_data = youtube_sync.get("data") if isinstance(youtube_sync.get("data"), dict) else youtube_sync
+    if isinstance(youtube_data, dict):
+        for action in youtube_data.get("suggested_actions", []):
+            if not isinstance(action, dict):
+                continue
+            reason_code = str(action.get("reason_code") or "status_unavailable")
+            actions.append(
+                {
+                    "id": f"youtube_sync_{reason_code}",
+                    "severity": "optional",
+                    "message": f"YouTube sync: {reason_code}",
+                    "command_hint": str(action.get("command_hint") or ""),
+                }
+            )
+
     obsidian = checks.get("obsidian", {})
     if obsidian.get("ok") is False and obsidian.get("required"):
         actions.append(
@@ -1204,6 +1220,43 @@ def _check_companion_diagnostics() -> Dict[str, Any]:
     ok = count == 0
     detail = "no duplicate companion notes" if ok else f"{count} duplicate companion note(s) detected"
     return _result(ok, detail, data=dict(summary))
+
+
+def _check_youtube_sync(*, vault_context: Any = None) -> Dict[str, Any]:
+    """Read-only YSS-09 doctor check over existing sync substrates."""
+    try:
+        from app.knowledge_acquisition.sync_observability import collect_youtube_sync_status
+
+        payload = collect_youtube_sync_status(vault_context=vault_context)
+    except Exception as exc:
+        return _result(
+            True,
+            f"YouTube sync diagnostic unavailable ({_exception_kind(exc)})",
+            data={"status": "unknown", "reason_codes": ["status_unavailable"]},
+        )
+    reason_codes = list(payload.get("reason_codes") or [])
+    state = str(payload.get("status") or "degraded")
+    detail = "YouTube sync connected"
+    if state == "paused":
+        detail = "YouTube sync paused"
+    elif state == "offline":
+        detail = "YouTube sync runner offline"
+    elif state != "connected":
+        detail = "YouTube sync degraded"
+    if reason_codes and state != "connected":
+        detail += ": " + ", ".join(reason_codes)
+    result = _result(
+        state == "connected",
+        detail,
+        data={
+            **payload,
+            "reason_codes": reason_codes,
+            "suggested_actions": list(payload.get("suggested_actions") or []),
+        },
+    )
+    result["reason_code"] = payload.get("reason_code")
+    result["reason_codes"] = reason_codes
+    return result
 
 
 def _check_authority_spine() -> Dict[str, str]:
@@ -1277,6 +1330,9 @@ def run_health(
     )
     checks["embedding_index"] = _annotate_required(_check_embedding_index(), required=True)
     checks["companion_diagnostics"] = _annotate_required(_check_companion_diagnostics(), required=False)
+    checks["youtube_sync"] = _annotate_required(
+        _check_youtube_sync(vault_context=kwargs.get("vault_context")), required=False
+    )
 
     runtime = {
         "watcher": _watcher_runtime_status(),

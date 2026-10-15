@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, List, Sequence, Set, Tuple
+from typing import Callable, Iterable, List, Sequence, Set, Tuple
 
 import click
 
@@ -47,6 +47,7 @@ from app.vault.layout import ensure_vault_layout
 from app.vault.paths import get_vault_system_dir_rel
 from app.vault.manager import iter_vault_markdown_files
 from app.write_guard import SOURCE_BACKED_REBUILD_ACTION
+from app.rebuildability.product_total_loss import capture_source_frontmatter
 
 #: Sentinel written to created_by_instance when runtime identity is unavailable.
 _UNKNOWN_INSTANCE = "unknown"
@@ -602,6 +603,7 @@ def _ingest_single(
     raw_text: str | None = None,
     write_companion_record: bool = True,
     reconcile_existing_projection: bool = False,
+    projection_sink: Callable[[dict], None] | None = None,
 ) -> str:
     rel_path = path.relative_to(vault_root)
     if raw_text is None:
@@ -710,6 +712,7 @@ def _ingest_single(
 
     payload = {
         "core6": core6,
+        "frontmatter": capture_source_frontmatter(raw_text),
         "raw_text": stripped_text,
         "text": stripped_text,
         "replay_text_kind": "extracted_body",
@@ -742,6 +745,7 @@ def _ingest_single(
         object_uuid = uuid.uuid4()
 
     store_payload = {
+        "frontmatter": capture_source_frontmatter(raw_text),
         "artifact_id": str(object_uuid),
         "stable_id": str(object_uuid),
         "title": title,
@@ -764,6 +768,14 @@ def _ingest_single(
         **producer_fields,
         "replay": replay,
     }
+
+    if projection_sink is not None:
+        # Recovery prepares exactly the canonical producer payload, but owns
+        # the object/vector transaction and must emit no companion/outbox work.
+        if write_companion_record or not reconcile_existing_projection:
+            raise ValueError("invalid projection preparation")
+        projection_sink(store_payload)
+        return canonical_object_id
 
     object_store = get_object_store()
     reconcile = getattr(object_store, "put_and_reconcile_source_backed", None)

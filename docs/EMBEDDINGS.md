@@ -452,6 +452,44 @@ Recommended checks:
 During native deployment, a vector-only finding can trigger the existing guarded source-backed
 rebuild of the selected retained-source inventory. The strict doctor must then pass before service
 activation; see [the deployment procedure](deployment/DEPLOYMENT_AND_ENVIRONMENTS.md).
+If replay leaves a vector-only gap elsewhere in the selected binding, `index repair-missing`
+reads canonical ObjectStore payloads and inserts only absent, provenance-complete admitted vault-note
+vectors under the current configured identity. It does not reset, overwrite or delete vectors,
+rewrite Product objects, synthesize source provenance, or promote candidate-only/untrusted material.
+Each insert locks and rechecks the source snapshot and commits vector plus derived provenance
+atomically; failures leave that vector absent. Existing rows, including malformed vectors, remain
+untouched and the strict final doctor remains authoritative.
+Repair admission requires a complete producer-captured `frontmatter` snapshot in the stored payload.
+Candidate/non-authoritative/review-required, draft, untrusted or malformed markers at any persisted
+frontmatter, core6 or top-level location refuse; a permissive alias cannot shadow them. Missing
+legacy admission evidence is unknown and remains absent, not synthesized from a body-only replay
+hash. Existing vault-alpha, vault-root, vault-sync, retained-projection and source-aware indexer
+producers preserve the captured source snapshot in their ordinary writes. Indexer refresh replaces
+it even for metadata-only source changes, and invalidates stale evidence when capture is unavailable.
+This is producer metadata preservation, not a missing-repair rewrite or a live legacy migration.
+
+Native recovery can run the separate guarded `index reconcile-legacy` stage before missing-only
+repair. For an evidence-free, vector-missing note mirror, its stored locator is discovery only.
+The active-vault adapter reads a stable regular source without following redirected components;
+current profile admission, canonical identity, complete frontmatter, supported trust and the shared
+producer inventory are re-proven. Eligible sources prepare the canonical vault-alpha payload
+without companion/outbox writes and generate the embedding before one Product/vector transaction.
+Sources excluded from all applicable current producer inventories may retire only their exact unchanged stale
+mirror, never the source file or canonical identity/history. Retained history/dependents refuse
+retirement. Changed sources, duplicate identities, candidate/staging material, malformed metadata,
+untrusted authority and ambiguous selection refuse without mutation.
+The separate dev-only filesystem watcher has a broader vault-sync inventory. If its configured
+or default `VAULT_DIR` scope overlaps the active vault, alpha exclusion alone is not retirement
+authority: recovery refuses that ambiguous producer applicability rather than enabling the optional
+producer or laundering its sources through alpha. Complete private-stage stream and logging
+suppression covers settings compatibility and conflict-quarantine diagnostics too.
+The transaction rechecks source/policy and forward/reverse canonical identity, compares equivalent
+absolute/relative source locators across the locked binding inventory, compares the discovered Product
+snapshot, fences vector writes, and inserts only an absent vector. Provider/write failure or a
+failed final recheck rolls back the affected Product/vector transition. Existing vectors are never
+overwritten; retry sees either the prior legacy row or the completed replacement/retirement.
+The strict final doctor remains authoritative for whole-binding coverage. Repository tests do not
+claim live DEV/TEST reconciliation or parent acceptance.
 
 ## Rebuild playbook (when identity changes)
 

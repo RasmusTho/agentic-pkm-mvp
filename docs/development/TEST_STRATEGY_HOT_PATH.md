@@ -5,7 +5,7 @@ Owner: Builder-agent governance
 Temporal class: operational
 Review cadence: event-driven
 Source of truth: code, workflow files, and repo-local skill docs
-Last reviewed: 2026-10-10 (companion-helper selector coverage)
+Last reviewed: 2026-10-14 (scoped unit execution margin)
 Last verified against: `.github/workflows/ci-smoke.yaml`, `.github/workflows/import-linter.yaml`, `.github/workflows/browser-runtime.yml`, `.github/workflows/issue-pr-governance.yml`, `.github/workflows/integration-nightly.yaml`, `.github/workflows/app-image-build.yml`, `scripts/deploy_channel.sh`, `tests/architecture/test_agent_skill_entrypoints.py`, `tests/architecture/test_dispatcher_skill_integration.py`, `docs/development/PR_HOT_PATH.md`, `docs/development/PR_ESCALATION_PATHS.md`, `docs/development/PARENT_ISSUE_CLOSURE.md`, `.codex/skills/issue-to-code/SKILL.md`, `.codex/skills/pr-integration/SKILL.md`, `.codex/skills/verification-and-closure/SKILL.md`, `scripts/select_pr_tests.py`, `tests/scripts/test_select_pr_tests.py`, `tests/governance/test_governed_vault_profile_contract.py`, `tests/governance/test_governed_vault_profile_proposals.py`, `tests/agents/test_reviewer.py`, `tests/agents/test_reviewer_single_note.py`, `scripts/docs_guard_logic.py`, `tests/knowledge/linux_acl.py`, `tests/knowledge/test_linux_acl_fixture.py`, `tests/ops/test_ci_workflow.py`, `tests/ops/test_review_before_ci_gate.py`, `tests/governance/test_ci_smoke_docs_only_gate.py::test_product_reasoning_facade_selects_its_llm_tests`, `tests/governance/test_ci_smoke_post_merge_proof_concurrency.py`, `docs/plans/FAST_PR_TO_DEV_TEST_AUTOMATION.md`, Issue #5820 / PR #5838 candidate selector coverage and `tests/scripts/test_select_pr_tests.py::test_product_embedding_adapters_select_their_regression_coverage`
 
 # Test Strategy for the Hot Path
@@ -86,8 +86,11 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   seed copies and require failure for missing/malformed metric input, failed gates and missing
   thresholds. This synthetic-input evidence establishes no live provider-quality acceptance or
   unrelated full-suite result; outside the enrolled test, Product Model Access still fails closed.
-- The full non-PG unit step has a finite 60-minute outer ceiling; the scoped step retains
-  the 35-minute ceiling from #5921 / PR #5924. Both retain the 120-second per-test thread watchdog,
+- Both full and scoped non-PG unit steps have finite 60-minute outer ceilings. The scoped step's
+  former 35-minute ceiling cut off #6091 / PR #6092 at 91% without a reported assertion failure
+  ([job 116083429844](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38631158811/job/116083429844));
+  its six selected subsystem groups run serially. Additional outer margin does not prove completion
+  or promise a speedup: current-head substantive CI must still pass. Both retain the 120-second per-test thread watchdog,
   every target, marker, required check, assertion and failure handler. #6084 records two independent
   35-minute cutoffs: [#6074 job 115700746542](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38514333873/job/115700746542)
   and [#6075 job 115693481077](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38515571086/job/115693481077).
@@ -103,6 +106,14 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   partial logs, and status inventory survive cancellation for the always-run artifact upload;
   normal EXIT handling adds final timings/status when the shell can execute it. Actual current-head
   CI completion remains required; the ceiling and fixture receipt alone are not runtime proof.
+  PR #6083's scoped serial job [115940412928](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38531981018/job/115940412928)
+  separately reached 93% at the old 35-minute cutoff, with one failed result whose traceback
+  was lost. The scoped command keeps the exact selector arguments and adds verbose node IDs,
+  short tracebacks and unbuffered output; pipefail and the always-uploaded log retain failure
+  evidence. Its increased ceiling is execution margin, not a completed-run measurement or a
+  speedup. `tests/ops/test_ci_workflow.py::test_scoped_unit_budget_preserves_selected_command_and_failure`
+  executes that YAML command against finite success/failure producers to verify selected arguments,
+  watchdog, visible diagnostics, retained log and failure exit propagation.
 - The shared native PostgreSQL acceptance profile retains the former `pr-index-pg-contracts`
   surface (#5587), including FCA-06 second-consumer conformance (#5405) and dormant host-candidate
   admission/history/live-refusal and managed-source proofs (#5593). Each test retains the
@@ -134,13 +145,30 @@ records activation and ten-candidate measurement; measurement does not gate ordi
   duplicate execution; it does not promise a particular wall-clock speedup or suppress failures.
 - The nightly full suite reuses that non-overlapping process pattern with four parallel pytest
   processes and the same serial `tests/ops` / `test_vault_multiwriter.py` boundary. It preserves
-  `not pg and not alpha_llm` exactly, including E2E and the other marker classes omitted on the
-  PR path. Every invocation retains the canonical temporary namespace, plugin autoload and
-  importlib collection; each has the existing 120-second thread watchdog, verbose node IDs,
-  short tracebacks, unbuffered output and the slowest 30 durations. The batch ceiling is 35 minutes
-  with a 45-minute job ceiling for installation, later checks and uploads. The triggering #6063
-  run exhausted the former 20-minute step after partial execution; the new batch margin matches
-  the existing PR baseline and does not establish a measured speedup.
+  every selected test while discovering `tests/deploy` at file granularity; other top-level
+  groups keep their existing discovery. The measured longest deploy file,
+  `test_deploy_channel_script.py`, is queued first, with the remaining discovered paths sorted.
+  Fully deselected files remain in the finite inventory and require their empty JUnit result.
+  The selection remains
+  `not pg and not alpha_llm and not eval`, including E2E and the other marker classes omitted on
+  the PR path. The qualified real-eval lane remains opt-in; the ten deterministic SV/EN checks
+  stay in this nightly selection. Every invocation retains the canonical temporary namespace,
+  plugin autoload and importlib collection; each has the existing 120-second thread watchdog, verbose node IDs,
+  short tracebacks, unbuffered output and the slowest 30 durations. The batch ceiling is 50 minutes
+  with a 60-minute job ceiling for installation, later checks and uploads. The triggering #6063
+  run exhausted the former 20-minute step after partial execution. Later, #6090's
+  [Python 3.12 job](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38638069945/job/116106250882)
+  completed all 132 shards and 20,208 reported cases at 35 minutes 6 seconds but timed out at the
+  35-minute ceiling. A [later run](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38649149411)
+  exhausted the 40-minute limit on both versions after their deploy groups took 31m31s and
+  32m46s, leaving the serial phase incomplete. After file grouping,
+  [run 38658078391](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38658078391)
+  completed all 155 shards and 20,343 reported cases on both versions with zero failures, but
+  Python 3.12 still timed out at 40m06s; Python 3.13 completed at 39m34s. The measured envelope
+  allows 20% beyond the slower complete run plus one minute, with separate setup and upload
+  reserves. Prior failed proof and timeout accounting remain unwaived. Neither grouping nor
+  a larger ceiling establishes acceptance: complete current-head inventories, failure-free
+  required targets, no timeout, and successful later checks still qualify the producer.
 - Nightly shard inventory, raw exit statuses, per-shard logs and JUnit results live under
   `$RUNNER_TEMP/pytest-nightly-shards` and are uploaded with the aggregate log by an `always()`
   step. A completed phase requires each expected shard exactly once and a JUnit testcase count

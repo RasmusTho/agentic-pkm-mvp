@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
 import os
 from pathlib import Path
-from threading import Lock
+from threading import Lock, RLock
 from typing import TYPE_CHECKING, Any, Callable, Iterator, Literal
 from uuid import uuid4
 
@@ -462,6 +463,7 @@ class VaultManager:
 
             write_guard = DEFAULT_WRITE_GUARD
         self._write_guard = write_guard
+        self._selection_lock = RLock()
         self._context = no_vault_context()
         self._subscribers: list[Callable[[VaultChangedEvent], None]] = []
 
@@ -472,7 +474,22 @@ class VaultManager:
     def subscribe(self, callback: Callable[[VaultChangedEvent], None]) -> None:
         self._subscribers.append(callback)
 
+    @contextmanager
+    def selection_window(self) -> Iterator[None]:
+        """Keep the process-local selection stable through a bounded effect.
+
+        Selection may run in a FastAPI worker thread while a voice turn runs
+        on the event loop. The same manager lock covers both, including lazy
+        selection loading. This supplies no cross-process session recovery.
+        """
+        with self._selection_lock:
+            yield
+
     def load_last_active(self) -> VaultContext:
+        with self.selection_window():
+            return self._load_last_active_locked()
+
+    def _load_last_active_locked(self) -> VaultContext:
         try:
             settings = self.app_local_store.load()
         except (OSError, MarkdownSettingsError):
@@ -492,7 +509,8 @@ class VaultManager:
         return self.select_vault(Path(item.path), remember=False)
 
     def select_vault(self, vault_path: Path, *, remember: bool = True) -> VaultContext:
-        return self._select_vault_locked(vault_path, remember=remember)
+        with self.selection_window():
+            return self._select_vault_locked(vault_path, remember=remember)
 
     def _select_vault_locked(self, vault_path: Path, *, remember: bool) -> VaultContext:
         previous = self._context
@@ -975,12 +993,15 @@ class VaultManager:
 
 
 _GLOBAL_MANAGER: VaultManager | None = None
+_GLOBAL_MANAGER_LOCK = Lock()
 
 
 def get_vault_manager() -> VaultManager:
     global _GLOBAL_MANAGER
     if _GLOBAL_MANAGER is None:
-        _GLOBAL_MANAGER = VaultManager()
+        with _GLOBAL_MANAGER_LOCK:
+            if _GLOBAL_MANAGER is None:
+                _GLOBAL_MANAGER = VaultManager()
     return _GLOBAL_MANAGER
 
 

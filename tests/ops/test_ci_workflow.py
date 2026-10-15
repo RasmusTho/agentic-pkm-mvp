@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 import pytest
 import yaml
@@ -255,7 +256,7 @@ def test_pr_ci_selects_subsystem_scoped_pytest_targets() -> None:
 
     assert "Select subsystem-scoped pytest targets" in job
     assert "scripts/select_pr_tests.py" in job
-    assert "steps.select-tests.outputs.pytest_args }} --durations=20" in job
+    assert "steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20" in job
     assert "Run shared not-pg unit tests in process shards" in job
     assert "xargs -r -n 1 -P 4 bash -c" in job
     assert "tests/invariants/test_vault_multiwriter.py" in job
@@ -382,6 +383,96 @@ def test_not_pg_steps_have_room_for_selected_coverage(step_name: str) -> None:
     assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
 
 
+def test_scoped_unit_budget_preserves_selected_coverage() -> None:
+    job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
+    step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
+    assert step["timeout-minutes"] == 60
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert step["if"] == (
+        "steps.changes.outputs.code == 'true' && steps.select-tests.outputs.full_suite != 'true'"
+    )
+    assert step["shell"] == "bash"
+    assert "continue-on-error" not in step
+    assert step["run"] == (
+        "set -o pipefail\n"
+        'echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"\n'
+        'echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"\n'
+        "pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20 | tee pytest-not-pg.log\n"
+    )
+
+
+
+@pytest.mark.parametrize("pytest_exit", [0, 7])
+def test_scoped_unit_budget_preserves_selected_command_and_failure(
+    tmp_path: Path, pytest_exit: int,
+) -> None:
+    job = yaml.safe_load(_smoke_text())["jobs"]["pr-unit-tests-not-pg"]
+    step = next(s for s in job["steps"] if s.get("name") == "Run scoped not-pg unit tests")
+    assert step["timeout-minutes"] == 60
+    assert step["env"]["PYTEST_ADDOPTS"] == "--timeout=120 --timeout-method=thread"
+    assert step["env"]["PYTHONUNBUFFERED"] == "1"
+    selected = "-q -m 'not pg and not eval' tests/governance tests/scripts/test_publication.py"
+    script = step["run"].replace("${{ steps.select-tests.outputs.pytest_args }}", selected)
+    script = re.sub(r"\$\{\{.*?\}\}", "fixture", script)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_pytest = bin_dir / "pytest"
+    fake_pytest.write_text(
+        f"#!{sys.executable}\n" + r'''
+import json
+import os
+from pathlib import Path
+import sys
+import time
+Path("invocation.json").write_text(json.dumps({
+    "args": sys.argv[1:], "watchdog": os.environ["PYTEST_ADDOPTS"],
+    "unbuffered": os.environ["PYTHONUNBUFFERED"],
+}))
+outcome = "FAILED" if int(os.environ["FIXTURE_PYTEST_EXIT"]) else "PASSED"
+print(f"tests/fixture.py::test_scoped_result {outcome}")
+if outcome == "FAILED":
+    print("tests/fixture.py:7: AssertionError: scoped diagnostic")
+deadline = time.monotonic() + 5
+while not Path("release").exists() and time.monotonic() < deadline:
+    time.sleep(0.01)
+sys.exit(int(os.environ["FIXTURE_PYTEST_EXIT"]))
+''', encoding="utf-8",
+    )
+    fake_pytest.chmod(0o755)
+    process = subprocess.Popen(
+        ["bash", "-c", script], cwd=tmp_path, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True,
+        env={**os.environ, **step["env"], "PATH": f"{bin_dir}:{os.environ['PATH']}",
+             "FIXTURE_PYTEST_EXIT": str(pytest_exit)},
+    )
+    log_path = tmp_path / "pytest-not-pg.log"
+    expected_node = "tests/fixture.py::test_scoped_result " + ("FAILED" if pytest_exit else "PASSED")
+    try:
+        deadline = time.monotonic() + 4
+        while time.monotonic() < deadline:
+            if log_path.exists() and expected_node in log_path.read_text():
+                break
+            time.sleep(0.01)
+        # Node evidence reaches tee before pytest completes, even through a pipe.
+        assert process.poll() is None
+        assert expected_node in log_path.read_text()
+    finally:
+        (tmp_path / "release").touch()
+        stdout, stderr = process.communicate(timeout=10)
+    assert process.returncode == pytest_exit, stdout + stderr
+    invocation = json.loads((tmp_path / "invocation.json").read_text())
+    assert invocation == {
+        "args": ["-q", "-m", "not pg and not eval", "tests/governance",
+                 "tests/scripts/test_publication.py", "-vv", "--tb=short", "--durations=20"],
+        "watchdog": "--timeout=120 --timeout-method=thread", "unbuffered": "1",
+    }
+    log = log_path.read_text()
+    assert expected_node in log
+    if pytest_exit:
+        assert "AssertionError: scoped diagnostic" in log
+    assert log in stdout
+
+
 @pytest.mark.parametrize("mode", ["shard-failure", "incomplete", "serial-failure"])
 def test_full_suite_shards_retain_failure_logs(tmp_path: Path, mode: str) -> None:
     failing_shard = "tests/ops" if mode == "serial-failure" else "tests/alpha"
@@ -414,6 +505,11 @@ def _run_nightly_suite_workflow(tmp_path: Path, *, mode: str = "success"):
         "tests/alpha/test_root.py": [],
         "tests/alpha/nested/test_pg.py": ["pg"],
         "tests/beta/deep/test_child.py": [],
+        "tests/deploy/test_deploy_channel_script.py": [],
+        "tests/deploy/test_short.py": ["e2e"],
+        "tests/deploy/nested/test_child.py": [],
+        "tests/deploy/nested/child_test.py": ["pg"],
+        "tests/deploy/test_optin_only.py": ["eval"],
         "tests/gamma/test_llm.py": ["alpha_llm"],
         "tests/test_standalone.py": ["e2e"],
         "tests/standalone_test.py": ["eval"],
@@ -437,6 +533,9 @@ def _run_nightly_suite_workflow(tmp_path: Path, *, mode: str = "success"):
         path = tmp_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch()
+    deploy_helpers = tmp_path / "tests/deploy/helpers"
+    deploy_helpers.mkdir(parents=True, exist_ok=True)
+    (deploy_helpers / "support.py").touch()
     (tmp_path / "population.json").write_text(json.dumps(population), encoding="utf-8")
     (tmp_path / "tmp").mkdir()
     bin_dir = tmp_path / "bin"
@@ -498,8 +597,12 @@ if targets[0] == "tests/alpha":
     if mode == "incomplete":
         record("finish")
         sys.exit(0)
+if targets[0] == "tests/deploy/test_deploy_channel_script.py" and mode == "deploy-file-incomplete":
+    record("finish")
+    sys.exit(0)
 time.sleep(0.1)
 failed = (mode == "failure" and targets[0] == "tests/alpha"
+          or mode == "deploy-file-failure" and targets[0] == "tests/deploy/test_deploy_channel_script.py"
           or mode == "serial-failure" and targets[0] == "tests/ops")
 for name in selected:
     print(f"EXECUTED {name}", flush=True)
@@ -539,25 +642,89 @@ def test_nightly_suite_shards_preserve_the_full_marker_inventory(tmp_path: Path)
     result, population, job, step = _run_nightly_suite_workflow(tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
     executed = re.findall(r"^EXECUTED (.+)$", (tmp_path / "tmp/nightly-pytest.log").read_text(), re.MULTILINE)
-    expected = [name for name, markers in population.items() if not {"pg", "alpha_llm"}.intersection(markers)]
+    expected = [
+        name for name, markers in population.items()
+        if not {"pg", "alpha_llm", "eval"}.intersection(markers)
+    ]
     assert sorted(executed) == sorted(expected)
     shards = (tmp_path / "runner/pytest-nightly-shards/shards").read_text().splitlines()
-    expected_shards = {"/".join(name.split("/")[:2]) if name.count("/") > 1 else name
+    expected_shards = {name if name.startswith("tests/deploy/") or name.count("/") == 1
+                       else "/".join(name.split("/")[:2])
                        for name in population if not name.startswith("tests/ops/")}
     assert set(shards) == expected_shards and len(shards) == len(expected_shards)
+    assert shards[0] == "tests/deploy/test_deploy_channel_script.py"
+    assert shards[1:] == sorted(set(shards[1:]))
+    assert "tests/deploy" not in shards
+    status = (tmp_path / "runner/pytest-nightly-shards/status").read_text().splitlines()
+    for deselected in ("tests/deploy/nested/child_test.py", "tests/deploy/test_optin_only.py"):
+        assert f"5 {deselected}" in status
+        report = tmp_path / "runner/pytest-nightly-shards/logs" / (deselected.replace("/", "_") + ".xml")
+        assert 'tests="0"' in report.read_text()
     events = [json.loads(line) for line in (tmp_path / "events.jsonl").read_text().splitlines()]
     for event in events:
-        assert event["marker"] == "not pg and not alpha_llm"
+        assert event["marker"] == "not pg and not alpha_llm and not eval"
         assert "-v" in event["args"] and "--tb=short" in event["args"]
         assert "--import-mode=importlib" in event["args"] and "--durations=30" in event["args"]
         assert event["addopts"] == "--timeout=120 --timeout-method=thread"
         assert event["unbuffered"] == "1"
-    assert step["timeout-minutes"] == 35 and job["timeout-minutes"] >= 45
+    assert step["timeout-minutes"] == 50 and job["timeout-minutes"] == 60
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in job.get("env", {})
 
 
+def test_nightly_memory_producer_respects_qualified_eval_lane() -> None:
+    job = yaml.safe_load(INTEGRATION_NIGHTLY_WORKFLOW.read_text(encoding="utf-8"))["jobs"]["full-suite"]
+    checkout = next(step for step in job["steps"] if step.get("name") == "Checkout")
+    install = next(
+        step for step in job["steps"] if step.get("name") == "Install standalone sidecar test dependencies"
+    )
+    suite = next(step for step in job["steps"] if step.get("name") == "Full test suite (memory, not pg)")
+
+    assert job["env"]["PYTHON"] == "python"
+    assert checkout["with"] == {"fetch-depth": 0}
+    assert install["run"] == (
+        "pip install --requirement mimer-mcp-sidecar/requirements.txt\n"
+        "pip install --no-deps --editable mimer-mcp-sidecar\n"
+    )
+    assert "marker='not pg and not alpha_llm and not eval'" in suite["run"]
+
+    def collect(marker: str) -> list[str]:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-p",
+                "pytest_timeout",
+                "-p",
+                "pytest_asyncio.plugin",
+                "-p",
+                "anyio.pytest_plugin",
+                "--collect-only",
+                "-q",
+                "tests/evals/test_sv_en_retrieval_eval.py",
+                "-m",
+                marker,
+            ],
+            cwd=REPO_ROOT,
+            env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        prefix = "tests/evals/test_sv_en_retrieval_eval.py::"
+        return [line for line in result.stdout.splitlines() if line.startswith(prefix)]
+
+    deterministic = collect("not eval")
+    qualified_live = collect("eval")
+    assert len(deterministic) == 10
+    assert len(qualified_live) == 2
+    assert set(deterministic).isdisjoint(qualified_live)
+
+
 @pytest.mark.parametrize("mode", ["failure", "serial-failure", "terminated", "unreported",
-                                  "incomplete", "miscount", "empty-selection", "empty-inventory"])
+                                  "incomplete", "miscount", "empty-selection", "empty-inventory",
+                                  "deploy-file-failure", "deploy-file-incomplete"])
 def test_nightly_suite_failed_and_incomplete_shards_fail_closed(tmp_path: Path, mode: str) -> None:
     result, _population, job, _step = _run_nightly_suite_workflow(tmp_path, mode=mode)
     assert result.returncode != 0, result.stdout + result.stderr
@@ -578,6 +745,16 @@ def test_nightly_suite_failed_and_incomplete_shards_fail_closed(tmp_path: Path, 
         assert "AssertionError: synthetic regression" in (root / "logs/tests_alpha.log").read_text()
         assert "1 tests/alpha" in (root / "status").read_text()
         assert "AssertionError: synthetic regression" in result.stderr
+    elif mode == "deploy-file-failure":
+        assert "1 tests/deploy/test_deploy_channel_script.py" in (root / "status").read_text()
+        assert "AssertionError: synthetic regression" in (
+            root / "logs/tests_deploy_test_deploy_channel_script.py.log"
+        ).read_text()
+        assert "AssertionError: synthetic regression" in result.stderr
+    elif mode == "deploy-file-incomplete":
+        assert "0 tests/deploy/test_deploy_channel_script.py" in (root / "status").read_text()
+        assert not (root / "logs/tests_deploy_test_deploy_channel_script.py.xml").exists()
+        assert "incomplete" in result.stderr
     elif mode == "serial-failure":
         assert "1 host-sensitive" in (root / "status").read_text()
         assert "AssertionError: synthetic regression" in (root / "logs/host-sensitive.log").read_text()
@@ -1735,7 +1912,7 @@ def test_deduplicated_contract_checks_preserve_failure_and_trigger_coverage() ->
     # pytest target in the scoped Unit tests lane.
     assert "tests/architecture" in unit_job
     assert "Run scoped not-pg unit tests" in unit_job
-    assert "pytest ${{ steps.select-tests.outputs.pytest_args }} --durations=20" in unit_job
+    assert "pytest ${{ steps.select-tests.outputs.pytest_args }} -vv --tb=short --durations=20" in unit_job
 
 
 def test_ci_smoke_validates_openapi_and_contract_surfaces() -> None:

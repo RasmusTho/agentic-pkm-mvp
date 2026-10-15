@@ -15,14 +15,20 @@ from app.services.note_uuid import ensure_note_uuid
 
 
 class SessionStore:
-    """Load/store SessionLog to disk for cross-process access."""
+    """Load/store SessionLog pointers; disk-backed unless explicitly ephemeral."""
 
-    def __init__(self, vault_root: Path) -> None:
+    def __init__(self, vault_root: Path, *, durable: bool = True) -> None:
         self._vault_root = vault_root.resolve()
         self._session_dir = self._vault_root / ".canvas-sessions"
+        # Voice live-session pointers are explicitly process-local. The chat
+        # transcript is their only durable artifact; never load it as context.
+        self._durable = durable
+        self._memory: dict[str, SessionLog] = {}
 
     def load(self, session_id: str) -> SessionLog | None:
-        """Load a session by ID from disk, or None if not found."""
+        """Load a pointer by ID, or None; ephemeral mode never consults disk."""
+        if not self._durable:
+            return self._memory.get(session_id)
         session_file = self._session_dir / f"{session_id}.json"
         if not session_file.exists():
             return None
@@ -30,7 +36,7 @@ class SessionStore:
         note_path = Path(data["note_path"])
         vault_root = Path(data.get("vault_root") or self._vault_root)
         note_uuid = data.get("note_uuid")
-        if note_uuid is None:
+        if note_uuid is None and note_path != Path(data["log_path"]):
             note_uuid = ensure_note_uuid(note_path, vault_root=vault_root)
         return SessionLog(
             log_path=Path(data["log_path"]),
@@ -42,7 +48,10 @@ class SessionStore:
         )
 
     def save(self, session: SessionLog) -> None:
-        """Save a session to disk."""
+        """Save a pointer in the explicitly selected durability mode."""
+        if not self._durable:
+            self._memory[session.session_id] = session
+            return
         self._session_dir.mkdir(parents=True, exist_ok=True)
         session_file = self._session_dir / f"{session.session_id}.json"
         data = asdict(session)
@@ -53,7 +62,10 @@ class SessionStore:
         session_file.write_text(json.dumps(data), encoding="utf-8")
 
     def delete(self, session_id: str) -> None:
-        """Delete a session from disk."""
+        """Delete a pointer in the explicitly selected durability mode."""
+        if not self._durable:
+            self._memory.pop(session_id, None)
+            return
         session_file = self._session_dir / f"{session_id}.json"
         if session_file.exists():
             session_file.unlink()
