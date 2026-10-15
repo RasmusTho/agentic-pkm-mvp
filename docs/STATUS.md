@@ -5,7 +5,7 @@ Owner: Runtime / current-state SoT
 Temporal class: operational
 Review cadence: weekly
 Source of truth: mixed
-Last reviewed: 2026-10-15 (BWS / #5667 status reconciliation; unrelated status entries were not re-audited)
+Last reviewed: 2026-10-15 (BWS / #5667 status reconciliation and bounded DevUI promotion / #6105; unrelated status entries were not re-audited)
 Last reviewed (Builder execution routing): 2026-10-11
 Last verified against (Builder execution routing): `docs/settings/models/providers.yaml`,
 `.codex/agents/verification-closer.toml`, and the focused provider-census, execution-routing,
@@ -80,6 +80,12 @@ permission write, key import, host installation, or Jev call is claimed.
 Source: Issues #5764, #5667, and #5801; `docs/TYPESAFE_SYSTEM_ONE/README.md`,
 `docs/CLOUD_SECRET_PROVISIONING/README.md`, and PR #5803, merged at
 `cf2a8dbe0d670e120fedf85a347db0babf916fe3`.
+Last verified against (DevUI component promotion): Issue #6105,
+`app/ops/devui_component_promotion.py` and its focused production-path tests. Repository support
+provides an attested manual DevUI-only promotion and rollback with exact image/config and browser
+checks; [the deployment owner](BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+defines its boundary. This is no live deployment, complete-system/source qualification or human
+outcome claim; subsequent VM102 evidence remains on #5181 and owner acceptance stays separate.
 Last verified against (DevUI supervised continuity): Issue #5655,
 `app/builderops/devui_issue_work.py`, `app/builderops/devui_sources.py`, and
 `tests/builderops/test_devui_issue_work.py` on 2026-09-24. The managed Focus read carries an

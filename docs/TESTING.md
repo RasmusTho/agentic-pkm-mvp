@@ -492,6 +492,11 @@ Older overlapping workflows may still exist while the surface is being consolida
 Current implementation:
 - `.github/workflows/ci-smoke.yaml` — PR smoke for pull-request creation, reopening, code/integration updates (`synchronize`), and base-ref retargets represented by `edited`, with explicit system dependency parity (`ffmpeg`, `ripgrep`), required `ruff check app tests` and `settings-validate` checks, split baseline pytest and deterministic Quality Wave UAT harness steps, and path-based skipping of the heavy pytest slices for docs-only PRs that do not touch code, tests, scripts, workflow, Docker, dependency, or Makefile surfaces. Pure PR title/body metadata edits keep the workflow jobs skipped and are checked by `.github/workflows/issue-pr-governance.yml`.
 - `.github/workflows/integration-nightly.yaml` — full suite nightly at 02:00 UTC, explicit deterministic acceptance harness coverage via `tests/quality_wave/test_uat_harness.py`, first bounded PG contracts lane (`tests/int/test_pg_backend.py`, `tests/api/test_status_store_pg.py`, `tests/indexer/test_outbox_roundtrip_pg.py`), runtime contract regressions, and fitness gates.
+  Its full-suite producer checks out complete Git history for provenance and promotion/review
+  fixtures, installs the standalone Mimer MCP sidecar requirements separately from the core
+  Product dependencies, and excludes only the explicitly qualified `eval` marker from the default
+  memory lane; the ten deterministic SV/EN checks remain in that lane and the two live checks stay
+  opt-in.
 - `.github/workflows/release-uat.yaml` — UAT harness + golden vault + full QW suite + fitness gates; triggered on version tags and manual dispatch.
 
 Post-merge image admission is implemented by `.github/workflows/postmerge-dev-test.yml`; the existing
@@ -652,7 +657,7 @@ The deterministic Quality Wave acceptance harness belongs in `integration-nightl
 Reason:
 - it is a trusted recurring verification signal for the active memory-backed runtime posture
 - it proves the CLI-first UAT contract continues to pass outside tag/manual release events
-- it should run alongside the broader nightly `not pg and not alpha_llm` surface rather than only as a release gate
+- it should run alongside the broader nightly `not pg and not alpha_llm and not eval` surface rather than only as a release gate
 
 Current nightly harness target:
 - `tests/quality_wave/test_uat_harness.py`
@@ -661,22 +666,31 @@ Current nightly harness target:
 
 The first recurring Postgres lane is intentionally small and contract-focused. It exists to establish a credible recurring PG signal without broadening nightly into all PG coverage at once.
 
-Lane membership:
+The required `integration-nightly / pg-contracts` step invokes
+`python -m app.ops.pg_acceptance --ci --nightly`. Its complete bounded target inventory is
+`app/ops/pg_acceptance.py::NIGHTLY_SELECTORS`; the original entry targets include:
 - `tests/int/test_pg_backend.py`
 - `tests/api/test_status_store_pg.py`
 - `tests/indexer/test_outbox_roundtrip_pg.py`
 
 Required service/env contract:
-- GitHub Actions service container: `postgres:16`
+- GitHub Actions service container: `pgvector/pgvector:pg16`
 - `POSTGRES_USER=app`
 - `POSTGRES_PASSWORD=app`
-- `POSTGRES_DB=app`
+- `POSTGRES_DB=app_test`
 - `DATABASE_URL` or `DB_DSN` points at the target Postgres endpoint; the repo DB abstraction normalizes psycopg/SQLAlchemy forms
 - `STORE_BACKEND=pg`
 - schema prepared with `alembic upgrade head`
 
+The shared `RequiredResults` guard requires every target to collect and every selected node to
+pass, including setup and teardown. Imported fixture skips, missing or deselected targets, xfails,
+collection errors and watchdog failures refuse the required invocation. The nightly log records
+the required selector inventory and passed node IDs. Ordinary optional developer pytest keeps its
+explicit environment skips. The separate native dev/test profile retains its existing `SELECTORS`
+inventory and immutable disposable-resource contract.
+
 First-green definition:
-- all three PG lane tests pass against the provisioned Postgres service in `integration-nightly`
+- every required selector collects and every selected node passes against the provisioned Postgres service in `integration-nightly`, with zero required skips, xfails or errors
 - the deterministic acceptance harness step is green in the same nightly workflow run
 - the existing memory-backed nightly suite and runtime contract regressions remain green
 

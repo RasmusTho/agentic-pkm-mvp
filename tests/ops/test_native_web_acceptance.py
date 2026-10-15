@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import copy
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 import subprocess
 import xml.etree.ElementTree as ET
@@ -617,3 +618,159 @@ def test_existing_pg_acceptance_contract_is_unchanged(tmp_path, monkeypatch):
     # An apparently green web result is never a retained PG receipt.
     with pytest.raises(pg.PgAcceptanceError):
         pg.require_pass({**proof, 'profile_version': web.WEB_PROFILE}, sha, DIGEST, 'dev', operation)
+
+
+# ERE-13 / #6002: these tests exercise the profile's production admission and
+# reader/effect seams without private bindings or a real-day operation.
+_ERE_NOW = datetime(2026, 10, 15, 12, tzinfo=UTC)
+_ERE_DAY = '2026-10-14'
+_ERE_REGISTRY = {source: {'stream_id': source, 'status': 'live'} for source in web.ERE_ADMITTED_SOURCES}
+
+
+def _ere_manifest(**overrides):
+    manifest = {
+        'profile_version': web.ERE_PROFILE,
+        'source_sha': 'a' * 40,
+        'image_digest': 'sha256:' + 'b' * 64,
+        'channel': 'test',
+        'operation_id': str(uuid4()),
+        'local_date': _ERE_DAY,
+        'sources': ['heimdal.observations', 'vault.activity', 'calendar'],
+        'bindings': {
+            'heimdal.observations': {'binding_id': 'heimdal:test', 'scope': 'test', 'consent_ref': 'grant:test'},
+            'vault.activity': {'binding_id': 'vault:test', 'scope': 'test'},
+            'calendar': {'binding_id': 'cal:test', 'calendar_id': 'calendar:test', 'scope': 'test'},
+        },
+    }
+    manifest.update(overrides)
+    return manifest
+
+
+def _ere_readers(*, extra=False, outside=False):
+    timestamp = '2026-10-14T12:00:00+02:00' if not outside else '2026-10-15T00:00:00+02:00'
+    def rows(source, binding, **extra_fields):
+        row = {'stream_id': source, 'binding_id': binding, 'scope': 'test', 'observed_at': timestamp,
+               'record_id': source + ':inside', **extra_fields}
+        if source == 'calendar':
+            row['calendar_id'] = 'calendar:test'
+            row.pop('binding_id')
+        if source == 'heimdal.observations':
+            row['consent_ref'] = 'grant:test'
+        return [row]
+    readers = {
+        'heimdal.observations': lambda binding, window: rows('heimdal.observations', binding.binding_id, grant='ok'),
+        'vault.activity': lambda binding, window: rows('vault.activity', binding.binding_id),
+        'calendar': lambda binding, window: rows('calendar', binding.binding_id),
+    }
+    if extra:
+        readers['vault.activity'] = lambda binding, window: rows('vault.activity', 'vault:foreign') + rows('vault.activity', binding.binding_id)
+    if outside:
+        readers['vault.activity'] = lambda binding, window: rows('vault.activity', binding.binding_id)
+    return readers
+
+
+def test_ere_profile_admits_only_registered_live_sources():
+    admission = web.admit_ere_profile(_ere_manifest(), registry=_ERE_REGISTRY, now=_ERE_NOW)
+    assert set(admission.bindings) == web.ERE_ADMITTED_SOURCES
+    for source in ('planned.native_capture', 'chat.sessions', 'location', 'builderops.records'):
+        with pytest.raises(web.EreProfileRefusal, match='source_inventory_not_admitted'):
+            web.admit_ere_profile(_ere_manifest(sources=['heimdal.observations', 'vault.activity', source]),
+                                  registry={**_ERE_REGISTRY, source: {'stream_id': source, 'status': 'planned'}}, now=_ERE_NOW)
+    with pytest.raises(web.EreProfileRefusal, match='profile_not_admitted'):
+        web.admit_ere_profile(_ere_manifest(profile_version='native-web-pilots.v1'), registry=_ERE_REGISTRY, now=_ERE_NOW)
+
+
+def test_ere_profile_refuses_incomplete_or_mismatched_source_binding():
+    readers_called = []
+    writes = []
+    guard_calls = []
+    readers = {source: (lambda binding, window, source=source: readers_called.append(source) or [])
+               for source in web.ERE_ADMITTED_SOURCES}
+    effects = {'proposal': lambda records, admission: writes.append('proposal')}
+
+    class Guard:
+        def assert_writes_allowed(self, action):
+            guard_calls.append(action)
+
+    with pytest.raises(web.EreProfileRefusal, match='candidate_digest_invalid'):
+        web.run_ere_profile({**_ere_manifest(), 'image_digest': 'foreign'}, readers=readers,
+                            effects=effects, write_guard=Guard(), registry=_ERE_REGISTRY, now=_ERE_NOW)
+    assert readers_called == []
+    assert writes == [] and guard_calls == []
+    bad = _ere_manifest(bindings={**_ere_manifest()['bindings'], 'calendar': {'binding_id': 'cal:test', 'scope': 'other', 'calendar_id': 'calendar:test'}})
+    with pytest.raises(web.EreProfileRefusal, match='test_vault_scope_mismatch'):
+        web.run_ere_profile(bad, readers=readers, effects=effects, write_guard=Guard(),
+                            registry=_ERE_REGISTRY, now=_ERE_NOW)
+    assert readers_called == []
+    assert writes == [] and guard_calls == []
+
+
+def test_ere_profile_reads_only_admitted_source_bindings():
+    seen = []
+    readers = _ere_readers(extra=True)
+    original = readers['vault.activity']
+    readers['vault.activity'] = lambda binding, window: (seen.append(binding.binding_id) or original(binding, window))
+    normalized, evidence = web.read_ere_sources(
+        web.admit_ere_profile(_ere_manifest(), registry=_ERE_REGISTRY, now=_ERE_NOW), readers)
+    assert seen == ['vault:test']
+    assert len(normalized) == 3 and evidence['vault.activity'][0].startswith('ref:')
+    assert all('foreign' not in reference for reference in evidence['vault.activity'])
+
+
+def test_ere_profile_limits_each_source_to_selected_local_day():
+    admission = web.admit_ere_profile(_ere_manifest(), registry=_ERE_REGISTRY, now=_ERE_NOW)
+    calls = []
+    def reader(binding, window):
+        calls.append((binding.identity, window.start, window.end))
+        return [
+            {'stream_id': 'vault.activity', 'binding_id': 'vault:test', 'scope': 'test',
+             'observed_at': '2026-10-13T23:59:59+02:00', 'record_id': 'before'},
+            {'stream_id': 'vault.activity', 'binding_id': 'vault:test', 'scope': 'test',
+             'observed_at': '2026-10-14T23:59:59+02:00', 'record_id': 'inside'},
+            {'stream_id': 'vault.activity', 'binding_id': 'vault:test', 'scope': 'test',
+             'observed_at': '2026-10-15T00:00:00+02:00', 'record_id': 'after'},
+        ]
+    readers = {'heimdal.observations': lambda binding, window: [], 'vault.activity': reader,
+               'calendar': lambda binding, window: []}
+    normalized, _ = web.read_ere_sources(admission, readers)
+    assert [row['record_id'] for row in normalized] == ['inside']
+    assert calls and calls[0][1].tzinfo is not None and calls[0][1] < calls[0][2]
+
+
+def test_ere_profile_effect_inventory_is_guarded_and_source_read_only():
+    calls = []
+    class Guard:
+        def assert_writes_allowed(self, action):
+            calls.append(('guard', action))
+    writes = []
+    effects = {'proposal': lambda records, admission: writes.append(('proposal', len(records))),
+               'projection': lambda records, admission: writes.append(('projection', len(records)))}
+    result = web.run_ere_profile(_ere_manifest(), readers=_ere_readers(), effects=effects,
+                                 write_guard=Guard(), registry=_ERE_REGISTRY, now=_ERE_NOW)
+    assert result['effects'] == {'proposal': 1, 'projection': 1}
+    assert len(writes) == 2 and len(calls) == 2 and all(item[1].startswith('episode-resolution.real-day.') for item in calls)
+    with pytest.raises(web.EreProfileRefusal, match='effect_not_admitted'):
+        web.run_ere_profile(_ere_manifest(), readers=_ere_readers(), effects={'calendar_write': lambda *_: None},
+                            registry=_ERE_REGISTRY, now=_ERE_NOW)
+
+
+def test_ere_profile_preserves_scope_and_human_recut_boundaries():
+    readers = _ere_readers()
+    readers['vault.activity'] = lambda binding, window: [
+        {'stream_id': 'vault.activity', 'binding_id': 'vault:test', 'scope': 'test',
+         'observed_at': '2026-10-14T12:00:00+02:00', 'record_id': 'private'},
+    ]
+    with pytest.raises(web.EreProfileRefusal, match='cross_scope_flow_required'):
+        web.run_ere_profile(_ere_manifest(), readers=readers,
+                            normalize=lambda source, row: {**row, 'scope': 'private'} if source == 'vault.activity' else row,
+                            registry=_ERE_REGISTRY, now=_ERE_NOW)
+    readers['vault.activity'] = lambda binding, window: [{
+        'stream_id': 'vault.activity', 'binding_id': 'vault:test', 'scope': 'test',
+        'observed_at': '2026-10-14T12:00:00+02:00', 'record_id': 'recut', 'segmentation': 're-cut',
+    }]
+    writes = []
+    with pytest.raises(web.EreProfileRefusal, match='human_recut_terminal'):
+        web.run_ere_profile(_ere_manifest(), readers=readers,
+                            effects={'proposal': lambda *_: writes.append('proposal')},
+                            registry=_ERE_REGISTRY, now=_ERE_NOW)
+    assert writes == []

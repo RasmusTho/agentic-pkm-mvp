@@ -151,7 +151,7 @@ it. The operator path (GCP/OAuth setup, first sync, troubleshooting, live accept
 | 6a | [Repair gaps with previewed backfill](REPAIR_GAPS_WITH_PREVIEWED_BACKFILL.md) | YSS-08 | YSS-05, YSS-07 | weekly reconcile + historical backfill with preview receipt and explicit confirmation gate |
 | 6b | [Surface sync health, status, and receipts](SURFACE_SYNC_HEALTH_STATUS_AND_RECEIPTS.md) | YSS-09 | YSS-02, YSS-04, YSS-06 | doctor/health checks, degraded-reason taxonomy, receipt projection answering the audit questions |
 | 6c | [Operate sync from the CLI](OPERATE_SYNC_FROM_CLI.md) | YSS-10 | YSS-02, YSS-06 | scriptable `--json` commands: auth connect/status/disconnect, sources list/configure, sync run/status/pause, doctor |
-| 7 | [Set up YouTube sync in Companion UI](SET_UP_YOUTUBE_SYNC_IN_COMPANION_UI.md) | YSS-11 | YSS-02, YSS-05, YSS-06, YSS-09 | guided setup flow + status card (cold/connected/degraded/paused/offline), preview-before-backfill, Sync now/Pause/Reconnect/Change inbox/Disconnect |
+| 7 | [Set up YouTube sync in Companion UI](SET_UP_YOUTUBE_SYNC_IN_COMPANION_UI.md) | YSS-11 | YSS-02, YSS-05, YSS-06, YSS-07, YSS-08, YSS-09 | guided setup flow + status card (cold/connected/degraded/paused/offline), preview-before-backfill, Sync now/Pause/Reconnect/Change inbox/Disconnect |
 
 Parallel lanes after YSS-01: {YSS-02, YSS-04} → {YSS-03, YSS-07} → YSS-05 → YSS-06 → {YSS-08,
 YSS-09, YSS-10} → YSS-11. The final child (YSS-11) includes the parent-closure handoff.

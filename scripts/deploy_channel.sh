@@ -1587,6 +1587,12 @@ native_source_projection_gate() {
     87) native_source_failure source_doctor_failed ;;
     88) native_source_failure source_settings_failed ;;
     89|124|130|143) native_source_failure source_worker_failed ;;
+    90) native_source_failure legacy_producer_policy_refused ;;
+    91) native_source_failure legacy_source_refused ;;
+    92) native_source_failure legacy_admission_refused ;;
+    93) native_source_failure legacy_identity_refused ;;
+    94) native_source_failure legacy_race_refused ;;
+    95) native_source_failure legacy_write_failed ;;
     0) ;;
     *) native_source_failure source_worker_failed ;;
   esac

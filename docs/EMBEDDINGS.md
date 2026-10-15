@@ -472,16 +472,41 @@ Native recovery can run the separate guarded `index reconcile-legacy` stage befo
 repair. For an evidence-free, vector-missing note mirror, its stored locator is discovery only.
 The active-vault adapter reads a stable regular source without following redirected components;
 current profile admission, canonical identity, complete frontmatter, supported trust and the shared
-producer inventory are re-proven. Eligible sources prepare the canonical vault-alpha payload
+producer inventory are re-proven. Alpha-selected sources prepare the canonical vault-alpha payload
 without companion/outbox writes and generate the embedding before one Product/vector transaction.
 Sources excluded from all applicable current producer inventories may retire only their exact unchanged stale
 mirror, never the source file or canonical identity/history. Retained history/dependents refuse
 retirement. Changed sources, duplicate identities, candidate/staging material, malformed metadata,
 untrusted authority and ambiguous selection refuse without mutation.
-The separate dev-only filesystem watcher has a broader vault-sync inventory. If its configured
-or default `VAULT_DIR` scope overlaps the active vault, alpha exclusion alone is not retirement
-authority: recovery refuses that ambiguous producer applicability rather than enabling the optional
-producer or laundering its sources through alpha. Complete private-stage stream and logging
+The separate dev-only `scripts/fs_watcher.py` producer has a broader vault-sync inventory.
+The default native registry watcher is independently broader too: `WATCHER_ENABLE`,
+`WATCHER_VAULT_PATH`, the canonical `configs/watchers.yaml` entrypoint and effective scope resolve
+through its ordinary registry loader. Recovery uses its read-only mode, requiring persisted vault
+identities and denying the normal settings identity-heal seam, then privately drains that same incremental scanner with
+memory-only state, never a second interpretation of nested-vault, hidden-path, settings-root,
+companion, conflict or scope exclusions. Registry claims prepare through the ordinary
+`ingest.vault.changed` worker/indexer payload factories without emitting events, healing a UUID,
+writing companions or saving Product state. Native registry claims take the native recipe; alpha
+and optional filesystem preparation remain available when that registry does not claim the source.
+The supported native Compose graph shares the governed runtime-env and selected-root binding
+across API, worker and watcher; recovery does not synthesize another service's environment.
+The legacy filesystem entrypoint and recovery share one strict activation/inventory reader: unset or explicitly false
+`FS_WATCHER_ENABLE` disables that optional producer; true requires an explicit absolute existing
+`VAULT_DIR`. Merely setting `VAULT_DIR`, or a default `./vault` path, never enables a producer.
+Every enabled source producer must be excluded before retirement. The UUID uniqueness proof
+uses the union of their full inventories, including the legacy filesystem
+producer's nested-vault files. Filesystem claims require an existing plain UUID scalar that its
+real adapter preserves; id-only or encoded identities refuse rather than being healed.
+Registry claims likewise refuse id-only sources in its configured inbox when the ordinary worker
+would allocate a fresh UUID on resume; the shared inbox-heal selector is evaluated without writes.
+Overlapping enabled producers must bind the same active root; conflicting roots, malformed settings
+or configuration drift refuse. Enabled legacy filesystem sources prepare through the ordinary vault-sync
+payload builder with complete current admission evidence, never through alpha's excluded inventory.
+When every enabled producer excludes the source, exact CAS retirement remains available.
+The private boundary retains only `legacy_producer_policy_refused`, `legacy_source_refused`,
+`legacy_admission_refused`, `legacy_identity_refused`, `legacy_race_refused`,
+`embedding_generation_failed` or `legacy_write_failed`; no path, identity or raw diagnostic is emitted.
+Complete private-stage stream and logging
 suppression covers settings compatibility and conflict-quarantine diagnostics too.
 The transaction rechecks source/policy and forward/reverse canonical identity, compares equivalent
 absolute/relative source locators across the locked binding inventory, compares the discovered Product

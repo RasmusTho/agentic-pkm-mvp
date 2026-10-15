@@ -5744,6 +5744,12 @@ def test_native_deploy_repairs_indexable_object_outside_selected_source_inventor
 
 
 @pytest.mark.parametrize("summary, rc, reason", [
+    ('{"reason":"legacy_producer_policy_refused"}', "79", "legacy_producer_policy_refused"),
+    ('{"reason":"legacy_source_refused"}', "79", "legacy_source_refused"),
+    ('{"reason":"legacy_admission_refused"}', "79", "legacy_admission_refused"),
+    ('{"reason":"legacy_identity_refused"}', "79", "legacy_identity_refused"),
+    ('{"reason":"legacy_race_refused"}', "79", "legacy_race_refused"),
+    ('{"reason":"legacy_write_failed"}', "79", "legacy_write_failed"),
     ('{"reason":"source_post_rebuild_failed"}', "79", "source_post_rebuild_failed"),
     ('{"processed":true}', "0", "source_summary_invalid"),
     ('{"reason":"private-canary"}', "79", "source_summary_invalid"),
@@ -5765,7 +5771,7 @@ def test_native_legacy_reconciliation_refusal_is_private_and_blocks_activation(t
 
 @pytest.mark.pg
 @pytest.mark.parametrize("selected", [True, False])
-def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch, selected):
+def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch, selected, *, broader=False, preserve_existing=False, registry_enabled=False):
     """Native ordering reaches the real producer, PG CAS and strict doctor.
 
     Retained replay is isolated here to leave one evidence-free
@@ -5786,15 +5792,53 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
 
     recovery, state, root, source, raw, original, _, _, factory = _legacy_source_fixture(
         monkeypatch, tmp_path, selected=selected)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1" if broader else "0")
+    monkeypatch.setenv("VAULT_DIR", str(root))
+    if registry_enabled:
+        from tests.rebuildability.test_legacy_source_reconciliation import _enable_registry
+        _enable_registry(monkeypatch, root)
     pg._TABLES_READY = False
     pg._ensure_tables()
     pg.truncate_pg_tables()
     store, index = pg.PgObjectStore(), pg.PgVectorIndex()
     store.put(original["object_id"], kind="note", source_ref=str(source), payload=original["payload"])
+    healthy_id = None
+    healthy_payload = None
+    if preserve_existing:
+        from uuid import uuid4
+        from app.ingest.vault_alpha import _ingest_single
+        from app.index.artifact_metadata import build_indexed_unit_payload, canonicalize_indexable_text
+        healthy_id = uuid4()
+        healthy_source = root / "Notes" / "existing.md"
+        healthy_source.parent.mkdir(exist_ok=True)
+        healthy_raw = f"---\nuuid: {healthy_id}\ntrust: human\nreview_state: reviewed\n---\nPreserved retained note.\n"
+        healthy_source.write_text(healthy_raw)
+        prepared = []
+        _ingest_single(healthy_source, vault_root=root, trace_id="native-fixture",
+                      raw_text=healthy_raw, write_companion_record=False,
+                      reconcile_existing_projection=True, projection_sink=prepared.append)
+        healthy_payload = prepared[0]
+        store.put(healthy_id, kind="note", source_ref=str(healthy_source), payload=healthy_payload)
+        client = factory()
+        text = canonicalize_indexable_text(healthy_payload)
+        index.upsert(healthy_id, kind="note", source_ref=str(healthy_source),
+            payload=build_indexed_unit_payload(object_id=healthy_id, kind="note", source_ref=str(healthy_source),
+                payload=healthy_payload, text=text, embedding_identity=client.identity),
+            embedding=[2., 1.], model=client.identity.model, identity=client.identity)
+
+    def healthy_vector():
+        with psycopg.connect(resolve_dsn()) as conn:
+            return conn.execute("SELECT embedding::text, payload, model, provider, dim, normalize FROM store_vector_index "
+                "WHERE vault_binding_id = %s AND object_id = %s", (store.vault_binding_id, healthy_id)).fetchone()
+
+    protected_vector = healthy_vector() if healthy_id is not None else None
     with psycopg.connect(resolve_dsn()) as conn:
         ensure_schema(conn)
         conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
                      (original["object_id"], original["object_id"], store.vault_binding_id))
+        if healthy_id is not None:
+            conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
+                         (healthy_id, healthy_id, store.vault_binding_id))
     binding = SimpleNamespace(backend="pg", store=store)
     monkeypatch.setattr(repair.domain_objects, "resolve_object_store_port", lambda: binding)
     monkeypatch.setattr(repair, "get_vector_index", lambda: index)
@@ -5819,18 +5863,31 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
     assert events.index(["index", "reconcile-legacy", "--json"]) < events.index(["index", "repair-missing", "--json"])
     assert events[-1] == ["index", "doctor", "--json", "--strict"]
     projected = store.get(original["object_id"])
-    if selected:
+    if selected or broader or registry_enabled:
         assert projected["payload"]["frontmatter"]["trust"] == "human"
         assert projected["object_id"] == original["object_id"]
-        assert index.present_object_ids() == {str(original["object_id"])}
-        assert state.embedded == ["canonical body"]
+        assert index.present_object_ids() == ({str(original["object_id"])} | ({str(healthy_id)} if healthy_id else set()))
+        assert state.embedded == [projected["payload"].get("content", "canonical body")]
     else:
-        assert projected is None and index.present_object_ids() == set()
+        assert projected is None and index.present_object_ids() == ({str(healthy_id)} if healthy_id else set())
         assert state.embedded == []
     assert source.read_bytes() == raw
     assert evaluate_product_store_readiness(root, store.list_objects(limit=None)).ready
     assert recovery.reconcile_legacy_sources(binding, index, factory) == 0
+    if healthy_id is not None:
+        assert store.get(healthy_id)["payload"] == healthy_payload
+        assert healthy_vector() == protected_vector
+        assert healthy_source.read_text() == healthy_raw
     pg.truncate_pg_tables()
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("producer_kind", ["disabled", "filesystem", "registry"])
+def test_native_legacy_reconciliation_reports_producer_policy_and_converges(tmp_path, monkeypatch, producer_kind):
+    test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(
+        tmp_path, monkeypatch, selected=False, broader=producer_kind == "filesystem", preserve_existing=True,
+        registry_enabled=producer_kind == "registry",
+    )
 
 
 @pytest.mark.parametrize("reason", ["source_post_rebuild_failed", "embedding_generation_failed",

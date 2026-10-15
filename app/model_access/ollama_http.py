@@ -100,6 +100,9 @@ class OllamaHttpAdapter:
         self._url = _require_loopback_base_url(base_url)
         self._api_root = self._url.removesuffix("/api/chat")
         self._max_output_bytes = max_output_bytes
+        # Cold inference may need a long window; metadata must not occupy the
+        # shared executor slots for that duration. Preserve shorter caller bounds.
+        self._metadata_timeout = httpx.Timeout(min(timeout_seconds, 120.0))
         client_transport = transport or httpx.HTTPTransport(retries=0)
         self._client = httpx.Client(
             transport=client_transport,
@@ -291,7 +294,9 @@ class OllamaHttpAdapter:
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         try:
-            with self._client.stream(method, url, json=payload) as response:
+            with self._client.stream(
+                method, url, json=payload, timeout=self._metadata_timeout
+            ) as response:
                 if response.status_code != 200:
                     raise OllamaHttpError(failure_code)
                 body = bytearray()

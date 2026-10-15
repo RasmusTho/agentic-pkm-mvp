@@ -1,0 +1,84 @@
+name: Post-Merge Closure Dispatch
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+
+jobs:
+  emit:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Collect bounded merge and classification evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          mkdir -p post-merge-closure
+          cp "${EVENT_PATH}" post-merge-closure/event.json
+          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" > post-merge-closure/pr.json
+          gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files?per_page=100" \
+            --jq '.[]' | jq -s '.' > post-merge-closure/files.json
+          gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '.[]' | jq -s '.' > post-merge-closure/comments.json
+          printf '{}\n' > post-merge-closure/issue.json
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from app.dispatcher.verified_merge import resolve_post_merge_issue_authority
+
+          root = Path("post-merge-closure")
+          pr = json.loads((root / "pr.json").read_text())
+          comments = json.loads((root / "comments.json").read_text())
+          authority = resolve_post_merge_issue_authority(
+              comments, pr=pr, repository=os.environ["REPOSITORY"]
+          )
+          if authority is not None:
+              (root / "issue.json").write_text(
+                  json.dumps({"number": authority.governing_issue}) + "\n"
+              )
+          PY
+      - name: Build existing post-merge classification
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 -m scripts.post_merge_docs_classifier \
+            --pr-json post-merge-closure/pr.json \
+            --files-json post-merge-closure/files.json \
+            --issue-json post-merge-closure/issue.json \
+            --comments-json post-merge-closure/comments.json \
+            --repository "${REPOSITORY}" \
+            --output-json post-merge-closure/classification.json \
+            --output-markdown post-merge-closure/classification.md
+      - name: Emit inert closure request
+        run: |
+          python3 -m scripts.build_closure_dispatch_request \
+            --event-json post-merge-closure/event.json \
+            --pr-json post-merge-closure/pr.json \
+            --classification-json post-merge-closure/classification.json \
+            --output-json post-merge-closure/request.json \
+            --output-markdown post-merge-closure/request.md \
+            --github-output post-merge-closure/output.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: post-merge-closure-request-${{ github.event.pull_request.number }}-${{ github.event.pull_request.merge_commit_sha }}
+          if-no-files-found: ignore
+          path: |
+            post-merge-closure/request.json
+            post-merge-closure/request.md
+            post-merge-closure/classification.json
+            post-merge-closure/classification.md
+            post-merge-closure/output.txt

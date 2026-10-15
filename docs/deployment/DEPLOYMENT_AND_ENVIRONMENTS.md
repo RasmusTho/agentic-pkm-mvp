@@ -38,6 +38,13 @@ headroom, and Linux alert installation belong in a deployment profile such as
 
 ## Complete Dev System placement and admission
 
+The separately owner-authorized [bounded manual DevUI component promotion](../BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+in #6105 installs only the existing read-only DevUI component through its fixed engine/project,
+attestation, image/config, rollback and browser-smoke boundary. It never runs Product channel
+promotion, control-plane migrations or source/credential provisioning, and its component record
+cannot satisfy complete-system qualification or owner acceptance. The full-system contract below
+is unchanged; a component installation is reported with its exact limits.
+
 The portable deployment contract admits a selected setup profile; it does not choose a host. The
 TARS/Proxmox profile selects TARS VM `bob-1` (VM ID `102`, formerly referred to as `vm102`) as the
 intended cohesive runtime home for the complete Builder System / Dev System. The guest/system
@@ -951,14 +958,33 @@ even when body replay provenance is complete. Missing-only repair cannot invent 
 or read raw sources to fill it. Before that repair, stopped-writer native recovery invokes the
 separate `index reconcile-legacy --json` stage. It resolves only the stored locator beneath the
 active vault through the hardened source adapter, re-proves current profile/source admission and
-unambiguous canonical identity, and checks the canonical producer inventory. An eligible source
+unambiguous canonical identity, and checks every applicable canonical producer inventory. An alpha-selected source
 prepares its evidence-complete vault-alpha projection without source, companion or outbox writes;
 embedding generation precedes atomic compare-and-swap Product replacement plus absent-only vector
 insertion. A currently excluded source may instead retire only its exact stale rebuildable mirror,
 with derived vector state absent; source files, canonical objects, receipts and accepted history
-remain untouched. Alpha exclusion is insufficient when the separate dev-only filesystem watcher's
-configured/default `VAULT_DIR` scope overlaps the active vault; unresolved broader-producer
-applicability refuses retirement. History dependencies, candidate/staging or untrusted material, changed sources,
+remain untouched. Producer applicability uses the same strict configuration and inventory reader as
+the default native registry and optional legacy entrypoints, not an assumption that the registry is
+alpha-gated. Native registry activation, selected root, configured event specs and effective scope
+come from its ordinary loader's read-only mode: persisted vault identities are required and the
+normal settings identity-heal seam is denied. Recovery drains its actual incremental scanner using memory-only
+state and prepares claimed sources through the ordinary registry worker/indexer payload factories.
+No source heal, companion, event or ordinary store-write path is invoked. The supported native
+Compose graph shares the governed runtime-env and selected-root binding across API/worker/watcher;
+no environment synthesis is used as applicability evidence. Missing, unknown, contradictory or
+drifting enabled-producer configuration refuses the legacy transition. Registry claims use the
+native recipe; otherwise applicable alpha or optional filesystem recipes remain available.
+For the optional `scripts/fs_watcher.py` entrypoint, `FS_WATCHER_ENABLE` unset/false means disabled;
+true requires an explicit absolute existing `VAULT_DIR`, matching the active root when overlapping.
+No default path or presence of `VAULT_DIR` enables that writer. Enabled filesystem sources prepare
+only when their existing UUID form is preserved by the actual filesystem adapter; id-only or
+encoded UUIDs refuse without healing. Uniqueness covers the union of enabled producer inventories,
+including nested-vault files in the legacy filesystem inventory. Applicable filesystem sources
+use vault-sync's canonical payload path; excluded sources are not laundered through alpha.
+Native registry claims also prove identity preservation against the ordinary worker's inbox-heal
+selector; an id-only inbox source refuses without healing or borrowing another producer's recipe.
+Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
+History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again
 alongside forward/reverse canonical identity and binding-wide canonical source-locator checks,
 inside the transaction, including after writes, so partial writes roll back; existing vectors
@@ -997,6 +1023,14 @@ markers retain `command_failed`. These content-free reasons identify checkpoints
 causes or repair authority: they never authorize source replay, semantic fallback, data/vector
 mutation or candidate activation. Raw stdout/stderr suppression, candidate/operation binding,
 compensation and no-replay semantics are unchanged.
+Legacy reconciliation additionally preserves the finite classes `legacy_producer_policy_refused`
+(exit 90), `legacy_source_refused` (91), `legacy_admission_refused` (92),
+`legacy_identity_refused` (93), `legacy_race_refused` (94), and `legacy_write_failed` (95).
+The CLI's private exit remains 79 with an allowlisted JSON reason; bootstrap maps that reason to
+the fixed native code, and the deploy wrapper/supervisor retains only its exact allowlisted marker.
+Provider generation retains `embedding_generation_failed`. These classifications expose no source
+paths, IDs, content, metadata values, embeddings or provider diagnostics. Fresh Product readiness
+and strict index doctor remain mandatory after reconciliation and missing-only repair, before activation.
 Ordinary service recreation and the existing final Data health, version, UI and receipt gates
 still follow this step. Ordinary API startup clears the selector and retains migration→uvicorn.
 

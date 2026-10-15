@@ -61,6 +61,9 @@ MAX_REQUEST_BYTES = 256_000
 MAX_OUTPUT_BYTES = 512_000
 MAX_CATALOG_RESPONSE_BYTES = 2_000_000
 DEFAULT_CONCURRENCY = 2
+# Match the governed Product caller window, including a cold local runner load.
+# A failure after dispatch remains terminal; this is not a retry allowance.
+OLLAMA_EXECUTION_TIMEOUT_SECONDS = 1_260
 _CONTENT_LENGTH = re.compile(r"^[0-9]{1,12}$")
 
 
@@ -1121,7 +1124,7 @@ def main() -> None:
     ollama_adapter = (
         OllamaHttpAdapter(
             base_url=ollama_base_url,
-            timeout_seconds=120,
+            timeout_seconds=OLLAMA_EXECUTION_TIMEOUT_SECONDS,
             max_output_bytes=MAX_OUTPUT_BYTES,
         )
         if ollama_base_url

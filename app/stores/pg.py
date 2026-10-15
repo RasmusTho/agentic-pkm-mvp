@@ -1152,6 +1152,7 @@ class PgObjectStore(ObjectStore):
         source claims and changed discovery rows refuse rather than being healed.
         """
         from app.write_guard import DEFAULT_WRITE_GUARD, SOURCE_BACKED_REBUILD_ACTION
+        from app.rebuildability.legacy_source import LegacySourceRefusal
 
         DEFAULT_WRITE_GUARD.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
         oid = UUID(str(expected["object_id"]))
@@ -1171,17 +1172,20 @@ class PgObjectStore(ObjectStore):
                 )
                 current = cur.fetchone()
                 if current != {key: expected[key] for key in ("object_id", "kind", "source_ref", "payload", "created_at")}:
-                    raise ValueError("legacy projection changed")
-                retained_uuid = retained_vault_uuid_with_connection(
-                    conn, str(oid), vault_binding_id=self.vault_binding_id,
-                )
+                    raise LegacySourceRefusal("legacy_race_refused")
+                try:
+                    retained_uuid = retained_vault_uuid_with_connection(
+                        conn, str(oid), vault_binding_id=self.vault_binding_id,
+                    )
+                    canonical = UUID(resolve_vault_uuid_with_connection(
+                        conn, vault_uuid, vault_binding_id=self.vault_binding_id,
+                    ))
+                except Exception:
+                    raise LegacySourceRefusal("legacy_identity_refused") from None
                 if retained_uuid is not None and UUID(retained_uuid) != UUID(vault_uuid):
-                    raise ValueError("legacy reverse identity changed")
-                canonical = UUID(resolve_vault_uuid_with_connection(
-                    conn, vault_uuid, vault_binding_id=self.vault_binding_id,
-                ))
+                    raise LegacySourceRefusal("legacy_identity_refused")
                 if canonical != oid:
-                    raise ValueError("legacy identity changed")
+                    raise LegacySourceRefusal("legacy_identity_refused")
                 cur.execute("SELECT object_id, source_ref, payload FROM store_objects WHERE vault_binding_id = %s",
                             (self.vault_binding_id,))
                 # The source adapter owns locator normalization; the table
@@ -1192,7 +1196,7 @@ class PgObjectStore(ObjectStore):
                     (self.vault_binding_id, oid),
                 )
                 if cur.fetchone() is not None:
-                    raise ValueError("legacy vector already present")
+                    raise LegacySourceRefusal("legacy_race_refused")
                 revalidate()
                 if replacement is None:
                     if vector is not None:
@@ -1214,12 +1218,12 @@ class PgObjectStore(ObjectStore):
                         if table in ("chunks", "embeddings"):
                             continue
                         if len(columns) != 2 or columns[0] != "vault_binding_id":
-                            raise ValueError("unknown retirement dependency")
+                            raise LegacySourceRefusal("legacy_admission_refused")
                         cur.execute(sql.SQL("SELECT 1 FROM {} WHERE {} = %s AND {} = %s LIMIT 1").format(
                             sql.Identifier(*table.split(".")), sql.Identifier(columns[0]), sql.Identifier(columns[1]),
                         ), (self.vault_binding_id, oid))
                         if cur.fetchone() is not None:
-                            raise ValueError("retirement has retained history")
+                            raise LegacySourceRefusal("legacy_admission_refused")
                     cur.execute(
                         "SELECT 1 FROM store_relations WHERE vault_binding_id = %s AND (src_id = %s OR dst_id = %s) "
                         "UNION ALL SELECT 1 FROM store_relation_memberships WHERE vault_binding_id = %s "
@@ -1227,7 +1231,7 @@ class PgObjectStore(ObjectStore):
                         (self.vault_binding_id, oid, oid, self.vault_binding_id, oid),
                     )
                     if cur.fetchone() is not None:
-                        raise ValueError("retirement has related projections")
+                        raise LegacySourceRefusal("legacy_admission_refused")
                     cur.execute(
                         "DELETE FROM store_objects WHERE vault_binding_id = %s AND object_id = %s",
                         (self.vault_binding_id, oid),
