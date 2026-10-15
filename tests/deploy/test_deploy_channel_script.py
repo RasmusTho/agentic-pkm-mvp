@@ -6916,10 +6916,11 @@ def _source_terminal_docker(monkeypatch, journal, operation, revision, status, o
 
 
 @pytest.mark.parametrize('interrupted_before_observation', [False, True])
+@pytest.mark.parametrize('already_failed', [False, True])
 @pytest.mark.parametrize('worker_status,oom,reason', [(137, True, 'source_worker_oom'),
     (96, False, 'source_worker_failed'), (97, False, 'source_worker_failed'),
     (98, False, 'source_worker_failed')])
-def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliation(tmp_path, monkeypatch, interrupted_before_observation, worker_status, oom, reason):
+def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliation(tmp_path, monkeypatch, interrupted_before_observation, already_failed, worker_status, oom, reason):
     from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux
     from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_CODES
@@ -6930,6 +6931,8 @@ def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliati
     if not interrupted_before_observation:
         assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, worker_status) == SOURCE_PROJECTION_FAILURE_CODES[reason]
         assert removed == [reason]
+    if already_failed:
+        journal.write(operation, 'failed')
     config = linux.LinuxConfig.load('test')
     lock = config.root / 'config/deploy/test.env.lock'
     lock.mkdir(parents=True, mode=0o700)
@@ -6946,6 +6949,33 @@ def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliati
     with pytest.raises(PostgresDeployError):
         journal.record_source_failure(operation, 'f' * 40, 'source_worker_failed')
     assert journal.read().source_failure == reason
+
+
+def test_native_source_same_id_reply_keeps_locked_snapshot_after_admission_retirement(tmp_path, monkeypatch):
+    from dataclasses import asdict
+    from app.ops import postgres_deploy_linux as linux
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    journal.record_source_failure(operation, plan.revision, 'source_worker_failed')
+    journal.write(operation, 'failed')
+    config = linux.LinuxConfig.load('test')
+    lock = config.root / 'config/deploy/test.env.lock'
+    lock.mkdir(parents=True, mode=0o700)
+    (lock / 'bws-owner').touch(mode=0o600)
+    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda self: True)
+    monkeypatch.setattr(linux, '_command', lambda *args, **kwargs: '')
+    retire = linux.LinuxEffects.retire_reconciled_channel_lock
+    replacement = '00000000-0000-4000-8000-000000000002'
+    def replace_after_retirement(handle):
+        retire(handle)
+        journal.bind_request(replacement, plan, False, create=True)
+        journal.write(replacement, 'prepared')
+    monkeypatch.setattr(linux.LinuxEffects, 'retire_reconciled_channel_lock', staticmethod(replace_after_retirement))
+    result = linux.DeploymentSupervisor(config).request({
+        'action': 'reconcile-failed', 'operation_id': operation, 'plan': asdict(plan), 'bootstrap': False,
+    })
+    assert result['receipt']['operation_id'] == operation
+    assert result['receipt']['source_failure'] == 'source_worker_failed'
+    assert journal.read().operation_id == replacement
 
 
 @pytest.mark.parametrize('fault', ['foreign', 'project', 'service', 'oneoff', 'malformed', 'created', 'removing', 'unknown', 'journal_unavailable'])

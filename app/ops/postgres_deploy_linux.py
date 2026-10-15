@@ -1912,8 +1912,13 @@ class DeploymentSupervisor:
                     if not effects.quiescent():
                         raise PostgresDeployError()
                     effects.recover_source_terminal(operation_id, plan)
+                    recovered = self.config.journal.read()
+                    if (recovered is None or recovered.operation_id != operation_id
+                        or recovered.terminal_result != 'failed'):
+                        raise PostgresDeployError()
+                    previous = recovered
                     effects.retire_reconciled_channel_lock(lock)
-            return {'receipt': self.config.journal.read().payload()}
+            return {'receipt': previous.payload()}
         if plan.authority_cutover is not None:
             # Quiescent services cannot establish the outcome of authority cutover.
             # Preserve the request, journal and admission lock for operator recovery.
