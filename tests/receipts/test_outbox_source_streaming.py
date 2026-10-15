@@ -91,6 +91,102 @@ def test_db_receipt_source_streams_complete_history_without_fetchall(
     assert connection.reader.closed and connection.closed
 
 
+@pytest.mark.parametrize(
+    "raw_payload",
+    (
+        '{"event":"promotion.transition.applied","payload":'
+        '{"decision_token":{"valid":false,"valid":true}}}',
+        '{"event":"governance.authority_receipt.recorded","payload":'
+        '{"authority_receipt":{"fallback_used":true,"fallback_used":false}}}',
+    ),
+)
+def test_db_string_receipt_source_rejects_recursive_duplicate_object_keys(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    raw_payload: str,
+) -> None:
+    connection = StreamingConnection(
+        [(1, "test.receipt", raw_payload, datetime(2026, 10, 15, tzinfo=timezone.utc))]
+    )
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(outbox_service, "_open_conn", lambda: connection)
+
+    with pytest.raises(outbox_service.JsonlOutboxCorruptionError, match="duplicate object key"):
+        with outbox_sources.open_receipt_source_records(
+            outbox_path=tmp_path / "missing.jsonl"
+        ) as records:
+            assert records is not None
+            list(records)
+
+    assert connection.reader.closed and connection.closed
+
+
+def test_db_receipt_source_rejects_payload_event_shadowing_authority_topic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection = StreamingConnection(
+        [
+            (
+                1,
+                "governance.authority_receipt.recorded",
+                {
+                    "event": "unrelated.event",
+                    "event_type": "unrelated.event",
+                    "payload": "{",
+                },
+                datetime(2026, 10, 15, tzinfo=timezone.utc),
+            )
+        ]
+    )
+    monkeypatch.setenv("STORE_BACKEND", "pg")
+    monkeypatch.setattr(outbox_service, "_open_conn", lambda: connection)
+
+    with pytest.raises(
+        outbox_service.JsonlOutboxCorruptionError,
+        match="event aliases conflict",
+    ):
+        with outbox_sources.open_receipt_source_records(
+            outbox_path=tmp_path / "missing.jsonl"
+        ) as records:
+            assert records is not None
+            list(records)
+
+    assert connection.reader.closed and connection.closed
+
+
+def test_jsonl_receipt_source_rejects_conflicting_structured_event_aliases(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "outbox.jsonl"
+    path.write_text(
+        json.dumps(
+            {
+                "event": "unrelated.event",
+                "event_type": "promotion.transition.applied",
+                "event_id": "masked-promotion-history",
+                "payload": "{",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        outbox_service.JsonlOutboxCorruptionError,
+        match="event aliases conflict",
+    ):
+        with outbox_sources.open_receipt_source_records(outbox_path=path) as records:
+            assert records is not None
+            list(records)
+
+    with pytest.raises(
+        outbox_service.JsonlOutboxCorruptionError,
+        match="event aliases conflict",
+    ):
+        outbox_sources._read_jsonl_outbox_records(outbox_path=path)
+
+
 def test_jsonl_receipt_source_streams_complete_history_without_read_bytes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
