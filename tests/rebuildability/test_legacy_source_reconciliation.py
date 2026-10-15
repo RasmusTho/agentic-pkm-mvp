@@ -96,6 +96,23 @@ def test_companion_discovery_filters_title_before_selection_in_every_location(mo
     assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
 
 
+def test_enabled_producer_companion_claim_is_not_hidden_as_metadata(monkeypatch, tmp_path):
+    from app.ingest.producer_policy import filesystem_producer_policy
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    companion = _persist_companion_identity(root, source, original["object_id"])
+    source.write_bytes(raw)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+    monkeypatch.setenv("VAULT_DIR", str(root))
+    policy = filesystem_producer_policy()
+    assert policy.includes(source) and policy.includes(companion)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    with pytest.raises(recovery.LegacySourceRefusal, match="^legacy_identity_ambiguous_refused$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == [original] and not state.calls and not state.vectors and not state.embedded
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
 @pytest.mark.parametrize("failure,reason", [
     ("missing", "legacy_identity_persistence_refused"),
     ("unpersisted-fingerprint", "legacy_identity_persistence_refused"),

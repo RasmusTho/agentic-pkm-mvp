@@ -328,9 +328,11 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                 identity_sources.update(policy.sources)
             for path in identity_sources:
                 from app.services.companion_note import is_companion_path
-                if is_companion_path(path, root):
-                    # A continuity sidecar is evidence for a source, not a
-                    # second source claiming its own UUID.
+                if (is_companion_path(path, root) and path not in inventory
+                        and not registry_policy.includes(path) and not policy.includes(path)):
+                    # A sidecar excluded by every producer is continuity
+                    # evidence, not a second source. Never hide a sidecar that
+                    # an actual producer claims (the legacy FS writer can).
                     continue
                 text, _ = read_recovery_snapshot_relative(path.relative_to(root).as_posix(), vault_root=root)
                 fm = capture_source_frontmatter(text)

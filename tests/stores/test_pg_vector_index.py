@@ -80,6 +80,7 @@ def _count(object_id) -> int:
     ("retire", None), ("retire-legacy", None), ("canonical", "legacy_identity_canonical_refused"),
     ("reverse", "legacy_identity_canonical_refused"),
     ("duplicate", "legacy_identity_ambiguous_refused"),
+    ("producer-companion", "legacy_identity_ambiguous_refused"),
     ("row-race", "legacy_race_refused"), ("companion-race", "legacy_race_refused"),
     ("history", "legacy_retained_history_refused"),
 ])
@@ -96,6 +97,11 @@ def test_legacy_retirement_identity_refusals_are_atomic(_pg_index, monkeypatch, 
         destination = root / "_system/companions" / companion.name
         destination.parent.mkdir(parents=True)
         companion.rename(destination)
+    if mode == "producer-companion":
+        source.write_bytes(raw)
+        monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+        monkeypatch.setenv("VAULT_DIR", str(root))
+    source_before = source.read_bytes()
     store = pg_store.PgObjectStore()
     store.put(oid, kind="note", source_ref=str(source), payload=original["payload"])
     store.put(other, kind="note", source_ref="healthy.md", payload={"content": "healthy", "frontmatter": {}})
@@ -129,7 +135,7 @@ def test_legacy_retirement_identity_refusals_are_atomic(_pg_index, monkeypatch, 
         assert recovery.reconcile_legacy_sources(binding, _pg_index, forbidden_embedding) == 1
         assert store.get(oid) is None
     assert store.get(other) == healthy and _count(oid) == 0 and _count(other) == 0
-    assert source.read_bytes() == raw.replace(f"uuid: {oid}\n".encode(), b"")
+    assert source.read_bytes() == source_before
     with psycopg.connect(_dsn()) as conn:
         assert conn.execute("SELECT count(*) FROM objects WHERE vault_binding_id = %s AND id = %s",
             (store.vault_binding_id, other if mode == "canonical" else oid)).fetchone()[0] == 1

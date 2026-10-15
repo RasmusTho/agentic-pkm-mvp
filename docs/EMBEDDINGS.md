@@ -511,7 +511,9 @@ identity must exactly match the stale row and canonical Product mapping, be uniq
 across the applicable source inventories, and survive hardened snapshot rechecks. Companion
 observations must still bind this exact source in the active root: matching body hash/title is
 discovery only, not identity authority for a moved/reused or foreign observation. Companion
-metadata itself is not a second source claim; ambiguous matching companions refuse. Invalid
+sidecars excluded by every producer are not second source claims. A sidecar actually claimed by
+an enabled producer (including the optional legacy filesystem writer) remains in the identity
+census; duplicate claims refuse. Ambiguous matching companions refuse. Invalid
 declarations and unpersisted path/fingerprint-only identities always refuse. No source metadata
 is created, healed, normalized or rewritten, and every existing atomic/history/race fence remains.
 Read-only companion discovery includes both the configured canonical and supported legacy
