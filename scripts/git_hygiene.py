@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, TypeGuard
 
 from markdown_it import MarkdownIt
+import regex
 
 if __package__ in {None, ""}:  # Supports direct ``python scripts/...`` invocation.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -1802,6 +1803,9 @@ _DISPATCHER_HTML_COMMENT_OPEN_RE = re.compile(r"<!--[^\r\n]*")
 _DISPATCHER_HTML_TAG_NAME_RE = re.compile(r"<\s*/?\s*([A-Za-z][A-Za-z0-9:-]*)")
 _DISPATCHER_OPAQUE_CODE_MARKER = "\x00"
 _DISPATCHER_TABLE_CELL_BOUNDARY = "\x1f"
+_DISPATCHER_DEFAULT_IGNORABLE_RE = regex.compile(
+    r"\p{Default_Ignorable_Code_Point}+"
+)
 _DISPATCHER_ESCAPED_HTML_COMMENT_MARKER = "\x02"
 _DISPATCHER_HTML_COMMENT_CLOSER_MASK = "\x03"
 _DISPATCHER_ESCAPED_HTML_COMMENT_CLOSER_MARKER = "\x04"
@@ -1957,6 +1961,10 @@ def _dispatcher_consume_pending_html_block_comment(
 def _dispatcher_mask_code_block(content: str) -> str:
     masked = re.sub(r"[^\n]", " ", content)
     return f"{_DISPATCHER_OPAQUE_CODE_MARKER}{masked}{_DISPATCHER_OPAQUE_CODE_MARKER}"
+
+
+def _dispatcher_strip_default_ignorables(text: str) -> str:
+    return _DISPATCHER_DEFAULT_IGNORABLE_RE.sub("", text)
 
 
 def _dispatcher_render_inline_tokens(
@@ -2173,6 +2181,7 @@ def _dispatcher_cross_line_scan_body(
     body: str,
     *,
     mask_code_inline: bool = False,
+    normalize_default_ignorables: bool = False,
     source_lines: list[str] | None = None,
 ) -> str:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
@@ -2217,6 +2226,8 @@ def _dispatcher_cross_line_scan_body(
             token
         ):
             html_comment_open = True
+        if normalize_default_ignorables:
+            rendered = _dispatcher_strip_default_ignorables(rendered)
         if token.map is None:
             parts.append(rendered)
             continue
@@ -2252,13 +2263,19 @@ def _dispatcher_cross_line_scan_body(
 
 
 def _dispatcher_cross_line_scan_source_lines(
-    body: str, *, mask_code_inline: bool = False
+    body: str,
+    *,
+    mask_code_inline: bool = False,
+    normalize_default_ignorables: bool = False,
 ) -> list[str]:
     normalized = body.replace("\r\n", "\n").replace("\r", "\n")
     normalized = _DISPATCHER_SPLITLINES_SEPARATOR_RE.sub("\n", normalized)
     source_lines = [""] * (normalized.count("\n") + 1)
     _dispatcher_cross_line_scan_body(
-        body, mask_code_inline=mask_code_inline, source_lines=source_lines
+        body,
+        mask_code_inline=mask_code_inline,
+        normalize_default_ignorables=normalize_default_ignorables,
+        source_lines=source_lines,
     )
     return source_lines
 
@@ -2411,9 +2428,16 @@ def _dispatcher_resumable_binding_resources(
             raise RuntimeError("dispatcher_activity_invalid")
         body = comment["body"]
         cross_line_scan_body = _dispatcher_cross_line_scan_body(body)
+        normalized_cross_line_scan_body = _dispatcher_cross_line_scan_body(
+            body, normalize_default_ignorables=True
+        )
         if any(
             re.search(r"[\r\n]", match.group(0))
-            for scan_segment in _dispatcher_split_scan_segments(cross_line_scan_body)
+            for scan_body in (
+                cross_line_scan_body,
+                normalized_cross_line_scan_body,
+            )
+            for scan_segment in _dispatcher_split_scan_segments(scan_body)
             for match in _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE.finditer(
                 scan_segment
             )
@@ -2421,6 +2445,9 @@ def _dispatcher_resumable_binding_resources(
             raise RuntimeError("dispatcher_activity_invalid")
         truncated_scan_lines = _dispatcher_cross_line_scan_source_lines(
             body, mask_code_inline=True
+        )
+        normalized_truncated_scan_lines = _dispatcher_cross_line_scan_source_lines(
+            body, mask_code_inline=True, normalize_default_ignorables=True
         )
         lines = body.splitlines()
         table_scan_lines = _dispatcher_normalize_gfm_table_pipes(body).splitlines()
@@ -2436,8 +2463,16 @@ def _dispatcher_resumable_binding_resources(
                 else line
             )
             marker_scan_line = _dispatcher_cross_line_scan_body(scan_line)
+            normalized_marker_scan_line = _dispatcher_cross_line_scan_body(
+                scan_line, normalize_default_ignorables=True
+            )
             truncated_scan_line = _dispatcher_cross_line_scan_body(
                 scan_line, mask_code_inline=True
+            )
+            normalized_truncated_scan_line = _dispatcher_cross_line_scan_body(
+                scan_line,
+                mask_code_inline=True,
+                normalize_default_ignorables=True,
             )
             visible_truncated_line = (
                 truncated_scan_lines[line_number]
@@ -2449,14 +2484,34 @@ def _dispatcher_resumable_binding_resources(
                 if line_number + 1 < len(truncated_scan_lines)
                 else ""
             )
+            normalized_visible_truncated_line = (
+                normalized_truncated_scan_lines[line_number]
+                if line_number < len(normalized_truncated_scan_lines)
+                else ""
+            )
+            normalized_next_visible_truncated_line = (
+                normalized_truncated_scan_lines[line_number + 1]
+                if line_number + 1 < len(normalized_truncated_scan_lines)
+                else ""
+            )
             continuation_line = (
                 table_scan_lines[line_number + 1]
                 if line_number + 1 < len(table_scan_lines)
                 else ""
             )
+            normalized_continuation_line = _dispatcher_cross_line_scan_body(
+                continuation_line, normalize_default_ignorables=True
+            )
             marker_segments = _dispatcher_split_scan_segments(marker_scan_line)
             continuation_segments = _dispatcher_split_scan_segments(continuation_line)
+            normalized_marker_segments = _dispatcher_split_scan_segments(
+                normalized_marker_scan_line
+            )
+            normalized_continuation_segments = _dispatcher_split_scan_segments(
+                normalized_continuation_line
+            )
             truncated_marker_lines = truncated_scan_line.splitlines()
+            normalized_truncated_marker_lines = normalized_truncated_scan_line.splitlines()
             dedicated_truncated_marker = bool(visible_truncated_line.strip()) and any(
                 _dispatcher_table_marker_search(
                     _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE,
@@ -2464,6 +2519,16 @@ def _dispatcher_resumable_binding_resources(
                     next_text=next_visible_truncated_line,
                 )
                 for rendered_line in truncated_marker_lines
+            )
+            normalized_dedicated_truncated_marker = bool(
+                normalized_visible_truncated_line.strip()
+            ) and any(
+                _dispatcher_table_marker_search(
+                    _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE,
+                    rendered_line,
+                    next_text=normalized_next_visible_truncated_line,
+                )
+                for rendered_line in normalized_truncated_marker_lines
             )
             dedicated_cross_line_marker = bool(
                 line_number not in table_line_numbers
@@ -2494,13 +2559,54 @@ def _dispatcher_resumable_binding_resources(
                     if _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(segment)
                 )
             )
+            normalized_dedicated_cross_line_marker = bool(
+                line_number not in table_line_numbers
+                and line_number + 1 not in table_line_numbers
+                and any(
+                    _DISPATCHER_DEDICATED_WORKTREE_CONTINUATION_RE.search(
+                        normalized_continuation_segments[index]
+                        if index < len(normalized_continuation_segments)
+                        else ""
+                    )
+                    or (
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_RE.search(segment)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_RE.search(
+                            normalized_continuation_segments[index]
+                            if index < len(normalized_continuation_segments)
+                            else ""
+                        )
+                    )
+                    or (
+                        _DISPATCHER_DEDICATED_WORKTREE_TRAILING_IS_STILL_RE.search(segment)
+                        and _DISPATCHER_DEDICATED_WORKTREE_AFTER_IS_STILL_RE.search(
+                            normalized_continuation_segments[index]
+                            if index < len(normalized_continuation_segments)
+                            else ""
+                        )
+                    )
+                    for index, segment in enumerate(normalized_marker_segments)
+                    if _DISPATCHER_DEDICATED_WORKTREE_FRAGMENT_RE.search(segment)
+                )
+            )
+            dedicated_truncated_marker = (
+                dedicated_truncated_marker or normalized_dedicated_truncated_marker
+            )
+            dedicated_cross_line_marker = (
+                dedicated_cross_line_marker or normalized_dedicated_cross_line_marker
+            )
+            dedicated_marker_match = _dispatcher_marker_search(
+                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE,
+                marker_scan_line,
+            )
+            normalized_dedicated_marker_match = _dispatcher_marker_search(
+                _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE,
+                normalized_marker_scan_line,
+            )
             explicit_binding = bool(
                 _DISPATCHER_PICKUP_RECEIPT_RE.search(line)
                 or _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
-                or _dispatcher_marker_search(
-                    _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE,
-                    marker_scan_line,
-                )
+                or dedicated_marker_match
+                or normalized_dedicated_marker_match
                 or dedicated_truncated_marker
                 or dedicated_cross_line_marker
             )
@@ -2512,10 +2618,7 @@ def _dispatcher_resumable_binding_resources(
                 _DISPATCHER_PRESERVED_WORKTREE_MARKER_RE.search(line)
                 and not _DISPATCHER_PRESERVED_WORKTREE_RE.search(line)
             ) or (
-                _dispatcher_marker_search(
-                    _DISPATCHER_DEDICATED_WORKTREE_MARKER_RE,
-                    marker_scan_line,
-                )
+                (dedicated_marker_match or normalized_dedicated_marker_match)
                 and not _DISPATCHER_DEDICATED_WORKTREE_RE.search(line)
             ):
                 raise RuntimeError("dispatcher_activity_invalid")

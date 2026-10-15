@@ -7195,6 +7195,68 @@ def test_local_retirement_rejects_cross_line_dedicated_worktree_marker(
 
 
 @pytest.mark.parametrize(
+    ("body_template", "expect_refusal"),
+    [
+        ("Dedicated worktree /tmp/old\nst\u200bill", True),
+        (
+            "Dedicated worktree /tmp/old is st\ufe0fill dirty "
+            "on branch old at head {sha}.",
+            True,
+        ),
+        (
+            "Dedicated worktree /tmp/old is st\u200bill dirty "
+            "on branch old at head {sha}.",
+            True,
+        ),
+        (
+            "Dedicated worktree /tmp/old is st\u0600ill dirty "
+            "on branch old at head {sha}.",
+            False,
+        ),
+    ],
+)
+def test_local_retirement_handles_default_ignorable_marker_text_monotonically(
+    tmp_path, monkeypatch, body_template, expect_refusal
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": body_template.format(sha=sha)
+                    }]
+                }),
+            },
+        }
+    ])
+    if expect_refusal:
+        with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+            git_hygiene.retire_inactive_local_branches(
+                repo,
+                targets={ref: sha},
+                snapshot_directory=tmp_path / "rescue",
+                owner_discard="reject default-ignorable marker variants",
+            )
+        assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+    else:
+        result = git_hygiene.retire_inactive_local_branches(
+            repo,
+            targets={ref: sha},
+            snapshot_directory=tmp_path / "rescue",
+            owner_discard="preserve non-default-ignorable format behavior",
+        )
+        assert result["deleted"] == 1
+
+
+@pytest.mark.parametrize(
     "body_template",
     [
         (
