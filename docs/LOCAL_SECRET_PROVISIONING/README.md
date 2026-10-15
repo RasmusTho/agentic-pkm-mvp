@@ -5,7 +5,8 @@ Owner: Architecture / operations
 Temporal class: strategic
 Review cadence: event-driven (task merge, host-topology change, or first CI/multi-host use)
 Source of truth: this directory for the proposed capability; GitHub parent/child issues are execution artifacts once filed
-Last reviewed: 2026-10-06
+Last reviewed: 2026-10-15
+Last verified against: #5667 comments #6114638077, #6114724380, and #6114787299; merged BWS slices #5703, #5717, #5725, and #5732. These verify current entitlement, existing reader scopes, the MARR non-prod binding, active encrypted reader services on all three channel VMs, and the accepted normal-writer model; Product/Builder acceptance and full channel deployment/runtime acceptance remain separate.
 
 # Local Secret Provisioning
 
@@ -15,9 +16,11 @@ Provide one small, host-local provisioning boundary for development and runtime 
 placing credentials in Git, iCloud, BuilderOps records, Mimer content, or ordinary deploy files.
 The Mac-hosted implementation keeps existing local secrets and the MARR read-only BWS bootstrap
 token in **macOS Keychain**. Merged PR #5803 and follow-up #5808 deliver the repository path for the TypeSafe provider
-key through the existing `non-prod` BWS project and reader identity. The live BWS
-entitlement, project permissions, MARR host binding, and Product/Builder acceptance remain gated by
-#5667 and #5764; this repository support does not claim that the key or permissions are installed.
+key through the existing `non-prod` BWS project and reader identity. The #5667 receipt #6114638077
+verifies the current Free-plan entitlement, both existing reader-token scopes, the imported MARR key,
+and the current-main `marr-server-dev` consumer check. This does not complete the separate
+Product/Builder acceptance under #5764 or the broader integrated deployment/runtime acceptance under
+#5667.
 Heimdal owns the lifecycle of external-helper credentials, while a narrowly scoped
 bootstrap resolves only the secrets a channel/process needs through a temporary owner-readable
 runtime surface, cleans it up, and redacts all values from logs and receipts.
@@ -30,7 +33,9 @@ authority, retention, or product memory.
 
 For external helper systems, Builder Vault records the non-secret credential reference and Heimdal
 ownership metadata. The Mac-hosted path uses macOS Keychain; Linux channel VMs use the accepted BWS
-contract defined in docs/CLOUD_SECRET_PROVISIONING/README.md, subject to encrypted-token installation and live qualification.
+contract defined in docs/CLOUD_SECRET_PROVISIONING/README.md. The #5667 receipt #6114638077 verifies
+active encrypted reader services on ygg-dev, ygg-test, and ygg-prod; broader integrated channel
+qualification remains open.
 External provider identities, including the Discord webhook identity, remain owned and provisioned
 outside this design; the value-free binding is declared below and is not a value stored in the Vault
 or repository.
@@ -51,7 +56,10 @@ retains the human Organization Owner as break-glass, and accepts deliberate same
 outside the controller as a residual. No separate writer daemon or shared fencing is required for
 this one-owner setup. Reassess before extra operators/controllers or prod secrets requiring
 confidentiality; this is host custody and normal-path policy, not executable confinement.
-BWS-03 / #5679 owns installation of that encrypted source and remains a separate delivery gate.
+BWS-03 / #5679 and PR #5732 delivered the repository installer. The #5667 receipts #6114638077 and
+#6114724380 verify active encrypted channel credentials and retirement of the unused generic helper
+and extra shared token on all three channel VMs. The parent remains open for integrated deployment
+and runtime acceptance.
 
 The BWS-04 supervisor unit uses
 `LoadCredentialEncrypted=bws-machine-account-token:/var/lib/yggdrasil/bws-tokens/%i/current`
@@ -69,9 +77,11 @@ and direct DB clients. Missing files and password-bearing overrides fail closed.
 require real password authentication; updating BWS or its file does not rotate a database role.
 The deployment owner document describes the DB-only cold-start probe, lifecycle, and pending recovery.
 
-Mac Keychain consumers retain their existing bindings and cleanup behavior. These are repository
-contracts: no test or code-delivery receipt claims BWS accounts, VM installation, credential cleanup,
-or live channel qualification. Parent #5667 remains open until those owner gates are satisfied.
+Mac Keychain consumers retain their existing bindings and cleanup behavior. Repository tests and
+code-delivery receipts prove only the fake-backed contract; separate #5667 receipts verify the
+current entitlement, reader scopes, MARR binding, encrypted reader services, and retired legacy
+helper/token. Those receipts do not establish complete target/action-bound channel acceptance, so
+parent #5667 remains open for that gate.
 
 ## Fixed constraints
 
@@ -98,8 +108,9 @@ or live channel qualification. Parent #5667 remains open until those owner gates
    trust boundary.
 5. **Mac Keychain remains the source for existing Mac secrets and the BWS bootstrap token.** TSO-07
    (#5801, merged PR #5803) and #5808 deliver the repository lookup for the TypeSafe provider key
-   from the existing `non-prod` BWS project through the `non-prod-reader` identity. Live permission
-   qualification remains gated by #5667. This does not change other Mac Keychain bindings or the
+   from the existing `non-prod` BWS project through the `non-prod-reader` identity. Existing reader
+   scope and MARR binding are verified by #5667 comment #6114638077; full channel acceptance remains
+   open under #5667. This does not change other Mac Keychain bindings or the
    explicit Linux channel project mapping.
 
 ### Declared identifier contract
@@ -134,13 +145,17 @@ remains explicit. The non-prod and prod reader project scope is an accepted
 one-operator store risk; code-level channel selection and the MARR consumer allowlist remain explicit.
 The BWS reader token remains a separate Keychain bootstrap credential under service
 `yggdrasil.bws-reader`, account `non-prod-reader.token`; it is not an admin credential and stays on
-the MARR server path. These are repository contract and resolver facts: live BWS entitlement,
-project permissions, and host installation remain unqualified. Product and Builder keep distinct
+the MARR server path. The live receipt #6114638077 verifies BWS entitlement, both reader identities'
+access to both projects, the imported MARR item and its current-main consumer check, plus active
+encrypted reader services on all three channel VMs. Product and Builder keep distinct
 caller policies, caller credentials, and owner model profiles; neither receives or resolves the MARR
 server's provider key. Codex and Claude runtime consumers have no grant; direct development calls
 are separately governed under #5778.
 
-This is a repository declaration verified with fake sources, not host provisioning or activation.
+Repository tests and code-delivery receipts verify the declaration with fake sources; they do not
+prove host provisioning or activation. Separate #5667 receipts above verify the specific live
+entitlement, reader, token, cleanup, and MARR facts they report, not the complete channel
+deployment/runtime acceptance.
 Any live MARR runtime use requires owner confirmation of rotation after the earlier exposure, scoped MARR dev
 host installation, explicit one-call authorization with synthetic input, and a redacted receipt.
 Product and Builder routes remain off pending their separate post-merge dev acceptance on #5764.
