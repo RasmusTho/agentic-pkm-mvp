@@ -34,6 +34,7 @@ from app.observability.status_model import (
     OutboxLagStatus,
     StoreStatus,
     SystemStatus,
+    YouTubeSyncStatus,
     ViewFreshnessStatus,
     WatcherAutomationStatus,
     WorkerQueueStatus,
@@ -1240,6 +1241,30 @@ def _get_heimdal_ingress_status():
     )
 
 
+def _get_youtube_sync_status() -> YouTubeSyncStatus:
+    """Project YSS-09 signals without making status depend on sync runtime."""
+    try:
+        from app.knowledge_acquisition.sync_observability import collect_youtube_sync_status
+
+        return YouTubeSyncStatus(**collect_youtube_sync_status())
+    except Exception:
+        # Optional status must never take down the existing status route. Keep
+        # the fallback bounded and secret-free.
+        return YouTubeSyncStatus(**{
+            "status": "degraded",
+            "ok": False,
+            "reason_code": "status_unavailable",
+            "reason_codes": ["status_unavailable"],
+            "enabled": False,
+            "runner_enabled": False,
+            "runner_offline": False,
+            "sources": {"total": 0, "enabled": 0, "degraded": 0, "next_due_at": None},
+            "queue": {"depth": 0, "pending": 0, "in_progress": 0, "dead_letters": 0},
+            "quota": {"spent_today": None, "budget": None, "remaining": None, "exhausted": False, "available": False},
+            "suggested_actions": [],
+        })
+
+
 def get_system_status() -> SystemStatus:
     sot_meta = get_sot_metadata()
     ingestion = get_ingestion_status()
@@ -1289,6 +1314,7 @@ def get_system_status() -> SystemStatus:
         context_dimensions=_status_context_dimensions(_status_outbox_path()),
         v6_0_seams=_get_v6_seams(),
         heimdal_ingress=heimdal_ingress,
+        youtube_sync=_get_youtube_sync_status(),
         integrated_runtime_v1=_integrated_runtime_v1_matrix(
             write_guard=write_guard,
             worker_queue=worker_queue,
