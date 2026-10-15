@@ -140,10 +140,12 @@ model gains `:latest`, while an invalid forced provider degrades coherently to
 ## Runtime behavior
 
 The host service constructs its Ollama HTTP adapter with a finite 1,260-second per-phase
-HTTP timeout, matching the default Product transport and executor-path request window rather
-than cutting off a cold embedding runner load after 120 seconds. This is an HTTP inactivity
-bound, not a promise of successful inference or a new retry budget. Once dispatch may have
-started, a timeout or transport failure remains terminal and indeterminate to the Product caller:
+inference HTTP timeout, matching the default Product transport and executor-path request window
+rather than cutting off a cold embedding runner load after 120 seconds. This is an HTTP inactivity
+bound, not a promise of successful inference or a new retry budget. Catalog and preflight
+metadata requests retain a short per-phase bound of at most 120 seconds (or a shorter adapter
+timeout), so a metadata stall cannot occupy executor slots for the inference window. Once dispatch
+may have started, a timeout or transport failure remains terminal and indeterminate to the Product caller:
 no retry, second provider call, or model switch is authorized. Identity, dimensions, catalog
 provenance, loopback-only execution, and VLAN admission are unchanged. Installing/restarting the
 governed Mac host service from the merged source is required to apply this constructor change;
