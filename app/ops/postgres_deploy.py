@@ -160,9 +160,9 @@ class DeployReceipt:
                 raise PostgresDeployError() from None
 
     def validate(self) -> None:
-        from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_CODES
+        from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_REASONS
         if self.source_failure is not None and (
-            self.source_failure not in SOURCE_PROJECTION_FAILURE_CODES
+            self.source_failure not in SOURCE_PROJECTION_FAILURE_REASONS
             or self.stage not in {'activating', 'failed'}
         ):
             raise PostgresDeployError()
