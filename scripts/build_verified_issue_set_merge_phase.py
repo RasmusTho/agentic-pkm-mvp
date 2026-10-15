@@ -126,12 +126,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if durable_convergence is None or durable_convergence != supplied_convergence:
         raise ValueError("phase requires one authenticated durable projection convergence")
+    pr = _mapping(args.pr_json)
+    closed_issues = _issue_numbers(args.closed_issues_json)
+    reopened_unauthorized_issues = _issue_numbers(args.reopened_issues_json)
     if args.mode == "manual":
         validate_manual_phase_inputs(
             comments,
             phase=args.phase,
             authority_receipt=authority_receipt,
             projection_convergence_receipt=durable_convergence,
+            pr=pr,
+            closed_issues=closed_issues,
+            reopened_unauthorized_issues=reopened_unauthorized_issues,
             post_effect_deployment_supplied=args.post_effect_deployment_json is not None,
             post_effect_operation_key_supplied=args.post_effect_operation_key is not None,
         )
@@ -168,7 +174,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         phase=args.phase,
         phase_version=phase_version,
         post_effect_authority=post_effect,
-        pr=_mapping(args.pr_json),
+        pr=pr,
         projection_convergence_receipt=durable_convergence,
         final_projection_observation=(
             _nested_mapping(
@@ -178,8 +184,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.final_projection_observation_json is not None
             else None
         ),
-        closed_issues=_issue_numbers(args.closed_issues_json),
-        reopened_unauthorized_issues=_issue_numbers(args.reopened_issues_json),
+        closed_issues=closed_issues,
+        reopened_unauthorized_issues=reopened_unauthorized_issues,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(

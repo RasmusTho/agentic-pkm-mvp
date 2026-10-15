@@ -1605,6 +1605,7 @@ def _run_phase_builder_cli(
     mode: str | None = None,
     post_effect_operation_key: str | None = None,
     post_effect_deployment_json: Path | None = None,
+    reopened_issues: list[int] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     token = f"{phase}-{len(comments)}"
     authority_path = tmp_path / f"{token}-authority.json"
@@ -1648,6 +1649,10 @@ def _run_phase_builder_cli(
         closed_path = tmp_path / f"{token}-closed.json"
         closed_path.write_text(json.dumps(closed_issues), encoding="utf-8")
         argv.extend(("--closed-issues-json", str(closed_path)))
+    if reopened_issues is not None:
+        reopened_path = tmp_path / f"{token}-reopened.json"
+        reopened_path.write_text(json.dumps(reopened_issues), encoding="utf-8")
+        argv.extend(("--reopened-issues-json", str(reopened_path)))
     return subprocess.run(
         argv,
         cwd=REPO_ROOT,
@@ -1847,6 +1852,69 @@ def test_manual_full_path_phase_cli_requires_immediate_predecessor(tmp_path: Pat
     )
     assert completed.returncode != 0
     assert "immediately preceding authenticated v1 phase" in completed.stderr
+
+
+def test_manual_full_path_phase_cli_preserves_reconciled_evidence(tmp_path: Path) -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    convergence_kwargs = projection_phase_kwargs(authority, neutral_pr)
+    convergence = convergence_kwargs["projection_convergence_receipt"]
+    comments = [projection_convergence_comment(convergence_kwargs)]
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    for phase, pr, closed in (
+        ("prepared", neutral_pr, None),
+        ("merged", merged_pr, None),
+        ("reconciled", merged_pr, [3820, 3823]),
+    ):
+        completed = _run_phase_builder_cli(
+            tmp_path=tmp_path,
+            authority=authority,
+            comments=comments,
+            convergence=convergence,
+            phase=phase,
+            pr=pr,
+            closed_issues=closed,
+            final_observation=convergence_kwargs["final_projection_observation"],
+            mode="manual",
+        )
+        assert completed.returncode == 0, completed.stderr
+        output = json.loads(
+            (tmp_path / f"{phase}-{len(comments)}-output.json").read_text()
+        )
+        comments.append(
+            {
+                "author_association": "OWNER",
+                "body": output["phase_receipt_comment"],
+            }
+        )
+
+    restored_pr = {**merged_pr, "body": plan["original_body"]}
+    completed = _run_phase_builder_cli(
+        tmp_path=tmp_path,
+        authority=authority,
+        comments=comments,
+        convergence=convergence,
+        phase="restored",
+        pr=restored_pr,
+        closed_issues=[3820, 3823],
+        reopened_issues=[4999],
+        mode="manual",
+    )
+    assert completed.returncode != 0
+    assert "preserve reconciled evidence" in completed.stderr
 
     deployment_path = tmp_path / "deployment.json"
     deployment_path.write_text("{}", encoding="utf-8")

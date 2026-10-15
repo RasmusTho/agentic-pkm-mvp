@@ -1924,6 +1924,9 @@ def validate_manual_phase_inputs(
     phase: str,
     authority_receipt: Mapping[str, object],
     projection_convergence_receipt: Mapping[str, object],
+    pr: Mapping[str, object],
+    closed_issues: Sequence[int],
+    reopened_unauthorized_issues: Sequence[int],
     post_effect_deployment_supplied: bool = False,
     post_effect_operation_key_supplied: bool = False,
 ) -> None:
@@ -1968,6 +1971,16 @@ def validate_manual_phase_inputs(
     if len({_canonical_digest(receipt) for receipt in predecessor_receipts}) != 1:
         raise ValueError(
             "manual mode requires the immediately preceding authenticated v1 phase"
+        )
+    predecessor_receipt = predecessor_receipts[0]
+    if phase == "restored" and (
+        predecessor_receipt.get("merge_commit_sha") != pr.get("merge_commit_sha")
+        or predecessor_receipt.get("closed_issues") != list(closed_issues)
+        or predecessor_receipt.get("reopened_unauthorized_issues")
+        != list(reopened_unauthorized_issues)
+    ):
+        raise ValueError(
+            "manual mode restored phase must preserve reconciled evidence"
         )
 
 
