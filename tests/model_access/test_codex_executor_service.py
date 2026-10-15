@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import inspect
+import math
 from pathlib import Path
 from types import SimpleNamespace
 import threading
@@ -165,6 +167,46 @@ def test_main_starts_without_ollama_or_tailscale_configuration(
     assert captured["ollama_adapter"] is None
     assert captured["host"] == "127.0.0.1"
     captured["provider_api_adapter"].close()
+
+
+def test_main_aligns_ollama_timeout_with_product_execution_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib
+
+    from app.model_access.codex_remote_transport import CodexRemoteTransport
+    from app.model_access.executor_network_policy import ExecutorNetworkPathRouter
+
+    module = importlib.import_module("app.model_access.codex_executor_service")
+    factory = _factory()
+    captured: dict[str, Any] = {}
+    monkeypatch.setenv("CODEX_CLI_SAFE_PROFILE_PATH", "/tmp/codex-safe-profile.json")
+    monkeypatch.setenv("MODEL_ACCESS_OLLAMA_BASE_URL", "http://127.0.0.1:11434")
+    monkeypatch.setattr(
+        module.ModelAccessAdapterFactory, "from_declared_sources", lambda **_kwargs: factory
+    )
+    monkeypatch.setattr(
+        factory, "create_codex_cli_executor", lambda **_kwargs: FakeCodexExecutor()
+    )
+
+    def capture_app(**kwargs: Any) -> object:
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(module, "create_codex_executor_app", capture_app)
+    monkeypatch.setattr(module, "serve_executor", lambda *_args, **_kwargs: None)
+    main()
+    try:
+        # Inspect the real adapter's HTTPX bounds, not just constructor arguments.
+        timeout = captured["ollama_adapter"]._client.timeout
+        for caller in (CodexRemoteTransport, ExecutorNetworkPathRouter):
+            product_window = inspect.signature(caller).parameters["timeout_seconds"].default
+            for phase in (timeout.connect, timeout.read, timeout.write, timeout.pool):
+                assert phase is not None and math.isfinite(phase)
+                assert phase >= product_window > 120
+    finally:
+        captured["ollama_adapter"].close()
+        captured["provider_api_adapter"].close()
 
 
 def _preflight_payload(transport_id: str = "codex_cli") -> dict[str, Any]:

@@ -137,6 +137,18 @@ not alter that forced identity. Provider and model are canonicalized together: a
 model gains `:latest`, while an invalid forced provider degrades coherently to
 `mock/mock-embedding`. The fabric consumes the attached identity without resolving it again.
 
+## Runtime behavior
+
+The host service constructs its Ollama HTTP adapter with a finite 1,260-second per-phase
+HTTP timeout, matching the default Product transport and executor-path request window rather
+than cutting off a cold embedding runner load after 120 seconds. This is an HTTP inactivity
+bound, not a promise of successful inference or a new retry budget. Once dispatch may have
+started, a timeout or transport failure remains terminal and indeterminate to the Product caller:
+no retry, second provider call, or model switch is authorized. Identity, dimensions, catalog
+provenance, loopback-only execution, and VLAN admission are unchanged. Installing/restarting the
+governed Mac host service from the merged source is required to apply this constructor change;
+repository tests do not establish live DEV/TEST channel acceptance (tracked by parent #3347).
+
 Current state:
 - The neutral route/provenance contract and policy-agnostic `ModelAccessRouter` seam are available. Product chat/completion callers continue to enter through the Product router and fabric, with the selected target resolved through the shared facade before adapter execution. The facade carries owner-resolver fallback lineage, preserves the `fallback_forbidden`, `human_decision_required`, and `fallback_same_identity` requirements, distinguishes source fallback cause from selected-target preflight status, and rejects resolved capability claims outside the selected adapter descriptor's declared support. Product route policy remains settings-owned; the facade does not create a separate model-selection authority.
 - Every non-mock Product chat/completion and embedding inference uses the logical Mac Product API over the configured executor/VLAN path. Product requests bind the selected provider/model and capability intent but do not choose the host transport, endpoint, or credentials. The host response binds the actual transport and catalog snapshot to the route. `mock` remains local for deterministic use.
