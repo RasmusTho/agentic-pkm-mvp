@@ -44,6 +44,16 @@ SOURCE_PROJECTION_FAILURE_CODES = {
     'source_worker_timeout': 96,
     'source_worker_terminated': 97,
     'source_worker_oom': 98,
+    'legacy_candidate_refused': 99,
+    'legacy_authority_refused': 100,
+    'legacy_trust_refused': 101,
+    'legacy_origin_refused': 102,
+    'legacy_payload_shape_refused': 103,
+    'legacy_system_path_refused': 104,
+    'legacy_profile_refused': 105,
+    'legacy_dependency_shape_refused': 106,
+    'legacy_retained_history_refused': 107,
+    'legacy_relation_retention_refused': 108,
 }
 
 

@@ -6960,6 +6960,74 @@ def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliati
     assert journal.read().source_failure == reason
 
 
+@pytest.mark.parametrize('reason', [
+    'legacy_candidate_refused', 'legacy_authority_refused', 'legacy_trust_refused',
+    'legacy_origin_refused', 'legacy_payload_shape_refused', 'legacy_system_path_refused',
+    'legacy_profile_refused', 'legacy_dependency_shape_refused',
+    'legacy_retained_history_refused', 'legacy_relation_retention_refused',
+])
+def test_native_legacy_admission_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, reason):
+    from dataclasses import asdict
+    from click.testing import CliRunner
+    from app.cli import cli, index_rebuild
+    from app.ops import native_source_bootstrap as native, postgres_deploy_linux as linux
+    from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
+
+    # Exercise the actual private CLI serialization, then send that exact
+    # summary through the native subprocess/bootstrap and shell wrapper path.
+    fixture = tmp_path / 'source'
+    fixture.mkdir()
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, fixture)
+    monkeypatch.setattr(index_rebuild.domain_objects, 'resolve_object_store_port', lambda: binding)
+    monkeypatch.setattr(index_rebuild, 'get_vector_index', lambda: index)
+    monkeypatch.setattr(index_rebuild, 'get_product_embedding_client', factory)
+
+    def refuse(*args, **kwargs):
+        raise recovery.LegacySourceRefusal(reason)
+
+    monkeypatch.setattr(recovery, 'reconcile_legacy_sources', refuse)
+    cli_result = CliRunner().invoke(cli, ['index', 'reconcile-legacy', '--json'])
+    assert cli_result.exit_code == 79 and json.loads(cli_result.output) == {'reason': reason}
+    harness = tmp_path / 'deploy'
+    harness.mkdir()
+    root, env, sha = _native_source_harness(harness, channel='dev', ready=True)
+    missing = json.dumps(dict(backend='PgVectorIndex', issues=['missing vector'], rebuild_required=True,
+        unembedded_object_count=1, non_vector_issue_count=0, pg_state={}))
+    env.update(FAKE_SOURCE_INDEX_PREFLIGHT_SUMMARY=missing, FAKE_SOURCE_REPLAY_INDEX_SUMMARY=missing,
+               FAKE_LEGACY_RECONCILIATION_SUMMARY=cli_result.output, FAKE_LEGACY_RECONCILIATION_RC='79')
+    diagnostics = []
+    monkeypatch.setattr(linux, '_emit_native_diagnostic', diagnostics.append)
+    with pytest.raises(linux.PostgresDeployError):
+        linux._command(['bash', str(root / 'scripts/deploy_channel.sh'), 'deploy', 'dev', sha],
+                       cwd=root, env=env, deploy_diagnostics=True)
+    assert len(diagnostics) == 1 and ('class=' + reason).encode() in diagnostics[0]
+    assert b'hostile' not in b''.join(diagnostics) and b'/private' not in b''.join(diagnostics)
+    events = _deploy_events(env)
+    assert 'api-cli index repair-missing --json' not in events
+    assert not any('up -d --force-recreate api worker watcher' in event for event in events)
+
+    journal, operation, plan = _source_terminal_journal(tmp_path, monkeypatch)
+    removed = []
+    status = native.SOURCE_PROJECTION_FAILURE_CODES[reason]
+    docker = _source_terminal_docker(monkeypatch, journal, operation, plan.revision, status, False, removed)
+    assert linux.record_source_terminal('test', 'pkm-test-source-bootstrap-' + operation, status) == status
+    assert removed == [reason]  # Durable attribution precedes container removal.
+    journal.write(operation, 'failed')
+    config = linux.LinuxConfig.load('test')
+    lock = config.root / 'config/deploy/test.env.lock'
+    lock.mkdir(parents=True, mode=0o700)
+    (lock / 'bws-owner').touch(mode=0o600)
+    monkeypatch.setattr(linux.LinuxEffects, 'quiescent', lambda self: True)
+    monkeypatch.setattr(linux.LinuxEffects, 'activate', lambda *args: pytest.fail('must not replay'))
+    monkeypatch.setattr(linux, '_command', lambda argv, **kwargs: docker(argv, **kwargs).stdout)
+    supervisor = linux.DeploymentSupervisor(config)
+    request = {'action': 'reconcile-failed', 'operation_id': operation, 'plan': asdict(plan), 'bootstrap': False}
+    result = supervisor.request(request)
+    assert result['receipt']['source_failure'] == reason
+    assert supervisor.request({**request, 'action': 'join'}) == result
+    assert removed == [reason] and not lock.exists()
+
+
 def test_native_source_same_id_reply_keeps_locked_snapshot_after_admission_retirement(tmp_path, monkeypatch):
     from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux

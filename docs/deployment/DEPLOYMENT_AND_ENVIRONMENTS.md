@@ -1045,6 +1045,16 @@ identify the previous live root cause nor establish that acceptance.
 Legacy reconciliation additionally preserves the finite classes `legacy_producer_policy_refused`
 (exit 90), `legacy_source_refused` (91), `legacy_admission_refused` (92),
 `legacy_identity_refused` (93), `legacy_race_refused` (94), and `legacy_write_failed` (95).
+Remediation-specific legacy admission reasons use fixed native exits 99–108, respectively:
+`legacy_candidate_refused`, `legacy_authority_refused`, `legacy_trust_refused`,
+`legacy_origin_refused`, `legacy_payload_shape_refused`, `legacy_system_path_refused`,
+`legacy_profile_refused`, `legacy_dependency_shape_refused`, `legacy_retained_history_refused`,
+and `legacy_relation_retention_refused`. Their meanings are owned by
+[embedding operational guardrails](../EMBEDDINGS.md#operational-guardrails).
+Each survives operation-bound journal retention, cleanup and same-operation terminal reconciliation;
+unexpected/private failures retain the generic fail-closed classification. These diagnostics grant
+no repair, admission, retirement or acceptance authority, and cannot authorize rewriting protected
+history or replaying a failed operation. Parent-owned fresh DEV-to-TEST acceptance remains separate.
 The CLI's private exit remains 79 with an allowlisted JSON reason; bootstrap maps that reason to
 the fixed native code, and the deploy wrapper/supervisor retains only its exact allowlisted marker.
 Provider generation retains `embedding_generation_failed`. These classifications expose no source
