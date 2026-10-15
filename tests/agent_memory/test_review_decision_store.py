@@ -136,6 +136,7 @@ def test_decision_record_preserves_provenance(tmp_path: Path) -> None:
 
     assert record.receipt_kind == REVIEW_DECISION_RECEIPT_KIND
     assert record.source_refs == tuple(candidate.source_refs)
+    assert record.memory_type is MemoryType.PREFERENCE_MEMORY
     assert record.decided_by == "companion-ui:reviewer"
     assert record.decided_at == decided.decided_at
     assert record.decision_notes == "Looks consistent."
