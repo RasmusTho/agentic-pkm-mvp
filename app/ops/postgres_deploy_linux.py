@@ -205,8 +205,8 @@ def _command(argv: list[str], *, cwd: Path | None = None, env: dict[str, str] | 
             stage = _deploy_failure_stage(result.stderr)
             reason = _deploy_failure_reason(result.stderr, stage)
             _emit_deploy_failure(stage, reason)
-            from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_CODES
-            if retain_source_failure is not None and reason in SOURCE_PROJECTION_FAILURE_CODES:
+            from app.ops.native_source_bootstrap import SOURCE_PROJECTION_FAILURE_REASONS
+            if retain_source_failure is not None and reason in SOURCE_PROJECTION_FAILURE_REASONS:
                 retain_source_failure(reason)
         raise PostgresDeployError()
     return result.stdout

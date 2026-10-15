@@ -446,6 +446,8 @@ Its fixed content-free reasons are `embedding_probe_client_failed` (client/ident
 `embedding_probe_cleanup_failed`. An earlier failure takes precedence over cleanup failure;
 unknown process outcomes retain `embedding_probe_failed`. The wrapper discards child streams
 and retains only allowlisted codes in native diagnostics and same-operation/controller receipts.
+Probe reasons are receipt-only, not source-worker exit codes; unknown worker exits remain
+`source_worker_failed` and cannot assert a probe failure.
 Never include exceptions, responses, endpoints, paths, credentials, source identity or probe content.
 Failure remains before source projection, PostgreSQL acceptance, TEST and journaling qualification;
 these diagnostics neither authorize Product writes nor prove live model acceptance.

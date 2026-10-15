@@ -914,6 +914,8 @@ The probe's fixed child exit statuses 114–118 map respectively to
 `embedding_probe_client_failed`, `embedding_probe_identity_mismatch`,
 `embedding_probe_generation_failed`, `embedding_probe_vector_invalid`, and
 `embedding_probe_cleanup_failed`; unknown exits retain `embedding_probe_failed`.
+This probe-only status namespace is separate from source-worker checkpoints: worker exits
+114–119 or other unsupported statuses retain generic worker failure, never probe attribution.
 Only these allowlisted reasons cross the supervised wrapper into the native operation journal,
 same-operation reconciliation and post-merge controller checkpoint. Cleanup is attempted for an
 acquired client, with the original failure taking precedence. Child output, exceptions, responses,

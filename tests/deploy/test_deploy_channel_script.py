@@ -6849,6 +6849,7 @@ def test_supervised_source_projection_reasons_are_finite_and_fail_closed(monkeyp
     (137, True, 'source_worker_oom'), (137, False, 'source_worker_failed'),
     (96, False, 'source_worker_failed'), (97, False, 'source_worker_failed'),
     (98, False, 'source_worker_failed'),
+    *[(status, False, 'source_worker_failed') for status in (114, 115, 116, 117, 118, 119, 255)],
     (42, False, 'source_worker_failed'),
 ])
 def test_native_source_worker_terminal_classes_survive_supervision(tmp_path, status, oom, reason, monkeypatch):
@@ -6933,7 +6934,8 @@ def _source_terminal_docker(monkeypatch, journal, operation, revision, status, o
 @pytest.mark.parametrize('already_failed', [False, True])
 @pytest.mark.parametrize('worker_status,oom,reason', [(137, True, 'source_worker_oom'),
     (96, False, 'source_worker_failed'), (97, False, 'source_worker_failed'),
-    (98, False, 'source_worker_failed')])
+    (98, False, 'source_worker_failed'),
+    *[(status, False, 'source_worker_failed') for status in (114, 115, 116, 117, 118, 119, 255)]])
 def test_native_source_terminal_reason_survives_cleanup_and_same_id_reconciliation(tmp_path, monkeypatch, interrupted_before_observation, already_failed, worker_status, oom, reason):
     from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux
@@ -7121,6 +7123,7 @@ def test_native_source_terminal_retry_reestablishes_durability_before_removal(tm
     (1, 82, 'source_preflight_failed'), (1, 79, 'vector_projection_failed'),
     (1, 0, 'source_worker_failed'), (124, 0, 'source_worker_timeout'),
     (143, 0, 'source_worker_terminated'), (1, 98, 'source_worker_failed'),
+    *[(1, status, 'source_worker_failed') for status in (114, 115, 116, 117, 118, 119, 255)],
 ])
 def test_native_source_docker_worker_state_survives_compose_transport_failure(tmp_path, monkeypatch, compose_status, worker_status, reason):
     from app.ops import native_source_bootstrap as source, postgres_deploy_linux as linux
@@ -7131,7 +7134,7 @@ def test_native_source_docker_worker_state_survives_compose_transport_failure(tm
     assert removed == [reason]
 
 
-@pytest.mark.parametrize('helper_status', [1, 42, 78, 124, 130, 137, 143])
+@pytest.mark.parametrize('helper_status', [1, 42, 78, 114, 115, 116, 117, 118, 119, 124, 130, 137, 143, 255])
 def test_native_source_unexpected_cleanup_helper_exit_never_admits_writer_restart(tmp_path, helper_status):
     root, env, sha = _native_source_harness(tmp_path, channel='dev')
     env['FAKE_SOURCE_RC'] = '42'
@@ -7517,6 +7520,10 @@ def test_embedding_probe_untrusted_markers_cannot_reach_operation_journal(monkey
     from app.ops import native_source_bootstrap as source, postgres_deploy_linux as linux
     codes = source.SOURCE_PROJECTION_FAILURE_CODES
     assert len(codes) == len(set(codes.values()))
+    probes = source.EMBEDDING_PROBE_FAILURE_CODES
+    assert len(probes) == len(set(probes.values()))
+    assert not (codes.keys() & probes.keys()) and not (set(codes.values()) & set(probes.values()))
+    assert source.SOURCE_PROJECTION_FAILURE_REASONS == codes.keys() | probes.keys()
     reason = 'embedding_probe_client_failed'
     stage = 'health' if marker == 'other-stage' else 'source_projection'
     line = 'YGGDRASIL_DEPLOY_FAILURE_REASON=' + (reason if marker != 'unknown' else 'unknown') + '\n'
@@ -7533,6 +7540,22 @@ def test_embedding_probe_untrusted_markers_cannot_reach_operation_journal(monkey
     assert not retained
     assert len(diagnostics) == 1 and b'class=command_failed' in diagnostics[0]
     assert b'private-provider-canary' not in diagnostics[0]
+
+
+def test_embedding_probe_status_namespace_never_decodes_as_worker_reason():
+    from app.ops import native_source_bootstrap as source
+    codes = source.SOURCE_PROJECTION_FAILURE_CODES
+    # Every worker byte status uses only worker checkpoint/observer semantics.
+    for status in range(256):
+        expected = (None if status == 0 else 'source_worker_timeout' if status == 124
+                    else 'source_worker_terminated' if status in {130, 143}
+                    else next((reason for reason, code in codes.items()
+                               if code == status and code not in {96, 97, 98}),
+                              'source_worker_failed'))
+        assert source.source_terminal_reason(status) == expected
+        assert source.source_terminal_reason(status, oom_killed=True) == 'source_worker_oom'
+    assert not (set(source.EMBEDDING_PROBE_FAILURE_CODES)
+                & {source.source_terminal_reason(status) for status in range(256)})
 
 
 def test_full_startup_uses_same_strict_source_summary_parser() -> None:
