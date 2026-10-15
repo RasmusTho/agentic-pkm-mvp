@@ -115,3 +115,26 @@ def test_recovery_skips_matching_terminal_receipt() -> None:
     )
     assert result["requests"] == []
     assert result["complete"] == [{"pr_number": 6113, "reason": "matching terminal closure receipt"}]
+
+
+def test_invalid_offset_and_exhausted_backoff_preserve_continuation() -> None:
+    classification = _classification()
+    invalid = recover(
+        repository=REPOSITORY,
+        pages=[[_pr()]],
+        classifications={"6113": classification},
+        cursor=encode_cursor(page=1, offset=999, window_end="2026-10-15T08:00:00Z"),
+        window_end="2026-10-15T08:00:00Z",
+    )
+    assert invalid["overflow"] is True
+    assert invalid["continuation_cursor"] is None
+    assert "offset" in invalid["error"]
+    exhausted = recover(
+        repository=REPOSITORY,
+        pages=[[_pr()]],
+        classifications={"6113": classification},
+        window_end="2026-10-15T08:00:00Z",
+        rest_attempt=3,
+    )
+    assert exhausted["overflow"] is True
+    assert exhausted["continuation_cursor"]

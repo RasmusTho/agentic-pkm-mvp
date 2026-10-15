@@ -62,15 +62,21 @@ def _merge_sha(pr: Mapping[str, object]) -> str:
     return merge_sha if isinstance(merge_sha, str) else ""
 
 
-def _receipt_matches(receipt: object, *, repository: str, pr_number: int, merge_sha: str) -> bool:
+def _receipt_identity_matches(receipt: object, *, repository: str, pr_number: int, merge_sha: str) -> bool:
     data = _dict(receipt)
     return (
         data.get("contract") in {"closure_delivery_receipt.v1", "autonomous_pr_closure_receipt.v1"}
         and data.get("repository") == repository
         and data.get("pr_number") == pr_number
         and data.get("merge_sha") == merge_sha
-        and data.get("status") in {"complete", "terminal", "reconciled"}
     )
+
+
+def _receipt_matches(receipt: object, *, repository: str, pr_number: int, merge_sha: str) -> bool:
+    data = _dict(receipt)
+    return _receipt_identity_matches(
+        data, repository=repository, pr_number=pr_number, merge_sha=merge_sha
+    ) and data.get("status") in {"complete", "terminal", "reconciled"}
 
 
 def classify_pending(
@@ -111,15 +117,23 @@ def classify_pending(
         return {"status": "merged_closure_pending", "reason": "foreign issue evidence"}
     if any(item.get("conflict") is True for item in issues):
         return {"status": "merged_closure_pending", "reason": "conflicting issue evidence"}
+    if any(item.get("unavailable") is True for item in issues):
+        return {"status": "merged_closure_pending", "reason": "issue evidence unavailable"}
     if evidence.get("conflict") is True or pr.get("evidence_conflict") is True:
         return {"status": "merged_closure_pending", "reason": "conflicting authority evidence"}
     if evidence.get("unavailable") is True or pr.get("evidence_unavailable") is True:
         return {"status": "merged_closure_pending", "reason": "authoritative evidence unavailable"}
-    if isinstance(receipts, list) and any(
-        _receipt_matches(item, repository=repository, pr_number=number, merge_sha=merge_sha)
-        for item in receipts
-    ):
-        return {"status": "complete", "reason": "matching terminal closure receipt"}
+    if isinstance(receipts, list):
+        matching = [
+            _dict(item)
+            for item in receipts
+            if _receipt_identity_matches(item, repository=repository, pr_number=number, merge_sha=merge_sha)
+        ]
+        if matching:
+            terminal_statuses = {"complete", "terminal", "reconciled"}
+            if any(item.get("status") not in terminal_statuses for item in matching):
+                return {"status": "merged_closure_pending", "reason": "conflicting terminal receipt evidence"}
+            return {"status": "complete", "reason": "matching terminal closure receipt"}
     if receipts not in ([], None) and not isinstance(receipts, list):
         return {"status": "merged_closure_pending", "reason": "receipt evidence unavailable"}
     # Direct-repair and Issue deliveries need a PR-specific receipt. Closed
@@ -212,13 +226,21 @@ def recover(
     if end is None or start is None or start > end or end - start > timedelta(days=MAX_LOOKBACK_DAYS):
         return {"requests": [], "pending": [], "overflow": True, "continuation_cursor": None, "error": "invalid or overlong recovery window"}
     backoff = bounded_rest_backoff(attempt=rest_attempt, retry_after_seconds=retry_after_seconds)
-    if rest_attempt < 0 or rest_attempt >= MAX_BACKOFF_ATTEMPTS:
-        return {"requests": [], "pending": [], "overflow": True, "continuation_cursor": None, "backoff": backoff, "error": "REST backoff cap reached"}
     page_start, item_start, cursor_error = decode_cursor(cursor, window_end=window_end)
     if cursor_error:
         return {"requests": [], "pending": [], "overflow": True, "continuation_cursor": None, "error": cursor_error}
     if page_start < pages_start:
         return {"requests": [], "pending": [], "overflow": True, "continuation_cursor": None, "error": "cursor precedes collected pages"}
+    if rest_attempt < 0 or rest_attempt >= MAX_BACKOFF_ATTEMPTS:
+        return {
+            "requests": [],
+            "pending": [],
+            "complete": [],
+            "overflow": True,
+            "continuation_cursor": encode_cursor(page=page_start, offset=item_start, window_end=window_end),
+            "backoff": backoff,
+            "error": "REST backoff cap reached",
+        }
     requests: list[dict[str, object]] = []
     pending: list[dict[str, object]] = []
     complete: list[dict[str, object]] = []
@@ -231,6 +253,15 @@ def recover(
         if len(page) > MAX_ITEMS_PER_PAGE:
             return {"requests": requests, "pending": pending, "complete": complete, "overflow": True, "continuation_cursor": encode_cursor(page=offset, offset=item_start, window_end=window_end), "error": "page exceeds item cap"}
         page_item_start = item_start if offset == page_start else 0
+        if page_item_start > len(page):
+            return {
+                "requests": requests,
+                "pending": pending,
+                "complete": complete,
+                "overflow": True,
+                "continuation_cursor": None,
+                "error": "cursor offset exceeds collected page",
+            }
         for item_index, pr in enumerate(page[page_item_start:], start=page_item_start):
             if scanned_requests >= max_requests:
                 return {"requests": requests, "pending": pending, "complete": complete, "overflow": True, "continuation_cursor": encode_cursor(page=offset, offset=item_index, window_end=window_end), "error": "request cap reached"}

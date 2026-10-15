@@ -57,11 +57,14 @@ jobs:
             local output="$1"
             local query="$2"
             local attempt=0
+            local temporary="${output}.tmp"
             while [ "${attempt}" -lt "${MAX_BACKOFF_ATTEMPTS}" ]; do
-              if gh api "${query}" > "${output}"; then
+              if gh api "${query}" > "${temporary}"; then
+                mv "${temporary}" "${output}"
                 REST_ATTEMPT="${attempt}"
                 return 0
               fi
+              rm -f "${temporary}"
               attempt=$((attempt + 1))
               if [ "${attempt}" -lt "${MAX_BACKOFF_ATTEMPTS}" ]; then
                 sleep_seconds=$((2 ** (attempt - 1)))
@@ -94,7 +97,10 @@ jobs:
           from scripts.post_merge_docs_classifier import classify
 
           pages = []
-          for path in sorted(Path("post-merge-closure-recovery/pages").glob("*.json")):
+          for path in sorted(
+              Path("post-merge-closure-recovery/pages").glob("*.json"),
+              key=lambda candidate: int(candidate.stem),
+          ):
               value = json.loads(path.read_text())
               pages.append(value if isinstance(value, list) else [])
           classifications = {}

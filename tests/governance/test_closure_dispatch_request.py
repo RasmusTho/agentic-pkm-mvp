@@ -78,3 +78,9 @@ def test_missing_classification_or_foreign_pr_identity_is_rejected() -> None:
         pr=foreign_pr,
         classification=_classification(),
     ) is None
+    foreign_string_pr = {**_pr(), "repository": "other/repository"}
+    assert build_request(
+        event={"repository": {"full_name": REPOSITORY}},
+        pr=foreign_string_pr,
+        classification=_classification(),
+    ) is None

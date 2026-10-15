@@ -49,6 +49,9 @@ def _merge_sha(pr: Mapping[str, object]) -> str:
 
 
 def _pr_repository(pr: Mapping[str, object]) -> str:
+    direct = pr.get("repository")
+    if isinstance(direct, str) and direct:
+        return direct
     for candidate in (
         _nested_str(pr, "repository", "full_name"),
         _nested_str(pr, "repository", "name_with_owner"),

@@ -45,3 +45,18 @@ def test_missing_or_conflicting_evidence_cannot_prove_terminal() -> None:
     )
     assert conflict["status"] != "complete"
     assert malformed["status"] != "complete"
+
+
+def test_conflicting_or_unavailable_receipts_cannot_prove_terminal() -> None:
+    receipt = _receipt()
+    conflicting = classify_pending(
+        pr=_pr(),
+        authoritative_evidence={"receipts": [receipt, {**receipt, "status": "pending"}]},
+    )
+    unavailable = classify_pending(
+        pr=_pr(),
+        issue_evidence=[{"repository": REPOSITORY, "unavailable": True}],
+        authoritative_evidence={"closure_receipt": receipt},
+    )
+    assert conflicting["status"] != "complete"
+    assert unavailable["status"] != "complete"
