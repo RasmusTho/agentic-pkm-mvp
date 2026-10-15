@@ -1125,22 +1125,60 @@ def test_post_effect_api_readback_preserves_exact_merge_identity(control_plane_s
     authority = plan["authority_receipt"]
     neutral = {**pr, "body": plan["neutralized_body"]}
     convergence = projection_phase_kwargs(authority, neutral)
-    merged_pr = {**pr, "state": "closed", "merged": True, "merged_at": "2026-10-09T10:00:00Z", "merge_commit_sha": "c" * 40}
+    merged_pr = {
+        **neutral,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-10-09T10:00:00Z",
+        "merge_commit_sha": "c" * 40,
+    }
+    restored_pr = {**merged_pr, "body": plan["original_body"]}
     comments = [{"author_association": "OWNER", "body": plan["authority_receipt_comment"]},
                 projection_convergence_comment(convergence)]
     paths = {}
     for name, payload in {"authority": authority, "comments": comments, "convergence": convergence["projection_convergence_receipt"],
-                          "deployment": deployment, "pr": merged_pr, "closed": [4897]}.items():
+                          "final": convergence["final_projection_observation"], "deployment": deployment,
+                          "pr": restored_pr, "closed": [4897]}.items():
         paths[name] = tmp_path / (name + ".json")
         paths[name].write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setattr(client_module.ClientConfig, "from_env", lambda: None)
     monkeypatch.setattr(client_module, "BuilderOpsControlPlaneClient", lambda _config: client)
     output = tmp_path / "phase.json"
-    assert phase_cli.main(["--phase", "restored", "--authority-json", str(paths["authority"]),
-        "--comments-json", str(paths["comments"]), "--projection-convergence-json", str(paths["convergence"]),
-        "--post-effect-deployment-json", str(paths["deployment"]), "--post-effect-operation-key", result.operation_key,
-        "--pr-json", str(paths["pr"]), "--closed-issues-json", str(paths["closed"]), "--output-json", str(output)]) == 0
-    projected_phase = json.loads(output.read_text())["phase_receipt"]
+    phase_inputs = {
+        "prepared": neutral,
+        "merged": merged_pr,
+        "reconciled": merged_pr,
+        "restored": restored_pr,
+    }
+    projected_phase = None
+    for phase, phase_pr in phase_inputs.items():
+        paths["comments"].write_text(json.dumps(comments), encoding="utf-8")
+        paths["pr"].write_text(json.dumps(phase_pr), encoding="utf-8")
+        argv = [
+            "--phase", phase,
+            "--authority-json", str(paths["authority"]),
+            "--comments-json", str(paths["comments"]),
+            "--projection-convergence-json", str(paths["convergence"]),
+            "--post-effect-deployment-json", str(paths["deployment"]),
+            "--pr-json", str(paths["pr"]),
+            "--output-json", str(output),
+        ]
+        if phase == "prepared":
+            argv.extend(("--final-projection-observation-json", str(paths["final"])))
+        if phase in {"reconciled", "restored"}:
+            argv.extend(("--post-effect-operation-key", result.operation_key))
+            argv.extend(("--closed-issues-json", str(paths["closed"])))
+        assert phase_cli.main(argv) == 0
+        phase_output = json.loads(output.read_text())
+        projected_phase = phase_output["phase_receipt"]
+        assert projected_phase["contract"] == "verified_issue_set_merge_phase.v2"
+        comments.append(
+            {
+                "author_association": "OWNER",
+                "body": phase_output["phase_receipt_comment"],
+            }
+        )
+    assert projected_phase is not None
     assert projected_phase["contract"] == "verified_issue_set_merge_phase.v2"
     assert projected_phase["post_effect_authority"] == projection
 
