@@ -45,6 +45,7 @@ class External:
         self.uncertain_up = False
         self.identity = 0
         self.config_extra = {}
+        self.compact_compose = True
         self.host_extra = {}
         self.drift_after_up = None
         self.expected_baseline = None
@@ -72,6 +73,10 @@ class External:
                    "read_only": True, "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
                    "environment": selected, "volumes": [{"type": "bind", "source": k, "target": v,
                        "read_only": True, "bind": {"create_host_path": False}} for k, v in deploy.MOUNTS.items()]}
+        if self.compact_compose:
+            service["entrypoint"] = None
+            for volume in service["volumes"]:
+                volume["bind"] = {}
         service.update(self.config_extra)
         if self.unsafe_compose:
             service["privileged"] = True
@@ -241,10 +246,12 @@ def test_component_evidence_does_not_grant_fullsystem_or_acceptance(operator):
 
 
 @pytest.mark.parametrize("extra", [
-    {"cap_add": ["SYS_ADMIN"]}, {"volumes_from": ["container:builderops-api-1:rw"]},
+    {"cap_add": ["SYS_ADMIN"]}, {"entrypoint": ["sh", "-c", "id"]}, {"volumes_from": ["container:builderops-api-1:rw"]},
     {"post_start": [{"command": "id", "user": "root", "privileged": True}]},
     {"pre_stop": [{"command": "id"}]}, {"healthcheck": {"test": ["CMD", "sh", "-c", "id"]}},
     {"volumes": [{"type": "bind", "source": "/", "target": "/host", "read_only": False}]},
+    {"volumes": [{"type": "bind", "source": source, "target": target, "read_only": True,
+                  "bind": {"create_host_path": True}} for source, target in deploy.MOUNTS.items()]},
     {"volumes": [{"type": "bind", "source": source, "target": target, "read_only": True,
                   "bind": {"create_host_path": False, "propagation": "rshared"}}
                  for source, target in deploy.MOUNTS.items()]},
@@ -309,3 +316,23 @@ def test_retained_pending_refuses_restart_before_effect(operator):
     with pytest.raises(deploy.Refusal, match="retained_attempt"):
         deploy.prepare(candidate, "restart")
     assert not world.mutations()
+
+
+def test_host_compose_serialization_and_legacy_baseline(operator):
+    world, candidate = operator
+    del world.environment["DEVUI_DIAGNOSTIC_ORIGIN"]
+    del world.environment["DEVUI_CKM_OVERVIEW_URL"]
+    plan = deploy.prepare(candidate, "owner mandate")
+    assert len(plan["baseline"]["environment"]) == 12
+    assert len(plan["target_environment"]) == 14
+    assert deploy.apply(plan, candidate, plan["plan_sha256"])["outcome"] == "deployed"
+    assert deploy.rollback(plan, plan["plan_sha256"])["outcome"] == "rolled_back"
+    assert world.environment == plan["baseline"]["environment"]
+    config = world.config(world.environment)
+    with pytest.raises(deploy.Refusal):  # Legacy serialization never relaxes candidate env requirements.
+        deploy.validate_config(config, world.environment)
+    assert deploy.validate_config(config, world.environment, baseline=True)
+    full = dict(world.environment, DEVUI_DIAGNOSTIC_ORIGIN="", DEVUI_CKM_OVERVIEW_URL="")
+    compact = world.config(full)
+    world.compact_compose = False
+    assert deploy.validate_config(compact, full) == deploy.validate_config(world.config(full), full)

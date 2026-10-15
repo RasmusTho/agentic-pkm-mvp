@@ -189,7 +189,7 @@ def compose(directory: Path, environment: dict[str, str], arguments: list[str]) 
     return run(argv + arguments, env=env)
 
 
-def validate_config(config: dict[str, Any], environment: dict[str, str]) -> str:
+def validate_config(config: dict[str, Any], environment: dict[str, str], *, baseline: bool = False) -> str:
     # Closed effective configuration, including nested commands and bind options.
     # A trusted future image does not expand this operator's component mandate.
     service: dict[str, Any] = {"image": IMAGE + environment["DEVUI_IMAGE_DIGEST"], "command": COMMAND,
@@ -201,15 +201,23 @@ def validate_config(config: dict[str, Any], environment: dict[str, str]) -> str:
                            for source, target in MOUNTS.items()]}
     expected = {"name": PROJECT, "services": {"devui": service}}
     normalized = json.loads(json.dumps(config))
-    actual_volumes = normalized.get("services", {}).get("devui", {}).get("volumes", [])
+    actual_service = normalized.get("services", {}).get("devui", {})
+    if actual_service.get("entrypoint") is None:
+        actual_service.pop("entrypoint", None)  # Compose serializes the inherited entrypoint as null.
+    actual_volumes = actual_service.get("volumes", [])
     # Compose may reorder mounts; their complete values must still match.
     if not isinstance(actual_volumes, list) or any(not isinstance(v, dict) for v in actual_volumes):
         raise Refusal("compose_mounts_refused")
-    normalized.get("services", {}).get("devui", {})["volumes"] = sorted(actual_volumes, key=lambda v: str(v.get("target")))
+    for volume in actual_volumes:
+        if volume.get("bind") == {}:
+            volume["bind"] = {"create_host_path": False}  # Compose omits this false default.
+    actual_service["volumes"] = sorted(actual_volumes, key=lambda v: str(v.get("target")))
     service["volumes"] = sorted(service["volumes"], key=lambda v: v["target"])
-    if set(environment) != ENV_KEYS or normalized != expected:
+    optional = {"DEVUI_DIAGNOSTIC_ORIGIN", "DEVUI_CKM_OVERVIEW_URL"}
+    valid_keys = [ENV_KEYS, ENV_KEYS - optional] if baseline else [ENV_KEYS]
+    if set(environment) not in valid_keys or normalized != expected:
         raise Refusal("compose_boundary_refused")
-    sanitized = json.loads(json.dumps(config))
+    sanitized = normalized
     sanitized["services"]["devui"]["environment"].pop("DEVUI_CONFIG_FINGERPRINT", None)
     return digest(sanitized)
 
@@ -274,7 +282,7 @@ def prepare(candidate_file: Path, authorization: str) -> dict[str, Any]:
     stage(directory, files)
     rendered = json.loads(compose(directory, target_env, ["config", "--format", "json"]))
     target_env["DEVUI_CONFIG_FINGERPRINT"] = validate_config(rendered, target_env)
-    validate_config(json.loads(compose(Path(baseline["directory"]), baseline["environment"], ["config", "--format", "json"])), baseline["environment"])
+    validate_config(json.loads(compose(Path(baseline["directory"]), baseline["environment"], ["config", "--format", "json"])), baseline["environment"], baseline=True)
     body = {"contract": "devui_component_promotion_plan.v1", "candidate": candidate,
             "candidate_file_sha256": hashlib.sha256(candidate_file.read_bytes()).hexdigest(),
             "engine_id": engine, "authorization_reference": authorization, "baseline": baseline,
@@ -306,7 +314,7 @@ def apply(plan: dict[str, Any], candidate_file: Path, expected_digest: str) -> d
     baseline = plan["baseline"]
     if {name: (Path(baseline["directory"]) / name).read_text() for name in FILES} != baseline["compose"]:
         raise Refusal("rollback_compose_drift")
-    validate_config(json.loads(compose(Path(baseline["directory"]), baseline["environment"], ["config", "--format", "json"])), baseline["environment"])
+    validate_config(json.loads(compose(Path(baseline["directory"]), baseline["environment"], ["config", "--format", "json"])), baseline["environment"], baseline=True)
     probe(baseline["environment"])
     browser(candidate["source_sha"], preflight=True)
     browser(baseline["environment"]["DEVUI_SOURCE_SHA"], baseline=True)
@@ -368,7 +376,7 @@ def rollback(plan: dict[str, Any], expected_digest: str) -> dict[str, Any]:
     baseline = plan["baseline"]
     if {name: (Path(baseline["directory"]) / name).read_text() for name in FILES} != baseline["compose"]:
         raise Refusal("rollback_compose_drift")
-    validate_config(json.loads(compose(Path(baseline["directory"]), baseline["environment"], ["config", "--format", "json"])), baseline["environment"])
+    validate_config(json.loads(compose(Path(baseline["directory"]), baseline["environment"], ["config", "--format", "json"])), baseline["environment"], baseline=True)
     browser(baseline["environment"]["DEVUI_SOURCE_SHA"], preflight=True)
     record["outcome"] = "pending"
     atomic(attempt, record)
