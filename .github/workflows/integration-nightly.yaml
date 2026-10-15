@@ -61,8 +61,8 @@ jobs:
 
   full-suite:
     runs-on: ubuntu-latest
-    # Leave installation, the bounded 40-minute batch, and artifact upload room.
-    timeout-minutes: 45
+    # Reserve setup and upload time around the measured full-suite envelope.
+    timeout-minutes: 60
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -132,9 +132,10 @@ jobs:
         run: mkdir -p tmp
 
       - name: Full test suite (memory, not pg)
-        # Keep the finite limit while qualifying the file-level deploy grouping.
+        # Complete current-source runs take about 40 minutes; retain finite
+        # headroom for runner variability without relaxing the test watchdog.
         # Timeout or incomplete results remain failed full-suite evidence.
-        timeout-minutes: 40
+        timeout-minutes: 50
         continue-on-error: ${{ matrix.experimental }}
         shell: bash
         env:

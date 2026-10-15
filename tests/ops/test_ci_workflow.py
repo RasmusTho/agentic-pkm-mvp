@@ -667,7 +667,7 @@ def test_nightly_suite_shards_preserve_the_full_marker_inventory(tmp_path: Path)
         assert "--import-mode=importlib" in event["args"] and "--durations=30" in event["args"]
         assert event["addopts"] == "--timeout=120 --timeout-method=thread"
         assert event["unbuffered"] == "1"
-    assert step["timeout-minutes"] == 40 and job["timeout-minutes"] >= 45
+    assert step["timeout-minutes"] == 50 and job["timeout-minutes"] == 60
     assert "PYTEST_DISABLE_PLUGIN_AUTOLOAD" not in job.get("env", {})
 
 
