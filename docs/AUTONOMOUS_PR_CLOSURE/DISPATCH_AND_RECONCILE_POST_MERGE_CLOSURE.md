@@ -76,6 +76,30 @@ Producer acceptance is repo-verifiable with these committed test commitments:
 - Verify: `tests/governance/test_post_merge_closure_reconciliation.py::test_bounded_recovery_rediscovers_orphaned_merge`
 - Verify: `tests/governance/test_post_merge_closure_reconciliation.py::test_cursor_overflow_and_backoff_preserve_scan_bounds`
 
+## Delivered repository producer
+
+The repository producer is implemented by
+`.github/workflows/post-merge-closure-dispatch.yml`,
+`.github/workflows/post-merge-closure-reconcile.yml`,
+`scripts/build_closure_dispatch_request.py`, and
+`scripts/reconcile_post_merge_closure.py`. The event path consumes the existing
+post-merge docs classification and emits an inert `closure_dispatch_request.v1` artifact for a
+merged PR using GitHub's exact REST merge SHA. The scheduled/manual path classifies each bounded
+snapshot from explicit evidence, scans a finite closed-PR window, and preserves a validated
+page/item continuation cursor when the page or request cap is reached; bounded REST retries stop
+at the declared backoff cap. Both paths have read-only GitHub permissions and upload artifacts
+only; they do not invoke the VM102 consumer or mutate Issues, labels, Projects, comments, branches,
+or delivery state.
+
+The request identity is `repository + PR number + exact merge SHA + closure stage + contract
+version`. Event and recovery requests therefore converge on the same idempotency key. The
+classifier keeps missing, unavailable, or conflicting terminal evidence pending. The scheduled
+producer has no consumer receipt source and must not synthesize one: a missing
+`closure_delivery_receipt.v1` remains pending and bounded recovery may re-emit the same request
+identity. The producer does not establish the VM102 consumer, durable consumer deduplication,
+owner-doc terminal receipt, lane release, or the governed live pilot/replay; those remain open
+acceptance gates on #3604.
+
 ## VM102 consumer and remaining acceptance
 
 The separate consumer target is VM102 (`bob-1`, guest identity `builder-system`), subject to #5181's
