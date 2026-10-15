@@ -54,6 +54,11 @@ SOURCE_PROJECTION_FAILURE_CODES = {
     'legacy_dependency_shape_refused': 106,
     'legacy_retained_history_refused': 107,
     'legacy_relation_retention_refused': 108,
+    'legacy_identity_persistence_refused': 109,
+    'legacy_identity_mismatch_refused': 110,
+    'legacy_identity_ambiguous_refused': 111,
+    'legacy_identity_producer_refused': 112,
+    'legacy_identity_canonical_refused': 113,
 }
 
 

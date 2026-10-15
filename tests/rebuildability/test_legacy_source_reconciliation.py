@@ -7,6 +7,315 @@ import pytest
 from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
 
 
+def _persist_companion_identity(root, source, oid):
+    from app.ingest import vault_alpha as producer
+    from app.rebuildability.product_total_loss import parse_bounded_frontmatter
+    from app.services.companion_note import CompanionNote, companion_path, write_companion
+
+    source.write_text(source.read_text().replace(f"uuid: {oid}\n", ""))
+    _, body, _ = parse_bounded_frontmatter(source.read_text())
+    companion = CompanionNote(uuid=str(oid), source_ref=source.relative_to(root).as_posix(),
+        title=producer._derive_title(body, source),
+        content_hash=str(producer._compute_ingest_fingerprint(body.strip(), source)["text_sha256"]),
+        ingest_state="tracked", last_ingested="", created_by_instance="fixture")
+    write_companion(root, companion)
+    return root / companion_path(str(oid), root)
+
+
+@pytest.mark.parametrize("location", ["canonical", "legacy"])
+def test_persisted_companion_identity_allows_only_exact_excluded_retirement(monkeypatch, tmp_path, location):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    companion = _persist_companion_identity(root, source, original["object_id"])
+    if location == "legacy":
+        destination = root / "_system/companions" / companion.name
+        destination.parent.mkdir(parents=True)
+        companion.rename(destination)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert not state.rows and not state.vectors and not state.embedded
+    assert len(state.calls) == 1
+    assert state.calls[0]["replacement"] is None and state.calls[0]["vector"] is None
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 0
+
+
+@pytest.mark.parametrize("producer", ["alpha", "filesystem", "registry"])
+@pytest.mark.parametrize("location", ["canonical", "legacy"])
+def test_persisted_companion_identity_never_authorizes_reprojection(monkeypatch, tmp_path, producer, location):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(
+        monkeypatch, tmp_path, selected=producer == "alpha")
+    companion = _persist_companion_identity(root, source, original["object_id"])
+    if location == "legacy":
+        destination = root / "_system/companions" / companion.name
+        destination.parent.mkdir(parents=True)
+        companion.rename(destination)
+    if producer == "filesystem":
+        monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+        monkeypatch.setenv("VAULT_DIR", str(root))
+    elif producer == "registry":
+        _enable_registry(monkeypatch, root)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    with pytest.raises(recovery.LegacySourceRefusal, match="^legacy_identity_producer_refused$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == [original] and not state.calls and not state.vectors and not state.embedded
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
+@pytest.mark.parametrize("location", ["canonical", "legacy"])
+@pytest.mark.parametrize("other_first", [False, True])
+def test_companion_discovery_filters_title_before_selection_in_every_location(monkeypatch, tmp_path, location, other_first):
+    from dataclasses import replace
+    from pathlib import Path
+    from uuid import uuid4
+    from app.services.companion_note import read_companion, write_companion
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    companion_path = _persist_companion_identity(root, source, original["object_id"])
+    companion = read_companion(root, str(original["object_id"]))
+    source.write_text(source.read_text().replace("---\n", "---\ntitle: Target\n", 1))
+    write_companion(root, replace(companion, title="Target"))
+    # An unrelated continuity observation can share template body text while
+    # declaring a different title. It must not shadow the one eligible match.
+    other_uuid = str(uuid4())
+    write_companion(root, replace(companion, uuid=other_uuid, title="Other", source_ref="other.md"))
+    canonical_dir = companion_path.parent
+    if location == "legacy":
+        destination = root / "_system/companions" / companion_path.name
+        destination.parent.mkdir(parents=True)
+        companion_path.rename(destination)
+    glob = Path.glob
+    def ordered_glob(path, pattern):
+        found = list(glob(path, pattern))
+        if path == canonical_dir and pattern == "*.md":
+            found.sort(key=lambda item: (item.stem == other_uuid) != other_first)
+        return iter(found)
+    monkeypatch.setattr(Path, "glob", ordered_glob)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert not state.rows and not state.embedded and not state.vectors
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
+def test_enabled_producer_companion_claim_is_not_hidden_as_metadata(monkeypatch, tmp_path):
+    from app.ingest.producer_policy import filesystem_producer_policy
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    companion = _persist_companion_identity(root, source, original["object_id"])
+    source.write_bytes(raw)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+    monkeypatch.setenv("VAULT_DIR", str(root))
+    policy = filesystem_producer_policy()
+    assert policy.includes(source) and policy.includes(companion)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    with pytest.raises(recovery.LegacySourceRefusal, match="^legacy_identity_ambiguous_refused$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == [original] and not state.calls and not state.vectors and not state.embedded
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
+def _effective_producer_collision(monkeypatch, root, source, raw, original, producer_kind):
+    from app.ingest import vault_alpha as producer
+    from app.rebuildability.product_total_loss import parse_bounded_frontmatter
+
+    other = root / "Notes" / str(original["object_id"]) / "other.md"
+    other.parent.mkdir(parents=True)
+    declaration = "uuid: invalid\n" if producer_kind == "alpha-invalid" else ""
+    if (producer_kind.startswith("registry-") and producer_kind != "registry-derived") or producer_kind == "filesystem-integer":
+        from uuid import UUID
+        identity = str(original["object_id"])
+        key = "id" if "-id-" in producer_kind else "uuid"
+        value = f"[{identity}, 00000000-0000-0000-0000-000000000000]"
+        if producer_kind.endswith("nested"):
+            value = f"[{value}]"
+        elif producer_kind.endswith("integer"):
+            value = "1" + f"{original['object_id'].int:039d}"[-31:]
+            identity = str(UUID(value))
+        declaration = f"{key}: {value}\n"
+    derived = "agent_maintained: true\nread_only: true\nauthority_role: derived\n" if producer_kind == "registry-derived" else ""
+    other.write_text(f"---\n{declaration}{derived}trust: human\n---\nunrelated producer body\n")
+    parsed, body, _ = parse_bounded_frontmatter(other.read_text())
+    effective = producer.resolve_vault_note_identity(other, vault_root=root, frontmatter=parsed, body=body).note_uuid
+    if producer_kind.startswith("registry-") or producer_kind == "filesystem-integer":
+        from app.ingest.producer_policy import registry_producer_policy
+        from app.services.note_uuid import ensure_note_uuid
+        # Prove the real read-only derived branch, not alpha's applicability.
+        if producer_kind == "registry-derived":
+            effective = ensure_note_uuid(other, vault_root=root)
+        elif producer_kind.startswith("registry-"):
+            from app.workers.outbox_worker import _normalize_uuid_value
+            effective = str(UUID(_normalize_uuid_value(parsed.get("uuid") or parsed.get("id"))))
+            assert effective == identity
+        else:
+            from app.ports.filesystem_vault_adapter import FilesystemVaultAdapter
+            adapter = FilesystemVaultAdapter(vault_root=root, backend_writes_enabled=False)
+            preserved = adapter.ensure_uuid(adapter.read_note(other))
+            assert not preserved.wrote
+            effective = str(UUID(preserved.uuid_value))
+        (root / "Alpha").mkdir()
+        (root / "⚙️ System" / "vault.layout.md").write_text("---\ninclude_folders: [Alpha]\n---\nLayout.\n")
+        if producer_kind.startswith("registry-"):
+            _enable_registry(monkeypatch, root, scope="Notes/*.md,Notes/**/*.md")
+            assert registry_producer_policy(root).includes(other)
+        else:
+            monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+            monkeypatch.setenv("VAULT_DIR", str(root))
+        assert other not in producer.select_source_backed_rebuild_candidates(root)
+    else:
+        assert other in producer.select_source_backed_rebuild_candidates(root)
+    assert source not in producer.select_source_backed_rebuild_candidates(root)
+    source.write_text(raw.decode().replace(str(original["object_id"]), effective))
+    return effective
+
+
+@pytest.mark.parametrize("producer_kind", ["alpha", "alpha-invalid", "registry-derived",
+    "registry-uuid-multi", "registry-id-multi", "registry-uuid-nested", "registry-id-nested", "registry-uuid-integer", "filesystem-integer"])
+@pytest.mark.parametrize("phase", ["discovery", "transaction"])
+def test_effective_producer_identity_is_a_denial_claim_not_retirement_authority(monkeypatch, tmp_path, producer_kind, phase):
+    from uuid import UUID
+
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    effective = _effective_producer_collision(monkeypatch, root, source, raw, original, producer_kind)
+    state.rows[0]["object_id"] = UUID(effective)
+    other = next((root / "Notes").rglob("other.md"))
+    other_bytes = other.read_bytes()
+    if phase == "transaction":
+        other.unlink()
+        reconcile = binding.store.reconcile_legacy_source
+        def racing(*args, **kwargs):
+            other.write_bytes(other_bytes)
+            return reconcile(*args, **kwargs)
+        monkeypatch.setattr(binding.store, "reconcile_legacy_source", racing)
+    before_rows = deepcopy(state.rows)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    reason = "legacy_producer_policy_refused" if phase == "transaction" and (producer_kind.startswith("registry-") or producer_kind == "filesystem-integer") else "legacy_identity_ambiguous_refused"
+    with pytest.raises(recovery.LegacySourceRefusal, match=f"^{reason}$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == before_rows and not state.calls and not state.vectors
+    if phase != "transaction" or producer_kind != "filesystem-integer":
+        assert not state.embedded
+    if phase == "transaction":
+        before[other] = other_bytes  # Only the simulated concurrent writer changed this source.
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
+def test_producer_claim_of_canonical_object_alias_refuses_before_reprojection(monkeypatch, tmp_path):
+    from uuid import uuid4
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path, selected=True)
+    source.write_text(raw.decode().replace(str(original["object_id"]), str(uuid4())))
+    other = source.parent / "other.md"
+    other.write_text(f"---\nuuid: {original['object_id']}\n---\nunrelated source\n")
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    with pytest.raises(recovery.LegacySourceRefusal, match="^legacy_identity_ambiguous_refused$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == [original] and not state.calls and not state.vectors and not state.embedded
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
+def _foreign_filesystem_root(monkeypatch, root, raw, root_kind, *, enabled=True):
+    from app.ingest.producer_policy import filesystem_producer_policy
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    foreign = {"nested": root / "Nested", "parent": root.parent, "disjoint": root.parent / "Other"}[root_kind]
+    foreign.mkdir(parents=True, exist_ok=True)
+    if root_kind == "nested":
+        initialize_test_vault(foreign)
+    claim = foreign / "claim.md"
+    claim.write_bytes(raw)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1" if enabled else "0")
+    monkeypatch.setenv("VAULT_DIR", str(foreign))
+    policy = filesystem_producer_policy()
+    assert policy.enabled == enabled and policy.includes(claim) == enabled
+    return claim
+
+
+@pytest.mark.parametrize("root_kind", ["nested", "parent", "disjoint"])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_foreign_filesystem_root_never_implies_product_binding_isolation(monkeypatch, tmp_path, root_kind, enabled):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    _foreign_filesystem_root(monkeypatch, root, raw, root_kind, enabled=enabled)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*.md")}
+    if enabled:
+        with pytest.raises(recovery.LegacySourceRefusal, match="^legacy_producer_policy_refused$"):
+            recovery.reconcile_legacy_sources(binding, index, factory)
+        assert state.rows == [original] and not state.calls
+    else:
+        # A configured VAULT_DIR alone does not activate the foreign writer;
+        # its claim remains outside the active vault's own inventory.
+        assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+        assert not state.rows
+    assert not state.vectors and not state.embedded
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*.md")} == before
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("missing", "legacy_identity_persistence_refused"),
+    ("unpersisted-fingerprint", "legacy_identity_persistence_refused"),
+    ("invalid-companion", "legacy_identity_persistence_refused"),
+    ("invalid", "legacy_identity_persistence_refused"),
+    ("invalid-with-companion", "legacy_identity_persistence_refused"),
+    ("invalid-shape", "legacy_identity_persistence_refused"),
+    ("mismatch", "legacy_identity_mismatch_refused"),
+    ("stored-mismatch", "legacy_identity_mismatch_refused"),
+    ("duplicate", "legacy_identity_ambiguous_refused"),
+    ("companion-duplicate", "legacy_identity_ambiguous_refused"),
+    ("legacy-companion-duplicate", "legacy_identity_ambiguous_refused"),
+    ("companion-foreign-source", "legacy_identity_mismatch_refused"),
+    ("companion-moved-source", "legacy_identity_mismatch_refused"),
+    ("companion-symlink", "legacy_identity_persistence_refused"),
+    ("companion-race", "legacy_race_refused"),
+    ("companion-removed", "legacy_race_refused"),
+])
+def test_identity_retirement_preserves_all_authority_refusals(monkeypatch, tmp_path, failure, reason):
+    from uuid import uuid4
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    companion = _persist_companion_identity(root, source, original["object_id"])
+    if failure in {"missing", "invalid", "invalid-shape", "unpersisted-fingerprint"}:
+        companion.unlink()
+    if failure == "unpersisted-fingerprint":
+        from app.ingest import vault_alpha
+        monkeypatch.setattr(vault_alpha, "_find_companion_by_fingerprint", lambda *args: str(original["object_id"]))
+    elif failure == "invalid-companion":
+        companion.write_text(companion.read_text().replace(str(original["object_id"]), "not-a-valid-uuid"))
+    elif failure.startswith("invalid"):
+        marker = "{}" if failure == "invalid-shape" else "private-invalid-identity"
+        source.write_text(source.read_text().replace("---\n", f"---\nuuid: {marker}\n", 1))
+    elif failure == "mismatch":
+        state.rows[0]["object_id"] = uuid4()
+    elif failure == "stored-mismatch":
+        state.rows[0]["payload"]["vault_uuid"] = str(uuid4())
+    elif failure == "duplicate":
+        (root / "duplicate.md").write_bytes(source.read_bytes())
+    elif failure == "companion-duplicate":
+        other = companion.with_name(f"{uuid4()}.md")
+        other.write_bytes(companion.read_bytes())
+    elif failure == "legacy-companion-duplicate":
+        other = root / "_system/companions" / companion.name
+        other.parent.mkdir(parents=True)
+        other.write_bytes(companion.read_bytes())
+    elif failure in {"companion-foreign-source", "companion-moved-source"}:
+        destination = "/foreign-root/note.md" if failure == "companion-foreign-source" else "old-source.md"
+        companion.write_text(companion.read_text().replace(source.relative_to(root).as_posix(), destination))
+    elif failure == "companion-symlink":
+        destination = tmp_path / "redirected-companion.md"
+        companion.rename(destination)
+        companion.symlink_to(destination)
+    elif failure in {"companion-race", "companion-removed"}:
+        reconcile = binding.store.reconcile_legacy_source
+        def racing_companion(*args, **kwargs):
+            if failure == "companion-race":
+                companion.write_text(companion.read_text() + "changed")
+            else:
+                companion.unlink()
+            reconcile(*args, **kwargs)
+        monkeypatch.setattr(binding.store, "reconcile_legacy_source", racing_companion)
+    before = deepcopy(state.rows)
+    source_before = source.read_bytes()
+    with pytest.raises(recovery.LegacySourceRefusal, match=f"^{reason}$"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == before and not state.calls and not state.vectors and not state.embedded
+    assert source.read_bytes() == source_before
+
+
 @pytest.mark.parametrize("location", ["source", "payload", "core6"])
 @pytest.mark.parametrize("marker,reason", [
     ({"candidate_only": True}, "legacy_candidate_refused"),
@@ -144,7 +453,7 @@ def test_non_vault_origin_never_authorizes_reprojection(monkeypatch, tmp_path, p
 
 @pytest.mark.parametrize("failure,reason", [
     ("body", "legacy_race_refused"), ("source", "legacy_race_refused"),
-    ("row", "legacy_write_failed"), ("identity", "legacy_identity_refused"),
+    ("row", "legacy_write_failed"), ("identity", "legacy_identity_ambiguous_refused"),
     ("policy", "legacy_producer_policy_refused"), ("selection-race", "legacy_producer_policy_refused"),
     ("producer-race", "legacy_producer_policy_refused"),
     ("candidate", "legacy_candidate_refused"), ("profile", "legacy_profile_refused"),
@@ -253,7 +562,7 @@ def test_native_registry_requires_identity_preserved_by_actual_inbox_healer(monk
         source.write_text(raw.decode().replace("uuid:", "id:"))
     before = source.read_bytes()
     if inbox and id_only:
-        with pytest.raises(recovery.LegacySourceRefusal, match="legacy_identity_refused"):
+        with pytest.raises(recovery.LegacySourceRefusal, match="legacy_identity_producer_refused"):
             recovery.reconcile_legacy_sources(binding, index, factory)
         assert state.rows == [original] and not state.calls and not state.vectors
     else:
@@ -302,7 +611,7 @@ def test_filesystem_identity_proof_uses_full_nested_inventory(monkeypatch, tmp_p
         assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
         assert state.rows[0]["payload"]["replay"]["source_identity"] == "Nested/note.md"
     else:
-        with pytest.raises(recovery.LegacySourceRefusal, match="legacy_identity_refused"):
+        with pytest.raises(recovery.LegacySourceRefusal, match="legacy_identity_ambiguous_refused"):
             recovery.reconcile_legacy_sources(binding, index, factory)
         assert state.rows == [original] and not state.calls and not state.vectors
     assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
@@ -326,7 +635,7 @@ def test_filesystem_claim_requires_uuid_form_preserved_by_real_adapter(monkeypat
         assert not preserved.wrote
         assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
     else:
-        with pytest.raises(recovery.LegacySourceRefusal, match="legacy_identity_refused"):
+        with pytest.raises(recovery.LegacySourceRefusal, match="legacy_identity_producer_refused"):
             recovery.reconcile_legacy_sources(binding, index, factory)
         assert state.rows == [original] and not state.calls and not state.vectors
     assert source.read_bytes() == before
@@ -373,7 +682,7 @@ def test_filesystem_incomplete_inventory_refuses_without_constructing_writer(mon
 
 @pytest.mark.parametrize("failure, reason", [
     ("policy", "legacy_producer_policy_refused"), ("source", "legacy_source_refused"),
-    ("candidate", "legacy_candidate_refused"), ("identity", "legacy_identity_refused"),
+    ("candidate", "legacy_candidate_refused"), ("identity", "legacy_identity_persistence_refused"),
     ("drift", "legacy_race_refused"), ("row", "legacy_write_failed"),
     ("embed", "embedding_generation_failed"),
 ])
