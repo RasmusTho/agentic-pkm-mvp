@@ -374,6 +374,10 @@ class SyncScheduler:
             0 if getattr(row, "priority", "normal") == "high" else 1, row.binding_id
         ))
         for row in rows:
+            # This scheduler owns only the shipped Inbox route. Future source
+            # kinds must use their own poller rather than the Inbox adapter.
+            if getattr(row, "collection_kind", None) != "inbox_playlist":
+                continue
             if only_binding_id is not None and row.binding_id != only_binding_id:
                 continue
             yield row

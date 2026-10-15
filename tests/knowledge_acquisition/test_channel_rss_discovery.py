@@ -188,6 +188,8 @@ def test_takeout_import_idempotent_with_conservative_default(
     subscription = next(row for row in rows.values() if row.collection_kind == "subscription_feed")
     owned = next(row for row in rows.values() if row.collection_kind == "owned_playlist")
     liked = next(row for row in rows.values() if row.collection_kind == "liked_videos")
+    assert subscription.account_binding_id is None
+    assert owned.account_binding_id == liked.account_binding_id == account_id
     assert subscription.acquisition_policy["mode"] == "discover_only"
     assert subscription.provenance["origin"] == "takeout_import"
     assert owned.provenance["origin"] == liked.provenance["origin"] == "takeout_import"

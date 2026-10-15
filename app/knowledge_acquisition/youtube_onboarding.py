@@ -192,7 +192,12 @@ def import_takeout_registry(
     imported = deduplicated = 0
     binding_ids: list[str] = []
     for collection_kind, collection_ref, title in planned:
-        key = (collection_kind, collection_ref, normalized_account_id)
+        binding_account_id = (
+            normalized_account_id
+            if collection_kind in {"owned_playlist", "liked_videos"}
+            else None
+        )
+        key = (collection_kind, collection_ref, binding_account_id)
         binding_id = existing.get(key)
         if binding_id is None:
             try:
@@ -200,7 +205,7 @@ def import_takeout_registry(
                     collection_kind=collection_kind,
                     collection_ref=collection_ref,
                     title=title,
-                    account_binding_id=normalized_account_id,
+                    account_binding_id=binding_account_id,
                     acquisition_policy={"mode": "discover_only"},
                     provenance={"origin": "takeout_import"},
                 )
