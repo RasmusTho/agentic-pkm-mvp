@@ -1050,6 +1050,7 @@ def _proof_stubs(monkeypatch):
         lambda pid, *, linux_boot_id=None: _controller_record(),
     )
     monkeypatch.setattr(writer_inventory, "_docker_writers", lambda: [])
+    monkeypatch.setattr(writer_inventory, "controller_namespace_digest", lambda pid: "a" * 64)
 
 
 def test_prove_quiescent_ignores_own_process_tree(monkeypatch, tmp_path, _proof_stubs):

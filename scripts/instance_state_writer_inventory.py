@@ -1703,6 +1703,42 @@ def controller_token(pid: int) -> str:
     return _record_for_pid(pid).start_token
 
 
+def controller_namespace_digest(pid: int, roots: tuple[Path, ...] = ()) -> str:
+    """Read actual live controller state and a correlated native process/mount view.
+
+    This adds no authority: new TEST callers compare it to the host producer's
+    digest. Old proof consumers need not have this additional evidence.
+    """
+    token = controller_token(pid)
+    if sys.platform.startswith("linux"):
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            namespaces = tuple(os.readlink(f"/proc/{pid}/ns/{name}") for name in ("pid", "mnt"))
+            own = tuple(os.readlink(f"/proc/self/ns/{name}") for name in ("pid", "mnt"))
+            if state not in {"R", "S", "D", "T", "t", "I"} or namespaces != own:
+                raise InventoryError("controller execution namespace is not qualified")
+            for root in roots:
+                native = Path(f"/proc/{pid}/root") / str(root).lstrip("/")
+                if not os.path.samestat(root.stat(), native.stat()):
+                    raise InventoryError("controller filesystem view differs")
+            material = (token.split(":", 1)[0], _read_linux_boot_id(), *namespaces)
+        except (OSError, IndexError) as exc:
+            raise InventoryError("controller execution namespace is unavailable") from exc
+    elif sys.platform == "darwin":
+        state = _run_checked(["ps", "-p", str(pid), "-o", "stat="],
+            label="controller native state", env={**os.environ, "LC_ALL": "C"}).strip()
+        if not state or state[0] not in {"R", "S", "I", "T", "U"}:
+            raise InventoryError("controller is not live")
+        # Darwin has no container PID/mount namespaces. Resolve every supplied
+        # native root here; Linux containers cannot claim this platform token.
+        for root in roots:
+            root.stat()
+        material = ("darwin", str(os.stat("/").st_dev), str(os.stat("/").st_ino))
+    else:
+        raise InventoryError("controller execution namespace is unsupported")
+    return hashlib.sha256(json.dumps(material, separators=(",", ":")).encode()).hexdigest()
+
+
 def _basename(value: str) -> str:
     return value.rsplit("/", 1)[-1]
 
@@ -1923,6 +1959,7 @@ def prove_quiescent(
                 "pid": controller_pid,
                 "start_token": controller_start_token,
             },
+            "controller_namespace_digest": controller_namespace_digest(controller_pid),
             "domains": first,
             "snapshot_digests": digests,
         },

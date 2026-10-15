@@ -349,10 +349,63 @@ preflight_instance_state_deployment_legacy_settings() {
 # MVR-01B deploy/start producer. The caller supplies its channel-aware compose
 # function so the same fenced sequence is used by pinned deploys and local
 # full-system starts.
+# Explicit future operator seam. No ordinary deploy/start caller selects this
+# mode. All authority commands run natively from this reviewed tree; this
+# function neither grants namespaces nor installs an interpreter/dependency.
+prepare_test_dormant_ownership_window() {
+  local test_real_compose_function="${1:?TEST compose function required}"
+  local channel_env_file="${2:?TEST environment file required}"
+  local test_native_python="${3:?existing native interpreter required}"
+  local test_source_revision="${4:?reviewed exact revision required}"
+  local test_native_state="${5:?existing native instance-state root required}"
+  local test_native_legacy="${6:?native legacy source path required}"
+  [ -x "${test_native_python}" ] || return 78
+  prepare_instance_state_deployment _test_dormant_native_compose test "${channel_env_file}" test-dormant-ownership
+}
+
+_test_dormant_native_compose() {
+  local -a native_args=()
+  local found=0 token
+  if [ "$1" != run ]; then
+    "${test_real_compose_function}" "$@"
+    return $?
+  fi
+  # Only this producer's native authority commands are eligible. The ordinary
+  # init one-shot is unnecessary: qualification required existing private roots.
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = python ] && [ "${2:-}" = -m ] && [ "${3:-}" = app.instance.runtime ]; then
+      shift 3
+      found=1
+      break
+    fi
+    shift
+  done
+  [ "${found}" -eq 1 ] || return 0
+  case "$1" in deployment-begin|deployment-prove|deployment-release|deployment-bind-owner-proof) ;;
+    *) return 78 ;;
+  esac
+  for token in "$@"; do
+    case "${token}" in
+      /app/instance-state) token="${test_native_state}" ;;
+      /app/instance-ownership) token="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}" ;;
+      /app/instance-ownership/*) token="${INSTANCE_OWNERSHIP_HOST_STATE_DIR}/${token#/app/instance-ownership/}" ;;
+    esac
+    native_args+=("${token}")
+  done
+  ( cd "${repo_root}" && "${test_native_python}" -m app.instance.runtime "${native_args[@]}" ) >/dev/null
+}
+
 prepare_instance_state_deployment() {
   local compose_function="$1"
   local channel="$2"
   local channel_env_file="${3:-}"
+  local preparation_mode="${4:-ordinary}"
+  local inventory_python="${PYTHON:-python3}"
+  case "${preparation_mode}:${channel}" in
+    ordinary:*) ;;
+    test-dormant-ownership:test) inventory_python="${test_native_python:?native interpreter required}" ;;
+    *) return 78 ;;
+  esac
   local legacy_path=""
   local inventory_path="${INSTANCE_LEGACY_OWNER_INVENTORY_PATH:-/app/instance-ownership/legacy-owner-inventory.json}"
   local quiescence_inventory_path="/app/instance-ownership/deployment-quiescence-inventory.json"
@@ -375,10 +428,23 @@ prepare_instance_state_deployment() {
     "${channel}" "${channel_env_file}")"; then
     return 78
   fi
-  _instance_state_deployment_validate_legacy_path "${channel}" "${legacy_path}" || return $?
+  if [ "${preparation_mode}" = test-dormant-ownership ]; then
+    legacy_path="${test_native_legacy:?native legacy path required}"
+    [[ "${legacy_path}" = /* ]] || return 78
+  else
+    _instance_state_deployment_validate_legacy_path "${channel}" "${legacy_path}" || return $?
+  fi
   repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
   inventory_helper="${repo_root}/scripts/instance_state_writer_inventory.py"
   controller_pid="$$"
+  if [ "${preparation_mode}" = test-dormant-ownership ]; then
+    controller_start_token="$("${inventory_python}" "${inventory_helper}" controller-token --pid "${controller_pid}")" || return $?
+    ( cd "${repo_root}" && "${inventory_python}" -m app.instance.runtime deployment-qualify-native \
+        --channel test --source-root "${repo_root}" --expected-revision "${test_source_revision:?reviewed revision required}" \
+        --instance-state-root "${test_native_state}" --host-global-root "${INSTANCE_OWNERSHIP_HOST_STATE_DIR:?existing ownership root required}" \
+        --controller-pid "${controller_pid}" --controller-start-token "${controller_start_token}" \
+        --runtime-uid "${runtime_uid}" --runtime-gid "${runtime_gid}" ) >/dev/null || return $?
+  fi
 
   # The principal floor is an irreversible compatibility boundary, so merely
   # deploying a capable image never activates it. Validate the complete opt-in
@@ -454,7 +520,7 @@ prepare_instance_state_deployment() {
   if [ "${inventory_rc}" -ne 0 ]; then
     return "${inventory_rc}"
   fi
-  python3 "${inventory_helper}" produce-legacy-owners \
+  "${inventory_python}" "${inventory_helper}" produce-legacy-owners \
     --repo-root "${repo_root}" \
     --active-channel "${channel}" \
     --output "${owner_inventory_host_path}" \
@@ -464,6 +530,23 @@ prepare_instance_state_deployment() {
     rm -f -- "${owner_inventory_host_path}"
     [ "${inventory_rc}" -ne 0 ] && return "${inventory_rc}"
     return 1
+  fi
+  if [ "${preparation_mode}" = test-dormant-ownership ]; then
+    "${inventory_python}" - "${owner_inventory_host_path}" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as source:
+    owners = json.load(source).get("owners")
+if not isinstance(owners, list) or len(owners) != 1 or any(
+    not isinstance(owner, dict) or owner.get("channel_id") != "test" for owner in owners
+):
+    raise SystemExit(78)
+PY
+    inventory_rc=$?
+    if [ "${inventory_rc}" -ne 0 ]; then
+      rm -f -- "${owner_inventory_host_path}"
+      return "${inventory_rc}"
+    fi
   fi
 
   # The one-shot remains the sole mount-permission producer. It creates no
@@ -478,7 +561,7 @@ prepare_instance_state_deployment() {
   fi
 
   # Resolve the OS start identity before claiming the durable host-global lease.
-  controller_start_token="$(python3 "${inventory_helper}" controller-token --pid "${controller_pid}")"
+  controller_start_token="$("${inventory_python}" "${inventory_helper}" controller-token --pid "${controller_pid}")"
   inventory_rc=$?
   if [ "${inventory_rc}" -ne 0 ]; then
     rm -f -- "${owner_inventory_host_path}"
@@ -540,7 +623,7 @@ prepare_instance_state_deployment() {
     return "${inventory_rc}"
   fi
   if [ ! -s "${mvr05_effective_compose_path}" ]; then
-    python3 "${inventory_helper}" redact-compose-fence-config \
+    "${inventory_python}" "${inventory_helper}" redact-compose-fence-config \
       --compose-path "${mvr05_raw_compose_path}" \
       --output "${mvr05_effective_compose_path}"
     inventory_rc=$?
@@ -567,7 +650,7 @@ prepare_instance_state_deployment() {
   fi
   rm -f -- "${mvr05_fence_plan_host_path}"
   mvr05_stop_services="$(
-    python3 "${inventory_helper}" compose-fence-plan \
+    "${inventory_python}" "${inventory_helper}" compose-fence-plan \
       --compose-path "${mvr05_effective_compose_path}" \
       --receipt-output "${mvr05_fence_plan_source_path}"
   )"
@@ -631,7 +714,7 @@ prepare_instance_state_deployment() {
   # One foreground helper owns both structured Docker and native OS probes.
   # It writes no proof candidate unless two complete snapshots are identical
   # and empty; there is no shell pipeline for the helper to observe as a writer.
-  python3 "${inventory_helper}" prove-quiescent \
+  "${inventory_python}" "${inventory_helper}" prove-quiescent \
     --controller-pid "${controller_pid}" \
     --controller-start-token "${controller_start_token}" \
     --output "${inventory_host_path}"
@@ -675,7 +758,7 @@ prepare_instance_state_deployment() {
   # lease-bound quiescence proof is durable. Any missing or changed source
   # aborts while the durable fence remains installed; only an exact match may
   # become the drained inventory consumed by finish.
-  python3 "${inventory_helper}" validate-legacy-owners \
+  "${inventory_python}" "${inventory_helper}" validate-legacy-owners \
     --repo-root "${repo_root}" \
     --active-channel "${channel}" \
     --inventory "${owner_inventory_host_path}" \
@@ -699,6 +782,24 @@ prepare_instance_state_deployment() {
       "${compose_function}" "${channel}" "${runtime_user}" \
       "${controller_pid}" "${controller_start_token}"
     return "${inventory_rc}"
+  fi
+  if [ "${preparation_mode}" = test-dormant-ownership ]; then
+    owner_inventory_sha256="$("${inventory_python}" - "${owner_inventory_host_target_path}" <<'PY'
+import hashlib
+import sys
+with open(sys.argv[1], "rb") as source:
+    print(hashlib.sha256(source.read()).hexdigest())
+PY
+    )" || return $?
+    "${compose_function}" run --rm --no-deps -T --user "${runtime_user}" instance-state-init \
+      python -m app.instance.runtime deployment-bind-owner-proof \
+        --channel test --instance-state-root /app/instance-state \
+        --host-global-root /app/instance-ownership --owner-receipt-path "${inventory_path}" \
+        --expected-owner-receipt-sha256 "${owner_inventory_sha256}" \
+        --quiescence-proof-path /app/instance-ownership/deployment-quiescence-proof.json || return $?
+    # Deliberately retain the actual live controller, lease and restart fence.
+    # No principal/scalar cutover, floor, migration, finish or startup follows.
+    return 0
   fi
   # Explicit MVR-03 authority transition. One runtime process records the floor
   # and then bootstraps the role, keeping the attempt-local floor receipt out of

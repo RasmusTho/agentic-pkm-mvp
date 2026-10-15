@@ -344,6 +344,41 @@ start only when neither the host-global lease nor any channel restart fence exis
 always run the full authenticated runtime preflight; module absence outside explicit rollback fails
 closed.
 
+#### Explicit TEST dormant ownership preparation
+
+The explicit TEST preparation-only entrypoint `prepare_test_dormant_ownership_window` reuses this
+producer's owner baseline, two-pass stopped-writer inventory and database no-client fence. It
+refuses foreign owners before any stop and returns after `deployment-bind-owner-proof`, retaining
+the actual controller, lease and restart fence. It does not select principal/scalar cutover, the
+MVR-05 floor, migration, finalization or startup. Ordinary deploy/start callers keep their existing
+mode and never select ownership initialization.
+
+This future operator route requires one exact clean native source revision and existing native
+interpreter, matching runtime UID/GID, accessible existing private instance/host roots, actual live
+controller start identity, and correlated native process/filesystem namespace. The read-only
+`deployment-qualify-native` facade refuses a dirty/shadowed source, missing dependency, wrong user,
+dead/zombie controller or unavailable view. A default image, code-only mount or visible numeric PID
+is not qualification; this route installs nothing and grants no namespace or access privilege.
+Native proof paths are produced directly, not rewritten from container proofs.
+
+Within that held window, the separate explicit `deployment-initialize-dormant-ownership` command
+requires `--channel test`, existing `--instance-state-root` and `--host-global-root`, retained
+`--vault-binding-id`, `--expected-registry-sha256`, canonical `--owner-receipt-path` and its current
+`--expected-owner-receipt-sha256`, canonical `--quiescence-proof-path`, a disjoint private
+`--backup-root`, and `--acknowledge-new-ownership-epoch`. It admits exactly one initialized dormant
+registration with no ownership pair, under deployment → producer → ledger → registry locks. The
+private existing-format backup package binds its absent before-image, prepared key/ledger and
+acknowledged epoch; existing lease/restart-fence reservation evidence prevents a second backup
+destination from minting another epoch. Partial reservations, missing packages and failed directory
+barriers remain fenced, and exact retries repeat the publication/key/ledger durability barriers.
+Ordinary begin, release, cleanup and finalization cannot erase a pending or indeterminate epoch;
+generic restore and rotation reject the operation-specific package. Public results are redacted.
+
+After the exact pair is authenticated durable, guarded `deployment-release` completes only this
+preparation window. A separately authorized ordinary B47 producer must create its own compatible
+proof; no manual state edit, migration retarget, B47 completion, live TEST repair or activation is
+inferred. This source preparation does not itself authorize the future live operation or owner ACK.
+
 #### Legacy owner root namespace authority (#4539)
 
 The owner-authorized decision recorded on 2026-08-30 is host-side validation (Option B). The
