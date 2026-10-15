@@ -766,7 +766,7 @@ class CodexRemoteTransport:
                     or not isinstance(vector, tuple) or len(vector) != dimensions
                     or any(type(item) not in (int, float) or not math.isfinite(item) for item in vector)):
                     raise RemoteEmbeddingVectorError(
-                        "embedding_route_or_dimension_mismatch", indeterminate=True
+                        "embedding_response_invalid", indeterminate=True
                     )
             result = ProductEmbeddingResponse.model_validate(value)
         except RemoteEmbeddingVectorError:

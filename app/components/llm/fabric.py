@@ -29,6 +29,7 @@ from app.llm.preflight_fallback import (
 from app.model_access.codex_remote_transport import (
     CodexRemoteTransport,
     RemoteCompletionError,
+    RemoteEmbeddingError as RemoteEmbeddingError,
     RemoteEmbeddingIdentityError,
     RemoteEmbeddingVectorError,
 )

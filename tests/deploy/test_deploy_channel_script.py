@@ -7289,7 +7289,9 @@ def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, 
     from types import SimpleNamespace
     from app.components.llm import fabric
     from app.components.embeddings import EmbeddingIdentity
-    from app.model_access.codex_remote_transport import CodexRemoteTransport
+    from app.model_access.codex_remote_transport import (
+        CodexRemoteTransport, RemoteEmbeddingError, RemoteEmbeddingIdentityError, RemoteEmbeddingVectorError,
+    )
     from app.model_access.remote_contract import ProductEmbeddingResponse
 
     body = {'route': {'provider': 'ollama', 'model': 'other' if fault == 'model' else 'selected:latest',
@@ -7319,6 +7321,15 @@ def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, 
     client = fabric._RemoteProductEmbeddingClient(
         identity=EmbeddingIdentity(provider='ollama', model='selected:latest', dim=2),
         request_model='selected:latest', expected_transport='ollama_http', remote_transport=transport)
+    errors = []
+    original_embed = client.embed_text
+    def observed_embed(text):
+        try:
+            return original_embed(text)
+        except RemoteEmbeddingError as exc:
+            errors.append(exc)
+            raise
+    monkeypatch.setattr(client, 'embed_text', observed_embed)
     def routed(intent):
         assert intent.task_kind == 'embed' and intent.strict_identity_required
         return client
@@ -7333,6 +7344,13 @@ def test_embedding_probe_classifies_real_product_client_validation(monkeypatch, 
         exec(probe, {})
     assert exit_info.value.code == status
     assert len(requests) == len(closed) == 1
+    assert fabric.RemoteEmbeddingError is RemoteEmbeddingError
+    if fault != 'success':
+        assert len(errors) == 1 and errors[0].indeterminate
+        assert isinstance(errors[0], RemoteEmbeddingIdentityError if fault == 'model' else RemoteEmbeddingVectorError)
+        assert str(errors[0]) == errors[0].code == (
+            'embedding_response_invalid' if boundary == 'transport' and fault == 'shape'
+            else 'embedding_route_or_dimension_mismatch')
 
 
 def test_native_embedding_probe_success_keeps_exact_identity_and_precedes_projection(tmp_path):
