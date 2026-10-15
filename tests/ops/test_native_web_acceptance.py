@@ -672,7 +672,7 @@ def _ere_readers(*, extra=False, outside=False):
 def test_ere_profile_admits_only_registered_live_sources():
     admission = web.admit_ere_profile(_ere_manifest(), registry=_ERE_REGISTRY, now=_ERE_NOW)
     assert set(admission.bindings) == web.ERE_ADMITTED_SOURCES
-    for source in ('bifrost.native_capture', 'chat.sessions', 'location', 'builderops.records'):
+    for source in ('planned.native_capture', 'chat.sessions', 'location', 'builderops.records'):
         with pytest.raises(web.EreProfileRefusal, match='source_inventory_not_admitted'):
             web.admit_ere_profile(_ere_manifest(sources=['heimdal.observations', 'vault.activity', source]),
                                   registry={**_ERE_REGISTRY, source: {'stream_id': source, 'status': 'planned'}}, now=_ERE_NOW)

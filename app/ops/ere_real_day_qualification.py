@@ -19,13 +19,13 @@ from datetime import UTC, date, datetime, timedelta
 import hashlib
 import re
 from types import MappingProxyType
-from typing import Any, Final, Protocol
+from typing import TYPE_CHECKING, Any, Final, Protocol
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from app.episodes.calendar_stream import _CALDAV_TIME_RANGE_FUTURE, _CALDAV_TIME_RANGE_PAST
-from app.episodes.stream_registry import STATUS_LIVE, StreamRegistry, load_registry
-from app.write_guard import DEFAULT_WRITE_GUARD, WriteGuard
+
+if TYPE_CHECKING:
+    from app.write_guard import WriteGuard
 
 
 PROFILE: Final[str] = "episode-resolution.real-day.v1"
@@ -159,6 +159,11 @@ def _parse_window(local_day: Any, *, now: datetime) -> LocalDayWindow:
         zone = ZoneInfo(TIMEZONE_NAME)
     except (TypeError, ValueError, ZoneInfoNotFoundError) as exc:
         raise EreProfileRefusal("local_day_invalid") from exc
+    # Keep the native qualification module importable without Product runtime
+    # dependencies. The calendar adapter remains the source of truth when the
+    # profile actually admits a day.
+    from app.episodes.calendar_stream import _CALDAV_TIME_RANGE_FUTURE, _CALDAV_TIME_RANGE_PAST
+
     now_local = now.astimezone(zone)
     # The profile is for one completed day.  Its range must also be reachable
     # through the calendar adapter's finite query window.
@@ -172,6 +177,11 @@ def _parse_window(local_day: Any, *, now: datetime) -> LocalDayWindow:
 
 
 def _registry_entries(registry: Any) -> dict[str, Any]:
+    # Keep importing the native qualification envelope independent of the
+    # Product stream models. Registry loading happens only after admission has
+    # established that this profile is actually being executed.
+    from app.episodes.stream_registry import StreamRegistry
+
     if isinstance(registry, StreamRegistry):
         return {entry.stream_id: entry for entry in registry.live_entries()}
     if isinstance(registry, Mapping):
@@ -186,6 +196,8 @@ def _registry_entries(registry: Any) -> dict[str, Any]:
 
 
 def _is_live(entry: Any) -> bool:
+    from app.episodes.stream_registry import STATUS_LIVE
+
     return getattr(entry, "status", None) == STATUS_LIVE or (
         isinstance(entry, Mapping) and entry.get("status") == STATUS_LIVE
     )
@@ -244,7 +256,11 @@ def admit_profile(
         requested_sources = set()
     if requested_sources != ADMITTED_SOURCES:
         raise EreProfileRefusal("source_inventory_not_admitted")
-    live = _registry_entries(registry if registry is not None else load_registry())
+    if registry is None:
+        from app.episodes.stream_registry import load_registry
+
+        registry = load_registry()
+    live = _registry_entries(registry)
     if any(source not in live or not _is_live(live[source]) for source in ADMITTED_SOURCES):
         raise EreProfileRefusal("registered_live_source_missing")
     raw_bindings = manifest.get("bindings", manifest.get("source_bindings"))
@@ -339,12 +355,16 @@ def run_profile(
     readers: Mapping[str, SourceReader],
     normalize: Normalizer | None = None,
     effects: Mapping[str, EffectWriter] | None = None,
-    write_guard: WriteGuard = DEFAULT_WRITE_GUARD,
+    write_guard: WriteGuard | None = None,
     cross_scope_flow: Callable[[tuple[str, ...]], Mapping[str, Any] | None] | None = None,
     registry: Any | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Production profile entrypoint used by the fixed qualification envelope."""
+    if write_guard is None:
+        from app.write_guard import DEFAULT_WRITE_GUARD
+
+        write_guard = DEFAULT_WRITE_GUARD
     admission = admit_profile(manifest, registry=registry, now=now)
     effect_writers = dict(effects or {})
     unknown = set(effect_writers) - ALLOWED_EFFECTS
