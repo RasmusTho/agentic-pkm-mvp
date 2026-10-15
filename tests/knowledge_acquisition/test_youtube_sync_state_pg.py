@@ -136,27 +136,39 @@ def test_pg_rss_finalizers_keep_canonical_dict_row_connection_usable(
         title="Synthetic RSS finalization source",
     )
     requests = AcquisitionRequests.for_runtime()
-    initial_cursor = {"version": 1, "recent_entry_ids": ["yt:video:aaaaaaaaaaa"]}
+    initial_cursor = {
+        "version": 1,
+        "newest_published_seen": "2026-09-30T10:00:00+00:00",
+        "recent_entry_ids": ["yt:video:aaaaaaaaaaa"],
+    }
     registry.record_poll_success(source.binding_id, cursor=initial_cursor)
-    valid_empty_feed = (
-        '<?xml version="1.0" encoding="UTF-8"?>'
-        '<feed xmlns="http://www.w3.org/2005/Atom" '
-        'xmlns:yt="http://www.youtube.com/xml/schemas/2015">'
-        f"<yt:channelId>{source.collection_ref}</yt:channelId></feed>"
-    ).encode()
+
+    def feed(video_id: str, published: str) -> bytes:
+        return (
+            '<?xml version="1.0" encoding="UTF-8"?>'
+            '<feed xmlns="http://www.w3.org/2005/Atom" '
+            'xmlns:yt="http://www.youtube.com/xml/schemas/2015">'
+            f"<yt:channelId>{source.collection_ref}</yt:channelId>"
+            "<entry>"
+            f"<id>yt:video:{video_id}</id><yt:videoId>{video_id}</yt:videoId>"
+            f"<yt:channelId>{source.collection_ref}</yt:channelId><published>{published}</published>"
+            "</entry></feed>"
+        ).encode()
 
     completed_result = channel_rss_discovery.poll_source(
         source,
         registry=registry,
         requests=requests,
-        fetch_feed=lambda _channel_id: valid_empty_feed,
+        fetch_feed=lambda _channel_id: feed("bbbbbbbbbbb", "2026-10-01T10:00:00Z"),
     )
     completed = registry.get(source.binding_id)
     assert not completed_result.degraded
     assert completed is not None
     assert completed.cursor != initial_cursor
-    assert completed.cursor["recent_entry_ids"] == initial_cursor["recent_entry_ids"]
+    assert "yt:video:bbbbbbbbbbb" in completed.cursor["recent_entry_ids"]
     assert completed.last_success_at is not None
+    successful_cursor = completed.cursor
+    successful_at = completed.last_success_at
 
     def outbox_topics(run_id: str) -> list[str]:
         with _scratch_connection() as conn:
@@ -195,12 +207,14 @@ def test_pg_rss_finalizers_keep_canonical_dict_row_connection_usable(
         degraded,
         registry=registry,
         requests=requests,
-        fetch_feed=lambda _channel_id: valid_empty_feed,
+        fetch_feed=lambda _channel_id: feed("ccccccccccc", "2026-10-02T10:00:00Z"),
     )
     after_rollback = registry.get(source.binding_id)
     assert rolled_back_result.degraded
-    assert after_rollback is not None and after_rollback.cursor == degraded.cursor
+    assert after_rollback is not None and after_rollback.cursor == successful_cursor
+    assert after_rollback.last_success_at == successful_at
     assert after_rollback.last_error is not None
+    assert "yt:video:ccccccccccc" not in after_rollback.cursor["recent_entry_ids"]
     assert outbox_topics(rolled_back_result.run_id) == ["youtube.sync.degraded"]
 
 
