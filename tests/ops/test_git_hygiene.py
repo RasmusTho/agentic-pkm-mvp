@@ -7050,6 +7050,7 @@ def test_local_retirement_rejects_whitespace_dedicated_worktree_marker(
         ("Dedicated worktree /tmp/old is ~~still dirty~~", "", ""),
         ("Dedicated worktree /tmp/old is __still dirty__", "", ""),
         ("Dedicated worktree /tmp/old is `still dirty`", "", ""),
+        ("Dedicated worktree /tmp/old", "`follow-up`", "\n"),
         (
             "Dedicated worktree /tmp/old is [still dirty](https://example.test/context)",
             "",

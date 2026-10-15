@@ -2470,8 +2470,7 @@ def _dispatcher_resumable_binding_resources(
                 if 0 <= adjacent_line < len(lines)
             )
             dedicated_truncated_marker = bool(visible_truncated_line.strip()) and not (
-                _DISPATCHER_OPAQUE_CODE_MARKER in next_visible_truncated_line
-                or container_fence_context
+                container_fence_context
             ) and any(
                 _dispatcher_table_marker_search(
                     _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE,
