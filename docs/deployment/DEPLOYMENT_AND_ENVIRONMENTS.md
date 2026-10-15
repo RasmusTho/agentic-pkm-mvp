@@ -38,6 +38,13 @@ headroom, and Linux alert installation belong in a deployment profile such as
 
 ## Complete Dev System placement and admission
 
+The separately owner-authorized [bounded manual DevUI component promotion](../BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+in #6105 installs only the existing read-only DevUI component through its fixed engine/project,
+attestation, image/config, rollback and browser-smoke boundary. It never runs Product channel
+promotion, control-plane migrations or source/credential provisioning, and its component record
+cannot satisfy complete-system qualification or owner acceptance. The full-system contract below
+is unchanged; a component installation is reported with its exact limits.
+
 The portable deployment contract admits a selected setup profile; it does not choose a host. The
 TARS/Proxmox profile selects TARS VM `bob-1` (VM ID `102`, formerly referred to as `vm102`) as the
 intended cohesive runtime home for the complete Builder System / Dev System. The guest/system

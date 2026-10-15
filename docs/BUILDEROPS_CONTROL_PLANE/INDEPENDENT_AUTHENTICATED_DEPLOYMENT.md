@@ -62,6 +62,10 @@ silently left pointing at a stale API address.
 
 ### Complete Dev System admission
 
+This section governs complete-system admission. The separately owner-authorized
+[bounded manual DevUI component promotion](#bounded-manual-devui-component-promotion) is a
+different, explicitly limited operation; its receipt cannot satisfy this section.
+
 BuilderOps deployment is admitted only as one part of the complete Dev System topology described in
 [`README.md :: Complete Dev System VM-102 topology contract`](README.md). A Dev UI-only deployment,
 the default Docker engine, or a healthy guest check cannot satisfy this boundary. The component
@@ -103,7 +107,7 @@ user, but starts `python -m app.builderops.devui_runtime`. It does not start the
 worker, Product API, Product settings, migrations, or any Product store. The image must contain
 this entrypoint at the newly attested candidate; an older candidate is not sufficient.
 
-This is a prepared Linux managed listener, not a deployment executor. A later operator execution
+This is a prepared Linux managed listener, not a deployment executor. Complete-system execution
 must qualify the fixed `builderops` context at `unix:///run/docker-builderops.sock`, authenticate
 the candidate on VM102, satisfy the ordered receipts and operator gates, and install it through
 the governed release path. Neither `deploy_channel.sh` nor an ad hoc process start is that path.
@@ -173,6 +177,76 @@ deployed final-main browser proof, complete-system health or the owner-pilot gat
 #4749 and parent #4741. ARO-09's
 [managed read journey admission](README.md#managed-read-journey-admission) owns those boundaries.
 #5520 preserves the delivered three-GET process boundary and installs no service.
+
+### Bounded manual DevUI component promotion
+
+The owner revision recorded in Issue #6105 admits one read-only DevUI-component operation before
+complete Dev System qualification. This path replaces ad hoc component recreation; it does not
+relax the full-system chain above. `scripts/deploy_devui.sh` runs
+`app.ops.devui_component_promotion` while holding the **same fixed host-local deployment interlock**
+as the BuilderOps wrapper. Only VM102 guest `builder-system`, context `builderops` at
+`unix:///run/docker-builderops.sock`, project `builderops-devui` and service `devui` are admitted.
+The control-plane API/worker/database, their active/previous pins, migrations and Product Runtime
+are outside this effect boundary. The control-plane unattended authorization profile does not
+authorize this project; execution requires the existing explicit manual operator mandate.
+
+The plan binds an exact trusted `main` candidate-pair receipt, host-local attestation, engine,
+current container/image/config, retained baseline Compose bytes, target Compose bytes fetched from
+that source SHA, and a fingerprint of the effective target configuration excluding its own
+fingerprint field. The wrapper checks non-root container posture, fixed command, host networking,
+GET-only listener configuration, read-only rootfs, dropped capabilities and the three fixed read-only
+receipt/source mounts. It cannot add a token, grant, source transport, public port or ingress.
+Optional diagnostic destinations retain the candidate defaults. Existing source bindings are
+preserved; stale/refused/unavailable sources remain explicit and are not deployment success claims.
+
+Use the already authenticated normal operator's gh context on VM102. When invoked through sudo,
+only the gh subprocess runs as the existing `SUDO_USER`; no token is copied or printed. The
+operator Python must already support Playwright Chromium. A launch/close preflight plus the real
+baseline Overview browser check runs before service mutation; missing browser tooling refuses the
+operation. Prepare host tooling deliberately through the Platform owner before invoking this path.
+
+```bash
+sudo scripts/deploy_devui.sh plan --candidate-pair /path/to/candidate-pair.json \
+  --authorization-reference 'github:issue:6105; explicit owner deployment mandate' \
+  --plan /opt/builderops/receipts/devui-promotion-plan.json
+# Review the exact image/config and retained baseline in this plan; use its returned hash.
+sudo scripts/deploy_devui.sh apply --candidate-pair /path/to/candidate-pair.json \
+  --plan /opt/builderops/receipts/devui-promotion-plan.json \
+  --expected-plan-sha256 sha256:<plan-hash>
+```
+
+Planning stages only the two exact Compose files under the existing release directory and writes
+the operator plan; it does not mutate a running service. Apply re-verifies attestation, baseline,
+engine, configuration and browser preconditions under the lock, pulls only the DevUI image, then
+durably retains the component attempt/baseline **before** `up --no-deps --force-recreate devui`.
+Exact observed `/version`, listener liveness and the real browser Overview → BSC / Focus → BSC →
+same Focus journey are required. The browser blocks mutation methods and cross-origin requests and
+asserts no browser storage. It supplies technical proof, never an owner acknowledgement.
+
+The finite `devui_component_deployment.v1` record lives in the existing receipt directory as
+`devui-component-<plan-hash>.json`; `devui-component-latest.json` retains the latest verified terminal
+result. It names source/image/config, engine, authorization reference, plan/candidate hash,
+baseline, observed runtime/browser proof and outcome (`pending`, `deployed`, `rolled_back` or
+`indeterminate`). It explicitly sets complete-system health, source qualification, owner pilot,
+trial and acceptance claims to false. It is not consumed by the full-system receipt reader or by
+the Ready-to-try/acceptance paths.
+
+A completed recreate followed by failed smoke restores only the exact bound DevUI baseline and
+requires its identity/liveness and Overview browser proof. Manual rollback uses the same plan/hash:
+
+```bash
+sudo scripts/deploy_devui.sh rollback --candidate-pair /path/to/candidate-pair.json \
+  --plan /opt/builderops/receipts/devui-promotion-plan.json \
+  --expected-plan-sha256 sha256:<plan-hash>
+```
+
+An interrupted/uncertain Compose or rollback leaves `pending`/`indeterminate` evidence. A subsequent
+plan or apply cannot bypass it by choosing a new plan hash. Stop further effects, read back the
+actual container/image/config and external operation completion under the existing operator
+recovery workflow, then deliberately reconcile the retained attempt. No automatic replay,
+blind compensation, database rewind or fabricated terminal receipt is permitted. Successful
+component deployment leaves #5181, #4749 and #5399 open; the owner's later trial and acceptance
+remain separate observations and decisions.
 
 ### Approved candidate attestation runner
 

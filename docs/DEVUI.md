@@ -77,6 +77,11 @@ Dev UI consumes those source receipts without copying their schema. If any sourc
 unavailable, Dev UI withdraws only the affected claim and leaves the gap visible; it never infers a
 deployment, rollback target, or owner acceptance.
 
+The owner-authorized [bounded manual DevUI component promotion](BUILDEROPS_CONTROL_PLANE/INDEPENDENT_AUTHENTICATED_DEPLOYMENT.md#bounded-manual-devui-component-promotion)
+from #6105 may install and technically verify only this read-only projection before full-system
+qualification. Its component record supplies no full-system/source qualification, pilot, trial or
+owner acceptance. The full-system receipt chain and remaining acceptance gates stay independent.
+
 ### Discovery/control-plane boundary
 
 devUI is a discovery and control plane, not a separate documentation portal. It may index, project,
