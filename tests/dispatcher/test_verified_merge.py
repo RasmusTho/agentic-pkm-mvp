@@ -2426,7 +2426,10 @@ def test_phase_validators_reject_second_authority_convergence_advancement() -> N
             validate_consumer_phase_inputs(**prepared_kwargs)
 
 
-def test_phase_candidate_parity_allows_idempotent_retry_and_rejects_conflict() -> None:
+@pytest.mark.parametrize("phase_version", [1, 2])
+def test_phase_candidate_parity_allows_idempotent_retry_and_rejects_conflict(
+    tmp_path: Path, phase_version: int
+) -> None:
     plan = prepare_verified_merge(
         context=_context(),
         pr=_pr(),
@@ -2441,7 +2444,7 @@ def test_phase_candidate_parity_allows_idempotent_retry_and_rejects_conflict() -
         authority_receipt=authority,
         phase="prepared",
         pr=neutral_pr,
-        phase_version=1,
+        phase_version=phase_version,
         **convergence,
     )
     comments = [projection_convergence_comment(convergence)]
@@ -2475,14 +2478,14 @@ def test_phase_candidate_parity_allows_idempotent_retry_and_rejects_conflict() -
         authority_receipt=authority,
         phase="merged",
         pr=merged_pr,
-        phase_version=1,
+        phase_version=phase_version,
         **convergence,
     )
     conflicting = build_verified_merge_phase(
         authority_receipt=authority,
         phase="merged",
         pr={**merged_pr, "merge_commit_sha": "c" * 40},
-        phase_version=1,
+        phase_version=phase_version,
         **convergence,
     )
     with pytest.raises(
@@ -2500,6 +2503,100 @@ def test_phase_candidate_parity_allows_idempotent_retry_and_rejects_conflict() -
             current_body_edit=convergence["projection_convergence_receipt"]["body_edit"],
             candidate=conflicting,
         )
+    if phase_version == 1:
+        completed = _run_phase_builder_cli(
+            tmp_path=tmp_path,
+            authority=authority,
+            comments=[
+                *comments,
+                {"author_association": "OWNER", "body": prepared["phase_receipt_comment"]},
+                {"author_association": "OWNER", "body": merged["phase_receipt_comment"]},
+            ],
+            convergence=convergence["projection_convergence_receipt"],
+            phase="merged",
+            pr={**merged_pr, "merge_commit_sha": "c" * 40},
+            mode="manual",
+        )
+        assert completed.returncode != 0
+        assert "authenticated resolver" in completed.stderr
+        assert not (tmp_path / "merged-3-output.json").exists()
+
+
+def test_v2_restored_candidate_parity_rejects_post_effect_drift() -> None:
+    plan = prepare_verified_merge(
+        context=_context(),
+        pr=_pr(),
+        live_closing_issues=[3820, 3823],
+        merge_readiness=_readiness(),
+    )
+    authority = plan["authority_receipt"]
+    assert isinstance(authority, dict)
+    neutral_pr = _pr(str(plan["neutralized_body"]))
+    merged_pr = {
+        **neutral_pr,
+        "state": "closed",
+        "merged": True,
+        "merged_at": "2026-07-16T10:00:00Z",
+        "merge_commit_sha": "b" * 40,
+    }
+    restored_pr = {**merged_pr, "body": plan["original_body"]}
+    convergence = projection_phase_kwargs(authority, neutral_pr)
+    proof = post_effect_authority(authority, "b" * 40)
+    phases = [
+        build_verified_merge_phase(
+            authority_receipt=authority,
+            phase=phase,
+            pr=neutral_pr if phase == "prepared" else merged_pr,
+            phase_version=2,
+            closed_issues=[3820, 3823] if phase == "reconciled" else [],
+            post_effect_authority=proof if phase == "reconciled" else None,
+            **convergence,
+        )
+        for phase in ("prepared", "merged", "reconciled")
+    ]
+    comments = [
+        projection_convergence_comment(convergence),
+        *[
+            {"author_association": "OWNER", "body": phase["phase_receipt_comment"]}
+            for phase in phases
+        ],
+    ]
+
+    def assert_rejected(post_effect: dict[str, object]) -> None:
+        candidate = build_verified_merge_phase(
+            authority_receipt=authority,
+            phase="restored",
+            pr=restored_pr,
+            phase_version=2,
+            closed_issues=[3820, 3823],
+            post_effect_authority=post_effect,
+            **convergence,
+        )
+        with pytest.raises(
+            ValueError, match="does not match the authenticated resolver"
+        ):
+            validate_phase_candidate_against_resolver(
+                comments,
+                authority_receipt=authority,
+                pr=restored_pr,
+                current_body_edit=convergence["projection_convergence_receipt"][
+                    "body_edit"
+                ],
+                candidate=candidate,
+            )
+
+    different_operation = {**proof, "operation_key": "e" * 64}
+    assert_rejected(different_operation)
+
+    changed_payload = copy.deepcopy(proof)
+    changed_payload["fencing_token"] = 2
+    changed_payload["pending_receipt_sequence"] = 3
+    changed_payload["reconciled_receipt_sequence"] = 4
+    changed_payload["deployment"] = {
+        **changed_payload["deployment"],
+        "source_sha": "d" * 40,
+    }
+    assert_rejected(changed_payload)
 
 
 def test_post_merge_race_reopens_only_closures_attributed_to_current_pr() -> None:
