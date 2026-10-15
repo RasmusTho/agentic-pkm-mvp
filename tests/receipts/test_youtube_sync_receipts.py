@@ -27,15 +27,20 @@ def test_projection_answers_audit_questions_secret_free() -> None:
         ),
     )
     sources = (
-        SimpleNamespace(binding_id="binding-a", cursor={"frontier": "2026-10-15T00:00:01+00:00"}, last_success_at="2026-10-15T00:00:02+00:00"),
-        SimpleNamespace(binding_id="binding-b", cursor={}, last_success_at=None),
+        SimpleNamespace(binding_id="binding-a", account_binding_id="account-a", cursor={"frontier": "2026-10-15T00:00:01+00:00"}, last_success_at="2026-10-15T00:00:02+00:00"),
+        SimpleNamespace(binding_id="binding-b", account_binding_id="account-b", cursor={}, last_success_at=None),
     )
     records = [
         {"event": "youtube.source.discovered", "event_id": "source-1", "payload": {"item_ref": "video-1", "binding_id": "binding-a", "collection_kind": "inbox_playlist", "collection_ref": "PL-a", "trigger": "poll", "discovered_at": "2026-10-15T00:00:00+00:00"}},
         {"event": "youtube.source.discovered", "event_id": "source-2", "payload": {"item_ref": "video-1", "binding_id": "binding-b", "collection_kind": "inbox_playlist", "collection_ref": "PL-b", "trigger": "poll", "discovered_at": "2026-10-15T00:00:01+00:00"}},
         {"event": "acquisition.failed", "event_id": "failed-1", "payload": {"request_id": "request-1", "item_ref": "video-1", "attempt": 1, "reason_code": "auth_revoked", "error": "refresh-token-super-secret"}},
     ]
-    result = query_youtube_sync_receipts(records=records, requests=(request,), sources=sources, channel_database="test")
+    result = query_youtube_sync_receipts(
+        records=records,
+        requests=(request,),
+        sources=sources,
+        channel_database="isolated-test-db",
+    )
     assert result.source_available is True
     assert len(result.rows) == 1
     row = result.rows[0]
@@ -48,6 +53,6 @@ def test_projection_answers_audit_questions_secret_free() -> None:
     assert row.failed_stage == "acquisition"
     assert row.cursor_advanced is True
     assert row.next_retry_at == "2026-10-15T00:05:00+00:00"
-    assert row.account_binding_ids == ("binding-a", "binding-b")
-    assert row.channel_database == "test"
+    assert row.account_binding_ids == ("account-a", "account-b")
+    assert row.channel_database == "isolated-test-db"
     assert "refresh-token-super-secret" not in json.dumps(projection)

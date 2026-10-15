@@ -257,9 +257,11 @@ def _rows_from_records(
             diagnostics.append({"event_id": first_str(record.get("event_id")), "trace_id": first_str(record.get("trace_id")), "reason": "missing_item_ref_and_request_id"})
             continue
         group["events"].append(first_str(record.get("event_id")))
-        channel_database = first_str(payload.get("channel_database"), payload.get("database"), payload.get("db_name"))
-        if channel_database:
-            group["channel_database"] = channel_database
+        event_channel_database = first_str(
+            payload.get("channel_database"), payload.get("database"), payload.get("db_name")
+        )
+        if event_channel_database:
+            group["channel_database"] = event_channel_database
         account_binding_id = first_str(payload.get("account_binding_id"))
         if account_binding_id:
             group["account_binding_ids"].append(account_binding_id)
@@ -290,13 +292,18 @@ def _rows_from_records(
         request_key = first_str(group.get("request_id"))
         request = request_map.get(request_key) if request_key else None
         projected_triggers = tuple(group.get("triggers") or ())
-        binding_ids = tuple(sorted({trigger.binding_id for trigger in projected_triggers if trigger.binding_id} | set(group.get("account_binding_ids") or ())))
+        source_binding_ids = tuple(
+            sorted({trigger.binding_id for trigger in projected_triggers if trigger.binding_id})
+        )
+        account_binding_ids = set(group.get("account_binding_ids") or ())
         source_successes: list[str] = []
         frontiers: list[str] = []
-        for binding_id in binding_ids:
+        for binding_id in source_binding_ids:
             source = source_map.get(binding_id)
             if source is None:
                 continue
+            account_binding_id = first_str(_field(source, "account_binding_id"))
+            account_binding_ids.add(account_binding_id or binding_id)
             success = first_str(_field(source, "last_success_at"))
             if success:
                 source_successes.append(success)
@@ -328,8 +335,10 @@ def _rows_from_records(
                 failure_at=first_str(failure.get("at")) if failure else None,
                 cursor_advanced=cursor_advanced,
                 cursor_frontier=max(frontiers) if frontiers else None,
-                account_binding_ids=binding_ids,
-                channel_database=first_str(group.get("channel_database"), channel_database, active_environment()),
+                account_binding_ids=tuple(sorted(account_binding_ids)),
+                channel_database=first_str(
+                    group.get("channel_database"), channel_database, active_environment()
+                ),
                 source_event_ids=event_ids,
             )
         )
