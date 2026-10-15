@@ -15,6 +15,12 @@ from app.settings.watcher_settings import load_watcher_settings
 
 
 _DB_RECEIPT_BATCH_SIZE = 256
+_STRUCTURED_RECEIPT_EVENTS = frozenset(
+    {
+        "governance.authority_receipt.recorded",
+        "promotion.transition.applied",
+    }
+)
 
 
 class ReceiptSourceUnavailableError(RuntimeError):
@@ -48,15 +54,13 @@ def open_receipt_source_records(
     when a consumer stops early.
     """
 
-    from app.services.outbox import iter_jsonl_outbox_records
-
     with _open_db_outbox_records() as db_records:
         if _db_outbox_configured() and db_records is None:
             yield None
             return
         resolved = _resolve_jsonl_outbox_path(outbox_path)
         jsonl_records = (
-            iter_jsonl_outbox_records(resolved)
+            _iter_validated_jsonl_outbox_records(resolved)
             if resolved is not None and resolved.exists() and resolved.is_file()
             else None
         )
@@ -98,7 +102,11 @@ def read_receipt_source_records(*, outbox_path: Path | None = None) -> list[dict
     return records if source_available else None
 
 
-def read_receipt_source_snapshot(*, outbox_path: Path | None = None) -> ReceiptSourceSnapshot:
+def read_receipt_source_snapshot(
+    *,
+    outbox_path: Path | None = None,
+    _jsonl_lock_held: bool = False,
+) -> ReceiptSourceSnapshot:
     """Read each receipt source independently for idempotent reconciliation.
 
     Unlike :func:`read_receipt_source_records`, this reports partial
@@ -121,13 +129,20 @@ def read_receipt_source_snapshot(*, outbox_path: Path | None = None) -> ReceiptS
         else:
             records.extend(db_records)
 
+    jsonl_configured = _resolve_jsonl_outbox_path(outbox_path) is not None
     try:
-        jsonl_records = _read_jsonl_outbox_records(outbox_path=outbox_path)
+        jsonl_records = _read_jsonl_outbox_records(
+            outbox_path=outbox_path,
+            _lock_held=_jsonl_lock_held,
+        )
     except Exception:
         jsonl_records = None
         unavailable_sources.append("JSONL")
     else:
-        if jsonl_records is not None:
+        if jsonl_records is None:
+            if jsonl_configured:
+                unavailable_sources.append("JSONL")
+        else:
             records.extend(jsonl_records)
 
     return ReceiptSourceSnapshot(
@@ -143,8 +158,10 @@ def record_event(record: dict[str, Any]) -> str:
 def record_payload(record: dict[str, Any]) -> dict[str, Any]:
     payload = record.get("payload")
     if isinstance(payload, str):
+        from app.services.outbox import loads_json_without_duplicate_keys
+
         try:
-            payload = json.loads(payload)
+            payload = loads_json_without_duplicate_keys(payload)
         except json.JSONDecodeError:
             return {}
     return dict(payload) if isinstance(payload, dict) else {}
@@ -274,12 +291,17 @@ def _iter_db_outbox_records(cur: Any) -> Generator[dict[str, Any], None, None]:
             else:
                 row_id, topic, payload, created_at = row
             record = _coerce_record(payload)
+            _validate_structured_receipt_payload(
+                record,
+                authoritative_event=topic,
+            )
             record.setdefault("event", topic)
             record.setdefault("event_type", topic)
             record.setdefault("event_id", str(row_id) if row_id is not None else "")
             if created_at is not None:
                 record.setdefault("created_at", coerce_timestamp(created_at))
                 record.setdefault("timestamp", coerce_timestamp(created_at))
+            _validate_structured_receipt_payload(record)
             yield record
 
 
@@ -288,13 +310,41 @@ def _db_outbox_configured() -> bool:
     return backend == "pg" or bool(os.getenv("DATABASE_URL") or os.getenv("DB_DSN"))
 
 
-def _read_jsonl_outbox_records(*, outbox_path: Path | None) -> list[dict[str, Any]] | None:
-    from app.services.outbox import iter_jsonl_outbox_records
+def _read_jsonl_outbox_records(
+    *,
+    outbox_path: Path | None,
+    _lock_held: bool = False,
+) -> list[dict[str, Any]] | None:
+    from app.services.outbox import iter_jsonl_outbox_records, read_jsonl_outbox_records
 
     resolved = _resolve_jsonl_outbox_path(outbox_path)
     if resolved is None or not resolved.exists() or not resolved.is_file():
         return None
-    return list(iter_jsonl_outbox_records(resolved))
+    if _lock_held:
+        records = read_jsonl_outbox_records(resolved, _lock_held=True)
+    else:
+        records = list(iter_jsonl_outbox_records(resolved))
+    for record in records:
+        _validate_structured_receipt_payload(record)
+    if not resolved.exists() or not resolved.is_file():
+        return None
+    return records
+
+
+def _iter_validated_jsonl_outbox_records(
+    outbox_path: Path,
+) -> Generator[dict[str, Any], None, None]:
+    """Traverse JSONL while rejecting unreadable authority-bearing payloads."""
+
+    from app.services.outbox import iter_jsonl_outbox_records
+
+    records = iter_jsonl_outbox_records(outbox_path)
+    try:
+        for record in records:
+            _validate_structured_receipt_payload(record)
+            yield record
+    finally:
+        records.close()
 
 
 def _resolve_jsonl_outbox_path(outbox_path: Path | None) -> Path | None:
@@ -312,13 +362,67 @@ def _resolve_jsonl_outbox_path(outbox_path: Path | None) -> Path | None:
 def _coerce_record(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return dict(value)
+    from app.services.outbox import JsonlOutboxCorruptionError
+
     if isinstance(value, str):
+        from app.services.outbox import loads_json_without_duplicate_keys
+
         try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return dict(parsed) if isinstance(parsed, dict) else {}
-    return {}
+            parsed = loads_json_without_duplicate_keys(value)
+        except json.JSONDecodeError as exc:
+            raise JsonlOutboxCorruptionError(
+                "DB outbox contains malformed receipt JSON"
+            ) from exc
+        if isinstance(parsed, dict):
+            return dict(parsed)
+    raise JsonlOutboxCorruptionError(
+        "DB outbox receipt payload must be a JSON object"
+    )
+
+
+def _validate_structured_receipt_payload(
+    record: dict[str, Any],
+    *,
+    authoritative_event: Any = None,
+) -> None:
+    """Reject a receipt envelope whose nested authority payload is not an object."""
+
+    aliases = [
+        str(value).strip()
+        for value in (
+            record.get("event"),
+            record.get("event_type"),
+            record.get("topic"),
+            authoritative_event,
+        )
+        if value is not None and str(value).strip()
+    ]
+    structured_aliases = [
+        alias for alias in aliases if alias in _STRUCTURED_RECEIPT_EVENTS
+    ]
+    if not structured_aliases:
+        return
+    from app.services.outbox import JsonlOutboxCorruptionError
+
+    if any(alias != structured_aliases[0] for alias in aliases):
+        raise JsonlOutboxCorruptionError(
+            "receipt source event aliases conflict for structured authority history"
+        )
+    payload = record.get("payload")
+    if isinstance(payload, str):
+        from app.services.outbox import loads_json_without_duplicate_keys
+
+        try:
+            payload = loads_json_without_duplicate_keys(payload)
+        except json.JSONDecodeError as exc:
+            raise JsonlOutboxCorruptionError(
+                "receipt source contains malformed nested payload JSON"
+            ) from exc
+    if not isinstance(payload, dict):
+        raise JsonlOutboxCorruptionError(
+            "receipt source nested payload must be a JSON object"
+        )
+    record["payload"] = dict(payload)
 
 
 __all__ = [

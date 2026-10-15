@@ -39,6 +39,24 @@ def test_bounded_reader_rejects_retained_tail_without_record_delimiter(tmp_path:
         read_jsonl_outbox_records(outbox_path, max_bytes=16, read_only=True)
 
 
+@pytest.mark.parametrize("read_only", (False, True))
+def test_jsonl_reader_rejects_recursive_duplicate_object_keys(
+    tmp_path: Path,
+    read_only: bool,
+) -> None:
+    outbox_path = tmp_path / "duplicate-key.jsonl"
+    original = (
+        b'{"event_id":"duplicate-key","payload":{"decision_token":'
+        b'{"valid":false,"valid":true}}}\n'
+    )
+    outbox_path.write_bytes(original)
+
+    with pytest.raises(JsonlOutboxCorruptionError, match="duplicate object key"):
+        read_jsonl_outbox_records(outbox_path, read_only=read_only)
+
+    assert outbox_path.read_bytes() == original
+
+
 def test_write_outbox_event_serializes_payload():
     conn = FakeConn()
     payload = {

@@ -4,18 +4,19 @@ import hashlib
 import json
 import os
 import sqlite3
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
-from app.agent_memory.candidate import validated_memory_scope_id
+from app.agent_memory.candidate import MemoryType, validated_memory_scope_id
 from app.agent_memory.review_queue import ReviewDecision, ReviewEntry
+from app.services.outbox import JsonlOutboxCorruptionError, loads_json_without_duplicate_keys
 from app.vault.manager import VaultContext
 
 REVIEW_DECISION_RECEIPT_KIND = "agent_memory.review_decision"
-REVIEW_DECISION_STORE_VERSION = 3
+REVIEW_DECISION_STORE_VERSION = 5
 _UNSET = object()
 
 
@@ -28,6 +29,7 @@ class ReviewDecisionRecord:
     decided_by: str
     decided_at: datetime
     source_refs: tuple[str, ...]
+    memory_type: MemoryType | None = None
     scope_id: str | None = None
     receipt_kind: str = REVIEW_DECISION_RECEIPT_KIND
     terminal: bool = False
@@ -37,6 +39,7 @@ class ReviewDecisionRecord:
     derived_from: str | None = None
     candidate_digest: str | None = None
     materializing: bool = False
+    materialization_source_binding: str | None = None
 
 
 class ReviewDecisionStoreError(ValueError):
@@ -81,6 +84,7 @@ class ReviewDecisionStore:
             decided_by=entry.decided_by,
             decided_at=entry.decided_at.astimezone(timezone.utc),
             source_refs=tuple(entry.source_refs),
+            memory_type=entry.candidate.memory_type,
             scope_id=entry.scope_id,
             terminal=entry.decision in {ReviewDecision.REJECT, ReviewDecision.REVISE},
             decision_notes=entry.decision_notes,
@@ -93,14 +97,15 @@ class ReviewDecisionStore:
             conn.execute("BEGIN IMMEDIATE")
             existing_row = conn.execute(
                 """
-                SELECT payload
+                SELECT vault_id, channel, candidate_id, outcome, decided_by,
+                       decided_at, terminal, payload
                 FROM agent_memory_review_decisions
                 WHERE vault_id = ? AND channel = ? AND candidate_id = ?
                 """,
                 (record.vault_id, record.channel, record.candidate_id),
             ).fetchone()
             if existing_row is not None:
-                existing = _record_from_payload(json.loads(existing_row["payload"]))
+                existing = _record_from_row(existing_row)
                 if existing.terminal:
                     raise ReviewDecisionStoreError(
                         "terminal review decisions cannot be replaced"
@@ -160,7 +165,8 @@ class ReviewDecisionStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT payload
+                SELECT vault_id, channel, candidate_id, outcome, decided_by,
+                       decided_at, terminal, payload
                 FROM agent_memory_review_decisions
                 WHERE vault_id = ? AND channel = ? AND candidate_id = ?
                 """,
@@ -168,7 +174,7 @@ class ReviewDecisionStore:
             ).fetchone()
         if row is None:
             return None
-        return _record_from_payload(json.loads(row["payload"]))
+        return _record_from_row(row)
 
     def list_decisions(
         self,
@@ -180,14 +186,15 @@ class ReviewDecisionStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT payload
+                SELECT vault_id, channel, candidate_id, outcome, decided_by,
+                       decided_at, terminal, payload
                 FROM agent_memory_review_decisions
                 WHERE vault_id = ? AND channel = ?
                 ORDER BY decided_at, candidate_id
                 """,
                 (vault_id, _safe_str(channel)),
             ).fetchall()
-        return tuple(_record_from_payload(json.loads(row["payload"])) for row in rows)
+        return tuple(_record_from_row(row) for row in rows)
 
     def mark_terminal(
         self,
@@ -204,7 +211,8 @@ class ReviewDecisionStore:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
-                SELECT payload
+                SELECT vault_id, channel, candidate_id, outcome, decided_by,
+                       decided_at, terminal, payload
                 FROM agent_memory_review_decisions
                 WHERE vault_id = ? AND channel = ? AND candidate_id = ?
                 """,
@@ -212,7 +220,7 @@ class ReviewDecisionStore:
             ).fetchone()
             if row is None:
                 raise ReviewDecisionStoreError("cannot mark missing decision terminal")
-            record = _record_from_payload(json.loads(row["payload"]))
+            record = _record_from_row(row)
             if record.terminal:
                 raise ReviewDecisionStoreError("decision is already terminal")
             if expected_scope_id is not _UNSET and record.scope_id != expected_scope_id:
@@ -253,6 +261,12 @@ class ReviewDecisionStore:
         channel: str,
         expected_scope_id: str,
         expected_candidate_digest: str,
+        initialize_first_attempt: (
+            Callable[[tuple[ReviewDecisionRecord, ...]], str] | None
+        ) = None,
+        terminal_guard: (
+            Callable[[ReviewDecisionRecord], AbstractContextManager[None]] | None
+        ) = None,
     ) -> Iterator[ReviewDecisionRecord]:
         """Serialize one promoted decision through artifact write and terminalization."""
 
@@ -263,7 +277,8 @@ class ReviewDecisionStore:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 """
-                SELECT payload
+                SELECT vault_id, channel, candidate_id, outcome, decided_by,
+                       decided_at, terminal, payload
                 FROM agent_memory_review_decisions
                 WHERE vault_id = ? AND channel = ? AND candidate_id = ?
                 """,
@@ -273,7 +288,7 @@ class ReviewDecisionStore:
                 raise ReviewDecisionStoreError(
                     "semantic memory materialization requires a persisted decision"
                 )
-            record = _record_from_payload(json.loads(row["payload"]))
+            record = _record_from_row(row)
             if record.outcome is not ReviewDecision.PROMOTE:
                 raise ReviewDecisionStoreError(
                     "semantic memory materialization requires a persisted promote decision"
@@ -290,9 +305,30 @@ class ReviewDecisionStore:
                 raise ReviewDecisionStoreError(
                     "candidate content does not match the persisted review decision"
                 )
+            history_rows = conn.execute(
+                """
+                SELECT vault_id, channel, candidate_id, outcome, decided_by,
+                       decided_at, terminal, payload
+                FROM agent_memory_review_decisions
+                ORDER BY vault_id, channel, decided_at, candidate_id
+                """
+            ).fetchall()
+            decision_history = tuple(
+                _record_from_row(history_row)
+                for history_row in history_rows
+            )
             if not record.materializing:
-                materializing_record = replace(record, materializing=True)
-                conn.execute(
+                source_binding = (
+                    initialize_first_attempt(decision_history)
+                    if initialize_first_attempt is not None
+                    else record.materialization_source_binding
+                )
+                materializing_record = replace(
+                    record,
+                    materializing=True,
+                    materialization_source_binding=source_binding,
+                )
+                updated = conn.execute(
                     """
                     UPDATE agent_memory_review_decisions
                     SET payload = ?
@@ -311,11 +347,16 @@ class ReviewDecisionStore:
                         ReviewDecision.PROMOTE.value,
                     ),
                 )
+                if updated.rowcount != 1:
+                    raise ReviewDecisionStoreError(
+                        "promote decision changed before materialization reservation"
+                    )
                 conn.commit()
                 conn.execute("BEGIN IMMEDIATE")
                 resumed_row = conn.execute(
                     """
-                    SELECT payload
+                    SELECT vault_id, channel, candidate_id, outcome, decided_by,
+                           decided_at, terminal, payload
                     FROM agent_memory_review_decisions
                     WHERE vault_id = ? AND channel = ? AND candidate_id = ?
                     """,
@@ -325,19 +366,25 @@ class ReviewDecisionStore:
                     raise ReviewDecisionStoreError(
                         "materializing review decision disappeared"
                     )
-                record = _record_from_payload(json.loads(resumed_row["payload"]))
-                if record.terminal or record.outcome is not ReviewDecision.PROMOTE:
+                reserved_record = _record_from_row(resumed_row)
+                if (
+                    reserved_record.terminal
+                    or reserved_record.outcome is not ReviewDecision.PROMOTE
+                ):
                     raise ReviewDecisionStoreError(
                         "promote decision changed before materialization resumed"
                     )
                 if (
-                    record.scope_id != expected_scope_id
-                    or record.candidate_digest != expected_candidate_digest
-                    or not record.materializing
+                    reserved_record.scope_id != expected_scope_id
+                    or reserved_record.candidate_digest != expected_candidate_digest
+                    or not reserved_record.materializing
+                    or reserved_record.materialization_source_binding
+                    != materializing_record.materialization_source_binding
                 ):
                     raise ReviewDecisionStoreError(
                         "materialization authority changed before resume"
                     )
+                record = reserved_record
 
             try:
                 yield record
@@ -345,32 +392,34 @@ class ReviewDecisionStore:
                 conn.rollback()
                 raise
 
-            terminal_record = replace(record, terminal=True, materializing=False)
-            updated = conn.execute(
-                """
-                UPDATE agent_memory_review_decisions
-                SET terminal = 1, payload = ?
-                WHERE vault_id = ? AND channel = ? AND candidate_id = ?
-                  AND outcome = ? AND terminal = 0
-                """,
-                (
-                    json.dumps(
-                        _record_payload(terminal_record),
-                        sort_keys=True,
-                        separators=(",", ":"),
+            guard = terminal_guard(record) if terminal_guard is not None else nullcontext()
+            with guard:
+                terminal_record = replace(record, terminal=True, materializing=False)
+                updated = conn.execute(
+                    """
+                    UPDATE agent_memory_review_decisions
+                    SET terminal = 1, payload = ?
+                    WHERE vault_id = ? AND channel = ? AND candidate_id = ?
+                      AND outcome = ? AND terminal = 0
+                    """,
+                    (
+                        json.dumps(
+                            _record_payload(terminal_record),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        record.vault_id,
+                        record.channel,
+                        record.candidate_id,
+                        ReviewDecision.PROMOTE.value,
                     ),
-                    record.vault_id,
-                    record.channel,
-                    record.candidate_id,
-                    ReviewDecision.PROMOTE.value,
-                ),
-            )
-            if updated.rowcount != 1:
-                conn.rollback()
-                raise ReviewDecisionStoreError(
-                    "promote decision changed before terminal transition"
                 )
-            conn.commit()
+                if updated.rowcount != 1:
+                    conn.rollback()
+                    raise ReviewDecisionStoreError(
+                        "promote decision changed before terminal transition"
+                    )
+                conn.commit()
 
     def _connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -449,6 +498,9 @@ def _record_payload(record: ReviewDecisionRecord) -> dict[str, Any]:
         "decided_at": _iso(record.decided_at),
         "terminal": record.terminal,
         "source_refs": list(record.source_refs),
+        "memory_type": (
+            record.memory_type.value if record.memory_type is not None else None
+        ),
         "scope_id": record.scope_id,
         "decision_notes": record.decision_notes,
         "revision_of": record.revision_of,
@@ -456,18 +508,95 @@ def _record_payload(record: ReviewDecisionRecord) -> dict[str, Any]:
         "derived_from": record.derived_from,
         "candidate_digest": record.candidate_digest,
         "materializing": record.materializing,
+        "materialization_source_binding": record.materialization_source_binding,
     }
 
 
+def _record_from_row(row: sqlite3.Row) -> ReviewDecisionRecord:
+    """Decode one row only when its indexed authority mirrors one payload."""
+
+    try:
+        payload = loads_json_without_duplicate_keys(row["payload"])
+    except (JsonlOutboxCorruptionError, json.JSONDecodeError, TypeError) as exc:
+        raise ReviewDecisionStoreError(
+            "persisted review decision payload is invalid"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ReviewDecisionStoreError("persisted review decision payload is invalid")
+    record = _record_from_payload(payload)
+
+    raw_terminal = row["terminal"]
+    if type(raw_terminal) is not int or raw_terminal not in {0, 1}:
+        raise ReviewDecisionStoreError(
+            "persisted review decision terminal mirror is invalid"
+        )
+    mirrors: dict[str, object] = {
+        "vault_id": row["vault_id"],
+        "channel": row["channel"],
+        "candidate_id": row["candidate_id"],
+        "outcome": row["outcome"],
+        "decided_by": row["decided_by"],
+        "decided_at": row["decided_at"],
+        "terminal": bool(raw_terminal),
+    }
+    for key, expected in mirrors.items():
+        observed = payload.get(key)
+        if type(observed) is not type(expected) or observed != expected:
+            raise ReviewDecisionStoreError(
+                f"persisted review decision {key} mirror conflicts with payload"
+            )
+    return record
+
+
 def _record_from_payload(payload: dict[str, Any]) -> ReviewDecisionRecord:
+    raw_reviewer = payload.get("decided_by")
+    if not isinstance(raw_reviewer, str) or not raw_reviewer.strip():
+        raise ReviewDecisionStoreError(
+            "persisted review decision reviewer is invalid"
+        )
+    raw_memory_type = payload.get("memory_type")
+    if raw_memory_type is None:
+        memory_type = None
+    elif isinstance(raw_memory_type, str):
+        try:
+            memory_type = MemoryType(raw_memory_type)
+        except ValueError as exc:
+            raise ReviewDecisionStoreError(
+                "persisted review decision memory type is invalid"
+            ) from exc
+    else:
+        raise ReviewDecisionStoreError(
+            "persisted review decision memory type is invalid"
+        )
+    raw_source_binding = payload.get("materialization_source_binding")
+    if raw_source_binding is not None and (
+        not isinstance(raw_source_binding, str) or not raw_source_binding.strip()
+    ):
+        raise ReviewDecisionStoreError(
+            "persisted materialization source binding is invalid"
+        )
+    raw_materializing = payload.get("materializing", False)
+    if type(raw_materializing) is not bool:
+        raise ReviewDecisionStoreError(
+            "persisted review decision materializing state is invalid"
+        )
+    if (
+        raw_source_binding is not None
+        and not raw_materializing
+        and payload.get("terminal") is not True
+    ):
+        raise ReviewDecisionStoreError(
+            "persisted materialization reservation state is inconsistent"
+        )
     return ReviewDecisionRecord(
         vault_id=str(payload["vault_id"]),
         channel=str(payload["channel"]),
         candidate_id=str(payload["candidate_id"]),
         outcome=ReviewDecision(str(payload["outcome"])),
-        decided_by=str(payload["decided_by"]),
+        decided_by=raw_reviewer,
         decided_at=_parse_iso(str(payload["decided_at"])),
         source_refs=tuple(str(ref) for ref in payload.get("source_refs", [])),
+        memory_type=memory_type,
         scope_id=payload.get("scope_id"),
         receipt_kind=str(payload.get("receipt_kind") or REVIEW_DECISION_RECEIPT_KIND),
         terminal=bool(payload.get("terminal", False)),
@@ -476,7 +605,8 @@ def _record_from_payload(payload: dict[str, Any]) -> ReviewDecisionRecord:
         generated_by=payload.get("generated_by"),
         derived_from=payload.get("derived_from"),
         candidate_digest=payload.get("candidate_digest"),
-        materializing=bool(payload.get("materializing", False)),
+        materializing=raw_materializing,
+        materialization_source_binding=raw_source_binding,
     )
 
 
