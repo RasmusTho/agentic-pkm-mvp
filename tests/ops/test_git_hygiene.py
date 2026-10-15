@@ -6636,14 +6636,9 @@ def test_local_retirement_ignores_completed_dedicated_worktree_lifecycle_prose(
         r"Dedicated worktree /tmp/old is still \<!-- note --> dirty on branch old at head {sha}.",
         "~~~\nDedicated worktree /tmp/old is <br>\ndirty on branch old at head {sha}.\n~~~",
         "~~~\nDedicated worktree /tmp/old is still\ndirty on branch old at head {sha}.\n~~~",
-        "Dedicated worktree /tmp/old is still\n~~~\nopaque\n~~~\ndirty on branch old at head {sha}.",
-        "Dedicated worktree /tmp/old is still\n~~~\n~~~\ndirty on branch old at head {sha}.",
-        "Dedicated worktree /tmp/old is still\n~~~\n\n~~~\ndirty on branch old at head {sha}.",
-        "Dedicated worktree /tmp/old\n~~~\nopaque\n~~~\nis still dirty on branch old at head {sha}.",
         "Completed delivery mentions `<!-- note` before routine cleanup.",
         "Narrative<!-- hidden\n\nDedicated worktree /tmp/old",
         "> ~~~\n> Dedicated worktree /tmp/old is <br>\n> dirty on branch old at head {sha}.\n> ~~~",
-        "- ~~~\n- Dedicated worktree /tmp/old is <br>\n- dirty on branch old at head {sha}.\n- ~~~",
         "Dedicated worktree /tmp/old is <br-widget> still dirty on branch old at head {sha}.",
         "Example. `Dedicated worktree /tmp/old`",
         (
@@ -6754,6 +6749,43 @@ def test_local_retirement_rejects_html_block_dedicated_worktree_marker(
         git_hygiene.retire_inactive_local_branches(
             repo, targets={ref: sha}, snapshot_directory=tmp_path / "rescue",
             owner_discard="discard inactive work only when HTML block receipt intent is explicit",
+        )
+    assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
+
+
+def test_local_retirement_rejects_list_fence_boundary_truncated_marker(
+    tmp_path, monkeypatch
+):
+    repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(git_hygiene, "_dispatcher_snapshot_from_connection", lambda *_: [
+        {
+            "kind": "task",
+            "record": {
+                "task_id": "github-RasmusTho--agentic-pkm-mvp-issue-5258",
+                "repo": "RasmusTho/agentic-pkm-mvp",
+                "issue_number": 5258,
+                "status": "blocked",
+                "linked_pr": None,
+                "source_anchor_refs": "[]",
+                "sync_state": json.dumps({
+                    "comments": [{
+                        "body": (
+                            "- ~~~\n"
+                            "- Dedicated worktree /tmp/old is <br>\n"
+                            "- dirty on branch old at head {sha}.\n"
+                            "- ~~~"
+                        ).format(sha=sha)
+                    }]
+                }),
+            },
+        }
+    ])
+    with pytest.raises(RuntimeError, match="dispatcher_activity_invalid"):
+        git_hygiene.retire_inactive_local_branches(
+            repo,
+            targets={ref: sha},
+            snapshot_directory=tmp_path / "rescue",
+            owner_discard="discard list-fence boundary receipt intent",
         )
     assert git_hygiene.run_git(["rev-parse", ref], repo) == sha
 
@@ -7120,6 +7152,13 @@ def test_local_retirement_rejects_whitespace_dedicated_worktree_marker(
         ("Note: Dedicated worktree /tmp/old is", "still dirty", "\n"),
         ("Dedicated worktree", "/tmp/old is still dirty", "\r"),
         ("Dedicated worktree", "/tmp/old is still dirty", "\r\n"),
+        ("Dedicated worktree /tmp/old is still", "~~~\nopaque\n~~~\ndirty", "\n"),
+        ("Dedicated worktree /tmp/old is still", "~~~\n~~~\ndirty", "\n"),
+        ("Dedicated worktree /tmp/old is still", "~~~\n\n~~~\ndirty", "\n"),
+        ("Dedicated worktree /tmp/old", "~~~\nopaque\n~~~\nis still dirty", "\n"),
+        ("~~~\nopaque\n~~~\nDedicated worktree /tmp/old", "follow-up", "\n"),
+        ("> ~~~\n> opaque\n> ~~~\n> Dedicated worktree /tmp/old", "follow-up", "\n"),
+        ("  ~~~\n  opaque\n  ~~~\n  Dedicated worktree /tmp/old", "follow-up", "\n"),
     ],
 )
 def test_local_retirement_rejects_cross_line_dedicated_worktree_marker(

@@ -2273,13 +2273,6 @@ def _dispatcher_code_block_line_numbers(body: str) -> set[int]:
     return line_numbers
 
 
-def _dispatcher_container_fence_line(line: str) -> bool:
-    content = re.sub(
-        r"^\s*(?:(?:>\s*)|(?:[-+*]\s+)|(?:\d+[.)]\s+))*", "", line
-    ).strip()
-    return bool(re.match(r"^(?:`{3,}|~{3,})(?:\s|$)", content))
-
-
 _DISPATCHER_DEDICATED_WORKTREE_CROSS_LINE_RE = re.compile(
     rf"(?:^[ \t]*|[.!?:][ \t]+|while[ \t]+the[ \t]+|"
     rf"while[ \t]*(?:\n[ \t]*)+the[ \t]+){_DISPATCHER_DEDICATED_KEYWORD}"
@@ -2464,14 +2457,7 @@ def _dispatcher_resumable_binding_resources(
             marker_segments = _dispatcher_split_scan_segments(marker_scan_line)
             continuation_segments = _dispatcher_split_scan_segments(continuation_line)
             truncated_marker_lines = truncated_scan_line.splitlines()
-            container_fence_context = any(
-                _dispatcher_container_fence_line(lines[adjacent_line])
-                for adjacent_line in (line_number - 1, line_number + 1)
-                if 0 <= adjacent_line < len(lines)
-            )
-            dedicated_truncated_marker = bool(visible_truncated_line.strip()) and not (
-                container_fence_context
-            ) and any(
+            dedicated_truncated_marker = bool(visible_truncated_line.strip()) and any(
                 _dispatcher_table_marker_search(
                     _DISPATCHER_DEDICATED_WORKTREE_TRUNCATED_RE,
                     rendered_line,
