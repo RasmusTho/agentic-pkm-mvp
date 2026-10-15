@@ -15,6 +15,8 @@ import uuid
 from pathlib import Path
 
 import psycopg
+from psycopg import sql
+from psycopg.rows import dict_row, tuple_row
 import pytest
 
 from app.db.errors import OutboxSchemaMissingError
@@ -97,6 +99,94 @@ def _outbox_snapshot(dsn: str) -> tuple[list[tuple], list[tuple]]:
             """
         ).fetchall()
     return list(columns), list(indexes)
+
+
+@pytest.fixture(params=[tuple_row, dict_row], ids=["tuple-row", "dict-row"])
+def isolated_outbox_conn(scratch_db, request):
+    """A migrated public outbox behind an empty active test schema."""
+    schema = f"outbox_fixture_{uuid.uuid4().hex}"
+    with psycopg.connect(scratch_db, autocommit=True, row_factory=request.param) as conn:
+        conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        conn.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
+        yield conn, schema
+
+
+def test_autocreate_uses_active_schema_despite_public_outbox(
+    isolated_outbox_conn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An opted-in fixture must create its own outbox instead of using public."""
+    from app.services import outbox as outbox_module
+
+    conn, schema = isolated_outbox_conn
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+    with conn.cursor(row_factory=tuple_row) as cur:
+        cur.execute("SELECT to_regclass('outbox')::oid, 'public.outbox'::regclass::oid")
+        visible_oid, public_oid = cur.fetchone()
+        assert visible_oid == public_oid
+
+    outbox_module.bootstrap(conn)
+
+    with conn.cursor(row_factory=tuple_row) as cur:
+        cur.execute("SELECT to_regclass('outbox')::oid, 'public.outbox'::regclass::oid")
+        isolated_oid, unchanged_public_oid = cur.fetchone()
+        assert isolated_oid != public_oid
+        assert unchanged_public_oid == public_oid
+        cur.execute(
+            "SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE c.oid = %s",
+            (isolated_oid,),
+        )
+        assert cur.fetchone() == (schema,)
+    outbox_module.bootstrap(conn)  # repeated bootstrap validates the same relation
+
+
+def test_assert_only_validates_visible_fallback_relation(
+    isolated_outbox_conn, scratch_db, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without opt-in, validate public's visible relation and leave schema intact."""
+    from app.services import outbox as outbox_module
+
+    conn, schema = isolated_outbox_conn
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    before = _outbox_snapshot(scratch_db)
+
+    outbox_module.bootstrap(conn)
+
+    assert _outbox_snapshot(scratch_db) == before
+    with conn.cursor(row_factory=tuple_row) as cur:
+        cur.execute("SELECT to_regclass(%s)", (f"{schema}.outbox",))
+        assert cur.fetchone() == (None,)
+
+
+def test_incomplete_visible_fallback_relation_fails_loud(
+    isolated_outbox_conn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The visible public table's missing column is reported precisely."""
+    from app.services import outbox as outbox_module
+
+    conn, _schema = isolated_outbox_conn
+    monkeypatch.delenv("STORE_SCHEMA_AUTOCREATE", raising=False)
+    conn.execute("ALTER TABLE public.outbox DROP COLUMN attempts")
+
+    with pytest.raises(OutboxSchemaMissingError, match="alembic upgrade head") as exc:
+        outbox_module.bootstrap(conn)
+    assert str(exc.value).startswith("outbox table is missing column(s) ['attempts'].")
+
+
+def test_autocreate_refuses_incomplete_active_relation(
+    isolated_outbox_conn, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opt-in cannot repair an existing incomplete table or validate public instead."""
+    from app.services import outbox as outbox_module
+
+    conn, _schema = isolated_outbox_conn
+    monkeypatch.setenv("STORE_SCHEMA_AUTOCREATE", "1")
+    conn.execute("CREATE TABLE outbox (LIKE public.outbox INCLUDING ALL)")
+    conn.execute("ALTER TABLE outbox DROP COLUMN attempts")
+
+    with pytest.raises(OutboxSchemaMissingError, match="alembic upgrade head") as exc:
+        outbox_module.bootstrap(conn)
+    assert str(exc.value).startswith("outbox table is missing column(s) ['attempts'].")
 
 
 def test_missing_table_raises(scratch_db, monkeypatch: pytest.MonkeyPatch) -> None:
