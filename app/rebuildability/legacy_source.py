@@ -219,8 +219,33 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                 # A producer bound to another source root cannot borrow this
                 # active binding's relative replay/identity authority.
                 raise LegacySourceRefusal("legacy_producer_policy_refused")
+            try:
+                filesystem_uuid = str(UUID(str(parsed.get("uuid") or "").strip()))
+            except (ValueError, TypeError, AttributeError):
+                filesystem_uuid = None
+            if policy.includes(root / relative) and filesystem_uuid != vault_uuid:
+                # The real FS adapter preserves only a literal uuid scalar;
+                # id-only/encoded forms would acquire another identity when
+                # it resumes. Recovery must refuse rather than heal a source.
+                raise LegacySourceRefusal("legacy_identity_refused")
+            if registry_policy.includes(root / relative):
+                from app.services.note_uuid import inbox_uuid_heal_applies, is_read_only_derived_artifact
+                try:
+                    inbox_heal = inbox_uuid_heal_applies(root / relative, root)
+                except Exception:
+                    raise LegacySourceRefusal("legacy_producer_policy_refused") from None
+                if (inbox_heal
+                        and not str(parsed.get("uuid") or "").strip()
+                        and not is_read_only_derived_artifact(parsed)):
+                    # Ordinary registry workers heal inbox UUIDs before using
+                    # their parsed id fallback. That new identity must not be
+                    # introduced on resume after this recovery transition.
+                    raise LegacySourceRefusal("legacy_identity_refused")
             claims = 0
-            for path in iter_vault_markdown_files(root):
+            identity_sources = set(iter_vault_markdown_files(root)) | set(registry_policy.sources)
+            if policy.root == root:
+                identity_sources.update(policy.sources)
+            for path in identity_sources:
                 text, _ = read_recovery_snapshot_relative(path.relative_to(root).as_posix(), vault_root=root)
                 fm = capture_source_frontmatter(text)
                 if fm is None:

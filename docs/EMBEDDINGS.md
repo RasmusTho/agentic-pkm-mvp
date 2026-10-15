@@ -493,8 +493,13 @@ across API, worker and watcher; recovery does not synthesize another service's e
 The legacy filesystem entrypoint and recovery share one strict activation/inventory reader: unset or explicitly false
 `FS_WATCHER_ENABLE` disables that optional producer; true requires an explicit absolute existing
 `VAULT_DIR`. Merely setting `VAULT_DIR`, or a default `./vault` path, never enables a producer.
-Every enabled source producer must be excluded before retirement. Enabled overlapping producers
-must bind the same active root; conflicting roots, malformed settings
+Every enabled source producer must be excluded before retirement. The UUID uniqueness proof
+uses the union of their full inventories, including the legacy filesystem
+producer's nested-vault files. Filesystem claims require an existing plain UUID scalar that its
+real adapter preserves; id-only or encoded identities refuse rather than being healed.
+Registry claims likewise refuse id-only sources in its configured inbox when the ordinary worker
+would allocate a fresh UUID on resume; the shared inbox-heal selector is evaluated without writes.
+Overlapping enabled producers must bind the same active root; conflicting roots, malformed settings
 or configuration drift refuse. Enabled legacy filesystem sources prepare through the ordinary vault-sync
 payload builder with complete current admission evidence, never through alpha's excluded inventory.
 When every enabled producer excludes the source, exact CAS retirement remains available.

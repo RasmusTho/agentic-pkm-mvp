@@ -77,7 +77,7 @@ from app.services.outbox import (
     poll_outbox_one,
     write_outbox_event,
 )
-from app.vault.paths import NoVaultSelectedError, get_vault_inbox_dir_rel
+from app.vault.paths import NoVaultSelectedError
 from app.events.models import new_event
 from scripts.yaml_roundtrip import load_frontmatter
 
@@ -995,15 +995,8 @@ def _warn_once(key: str, message: str, *args: object) -> None:
 
 
 def _maybe_heal_uuid(note_path: Path, vault_root: Path) -> str:
-    try:
-        rel_path = note_path.relative_to(vault_root)
-    except Exception:
-        return ""
-
-    inbox_rel = Path(get_vault_inbox_dir_rel(vault_root))
-    try:
-        rel_path.relative_to(inbox_rel)
-    except Exception:
+    from app.services.note_uuid import inbox_uuid_heal_applies
+    if not inbox_uuid_heal_applies(note_path, vault_root):
         return ""
 
     # iCloud File Provider paths can transiently deny writes (EPERM/EACCES) even when

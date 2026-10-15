@@ -23,15 +23,33 @@ class FilesystemProducerPolicy:
     enabled: bool
     root: Path | None
     configuration: tuple[str | None, str | None]
+    sources: frozenset[Path]
 
     def includes(self, path: Path) -> bool:
-        return bool(self.enabled and self.root is not None
-                    and filesystem_source_in_inventory(path, self.root))
+        return self.enabled and path in self.sources
 
 
 def filesystem_source_in_inventory(path: Path, root: Path) -> bool:
-    return (path.is_relative_to(root) and path.suffix == ".md"
+    return (path.is_relative_to(root) and path.match("*.md")
             and not any(part.startswith(".obsidian") for part in path.parts))
+
+
+def filesystem_source_inventory(root: Path) -> frozenset[Path]:
+    """The real legacy scanner's full Markdown inventory, including nested vaults.
+
+    Like pathlib's rglob, directory symlinks are not followed. Unlike its
+    error-suppressing traversal, an unreadable subtree cannot prove exclusion.
+    """
+    sources: set[Path] = set()
+    def fail(error: OSError) -> None:
+        raise error
+    for directory, subdirs, names in os.walk(root, onerror=fail, followlinks=False):
+        subdirs[:] = [name for name in subdirs if not name.startswith(".obsidian")]
+        for name in names:
+            path = Path(directory) / name
+            if filesystem_source_in_inventory(path, root):
+                sources.add(path)
+    return frozenset(sources)
 
 
 def filesystem_producer_policy() -> FilesystemProducerPolicy:
@@ -50,7 +68,8 @@ def filesystem_producer_policy() -> FilesystemProducerPolicy:
         root = Path(directory).resolve(strict=True)
         if not root.is_dir():
             raise ValueError("producer policy ambiguous")
-    return FilesystemProducerPolicy(enabled, root, (activation, directory))
+    sources = filesystem_source_inventory(root) if root is not None else frozenset()
+    return FilesystemProducerPolicy(enabled, root, (activation, directory), sources)
 
 
 @dataclass(frozen=True)
@@ -62,6 +81,7 @@ class RegistryProducerPolicy:
     sources: frozenset[Path]
     configuration: tuple[tuple[str, str | None], ...]
     registry_digest: str
+    inbox_relative: str
 
     def includes(self, path: Path) -> bool:
         return self.enabled and path in self.sources
@@ -75,10 +95,10 @@ def registry_producer_policy(active_root: Path) -> RegistryProducerPolicy:
 
     configuration = tuple((key, os.getenv(key)) for key in (
         "WATCHER_ENABLE", "WATCHER_VAULT_PATH", "WATCHER_SCOPE_GLOB", "PKM_SETTINGS_PROFILE",
-        "VAULT_SYSTEM_DIR_REL",
+        "VAULT_SYSTEM_DIR_REL", "VAULT_INBOX_DIR_REL",
     ))
     if not parse_producer_activation(env_str("WATCHER_ENABLE")):
-        return RegistryProducerPolicy(False, None, (), (), frozenset(), configuration, "")
+        return RegistryProducerPolicy(False, None, (), (), frozenset(), configuration, "", "")
     raw_root = os.getenv("WATCHER_VAULT_PATH")
     if not raw_root or not Path(raw_root).is_absolute():
         raise ValueError("producer policy ambiguous")
@@ -91,9 +111,11 @@ def registry_producer_policy(active_root: Path) -> RegistryProducerPolicy:
                    or spec.emit_event not in {INGEST_VAULT_CHANGED, PANEL_SCAN_REQUESTED} for spec in cfg.specs)):
         raise ValueError("producer policy ambiguous")
     scopes = tuple(spec.scope_glob for spec in cfg.specs if spec.emit_event == INGEST_VAULT_CHANGED)
+    from app.vault.paths import get_vault_inbox_dir_rel
+    inbox_relative = get_vault_inbox_dir_rel(active_root) if scopes else ""
     sources = source_backed_registry_inventory(cfg)
     if cfg.config_path.read_bytes() != snapshot:
         raise ValueError("producer policy changed")
     specifications = tuple((spec.name, spec.emit_event, spec.scope_glob) for spec in cfg.specs)
     return RegistryProducerPolicy(True, active_root, scopes, specifications, sources, configuration,
-        hashlib.sha256(snapshot).hexdigest())
+        hashlib.sha256(snapshot).hexdigest(), inbox_relative)

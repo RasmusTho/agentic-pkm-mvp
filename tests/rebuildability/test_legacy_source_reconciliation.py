@@ -13,6 +13,7 @@ def _enable_registry(monkeypatch, root, *, scope="*.md,**/*.md"):
     monkeypatch.setenv("WATCHER_ENABLE", "1")
     monkeypatch.setenv("WATCHER_VAULT_PATH", str(root))
     monkeypatch.setenv("WATCHER_SCOPE_GLOB", scope)
+    monkeypatch.setenv("VAULT_INBOX_DIR_REL", "Inbox")
 
 
 def test_producer_applicability_uses_canonical_runtime_configuration(monkeypatch, tmp_path):
@@ -33,13 +34,14 @@ def test_producer_applicability_uses_canonical_runtime_configuration(monkeypatch
     assert state.rows == [original] and not state.calls and not state.vectors
 
 
-def test_enabled_entrypoint_consumes_shared_inventory(monkeypatch, tmp_path):
+@pytest.mark.parametrize("filename", ["source.md", ".md"])
+def test_enabled_entrypoint_consumes_shared_inventory(monkeypatch, tmp_path, filename):
     from scripts import fs_watcher
     from tests.watcher.test_fs_watcher import RecordingVaultPort
     from app.ingest.producer_policy import filesystem_producer_policy
     root = tmp_path / "watcher-vault"
     root.mkdir()
-    source = root / "source.md"
+    source = root / filename
     source.write_text("---\nuuid: 68cb2581-17db-4c94-83bf-b2aee37e6ebc\n---\nbody")
     excluded = root / ".obsidian-hidden" / "source.md"
     excluded.parent.mkdir()
@@ -56,6 +58,42 @@ def test_enabled_entrypoint_consumes_shared_inventory(monkeypatch, tmp_path):
     assert [item[0] for item in port.upserts] == [str(source)]
     assert filesystem_producer_policy().includes(source)
     assert not filesystem_producer_policy().includes(excluded)
+    fs_watcher.scan_once()
+    assert not port.deletes and str(source) in fs_watcher.STATE
+
+
+@pytest.mark.parametrize("inbox, id_only", [(True, True), (False, True), (True, False)])
+def test_native_registry_requires_identity_preserved_by_actual_inbox_healer(monkeypatch, tmp_path, inbox, id_only):
+    from app.services import note_uuid
+    from app.workers import outbox_worker
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    _enable_registry(monkeypatch, root)
+    if inbox:
+        inbox_dir = root / "Inbox"
+        inbox_dir.mkdir(exist_ok=True)
+        destination = inbox_dir / source.name
+        source.rename(destination)
+        source = destination
+        state.rows[0]["source_ref"] = original["source_ref"] = str(source)
+    if id_only:
+        source.write_text(raw.decode().replace("uuid:", "id:"))
+    before = source.read_bytes()
+    if inbox and id_only:
+        with pytest.raises(recovery.LegacySourceRefusal, match="legacy_identity_refused"):
+            recovery.reconcile_legacy_sources(binding, index, factory)
+        assert state.rows == [original] and not state.calls and not state.vectors
+    else:
+        assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    assert source.read_bytes() == before
+    writes = []
+    monkeypatch.setattr(note_uuid.DEFAULT_WRITE_GUARD, "assert_writes_allowed", lambda _: None)
+    monkeypatch.setattr(note_uuid, "write_note_from_absolute", lambda *args, **kwargs: writes.append(args))
+    actual_healed = outbox_worker._maybe_heal_uuid(source, root)
+    if inbox and id_only:
+        assert actual_healed != str(original["object_id"]) and writes
+    else:
+        assert actual_healed == (str(original["object_id"]) if inbox else "") and not writes
+    assert source.read_bytes() == before
 
 
 def test_disabled_optional_producer_does_not_block_exact_retirement(monkeypatch, tmp_path):
@@ -64,6 +102,98 @@ def test_disabled_optional_producer_does_not_block_exact_retirement(monkeypatch,
     monkeypatch.setenv("VAULT_DIR", str(root))
     assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
     assert state.rows == [] and state.vectors == {} and state.embedded == []
+    assert source.read_bytes() == raw
+
+
+@pytest.mark.parametrize("nested_source", [False, True])
+def test_filesystem_identity_proof_uses_full_nested_inventory(monkeypatch, tmp_path, nested_source):
+    from app.ingest.producer_policy import filesystem_producer_policy
+    from tests.helpers.vault_settings import initialize_test_vault
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    nested = root / "Nested"
+    initialize_test_vault(nested)
+    nested_note = nested / "note.md"
+    if nested_source:
+        source.rename(nested_note)
+        source = nested_note
+        state.rows[0]["source_ref"] = str(source)
+        original["source_ref"] = str(source)
+    else:
+        nested_note.write_bytes(raw)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+    monkeypatch.setenv("VAULT_DIR", str(root))
+    assert filesystem_producer_policy().includes(nested_note)
+    before = {p: p.read_bytes() for p in root.rglob("*.md")}
+    if nested_source:
+        assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+        assert state.rows[0]["payload"]["replay"]["source_identity"] == "Nested/note.md"
+    else:
+        with pytest.raises(recovery.LegacySourceRefusal, match="legacy_identity_refused"):
+            recovery.reconcile_legacy_sources(binding, index, factory)
+        assert state.rows == [original] and not state.calls and not state.vectors
+    assert {p: p.read_bytes() for p in root.rglob("*.md")} == before
+
+
+@pytest.mark.parametrize("identity", ["id-only", "wikilink", "list", "upper", "hex"])
+def test_filesystem_claim_requires_uuid_form_preserved_by_real_adapter(monkeypatch, tmp_path, identity):
+    from app.ports.filesystem_vault_adapter import FilesystemVaultAdapter
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    oid = str(original["object_id"])
+    replacement = {"id-only": f"id: {oid}", "wikilink": f"uuid: '[[{oid}]]'",
+                   "list": f"uuid: [{oid}]", "upper": f"uuid: {oid.upper()}",
+                   "hex": f"uuid: '{oid.replace('-', '')}'"}[identity]
+    source.write_text(raw.decode().replace(f"uuid: {oid}", replacement))
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+    monkeypatch.setenv("VAULT_DIR", str(root))
+    before = source.read_bytes()
+    if identity in {"upper", "hex"}:
+        adapter = FilesystemVaultAdapter(vault_root=root, backend_writes_enabled=False)
+        preserved = adapter.ensure_uuid(adapter.read_note(source))
+        assert not preserved.wrote
+        assert recovery.reconcile_legacy_sources(binding, index, factory) == 1
+    else:
+        with pytest.raises(recovery.LegacySourceRefusal, match="legacy_identity_refused"):
+            recovery.reconcile_legacy_sources(binding, index, factory)
+        assert state.rows == [original] and not state.calls and not state.vectors
+    assert source.read_bytes() == before
+
+
+def test_filesystem_inventory_drift_during_embedding_refuses(monkeypatch, tmp_path):
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+    monkeypatch.setenv("VAULT_DIR", str(root))
+    duplicate_dir = root / "Race"
+    duplicate_dir.mkdir()
+    client = factory()
+    def embed(_text):
+        (duplicate_dir / "duplicate.md").write_bytes(raw)
+        return [1., 2.]
+    client.embed_text = embed
+    with pytest.raises(recovery.LegacySourceRefusal, match="legacy_producer_policy_refused"):
+        recovery.reconcile_legacy_sources(binding, index, lambda **kwargs: client)
+    assert state.rows == [original] and not state.calls and not state.vectors
+    assert source.read_bytes() == raw
+
+
+def test_filesystem_incomplete_inventory_refuses_without_constructing_writer(monkeypatch, tmp_path):
+    import os
+    from scripts import fs_watcher
+    recovery, state, root, source, raw, original, binding, index, factory = _legacy_source_fixture(monkeypatch, tmp_path)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+    monkeypatch.setenv("VAULT_DIR", str(root))
+    monkeypatch.setattr(fs_watcher, "VAULT", root)
+    monkeypatch.setattr(fs_watcher, "_default_vault_port", lambda: pytest.fail("incomplete scan constructed writer"))
+    original_scandir = os.scandir
+    def scandir(path):
+        if str(path) == str(source.parent):
+            raise PermissionError("private-canary")
+        return original_scandir(path)
+    monkeypatch.setattr(os, "scandir", scandir)
+    with pytest.raises(PermissionError):
+        fs_watcher.scan_once()
+    with pytest.raises(recovery.LegacySourceRefusal, match="legacy_producer_policy_refused"):
+        recovery.reconcile_legacy_sources(binding, index, factory)
+    assert state.rows == [original] and not state.calls and not state.vectors
     assert source.read_bytes() == raw
 
 

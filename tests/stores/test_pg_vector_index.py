@@ -155,7 +155,7 @@ def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, 
         assert _count(alias_id) == 1
 
 
-@pytest.mark.parametrize("mode", ["replace", "retire", "existing", "policy-race", "write-failure"])
+@pytest.mark.parametrize("mode", ["replace", "retire", "existing", "policy-race", "inventory-race", "write-failure", "nested-duplicate", "id-only", "inbox-id-only"])
 @pytest.mark.parametrize("producer_kind", ["filesystem", "registry"])
 def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_pg_index, monkeypatch, tmp_path, mode, producer_kind):
     from types import SimpleNamespace
@@ -170,6 +170,29 @@ def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_p
         monkeypatch.setenv("FS_WATCHER_ENABLE", "0")
         if mode == "retire":
             monkeypatch.setenv("WATCHER_ENABLE", "0")
+        if mode in {"nested-duplicate", "id-only", "inventory-race"}:
+            monkeypatch.setenv("FS_WATCHER_ENABLE", "1")
+    if mode == "nested-duplicate":
+        from tests.helpers.vault_settings import initialize_test_vault
+        nested = root / "Nested"
+        initialize_test_vault(nested)
+        (nested / "duplicate.md").write_bytes(raw)
+    if mode == "id-only":
+        source.write_text(raw.decode().replace("uuid:", "id:"))
+        raw = source.read_bytes()
+    if mode == "inventory-race":
+        (root / "Race").mkdir()
+    if mode == "inbox-id-only":
+        from tests.rebuildability.test_legacy_source_reconciliation import _enable_registry
+        _enable_registry(monkeypatch, root)
+        monkeypatch.setenv("FS_WATCHER_ENABLE", "0")
+        inbox_dir = root / "Inbox"
+        inbox_dir.mkdir(exist_ok=True)
+        destination = inbox_dir / source.name
+        source.rename(destination)
+        source = destination
+        source.write_text(raw.decode().replace("uuid:", "id:"))
+        raw = source.read_bytes()
     store, index = pg_store.PgObjectStore(), _pg_index
     oid, other = original["object_id"], uuid4()
     store.put(oid, kind="note", source_ref=str(source), payload=original["payload"])
@@ -184,7 +207,7 @@ def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_p
     if mode == "existing":
         index.upsert(oid, **{**vector, "source_ref": str(source)})
     before = store.get(oid)
-    if mode == "policy-race":
+    if mode in {"policy-race", "inventory-race"}:
         original_reconcile = store.reconcile_legacy_source
         def reconcile(expected, **kwargs):
             revalidate = kwargs["revalidate"]
@@ -193,7 +216,10 @@ def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_p
                 nonlocal calls
                 calls += 1
                 if calls == 2:
-                    monkeypatch.setenv("WATCHER_ENABLE" if producer_kind == "registry" else "FS_WATCHER_ENABLE", "0")
+                    if mode == "inventory-race":
+                        (root / "Race" / "duplicate.md").write_bytes(raw)
+                    else:
+                        monkeypatch.setenv("WATCHER_ENABLE" if producer_kind == "registry" else "FS_WATCHER_ENABLE", "0")
                 revalidate()
             original_reconcile(expected, **{**kwargs, "revalidate": raced})
         monkeypatch.setattr(store, "reconcile_legacy_source", reconcile)
@@ -201,10 +227,12 @@ def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_p
         monkeypatch.setattr(pg_store.PgVectorIndex, "upsert", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("private-write-canary")))
     factory = lambda **kwargs: SimpleNamespace(identity=PRIMARY, embed_text=lambda _: [1., 0., 0., 0.])
     binding = SimpleNamespace(backend="pg", store=store)
-    if mode in {"policy-race", "write-failure"}:
+    if mode in {"policy-race", "inventory-race", "write-failure", "nested-duplicate", "id-only", "inbox-id-only"}:
         with pytest.raises(recovery.LegacySourceRefusal) as caught:
             recovery.reconcile_legacy_sources(binding, index, factory)
-        assert caught.value.reason == ("legacy_producer_policy_refused" if mode == "policy-race" else "legacy_write_failed")
+        expected_reason = {"policy-race": "legacy_producer_policy_refused", "inventory-race": "legacy_producer_policy_refused",
+                           "write-failure": "legacy_write_failed"}
+        assert caught.value.reason == expected_reason.get(mode, "legacy_identity_refused")
         assert store.get(oid) == before and _count(oid) == 0
     else:
         assert recovery.reconcile_legacy_sources(binding, index, factory) == (0 if mode == "existing" else 1)

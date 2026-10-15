@@ -969,8 +969,13 @@ drifting enabled-producer configuration refuses the legacy transition. Registry 
 native recipe; otherwise applicable alpha or optional filesystem recipes remain available.
 For the optional `scripts/fs_watcher.py` entrypoint, `FS_WATCHER_ENABLE` unset/false means disabled;
 true requires an explicit absolute existing `VAULT_DIR`, matching the active root when overlapping.
-No default path or presence of `VAULT_DIR` enables that writer. Enabled broader sources prepare
-through vault-sync's canonical payload path; excluded sources are not laundered through alpha.
+No default path or presence of `VAULT_DIR` enables that writer. Enabled filesystem sources prepare
+only when their existing UUID form is preserved by the actual filesystem adapter; id-only or
+encoded UUIDs refuse without healing. Uniqueness covers the union of enabled producer inventories,
+including nested-vault files in the legacy filesystem inventory. Applicable filesystem sources
+use vault-sync's canonical payload path; excluded sources are not laundered through alpha.
+Native registry claims also prove identity preservation against the ordinary worker's inbox-heal
+selector; an id-only inbox source refuses without healing or borrowing another producer's recipe.
 Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
 History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again

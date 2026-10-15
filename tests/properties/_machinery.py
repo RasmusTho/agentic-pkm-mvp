@@ -50,8 +50,9 @@ APP_ROOT = REPO_ROOT / "app"
 # and event/payload justifications remain unchanged.
 # #6091 re-pins unchanged calls after admission-metadata preservation.
 # #6096 re-pins unchanged calls after the side-effect-free preparation hook.
+# #6100 re-pins the same sinks after extracting canonical native preparation.
 REGISTERED_MIRRORS: dict[tuple[str, int], str] = {
-    ("app/services/indexer.py", 385): (
+    ("app/services/indexer.py", 418): (
         "T-materialize sink (handle_ingest_object_created): the INGEST_OBJECT_CREATED "
         "event that CAUSED this row is its own record -- emitting a second event here "
         "would be a duplicate, not completeness (formal-model.md T-materialize). "
@@ -1716,13 +1717,13 @@ STORE_PAYLOAD_SINK_CLASSIFICATION: dict[tuple[str, int], str] = {
         "carries_via_indexed_unit_builder: ingest_object's internal idx.upsert; payload_out = "
         "build_indexed_unit_payload(payload=<caller payload>) -> store_vector_index."
     ),
-    ("app/services/indexer.py", 385): (
+    ("app/services/indexer.py", 418): (
         "carries_via_indexed_unit_builder: handle_ingest_object_created save_object; domain.payload "
         "= build_indexed_unit_payload(...) -> store_objects. Also carries frontmatter episode_ref "
         "into the input on the vault-changed path and preserves an existing binding via the merge. "
         "Line moved to 379 when #5927 added source-backed metadata and binding checks before the sink."
     ),
-    ("app/services/indexer.py", 467): (
+    ("app/services/indexer.py", 500): (
         "carries_via_indexed_unit_builder: same handler's vector_index.upsert; upsert_kwargs["
         "'payload'] = build_indexed_unit_payload(...) -> store_vector_index. Line shifted 256 -> 257 "
         "when #5820 routed Product embedding through the portal client, then moved to 461 when #5927 "
