@@ -72,6 +72,8 @@ _LEGACY_MATERIALIZATION_SOURCE_MARKER_CONTRACT = (
     "materialization-source-continuity.v1"
 )
 _MATERIALIZATION_SOURCE_MARKER_CONTRACT = "materialization-source-continuity.v2"
+_MAX_MATERIALIZATION_SOURCE_MARKER_BYTES = 64 * 1024
+_MAX_MATERIALIZATION_TARGET_RESERVATIONS = 256
 _GOVERNED_WRITE_ADAPTER = GovernedWriteAdapter()
 
 
@@ -102,6 +104,10 @@ class _MaterializationSourceMarkerState:
 
 class MemoryMaterializationError(RuntimeError):
     """Raised when promoted memory cannot be materialized through governance."""
+
+
+class _MaterializationMarkerCapacityError(MemoryMaterializationError):
+    """Raised before mutation when a proposed continuity marker cannot be encoded."""
 
 
 def materialize_promoted_memory(
@@ -289,6 +295,8 @@ def materialize_promoted_memory(
                                 trace_id=trace_id,
                                 observed=observed_write_receipt,
                             )
+                        except _MaterializationMarkerCapacityError:
+                            raise
                         except Exception as exc:
                             failed_receipt_id = _append_promotion_receipt(
                                 locked_outbox_path,
@@ -605,12 +613,15 @@ def _read_materialization_source_marker(marker_path: Path) -> dict[str, Any]:
     )
     try:
         marker_stat = os.fstat(descriptor)
-        if not stat.S_ISREG(marker_stat.st_mode) or marker_stat.st_size > 64 * 1024:
+        if (
+            not stat.S_ISREG(marker_stat.st_mode)
+            or marker_stat.st_size > _MAX_MATERIALIZATION_SOURCE_MARKER_BYTES
+        ):
             raise MemoryMaterializationError(
                 "materialization receipt source continuity marker is invalid"
             )
         raw = b""
-        while len(raw) <= 64 * 1024:
+        while len(raw) <= _MAX_MATERIALIZATION_SOURCE_MARKER_BYTES:
             block = os.read(descriptor, 8192)
             if not block:
                 break
@@ -665,7 +676,8 @@ def _validated_materialization_source_marker(
             or not isinstance(committed_sha256, str)
             or not re.fullmatch(r"[0-9a-f]{64}", committed_sha256)
             or not isinstance(raw_target_reservations, dict)
-            or len(raw_target_reservations) > 256
+            or len(raw_target_reservations)
+            > _MAX_MATERIALIZATION_TARGET_RESERVATIONS
         ):
             raise MemoryMaterializationError(
                 "materialization receipt source continuity marker is invalid"
@@ -771,6 +783,21 @@ def _write_materialization_source_marker(
         target_reservations = dict(target_reservations)
     if clear_target_reservation is not None:
         target_reservations.pop(clear_target_reservation, None)
+    if len(target_reservations) > _MAX_MATERIALIZATION_TARGET_RESERVATIONS:
+        raise _MaterializationMarkerCapacityError(
+            "materialization target reservation capacity is exhausted"
+        )
+    for reservation_id, target_path in target_reservations.items():
+        if (
+            not isinstance(reservation_id, str)
+            or not re.fullmatch(r"[0-9a-f]{32}", reservation_id)
+            or not isinstance(target_path, str)
+            or len(target_path) > 4096
+            or _safe_rel_path(target_path) != target_path
+        ):
+            raise MemoryMaterializationError(
+                "materialization target reservation state is invalid"
+            )
     device, inode, committed_size, committed_sha256 = (
         _materialization_source_state(source_path)
     )
@@ -798,6 +825,10 @@ def _write_materialization_source_marker(
         "target_reservations": target_reservations,
     }
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    if len(raw) > _MAX_MATERIALIZATION_SOURCE_MARKER_BYTES:
+        raise _MaterializationMarkerCapacityError(
+            "materialization receipt source continuity marker capacity is exhausted"
+        )
     temporary = marker_path.with_name(f".{marker_path.name}.{uuid4().hex}.tmp")
     descriptor: int | None = None
     try:

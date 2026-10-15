@@ -1445,6 +1445,141 @@ def test_retry_refuses_missing_target_reservation_after_hka_append_failure(
     assert persisted.materializing is True
 
 
+def test_target_reservation_capacity_refusal_preserves_valid_shared_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vault = _vault(tmp_path / "vault")
+    vault_root = Path(vault.active_vault_path)
+    vault_root.mkdir()
+    store = ReviewDecisionStore(tmp_path / "review_decisions.sqlite3")
+    outbox = tmp_path / "outbox.jsonl"
+    original_write = materialization_module.write_note_relative
+    hka_calls = 0
+
+    def fail_hka(*args: object, **kwargs: object) -> object:
+        nonlocal hka_calls
+        hka_calls += 1
+        raise OSError("injected unavailable HKA")
+
+    monkeypatch.setattr(materialization_module, "write_note_relative", fail_hka)
+    for index in range(256):
+        entry = _promoted(
+            _candidate(
+                candidate_id=f"capacity-candidate-{index:03d}",
+                title=f"Capacity candidate {index:03d}",
+            ),
+            store=store,
+            vault=vault,
+        )
+        with pytest.raises(MemoryMaterializationError):
+            materialize_promoted_memory(
+                entry,
+                vault_context=vault,
+                channel="test",
+                decision_store=store,
+                write_guard=_allowing_guard(),
+                outbox_path=outbox,
+            )
+
+    marker_path = materialization_module._materialization_source_marker_path(outbox)
+    marker_before_refusal = marker_path.read_bytes()
+    assert len(
+        materialization_module._validated_materialization_source_marker(
+            outbox
+        ).target_reservations
+    ) == 256
+
+    over_capacity = _promoted(
+        _candidate(
+            candidate_id="capacity-candidate-over-limit",
+            title="Capacity candidate over limit",
+        ),
+        store=store,
+        vault=vault,
+    )
+    with pytest.raises(
+        MemoryMaterializationError,
+        match="target reservation capacity",
+    ):
+        materialize_promoted_memory(
+            over_capacity,
+            vault_context=vault,
+            channel="test",
+            decision_store=store,
+            write_guard=_allowing_guard(),
+            outbox_path=outbox,
+        )
+
+    assert hka_calls == 256
+    assert marker_path.read_bytes() == marker_before_refusal
+    assert len(
+        materialization_module._validated_materialization_source_marker(
+            outbox
+        ).target_reservations
+    ) == 256
+
+    marker = materialization_module._validated_materialization_source_marker(outbox)
+    remediated_reservation = next(iter(marker.target_reservations))
+    with materialization_module.jsonl_outbox_append_lock(outbox) as canonical_path:
+        materialization_module._write_materialization_source_marker(
+            canonical_path,
+            clear_target_reservation=remediated_reservation,
+        )
+    monkeypatch.setattr(materialization_module, "write_note_relative", original_write)
+    unrelated = _promoted(
+        _candidate(
+            candidate_id="capacity-candidate-unrelated",
+            title="Unrelated candidate after capacity refusal",
+        ),
+        store=store,
+        vault=vault,
+    )
+    unrelated_result = materialize_promoted_memory(
+        unrelated,
+        vault_context=vault,
+        channel="test",
+        decision_store=store,
+        write_guard=_allowing_guard(),
+        outbox_path=outbox,
+    )
+
+    assert unrelated_result.terminal is True
+    assert len(list(vault_root.rglob("*.md"))) == 1
+    assert len(
+        materialization_module._validated_materialization_source_marker(
+            outbox
+        ).target_reservations
+    ) == 255
+
+
+def test_marker_byte_capacity_refusal_preserves_valid_shared_marker(
+    tmp_path: Path,
+) -> None:
+    outbox = tmp_path / "outbox.jsonl"
+    outbox.write_text("", encoding="utf-8")
+    materialization_module._write_materialization_source_marker(outbox)
+    marker_path = materialization_module._materialization_source_marker_path(outbox)
+    marker_before_refusal = marker_path.read_bytes()
+    oversized_reservations = {
+        f"{index:032x}": f"Agent Memory/{index:03d}-{'x' * 300}.md"
+        for index in range(256)
+    }
+
+    with pytest.raises(
+        MemoryMaterializationError,
+        match="continuity marker capacity",
+    ):
+        materialization_module._write_materialization_source_marker(
+            outbox,
+            target_reservations=oversized_reservations,
+        )
+
+    assert marker_path.read_bytes() == marker_before_refusal
+    marker = materialization_module._validated_materialization_source_marker(outbox)
+    assert marker.target_reservations == {}
+
+
 def test_fresh_attempt_upgrades_legacy_marker_without_reservation_state(
     tmp_path: Path,
 ) -> None:
