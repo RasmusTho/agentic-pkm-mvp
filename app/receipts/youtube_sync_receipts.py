@@ -223,6 +223,8 @@ def _rows_from_records(
         key = request_id or item_ref
         if not key:
             return None
+        if request_id and item_ref and request_id not in groups and item_ref in groups:
+            groups[request_id] = groups.pop(item_ref)
         group = groups.setdefault(key, {"item_ref": item_ref, "request_id": request_id, "triggers": [], "events": [], "failures": [], "channel_database": None, "account_binding_ids": []})
         if item_ref and not group.get("item_ref"):
             group["item_ref"] = item_ref

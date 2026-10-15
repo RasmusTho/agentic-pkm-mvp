@@ -71,7 +71,7 @@ def test_doctor_check_reason_codes_and_redaction(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(observed, "_DEFAULT_GATES", {"youtubeSync.enabled": True, "youtubeSync.runnerEnabled": True})
     monkeypatch.setenv("YOUTUBE_TOKEN_STORE_KEY", "00" * 32)
     payload = collect_youtube_sync_status(
-        now=datetime(2026, 10, 15, tzinfo=timezone.utc),
+        now=datetime(2026, 10, 15, 1, tzinfo=timezone.utc),
         source_registry=_Registry((_source("auth_revoked"),)),
         request_store=_Requests(),
         account_store=_AccountStore(),
