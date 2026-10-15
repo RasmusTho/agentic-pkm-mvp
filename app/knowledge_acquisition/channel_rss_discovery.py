@@ -4,6 +4,9 @@ This adapter turns a channel's newest YouTube RSS entries into durable
 discovery dispositions and optional AcquisitionRequests. It never writes vault
 notes. The request/discovery rows and events are persisted before the registry
 cursor advances, so a retry converges through the existing idempotency keys.
+Every shared write uses the caller's YSS-06 lease-fenced transaction, and a
+cursor compare-and-swap prevents a slower overlapping poll from rewinding a
+newer result.
 """
 
 from __future__ import annotations
@@ -14,11 +17,12 @@ import re
 import time
 import uuid
 import xml.etree.ElementTree as ET
+from contextlib import AbstractContextManager, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
@@ -29,16 +33,17 @@ from app.knowledge_acquisition.acquisition_requests import (
     AcquisitionRequests,
     AcquisitionRequestPolicyConflictError,
     DiscoveryTrigger,
-    request_identity,
 )
 from app.knowledge_acquisition.source_registry import (
     ISO_639_1_LANGUAGE_CODES,
     SourceBinding,
+    SourceCursorConflictError,
     SourceRegistry,
     SourceRegistryValidationError,
 )
+from app.knowledge_acquisition.sync_state import SyncLeaseLostError
 from app.knowledge_acquisition.youtube_plugin import MetadataAcquisitionError, yt_dlp_extract_metadata
-from app.services.outbox import derive_idempotency_key, open_outbox_txn_conn, write_outbox_event
+from app.services.outbox import derive_idempotency_key, write_outbox_event
 from app.source_egress import assert_source_egress_allowed
 
 ATOM = "{http://www.w3.org/2005/Atom}"
@@ -82,6 +87,7 @@ class ChannelRSSPollResult:
     degraded: bool = False
     reason_code: str | None = None
     detail: str | None = None
+    superseded: bool = False
 
 
 def build_feed_url(channel_id: str) -> str:
@@ -226,6 +232,8 @@ def _filter_matches(
         return True
     try:
         metadata = metadata_fetcher(f"https://www.youtube.com/watch?v={video_id}")
+    except SyncLeaseLostError:
+        raise
     except Exception as exc:
         raise RSSFeedError(
             "filter_metadata_unavailable", "Required metadata for the subscription filter was unavailable."
@@ -255,6 +263,16 @@ def _filter_matches(
     return True
 
 
+def _checked_metadata_fetch(
+    url: str,
+    *,
+    metadata_fetcher: Callable[[str], dict[str, Any]],
+    check_active: Callable[[], None],
+) -> dict[str, Any]:
+    check_active()
+    return metadata_fetcher(url)
+
+
 def _write_sync_event(topic: str, payload: dict[str, Any], *, run_id: str, binding_id: str, conn: Any) -> None:
     event = new_event(
         event_type=topic,
@@ -278,19 +296,39 @@ def _transaction_required() -> bool:
     return _has_named_database() or (os.environ.get("STORE_BACKEND") or "").strip().lower() == "pg"
 
 
+@contextmanager
+def _owned_effect(
+    *,
+    check_active: Callable[[], None],
+    commit_guard: Callable[[], AbstractContextManager[Any]],
+) -> Iterator[Any]:
+    """Admit one RSS write on the caller's lease-fenced transaction."""
+    check_active()
+    with commit_guard() as conn:
+        if conn is None and _transaction_required():
+            raise RuntimeError("Could not open an ownership transaction for subscription discovery.")
+        yield conn
+
+
 def _finish_success(
     binding: SourceBinding,
     *,
     registry: SourceRegistry,
     run_id: str,
     cursor: dict[str, Any],
+    expected_cursor: dict[str, Any],
     payload: dict[str, Any],
+    check_active: Callable[[], None],
+    commit_guard: Callable[[], AbstractContextManager[Any]],
 ) -> None:
-    conn = open_outbox_txn_conn()
-    if conn is None and _transaction_required():
-        raise RuntimeError("Could not open a transaction for the subscription cursor and completion receipt.")
-    try:
+    with _owned_effect(check_active=check_active, commit_guard=commit_guard) as conn:
         if conn is None:
+            current = registry.get(binding.binding_id)
+            if current is None or current.cursor != expected_cursor:
+                raise SourceCursorConflictError("source cursor changed during poll")
+            # The memory backend cannot roll back an outbox write. Validate the
+            # snapshot under the lease guard, then write the receipt before the
+            # in-memory cursor mutation so receipt failure leaves it untouched.
             _write_sync_event(
                 YOUTUBE_SYNC_COMPLETED,
                 payload,
@@ -298,10 +336,13 @@ def _finish_success(
                 binding_id=binding.binding_id,
                 conn=None,
             )
-            registry.record_poll_success(binding.binding_id, cursor=cursor)
-            return
-        with conn.transaction():
-            registry.record_poll_success(binding.binding_id, cursor=cursor, transaction_conn=conn)
+        registry.record_poll_success(
+            binding.binding_id,
+            cursor=cursor,
+            expected_cursor=expected_cursor,
+            transaction_conn=conn,
+        )
+        if conn is not None:
             _write_sync_event(
                 YOUTUBE_SYNC_COMPLETED,
                 payload,
@@ -309,9 +350,6 @@ def _finish_success(
                 binding_id=binding.binding_id,
                 conn=conn,
             )
-    finally:
-        if conn is not None:
-            conn.close()
 
 
 def _finish_degraded(
@@ -322,6 +360,9 @@ def _finish_degraded(
     reason_code: str,
     detail: str,
     duration_ms: int,
+    expected_cursor: dict[str, Any],
+    check_active: Callable[[], None],
+    commit_guard: Callable[[], AbstractContextManager[Any]],
 ) -> ChannelRSSPollResult:
     payload = {
         "binding_id": binding.binding_id,
@@ -332,27 +373,27 @@ def _finish_degraded(
         "detail": detail[:240],
         "duration_ms": duration_ms,
     }
-    conn = open_outbox_txn_conn()
-    if conn is None and _transaction_required():
-        raise RuntimeError("Could not open a transaction for the subscription degradation receipt.")
     try:
-        if conn is None:
-            _write_sync_event(
-                YOUTUBE_SYNC_DEGRADED,
-                payload,
-                run_id=run_id,
-                binding_id=binding.binding_id,
-                conn=None,
-            )
-            registry.record_poll_failure(binding.binding_id, reason_code=reason_code, detail=detail)
-        else:
-            with conn.transaction():
-                registry.record_poll_failure(
-                    binding.binding_id,
-                    reason_code=reason_code,
-                    detail=detail,
-                    transaction_conn=conn,
+        with _owned_effect(check_active=check_active, commit_guard=commit_guard) as conn:
+            if conn is None:
+                current = registry.get(binding.binding_id)
+                if current is None or current.cursor != expected_cursor:
+                    raise SourceCursorConflictError("source cursor changed during poll")
+                _write_sync_event(
+                    YOUTUBE_SYNC_DEGRADED,
+                    payload,
+                    run_id=run_id,
+                    binding_id=binding.binding_id,
+                    conn=None,
                 )
+            registry.record_poll_failure(
+                binding.binding_id,
+                reason_code=reason_code,
+                detail=detail,
+                expected_cursor=expected_cursor,
+                transaction_conn=conn,
+            )
+            if conn is not None:
                 _write_sync_event(
                     YOUTUBE_SYNC_DEGRADED,
                     payload,
@@ -360,9 +401,13 @@ def _finish_degraded(
                     binding_id=binding.binding_id,
                     conn=conn,
                 )
-    finally:
-        if conn is not None:
-            conn.close()
+    except SourceCursorConflictError:
+        return ChannelRSSPollResult(
+            binding_id=binding.binding_id,
+            run_id=run_id,
+            duration_ms=duration_ms,
+            superseded=True,
+        )
     return ChannelRSSPollResult(
         binding_id=binding.binding_id,
         run_id=run_id,
@@ -378,6 +423,8 @@ def poll_source(
     *,
     registry: SourceRegistry,
     requests: AcquisitionRequests,
+    check_active: Callable[[], None],
+    commit_guard: Callable[[], AbstractContextManager[Any]],
     fetch_feed: Callable[[str], bytes] = fetch_channel_feed,
     metadata_fetcher: Callable[[str], dict[str, Any]] = yt_dlp_extract_metadata,
 ) -> ChannelRSSPollResult:
@@ -387,6 +434,7 @@ def poll_source(
     run_id = str(uuid.uuid4())
     started = time.monotonic()
 
+    check_active()
     current = registry.get(binding.binding_id)
     if current is None:
         raise KeyError(f"no such binding: {binding.binding_id}")
@@ -401,6 +449,9 @@ def poll_source(
             reason_code="policy_unsupported",
             detail="This poller accepts only RSS subscription bindings.",
             duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+            expected_cursor=binding.cursor,
+            check_active=check_active,
+            commit_guard=commit_guard,
         )
     if not binding.enabled:
         return _finish_degraded(
@@ -410,6 +461,9 @@ def poll_source(
             reason_code="paused_source",
             detail="This subscription binding is disabled.",
             duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+            expected_cursor=binding.cursor,
+            check_active=check_active,
+            commit_guard=commit_guard,
         )
     if CHANNEL_ID_RE.fullmatch(binding.collection_ref) is None:
         return _finish_degraded(
@@ -419,6 +473,9 @@ def poll_source(
             reason_code="source_mismatch",
             detail="The subscription channel id is invalid.",
             duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+            expected_cursor=binding.cursor,
+            check_active=check_active,
+            commit_guard=commit_guard,
         )
 
     policy = deepcopy(binding.acquisition_policy)
@@ -431,17 +488,22 @@ def poll_source(
             reason_code="policy_unsupported",
             detail="The stored acquisition policy is not supported by this discovery path.",
             duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+            expected_cursor=binding.cursor,
+            check_active=check_active,
+            commit_guard=commit_guard,
         )
 
     try:
         cursor = deepcopy(binding.cursor)
         newest_seen, prior_recent = _cursor_state(cursor)
+        check_active()
         feed = parse_channel_feed(fetch_feed(binding.collection_ref), expected_channel_id=binding.collection_ref)
         prior_ids = set(prior_recent)
         new_entries = [entry for entry in feed if entry.entry_id not in prior_ids]
         enqueued = deduped = filtered_out = 0
 
         for entry in new_entries:
+            check_active()
             trigger = DiscoveryTrigger(
                 binding_id=binding.binding_id,
                 collection_kind=binding.collection_kind,
@@ -449,7 +511,13 @@ def poll_source(
                 trigger="poll",
             )
             if mode == "discover_only":
-                requests.record_discovery(item_ref=entry.video_id, trigger=trigger, trace_id=run_id)
+                with _owned_effect(check_active=check_active, commit_guard=commit_guard) as conn:
+                    requests.record_discovery(
+                        item_ref=entry.video_id,
+                        trigger=trigger,
+                        trace_id=run_id,
+                        conn=conn,
+                    )
                 continue
 
             effective_policy = policy
@@ -462,35 +530,52 @@ def poll_source(
                 if not _filter_matches(
                     binding,
                     filters,
-                    metadata_fetcher=metadata_fetcher,
+                    metadata_fetcher=lambda url: _checked_metadata_fetch(
+                        url, metadata_fetcher=metadata_fetcher, check_active=check_active
+                    ),
                     video_id=entry.video_id,
                 ):
-                    requests.record_discovery(item_ref=entry.video_id, trigger=trigger, trace_id=run_id)
+                    with _owned_effect(check_active=check_active, commit_guard=commit_guard) as conn:
+                        requests.record_discovery(
+                            item_ref=entry.video_id,
+                            trigger=trigger,
+                            trace_id=run_id,
+                            conn=conn,
+                        )
                     filtered_out += 1
                     continue
                 effective_policy = dict(policy)
                 effective_policy.pop("filters", None)
                 effective_policy["mode"] = "acquire_transcript"
 
-            policy_version = effective_policy.get("policy_version", 1)
-            existing = requests.get(request_identity("youtube_url", entry.video_id, policy_version))
-            try:
-                requests.enqueue(
-                    source_kind="youtube_url",
-                    item_ref=entry.video_id,
-                    source_ref=f"https://www.youtube.com/watch?v={entry.video_id}",
-                    trigger=trigger,
-                    priority=binding.priority,
-                    policy_snapshot=effective_policy,
-                    trace_id=run_id,
-                )
-            except AcquisitionRequestPolicyConflictError:
-                requests.record_discovery(item_ref=entry.video_id, trigger=trigger, trace_id=run_id)
-                raise
-            if existing is None:
+            policy_conflict: AcquisitionRequestPolicyConflictError | None = None
+            created = False
+            with _owned_effect(check_active=check_active, commit_guard=commit_guard) as conn:
+                try:
+                    _, created = requests.enqueue_with_outcome(
+                        source_kind="youtube_url",
+                        item_ref=entry.video_id,
+                        source_ref=f"https://www.youtube.com/watch?v={entry.video_id}",
+                        trigger=trigger,
+                        priority=binding.priority,
+                        policy_snapshot=effective_policy,
+                        trace_id=run_id,
+                        transaction_conn=conn,
+                    )
+                except AcquisitionRequestPolicyConflictError as exc:
+                    requests.record_discovery(
+                        item_ref=entry.video_id,
+                        trigger=trigger,
+                        trace_id=run_id,
+                        conn=conn,
+                    )
+                    policy_conflict = exc
+            if created:
                 enqueued += 1
             else:
                 deduped += 1
+            if policy_conflict is not None:
+                raise policy_conflict
 
         current_newest = max((entry.published_at for entry in feed), default=newest_seen)
         if newest_seen is not None and current_newest is not None:
@@ -515,7 +600,28 @@ def poll_source(
             "duration_ms": duration_ms,
             "quota_units_spent": 0,
         }
-        _finish_success(binding, registry=registry, run_id=run_id, cursor=next_cursor, payload=payload)
+        try:
+            _finish_success(
+                binding,
+                registry=registry,
+                run_id=run_id,
+                cursor=next_cursor,
+                expected_cursor=cursor,
+                payload=payload,
+                check_active=check_active,
+                commit_guard=commit_guard,
+            )
+        except SourceCursorConflictError:
+            return ChannelRSSPollResult(
+                binding_id=binding.binding_id,
+                run_id=run_id,
+                discovered=len(new_entries),
+                enqueued=enqueued,
+                deduped=deduped,
+                filtered_out=filtered_out,
+                duration_ms=duration_ms,
+                superseded=True,
+            )
         return ChannelRSSPollResult(
             binding_id=binding.binding_id,
             run_id=run_id,
@@ -525,6 +631,8 @@ def poll_source(
             filtered_out=filtered_out,
             duration_ms=duration_ms,
         )
+    except SyncLeaseLostError:
+        raise
     except RSSFeedError as exc:
         reason_code, detail = exc.reason_code, exc.detail
     except MetadataAcquisitionError:
@@ -540,6 +648,9 @@ def poll_source(
         reason_code=reason_code,
         detail=detail,
         duration_ms=max(0, int((time.monotonic() - started) * 1000)),
+        expected_cursor=binding.cursor,
+        check_active=check_active,
+        commit_guard=commit_guard,
     )
 
 

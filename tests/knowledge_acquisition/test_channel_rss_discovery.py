@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,8 @@ from app.knowledge_acquisition.source_registry import (
     SourceRegistry,
     reset_memory_source_registry,
 )
+from app.knowledge_acquisition.sync_scheduler import LEASE_KEY, LEASE_TTL_SECONDS
+from app.knowledge_acquisition.sync_state import MemorySyncStateStore, SyncLeaseLostError
 from app.knowledge_acquisition.youtube_onboarding import import_takeout_registry
 
 pytestmark = pytest.mark.not_pg
@@ -31,6 +34,54 @@ CHANNEL_A = "UC" + "a" * 22
 CHANNEL_B = "UC" + "b" * 22
 CHANNEL_C = "UC" + "c" * 22
 CHANNEL_D = "UC" + "d" * 22
+
+_RAW_POLL_SOURCE = channel_rss_discovery.poll_source
+
+
+def _poll_with_lease(
+    binding: SourceBinding,
+    *,
+    registry: SourceRegistry,
+    requests: AcquisitionRequests,
+    _state: MemorySyncStateStore | None = None,
+    _holder: str = "rss-test-holder",
+    _check_active: Any = None,
+    _commit_guard: Any = None,
+    **kwargs: Any,
+) -> channel_rss_discovery.ChannelRSSPollResult:
+    state = _state or MemorySyncStateStore()
+    now = datetime.now(timezone.utc)
+    assert state.acquire_lease(
+        key=LEASE_KEY,
+        holder=_holder,
+        ttl_seconds=LEASE_TTL_SECONDS,
+        now=now,
+    )
+
+    def check_active() -> None:
+        if not state.heartbeat_lease(
+            key=LEASE_KEY,
+            holder=_holder,
+            ttl_seconds=LEASE_TTL_SECONDS,
+            now=datetime.now(timezone.utc),
+        ):
+            raise SyncLeaseLostError("YouTube discovery lease ownership was lost")
+
+    def commit_guard():
+        return state.owned_effect(
+            key=LEASE_KEY,
+            holder=_holder,
+            now=datetime.now(timezone.utc),
+        )
+
+    return _RAW_POLL_SOURCE(
+        binding,
+        registry=registry,
+        requests=requests,
+        check_active=_check_active or check_active,
+        commit_guard=_commit_guard or commit_guard,
+        **kwargs,
+    )
 
 
 def _feed(channel_id: str, *items: tuple[str, str]) -> bytes:
@@ -51,6 +102,7 @@ def _feed(channel_id: str, *items: tuple[str, str]) -> bytes:
 @pytest.fixture
 def runtime(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("STORE_BACKEND", "memory")
+    monkeypatch.setattr(channel_rss_discovery, "poll_source", _poll_with_lease)
     reset_memory_source_registry()
     reset_memory_acquisition_requests()
     registry = SourceRegistry.for_runtime()
@@ -176,6 +228,11 @@ def test_rss_incremental_cursor_and_request_before_cursor(
             assert current is not None and current.cursor == {}
             return requests.enqueue(**kwargs)
 
+        def enqueue_with_outcome(self, **kwargs: Any) -> Any:
+            current = registry.get(binding.binding_id)
+            assert current is not None and current.cursor == {}
+            return requests.enqueue_with_outcome(**kwargs)
+
         def record_discovery(self, **kwargs: Any) -> None:
             current = registry.get(binding.binding_id)
             assert current is not None and current.cursor == {}
@@ -195,6 +252,178 @@ def test_rss_incremental_cursor_and_request_before_cursor(
     assert stored is not None
     assert stored.cursor["newest_published_seen"] == "2026-09-28T10:00:00+00:00"
     assert stored.cursor["recent_entry_ids"] == ["yt:video:aaaaaaaaaaa", "yt:video:bbbbbbbbbbb"]
+
+
+def test_overlapping_rss_poll_cannot_rewind_cursor_or_emit_stale_success(
+    runtime: tuple[SourceRegistry, AcquisitionRequests],
+    captured_events: list[tuple[str, dict[str, Any], str]],
+) -> None:
+    registry, requests = runtime
+    binding = _binding(registry)
+    state = MemorySyncStateStore()
+    newer_results: list[channel_rss_discovery.ChannelRSSPollResult] = []
+
+    def older_feed(_channel_id: str) -> bytes:
+        newer_results.append(
+            _poll_with_lease(
+                binding,
+                registry=registry,
+                requests=requests,
+                _state=state,
+                _holder="same-runner",
+                fetch_feed=lambda _ref: _feed(
+                    CHANNEL_A, ("bbbbbbbbbbb", "2026-10-02T10:00:00Z")
+                ),
+            )
+        )
+        return _feed(CHANNEL_A, ("aaaaaaaaaaa", "2026-10-01T10:00:00Z"))
+
+    older = _poll_with_lease(
+        binding,
+        registry=registry,
+        requests=requests,
+        _state=state,
+        _holder="same-runner",
+        fetch_feed=older_feed,
+    )
+
+    stored = registry.get(binding.binding_id)
+    assert stored is not None
+    assert stored.cursor["newest_published_seen"] == "2026-10-02T10:00:00+00:00"
+    assert stored.cursor["recent_entry_ids"] == ["yt:video:bbbbbbbbbbb"]
+    assert len(newer_results) == 1 and not newer_results[0].degraded
+    assert older.superseded and not older.degraded
+    completed = [
+        event for event in captured_events
+        if event[0] == "youtube.sync.completed" and event[1]["binding_id"] == binding.binding_id
+    ]
+    assert len(completed) == 1
+    assert completed[0][1]["run_id"] == newer_results[0].run_id
+
+
+def test_rss_old_lease_holder_stops_before_discovery_write_after_takeover(
+    runtime: tuple[SourceRegistry, AcquisitionRequests],
+    captured_events: list[tuple[str, dict[str, Any], str]],
+) -> None:
+    registry, requests = runtime
+    binding = _binding(registry)
+    state = MemorySyncStateStore()
+    clock = [datetime(2026, 10, 15, tzinfo=timezone.utc)]
+    old_holder = "old-runner"
+    replacement = "replacement-runner"
+    assert state.acquire_lease(
+        key=LEASE_KEY, holder=old_holder, ttl_seconds=60, now=clock[0]
+    )
+
+    def check_old_holder() -> None:
+        lease = state.get(LEASE_KEY)
+        if (
+            lease is None
+            or lease["holder"] != old_holder
+            or clock[0] >= datetime.fromisoformat(lease["expires_at"])
+        ):
+            raise SyncLeaseLostError("YouTube discovery lease ownership was lost")
+
+    def owned_old_effect():
+        return state.owned_effect(key=LEASE_KEY, holder=old_holder, now=clock[0])
+
+    def take_over_before_disposition(_channel_id: str) -> bytes:
+        clock[0] += timedelta(seconds=61)
+        assert state.acquire_lease(
+            key=LEASE_KEY,
+            holder=replacement,
+            ttl_seconds=60,
+            now=clock[0],
+        )
+        return _feed(CHANNEL_A, ("aaaaaaaaaaa", "2026-10-01T10:00:00Z"))
+
+    with pytest.raises(SyncLeaseLostError):
+        _RAW_POLL_SOURCE(
+            binding,
+            registry=registry,
+            requests=requests,
+            check_active=check_old_holder,
+            commit_guard=owned_old_effect,
+            fetch_feed=take_over_before_disposition,
+        )
+
+    stored = registry.get(binding.binding_id)
+    assert stored is not None and stored.cursor == {}
+    assert requests.list_all() == ()
+    assert not any(event[1].get("binding_id") == binding.binding_id for event in captured_events)
+
+
+def test_rss_completion_counts_atomic_queue_dedup_after_overlapping_poll(
+    runtime: tuple[SourceRegistry, AcquisitionRequests],
+    captured_events: list[tuple[str, dict[str, Any], str]],
+) -> None:
+    registry, requests = runtime
+    binding_a = _binding(registry, CHANNEL_A, mode="acquire_transcript")
+    binding_b = _binding(registry, CHANNEL_B, mode="acquire_transcript")
+    state = MemorySyncStateStore()
+    competing_results: list[channel_rss_discovery.ChannelRSSPollResult] = []
+
+    class InterleavingRequests:
+        def __getattr__(self, name: str) -> Any:
+            return getattr(requests, name)
+
+        def get(self, request_id: str) -> Any:
+            observed = requests.get(request_id)
+            if observed is None and not competing_results:
+                competing_results.append(
+                    _poll_with_lease(
+                        binding_b,
+                        registry=registry,
+                        requests=requests,
+                        _state=state,
+                        _holder="same-runner",
+                        fetch_feed=lambda _channel_id: _feed(
+                            CHANNEL_B, ("aaaaaaaaaaa", "2026-10-01T10:00:00Z")
+                        ),
+                    )
+                )
+            return observed
+
+    first = _poll_with_lease(
+        binding_a,
+        registry=registry,
+        requests=InterleavingRequests(),  # type: ignore[arg-type]
+        _state=state,
+        _holder="same-runner",
+        fetch_feed=lambda _channel_id: _feed(
+            CHANNEL_A, ("aaaaaaaaaaa", "2026-10-01T10:00:00Z")
+        ),
+    )
+    if not competing_results:
+        # The atomic outcome path has no stale preflight-read gap. Run the
+        # second poll after the first disposition to verify its dedup receipt.
+        competing_results.append(
+            _poll_with_lease(
+                binding_b,
+                registry=registry,
+                requests=requests,
+                _state=state,
+                _holder="same-runner",
+                fetch_feed=lambda _channel_id: _feed(
+                    CHANNEL_B, ("aaaaaaaaaaa", "2026-10-01T10:00:00Z")
+                ),
+            )
+        )
+
+    assert not first.degraded
+    assert len(competing_results) == 1 and not competing_results[0].degraded
+    assert len(requests.list_all()) == 1
+    completed = [
+        event[1]
+        for event in captured_events
+        if event[0] == "youtube.sync.completed"
+        and event[1]["binding_id"] in {binding_a.binding_id, binding_b.binding_id}
+    ]
+    assert len(completed) == 2
+    assert sorted((payload["enqueued"], payload["deduped"]) for payload in completed) == [
+        (0, 1),
+        (1, 0),
+    ]
 
 
 def test_policy_modes_and_version_bump_not_retroactive(
@@ -522,8 +751,7 @@ def test_named_database_without_receipt_transaction_fails_before_cursor_advance(
     registry, requests = runtime
     binding = _binding(registry)
     monkeypatch.setattr(channel_rss_discovery, "_transaction_required", lambda: True)
-    monkeypatch.setattr(channel_rss_discovery, "open_outbox_txn_conn", lambda: None)
-    with pytest.raises(RuntimeError, match="transaction for the subscription"):
+    with pytest.raises(RuntimeError, match="ownership transaction"):
         channel_rss_discovery.poll_source(
             binding,
             registry=registry,
@@ -539,6 +767,7 @@ def test_named_database_without_receipt_transaction_fails_before_cursor_advance(
 
 def test_registry_receipts_receive_the_shared_outbox_transaction(
     runtime: tuple[SourceRegistry, AcquisitionRequests],
+    captured_events: list[tuple[str, dict[str, Any], str]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry, requests = runtime
@@ -547,17 +776,13 @@ def test_registry_receipts_receive_the_shared_outbox_transaction(
     connections: list[Any] = []
 
     class TransactionConnection:
-        @contextmanager
-        def transaction(self):
-            yield self
+        pass
 
-        def close(self) -> None:
-            return None
-
-    def open_transaction() -> TransactionConnection:
+    @contextmanager
+    def owned_transaction():
         connection = TransactionConnection()
         connections.append(connection)
-        return connection
+        yield connection
 
     success_calls: list[Any] = []
     failure_calls: list[Any] = []
@@ -573,7 +798,6 @@ def test_registry_receipts_receive_the_shared_outbox_transaction(
         return original_failure(binding_id, **kwargs)
 
     monkeypatch.setattr(channel_rss_discovery, "_transaction_required", lambda: True)
-    monkeypatch.setattr(channel_rss_discovery, "open_outbox_txn_conn", open_transaction)
     monkeypatch.setattr(registry, "record_poll_success", record_success)
     monkeypatch.setattr(registry, "record_poll_failure", record_failure)
 
@@ -581,6 +805,7 @@ def test_registry_receipts_receive_the_shared_outbox_transaction(
         successful_binding,
         registry=registry,
         requests=requests,
+        _commit_guard=owned_transaction,
         fetch_feed=lambda _channel_id: _feed(
             CHANNEL_A, ("aaaaaaaaaaa", "2026-09-28T10:00:00Z")
         ),
@@ -589,12 +814,15 @@ def test_registry_receipts_receive_the_shared_outbox_transaction(
         degraded_binding,
         registry=registry,
         requests=requests,
+        _commit_guard=owned_transaction,
         fetch_feed=lambda _channel_id: b"<broken",
     )
 
     assert not completed.degraded and degraded.degraded
-    assert success_calls == [connections[0]]
-    assert failure_calls == [connections[1]]
+    assert success_calls == [connections[1]]
+    assert failure_calls == [connections[2]]
+    assert any(event[0] == "youtube.sync.completed" for event in captured_events)
+    assert any(event[0] == "youtube.sync.degraded" for event in captured_events)
 
 
 def test_invalid_subscription_channel_degrades_with_registered_payload_schema(

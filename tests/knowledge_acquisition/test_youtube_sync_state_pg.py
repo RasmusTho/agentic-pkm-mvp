@@ -129,6 +129,21 @@ def test_pg_rss_finalizers_keep_canonical_dict_row_connection_usable(
 ) -> None:
     """RSS polls commit receipts atomically on the canonical dict-row connection."""
     command.upgrade(scratch_database, YSS06_HEAD)
+    store = for_runtime()
+    holder = f"pg-rss-test:{uuid.uuid4()}"
+    assert store.acquire_lease(
+        key=LEASE_KEY, holder=holder, ttl_seconds=LEASE_TTL_SECONDS, now=NOW
+    )
+
+    def check_active() -> None:
+        if not store.heartbeat_lease(
+            key=LEASE_KEY, holder=holder, ttl_seconds=LEASE_TTL_SECONDS, now=NOW
+        ):
+            raise SyncLeaseLostError("YouTube discovery lease ownership was lost")
+
+    def commit_guard():
+        return store.owned_effect(key=LEASE_KEY, holder=holder, now=NOW)
+
     registry = SourceRegistry.for_runtime()
     source = registry.register(
         collection_kind="subscription_feed",
@@ -159,6 +174,8 @@ def test_pg_rss_finalizers_keep_canonical_dict_row_connection_usable(
         source,
         registry=registry,
         requests=requests,
+        check_active=check_active,
+        commit_guard=commit_guard,
         fetch_feed=lambda _channel_id: feed("bbbbbbbbbbb", "2026-10-01T10:00:00Z"),
     )
     completed = registry.get(source.binding_id)
@@ -184,6 +201,8 @@ def test_pg_rss_finalizers_keep_canonical_dict_row_connection_usable(
         completed,
         registry=registry,
         requests=requests,
+        check_active=check_active,
+        commit_guard=commit_guard,
         fetch_feed=lambda _channel_id: b"<broken",
     )
     degraded = registry.get(source.binding_id)
@@ -207,6 +226,8 @@ def test_pg_rss_finalizers_keep_canonical_dict_row_connection_usable(
         degraded,
         registry=registry,
         requests=requests,
+        check_active=check_active,
+        commit_guard=commit_guard,
         fetch_feed=lambda _channel_id: feed("ccccccccccc", "2026-10-02T10:00:00Z"),
     )
     after_rollback = registry.get(source.binding_id)

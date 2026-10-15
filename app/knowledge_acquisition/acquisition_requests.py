@@ -1024,12 +1024,45 @@ class AcquisitionRequests:
         conn: Any = None,
         transaction_conn: Any = None,
     ) -> AcquisitionRequest:
+        """Idempotently enqueue a request, preserving the original return contract."""
+        stored, _created = self.enqueue_with_outcome(
+            source_kind=source_kind,
+            item_ref=item_ref,
+            source_ref=source_ref,
+            trigger=trigger,
+            priority=priority,
+            policy_snapshot=policy_snapshot,
+            trace_id=trace_id,
+            now=now,
+            conn=conn,
+            transaction_conn=transaction_conn,
+        )
+        return stored
+
+    def enqueue_with_outcome(
+        self,
+        *,
+        source_kind: str,
+        item_ref: str,
+        source_ref: str,
+        trigger: DiscoveryTrigger,
+        priority: str = "normal",
+        policy_snapshot: dict[str, Any] | None = None,
+        trace_id: str | None = None,
+        now: datetime | None = None,
+        conn: Any = None,
+        transaction_conn: Any = None,
+    ) -> tuple[AcquisitionRequest, bool]:
         """Idempotent enqueue (INV-YSS-2). Emits ``youtube.source.discovered``
         (key-deduped per ``(binding_id, item_ref)``) and, on first insert only,
         ``acquisition.requested``. On conflict, an equal policy snapshot lets an
         identity-novel trigger append without reopening a completed/dead-lettered
         request. A different snapshot raises
         :class:`AcquisitionRequestPolicyConflictError` and leaves the row intact.
+
+        The returned boolean is the atomic queue insert result: true only when
+        this call created the request, false when it deduplicated against an
+        existing request.
         """
         for name, value in (("source_kind", source_kind), ("item_ref", item_ref), ("source_ref", source_ref)):
             if not isinstance(value, str) or not value.strip() or "\x00" in value:
@@ -1141,8 +1174,7 @@ class AcquisitionRequests:
             trace_id=trace_id,
             conn=conn,
         )
-        del created  # identity/dedup outcome is visible via discovery_triggers
-        return stored
+        return stored, created
 
     def record_discovery(
         self,

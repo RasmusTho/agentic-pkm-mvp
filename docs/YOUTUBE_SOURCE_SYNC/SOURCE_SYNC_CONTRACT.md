@@ -178,8 +178,10 @@ only under INV-YSS-1 (*request-before-cursor*):
   durable request rows or traced discovery dispositions are written before cursor advance. A
   required filter-metadata failure leaves the cursor unchanged. Cursor success state and its
   `youtube.sync.completed` receipt commit in one canonical DB transaction; inability to open or
-  write that transaction never advances the cursor. The current RSS response window bounds
-  incremental reach — anything past the window is backfill's job.
+  write that transaction never advances the cursor. Finalization compares the cursor snapshot read
+  at poll start; an overlapping stale poll is superseded and cannot rewind newer progress or emit a
+  stale success receipt. The current RSS response window bounds incremental reach — anything past
+  the window is backfill's job.
 - **Backfill (YSS-08):** does not use the incremental cursor; it enumerates via yt-dlp
   `--flat-playlist` (logged-out) or full API pagination, diffs against existing
   requests/dispositions, and enqueues only the gap. It never rewinds an incremental cursor.

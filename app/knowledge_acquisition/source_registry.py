@@ -172,6 +172,10 @@ class SourceRegistryValidationError(ValueError):
     """
 
 
+class SourceCursorConflictError(RuntimeError):
+    """A poll tried to publish a cursor based on a stale registry snapshot."""
+
+
 class DuplicateBindingError(ValueError):
     """Raised when (collection_kind, collection_ref, account_binding_id) already exists."""
 
@@ -765,12 +769,15 @@ class _MemorySourceRegistryBackend:
         binding_id: str,
         *,
         cursor: dict[str, Any],
+        expected_cursor: dict[str, Any] | None = None,
         transaction_conn: Any = None,
     ) -> SourceBinding:
         with self._lock:
             row = self._rows.get(binding_id)
             if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
+            if expected_cursor is not None and row.cursor != expected_cursor:
+                raise SourceCursorConflictError("source cursor changed during poll")
             now = _now_iso()
             updated = replace(
                 row,
@@ -788,12 +795,15 @@ class _MemorySourceRegistryBackend:
         binding_id: str,
         *,
         last_error: dict[str, Any],
+        expected_cursor: dict[str, Any] | None = None,
         transaction_conn: Any = None,
     ) -> SourceBinding:
         with self._lock:
             row = self._rows.get(binding_id)
             if row is None:
                 raise KeyError(f"no such binding: {binding_id}")
+            if expected_cursor is not None and row.cursor != expected_cursor:
+                raise SourceCursorConflictError("source cursor changed during poll")
             now = _now_iso()
             updated = replace(
                 row,
@@ -1356,6 +1366,7 @@ class _PgSourceRegistryBackend:
         binding_id: str,
         *,
         cursor: dict[str, Any],
+        expected_cursor: dict[str, Any] | None = None,
         transaction_conn: Any = None,
     ) -> SourceBinding:
         conn = transaction_conn if transaction_conn is not None else _pg_connect()
@@ -1372,12 +1383,23 @@ class _PgSourceRegistryBackend:
                     last_error = NULL,
                     updated_at = %s::timestamptz
                 WHERE binding_id = %s
+                  AND (%s::jsonb IS NULL OR cursor = %s::jsonb)
                 RETURNING {_COLUMNS_SQL}
                 """,
-                (json.dumps(cursor), now, now, now, binding_id),
+                (
+                    json.dumps(cursor),
+                    now,
+                    now,
+                    now,
+                    binding_id,
+                    json.dumps(expected_cursor) if expected_cursor is not None else None,
+                    json.dumps(expected_cursor) if expected_cursor is not None else None,
+                ),
             )
             row = cur.fetchone()
             if row is None:
+                if expected_cursor is not None:
+                    raise SourceCursorConflictError("source cursor changed during poll")
                 raise KeyError(f"no such binding: {binding_id}")
             return _row_to_binding(tuple(row))
         finally:
@@ -1389,6 +1411,7 @@ class _PgSourceRegistryBackend:
         binding_id: str,
         *,
         last_error: dict[str, Any],
+        expected_cursor: dict[str, Any] | None = None,
         transaction_conn: Any = None,
     ) -> SourceBinding:
         conn = transaction_conn if transaction_conn is not None else _pg_connect()
@@ -1403,12 +1426,22 @@ class _PgSourceRegistryBackend:
                     last_error = %s::jsonb,
                     updated_at = %s::timestamptz
                 WHERE binding_id = %s
+                  AND (%s::jsonb IS NULL OR cursor = %s::jsonb)
                 RETURNING {_COLUMNS_SQL}
                 """,
-                (now, json.dumps(last_error), now, binding_id),
+                (
+                    now,
+                    json.dumps(last_error),
+                    now,
+                    binding_id,
+                    json.dumps(expected_cursor) if expected_cursor is not None else None,
+                    json.dumps(expected_cursor) if expected_cursor is not None else None,
+                ),
             )
             row = cur.fetchone()
             if row is None:
+                if expected_cursor is not None:
+                    raise SourceCursorConflictError("source cursor changed during poll")
                 raise KeyError(f"no such binding: {binding_id}")
             return _row_to_binding(tuple(row))
         finally:
@@ -1636,20 +1669,29 @@ class SourceRegistry:
         binding_id: str,
         *,
         cursor: dict[str, Any],
+        expected_cursor: dict[str, Any] | None = None,
         transaction_conn: Any = None,
     ) -> SourceBinding:
         """Atomically publish a successful poll outcome.
 
         ``cursor`` is accepted only after the caller has durably disposed every
-        newly covered item. V1 exposes one synchronous manual poll path;
-        scheduling, leases, and concurrent-run reconciliation remain deferred.
+        newly covered item. ``expected_cursor`` rejects publication based on a
+        stale snapshot so a slower poll cannot rewind newer progress.
         """
         stored_cursor = _portable_json_copy(cursor, field="cursor")
         if not isinstance(stored_cursor, dict):
             raise SourceRegistryValidationError("cursor must be a JSON object")
+        stored_expected = (
+            _portable_json_copy(expected_cursor, field="expected_cursor")
+            if expected_cursor is not None
+            else None
+        )
+        if stored_expected is not None and not isinstance(stored_expected, dict):
+            raise SourceRegistryValidationError("expected_cursor must be a JSON object")
         return self._backend.record_poll_success(
             binding_id,
             cursor=stored_cursor,
+            expected_cursor=stored_expected,
             transaction_conn=transaction_conn,
         )
 
@@ -1659,12 +1701,21 @@ class SourceRegistry:
         *,
         reason_code: str,
         detail: Any = None,
+        expected_cursor: dict[str, Any] | None = None,
         transaction_conn: Any = None,
     ) -> SourceBinding:
         """Record a degraded poll without touching its cursor/known set."""
+        stored_expected = (
+            _portable_json_copy(expected_cursor, field="expected_cursor")
+            if expected_cursor is not None
+            else None
+        )
+        if stored_expected is not None and not isinstance(stored_expected, dict):
+            raise SourceRegistryValidationError("expected_cursor must be a JSON object")
         return self._backend.record_poll_failure(
             binding_id,
             last_error=_build_last_error(reason_code, detail),
+            expected_cursor=stored_expected,
             transaction_conn=transaction_conn,
         )
 
