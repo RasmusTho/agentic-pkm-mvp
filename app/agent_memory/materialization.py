@@ -31,9 +31,9 @@ from app.governance.governed_write import (
     GovernedWriteGrant,
     PolicyDecision,
 )
+from app.knowledge import make_note_locator
 from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
-from app.knowledge.locators import make_note_locator
 from app.knowledge.vault_identity import resolve_obsidian_vault_name
 from app.knowledge.write_ops import read_create_once_winner_relative, write_note_relative
 from app.knowledge.multiwriter import NoteClass
