@@ -4520,16 +4520,14 @@ def test_bws_full_deploy_raw_migration_uses_supervised_preflight(tmp_path, chann
         _configure_bws_retry_driver(tmp_path, env)
     # Fake only the VM credential/FD adapter; run the actual deployment shell and
     # its real pending-HAR classification, pin/migration and Compose branches.
-    (root / 'app/ops/postgres_deploy_linux.py').write_text('''
-import os,sys
-from pathlib import Path
-assert sys.argv[1] == 'guard'
-log = Path(os.environ['FAKE_DEPLOY_EVENT_LOG'])
-prior = log.read_text().count('bws-guard') if log.exists() else 0
-with log.open('a') as stream:
-    stream.write('bws-guard\\n')
-if os.environ.get('FAKE_BWS_REJECT_RECHECK') == '1' and prior == 1:
-    raise SystemExit(78)
+    _install_bws_identity_guard_fixture(root)
+    guard = root / 'app/ops/postgres_deploy_linux.py'
+    guard.write_text(guard.read_text() + '''
+if __name__ == '__main__':
+    from pathlib import Path
+    count = Path(os.environ['FAKE_DEPLOY_EVENT_LOG']).read_text().count('bws-guard')
+    if os.environ.get('FAKE_BWS_REJECT_RECHECK') == '1' and count == 2:
+        raise SystemExit(78)
 ''')
     handle = tmp_path / 'migration.env'
     handle.write_text('HEIMDAL_RAW_STORE_KEY=' + 'a' * 64 + '\n')
@@ -4682,7 +4680,7 @@ def test_bws_prod_retry_preflight_uses_file_connection_and_preserves_availabilit
         env['FAKE_OUTBOX_QUERY_UNAVAILABLE'] = '1'
     # Only the external worker credential/lock seam is fake. The shell, real
     # preflight/resolver, libpq parser and terminal-row classifier all run.
-    (root / 'app/ops/postgres_deploy_linux.py').write_text('import sys\nassert sys.argv[1] == "guard"\n')
+    _install_bws_identity_guard_fixture(root)
     pin = root / 'config/deploy/prod.env'
     before = pin.read_bytes() if pin.exists() else None
     result = _run_deploy(root, env, target, channel='prod')
@@ -5355,7 +5353,8 @@ def test_native_deploy_rebuilds_source_projection_before_health_gate(
     ]
     assert len(source_calls) == 1, events
     source_pos, command = source_calls[0]
-    assert "run --rm --no-deps -T" in command
+    assert "run --no-deps -T" in command
+    assert "--rm" not in command.split()
     assert f"NATIVE_SOURCE_BOOTSTRAP={channel}:{sha}" in command
     assert command.endswith(" api")
     assert "--entrypoint" not in command
@@ -5366,7 +5365,10 @@ def test_native_deploy_rebuilds_source_projection_before_health_gate(
         if "up -d --force-recreate api worker watcher" in event
     )
     final_readiness = next(i for i, event in enumerate(events) if "/readyz" in event)
-    assert source_pos < runtime_start < final_readiness
+    source_census = next(i for i, event in enumerate(events)
+                        if event.startswith('docker ps --all --filter name=^/pkm-')
+                        and 'source-bootstrap-' in event)
+    assert source_pos < source_census < runtime_start < final_readiness
     assert events.count("source-rebuild") == (0 if ready else 1)
     assert any("api-instance-preflight -m app.instance.runtime preflight" in event for event in events)
     assert events.count("api-migrations") == 1
