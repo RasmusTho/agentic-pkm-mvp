@@ -22,3 +22,11 @@ def test_component_smoke_exercises_runtime_and_refuses_wrong_identity(managed_so
         assert result["owner_acceptance"] is False
         with pytest.raises(RuntimeError, match="candidate mismatch"):
             smoke("0" * 40)
+
+        # A visible static Focus shell must never count as a successful journey.
+        from app.builderops import devui_runtime
+        def unavailable(*args, **kwargs):
+            raise devui_runtime.FocusInputError("fixture read failure")
+        monkeypatch.setattr(devui_runtime, "read_managed_focus", unavailable)
+        with pytest.raises(RuntimeError, match="Focus read or subject mismatch"):
+            smoke(sha)

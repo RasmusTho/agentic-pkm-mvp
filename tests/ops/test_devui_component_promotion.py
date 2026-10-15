@@ -44,25 +44,35 @@ class External:
         self.fail_smoke = False
         self.uncertain_up = False
         self.identity = 0
+        self.config_extra = {}
+        self.host_extra = {}
+        self.drift_after_up = None
+        self.expected_baseline = None
 
     def container(self):
         return {"Id": str(self.identity), "Image": "sha256:" + "a" * 64,
-                "Config": {"User": "builderops", "Image": deploy.IMAGE + self.environment["DEVUI_IMAGE_DIGEST"],
+                "Config": {"User": "builderops", "Cmd": deploy.COMMAND, "Entrypoint": None,
+                           "Healthcheck": {"Test": deploy.HEALTH_TEST, "Interval": 30000000000,
+                                           "Timeout": 5000000000, "Retries": 3}, "Image": deploy.IMAGE + self.environment["DEVUI_IMAGE_DIGEST"],
                            "Env": [k + "=" + v for k, v in self.environment.items()],
                            "Labels": {"com.docker.compose.project": deploy.PROJECT,
                                       "com.docker.compose.service": "devui",
                                       "com.docker.compose.project.working_dir": str(self.directory),
                                       "org.opencontainers.image.revision": self.environment["DEVUI_SOURCE_SHA"]}},
-                "State": {"Running": True}, "HostConfig": {"NetworkMode": "host", "ReadonlyRootfs": True},
+                "State": {"Running": True}, "HostConfig": {"NetworkMode": "host", "ReadonlyRootfs": True, "IpcMode": "private",
+                    "CapDrop": ["ALL"], "SecurityOpt": ["no-new-privileges:true"],
+                    "RestartPolicy": {"Name": "unless-stopped", "MaximumRetryCount": 0}, **self.host_extra},
                 "Mounts": [{"Source": k, "Destination": v, "RW": False} for k, v in deploy.MOUNTS.items()]}
 
     def config(self, env):
         selected = {k: v for k, v in env.items() if k in deploy.ENV_KEYS}
         service = {"image": deploy.IMAGE + env["DEVUI_IMAGE_DIGEST"],
                    "command": ["python", "-m", "app.builderops.devui_runtime"], "network_mode": "host",
+                   "restart": "unless-stopped", "healthcheck": deploy.HEALTHCHECK,
                    "read_only": True, "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
                    "environment": selected, "volumes": [{"type": "bind", "source": k, "target": v,
                        "read_only": True, "bind": {"create_host_path": False}} for k, v in deploy.MOUNTS.items()]}
+        service.update(self.config_extra)
         if self.unsafe_compose:
             service["privileged"] = True
         return {"name": deploy.PROJECT, "services": {"devui": service}}
@@ -91,9 +101,16 @@ class External:
                 assert argv[-2:] == ["pull", "devui"]
                 return ""
             assert argv[-5:] == ["up", "-d", "--no-deps", "--force-recreate", "devui"]
+            records = [json.loads(p.read_text()) for p in deploy.RECEIPTS.glob("devui-component-*.json")
+                       if p.name != "devui-component-latest.json"]
+            pending = [r for r in records if r["outcome"] == "pending"]
+            assert len(pending) == 1  # The first external effect already has durable recovery state.
+            assert pending[0]["baseline"] == self.expected_baseline
             self.environment = {k: v for k, v in env.items() if k in deploy.ENV_KEYS}
             self.directory = Path(argv[argv.index("-f") + 1]).parent
             self.identity += 1
+            if self.drift_after_up == self.identity:
+                self.environment["DEVUI_BUILDEROPS_AUTHORITY_EPOCH"] = "unexpected-drift"
             if self.uncertain_up:
                 raise deploy.Refusal("external_command_indeterminate")
             return ""
@@ -129,6 +146,12 @@ def operator(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy.os, "geteuid", lambda: 0)
     monkeypatch.setattr(deploy.socket, "gethostname", lambda: "builder-system")
     monkeypatch.setenv("BUILDEROPS_DEPLOYMENT_LOCK_FD", str(fd))
+    original_prepare = deploy.prepare
+    def remember_baseline(*args):
+        plan = original_prepare(*args)
+        world.expected_baseline = plan["baseline"]
+        return plan
+    monkeypatch.setattr(deploy, "prepare", remember_baseline)
     monkeypatch.setattr(deploy, "run", world.run)
     monkeypatch.setattr(deploy.urllib.request, "urlopen", world.urlopen)
     monkeypatch.setattr(deploy.time, "sleep", lambda _: None)
@@ -215,3 +238,74 @@ def test_component_evidence_does_not_grant_fullsystem_or_acceptance(operator):
     assert retained["runtime"]["image_digest"] == NEW_DIGEST
     assert retained["runtime"]["config_fingerprint"] == world.environment["DEVUI_CONFIG_FINGERPRINT"]
     assert retained["secret_material"] == "absent"
+
+
+@pytest.mark.parametrize("extra", [
+    {"cap_add": ["SYS_ADMIN"]}, {"volumes_from": ["container:builderops-api-1:rw"]},
+    {"post_start": [{"command": "id", "user": "root", "privileged": True}]},
+    {"pre_stop": [{"command": "id"}]}, {"healthcheck": {"test": ["CMD", "sh", "-c", "id"]}},
+    {"volumes": [{"type": "bind", "source": "/", "target": "/host", "read_only": False}]},
+    {"volumes": [{"type": "bind", "source": source, "target": target, "read_only": True,
+                  "bind": {"create_host_path": False, "propagation": "rshared"}}
+                 for source, target in deploy.MOUNTS.items()]},
+])
+def test_effective_compose_is_closed_before_mutation(operator, extra):
+    world, candidate = operator
+    plan = deploy.prepare(candidate, "owner mandate")
+    world.config_extra = extra
+    with pytest.raises(deploy.Refusal, match="compose_"):
+        deploy.apply(plan, candidate, plan["plan_sha256"])
+    assert not world.mutations()
+
+
+@pytest.mark.parametrize("posture", [{"Privileged": True}, {"CapAdd": ["SYS_ADMIN"]},
+                                    {"VolumesFrom": ["container:api:rw"]},
+                                    {"SecurityOpt": []}, {"Devices": [{"PathOnHost": "/dev/sda"}]}])
+def test_runtime_posture_drift_refuses_before_mutation(operator, posture):
+    world, candidate = operator
+    plan = deploy.prepare(candidate, "owner mandate")
+    world.host_extra = posture
+    with pytest.raises(deploy.Refusal, match="runtime_posture"):
+        deploy.apply(plan, candidate, plan["plan_sha256"])
+    assert not world.mutations()
+
+
+def test_target_config_drift_prevents_compensation(operator):
+    world, candidate = operator
+    plan = deploy.prepare(candidate, "owner mandate")
+    world.drift_after_up = 1
+    world.fail_smoke = True
+    with pytest.raises(deploy.Refusal, match="indeterminate"):
+        deploy.apply(plan, candidate, plan["plan_sha256"])
+    assert len(world.mutations()) == 1
+    with pytest.raises(deploy.Refusal, match="retained_attempt"):
+        deploy.prepare(candidate, "no replay")
+
+
+@pytest.mark.parametrize("manual", [False, True])
+def test_rollback_requires_observed_exact_baseline(operator, manual):
+    world, candidate = operator
+    plan = deploy.prepare(candidate, "owner mandate")
+    world.drift_after_up = 2
+    if manual:
+        deploy.apply(plan, candidate, plan["plan_sha256"])
+        effect = lambda: deploy.rollback(plan, plan["plan_sha256"])
+    else:
+        world.fail_smoke = True
+        effect = lambda: deploy.apply(plan, candidate, plan["plan_sha256"])
+    with pytest.raises(deploy.Refusal, match="indeterminate|readback"):
+        effect()
+    record = json.loads(next(p for p in deploy.RECEIPTS.glob("devui-component-*.json")
+                             if p.name != "devui-component-latest.json").read_text())
+    assert record["outcome"] == "indeterminate"
+    assert len(world.mutations()) == 2
+
+
+def test_retained_pending_refuses_restart_before_effect(operator):
+    world, candidate = operator
+    plan = deploy.prepare(candidate, "owner mandate")
+    deploy.atomic(deploy.RECEIPTS / ("devui-component-" + "c" * 64 + ".json"),
+                  {"receipt_type": "devui_component_deployment.v1", "outcome": "pending", "baseline": plan["baseline"]})
+    with pytest.raises(deploy.Refusal, match="retained_attempt"):
+        deploy.prepare(candidate, "restart")
+    assert not world.mutations()

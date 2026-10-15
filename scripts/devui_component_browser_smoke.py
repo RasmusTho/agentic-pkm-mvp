@@ -60,11 +60,18 @@ def smoke(source_sha: str, *, preflight: bool = False, baseline: bool = False) -
                     raise RuntimeError("server Focus binding mismatch")
                 subject = selected[0]
             page.goto(origin + "/devui/focus?" + urlencode({"subject": subject}), wait_until="domcontentloaded")
+            def require_focus():  # type: ignore[no-untyped-def]
+                page.locator('[data-testid="focus-load-state"]:not([data-state="loading"])').wait_for()
+                if (page.locator('[data-testid="focus-load-state"]').get_attribute("data-state") != "loaded" or
+                        page.locator('[data-testid="focus-subject"]').get_attribute("data-subject") != subject):
+                    raise RuntimeError("Focus read or subject mismatch")
+
+            require_focus()
             page.locator('[data-testid="builder-system-control-entry"]').click()
             if page.locator('[data-testid="focus-return"]').get_attribute("href") != "/devui/focus?" + urlencode({"subject": subject}):
                 raise RuntimeError("Focus return context mismatch")
             page.locator('[data-testid="focus-return"]').click()
-            page.locator('[data-testid="focus-subject"]').wait_for()
+            require_focus()
             if forbidden:
                 raise RuntimeError("unexpected browser effects or egress")
             if page.evaluate("localStorage.length + sessionStorage.length"):

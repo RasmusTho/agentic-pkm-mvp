@@ -42,6 +42,10 @@ MOUNTS = {"/opt/builderops/receipts": "/run/builderops/devui-receipts",
           "/opt/builderops/secrets/devui-api-token": "/run/builderops/devui-api-token",
           "/opt/builderops/devui-gh": "/run/builderops/devui-gh"}
 
+COMMAND = ["python", "-m", "app.builderops.devui_runtime"]
+HEALTH_TEST = ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8113/healthz', timeout=3)"]
+HEALTHCHECK = {"test": HEALTH_TEST, "interval": "30s", "timeout": "5s", "retries": 3}
+
 
 class Refusal(RuntimeError):
     """Value-free operational refusal."""
@@ -144,6 +148,16 @@ def observed() -> dict[str, Any]:
         raise Refusal("runtime_posture_refused")
     if c["HostConfig"].get("NetworkMode") != "host" or not c["HostConfig"].get("ReadonlyRootfs"):
         raise Refusal("runtime_posture_refused")
+    host = c["HostConfig"]
+    if (host.get("Privileged") or host.get("CapAdd") or host.get("VolumesFrom") or
+            host.get("Devices") or host.get("DeviceRequests") or host.get("DeviceCgroupRules") or
+            host.get("PidMode") or host.get("IpcMode") != "private" or
+            host.get("CapDrop") != ["ALL"] or host.get("SecurityOpt") != ["no-new-privileges:true"] or
+            host.get("RestartPolicy") != {"Name": "unless-stopped", "MaximumRetryCount": 0} or
+            c["Config"].get("Cmd") != COMMAND or c["Config"].get("Entrypoint") or
+            c["Config"].get("Healthcheck") != {"Test": HEALTH_TEST, "Interval": 30000000000,
+                                            "Timeout": 5000000000, "Retries": 3}):
+        raise Refusal("runtime_posture_refused")
     mounts = {m["Source"]: m["Destination"] for m in c["Mounts"] if not m["RW"]}
     if mounts != MOUNTS or len(c["Mounts"]) != len(MOUNTS):
         raise Refusal("runtime_mounts_refused")
@@ -153,6 +167,15 @@ def observed() -> dict[str, Any]:
     return {"container_id": c["Id"], "image_id": c["Image"], "image": image,
             "environment": selected, "directory": str(directory),
             "compose": {name: (directory / name).read_text() for name in FILES}}
+
+
+def require_runtime(environment: dict[str, str], directory: str, files: dict[str, str], *, image_id: str | None = None) -> dict[str, Any]:
+    current = observed()  # Includes the fixed runtime security posture and mounts.
+    if (current["environment"] != environment or current["image"] != IMAGE + environment["DEVUI_IMAGE_DIGEST"] or
+            current["directory"] != directory or current["compose"] != files or
+            (image_id is not None and current["image_id"] != image_id)):
+        raise Refusal("runtime_configuration_drift")
+    return current
 
 
 def compose(directory: Path, environment: dict[str, str], arguments: list[str]) -> str:
@@ -167,24 +190,25 @@ def compose(directory: Path, environment: dict[str, str], arguments: list[str]) 
 
 
 def validate_config(config: dict[str, Any], environment: dict[str, str]) -> str:
-    if set(config.get("services", {})) != {"devui"} or config.get("name") != PROJECT:
-        raise Refusal("compose_project_refused")
-    s = config["services"]["devui"]
-    if (s.get("image") != IMAGE + environment["DEVUI_IMAGE_DIGEST"] or
-            s.get("command") != ["python", "-m", "app.builderops.devui_runtime"] or
-            s.get("network_mode") != "host" or not s.get("read_only") or
-            s.get("privileged") or s.get("ports") or s.get("build") or s.get("env_file") or
-            s.get("entrypoint") or s.get("depends_on") or s.get("devices") or s.get("secrets") or
-            s.get("configs") or s.get("user") or
-            s.get("cap_drop") != ["ALL"] or s.get("security_opt") != ["no-new-privileges:true"]):
-        raise Refusal("compose_posture_refused")
-    mounts = s.get("volumes", [])
-    if len(mounts) != len(MOUNTS) or any(m.get("type") != "bind" or not m.get("read_only") or
-            MOUNTS.get(m.get("source")) != m.get("target") or m.get("bind", {}).get("create_host_path") is not False for m in mounts):
+    # Closed effective configuration, including nested commands and bind options.
+    # A trusted future image does not expand this operator's component mandate.
+    service: dict[str, Any] = {"image": IMAGE + environment["DEVUI_IMAGE_DIGEST"], "command": COMMAND,
+               "network_mode": "host", "restart": "unless-stopped", "read_only": True,
+               "cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"],
+               "environment": environment, "healthcheck": HEALTHCHECK,
+               "volumes": [{"type": "bind", "source": source, "target": target,
+                            "read_only": True, "bind": {"create_host_path": False}}
+                           for source, target in MOUNTS.items()]}
+    expected = {"name": PROJECT, "services": {"devui": service}}
+    normalized = json.loads(json.dumps(config))
+    actual_volumes = normalized.get("services", {}).get("devui", {}).get("volumes", [])
+    # Compose may reorder mounts; their complete values must still match.
+    if not isinstance(actual_volumes, list) or any(not isinstance(v, dict) for v in actual_volumes):
         raise Refusal("compose_mounts_refused")
-    actual = s.get("environment", {})
-    if set(actual) - ENV_KEYS or any(actual.get(k) != v for k, v in environment.items()):
-        raise Refusal("compose_environment_refused")
+    normalized.get("services", {}).get("devui", {})["volumes"] = sorted(actual_volumes, key=lambda v: str(v.get("target")))
+    service["volumes"] = sorted(service["volumes"], key=lambda v: v["target"])
+    if set(environment) != ENV_KEYS or normalized != expected:
+        raise Refusal("compose_boundary_refused")
     sanitized = json.loads(json.dumps(config))
     sanitized["services"]["devui"]["environment"].pop("DEVUI_CONFIG_FINGERPRINT", None)
     return digest(sanitized)
@@ -306,18 +330,16 @@ def apply(plan: dict[str, Any], candidate_file: Path, expected_digest: str) -> d
     try:
         record["runtime"] = probe(environment)
         record["browser"] = browser(candidate["source_sha"])
-        current = observed()
-        if current["environment"] != environment or current["image"] != IMAGE + environment["DEVUI_IMAGE_DIGEST"]:
-            raise Refusal("post_smoke_identity_drift")
+        record["container"] = require_runtime(environment, str(directory), plan["target_compose"])
     except Refusal:
         try:
             # A completed Compose plus exact target readback permits compensation.
-            current = observed()
-            if current["image"] != IMAGE + environment["DEVUI_IMAGE_DIGEST"]:
-                raise Refusal("rollback_target_drift")
+            require_runtime(environment, str(directory), plan["target_compose"])
             compose(Path(baseline["directory"]), baseline["environment"], ["up", "-d", "--no-deps", "--force-recreate", "devui"])
             record["rollback_runtime"] = probe(baseline["environment"])
             record["rollback_browser"] = browser(baseline["environment"]["DEVUI_SOURCE_SHA"], baseline=True)
+            record["rollback_container"] = require_runtime(baseline["environment"], baseline["directory"],
+                                                           baseline["compose"], image_id=baseline["image_id"])
             record["outcome"] = "rolled_back"
         except Refusal:
             record["outcome"] = "indeterminate"
@@ -341,10 +363,8 @@ def rollback(plan: dict[str, Any], expected_digest: str) -> dict[str, Any]:
     record = json.loads(attempt.read_text())
     if record.get("outcome") != "deployed" or engine != plan["engine_id"]:
         raise Refusal("rollback_state_refused")
-    current = observed()
     environment = plan["target_environment"]
-    if current["environment"] != environment or current["image"] != IMAGE + environment["DEVUI_IMAGE_DIGEST"]:
-        raise Refusal("rollback_current_identity_drift")
+    require_runtime(environment, plan["target_directory"], plan["target_compose"])
     baseline = plan["baseline"]
     if {name: (Path(baseline["directory"]) / name).read_text() for name in FILES} != baseline["compose"]:
         raise Refusal("rollback_compose_drift")
@@ -356,6 +376,8 @@ def rollback(plan: dict[str, Any], expected_digest: str) -> dict[str, Any]:
         compose(Path(baseline["directory"]), baseline["environment"], ["up", "-d", "--no-deps", "--force-recreate", "devui"])
         record["rollback_runtime"] = probe(baseline["environment"])
         record["rollback_browser"] = browser(baseline["environment"]["DEVUI_SOURCE_SHA"], baseline=True)
+        record["rollback_container"] = require_runtime(baseline["environment"], baseline["directory"],
+                                                       baseline["compose"], image_id=baseline["image_id"])
         record["outcome"] = "rolled_back"
     except Refusal:
         record["outcome"] = "indeterminate"
