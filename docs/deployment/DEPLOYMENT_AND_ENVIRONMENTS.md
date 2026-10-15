@@ -956,9 +956,13 @@ prepares its evidence-complete vault-alpha projection without source, companion 
 embedding generation precedes atomic compare-and-swap Product replacement plus absent-only vector
 insertion. A currently excluded source may instead retire only its exact stale rebuildable mirror,
 with derived vector state absent; source files, canonical objects, receipts and accepted history
-remain untouched. Alpha exclusion is insufficient when the separate dev-only filesystem watcher's
-configured/default `VAULT_DIR` scope overlaps the active vault; unresolved broader-producer
-applicability refuses retirement. History dependencies, candidate/staging or untrusted material, changed sources,
+remain untouched. Producer applicability uses the same strict configuration and inventory reader as
+the optional `scripts/fs_watcher.py` entrypoint: `FS_WATCHER_ENABLE` unset/false means disabled;
+true requires an explicit absolute existing `VAULT_DIR`, matching the active root when overlapping.
+No default path or presence of `VAULT_DIR` enables that writer. Enabled broader sources prepare
+through vault-sync's canonical payload path; excluded sources are not laundered through alpha.
+Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
+History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again
 alongside forward/reverse canonical identity and binding-wide canonical source-locator checks,
 inside the transaction, including after writes, so partial writes roll back; existing vectors
@@ -997,6 +1001,14 @@ markers retain `command_failed`. These content-free reasons identify checkpoints
 causes or repair authority: they never authorize source replay, semantic fallback, data/vector
 mutation or candidate activation. Raw stdout/stderr suppression, candidate/operation binding,
 compensation and no-replay semantics are unchanged.
+Legacy reconciliation additionally preserves the finite classes `legacy_producer_policy_refused`
+(exit 90), `legacy_source_refused` (91), `legacy_admission_refused` (92),
+`legacy_identity_refused` (93), `legacy_race_refused` (94), and `legacy_write_failed` (95).
+The CLI's private exit remains 79 with an allowlisted JSON reason; bootstrap maps that reason to
+the fixed native code, and the deploy wrapper/supervisor retains only its exact allowlisted marker.
+Provider generation retains `embedding_generation_failed`. These classifications expose no source
+paths, IDs, content, metadata values, embeddings or provider diagnostics. Fresh Product readiness
+and strict index doctor remain mandatory after reconciliation and missing-only repair, before activation.
 Ordinary service recreation and the existing final Data health, version, UI and receipt gates
 still follow this step. Ordinary API startup clears the selector and retains migration→uvicorn.
 

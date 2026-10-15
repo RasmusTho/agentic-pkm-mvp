@@ -5744,6 +5744,12 @@ def test_native_deploy_repairs_indexable_object_outside_selected_source_inventor
 
 
 @pytest.mark.parametrize("summary, rc, reason", [
+    ('{"reason":"legacy_producer_policy_refused"}', "79", "legacy_producer_policy_refused"),
+    ('{"reason":"legacy_source_refused"}', "79", "legacy_source_refused"),
+    ('{"reason":"legacy_admission_refused"}', "79", "legacy_admission_refused"),
+    ('{"reason":"legacy_identity_refused"}', "79", "legacy_identity_refused"),
+    ('{"reason":"legacy_race_refused"}', "79", "legacy_race_refused"),
+    ('{"reason":"legacy_write_failed"}', "79", "legacy_write_failed"),
     ('{"reason":"source_post_rebuild_failed"}', "79", "source_post_rebuild_failed"),
     ('{"processed":true}', "0", "source_summary_invalid"),
     ('{"reason":"private-canary"}', "79", "source_summary_invalid"),
@@ -5765,7 +5771,7 @@ def test_native_legacy_reconciliation_refusal_is_private_and_blocks_activation(t
 
 @pytest.mark.pg
 @pytest.mark.parametrize("selected", [True, False])
-def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch, selected):
+def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(tmp_path, monkeypatch, selected, *, broader=False):
     """Native ordering reaches the real producer, PG CAS and strict doctor.
 
     Retained replay is isolated here to leave one evidence-free
@@ -5786,6 +5792,8 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
 
     recovery, state, root, source, raw, original, _, _, factory = _legacy_source_fixture(
         monkeypatch, tmp_path, selected=selected)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "1" if broader else "0")
+    monkeypatch.setenv("VAULT_DIR", str(root))
     pg._TABLES_READY = False
     pg._ensure_tables()
     pg.truncate_pg_tables()
@@ -5819,11 +5827,11 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
     assert events.index(["index", "reconcile-legacy", "--json"]) < events.index(["index", "repair-missing", "--json"])
     assert events[-1] == ["index", "doctor", "--json", "--strict"]
     projected = store.get(original["object_id"])
-    if selected:
+    if selected or broader:
         assert projected["payload"]["frontmatter"]["trust"] == "human"
         assert projected["object_id"] == original["object_id"]
         assert index.present_object_ids() == {str(original["object_id"])}
-        assert state.embedded == ["canonical body"]
+        assert state.embedded == [projected["payload"].get("content", "canonical body")]
     else:
         assert projected is None and index.present_object_ids() == set()
         assert state.embedded == []
@@ -5831,6 +5839,14 @@ def test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(t
     assert evaluate_product_store_readiness(root, store.list_objects(limit=None)).ready
     assert recovery.reconcile_legacy_sources(binding, index, factory) == 0
     pg.truncate_pg_tables()
+
+
+@pytest.mark.pg
+@pytest.mark.parametrize("broader", [False, True])
+def test_native_legacy_reconciliation_reports_producer_policy_and_converges(tmp_path, monkeypatch, broader):
+    test_native_legacy_eligible_source_reprojects_before_missing_vector_repair(
+        tmp_path, monkeypatch, selected=False, broader=broader,
+    )
 
 
 @pytest.mark.parametrize("reason", ["source_post_rebuild_failed", "embedding_generation_failed",

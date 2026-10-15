@@ -12,6 +12,7 @@ from app.ports.filesystem_vault_adapter import FilesystemVaultAdapter
 from app.ports.vault_port import VaultPort
 from app.services.settings import policy
 from app.services.vault_sync import active_edit
+from app.ingest.producer_policy import filesystem_producer_policy, filesystem_source_in_inventory
 
 logger = logging.getLogger(__name__)
 
@@ -90,11 +91,17 @@ def _default_vault_port() -> VaultPort:
 
 
 def scan_once(port: VaultPort | None = None) -> None:
+    if port is None:
+        configured = filesystem_producer_policy()
+        if not configured.enabled:
+            return
+        if configured.root != VAULT.resolve():
+            raise ValueError("producer policy changed")
     resolved_port = port or _default_vault_port()
     VAULT.mkdir(parents=True, exist_ok=True)
     current_paths: set[str] = set()
     for note_path in VAULT.rglob("*.md"):
-        if any(part.startswith(".obsidian") for part in note_path.parts):
+        if not filesystem_source_in_inventory(note_path, VAULT):
             continue
         current_paths.add(str(note_path))
         if _ensure_uuid(note_path, resolved_port):
@@ -159,9 +166,13 @@ def scan_once(port: VaultPort | None = None) -> None:
 
 
 def run() -> None:
-    port = _default_vault_port()
+    configured = filesystem_producer_policy()
+    if not configured.enabled:
+        return
+    if configured.root != VAULT.resolve():
+        raise ValueError("producer policy changed")
     while True:
-        scan_once(port)
+        scan_once()
         debounce_ms = policy().get("debounce_ms", 1200)
         interval = max(debounce_ms / 1000.0, 0.2)
         time.sleep(interval)

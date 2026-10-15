@@ -204,7 +204,7 @@ class MissingVectorRepairFailure(RuntimeError):
 @index.command("reconcile-legacy", help="Reconcile evidence-free legacy mirrors against current source policy.")
 @click.option("--json", "as_json", is_flag=True, default=False)
 def reconcile_legacy(as_json: bool) -> None:
-    from app.rebuildability.legacy_source import private_source_output, reconcile_legacy_sources
+    from app.rebuildability.legacy_source import LegacySourceRefusal, private_source_output, reconcile_legacy_sources
     from app.stores.pg import PgObjectStore, PgVectorIndex
     from app.write_guard import DEFAULT_WRITE_GUARD, SOURCE_BACKED_REBUILD_ACTION
     try:
@@ -217,8 +217,9 @@ def reconcile_legacy(as_json: bool) -> None:
                     or binding.store.vault_binding_id != vector.vault_binding_id):
                 raise ValueError("legacy binding refused")
             processed = reconcile_legacy_sources(binding, vector, get_product_embedding_client)
-    except Exception:
-        click.echo(json.dumps({"reason": "source_post_rebuild_failed"}))
+    except Exception as exc:
+        reason = exc.reason if isinstance(exc, LegacySourceRefusal) else "legacy_source_refused"
+        click.echo(json.dumps({"reason": reason}))
         raise click.exceptions.Exit(79) from None
     _emit_summary({"processed": processed}, as_json)
 

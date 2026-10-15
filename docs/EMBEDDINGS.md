@@ -478,10 +478,18 @@ Sources excluded from all applicable current producer inventories may retire onl
 mirror, never the source file or canonical identity/history. Retained history/dependents refuse
 retirement. Changed sources, duplicate identities, candidate/staging material, malformed metadata,
 untrusted authority and ambiguous selection refuse without mutation.
-The separate dev-only filesystem watcher has a broader vault-sync inventory. If its configured
-or default `VAULT_DIR` scope overlaps the active vault, alpha exclusion alone is not retirement
-authority: recovery refuses that ambiguous producer applicability rather than enabling the optional
-producer or laundering its sources through alpha. Complete private-stage stream and logging
+The separate dev-only `scripts/fs_watcher.py` producer has a broader vault-sync inventory.
+Its entrypoint and recovery share one strict activation/inventory reader: unset or explicitly false
+`FS_WATCHER_ENABLE` disables that optional producer; true requires an explicit absolute existing
+`VAULT_DIR`. Merely setting `VAULT_DIR`, or a default `./vault` path, never enables a producer.
+Enabled overlapping producers must bind the same active root; conflicting roots, malformed settings
+or configuration drift refuse. Enabled broader sources prepare through the ordinary vault-sync
+payload builder with complete current admission evidence, never through alpha's excluded inventory.
+When every enabled producer excludes the source, exact CAS retirement remains available.
+The private boundary retains only `legacy_producer_policy_refused`, `legacy_source_refused`,
+`legacy_admission_refused`, `legacy_identity_refused`, `legacy_race_refused`,
+`embedding_generation_failed` or `legacy_write_failed`; no path, identity or raw diagnostic is emitted.
+Complete private-stage stream and logging
 suppression covers settings compatibility and conflict-quarantine diagnostics too.
 The transaction rechecks source/policy and forward/reverse canonical identity, compares equivalent
 absolute/relative source locators across the locked binding inventory, compares the discovered Product

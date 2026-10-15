@@ -34,6 +34,12 @@ SOURCE_PROJECTION_FAILURE_CODES = {
     'source_doctor_failed': 87,
     'source_settings_failed': 88,
     'source_worker_failed': 89,
+    'legacy_producer_policy_refused': 90,
+    'legacy_source_refused': 91,
+    'legacy_admission_refused': 92,
+    'legacy_identity_refused': 93,
+    'legacy_race_refused': 94,
+    'legacy_write_failed': 95,
 }
 
 
@@ -256,9 +262,12 @@ def _run_json(arguments: list[str]) -> Any:
         payload = _checkpoint('source_summary_invalid', json.loads, raw)
         if result.returncode:
             if arguments[:2] in (['index', 'repair-missing'], ['index', 'reconcile-legacy']):
+                from app.rebuildability.legacy_source import LEGACY_RECONCILIATION_REASONS
                 reason = payload.get('reason') if isinstance(payload, dict) else None
-                if reason not in {'source_post_rebuild_failed', 'embedding_generation_failed',
-                                  'vector_index_write_failed'}:
+                allowed = {'source_post_rebuild_failed', 'embedding_generation_failed', 'vector_index_write_failed'}
+                if arguments[:2] == ['index', 'reconcile-legacy']:
+                    allowed |= LEGACY_RECONCILIATION_REASONS
+                if reason not in allowed:
                     raise SourceBootstrapFailure('source_summary_invalid')
                 raise SourceBootstrapFailure(reason)
             counts = _checkpoint('source_summary_invalid', source_rebuild_counts, payload)

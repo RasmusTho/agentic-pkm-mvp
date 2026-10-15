@@ -155,6 +155,63 @@ def test_legacy_source_reconciliation_is_atomic_and_never_overwrites(_pg_index, 
         assert _count(alias_id) == 1
 
 
+@pytest.mark.parametrize("mode", ["replace", "retire", "existing", "policy-race", "write-failure"])
+def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_pg_index, monkeypatch, tmp_path, mode):
+    from types import SimpleNamespace
+    from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
+    from app.db.db import ensure_schema
+    recovery, state, root, source, raw, original, _, _, _ = _legacy_source_fixture(monkeypatch, tmp_path)
+    monkeypatch.setenv("FS_WATCHER_ENABLE", "0" if mode == "retire" else "1")
+    monkeypatch.setenv("VAULT_DIR", str(root))
+    store, index = pg_store.PgObjectStore(), _pg_index
+    oid, other = original["object_id"], uuid4()
+    store.put(oid, kind="note", source_ref=str(source), payload=original["payload"])
+    store.put(other, kind="note", source_ref="unrelated", payload={"text": "preserved"})
+    with psycopg.connect(_dsn()) as conn:
+        ensure_schema(conn)
+        conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
+                     (oid, oid, store.vault_binding_id))
+    vector = dict(kind="note", source_ref="unrelated", payload={"text": "preserved"},
+                  embedding=[1., 0., 0., 0.], model=PRIMARY.model, identity=PRIMARY)
+    index.upsert(other, **vector)
+    if mode == "existing":
+        index.upsert(oid, **{**vector, "source_ref": str(source)})
+    before = store.get(oid)
+    if mode == "policy-race":
+        original_reconcile = store.reconcile_legacy_source
+        def reconcile(expected, **kwargs):
+            revalidate = kwargs["revalidate"]
+            calls = 0
+            def raced():
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    monkeypatch.setenv("FS_WATCHER_ENABLE", "0")
+                revalidate()
+            original_reconcile(expected, **{**kwargs, "revalidate": raced})
+        monkeypatch.setattr(store, "reconcile_legacy_source", reconcile)
+    if mode == "write-failure":
+        monkeypatch.setattr(pg_store.PgVectorIndex, "upsert", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("private-write-canary")))
+    factory = lambda **kwargs: SimpleNamespace(identity=PRIMARY, embed_text=lambda _: [1., 0., 0., 0.])
+    binding = SimpleNamespace(backend="pg", store=store)
+    if mode in {"policy-race", "write-failure"}:
+        with pytest.raises(recovery.LegacySourceRefusal) as caught:
+            recovery.reconcile_legacy_sources(binding, index, factory)
+        assert caught.value.reason == ("legacy_producer_policy_refused" if mode == "policy-race" else "legacy_write_failed")
+        assert store.get(oid) == before and _count(oid) == 0
+    else:
+        assert recovery.reconcile_legacy_sources(binding, index, factory) == (0 if mode == "existing" else 1)
+        if mode == "retire":
+            assert store.get(oid) is None and _count(oid) == 0
+        elif mode == "existing":
+            assert store.get(oid) == before and _count(oid) == 1
+        else:
+            assert store.get(oid)["payload"]["frontmatter"]["trust"] == "human" and _count(oid) == 1
+    assert store.get(other)["payload"] == {"text": "preserved"}
+    assert _row(other)["model"] == PRIMARY.model and _count(other) == 1
+    assert source.read_bytes() == raw
+
+
 def test_upsert_records_full_identity_columns(_pg_index):
     index = _pg_index
     oid = uuid4()
