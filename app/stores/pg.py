@@ -1181,11 +1181,11 @@ class PgObjectStore(ObjectStore):
                         conn, vault_uuid, vault_binding_id=self.vault_binding_id,
                     ))
                 except Exception:
-                    raise LegacySourceRefusal("legacy_identity_refused") from None
+                    raise LegacySourceRefusal("legacy_identity_canonical_refused") from None
                 if retained_uuid is not None and UUID(retained_uuid) != UUID(vault_uuid):
-                    raise LegacySourceRefusal("legacy_identity_refused")
+                    raise LegacySourceRefusal("legacy_identity_canonical_refused")
                 if canonical != oid:
-                    raise LegacySourceRefusal("legacy_identity_refused")
+                    raise LegacySourceRefusal("legacy_identity_canonical_refused")
                 cur.execute("SELECT object_id, source_ref, payload FROM store_objects WHERE vault_binding_id = %s",
                             (self.vault_binding_id,))
                 # The source adapter owns locator normalization; the table

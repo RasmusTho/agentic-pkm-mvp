@@ -19,6 +19,9 @@ from app.rebuildability.product_total_loss import capture_source_frontmatter, ca
 LEGACY_RECONCILIATION_REASONS = frozenset({
     "legacy_producer_policy_refused", "legacy_source_refused", "legacy_admission_refused",
     "legacy_identity_refused", "legacy_race_refused", "legacy_write_failed",
+    "legacy_identity_persistence_refused", "legacy_identity_mismatch_refused",
+    "legacy_identity_ambiguous_refused", "legacy_identity_producer_refused",
+    "legacy_identity_canonical_refused",
     "embedding_generation_failed",
     "legacy_candidate_refused", "legacy_authority_refused", "legacy_trust_refused",
     "legacy_origin_refused", "legacy_payload_shape_refused", "legacy_system_path_refused",
@@ -83,7 +86,7 @@ def assert_unique_projection_source(
         locators = (row.get("source_ref"), replay.get("source_identity"))
         if any(source_key(value) == target
                for value in locators if isinstance(value, str)):
-            raise LegacySourceRefusal("legacy_identity_refused")
+            raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
         frontmatter = payload.get("frontmatter")
         frontmatter = frontmatter if isinstance(frontmatter, dict) else {}
         core = payload.get("core6")
@@ -92,7 +95,7 @@ def assert_unique_projection_source(
                   frontmatter.get("uuid"), frontmatter.get("id"), core.get("id"))
         for value in claims:
             if _source_uuid(value) in (vault_uuid, expected_id):
-                raise LegacySourceRefusal("legacy_identity_refused")
+                raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
 
 
 def assert_admission_layers(*layers: dict) -> None:
@@ -155,6 +158,67 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
     from app.write_guard import DEFAULT_WRITE_GUARD, SOURCE_BACKED_REBUILD_ACTION
 
     DEFAULT_WRITE_GUARD.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
+
+    def identity_evidence(path: Path, parsed: dict, body: str, *, require_binding: bool = True) -> tuple[Any, object]:
+        """Resolve without healing; retain the exact persisted companion snapshot.
+
+        A resolver's deterministic path/hash fallback is not persisted identity.
+        Read the companion through the same hardened snapshot adapter as sources,
+        including when the ordinary resolver found a legacy companion location.
+        """
+        from app.services.companion_note import companion_path
+
+        note = producer.resolve_vault_note_identity(path, vault_root=root, frontmatter=parsed, body=body)
+        if note.frontmatter_uuid or note.companion is None:
+            return note, None
+        companion = note.companion
+        try:
+            identity = str(UUID(companion.uuid))
+        except (TypeError, ValueError, AttributeError):
+            raise LegacySourceRefusal("legacy_identity_persistence_refused") from None
+        if identity != _source_uuid(note.note_uuid):
+            raise LegacySourceRefusal("legacy_identity_persistence_refused")
+        # A hash/title lookup is discovery, not a binding proof. The retained
+        # continuity observation must name this source in this active root;
+        # stale moved/reused or foreign observations cannot authorize deletion.
+        if require_binding:
+            companion_source = Path(companion.source_ref.strip().replace("\\", "/"))
+            if companion_source.is_absolute():
+                try:
+                    companion_source = companion_source.relative_to(root)
+                except ValueError:
+                    raise LegacySourceRefusal("legacy_identity_mismatch_refused") from None
+            if companion_source != path.relative_to(root):
+                raise LegacySourceRefusal("legacy_identity_mismatch_refused")
+        relative_companion = companion_path(companion.uuid, root)
+        if not (root / relative_companion).exists():
+            relative_companion = Path("_system/companions") / f"{companion.uuid}.md"
+        try:
+            retained = read_recovery_snapshot_relative(relative_companion.as_posix(), vault_root=root)
+            fm = capture_source_frontmatter(retained[0])
+            if fm is None or _source_uuid(fm.get("uuid")) != identity:
+                raise ValueError("invalid companion identity")
+            # Bind the resolver's parsed evidence to the hardened read, not just
+            # a coincident UUID in a companion changed between those reads.
+            from app.services.companion_note import _fm_to_companion
+            if _fm_to_companion(fm) != companion:
+                raise ValueError("changed companion")
+        except Exception:
+            raise LegacySourceRefusal("legacy_identity_persistence_refused") from None
+        matches = 0
+        directories = {companion_path(companion.uuid, root).parent, Path("_system/companions")}
+        for directory in directories:
+            for candidate in (root / directory).glob("*.md"):
+                text, _ = read_recovery_snapshot_relative(candidate.relative_to(root).as_posix(), vault_root=root)
+                candidate_fm = capture_source_frontmatter(text)
+                if (candidate_fm and candidate_fm.get("content_hash") == companion.content_hash
+                        and producer._normalize_title(str(candidate_fm.get("title") or ""))
+                        == producer._normalize_title(companion.title)):
+                    matches += 1
+        if matches != 1:
+            raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
+        return note, (relative_companion, retained)
+
     present = index.present_object_ids()
     candidates = [row for row in binding.store.list_objects(limit=None)
                   if str(row["object_id"]) not in present
@@ -194,14 +258,16 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
         if canonicalize_indexable_text(payload) != canonical_product_source_text(raw):
             raise LegacySourceRefusal("legacy_race_refused")
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            note = producer.resolve_vault_note_identity(root / relative, vault_root=root, frontmatter=parsed, body=body)
-        if note.frontmatter_invalid or not note.frontmatter_uuid:
-            raise LegacySourceRefusal("legacy_identity_refused")
-        vault_uuid = note.note_uuid
+            note, companion_snapshot = identity_evidence(root / relative, parsed, body)
+        if (note.frontmatter_invalid
+                or any(key in parsed and _source_uuid(parsed[key]) is None for key in ("uuid", "id"))
+                or not (note.frontmatter_uuid or companion_snapshot)):
+            raise LegacySourceRefusal("legacy_identity_persistence_refused")
+        vault_uuid = str(UUID(note.note_uuid))
         if any(parsed.get(key) and _source_uuid(parsed[key]) != vault_uuid for key in ("uuid", "id")):
-            raise LegacySourceRefusal("legacy_identity_refused")
+            raise LegacySourceRefusal("legacy_identity_mismatch_refused")
         if "vault_uuid" in payload and _source_uuid(payload["vault_uuid"]) != vault_uuid:
-            raise LegacySourceRefusal("legacy_identity_refused")
+            raise LegacySourceRefusal("legacy_identity_mismatch_refused")
         if "replay" in payload and payload["replay"] != producer.product_replay_for_vault_note(
             root / relative, vault_root=root, source_text=raw,
         ):
@@ -227,6 +293,10 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                 # A producer bound to another source root cannot borrow this
                 # active binding's relative replay/identity authority.
                 raise LegacySourceRefusal("legacy_producer_policy_refused")
+            if (selected or registry_policy.includes(root / relative) or policy.includes(root / relative)) and not note.frontmatter_uuid:
+                # Companion continuity proves only excluded retirement, never
+                # identity preservation by a replacement producer.
+                raise LegacySourceRefusal("legacy_identity_producer_refused")
             try:
                 filesystem_uuid = str(UUID(str(parsed.get("uuid") or "").strip()))
             except (ValueError, TypeError, AttributeError):
@@ -235,7 +305,7 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                 # The real FS adapter preserves only a literal uuid scalar;
                 # id-only/encoded forms would acquire another identity when
                 # it resumes. Recovery must refuse rather than heal a source.
-                raise LegacySourceRefusal("legacy_identity_refused")
+                raise LegacySourceRefusal("legacy_identity_producer_refused")
             if registry_policy.includes(root / relative):
                 from app.services.note_uuid import inbox_uuid_heal_applies, is_read_only_derived_artifact
                 try:
@@ -248,29 +318,44 @@ def _reconcile_legacy_sources(binding: Any, index: Any, client_factory: Callable
                     # Ordinary registry workers heal inbox UUIDs before using
                     # their parsed id fallback. That new identity must not be
                     # introduced on resume after this recovery transition.
-                    raise LegacySourceRefusal("legacy_identity_refused")
+                    raise LegacySourceRefusal("legacy_identity_producer_refused")
             claims = 0
             identity_sources = set(iter_vault_markdown_files(root)) | set(registry_policy.sources)
             if policy.root == root:
                 identity_sources.update(policy.sources)
             for path in identity_sources:
+                from app.services.companion_note import is_companion_path
+                if is_companion_path(path, root):
+                    # A continuity sidecar is evidence for a source, not a
+                    # second source claiming its own UUID.
+                    continue
                 text, _ = read_recovery_snapshot_relative(path.relative_to(root).as_posix(), vault_root=root)
                 fm = capture_source_frontmatter(text)
                 if fm is None:
-                    raise LegacySourceRefusal("legacy_identity_refused")
+                    raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
                 identities = {_source_uuid(fm.get(key)) for key in ("uuid", "id")}
-                if vault_uuid in identities:
+                other_parsed, other_body, error = parse_bounded_frontmatter(text)
+                if error is not None:
+                    raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
+                other_note, persisted = identity_evidence(path, other_parsed, other_body, require_binding=False)
+                if persisted:
+                    identities.add(_source_uuid(other_note.note_uuid))
+                if _source_uuid(vault_uuid) in identities:
                     claims += 1
             if claims != 1:
-                raise LegacySourceRefusal("legacy_identity_refused")
+                raise LegacySourceRefusal("legacy_identity_ambiguous_refused")
             return selected or registry_policy.includes(root / relative) or policy.includes(root / relative)
 
         selected = eligibility()
+        if not selected and vault_uuid != str(row["object_id"]):
+            raise LegacySourceRefusal("legacy_identity_mismatch_refused")
         alpha_selected = root / relative in producer.select_source_backed_rebuild_candidates(root)
 
         def revalidate() -> None:
             DEFAULT_WRITE_GUARD.assert_writes_allowed(SOURCE_BACKED_REBUILD_ACTION)
             if resolve_vault_root().resolve(strict=True) != root or read_recovery_snapshot_relative(relative.as_posix(), vault_root=root) != snapshot:
+                raise LegacySourceRefusal("legacy_race_refused")
+            if identity_evidence(root / relative, parsed, body) != (note, companion_snapshot):
                 raise LegacySourceRefusal("legacy_race_refused")
             admission()
             if eligibility() != selected:

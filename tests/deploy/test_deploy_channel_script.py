@@ -7028,6 +7028,15 @@ def test_native_legacy_admission_subreason_survives_terminal_reconciliation(tmp_
     assert removed == [reason] and not lock.exists()
 
 
+@pytest.mark.parametrize('reason', [
+    'legacy_identity_persistence_refused', 'legacy_identity_mismatch_refused',
+    'legacy_identity_ambiguous_refused', 'legacy_identity_producer_refused',
+    'legacy_identity_canonical_refused',
+])
+def test_native_legacy_identity_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, reason):
+    test_native_legacy_admission_subreason_survives_terminal_reconciliation(tmp_path, monkeypatch, reason)
+
+
 def test_native_source_same_id_reply_keeps_locked_snapshot_after_admission_retirement(tmp_path, monkeypatch):
     from dataclasses import asdict
     from app.ops import postgres_deploy_linux as linux

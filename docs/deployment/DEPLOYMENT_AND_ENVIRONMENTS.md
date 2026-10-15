@@ -983,6 +983,23 @@ including nested-vault files in the legacy filesystem inventory. Applicable file
 use vault-sync's canonical payload path; excluded sources are not laundered through alpha.
 Native registry claims also prove identity preservation against the ordinary worker's inbox-heal
 selector; an id-only inbox source refuses without healing or borrowing another producer's recipe.
+For sources excluded from every producer, exact retirement also accepts an already persisted
+valid companion UUID matching both the legacy row and canonical Product mapping. Hardened source
+and companion snapshots, unique source claims (excluding metadata sidecars), unambiguous companion
+evidence and all existing profile/history/relation/CAS fences remain mandatory.
+The persisted companion observation must bind the exact current source in the active root;
+hash/title discovery alone cannot authorize a moved/reused or foreign source observation.
+Replacement still requires explicit producer-preserved frontmatter identity. Invalid declarations and unpersisted
+path/fingerprint-only fallbacks never authorize retirement or replacement. No source healing,
+identity synthesis/normalization, metadata write or acceptance authority is introduced.
+Identity refusals retain five finite remediation classes: `legacy_identity_persistence_refused`,
+`legacy_identity_mismatch_refused`, `legacy_identity_ambiguous_refused`,
+`legacy_identity_producer_refused` and `legacy_identity_canonical_refused` (worker exits 109–113).
+They distinguish absent/invalid persistence, stored/source mismatch, duplicate/ambiguous claims,
+producer preservation/heal mismatch and canonical Product disagreement respectively. The private
+CLI, bootstrap, deploy diagnostic and operation journal preserve only those fixed classes through
+cleanup and same-operation terminal reconciliation; unexpected/private failures remain generic
+and fail closed. The legacy generic identity class remains accepted for older worker evidence.
 Malformed, missing enabled-root, contradictory or drifting configuration refuses without mutation.
 History dependencies, candidate/staging or untrusted material, changed sources,
 redirected paths, duplicate identities and ambiguous policy refuse. Source/policy checks run again

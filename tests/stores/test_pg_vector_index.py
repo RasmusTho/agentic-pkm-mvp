@@ -76,6 +76,63 @@ def _count(object_id) -> int:
             return int(cur.fetchone()[0])
 
 
+@pytest.mark.parametrize("mode,reason", [
+    ("retire", None), ("canonical", "legacy_identity_canonical_refused"),
+    ("reverse", "legacy_identity_canonical_refused"),
+    ("duplicate", "legacy_identity_ambiguous_refused"),
+    ("row-race", "legacy_race_refused"), ("companion-race", "legacy_race_refused"),
+    ("history", "legacy_retained_history_refused"),
+])
+def test_legacy_retirement_identity_refusals_are_atomic(_pg_index, monkeypatch, tmp_path, mode, reason):
+    from types import SimpleNamespace
+    from app.db.db import ensure_schema
+    from tests.cli.test_index_rebuild_cli import _legacy_source_fixture
+    from tests.rebuildability.test_legacy_source_reconciliation import _persist_companion_identity
+
+    recovery, state, root, source, raw, original, _, _, _ = _legacy_source_fixture(monkeypatch, tmp_path)
+    oid, other = original["object_id"], uuid4()
+    companion = _persist_companion_identity(root, source, oid)
+    store = pg_store.PgObjectStore()
+    store.put(oid, kind="note", source_ref=str(source), payload=original["payload"])
+    store.put(other, kind="note", source_ref="healthy.md", payload={"content": "healthy", "frontmatter": {}})
+    with psycopg.connect(_dsn()) as conn:
+        ensure_schema(conn)
+        conn.execute("INSERT INTO objects (id, uuid, vault_binding_id, kind) VALUES (%s, %s, %s, 'note')",
+            (other if mode == "canonical" else oid, uuid4() if mode == "reverse" else oid, store.vault_binding_id))
+        if mode == "history":
+            conn.execute("INSERT INTO decisions (object_id, vault_binding_id, key, value) VALUES (%s, %s, 'identity-fixture', '{}')",
+                (oid, store.vault_binding_id))
+    if mode == "duplicate":
+        store.put(other, kind="note", source_ref=str(source), payload={"content": "healthy", "frontmatter": {}})
+    before, healthy = store.get(oid), store.get(other)
+    if mode in {"row-race", "companion-race"}:
+        reconcile = store.reconcile_legacy_source
+        def racing(*args, **kwargs):
+            if mode == "row-race":
+                store.put(oid, kind="note", source_ref=str(source), payload={"content": "changed"})
+            else:
+                companion.write_text(companion.read_text() + "changed")
+            reconcile(*args, **kwargs)
+        monkeypatch.setattr(store, "reconcile_legacy_source", racing)
+    binding = SimpleNamespace(backend="pg", store=store)
+    def forbidden_embedding(**kwargs):
+        pytest.fail("retirement must not construct an embedding client")
+    if reason:
+        with pytest.raises(recovery.LegacySourceRefusal, match=f"^{reason}$"):
+            recovery.reconcile_legacy_sources(binding, _pg_index, forbidden_embedding)
+        assert store.get(oid) == before if mode != "row-race" else store.get(oid)["payload"] == {"content": "changed"}
+    else:
+        assert recovery.reconcile_legacy_sources(binding, _pg_index, forbidden_embedding) == 1
+        assert store.get(oid) is None
+    assert store.get(other) == healthy and _count(oid) == 0 and _count(other) == 0
+    assert source.read_bytes() == raw.replace(f"uuid: {oid}\n".encode(), b"")
+    with psycopg.connect(_dsn()) as conn:
+        assert conn.execute("SELECT count(*) FROM objects WHERE vault_binding_id = %s AND id = %s",
+            (store.vault_binding_id, other if mode == "canonical" else oid)).fetchone()[0] == 1
+        if mode == "history":
+            assert conn.execute("SELECT object_id FROM decisions WHERE object_id = %s", (oid,)).fetchone()[0] == oid
+
+
 @pytest.mark.parametrize("branch,reason", [
     ("shape", "legacy_dependency_shape_refused"),
     ("history", "legacy_retained_history_refused"),
@@ -287,7 +344,8 @@ def test_legacy_producer_policy_reconciliation_is_atomic_and_never_overwrites(_p
             recovery.reconcile_legacy_sources(binding, index, factory)
         expected_reason = {"policy-race": "legacy_producer_policy_refused", "inventory-race": "legacy_producer_policy_refused",
                            "write-failure": "legacy_write_failed"}
-        assert caught.value.reason == expected_reason.get(mode, "legacy_identity_refused")
+        assert caught.value.reason == expected_reason.get(mode,
+            "legacy_identity_ambiguous_refused" if mode == "nested-duplicate" else "legacy_identity_producer_refused")
         assert store.get(oid) == before and _count(oid) == 0
     else:
         assert recovery.reconcile_legacy_sources(binding, index, factory) == (0 if mode == "existing" else 1)

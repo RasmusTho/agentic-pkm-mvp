@@ -503,6 +503,17 @@ Overlapping enabled producers must bind the same active root; conflicting roots,
 or configuration drift refuse. Enabled legacy filesystem sources prepare through the ordinary vault-sync
 payload builder with complete current admission evidence, never through alpha's excluded inventory.
 When every enabled producer excludes the source, exact CAS retirement remains available.
+Identity evidence is effect-sensitive too. Replacement/reprojection still requires explicit
+frontmatter identity in the form each actual producer preserves; a companion never authorizes
+replacement, embedding or producer UUID healing. For excluded-only retirement, either valid
+frontmatter UUID/ID or an existing valid persisted companion UUID can prove identity. Companion
+identity must exactly match the stale row and canonical Product mapping, be uniquely claimed
+across the applicable source inventories, and survive hardened snapshot rechecks. Companion
+observations must still bind this exact source in the active root: matching body hash/title is
+discovery only, not identity authority for a moved/reused or foreign observation. Companion
+metadata itself is not a second source claim; ambiguous matching companions refuse. Invalid
+declarations and unpersisted path/fingerprint-only identities always refuse. No source metadata
+is created, healed, normalized or rewritten, and every existing atomic/history/race fence remains.
 Origin evidence is effect-sensitive: an explicit non-vault, unknown or malformed stored origin
 still refuses replacement/reprojection with `legacy_origin_refused` before payload preparation or
 embedding. Only the already-governed exact retirement path may disregard that marker after every
@@ -528,6 +539,11 @@ Bounded admission refusals additionally distinguish these remediation classes:
 | `legacy_dependency_shape_refused` | Unsupported retained dependency shape |
 | `legacy_retained_history_refused` | Retained foreign-key history prevents retirement |
 | `legacy_relation_retention_refused` | Retained relation or membership prevents retirement |
+| `legacy_identity_persistence_refused` | Missing or invalid persisted source identity |
+| `legacy_identity_mismatch_refused` | Stored/source identity disagreement |
+| `legacy_identity_ambiguous_refused` | Duplicate or ambiguous source/companion inventory claims |
+| `legacy_identity_producer_refused` | Producer would heal or fail to preserve the existing identity |
+| `legacy_identity_canonical_refused` | Canonical Product identity mapping disagreement or unavailable proof |
 
 These are finite content-free diagnostic classes, not source values or exception details.
 Multiple refusing markers retain the first observed class; classification does not inventory every

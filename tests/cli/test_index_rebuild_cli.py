@@ -122,7 +122,7 @@ def test_legacy_source_uuid_forms_match_producer_and_refuse_duplicates(monkeypat
     before = __import__("copy").deepcopy(state.rows)
     duplicate = root / "duplicate.md"
     duplicate.write_text(text)
-    with pytest.raises(ValueError, match="legacy_identity_refused"):
+    with pytest.raises(ValueError, match="legacy_identity_ambiguous_refused"):
         recovery.reconcile_legacy_sources(binding, index, factory)
     assert state.rows == before and not state.calls and not state.vectors
     duplicate.unlink()
@@ -255,7 +255,7 @@ def test_legacy_source_reconciliation_refuses_projection_locator_aliases(monkeyp
     state.rows.append(other)
     state.vectors[str(other["object_id"])] = "existing vector preserved"
     before = deepcopy(state.rows)
-    with pytest.raises(ValueError, match="legacy_identity_refused"):
+    with pytest.raises(ValueError, match="legacy_identity_ambiguous_refused"):
         recovery.reconcile_legacy_sources(binding, index, factory)
     assert state.rows == before and state.calls == []
     assert state.vectors == {str(other["object_id"]): "existing vector preserved"}
