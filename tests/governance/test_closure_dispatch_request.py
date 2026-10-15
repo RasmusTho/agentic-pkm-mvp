@@ -64,3 +64,17 @@ def test_foreign_or_mismatched_classification_is_rejected() -> None:
         pr=_pr(),
         classification=classification,
     ) is None
+
+
+def test_missing_classification_or_foreign_pr_identity_is_rejected() -> None:
+    assert build_request(
+        event={"repository": {"full_name": REPOSITORY}},
+        pr=_pr(),
+        classification={},
+    ) is None
+    foreign_pr = {**_pr(), "repository": {"full_name": "other/repository"}}
+    assert build_request(
+        event={"repository": {"full_name": REPOSITORY}},
+        pr=foreign_pr,
+        classification=_classification(),
+    ) is None

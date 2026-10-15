@@ -31,24 +31,67 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          RECOVERY_CURSOR: ${{ inputs.cursor }}
           WINDOW_END_INPUT: ${{ inputs.window_end }}
         run: |
           mkdir -p post-merge-closure-recovery/pages
           MAX_PAGES=3
           MAX_ITEMS_PER_PAGE=100
-          for page in $(seq 1 "${MAX_PAGES}"); do
-            gh api "repos/${REPOSITORY}/pulls?state=closed&sort=updated&direction=desc&per_page=${MAX_ITEMS_PER_PAGE}&page=${page}" \
-              > "post-merge-closure-recovery/pages/${page}.json"
+          MAX_BACKOFF_ATTEMPTS=3
+          START_PAGE="$(python3 - <<'PY'
+          import base64
+          import json
+          import os
+
+          cursor = os.environ.get("RECOVERY_CURSOR", "")
+          try:
+              payload = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+              page = payload.get("page", 1)
+              print(page if isinstance(page, int) and page > 0 else 1)
+          except (ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+              print(1)
+          PY
+          )"
+          REST_ATTEMPT=0
+          fetch_page() {
+            local output="$1"
+            local query="$2"
+            local attempt=0
+            while [ "${attempt}" -lt "${MAX_BACKOFF_ATTEMPTS}" ]; do
+              if gh api "${query}" > "${output}"; then
+                REST_ATTEMPT="${attempt}"
+                return 0
+              fi
+              attempt=$((attempt + 1))
+              if [ "${attempt}" -lt "${MAX_BACKOFF_ATTEMPTS}" ]; then
+                sleep_seconds=$((2 ** (attempt - 1)))
+                sleep "${sleep_seconds}"
+              fi
+            done
+            REST_ATTEMPT="${MAX_BACKOFF_ATTEMPTS}"
+            return 1
+          }
+          for relative_page in $(seq 0 $((MAX_PAGES - 1))); do
+            page=$((START_PAGE + relative_page))
+            if ! fetch_page \
+              "post-merge-closure-recovery/pages/${page}.json" \
+              "repos/${REPOSITORY}/pulls?state=closed&sort=updated&direction=desc&per_page=${MAX_ITEMS_PER_PAGE}&page=${page}"; then
+              break
+            fi
             count="$(jq 'length' "post-merge-closure-recovery/pages/${page}.json")"
             if [ "${count}" -lt "${MAX_ITEMS_PER_PAGE}" ]; then
               break
             fi
           done
+          export START_PAGE REST_ATTEMPT
           python3 - <<'PY'
           import json
           import os
+          from dataclasses import asdict
           from datetime import datetime, timezone
           from pathlib import Path
+
+          from scripts.post_merge_docs_classifier import classify
 
           pages = []
           for path in sorted(Path("post-merge-closure-recovery/pages").glob("*.json")):
@@ -58,20 +101,23 @@ jobs:
           for page in pages:
               for pr in page:
                   if pr.get("merged_at") and pr.get("merge_commit_sha"):
-                      classifications[str(pr.get("number"))] = {
-                          "repository": os.environ["REPOSITORY"],
-                          "pr_number": pr.get("number"),
-                          "merge_sha": pr.get("merge_commit_sha"),
-                          "artifact_name": f"post-merge-docs-classifier-{pr.get('number')}",
-                          "impact_classification": "pending-live-classification",
-                      }
+                      result = classify(
+                          pr=pr,
+                          files_payload=[],
+                          issue={},
+                          comments_payload=[],
+                          repository=os.environ["REPOSITORY"],
+                      )
+                      classifications[str(pr.get("number"))] = asdict(result)
           window_end = os.environ.get("WINDOW_END_INPUT") or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
           payload = {
               "repository": os.environ["REPOSITORY"],
+              "pages_start": int(os.environ.get("START_PAGE", "1")),
               "window_end": window_end,
               "window_start": None,
               "pages": pages,
               "classifications": classifications,
+              "rest_attempt": int(os.environ.get("REST_ATTEMPT", "0")),
           }
           Path("post-merge-closure-recovery/input.json").write_text(
               json.dumps(payload, sort_keys=True) + "\n"

@@ -33,6 +33,7 @@ _GOVERNANCE_SCRIPT_FILES = {
 
 @dataclass(frozen=True)
 class PostMergeDocsClassification:
+    repository: str
     merged_pr_number: int | None
     merged_pr_title: str
     merged_pr_sha: str
@@ -70,6 +71,15 @@ def _nested_str(data: dict[str, object], *keys: str) -> str:
             return ""
         current = current.get(key)
     return current if isinstance(current, str) else ""
+
+
+def _merge_sha(pr: dict[str, object]) -> str:
+    """Prefer GitHub's exact REST merge SHA over the head SHA fallback."""
+
+    direct = pr.get("merge_commit_sha")
+    if isinstance(direct, str) and direct:
+        return direct
+    return _nested_str(pr, "merge_commit", "sha") or _nested_str(pr, "head", "sha")
 
 
 def _linked_issues(
@@ -324,9 +334,10 @@ def classify(
     raw_number = pr.get("number")
     raw_title = pr.get("title")
     return PostMergeDocsClassification(
+        repository=repository or _nested_str(pr, "repository", "full_name"),
         merged_pr_number=raw_number if isinstance(raw_number, int) else None,
         merged_pr_title=raw_title if isinstance(raw_title, str) else "",
-        merged_pr_sha=_nested_str(pr, "merge_commit", "sha") or _nested_str(pr, "head", "sha"),
+        merged_pr_sha=_merge_sha(pr),
         linked_issues=linked,
         changed_files=files,
         owner_doc_spec_declaration=declaration,

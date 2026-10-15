@@ -33,6 +33,15 @@ def _dict(value: object) -> dict[str, object]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+def _nested_str(value: object, *keys: str) -> str:
+    current = value
+    for key in keys:
+        if not isinstance(current, Mapping):
+            return ""
+        current = current.get(key)
+    return current if isinstance(current, str) else ""
+
+
 def _items(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list):
         return []
@@ -49,8 +58,8 @@ def _merge_sha(pr: Mapping[str, object]) -> str:
     value = pr.get("merge_commit_sha")
     if isinstance(value, str):
         return value
-    merge = pr.get("merge_commit")
-    return _dict(merge).get("sha", "") if isinstance(_dict(merge).get("sha"), str) else ""
+    merge_sha = _dict(pr.get("merge_commit")).get("sha")
+    return merge_sha if isinstance(merge_sha, str) else ""
 
 
 def _receipt_matches(receipt: object, *, repository: str, pr_number: int, merge_sha: str) -> bool:
@@ -81,9 +90,10 @@ def classify_pending(
     if isinstance(repository_value, Mapping):
         repository = str(repository_value.get("full_name") or repository_value.get("name_with_owner") or "")
     if not repository:
-        repository = str(_dict(pr.get("base")).get("repository") or "")
+        base = _dict(pr.get("base"))
+        repository = _nested_str(base, "repo", "full_name") or _nested_str(base, "repository", "full_name")
     if not repository:
-        repository = str(_dict(pr.get("base")).get("repo") or "")
+        repository = _nested_str(pr, "base", "repo", "name_with_owner")
     number = pr.get("number")
     merge_sha = _merge_sha(pr)
     evidence = _dict(authoritative_evidence)
@@ -96,6 +106,11 @@ def classify_pending(
         return {"status": "unknown", "reason": "merged PR identity is missing or malformed"}
     if not isinstance(repository, str) or not repository:
         return {"status": "unknown", "reason": "repository identity is missing"}
+    issues = list(issue_evidence)
+    if any(item.get("repository") not in (None, repository) for item in issues):
+        return {"status": "merged_closure_pending", "reason": "foreign issue evidence"}
+    if any(item.get("conflict") is True for item in issues):
+        return {"status": "merged_closure_pending", "reason": "conflicting issue evidence"}
     if evidence.get("conflict") is True or pr.get("evidence_conflict") is True:
         return {"status": "merged_closure_pending", "reason": "conflicting authority evidence"}
     if evidence.get("unavailable") is True or pr.get("evidence_unavailable") is True:
@@ -107,9 +122,6 @@ def classify_pending(
         return {"status": "complete", "reason": "matching terminal closure receipt"}
     if receipts not in ([], None) and not isinstance(receipts, list):
         return {"status": "merged_closure_pending", "reason": "receipt evidence unavailable"}
-    issues = list(issue_evidence)
-    if any(item.get("repository") not in (None, repository) for item in issues):
-        return {"status": "merged_closure_pending", "reason": "foreign issue evidence"}
     # Direct-repair and Issue deliveries need a PR-specific receipt. Closed
     # Issues alone are intentionally insufficient proof of terminal delivery.
     if any(item.get("state") == "closed" and item.get("terminal_receipt") for item in issues):
@@ -117,28 +129,32 @@ def classify_pending(
     return {"status": "merged_closure_pending", "reason": "terminal closure evidence is incomplete"}
 
 
-def encode_cursor(*, page: int, window_end: str) -> str:
-    payload = {"version": CURSOR_VERSION, "page": page, "window_end": window_end}
+def encode_cursor(*, page: int, window_end: str, offset: int = 0) -> str:
+    if page < 1 or offset < 0:
+        raise ValueError("cursor page and offset must be non-negative, with page >= 1")
+    payload = {"version": CURSOR_VERSION, "page": page, "offset": offset, "window_end": window_end}
     return base64.urlsafe_b64encode(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).decode().rstrip("=")
 
 
-def decode_cursor(cursor: str | None, *, window_end: str) -> tuple[int, str | None]:
+def decode_cursor(cursor: str | None, *, window_end: str) -> tuple[int, int, str | None]:
     if cursor is None:
-        return 1, None
+        return 1, 0, None
     try:
         padded = cursor + "=" * (-len(cursor) % 4)
         data = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     except (ValueError, UnicodeError, binascii.Error, json.JSONDecodeError):
-        return 0, "invalid cursor"
+        return 0, 0, "invalid cursor"
     if (
         not isinstance(data, dict)
         or data.get("version") != CURSOR_VERSION
         or not isinstance(data.get("page"), int)
         or data["page"] < 1
+        or not isinstance(data.get("offset", 0), int)
+        or data.get("offset", 0) < 0
         or data.get("window_end") != window_end
     ):
-        return 0, "cursor does not match the declared recovery window"
-    return data["page"], None
+        return 0, 0, "cursor does not match the declared recovery window"
+    return data["page"], data.get("offset", 0), None
 
 
 def bounded_rest_backoff(*, attempt: int, retry_after_seconds: float | None = None) -> dict[str, object]:
@@ -175,6 +191,7 @@ def recover(
     cursor: str | None = None,
     window_end: str,
     window_start: str | None = None,
+    pages_start: int = 1,
     max_pages: int = MAX_PAGES,
     max_requests: int = MAX_REQUESTS,
     rest_attempt: int = 0,
@@ -182,7 +199,13 @@ def recover(
 ) -> dict[str, object]:
     """Recover orphaned merges from already-collected bounded pages."""
 
-    if max_pages < 1 or max_pages > MAX_PAGES or max_requests < 1 or max_requests > MAX_REQUESTS:
+    if (
+        max_pages < 1
+        or max_pages > MAX_PAGES
+        or max_requests < 1
+        or max_requests > MAX_REQUESTS
+        or pages_start < 1
+    ):
         raise ValueError("recovery bounds exceed the producer contract")
     end = _parse_timestamp(window_end)
     start = _parse_timestamp(window_start) if window_start else (end - timedelta(days=MAX_LOOKBACK_DAYS) if end else None)
@@ -191,32 +214,48 @@ def recover(
     backoff = bounded_rest_backoff(attempt=rest_attempt, retry_after_seconds=retry_after_seconds)
     if rest_attempt < 0 or rest_attempt >= MAX_BACKOFF_ATTEMPTS:
         return {"requests": [], "pending": [], "overflow": True, "continuation_cursor": None, "backoff": backoff, "error": "REST backoff cap reached"}
-    page_start, cursor_error = decode_cursor(cursor, window_end=window_end)
+    page_start, item_start, cursor_error = decode_cursor(cursor, window_end=window_end)
     if cursor_error:
         return {"requests": [], "pending": [], "overflow": True, "continuation_cursor": None, "error": cursor_error}
+    if page_start < pages_start:
+        return {"requests": [], "pending": [], "overflow": True, "continuation_cursor": None, "error": "cursor precedes collected pages"}
     requests: list[dict[str, object]] = []
     pending: list[dict[str, object]] = []
+    complete: list[dict[str, object]] = []
     scanned_pages = 0
     scanned_requests = 0
     labels = classifications or {}
-    for offset, page in enumerate(pages[page_start - 1 : page_start - 1 + max_pages], start=page_start):
+    local_start = page_start - pages_start
+    for offset, page in enumerate(pages[local_start : local_start + max_pages], start=page_start):
         scanned_pages += 1
         if len(page) > MAX_ITEMS_PER_PAGE:
-            return {"requests": requests, "pending": pending, "overflow": True, "continuation_cursor": encode_cursor(page=offset, window_end=window_end), "error": "page exceeds item cap"}
-        for pr in page:
+            return {"requests": requests, "pending": pending, "complete": complete, "overflow": True, "continuation_cursor": encode_cursor(page=offset, offset=item_start, window_end=window_end), "error": "page exceeds item cap"}
+        page_item_start = item_start if offset == page_start else 0
+        for item_index, pr in enumerate(page[page_item_start:], start=page_item_start):
+            if scanned_requests >= max_requests:
+                return {"requests": requests, "pending": pending, "complete": complete, "overflow": True, "continuation_cursor": encode_cursor(page=offset, offset=item_index, window_end=window_end), "error": "request cap reached"}
             scanned_requests += 1
-            if scanned_requests > max_requests:
-                return {"requests": requests, "pending": pending, "overflow": True, "continuation_cursor": encode_cursor(page=offset, window_end=window_end), "error": "request cap reached"}
             if not _merged(pr):
                 continue
             merged_at = _parse_timestamp(pr.get("merged_at"))
             if merged_at is None or merged_at < start or merged_at > end:
                 continue
             number = pr.get("number")
-            classification = labels.get(str(number), {}) if isinstance(number, int) else {}
+            classification = labels.get(str(number)) if isinstance(number, int) else None
+            if not isinstance(classification, Mapping):
+                pending.append({"pr_number": number, "reason": "missing classification evidence"})
+                continue
+            pending_state = classify_pending(
+                pr=pr,
+                issue_evidence=_items(classification.get("issue_evidence")),
+                authoritative_evidence=_dict(classification.get("authoritative_evidence")),
+            )
+            if pending_state["status"] == "complete":
+                complete.append({"pr_number": number, "reason": pending_state["reason"]})
+                continue
             request = build_request(
                 event={"repository": {"full_name": repository}, "generated_at": pr.get("merged_at", window_end)},
-                pr={**dict(pr), "repository": {"full_name": repository}},
+                pr=pr,
                 classification=classification,
                 source="bounded_recovery",
             )
@@ -224,10 +263,11 @@ def recover(
                 requests.append(request)
             else:
                 pending.append({"pr_number": number, "reason": "missing or mismatched classification/merge evidence"})
-    more = page_start - 1 + scanned_pages < len(pages)
+    more = page_start - pages_start + scanned_pages < len(pages)
     return {
         "requests": requests,
         "pending": pending,
+        "complete": complete,
         "overflow": more,
         "continuation_cursor": encode_cursor(page=page_start + scanned_pages, window_end=window_end) if more else None,
         "scanned_pages": scanned_pages,
@@ -248,7 +288,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not isinstance(payload, dict):
         raise ValueError("recovery input must be an object")
     now = datetime.now(timezone.utc).replace(microsecond=0)
-    window_end = payload.get("window_end") if isinstance(payload.get("window_end"), str) else now.isoformat().replace("+00:00", "Z")
+    raw_window_end = payload.get("window_end")
+    window_end: str = raw_window_end if isinstance(raw_window_end, str) else now.isoformat().replace("+00:00", "Z")
     window_start = payload.get("window_start") if isinstance(payload.get("window_start"), str) else None
     pages = payload.get("pages", [])
     result = recover(
@@ -258,6 +299,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         cursor=args.cursor or (payload.get("cursor") if isinstance(payload.get("cursor"), str) else None),
         window_end=window_end,
         window_start=window_start,
+        pages_start=int(payload.get("pages_start", 1)) if isinstance(payload.get("pages_start", 1), int) else 1,
         rest_attempt=int(payload.get("rest_attempt", 0)) if isinstance(payload.get("rest_attempt", 0), int) else 0,
         retry_after_seconds=float(payload["retry_after_seconds"]) if isinstance(payload.get("retry_after_seconds"), (int, float)) else None,
     )

@@ -87,6 +87,22 @@ def test_classifier_emits_markdown_and_json(tmp_path: Path) -> None:
     assert "# Post-Merge Docs/Spec Classifier" in markdown
 
 
+def test_classifier_prefers_exact_rest_merge_sha() -> None:
+    pr = _pr(_body("- [x] No owner-doc change implied."))
+    pr["merge_commit_sha"] = "a" * 40
+    pr["merge_commit"] = {"sha": "b" * 40}
+    pr["head"] = {"sha": "c" * 40}
+    result = classify(
+        pr=pr,
+        files_payload=[],
+        issue={"number": 3217},
+        comments_payload=[],
+        repository="RasmusTho/agentic-pkm-mvp",
+    )
+    assert result.repository == "RasmusTho/agentic-pkm-mvp"
+    assert result.merged_pr_sha == "a" * 40
+
+
 def _neutralized_multi_issue_evidence() -> tuple[dict[str, object], list[dict[str, object]]]:
     head = "a" * 40
     body = (

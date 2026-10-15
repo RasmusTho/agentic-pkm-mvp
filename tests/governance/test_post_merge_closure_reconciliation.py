@@ -71,3 +71,47 @@ def test_cursor_overflow_and_backoff_preserve_scan_bounds() -> None:
     )
     assert capped["requests"] == []
     assert capped["backoff"]["retry"] is False
+
+
+def test_request_cap_cursor_resumes_within_a_page() -> None:
+    prs = [_pr(number) for number in range(6113, 6153)]
+    classifications = {str(pr["number"]): _classification(int(pr["number"])) for pr in prs}
+    first = recover(
+        repository=REPOSITORY,
+        pages=[prs],
+        classifications=classifications,
+        window_end="2026-10-15T08:00:00Z",
+        max_requests=30,
+    )
+    assert first["overflow"] is True
+    assert len(first["requests"]) == 30
+    second = recover(
+        repository=REPOSITORY,
+        pages=[prs],
+        classifications=classifications,
+        cursor=first["continuation_cursor"],
+        window_end="2026-10-15T08:00:00Z",
+        max_requests=30,
+    )
+    assert second["overflow"] is False
+    assert len(second["requests"]) == 10
+
+
+def test_recovery_skips_matching_terminal_receipt() -> None:
+    classification = _classification()
+    classification["impact_classification"] = "no_change_likely"
+    classification["authoritative_evidence"] = {"closure_receipt": {
+        "contract": "closure_delivery_receipt.v1",
+        "repository": REPOSITORY,
+        "pr_number": 6113,
+        "merge_sha": MERGE_SHA,
+        "status": "complete",
+    }}
+    result = recover(
+        repository=REPOSITORY,
+        pages=[[_pr()]],
+        classifications={"6113": classification},
+        window_end="2026-10-15T08:00:00Z",
+    )
+    assert result["requests"] == []
+    assert result["complete"] == [{"pr_number": 6113, "reason": "matching terminal closure receipt"}]

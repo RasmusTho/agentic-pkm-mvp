@@ -48,6 +48,18 @@ def _merge_sha(pr: Mapping[str, object]) -> str:
     )
 
 
+def _pr_repository(pr: Mapping[str, object]) -> str:
+    for candidate in (
+        _nested_str(pr, "repository", "full_name"),
+        _nested_str(pr, "repository", "name_with_owner"),
+        _nested_str(pr, "base", "repo", "full_name"),
+        _nested_str(pr, "base", "repository", "full_name"),
+    ):
+        if candidate:
+            return candidate
+    return ""
+
+
 def idempotency_key(*, repository: str, pr_number: int, merge_sha: str) -> str:
     """Return the stable identity shared by event and recovery producers."""
 
@@ -69,17 +81,18 @@ def _classification_link(
     pr_number: int,
     merge_sha: str,
 ) -> dict[str, object] | None:
-    if not isinstance(classification, Mapping):
+    if not isinstance(classification, Mapping) or not classification:
         return None
     link = _as_dict(classification)
     linked_repository = link.get("repository")
     linked_pr = link.get("merged_pr_number", link.get("pr_number"))
     linked_sha = link.get("merged_pr_sha", link.get("merge_sha"))
-    if linked_repository is not None and linked_repository != repository:
+    impact = link.get("impact_classification", link.get("classification"))
+    if linked_repository != repository:
         return None
-    if linked_pr is not None and linked_pr != pr_number:
+    if linked_pr != pr_number:
         return None
-    if linked_sha is not None and linked_sha != merge_sha:
+    if linked_sha != merge_sha:
         return None
     # Keep only a bounded, content-addressable classification reference.  The
     # full classifier artifact remains available to a future consumer.
@@ -91,8 +104,11 @@ def _classification_link(
         not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
     ):
         return None
-    impact = link.get("impact_classification", link.get("classification"))
-    if impact is not None and not isinstance(impact, str):
+    if not (
+        isinstance(impact, str) and bool(impact)
+        or isinstance(artifact, str) and bool(artifact)
+        or isinstance(digest, str) and bool(digest)
+    ):
         return None
     result: dict[str, object] = {
         "repository": repository,
@@ -126,10 +142,11 @@ def build_request(
     pr_data = _as_dict(pr)
     if not pr_data:
         pr_data = _as_dict(event_data.get("pull_request"))
-    repository = (
-        _nested_str(event_data, "repository", "full_name")
-        or _nested_str(pr_data, "repository", "full_name")
-    )
+    event_repository = _nested_str(event_data, "repository", "full_name")
+    pr_repository = _pr_repository(pr_data)
+    if event_repository and pr_repository and event_repository != pr_repository:
+        return None
+    repository = event_repository or pr_repository
     number = pr_data.get("number")
     merged = pr_data.get("merged")
     merge_sha = _merge_sha(pr_data)
