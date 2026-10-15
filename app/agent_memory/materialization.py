@@ -31,8 +31,9 @@ from app.governance.governed_write import (
     GovernedWriteGrant,
     PolicyDecision,
 )
-from app.knowledge.contracts import NoteLocator, WriteReceipt
+from app.knowledge.contracts import WriteReceipt
 from app.knowledge.errors import KnowledgeWriteConflict
+from app.knowledge.locators import make_note_locator
 from app.knowledge.vault_identity import resolve_obsidian_vault_name
 from app.knowledge.write_ops import read_create_once_winner_relative, write_note_relative
 from app.knowledge.multiwriter import NoteClass
@@ -1333,10 +1334,9 @@ def _materialization_governed_ids(
         f"{receipt_id}\x00{persisted.decided_by}\x00"
         f"{_iso(persisted.decided_at)}\x00{artifact_path}"
     ).encode("utf-8")
-    return (
-        f"policy_decision_{hashlib.sha256(b'policy\x00' + identity).hexdigest()}",
-        f"decision_token_{hashlib.sha256(b'token\x00' + identity).hexdigest()}",
-    )
+    decision_digest = hashlib.sha256(b"policy\x00" + identity).hexdigest()
+    token_digest = hashlib.sha256(b"token\x00" + identity).hexdigest()
+    return f"policy_decision_{decision_digest}", f"decision_token_{token_digest}"
 
 
 def _materialization_grant(
@@ -1502,7 +1502,9 @@ def _parse_write_receipt(
         )
     raw = dict(value)
     try:
-        raw["locator"] = NoteLocator(**raw["locator"])
+        raw["locator"] = make_note_locator(
+            raw["locator"]["path"], vault=raw["locator"]["vault"]
+        )
         return WriteReceipt(**raw)
     except (TypeError, ValueError) as exc:
         raise MemoryMaterializationError(
