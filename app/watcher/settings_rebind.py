@@ -594,8 +594,8 @@ class DormantSettingsRebindReconciler:
             raise RegistryError("settings rebind watcher receipt does not match durable authority")
         return receipt
 
-    @staticmethod
     def _rearm_configured_watcher(
+        self,
         snapshot: RegistrySnapshot,
         record: SettingsRebindRecord,
         cfg: RegistryConfig,
@@ -647,6 +647,12 @@ class DormantSettingsRebindReconciler:
             # root cannot be scanned: stay refused and idle rather than re-arm a loop
             # whose next tick would raise before candidate-policy validation.
             return "refused"
+        try:
+            # Identity proves which root, not that watching it is allowed: run the
+            # full candidate policy before any scan rather than in finish_cycle.
+            validate_settings_rebind_candidate_root(Path(candidate.path))
+        except RegistryError:
+            return "refused"
         cfg.enable = True
         cfg.vault_path = configured_root
         return "rearmed"
@@ -692,6 +698,20 @@ class DormantSettingsRebindReconciler:
         if completed is None or completed.candidate_binding_id != prior:
             return
         cfg.vault_path = validate_settings_rebind_candidate_root(Path(registration.path))
+
+    def cleared_before(self, record: SettingsRebindRecord) -> bool:
+        """Return True when durable watcher history ends in a completed CLEAR.
+
+        A first selection prepared after a completed no-target handoff has no prior
+        binding, so the boot env root names the cleared vault. A restarted process must
+        stay idle on it -- no startup ingestion, no scan -- exactly as the long-lived loop
+        that completed the CLEAR does.
+        """
+
+        if record.prior_binding_id is not None:
+            return False
+        completed = self._latest_completed_receipt(before=record.desired_revision)
+        return completed is not None and completed.candidate_binding_id is None
 
     def _latest_completed_receipt(
         self,

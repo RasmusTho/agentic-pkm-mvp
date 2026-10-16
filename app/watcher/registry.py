@@ -2716,6 +2716,16 @@ def run_registry_forever(
                 idle_without_binding = True
             else:
                 cfg.vault_path = reconciler.candidate_vault_path(startup_rebind_cycle.record)
+        elif (
+            startup_rebind_cycle is not None
+            and startup_rebind_cycle.mode == "refused"
+            and reconciler is not None
+            and reconciler.cleared_before(startup_rebind_cycle.record)
+        ):
+            # A restart during a post-CLEAR selection of another root: the boot env root
+            # is the cleared vault, so stay idle exactly like the long-lived loop.
+            cfg.enable = False
+            idle_without_binding = True
         # `watcher run` is the production entrypoint.  Compile its bound vault at
         # boot just as API and worker do; the registry config is authoritative for
         # this process and need not depend on VAULT_ROOT being set separately.
