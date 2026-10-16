@@ -339,6 +339,9 @@ def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
     )
     assert workspace.status_code == 200, workspace.text
     assert workspace.json()["runtime"]["resurface"]["candidates"] == []
+    # The process-wide watcher heartbeat may name another vault: not reported.
+    assert workspace.json()["runtime"]["ingest"]["state"] == "unavailable"
+    assert workspace.json()["runtime"]["ingest"]["watcher_vault_path"] is None
     now = client.get("/api/companion/now", headers=headers)
     orientation = client.get("/api/companion/orientation", headers=headers)
     browse = client.get("/api/companion/vault/browse", headers=headers)
@@ -350,3 +353,25 @@ def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
     assert body["governance"]["pending_proposal_count"] == 0
     assert browse.status_code == 200, browse.text
     assert browse.json()["base"] == str(Path(first_root.path).resolve())
+
+
+def test_scoped_identity_is_stable_and_review_queue_refuses_carriers(instance, client) -> None:
+    """#6156 review: binding-snapshot identity; the global review queue fails closed."""
+
+    runtime, first, _second = instance
+    registration = runtime.registry.lookup(first.vault_binding_id)
+    assert registration is not None
+    session = _create(client, first.vault_binding_id)
+    headers = {"X-Active-Context-Session": session["context_selection_id"]}
+
+    contexts = [client.get("/api/companion/vault/context", headers=headers) for _ in range(2)]
+    queue = client.get("/api/companion/memory/review-queue", headers=headers)
+
+    for response in contexts:
+        assert response.status_code == 200, response.text
+    ids = {response.json().get("active_vault_id") for response in contexts}
+    assert len(ids) == 1
+    if registration.vault_id:
+        assert ids == {registration.vault_id}
+    assert queue.status_code == 409, queue.text
+    assert queue.json()["detail"] == "capability_not_ready"

@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 import errno
 import functools
 import inspect
@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -924,6 +924,25 @@ def _companion_read_vault_context() -> VaultContext:
     return _companion_vault_context_with_lazy_last_active(_legacy_companion_vault_manager())
 
 
+def _scoped_vault_context(
+    validator: VaultManager, root: Path, context: ActiveContextSetV1
+) -> VaultContext:
+    """Write-free classification carrying the binding's stable identity.
+
+    A scoped read never heals identity, so a vault whose settings omit an id would
+    otherwise get a fresh request-local UUID on every read. The selection's binding
+    snapshot already names the stable identity; prefer it.
+    """
+
+    classified = validator.validate_vault(root, heal_identity=False)
+    binding = context.source_bindings[0]
+    return replace(
+        classified,
+        active_vault_id=binding.vault_id or classified.active_vault_id,
+        local_instance_id=binding.local_instance_id or classified.local_instance_id,
+    )
+
+
 @contextmanager
 def _companion_scoped_read_window(context: ActiveContextSetV1) -> Iterator[_ScopedCompanionRead]:
     """Bind one companion read to ``context`` under its shared binding lease."""
@@ -948,8 +967,7 @@ def _companion_scoped_read_window(context: ActiveContextSetV1) -> Iterator[_Scop
                     vault_binding_id=source.vault_binding_id,
                     root=source.root,
                     context_generation=source.context_generation,
-                    # Write-free classification: a scoped read never heals identity.
-                    vault_context=validator.validate_vault(source.root, heal_identity=False),
+                    vault_context=_scoped_vault_context(validator, source.root, context),
                     validator=validator,
                 )
             else:
@@ -2508,6 +2526,14 @@ def _ingest_binding_state(vault_root: Path) -> IngestBindingResponse:
     visible must not introduce a new outage of its own).
     """
 
+    if _SCOPED_COMPANION_READ.get() is not None:
+        # The watcher heartbeat is process-wide (one compatibility binding); for a
+        # scoped read it may name another vault, so it is not reported.
+        return IngestBindingResponse(
+            state="unavailable",
+            bound=False,
+            detail="watcher binding status is process-wide and is not reported for scoped reads",
+        )
     try:
         status = ingest_binding_status(selected_vault_path=str(vault_root))
     except Exception:
@@ -5882,9 +5908,16 @@ def _memory_review_revision_candidate(
 
 
 @router.get("/memory/review-queue", response_model=MemoryReviewQueueResponse)
-def get_memory_review_queue() -> MemoryReviewQueueResponse:
+def get_memory_review_queue(
+    x_active_context_session: str | None = Header(default=None),
+    x_active_context_override: str | None = Header(default=None),
+) -> MemoryReviewQueueResponse:
     """Bounded read over pending memory candidates awaiting review."""
 
+    if x_active_context_session or x_active_context_override:
+        # The review queue is process-global and not yet binding-aware (MVR-05B4,
+        # #6139): a scoped request is refused rather than shown other vaults' items.
+        raise HTTPException(status_code=409, detail="capability_not_ready")
     queue = _orientation_memory_review_queue()
     candidates = [_memory_review_candidate_projection(entry) for entry in queue.pending()]
     return MemoryReviewQueueResponse(
