@@ -1819,12 +1819,21 @@ def test_selector_reports_deferred_targets_to_github_output(tmp_path: Path) -> N
     "app/release_channels/prepare_promotion.py",
     "ops/scalar-rollback/nginx.conf",
     "tests/deploy/conftest.py",
+    "docker-compose.test.yml",
+    "requirements.txt",
+    "Dockerfile",
 ])
 def test_deploy_trigger_keeps_heavy_deploy_suite_on_pr_path(path: str) -> None:
     selection = select_tests([path])
 
-    assert "tests/deploy" in selection.targets
     assert selection.deferred_targets == ()
+    # Full-suite inputs (compose, requirements) run all of tests/ without an
+    # --ignore; unowned paths fail selection closed before any deferral.
+    assert (
+        "tests/deploy" in selection.targets
+        or (selection.full_suite and "--ignore=tests/deploy" not in selection.pytest_args)
+        or selection.unowned_paths == (path,)
+    )
 
 
 def test_changed_heavy_test_file_still_runs_on_pr_path() -> None:
@@ -1846,22 +1855,33 @@ def test_full_suite_selection_ignores_deferred_heavy_targets() -> None:
 
 
 def test_deploy_heavy_triggers_cover_scripts_referenced_by_deploy_tests() -> None:
-    # Census: a deploy test that starts exercising a new repo script must add
-    # it to the trigger set, or a change to that script would silently skip
-    # its heavy coverage on the PR path.
+    # Census: every repo file tests/deploy reads directly (scripts, compose
+    # files, requirements, Dockerfile, deploy config, app/ modules by path)
+    # must keep the heavy deploy suite on the PR path, or a change to that
+    # input would merge before the post-merge heavy run sees it.
     import re
 
     triggers = selector.HEAVY_PR_DEFERRED_TARGETS["tests/deploy"]
-    literal = re.compile(r"[\"'/]((?:scripts|ops|config/deploy)/[A-Za-z0-9_./-]+)")
-    joined = re.compile(r'"(scripts|ops)"\s*/\s*"([A-Za-z0-9_.-]+)"')
+    literal = re.compile(r"[\"']([A-Za-z0-9_./][A-Za-z0-9_./@+=,-]*)[\"']")
+    joined = re.compile(r'"([A-Za-z0-9_.@+=,-]+)"\s*/\s*"([A-Za-z0-9_.@+=,-]+)"')
+    single = re.compile(r'/\s*"([A-Za-z0-9_.@+=,-]+)"')
     referenced: set[str] = set()
     for test_file in (REPO_ROOT / "tests" / "deploy").rglob("*.py"):
         text = test_file.read_text(encoding="utf-8")
-        referenced.update(match.group(1).rstrip("/.") for match in literal.finditer(text))
+        referenced.update(match.group(1).removeprefix("./") for match in literal.finditer(text))
         referenced.update(f"{a}/{b}" for a, b in joined.findall(text))
-    existing = {path for path in referenced if (REPO_ROOT / path).is_file()}
+        referenced.update(single.findall(text))
+    existing = {
+        path for path in referenced
+        if path and not path.startswith(("/", "tests/")) and path != ".git"
+        and (REPO_ROOT / path).is_file()
+    }
 
-    assert existing, "census found no deploy-test script references"
+    for required in (
+        "scripts/deploy_channel.sh", "docker-compose.test.yml", "requirements.txt", "Dockerfile",
+        "config/systemd/yggdrasil-bws-deploy@.service",
+    ):
+        assert required in existing, f"census no longer sees {required}"
     uncovered = sorted(
         path for path in existing
         if path not in triggers
