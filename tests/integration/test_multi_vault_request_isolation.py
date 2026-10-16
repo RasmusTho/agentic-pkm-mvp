@@ -375,3 +375,16 @@ def test_scoped_identity_is_stable_and_review_queue_refuses_carriers(instance, c
         assert ids == {registration.vault_id}
     assert queue.status_code == 409, queue.text
     assert queue.json()["detail"] == "capability_not_ready"
+
+
+@pytest.mark.parametrize("header", ["X-Active-Context-Session", "X-Active-Context-Override"])
+def test_blank_carrier_fails_closed_instead_of_legacy_fallback(instance, client, header) -> None:
+    """#6156 review: a present-but-blank carrier is scoped and invalid, never legacy."""
+
+    blank = {header: ""}
+    notes = client.get("/api/companion/vault/notes", headers=blank)
+    queue = client.get("/api/companion/memory/review-queue", headers=blank)
+
+    assert notes.status_code in (400, 401, 409), notes.text
+    assert "notes" not in notes.json()
+    assert queue.status_code == 409, queue.text

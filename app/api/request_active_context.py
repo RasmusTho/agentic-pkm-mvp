@@ -111,7 +111,9 @@ def resolve_optional_scoped_read_context(
     legacy single-binding journey until MVR-05B5 activates the carrier.
     """
 
-    if not (x_active_context_session or x_active_context_override):
+    if x_active_context_session is None and x_active_context_override is None:
+        # Only an absent carrier is the legacy journey. A present-but-blank one is
+        # an invalid scoped carrier and fails closed below, never falls back.
         return None
     context = resolve_read_context(
         request,
