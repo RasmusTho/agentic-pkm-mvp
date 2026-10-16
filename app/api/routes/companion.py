@@ -928,24 +928,7 @@ def _companion_read_vault_context() -> VaultContext:
 def _companion_scoped_read_window(context: ActiveContextSetV1) -> Iterator[_ScopedCompanionRead]:
     """Bind one companion read to ``context`` under its shared binding lease."""
 
-    if not context.source_bindings:
-        # A valid explicit empty selection is the healthy scoped no-vault journey:
-        # bind the request to "no vault" so routes render their picker / empty
-        # state, never the legacy process-wide selection.
-        scoped = _ScopedCompanionRead(
-            vault_binding_id=None,
-            root=None,
-            context_generation=context.generation,
-            vault_context=no_vault_context(),
-            validator=VaultManager(),
-        )
-        token = _SCOPED_COMPANION_READ.set(scoped)
-        try:
-            yield scoped
-        finally:
-            _SCOPED_COMPANION_READ.reset(token)
-        return
-    if len(context.source_bindings) != 1:
+    if len(context.source_bindings) > 1:
         # Companion read surfaces render exactly one vault. A many-binding
         # selection is refused rather than silently narrowed to one of them.
         raise HTTPException(status_code=409, detail="active_context_single_binding_required")
@@ -954,17 +937,29 @@ def _companion_scoped_read_window(context: ActiveContextSetV1) -> Iterator[_Scop
         raise HTTPException(status_code=503, detail="instance registry is not bound on this process")
     registry = VaultRegistryStore(Path(registry_path).expanduser().resolve(strict=False))
     try:
+        # A valid explicit empty selection is the healthy scoped no-vault journey.
+        # It still runs inside the read window, so the principal read-effect fence
+        # holds through response publication exactly as for a bound read.
         with context_bound_read_window(context, registry_store=registry) as roots:
-            source = roots[0]
             validator = VaultManager()
-            scoped = _ScopedCompanionRead(
-                vault_binding_id=source.vault_binding_id,
-                root=source.root,
-                context_generation=source.context_generation,
-                # Write-free classification: a scoped read never heals identity.
-                vault_context=validator.validate_vault(source.root, heal_identity=False),
-                validator=validator,
-            )
+            if roots:
+                source = roots[0]
+                scoped = _ScopedCompanionRead(
+                    vault_binding_id=source.vault_binding_id,
+                    root=source.root,
+                    context_generation=source.context_generation,
+                    # Write-free classification: a scoped read never heals identity.
+                    vault_context=validator.validate_vault(source.root, heal_identity=False),
+                    validator=validator,
+                )
+            else:
+                scoped = _ScopedCompanionRead(
+                    vault_binding_id=None,
+                    root=None,
+                    context_generation=context.generation,
+                    vault_context=no_vault_context(),
+                    validator=validator,
+                )
             token = _SCOPED_COMPANION_READ.set(scoped)
             try:
                 yield scoped
@@ -2890,9 +2885,13 @@ def _panel_state(
     selectable_options: list[PanelSelectableOption] | None = None,
 ) -> PanelState:
     options = list(selectable_options or [])
-    proposal_count = _proposal_count_for_artifact(artifact_id)
+    # The proposal and idempotency stores are process-global and keyed only by
+    # artifact id, so a scoped read would show another binding's proposals for a
+    # shared UUID. A scoped panel omits them (fail closed) until MVR-05B4.
+    process_global = _SCOPED_COMPANION_READ.get() is None
+    proposal_count = _proposal_count_for_artifact(artifact_id) if process_global else 0
     selectable_count = sum(1 for option in options if option.selectable)
-    cache = getattr(confirm_module._idempotency_store, "_cache", {})
+    cache = getattr(confirm_module._idempotency_store, "_cache", {}) if process_global else {}
     relevant = [resp for resp in cache.values() if resp.artifact_id == artifact_id]
     latest = relevant[-1] if relevant else None
     blocked_reason = None
@@ -2909,7 +2908,7 @@ def _panel_state(
         state = "receipt-displayed"
     else:
         state = "idle"
-    staged = getattr(confirm_module._proposal_store, "_proposals", {})
+    staged = getattr(confirm_module._proposal_store, "_proposals", {}) if process_global else {}
     proposal_rows = []
     for proposal_id, proposal in staged.items():
         if proposal.artifact_id != artifact_id:
@@ -3925,6 +3924,12 @@ def _attach_receipts_to_notes(
     *,
     vault_root: Path,
 ) -> list[VaultBrowserNoteState]:
+    if _SCOPED_COMPANION_READ.get() is not None:
+        # The receipt / review-queue sources are process-global and are not yet
+        # filtered by vault binding, so a scoped read would match another
+        # binding's artifacts on a shared UUID or note path. Omit the projection
+        # (fail closed) until MVR-05B4 makes it binding-aware.
+        return notes
     projection = receipts_for_artifacts(
         [
             ArtifactReceiptTarget(
@@ -3955,6 +3960,12 @@ def _attach_agent_memory_posture_to_notes(
     *,
     vault_root: Path,
 ) -> list[VaultBrowserNoteState]:
+    if _SCOPED_COMPANION_READ.get() is not None:
+        # The receipt / review-queue sources are process-global and are not yet
+        # filtered by vault binding, so a scoped read would match another
+        # binding's artifacts on a shared UUID or note path. Omit the projection
+        # (fail closed) until MVR-05B4 makes it binding-aware.
+        return notes
     projection = agent_memory_posture_for_artifacts(
         [
             AgentMemoryPostureTarget(

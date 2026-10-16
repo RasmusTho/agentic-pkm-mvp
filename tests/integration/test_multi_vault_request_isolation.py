@@ -239,3 +239,65 @@ def test_explicit_empty_selection_renders_no_vault_state_without_legacy_lookup(
         assert "active_context_single_binding_required" not in result.text
     assert "no_vault_bound" in notes.text
     assert context.json().get("active_vault_path") in (None, "")
+
+
+def test_explicit_empty_selection_reads_inside_the_principal_effect_window(
+    instance, client, monkeypatch
+) -> None:
+    """#6156 review: the zero-binding journey keeps the read-to-publication fence."""
+
+    from contextlib import contextmanager
+
+    from app.api.routes import companion as companion_routes
+
+    original = companion_routes.context_bound_read_window
+    entered: list[int] = []
+
+    @contextmanager
+    def recording(context, **kwargs):
+        with original(context, **kwargs) as roots:
+            entered.append(len(roots))
+            yield roots
+
+    monkeypatch.setattr(companion_routes, "context_bound_read_window", recording)
+    response = client.post(SELECTION_URL, json={"vault_binding_ids": []})
+    assert response.status_code == 201, response.text
+    headers = {"X-Active-Context-Session": response.json()["context_selection_id"]}
+
+    browse = client.get("/api/companion/vault/browse", headers=headers)
+
+    assert browse.status_code == 200, browse.text
+    assert entered == [0]
+
+
+def test_scoped_reads_omit_process_global_artifact_projections(instance, client, monkeypatch) -> None:
+    """#6156 review: receipts, memory posture and panel stores are not binding-aware yet."""
+
+    from pathlib import Path
+
+    from app.api.routes import companion as companion_routes
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("scoped read consulted a process-global artifact projection")
+
+    monkeypatch.setattr(companion_routes, "receipts_for_artifacts", forbidden)
+    monkeypatch.setattr(companion_routes, "agent_memory_posture_for_artifacts", forbidden)
+    monkeypatch.setattr(companion_routes, "_proposal_count_for_artifact", forbidden)
+    runtime, first, _second = instance
+    first_root = runtime.registry.lookup(first.vault_binding_id)
+    assert first_root is not None
+    Path(first_root.path, "shared.md").write_text("# Shared\n", encoding="utf-8")
+    session = _create(client, first.vault_binding_id)
+    headers = {"X-Active-Context-Session": session["context_selection_id"]}
+
+    browser = client.get("/api/companion/vault-browser", headers=headers)
+    workspace = client.get(
+        "/api/companion/workspace", params={"note_path": "shared.md"}, headers=headers
+    )
+
+    assert browser.status_code == 200, browser.text
+    assert all(note.get("receipts") in ([], None) for note in browser.json()["notes"])
+    assert workspace.status_code == 200, workspace.text
+    panel = workspace.json()["panel"]
+    assert panel["proposal_count"] == 0
+    assert panel["receipt_count"] == 0
