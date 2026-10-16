@@ -25,6 +25,11 @@ ALWAYS_TARGETS = (
     # over app/, no fixtures, seconds — so run them on every scoped PR.
     "tests/architecture/test_outbox_producer_durability.py",
     "tests/architecture/test_outbox_producer_idempotency.py",
+    # The MVR-05B context-boundary gate is the same kind of cheap AST census,
+    # over request entrypoints spread across many owned subsystems (api routes,
+    # agents, MCP, CLI). Scoping it to its own files would skip exactly the PRs
+    # that add a global vault lookup to a guarded entrypoint (#6136 review).
+    "tests/architecture/test_multi_vault_context_boundaries.py",
 )
 
 PR_MARKER_EXPRESSION = (
@@ -285,6 +290,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Builder System architecture gate. Own this exact file so a
             # count/contract repair cannot fail closed as an unowned PR.
             "tests/architecture/test_multi_vault_projection_inventory.py",
+            # The MVR-05B context-boundary gate and its inventory helper are the
+            # same kind of architecture fitness; own them exactly (#6136).
+            "tests/architecture/context_boundary_inventory.py",
+            "tests/architecture/test_multi_vault_context_boundaries.py",
             # Isolated subprocess import wiring is a Builder test-harness
             # contract; own both the helper and its focused regression without
             # widening this subsystem to all helpers.
