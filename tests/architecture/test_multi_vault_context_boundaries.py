@@ -159,6 +159,15 @@ def test_gate_fails_on_stale_allowlist_entry() -> None:
         ),
         ("def f():\n    return resolve_optional_vault_root()\n", {"resolve_optional_vault_root"}),
         ("def f():\n    return resolve_active_vault_root()\n", {"resolve_active_vault_root"}),
+        (
+            "import os\ndef f():\n    for n in ('X', 'VAULT_DIR'):\n        v = os.getenv(n)\n",
+            {"env:VAULT_DIR"},
+        ),
+        (
+            "import os\nNAMES = ('X', 'VAULT_ROOT')\n"
+            "def f():\n    for n in NAMES:\n        v = os.getenv(n)\n",
+            {"env:VAULT_ROOT"},
+        ),
     ],
 )
 def test_detector_sees_structural_forms_not_substrings(source: str, expected: set[str]) -> None:
@@ -175,6 +184,24 @@ def test_detector_ignores_import_only_comments_and_docstrings() -> None:
         "    return require_scoped_read_context()\n"
     )
     assert scan_source(source) == {}
+
+
+def test_detector_ignores_vault_env_literals_outside_environment_reads() -> None:
+    """#6152 review: an error argument naming VAULT_ROOT is not a global lookup."""
+
+    source = (
+        "def f():\n"
+        "    raise VaultRootMisconfiguredError('VAULT_ROOT', 'unset')\n"
+        "def g():\n"
+        "    return {'VAULT_DIR': 1}\n"
+    )
+    assert scan_source(source) == {}
+
+
+def test_application_module_handlers_are_scanned() -> None:
+    """#6152 review: app.py defines its own handlers, not only router registration."""
+
+    assert inventory.API_APP_MODULE in inventory.entrypoint_modules()
 
 
 def test_gate_fails_on_unclassified_request_module(monkeypatch: pytest.MonkeyPatch) -> None:

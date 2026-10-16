@@ -285,6 +285,10 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             # Builder System architecture gate. Own this exact file so a
             # count/contract repair cannot fail closed as an unowned PR.
             "tests/architecture/test_multi_vault_projection_inventory.py",
+            # The MVR-05B context-boundary gate and its inventory helper are the
+            # same kind of architecture fitness; own them exactly (#6136).
+            "tests/architecture/context_boundary_inventory.py",
+            "tests/architecture/test_multi_vault_context_boundaries.py",
             # Isolated subprocess import wiring is a Builder test-harness
             # contract; own both the helper and its focused regression without
             # widening this subsystem to all helpers.
@@ -303,6 +307,7 @@ SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
             "tests/ops/test_builderops_package_smoke.py",
             "tests/architecture/test_pr_hot_path_governance.py",
             "tests/architecture/test_multi_vault_projection_inventory.py",
+            "tests/architecture/test_multi_vault_context_boundaries.py",
         ),
     ),
     (

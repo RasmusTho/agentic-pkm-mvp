@@ -115,7 +115,7 @@ COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
     _a("app/api/routes/canvas.py", "_get_vault_root_or_picker", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
     _a("app/api/routes/capture.py", "capture_to_inbox", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
     _a(_COMPANION, "_active_companion_vault_root", "get_vault_manager resolve_optional_vault_root", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "_memory_review_selection_required_response", "env:VAULT_ROOT resolve_optional_vault_root", _COMPANION_READ, "05B2"),
+    _a(_COMPANION, "_memory_review_selection_required_response", "resolve_optional_vault_root", _COMPANION_READ, "05B2"),
     _a(_COMPANION, "_memory_review_vault_context", "get_vault_manager resolve_optional_vault_root", _COMPANION_READ, "05B2"),
     _a(_COMPANION, "_recent_vaults_response", "get_vault_manager", _COMPANION_READ, "05B2"),
     _a(_COMPANION, "_resolve_browse_base", "resolve_optional_vault_root", _COMPANION_READ, "05B2"),
@@ -141,7 +141,7 @@ COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
     _a("app/cli/__init__.py", "_resolve_mcp_vault_root_path", "env:VAULT_DIR", _CLI_NOTE, "05B4"),
     _a("app/cli/__init__.py", "_resolve_vault_root_path", "resolve_optional_vault_root", _CLI_NOTE, "05B4"),
     _a("app/cli/briefing.py", "_resolve_vault_context", "get_vault_manager", _CLI_NOTE, "05B4"),
-    _a("app/cli/episodes.py", "<module>", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
+    _a("app/cli/episodes.py", "_default_vault_root", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
     _a("app/cli/health.py", "_check_companion_diagnostics", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
     _a("app/cli/settings_explain.py", "build_settings_explain_payload", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
     _a("app/cli/vault.py", "vault_init", "get_vault_manager", _CLI_NOTE, "05B4"),
@@ -232,6 +232,8 @@ def entrypoint_modules() -> tuple[str, ...]:
     modules = set(registered_router_modules())
     modules |= _python_modules(API_ROUTES_DIR)
     modules |= set(FIXED_ENTRYPOINT_MODULES)
+    # app.py both registers routers and defines its own request handlers.
+    modules.add(API_APP_MODULE)
     modules |= _python_modules(CLI_DIR)
     modules |= {f"{CLI_DIR}/__init__.py"}
     return tuple(sorted(m for m in modules if (ROOT / m).is_file()))
@@ -248,11 +250,48 @@ def _is_environ(node: ast.AST) -> bool:
     )
 
 
+ENV_READ_FUNCTIONS = frozenset({"getenv", "env_str"})
+ENVIRON_READ_METHODS = frozenset({"get", "pop", "setdefault"})
+
+
+def _name_id(node: ast.AST | None) -> str | None:
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def _env_names_in(node: ast.AST) -> tuple[str, ...]:
+    if not isinstance(node, (ast.Tuple, ast.List)):
+        return ()
+    return tuple(
+        element.value
+        for element in node.elts
+        if isinstance(element, ast.Constant) and element.value in GLOBAL_ENV_NAMES
+    )
+
+
+def _module_env_tuples(tree: ast.Module) -> dict[str, tuple[str, ...]]:
+    """Name-bound literal tuples/lists that carry a global vault env name."""
+
+    bound: dict[str, tuple[str, ...]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            target, value = node.target, node.value
+        else:
+            continue
+        names = _env_names_in(value)
+        if isinstance(target, ast.Name) and names:
+            bound[target.id] = names
+    return bound
+
+
 class _Scanner(ast.NodeVisitor):
     def __init__(self) -> None:
         self.aliases: dict[str, str] = {}
         self.stack: list[str] = []
         self.found: dict[str, set[str]] = {}
+        self._env_loop_names: dict[str | None, tuple[str, ...]] = {}
+        self.env_tuples: dict[str, tuple[str, ...]] = {}
 
     def _record(self, symbol: str) -> None:
         self.found.setdefault(".".join(self.stack) or "<module>", set()).add(symbol)
@@ -288,19 +327,66 @@ class _Scanner(ast.NodeVisitor):
             self._record(node.attr)
         self.generic_visit(node)
 
-    def visit_Constant(self, node: ast.Constant) -> None:
-        # Direct environment reads: ``os.getenv("VAULT_ROOT")``,
-        # ``os.environ.get("VAULT_ROOT")``, ``os.environ["VAULT_ROOT"]`` and
-        # name tuples iterated into one of those all reduce to the literal.
-        if isinstance(node.value, str) and node.value in GLOBAL_ENV_NAMES:
+    def _record_env_names(self, node: ast.AST | None) -> None:
+        if isinstance(node, ast.Constant) and node.value in GLOBAL_ENV_NAMES:
             self._record(ENV_SYMBOL_PREFIX + node.value)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        # Only an actual environment read counts: ``os.getenv("VAULT_ROOT")``,
+        # ``getenv(...)``, ``env_str(...)`` and ``os.environ.get/pop/setdefault``.
+        # A bare literal (an error argument, a docstring) is not a lookup.
+        func = node.func
+        if node.args and (
+            (isinstance(func, ast.Name) and func.id in ENV_READ_FUNCTIONS)
+            or (isinstance(func, ast.Attribute) and func.attr in ENV_READ_FUNCTIONS)
+            or (
+                isinstance(func, ast.Attribute)
+                and func.attr in ENVIRON_READ_METHODS
+                and _is_environ(func.value)
+            )
+        ):
+            self._record_env_names(node.args[0])
+            loop_names = self._env_loop_names.get(_name_id(node.args[0]), ())
+            for name in loop_names:
+                self._record(ENV_SYMBOL_PREFIX + name)
+        self.generic_visit(node)
+
+    def visit_Subscript(self, node: ast.Subscript) -> None:
+        if _is_environ(node.value):
+            self._record_env_names(node.slice)
+            for name in self._env_loop_names.get(_name_id(node.slice), ()):
+                self._record(ENV_SYMBOL_PREFIX + name)
+        self.generic_visit(node)
+
+    def visit_For(self, node: ast.For) -> None:
+        # ``for name in ("VAULT_ROOT", "VAULT_DIR"): os.getenv(name)`` reads both.
+        names: tuple[str, ...] = ()
+        if isinstance(node.target, ast.Name):
+            if isinstance(node.iter, (ast.Tuple, ast.List)):
+                names = _env_names_in(node.iter)
+            elif isinstance(node.iter, ast.Name):
+                # ``CANDIDATES = (..., "VAULT_ROOT")`` bound elsewhere in the module.
+                names = self.env_tuples.get(node.iter.id, ())
+        if names:
+            assert isinstance(node.target, ast.Name)
+            previous = self._env_loop_names.get(node.target.id)
+            self._env_loop_names[node.target.id] = names
+            self.generic_visit(node)
+            if previous is None:
+                self._env_loop_names.pop(node.target.id, None)
+            else:
+                self._env_loop_names[node.target.id] = previous
+            return
+        self.generic_visit(node)
 
 
 def scan_source(source: str, filename: str = "<memory>") -> dict[str, frozenset[str]]:
     """Return ``{function scope: global-resolution symbols}`` for one module."""
 
+    tree = ast.parse(source, filename=filename)
     scanner = _Scanner()
-    scanner.visit(ast.parse(source, filename=filename))
+    scanner.env_tuples = _module_env_tuples(tree)
+    scanner.visit(tree)
     return {scope: frozenset(symbols) for scope, symbols in scanner.found.items()}
 
 
