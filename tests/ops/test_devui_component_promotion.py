@@ -6,6 +6,7 @@ import copy
 import fcntl
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,10 @@ class External:
         self.expected_baseline = None
         self.replace_candidate_on_attestation = None
         self.attested_contents = []
+        self.source_calls = 0
+        self.source_failure_at = None
+        self.source_extra = {}
+        self.source_drift_at = None
 
     def container(self):
         return {"Id": str(self.identity), "Image": "sha256:" + "a" * 64,
@@ -99,6 +104,20 @@ class External:
             name = next(n for n in deploy.FILES if n in argv[-1])
             return json.dumps({"content": base64.b64encode(self.files[name].encode()).decode()})
         if argv[0] == "docker":
+            if "exec" in argv:
+                self.source_calls += 1
+                assert argv[argv.index("exec") + 1] == deploy.CONTAINER
+                assert "--user" not in argv and "--env" not in argv
+                assert "devui_source_binding_observation.v1" in argv[argv.index("-c") + 1]
+                if self.source_failure_at == self.source_calls:
+                    raise deploy.Refusal("source_unavailable")
+                return json.dumps({"contract": "devui_source_binding_observation.v1",
+                    "repository": self.environment["DEVUI_REPOSITORY"].lower(),
+                    "source_sha": self.environment["DEVUI_SOURCE_SHA"],
+                    "installed_epoch": int(self.environment["DEVUI_BUILDEROPS_AUTHORITY_EPOCH"]),
+                    "target_epoch": int(argv[argv.index("--epoch") + 1]) + (self.source_drift_at == self.source_calls), "schema_version": 5,
+                    "observed_at": datetime.now(timezone.utc).isoformat(), "task_count": 1,
+                    "data_outcome": "refused", "data_refusal": "task_payload_invalid", **self.source_extra})
             if "context" in argv:
                 return self.endpoint
             if "info" in argv:
@@ -159,8 +178,8 @@ def operator(tmp_path, monkeypatch):
     monkeypatch.setattr(deploy.socket, "gethostname", lambda: "builder-system")
     monkeypatch.setenv("BUILDEROPS_DEPLOYMENT_LOCK_FD", str(fd))
     original_prepare = deploy.prepare
-    def remember_baseline(*args):
-        plan = original_prepare(*args)
+    def remember_baseline(*args, **kwargs):
+        plan = original_prepare(*args, **kwargs)
         world.expected_baseline = plan["baseline"]
         return plan
     monkeypatch.setattr(deploy, "prepare", remember_baseline)
@@ -359,3 +378,121 @@ def test_candidate_snapshot_binds_parse_hash_and_attestation(operator):
     assert deploy.apply(plan, candidate, plan["plan_sha256"])["outcome"] == "deployed"
     assert world.attested_contents == [original, original]
     assert candidate.read_bytes() != original
+
+
+def source_candidate(world, candidate):
+    data = json.loads(candidate.read_text())
+    data.update(source_sha=OLD, control_plane_image_digest=OLD_DIGEST)
+    candidate.write_text(json.dumps(data))
+    world.environment['DEVUI_CONFIG_FINGERPRINT'] = deploy.validate_config(
+        world.config(world.environment), dict(world.environment))
+
+
+def test_explicit_source_rebind_plan_and_apply(operator):
+    world, candidate = operator
+    source_candidate(world, candidate)
+    plan = deploy.prepare(candidate, 'explicit source rebind mandate', source_authority_epoch=9)
+    assert not world.mutations()
+    assert plan['contract'] == deploy.V2
+    assert plan['operation'] == 'rebind_source_epoch'
+    assert {k for k in plan['target_environment'] if plan['target_environment'][k] != plan['baseline']['environment'][k]} == {
+        'DEVUI_BUILDEROPS_AUTHORITY_EPOCH', 'DEVUI_CONFIG_FINGERPRINT'}
+    assert plan['source_binding']['installed_epoch'] == 1
+    # The deployed legacy apply's first version gate cannot accept this plan.
+    assert plan['contract'] != 'devui_component_promotion_plan.v1'
+    result = deploy.apply(plan, candidate, plan['plan_sha256'])
+    assert len(world.mutations()) == 1 and world.source_calls == 4
+    assert world.environment['DEVUI_SOURCE_SHA'] == OLD
+    assert world.environment['DEVUI_IMAGE_DIGEST'] == OLD_DIGEST
+    assert world.environment['DEVUI_BUILDEROPS_AUTHORITY_EPOCH'] == '9'
+    assert result['source_binding_after']['installed_epoch'] == 9
+    assert result['source_binding_after']['data_refusal'] == 'task_payload_invalid'
+    assert result['source_qualification'] is result['owner_acceptance'] is False
+    assert deploy.rollback(plan, plan['plan_sha256'])['outcome'] == 'rolled_back'
+    assert world.environment == plan['baseline']['environment']
+
+
+@pytest.mark.parametrize('failure', ['epoch', 'candidate', 'schema', 'source_denied', 'epoch_drift',
+                                     'foreign_env', 'unknown_field', 'v1_override', 'source_packet', 'pending', 'postpull_drift'])
+def test_source_rebind_refuses_drift_before_effect(operator, failure):
+    world, candidate = operator
+    source_candidate(world, candidate)
+    if failure == 'epoch':
+        with pytest.raises(deploy.Refusal):
+            deploy.prepare(candidate, 'mandate', source_authority_epoch=0)
+        assert not world.mutations()
+        return
+    if failure == 'candidate':
+        data = json.loads(candidate.read_text()); data['source_sha'] = NEW
+        candidate.write_text(json.dumps(data))
+        with pytest.raises(deploy.Refusal):
+            deploy.prepare(candidate, 'mandate', source_authority_epoch=9)
+        assert not world.mutations()
+        return
+    plan = deploy.prepare(candidate, 'mandate', source_authority_epoch=9)
+    if failure == 'schema':
+        world.source_extra = {'schema_version': 6}
+    elif failure == 'source_denied':
+        world.source_failure_at = 2
+    elif failure == 'epoch_drift':
+        world.source_extra = {'target_epoch': 10}
+    elif failure == 'foreign_env':
+        plan['target_environment']['BUILDEROPS_API_URL'] = 'http://127.0.0.1:9999'
+    elif failure == 'unknown_field':
+        plan['extra'] = 'unadmitted'
+    elif failure == 'v1_override':
+        plan['contract'] = deploy.V1
+    elif failure == 'source_packet':
+        plan['source_binding']['repository'] = 'foreign/repository'
+    elif failure == 'pending':
+        deploy.atomic(deploy.RECEIPTS / ('devui-component-' + 'e' * 64 + '.json'),
+                      {'receipt_type': 'devui_component_deployment.v1', 'outcome': 'pending'})
+    elif failure == 'postpull_drift':
+        world.source_drift_at = 3
+    plan['plan_sha256'] = deploy.digest({k: v for k, v in plan.items() if k != 'plan_sha256'})
+    with pytest.raises(deploy.Refusal):
+        deploy.apply(plan, candidate, plan['plan_sha256'])
+    assert not world.mutations()
+
+
+@pytest.mark.parametrize('failure', ['postcheck', 'unknown_up', 'target_drift'])
+def test_source_rebind_recovery_and_scope(operator, failure):
+    world, candidate = operator
+    source_candidate(world, candidate)
+    plan = deploy.prepare(candidate, 'mandate', source_authority_epoch=9)
+    world.source_failure_at = 4
+    if failure == 'unknown_up':
+        world.uncertain_up = True
+    elif failure == 'target_drift':
+        world.drift_after_up = 1
+    with pytest.raises(deploy.Refusal):
+        deploy.apply(plan, candidate, plan['plan_sha256'])
+    attempt = deploy.RECEIPTS / ('devui-component-' + plan['plan_sha256'].removeprefix('sha256:') + '.json')
+    record = json.loads(attempt.read_text())
+    if failure == 'postcheck':
+        assert record['outcome'] == 'rolled_back'
+        assert world.environment == plan['baseline']['environment']
+        assert len(world.mutations()) == 2
+    else:
+        assert record['outcome'] == 'indeterminate'
+        assert len(world.mutations()) == 1
+        with pytest.raises(deploy.Refusal, match='retained_attempt'):
+            deploy.prepare(candidate, 'mandate', source_authority_epoch=9)
+    assert all(c[-1] == 'devui' for c in world.mutations())
+    assert record['source_qualification'] is record['complete_dev_system_health'] is False
+
+
+@pytest.mark.parametrize('value', ['0', '-1', '01', '9223372036854775808', 'secret-value-never-echo'])
+def test_source_epoch_cli_refuses_without_effect(operator, capsys, value):
+    world, candidate = operator
+    assert deploy.main(['plan', '--candidate-pair', str(candidate), '--plan', str(world.root / 'plan.json'),
+                        '--authorization-reference', 'mandate', '--source-authority-epoch', value]) == 75
+    assert not world.commands
+    assert value not in capsys.readouterr().err
+
+
+def test_source_epoch_option_cannot_override_apply(operator):
+    world, candidate = operator
+    assert deploy.main(['apply', '--candidate-pair', str(candidate), '--plan', str(world.root / 'plan.json'),
+                        '--source-authority-epoch', '9']) == 75
+    assert not world.commands

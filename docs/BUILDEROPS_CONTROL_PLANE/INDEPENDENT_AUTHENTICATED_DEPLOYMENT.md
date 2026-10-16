@@ -248,6 +248,48 @@ blind compensation, database rewind or fabricated terminal receipt is permitted.
 component deployment leaves #5181, #4749 and #5399 open; the owner's later trial and acceptance
 remain separate observations and decisions.
 
+#### Explicit source-epoch rebind
+
+The operator also implements a config-only source rebind through
+`plan --source-authority-epoch <explicit-positive-epoch>`. This is repository support, not a claim
+that the operator or a new configuration is installed on VM102. Source/Platform owners retain
+their permission and live-effect boundaries. It never discovers or adopts the current epoch as
+a default. Without this option, image promotion retains the existing source binding.
+
+Rebind requires the attested application source/image to equal the exact running baseline. Only
+`DEVUI_BUILDEROPS_AUTHORITY_EPOCH` and the recomputed `DEVUI_CONFIG_FINGERPRINT` may differ;
+repository, API and credential references, diagnostics, Compose bytes, mounts and ingress cannot
+change. The existing plan owner emits `devui_component_promotion_plan.v2`, with the closed
+`rebind_source_epoch` operation and a bounded source observation. The old v1 operator rejects that
+version; new code retains v1 image plans but refuses an epoch change hidden inside them. An epoch
+option on apply/rollback is refused: those actions consume only the reviewed exact plan/hash.
+
+`scripts/devui_source_binding_probe.py` is part of the separately installed operator tooling. The
+operator executes its bytes inside the existing DevUI container, inheriting that container's
+non-root user, configuration and mounted credential. It never uses a host operator's API identity
+or passes a token. The probe loads the production runtime/client, requires schema 5 and the explicit
+repository/epoch, reads status → bounded tasks and addressed task versions → status, and emits only
+closed metadata. It performs no task/import/transition or grant operation. Denied access, changed
+epoch/schema/repository/version or malformed source identity refuses admission. Fresh probe results
+are at most five minutes old; the historical planning observation remains bound to the plan while
+apply obtains new observations. Apply repeats the probe after image pull immediately before
+persisting the attempt/recreating DevUI, and after exact runtime/browser readback.
+
+A consistent binding is separate from useful work evidence. In particular, the production
+`task_payload_invalid` refusal (such as native `completed` versus payload `ready`) is retained as
+`data_outcome: refused`; it is never repaired, hidden or interpreted as empty/healthy work. Generic
+unprojectable tasks remain partial, and no Issue evidence remains unavailable. The component
+receipt records the rebind operation and before/after source observations while preserving every
+false full-system/source/pilot/acceptance claim. A rebind does not transfer prior acceptance to the
+new config fingerprint. Task-data correction and full source qualification retain their owners.
+
+All lock, candidate snapshot, exact-baseline, pending-before-effect, browser, compensation and
+uncertainty rules above still apply. A failed post-rebind probe uses the existing exact-target
+readback before bounded compensation; an unknown outcome remains non-replayable. Manual rollback
+restores the retained baseline epoch/config and verifies its component identity/liveness/browser,
+not the correctness of that historical source binding. No control-plane pin/data rewind or
+permission change follows from either operation.
+
 ### Approved candidate attestation runner
 
 The candidate pair must be verified from Bob-1/guest `builder-system` or from a named,
