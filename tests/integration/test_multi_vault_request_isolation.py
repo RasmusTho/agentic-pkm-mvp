@@ -213,3 +213,29 @@ def test_subject_revocation_rejects_a_previously_issued_session(instance, client
     )
     assert stale.status_code == 401, stale.text
     assert stale.json()["detail"] == "reselection_required"
+
+
+def test_explicit_empty_selection_renders_no_vault_state_without_legacy_lookup(
+    instance, client, monkeypatch
+) -> None:
+    """#6156 review: a healthy zero-binding selection is the scoped no-vault journey."""
+
+    from app.api.routes import companion as companion_routes
+
+    def legacy_forbidden(*_args, **_kwargs):
+        raise AssertionError("scoped no-vault read consulted the legacy process-wide selection")
+
+    monkeypatch.setattr(companion_routes, "_legacy_companion_vault_manager", legacy_forbidden)
+    monkeypatch.setattr(companion_routes, "_legacy_configured_vault_root", legacy_forbidden)
+    response = client.post(SELECTION_URL, json={"vault_binding_ids": []})
+    assert response.status_code == 201, response.text
+    headers = {"X-Active-Context-Session": response.json()["context_selection_id"]}
+
+    notes = client.get("/api/companion/vault/notes", headers=headers)
+    context = client.get("/api/companion/vault/context", headers=headers)
+
+    for result in (notes, context):
+        assert result.status_code == 200, result.text
+        assert "active_context_single_binding_required" not in result.text
+    assert "no_vault_bound" in notes.text
+    assert context.json().get("active_vault_path") in (None, "")

@@ -144,6 +144,7 @@ from app.vault.manager import (
     get_vault_manager,
     is_vault_root,
     nearest_enclosing_vault_root,
+    no_vault_context,
 )
 from app.instance.active_context_service import (
     ActiveContextSelectionService,
@@ -869,8 +870,10 @@ _READABLE_SELECTED_STATUSES: frozenset[str] = frozenset({"selected", "uninitiali
 class _ScopedCompanionRead:
     """The one binding a scoped companion read is bound to, under its lease."""
 
-    vault_binding_id: str
-    root: Path
+    # ``None`` for a healthy explicit zero-binding selection (the scoped no-vault
+    # journey): routes render their no-vault picker state for it.
+    vault_binding_id: str | None
+    root: Path | None
     context_generation: int
     vault_context: VaultContext
     # Stateless classifier for this root; never the process-wide selector.
@@ -925,6 +928,23 @@ def _companion_read_vault_context() -> VaultContext:
 def _companion_scoped_read_window(context: ActiveContextSetV1) -> Iterator[_ScopedCompanionRead]:
     """Bind one companion read to ``context`` under its shared binding lease."""
 
+    if not context.source_bindings:
+        # A valid explicit empty selection is the healthy scoped no-vault journey:
+        # bind the request to "no vault" so routes render their picker / empty
+        # state, never the legacy process-wide selection.
+        scoped = _ScopedCompanionRead(
+            vault_binding_id=None,
+            root=None,
+            context_generation=context.generation,
+            vault_context=no_vault_context(),
+            validator=VaultManager(),
+        )
+        token = _SCOPED_COMPANION_READ.set(scoped)
+        try:
+            yield scoped
+        finally:
+            _SCOPED_COMPANION_READ.reset(token)
+        return
     if len(context.source_bindings) != 1:
         # Companion read surfaces render exactly one vault. A many-binding
         # selection is refused rather than silently narrowed to one of them.
@@ -998,6 +1018,10 @@ def _scoped_companion_vault_root(
     context_snapshot_out: dict[str, VaultContext] | None,
 ) -> Path:
     context = scoped.vault_context
+    if scoped.root is None:
+        # Scoped zero-binding selection: the same no-vault picker state as a
+        # carrier-free request with nothing selected, without consulting it.
+        raise NoVaultBoundError("no vault is selected", configured_path=None)
     if require_initialized and context.status == "uninitialized":
         # Read-before-initialize: a provisional binding is readable but the
         # entry/write gates still name the residual ``uninitialized`` state.
