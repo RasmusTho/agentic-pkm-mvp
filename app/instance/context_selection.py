@@ -472,6 +472,11 @@ class ActiveContextSelectionResolver:
         registry_revision = self._registry_revision()
 
         if selection is not None:
+            if selection.dimension_filter is not None and not selection.binding_ids:
+                # KD-0F9089B13719: a dimension selection that holds zero bindings is an
+                # invalid selection, never an empty or no-vault context. Creation already
+                # refuses it; this keeps the request path fail-closed on its own.
+                raise ReselectionRequiredError("dimension selection holds zero bindings")
             binding_ids = selection.binding_ids
             context_id = selection.context_id
             generation = selection.generation + self._rotations.get(selection.context_id, 0)

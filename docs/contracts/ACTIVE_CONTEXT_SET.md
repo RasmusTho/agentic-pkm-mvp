@@ -96,6 +96,10 @@ Durable, non-authoritative grouping over registered bindings, owned by
 independently through the same `app/governance/binding_authority.py` seam, with the calling
 contract's own decision inputs; the dimension is never one of them. What a snapshot stores is the
 resolved explicit binding set plus `dimension_filter` provenance — a dimension grants nothing.
+A dimension whose stored membership is empty (operator-emptied, or stripped by registration-removal
+repair) is an invalid selection: resolution and selection create/replace fail with `409
+dimension_empty`, and the request path refuses a zero-binding dimension selection as
+`reselection_required`. It never yields an empty or no-vault context (KD-0F9089B13719, #6135).
 
 Still target state after MVR-04: production request-header carrier propagation
 (`X-Active-Context-Session` / `X-Active-Context-Override`) is owned by MVR-05B (#3860) and
