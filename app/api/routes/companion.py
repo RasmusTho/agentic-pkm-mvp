@@ -1276,8 +1276,12 @@ def _resolve_browse_base() -> Path:
         # otherwise it is ignored and the base falls through to '/', broadening
         # the first picker screen to the whole tree (#2565 Codex P2).
         # A scoped request browses beside its own bound root instead.
+        if scoped is not None and scoped.root is not None:
+            # A scoped browse is confined to its own bound root, never its parent:
+            # the parent may hold another registered vault.
+            return scoped.root.expanduser().resolve()
         configured = (
-            scoped.root
+            None
             if scoped is not None
             else _legacy_configured_vault_root(environment=active_environment())
         )
@@ -1483,7 +1487,12 @@ def read_companion_now() -> list[dict]:
     """
     context = _companion_read_vault_context()
     if context.status == "selected" and context.active_vault_path:
-        return collect_now_moments(context)
+        # Reach-out receipts are process-global and keyed only by moment UUID, so
+        # a scoped read omits the in-app nudge (fail closed) until MVR-05B4.
+        return collect_now_moments(
+            context,
+            include_in_app_nudges=_SCOPED_COMPANION_READ.get() is None,
+        )
     return []
 
 
@@ -3272,6 +3281,10 @@ def _memory_review_channel() -> str:
 
 
 def _orientation_memory_summary() -> WorkspaceOrientationMemory:
+    if _SCOPED_COMPANION_READ.get() is not None:
+        # Process-global source with no vault-binding predicate: a scoped read
+        # takes the degraded "unavailable" path (fail closed) until MVR-05B4.
+        raise RuntimeError("orientation source is not binding-aware")
     pending = len(_orientation_memory_review_queue().pending())
     return WorkspaceOrientationMemory(
         pending_candidate_count=pending,
@@ -3478,6 +3491,10 @@ def _orientation_memory_mutation_intents(
 
 
 def _orientation_governance_summary() -> WorkspaceOrientationGovernance:
+    if _SCOPED_COMPANION_READ.get() is not None:
+        # Process-global source with no vault-binding predicate: a scoped read
+        # takes the degraded "unavailable" path (fail closed) until MVR-05B4.
+        raise RuntimeError("orientation source is not binding-aware")
     proposals = getattr(confirm_module._proposal_store, "_proposals", {})
     receipts = getattr(confirm_module._idempotency_store, "_cache", {})
     receipt_values = list(receipts.values()) if isinstance(receipts, dict) else []

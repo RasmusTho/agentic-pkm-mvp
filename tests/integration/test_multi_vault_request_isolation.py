@@ -301,3 +301,42 @@ def test_scoped_reads_omit_process_global_artifact_projections(instance, client,
     panel = workspace.json()["panel"]
     assert panel["proposal_count"] == 0
     assert panel["receipt_count"] == 0
+
+
+def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
+    instance, client, monkeypatch
+) -> None:
+    """#6156 review: /now nudges, orientation stores and browse base are binding-confined."""
+
+    from pathlib import Path
+
+    from app.api.routes import companion as companion_routes
+    from app.relevance import now_surface
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("scoped read consulted a process-global source")
+
+    monkeypatch.setattr(now_surface, "query_reachout_receipts", forbidden)
+    monkeypatch.setattr(companion_routes, "_orientation_memory_review_queue", forbidden)
+    monkeypatch.setattr(companion_routes, "_proposal_count_for_artifact", forbidden)
+    monkeypatch.delenv("VAULT_BROWSE_ROOT", raising=False)
+    runtime, first, _second = instance
+    first_root = runtime.registry.lookup(first.vault_binding_id)
+    assert first_root is not None
+    from tests.helpers.vault_settings import initialize_test_vault
+
+    initialize_test_vault(Path(first_root.path))
+    session = _create(client, first.vault_binding_id)
+    headers = {"X-Active-Context-Session": session["context_selection_id"]}
+
+    now = client.get("/api/companion/now", headers=headers)
+    orientation = client.get("/api/companion/orientation", headers=headers)
+    browse = client.get("/api/companion/vault/browse", headers=headers)
+
+    assert now.status_code == 200, now.text
+    assert orientation.status_code == 200, orientation.text
+    body = orientation.json()
+    assert body["memory"]["pending_candidate_count"] == 0
+    assert body["governance"]["pending_proposal_count"] == 0
+    assert browse.status_code == 200, browse.text
+    assert browse.json()["base"] == str(Path(first_root.path).resolve())
