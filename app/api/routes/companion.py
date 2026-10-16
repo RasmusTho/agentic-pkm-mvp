@@ -3123,6 +3123,9 @@ def _reorient_state(signals: OrientationSignals | None = None) -> dict[str, list
         }
 
     try:
+        if _SCOPED_COMPANION_READ.get() is not None:
+            # Scoped read: process-global runtime signals have no vault-binding predicate (fail closed until MVR-05B4).
+            raise RuntimeError("orientation signals are not binding-aware")
         frame = build_orientation_frame(signals=signals)
     except Exception:
         return {
@@ -3178,6 +3181,9 @@ def _reorient_state(signals: OrientationSignals | None = None) -> dict[str, list
 def _resurface_state(
     safe_note_path: str, signals: OrientationSignals | None = None
 ) -> dict[str, list[dict[str, str | list[str] | bool]] | int | bool]:
+    if _SCOPED_COMPANION_READ.get() is not None:
+        # Scoped read: process-global runtime signals have no vault-binding predicate (fail closed until MVR-05B4).
+        return {"candidates": [], "scarce_count": 0, "more_held_back": False}
     evaluation = evaluate_resurfacing_candidates(signals=signals)
     candidates: list[dict[str, str | list[str] | bool]] = []
     for candidate in evaluation.candidates:
@@ -4901,7 +4907,9 @@ def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectio
         if isinstance(vault_root, VaultSelectionRequiredResponse):
             return vault_root
         identity = _orientation_identity(vault_root)
-        orientation_signals = get_orientation_signals()
+        scoped_read = _SCOPED_COMPANION_READ.get() is not None
+        # Scoped read: process-global runtime signals have no vault-binding predicate (fail closed until MVR-05B4); the frame, leave point and resurfacing below degrade.
+        orientation_signals = None if scoped_read else get_orientation_signals()
     except HTTPException:
         raise
     except Exception as exc:
@@ -4918,6 +4926,10 @@ def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectio
     mutation_intents: list[WorkspaceOrientationMutationIntent] = []
 
     try:
+        if orientation_signals is None:
+            # Scoped read: no frame, and never open (or create) the global
+            # leave-point cursor DB, which is keyed by display name, not binding.
+            raise RuntimeError("orientation source is not binding-aware")
         frame = build_orientation_frame(signals=orientation_signals)
         leave_point = _orientation_leave_point(
             orientation_signals,
@@ -4934,6 +4946,8 @@ def read_companion_orientation() -> WorkspaceOrientationResponse | VaultSelectio
         degraded_reasons.append("orientation_source_unavailable")
 
     try:
+        if orientation_signals is None:
+            raise RuntimeError("resurfacing source is not binding-aware")
         resurface_candidates = _orientation_resurface_candidates(orientation_signals)
     except Exception:
         degraded_reasons.append("resurfacing_source_unavailable")
@@ -5145,7 +5159,10 @@ def read_companion_workspace(
         canvas_enabled=canvas_enabled,
         writeguard_status=writeguard_status,
     )
-    orientation_signals = get_orientation_signals()
+    # Scoped read: process-global runtime signals have no vault-binding predicate (fail closed until MVR-05B4); reorient/resurface degrade.
+    orientation_signals = (
+        get_orientation_signals() if _SCOPED_COMPANION_READ.get() is None else None
+    )
     reflection_offer: ReflectionOfferState | None = None
     settings_path = vault_root / SETTINGS_DIR_NAME
     if settings_path.is_dir():

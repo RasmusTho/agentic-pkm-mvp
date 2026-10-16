@@ -320,6 +320,8 @@ def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
     monkeypatch.setattr(companion_routes, "_orientation_memory_review_queue", forbidden)
     monkeypatch.setattr(companion_routes, "_proposal_count_for_artifact", forbidden)
     monkeypatch.setattr(companion_routes, "_append_orientation_memory_intent_trace", forbidden)
+    monkeypatch.setattr(companion_routes, "get_orientation_signals", forbidden)
+    monkeypatch.setattr(companion_routes, "_orientation_leave_point", forbidden)
     runtime, first, _second = instance
     # A global browse override must not widen a scoped browse beyond its root.
     monkeypatch.setenv("VAULT_BROWSE_ROOT", str(Path(runtime.registry.lookup(first.vault_binding_id).path).parent))
@@ -331,6 +333,12 @@ def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
     session = _create(client, first.vault_binding_id)
     headers = {"X-Active-Context-Session": session["context_selection_id"]}
 
+    Path(first_root.path, "focus.md").write_text("# Focus\n", encoding="utf-8")
+    workspace = client.get(
+        "/api/companion/workspace", params={"note_path": "focus.md"}, headers=headers
+    )
+    assert workspace.status_code == 200, workspace.text
+    assert workspace.json()["runtime"]["resurface"]["candidates"] == []
     now = client.get("/api/companion/now", headers=headers)
     orientation = client.get("/api/companion/orientation", headers=headers)
     browse = client.get("/api/companion/vault/browse", headers=headers)
