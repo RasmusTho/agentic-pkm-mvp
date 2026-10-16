@@ -387,8 +387,17 @@ class DormantSettingsRebindReconciler:
             return RebindCycle(record=record, mode="no_lifecycle", receipt=None)
         if not cfg.enable:
             # A configured watcher idle after a completed CLEAR reconciles the next
-            # selection exactly as a freshly started configured watcher would.
-            self._rearm_configured_watcher(record, cfg)
+            # selection exactly as a freshly started configured watcher would: it
+            # adopts its own configured root and refuses -- still idle, scanning
+            # nothing -- any other candidate.
+            rearm = self._rearm_configured_watcher(snapshot, record, cfg)
+            if rearm == "refused":
+                logger.warning(
+                    "settings rebind watcher refused first selection revision=%s: "
+                    "candidate is not the configured watcher root",
+                    record.desired_revision,
+                )
+                return RebindCycle(record=record, mode="refused", receipt=None)
         if not cfg.enable:
             if record.phase == "committed" and record.candidate_binding_id is None:
                 # A completed no-target handoff (MVR-02 default CLEAR) is what turned
@@ -587,33 +596,54 @@ class DormantSettingsRebindReconciler:
 
     @staticmethod
     def _rearm_configured_watcher(
+        snapshot: RegistrySnapshot,
         record: SettingsRebindRecord,
         cfg: RegistryConfig,
-    ) -> bool:
+    ) -> str | None:
         """Re-arm a configured watcher that went idle after a completed CLEAR.
 
         The foreground activation derives "a watcher exists" from the deployment
         configuration (``WATCHER_ENABLE`` plus ``WATCHER_VAULT_PATH``). After a completed
         no-target handoff the long-lived loop turns itself idle in memory; if it then
         answered the next prepared selection with ``no_lifecycle``, the API would wait for
-        a receipt that is never written. Restore the configured posture instead, so the
-        selection is acknowledged (or refused) exactly as by a freshly started watcher.
+        a receipt that is never written. A freshly started configured watcher adopts a
+        first selection only of its own configured root and refuses any other, so this
+        returns ``"rearmed"`` (enabled on the configured root) only when the prepared
+        candidate *is* that root, ``"refused"`` for a configured watcher and any other
+        candidate (the caller stays idle and scans nothing), and ``None`` when no
+        configured watcher applies.
         """
 
         if record.phase != "prepared" or record.prior_binding_id is not None:
-            return False
+            return None
         enabled = (os.getenv("WATCHER_ENABLE") or "").strip().lower() in {
             "1",
             "true",
             "yes",
             "on",
         }
-        configured_root = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
-        if not enabled or not configured_root:
-            return False
+        configured_raw = (os.getenv("WATCHER_VAULT_PATH") or "").strip()
+        if not enabled or not configured_raw:
+            return None
+        configured_root = Path(configured_raw).expanduser()
+        candidate = (
+            snapshot.registrations.get(record.candidate_binding_id)
+            if record.candidate_binding_id is not None
+            else None
+        )
+        if candidate is None:
+            return "refused"
+        try:
+            if not same_filesystem_root(
+                resolve_filesystem_root_identity(configured_root),
+                resolve_filesystem_root_identity(candidate.path),
+            ):
+                return "refused"
+        except FilesystemIdentityError:
+            return "refused"
         cfg.enable = True
-        cfg.vault_path = Path(configured_root).expanduser()
-        return True
+        cfg.vault_path = configured_root
+        return "rearmed"
 
     def _resume_completed_prior_root(
         self,

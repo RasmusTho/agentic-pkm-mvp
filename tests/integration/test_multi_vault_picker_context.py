@@ -786,10 +786,25 @@ def test_legacy_picker_bridge_preserves_single_watcher_until_mvr06(
     # The foreground SETTINGS-01 reload ran for each new compatibility root.
     assert {vault_a, vault_b} <= set(reloads)
 
-    # -- 7. after a completed CLEAR, a long-lived watcher re-arms for the next pick ----
+    # -- 7. after a completed CLEAR, a long-lived watcher re-arms only for its own root --
     # Activation and reconciliation must agree: the configured watcher acknowledges the
-    # next first selection of its own root instead of silently answering no_lifecycle.
+    # next first selection of its own root instead of silently answering no_lifecycle,
+    # and refuses (staying idle, scanning nothing) a selection of any other root.
     with _running_watcher(config_path, long_lived=True) as long_lived_errors:
+        before_refusal = runtime.open_settings_rebind_store().read()
+        events_before = len(_event_paths(tmp_path))
+        (vault_a / "cleared-root-edit.md").write_text("must not be scanned\n", encoding="utf-8")
+        monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "0.5")
+        with pytest.raises(RegistryError, match="did not reach acknowledged"):
+            VaultManager().select_vault(vault_b)
+        monkeypatch.setenv("SETTINGS_REBIND_WAIT_TIMEOUT_SECONDS", "10")
+        refused = runtime.open_settings_rebind_store().read()
+        assert refused.phase == "cancelled"
+        assert refused.candidate_binding_id is None
+        assert refused.desired_revision == before_refusal.desired_revision + 1
+        assert not _revision_receipt_path(tmp_path, refused.desired_revision).exists()
+        assert _event_paths(tmp_path)[events_before:] == []
+
         reselected = VaultManager().select_vault(vault_a)
         assert reselected.active_vault_path == str(vault_a)
         readopted = runtime.open_settings_rebind_store().read()
