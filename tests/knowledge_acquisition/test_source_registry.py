@@ -29,6 +29,7 @@ from tests.knowledge_acquisition._source_registry_contract import (
     assert_invalid_interval_and_policy_fail_loud,
     assert_memory_json_isolation,
     assert_inbox_poll_outcomes,
+    assert_policy_filter_validation_and_versioning,
     assert_provenance_is_strict_portable_json,
     assert_round_trip_and_contract_fields,
     assert_single_enabled_inbox_and_swap,
@@ -101,6 +102,10 @@ def test_provenance_is_strict_portable_json_memory() -> None:
 
 def test_inbox_poll_outcomes_memory() -> None:
     assert_inbox_poll_outcomes(_make_registry)
+
+
+def test_policy_update_versioning_and_filter_validation() -> None:
+    assert_policy_filter_validation_and_versioning(_make_registry)
 
 
 def test_registry_accepts_exact_declared_extractor_materialization_policy() -> None:

@@ -132,6 +132,8 @@ INSTANCE_DEFAULT_VAULT_CHANGED = "instance.default_vault.changed"
 INSTANCE_VAULT_DIMENSION_CHANGED = "instance.vault_dimension.changed"
 
 YOUTUBE_SOURCE_DISCOVERED = "youtube.source.discovered"
+YOUTUBE_SYNC_COMPLETED = "youtube.sync.completed"
+YOUTUBE_SYNC_DEGRADED = "youtube.sync.degraded"
 ACQUISITION_REQUESTED = "acquisition.requested"
 ACQUISITION_STARTED = "acquisition.started"
 ACQUISITION_COMPLETED = "acquisition.completed"

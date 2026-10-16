@@ -45,6 +45,10 @@ MOUNTS = {"/opt/builderops/receipts": "/run/builderops/devui-receipts",
 COMMAND = ["python", "-m", "app.builderops.devui_runtime"]
 HEALTH_TEST = ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8113/healthz', timeout=3)"]
 HEALTHCHECK = {"test": HEALTH_TEST, "interval": "30s", "timeout": "5s", "retries": 3}
+V1 = "devui_component_promotion_plan.v1"
+V2 = "devui_component_promotion_plan.v2"
+SOURCE_FIELDS = {"contract", "repository", "source_sha", "installed_epoch", "target_epoch",
+                 "schema_version", "observed_at", "task_count", "data_outcome", "data_refusal"}
 
 
 class Refusal(RuntimeError):
@@ -267,13 +271,88 @@ def probe(environment: dict[str, str]) -> dict[str, Any]:
     raise Refusal("runtime_probe_failed")
 
 
-def prepare(candidate_file: Path, authorization: str) -> dict[str, Any]:
+def epoch(value: object) -> int:
+    if isinstance(value, str) and re.fullmatch(r"[1-9][0-9]{0,18}", value):
+        value = int(value)
+    if type(value) is not int or not 0 < value < 2**63:
+        raise Refusal("source_epoch_refused")
+    return value
+
+
+def validate_source(packet: Any, environment: dict[str, str], target: int, *, fresh: bool) -> None:
+    if (not isinstance(packet, dict) or set(packet) != SOURCE_FIELDS or
+            packet.get("contract") != "devui_source_binding_observation.v1" or
+            packet.get("repository") != environment["DEVUI_REPOSITORY"].lower() or
+            packet.get("source_sha") != environment["DEVUI_SOURCE_SHA"] or
+            type(packet.get("installed_epoch")) is not int or
+            packet["installed_epoch"] != epoch(environment["DEVUI_BUILDEROPS_AUTHORITY_EPOCH"]) or
+            type(packet.get("target_epoch")) is not int or packet["target_epoch"] != target or
+            type(packet.get("schema_version")) is not int or packet["schema_version"] != 5 or
+            type(packet.get("task_count")) is not int or not 0 <= packet["task_count"] <= 200 or
+            packet.get("data_outcome") not in {"available", "partial", "unavailable", "refused"} or
+            packet.get("data_refusal") != ("task_payload_invalid" if packet["data_outcome"] == "refused" else None)):
+        raise Refusal("source_observation_refused")
+    try:
+        observed_at = datetime.fromisoformat(packet["observed_at"])
+        if observed_at.tzinfo is None or (fresh and not -5 <= (datetime.now(timezone.utc) - observed_at).total_seconds() <= 300):
+            raise ValueError()
+    except (KeyError, TypeError, ValueError) as exc:
+        raise Refusal("source_observation_time_refused") from exc
+
+
+def source_probe(environment: dict[str, str], target: int) -> dict[str, Any]:
+    # The container's declared user and existing mounted consumer credential are used.
+    # No host-side API identity, env override, token or source payload crosses this boundary.
+    script = (ROOT / "scripts/devui_source_binding_probe.py").read_text()
+    try:
+        packet = json.loads(run(["docker", "--context", "builderops", "exec", CONTAINER,
+                                 "python", "-B", "-c", script,
+                                 "--repository", environment["DEVUI_REPOSITORY"].lower(),
+                                 "--epoch", str(target), "--source-sha", environment["DEVUI_SOURCE_SHA"]]))
+    except (ValueError, OSError) as exc:
+        raise Refusal("source_probe_invalid") from exc
+    validate_source(packet, environment, target, fresh=True)
+    return packet
+
+
+def rebind(plan: dict[str, Any]) -> bool:
+    baseline = plan["baseline"]["environment"]
+    target = plan["target_environment"]
+    if plan.get("contract") == V1:
+        if target.get("DEVUI_BUILDEROPS_AUTHORITY_EPOCH") != baseline.get("DEVUI_BUILDEROPS_AUTHORITY_EPOCH"):
+            raise Refusal("legacy_source_change_refused")
+        return False
+    fields = {"contract", "candidate", "candidate_file_sha256", "engine_id", "authorization_reference",
+              "baseline", "target_environment", "target_directory", "target_compose", "plan_sha256",
+              "operation", "source_binding"}
+    if plan.get("contract") != V2 or set(plan) != fields or plan.get("operation") != "rebind_source_epoch":
+        raise Refusal("source_plan_refused")
+    allowed = {"DEVUI_BUILDEROPS_AUTHORITY_EPOCH", "DEVUI_CONFIG_FINGERPRINT"}
+    if (set(target) != set(baseline) or set(target) != ENV_KEYS or
+            {k for k in target if target[k] != baseline[k]} != allowed or
+            plan["candidate"]["source_sha"] != baseline["DEVUI_SOURCE_SHA"] or
+            plan["candidate"]["control_plane_image_digest"] != baseline["DEVUI_IMAGE_DIGEST"] or
+            plan["target_compose"] != plan["baseline"]["compose"]):
+        raise Refusal("source_delta_refused")
+    validate_source(plan["source_binding"], baseline, epoch(target["DEVUI_BUILDEROPS_AUTHORITY_EPOCH"]), fresh=False)
+    return True
+
+
+def prepare(candidate_file: Path, authorization: str, *, source_authority_epoch: int | None = None) -> dict[str, Any]:
     engine = boundary()
     pending()
     if not authorization.strip():
         raise Refusal("operator_reference_missing")
     candidate, candidate_hash = pair(candidate_file)
     baseline = observed()
+    source = None
+    if source_authority_epoch is not None:
+        target_epoch = epoch(source_authority_epoch)
+        if (target_epoch == epoch(baseline["environment"]["DEVUI_BUILDEROPS_AUTHORITY_EPOCH"]) or
+                candidate["source_sha"] != baseline["environment"]["DEVUI_SOURCE_SHA"] or
+                candidate["control_plane_image_digest"] != baseline["environment"]["DEVUI_IMAGE_DIGEST"]):
+            raise Refusal("source_candidate_refused")
+        source = source_probe(baseline["environment"], target_epoch)
     probe(baseline["environment"])
     browser(candidate["source_sha"], preflight=True)
     browser(baseline["environment"]["DEVUI_SOURCE_SHA"], baseline=True)
@@ -286,22 +365,29 @@ def prepare(candidate_file: Path, authorization: str) -> dict[str, Any]:
                       DEVUI_CONFIG_FINGERPRINT="sha256:" + "0" * 64)
     target_env.setdefault("DEVUI_DIAGNOSTIC_ORIGIN", "")
     target_env.setdefault("DEVUI_CKM_OVERVIEW_URL", "")
+    if source is not None:
+        target_env["DEVUI_BUILDEROPS_AUTHORITY_EPOCH"] = str(source["target_epoch"])
     directory = RELEASES / (candidate["source_sha"] + "-devui-component")
     stage(directory, files)
     rendered = json.loads(compose(directory, target_env, ["config", "--format", "json"]))
     target_env["DEVUI_CONFIG_FINGERPRINT"] = validate_config(rendered, target_env)
     validate_config(json.loads(compose(Path(baseline["directory"]), baseline["environment"], ["config", "--format", "json"])), baseline["environment"], baseline=True)
-    body = {"contract": "devui_component_promotion_plan.v1", "candidate": candidate,
+    body = {"contract": V1, "candidate": candidate,
             "candidate_file_sha256": candidate_hash,
             "engine_id": engine, "authorization_reference": authorization, "baseline": baseline,
             "target_environment": target_env, "target_directory": str(directory), "target_compose": files}
-    return {**body, "plan_sha256": digest(body)}
+    if source is not None:
+        body.update(contract=V2, operation="rebind_source_epoch", source_binding=source)
+    result = {**body, "plan_sha256": digest(body)}
+    rebind(result)
+    return result
 
 
 def apply(plan: dict[str, Any], candidate_file: Path, expected_digest: str) -> dict[str, Any]:
     body = {k: v for k, v in plan.items() if k != "plan_sha256"}
-    if plan.get("contract") != "devui_component_promotion_plan.v1" or plan.get("plan_sha256") != expected_digest or digest(body) != expected_digest:
+    if plan.get("contract") not in {V1, V2} or plan.get("plan_sha256") != expected_digest or digest(body) != expected_digest:
         raise Refusal("plan_digest_refused")
+    source_change = rebind(plan)
     engine = boundary()
     pending()
     candidate, candidate_hash = pair(candidate_file)
@@ -326,6 +412,7 @@ def apply(plan: dict[str, Any], candidate_file: Path, expected_digest: str) -> d
     probe(baseline["environment"])
     browser(candidate["source_sha"], preflight=True)
     browser(baseline["environment"]["DEVUI_SOURCE_SHA"], baseline=True)
+    source_before = source_probe(baseline["environment"], epoch(environment["DEVUI_BUILDEROPS_AUTHORITY_EPOCH"])) if source_change else None
     record: dict[str, Any] = {"receipt_type": "devui_component_deployment.v1", "plan_sha256": expected_digest,
               "observed_at": datetime.now(timezone.utc).isoformat(), "engine_id": engine,
               "candidate_receipt_sha256": plan["candidate_file_sha256"],
@@ -335,6 +422,10 @@ def apply(plan: dict[str, Any], candidate_file: Path, expected_digest: str) -> d
               "outcome": "pending", "complete_dev_system_health": False, "source_qualification": False,
               "owner_pilot": False, "owner_trial": False, "owner_acceptance": False, "secret_material": "absent"}
     compose(directory, environment, ["pull", "devui"])
+    if source_change:
+        # Image pull can take time. Recheck source admission immediately before the first effect.
+        source_before = source_probe(baseline["environment"], epoch(environment["DEVUI_BUILDEROPS_AUTHORITY_EPOCH"]))
+        record.update(operation="rebind_source_epoch", source_binding_before=source_before)
     atomic(attempt, record)
     try:
         compose(directory, environment, ["up", "-d", "--no-deps", "--force-recreate", "devui"])
@@ -347,6 +438,8 @@ def apply(plan: dict[str, Any], candidate_file: Path, expected_digest: str) -> d
         record["runtime"] = probe(environment)
         record["browser"] = browser(candidate["source_sha"])
         record["container"] = require_runtime(environment, str(directory), plan["target_compose"])
+        if source_change:
+            record["source_binding_after"] = source_probe(environment, epoch(environment["DEVUI_BUILDEROPS_AUTHORITY_EPOCH"]))
     except Refusal:
         try:
             # A completed Compose plus exact target readback permits compensation.
@@ -373,6 +466,7 @@ def rollback(plan: dict[str, Any], expected_digest: str) -> dict[str, Any]:
     body = {k: v for k, v in plan.items() if k != "plan_sha256"}
     if digest(body) != expected_digest or plan.get("plan_sha256") != expected_digest:
         raise Refusal("plan_digest_refused")
+    rebind(plan)
     engine = boundary()
     pending()
     attempt = RECEIPTS / ("devui-component-" + expected_digest.removeprefix("sha256:") + ".json")
@@ -411,10 +505,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plan", required=True, type=Path)
     parser.add_argument("--authorization-reference", default="")
     parser.add_argument("--expected-plan-sha256", default="")
+    parser.add_argument("--source-authority-epoch")
     args = parser.parse_args(argv)
     try:
+        if args.source_authority_epoch is not None and args.action != "plan":
+            raise Refusal("source_epoch_plan_only")
         if args.action == "plan":
-            result = prepare(args.candidate_pair, args.authorization_reference)
+            result = prepare(args.candidate_pair, args.authorization_reference,
+                             source_authority_epoch=epoch(args.source_authority_epoch) if args.source_authority_epoch is not None else None)
             atomic(args.plan, result)
             print(json.dumps({"plan_sha256": result["plan_sha256"], "effect": "none"}))
         elif args.action == "apply":

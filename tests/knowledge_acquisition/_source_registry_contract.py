@@ -586,6 +586,75 @@ def assert_memory_json_isolation(make_registry: RegistryFactory) -> None:
     assert final.provenance["detail"]["reason"] == "test"
 
 
+def assert_policy_filter_validation_and_versioning(make_registry: RegistryFactory) -> None:
+    """Filter schema and effective policy-version bumps match in both backends."""
+    reg = make_registry()
+    filters = {
+        "language_allowlist": ["en", "sv"],
+        "min_duration_seconds": 30,
+        "max_duration_seconds": 900,
+        "channel_allowlist": ["UC" + "a" * 22],
+    }
+    binding = reg.register(
+        collection_kind="subscription_feed",
+        collection_ref="UC" + "b" * 22,
+        title="Synthetic subscription",
+        acquisition_policy={"mode": "acquire_if_filter_matches", "filters": filters},
+    )
+    assert binding.acquisition_policy["policy_version"] == 1
+    assert binding.acquisition_policy["filters"] == filters
+
+    with pytest.raises(SourceRegistryValidationError):
+        reg.register(
+            collection_kind="subscription_feed",
+            collection_ref="UC" + "c" * 22,
+            title="Missing filter schema",
+            acquisition_policy={"mode": "acquire_if_filter_matches"},
+        )
+    for invalid in (
+        {},
+        {"language_allowlist": ["EN"]},
+        {"language_allowlist": ["zz"]},
+        {"language_allowlist": []},
+        {"min_duration_seconds": float("nan")},
+        {"min_duration_seconds": 901, "max_duration_seconds": 900},
+        {"unknown": True},
+    ):
+        with pytest.raises(SourceRegistryValidationError):
+            reg.register(
+                collection_kind="subscription_feed",
+                collection_ref="UC" + uuid.uuid4().hex[:22],
+                title="Invalid filter",
+                acquisition_policy={"mode": "acquire_if_filter_matches", "filters": invalid},
+            )
+    with pytest.raises(SourceRegistryValidationError):
+        reg.register(
+            collection_kind="subscription_feed",
+            collection_ref="UC" + "d" * 22,
+            title="Filters with discover-only",
+            acquisition_policy={"mode": "discover_only", "filters": filters},
+        )
+
+    unchanged = reg.update_acquisition_policy(
+        binding.binding_id,
+        {"mode": "acquire_if_filter_matches", "filters": filters},
+    )
+    assert unchanged.acquisition_policy["policy_version"] == 1
+    changed_filters = {**filters, "min_duration_seconds": 60}
+    updated = reg.update_acquisition_policy(binding.binding_id, {"filters": changed_filters})
+    assert updated.acquisition_policy["policy_version"] == 2
+    assert updated.acquisition_policy["filters"] == changed_filters
+    unchanged_again = reg.update_acquisition_policy(binding.binding_id, {"filters": changed_filters})
+    assert unchanged_again.acquisition_policy["policy_version"] == 2
+    switched = reg.update_acquisition_policy(binding.binding_id, {"mode": "acquire_transcript"})
+    assert switched.acquisition_policy["policy_version"] == 3
+    assert "filters" not in switched.acquisition_policy
+    with pytest.raises(SourceRegistryValidationError, match="only valid with acquire_if_filter_matches"):
+        reg.update_acquisition_policy(binding.binding_id, {"filters": {"unknown": True}})
+    with pytest.raises(SourceRegistryValidationError):
+        reg.update_acquisition_policy(binding.binding_id, {"policy_version": 99})
+
+
 def assert_provenance_is_strict_portable_json(make_registry: RegistryFactory) -> None:
     """Provenance validation is identical before memory/Postgres selection."""
     reg = make_registry()
@@ -693,4 +762,5 @@ ALL_CONTRACT_ASSERTIONS: tuple[Callable[[RegistryFactory], None], ...] = (
     assert_provenance_is_strict_portable_json,
     assert_memory_json_isolation,
     assert_inbox_poll_outcomes,
+    assert_policy_filter_validation_and_versioning,
 )
