@@ -634,12 +634,18 @@ class DormantSettingsRebindReconciler:
         if candidate is None:
             return "refused"
         try:
+            configured_identity = resolve_filesystem_root_identity(configured_root)
             if not same_filesystem_root(
-                resolve_filesystem_root_identity(configured_root),
+                configured_identity,
                 resolve_filesystem_root_identity(candidate.path),
             ):
                 return "refused"
         except FilesystemIdentityError:
+            return "refused"
+        if not configured_identity.materialized:
+            # Two identical missing canonical paths compare equal, but an unmounted
+            # root cannot be scanned: stay refused and idle rather than re-arm a loop
+            # whose next tick would raise before candidate-policy validation.
             return "refused"
         cfg.enable = True
         cfg.vault_path = configured_root

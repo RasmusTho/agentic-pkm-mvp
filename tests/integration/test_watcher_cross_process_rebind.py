@@ -1532,6 +1532,50 @@ def test_cancelled_selection_after_cleared_default_keeps_watcher_disabled(
     assert reconciler.begin_cycle(cfg).mode == "stable"
 
 
+def test_idle_watcher_is_not_rearmed_on_an_unmounted_configured_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#6144 review: re-arm after CLEAR validates the configured root is usable."""
+    import shutil
+
+    runtime, vault_a, _vault_b, config_path = _fixture(
+        tmp_path, monkeypatch, prepare=False
+    )
+    # After a completed CLEAR the loop is idle; the configured root A then goes
+    # missing while a default SET prepares its still-registered binding.
+    prepared = SettingsRebindRecord(
+        desired_revision=2,
+        applied_revision=1,
+        phase="prepared",
+        lifecycle_posture="watcher",
+        prior_binding_id=None,
+        candidate_binding_id="binding-a",
+        reload_revision=1,
+        scalar_drain_revision=1,
+    )
+    runtime.registry.set_settings_rebind_state(
+        prepared.as_payload(),
+        _capability=STORAGE_MUTATION_CAPABILITY,
+    )
+    # The long-lived loop loaded its config while A was mounted.
+    cfg = registry.load_registry_config(config_path)
+    cfg.enable = False
+    shutil.rmtree(vault_a)
+    reconciler = DormantSettingsRebindReconciler(
+        registry_path=runtime.registry.path,
+        state_dir=tmp_path / "watcher-state",
+    )
+
+    cycle = reconciler.begin_cycle(cfg)
+
+    # Two identical missing paths compare equal, but a missing root is not usable:
+    # the cycle stays refused and idle instead of re-arming a scan that would raise.
+    assert cycle.mode == "refused"
+    assert cfg.enable is False
+    assert runtime.open_settings_rebind_store().read() == prepared
+
+
 def test_stranded_no_lifecycle_default_set_commits_default(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
