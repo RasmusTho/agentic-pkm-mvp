@@ -306,6 +306,7 @@ class _Scanner(ast.NodeVisitor):
         self.found: dict[str, set[str]] = {}
         self._env_loop_names: dict[str | None, tuple[str, ...]] = {}
         self.env_tuples: dict[str, tuple[str, ...]] = {}
+        self.env_aliases: dict[str, str] = {}
 
     def _record(self, symbol: str) -> None:
         self.found.setdefault(".".join(self.stack) or "<module>", set()).add(symbol)
@@ -330,6 +331,11 @@ class _Scanner(ast.NodeVisitor):
         for alias in node.names:
             if alias.name in GLOBAL_RESOLUTION_SYMBOLS and alias.asname:
                 self.aliases[alias.asname] = alias.name
+            elif alias.name in ENV_READ_FUNCTIONS and alias.asname:
+                # ``from os import getenv as read_env`` is still an env read.
+                self.env_aliases[alias.asname] = alias.name
+            elif alias.name == "environ" and alias.asname:
+                self.env_aliases[alias.asname] = "environ"
 
     def visit_Name(self, node: ast.Name) -> None:
         canonical = self.aliases.get(node.id, node.id)
@@ -340,6 +346,11 @@ class _Scanner(ast.NodeVisitor):
         if node.attr in GLOBAL_RESOLUTION_SYMBOLS:
             self._record(node.attr)
         self.generic_visit(node)
+
+    def _is_environ(self, node: ast.AST) -> bool:
+        if isinstance(node, ast.Name) and self.env_aliases.get(node.id) == "environ":
+            return True
+        return _is_environ(node)
 
     def _record_env_key(self, node: ast.AST | None) -> None:
         """Record the global vault env names an environment-read key can name."""
@@ -387,19 +398,22 @@ class _Scanner(ast.NodeVisitor):
             (kw.value for kw in node.keywords if kw.arg in ENV_READ_KEYWORDS), None
         )
         if key is not None and (
-            (isinstance(func, ast.Name) and func.id in ENV_READ_FUNCTIONS)
+            (
+                isinstance(func, ast.Name)
+                and self.env_aliases.get(func.id, func.id) in ENV_READ_FUNCTIONS
+            )
             or (isinstance(func, ast.Attribute) and func.attr in ENV_READ_FUNCTIONS)
             or (
                 isinstance(func, ast.Attribute)
                 and func.attr in ENVIRON_READ_METHODS
-                and _is_environ(func.value)
+                and self._is_environ(func.value)
             )
         ):
             self._record_env_key(key)
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
-        if _is_environ(node.value):
+        if self._is_environ(node.value):
             self._record_env_key(node.slice)
         self.generic_visit(node)
 

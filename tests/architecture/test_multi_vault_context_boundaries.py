@@ -164,6 +164,14 @@ def test_gate_fails_on_stale_allowlist_entry() -> None:
         ("import os\ndef f():\n    return os.getenv(key='VAULT_ROOT')\n", {"env:VAULT_ROOT"}),
         ("def f():\n    return env_str(key='VAULT_DIR')\n", {"env:VAULT_DIR"}),
         (
+            "from os import getenv as read_env\ndef f():\n    return read_env('VAULT_ROOT')\n",
+            {"env:VAULT_ROOT"},
+        ),
+        (
+            "from os import environ as env\ndef f():\n    return env.get('VAULT_DIR')\n",
+            {"env:VAULT_DIR"},
+        ),
+        (
             "import os\ndef f():\n    for n in ('X', 'VAULT_DIR'):\n        v = os.getenv(n)\n",
             {"env:VAULT_DIR"},
         ),
