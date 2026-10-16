@@ -95,4 +95,38 @@ def require_scoped_read_context(
     return context
 
 
-__all__ = ["reject_scoped_vault_mutation", "require_scoped_read_context", "resolve_read_context"]
+def resolve_optional_scoped_read_context(
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+    x_active_context_session: str | None = Header(default=None),
+    x_active_context_override: str | None = Header(default=None),
+) -> ActiveContextSetV1 | None:
+    """Bind a carrier-bearing read to its own context; leave carrier-free reads legacy.
+
+    MVR-05B2 migrates companion read routes in place, so one URL serves two
+    separately identified journeys. A request that presents a selection carrier
+    is resolved with exactly the scoped-route semantics above (never downgraded
+    to an instance-default or no-vault read). A carrier-free request returns
+    ``None`` *without* resolving anything, so the shipped client keeps its
+    legacy single-binding journey until MVR-05B5 activates the carrier.
+    """
+
+    if x_active_context_session is None and x_active_context_override is None:
+        # Only an absent carrier is the legacy journey. A present-but-blank one is
+        # an invalid scoped carrier and fails closed below, never falls back.
+        return None
+    context = resolve_read_context(
+        request,
+        api_key=api_key,
+        x_active_context_session=x_active_context_session,
+        x_active_context_override=x_active_context_override,
+    )
+    return require_scoped_read_context(request, context)
+
+
+__all__ = [
+    "reject_scoped_vault_mutation",
+    "require_scoped_read_context",
+    "resolve_optional_scoped_read_context",
+    "resolve_read_context",
+]
