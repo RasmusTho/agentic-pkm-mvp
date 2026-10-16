@@ -85,7 +85,9 @@ jobs:
     # Fail loud: route every red or broken run (not a cancelled one) to the
     # rolling alert Issue; close it again on green.
     needs: heavy-tests
-    if: always() && needs.heavy-tests.result != 'cancelled'
+    # Only main owns the rolling alert; a dispatch from another branch must not
+    # open or close it.
+    if: always() && needs.heavy-tests.result != 'cancelled' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
