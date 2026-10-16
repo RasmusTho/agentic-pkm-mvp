@@ -254,10 +254,6 @@ ENV_READ_FUNCTIONS = frozenset({"getenv", "env_str"})
 ENVIRON_READ_METHODS = frozenset({"get", "pop", "setdefault"})
 
 
-def _name_id(node: ast.AST | None) -> str | None:
-    return node.id if isinstance(node, ast.Name) else None
-
-
 def _env_names_in(node: ast.AST) -> tuple[str, ...]:
     if not isinstance(node, (ast.Tuple, ast.List)):
         return ()
@@ -280,6 +276,9 @@ def _module_env_tuples(tree: ast.Module) -> dict[str, tuple[str, ...]]:
         else:
             continue
         names = _env_names_in(value)
+        if isinstance(value, ast.Constant) and value.value in GLOBAL_ENV_NAMES:
+            # ``VAULT_KEY = "VAULT_ROOT"`` then ``os.getenv(VAULT_KEY)``.
+            names = (value.value,)
         if isinstance(target, ast.Name) and names:
             bound[target.id] = names
     return bound
@@ -327,9 +326,42 @@ class _Scanner(ast.NodeVisitor):
             self._record(node.attr)
         self.generic_visit(node)
 
-    def _record_env_names(self, node: ast.AST | None) -> None:
+    def _record_env_key(self, node: ast.AST | None) -> None:
+        """Record the global vault env names an environment-read key can name."""
+
+        names: tuple[str, ...] = ()
         if isinstance(node, ast.Constant) and node.value in GLOBAL_ENV_NAMES:
-            self._record(ENV_SYMBOL_PREFIX + node.value)
+            names = (node.value,)
+        elif isinstance(node, ast.Name):
+            names = self._env_loop_names.get(node.id) or self.env_tuples.get(node.id, ())
+        for name in names:
+            self._record(ENV_SYMBOL_PREFIX + name)
+
+    def _loop_names(self, target: ast.AST, iterable: ast.AST) -> tuple[str | None, tuple[str, ...]]:
+        if not isinstance(target, ast.Name):
+            return None, ()
+        if isinstance(iterable, (ast.Tuple, ast.List)):
+            return target.id, _env_names_in(iterable)
+        if isinstance(iterable, ast.Name):
+            return target.id, self.env_tuples.get(iterable.id, ())
+        return target.id, ()
+
+    def _visit_comprehension(self, node: ast.AST) -> None:
+        # ``os.getenv(n) for n in ("VAULT_ROOT", ...)`` reads each named key.
+        bound: dict[str | None, tuple[str, ...]] = {}
+        for generator in getattr(node, "generators", ()):
+            name, names = self._loop_names(generator.target, generator.iter)
+            if names:
+                bound[name] = names
+        previous = dict(self._env_loop_names)
+        self._env_loop_names.update(bound)
+        self.generic_visit(node)
+        self._env_loop_names = previous
+
+    visit_GeneratorExp = _visit_comprehension
+    visit_ListComp = _visit_comprehension
+    visit_SetComp = _visit_comprehension
+    visit_DictComp = _visit_comprehension
 
     def visit_Call(self, node: ast.Call) -> None:
         # Only an actual environment read counts: ``os.getenv("VAULT_ROOT")``,
@@ -345,28 +377,18 @@ class _Scanner(ast.NodeVisitor):
                 and _is_environ(func.value)
             )
         ):
-            self._record_env_names(node.args[0])
-            loop_names = self._env_loop_names.get(_name_id(node.args[0]), ())
-            for name in loop_names:
-                self._record(ENV_SYMBOL_PREFIX + name)
+            self._record_env_key(node.args[0])
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         if _is_environ(node.value):
-            self._record_env_names(node.slice)
-            for name in self._env_loop_names.get(_name_id(node.slice), ()):
-                self._record(ENV_SYMBOL_PREFIX + name)
+            self._record_env_key(node.slice)
         self.generic_visit(node)
 
     def visit_For(self, node: ast.For) -> None:
         # ``for name in ("VAULT_ROOT", "VAULT_DIR"): os.getenv(name)`` reads both.
-        names: tuple[str, ...] = ()
-        if isinstance(node.target, ast.Name):
-            if isinstance(node.iter, (ast.Tuple, ast.List)):
-                names = _env_names_in(node.iter)
-            elif isinstance(node.iter, ast.Name):
-                # ``CANDIDATES = (..., "VAULT_ROOT")`` bound elsewhere in the module.
-                names = self.env_tuples.get(node.iter.id, ())
+        # ``CANDIDATES = (..., "VAULT_ROOT")`` may be bound elsewhere in the module.
+        _, names = self._loop_names(node.target, node.iter)
         if names:
             assert isinstance(node.target, ast.Name)
             previous = self._env_loop_names.get(node.target.id)

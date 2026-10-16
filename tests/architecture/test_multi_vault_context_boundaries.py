@@ -168,6 +168,19 @@ def test_gate_fails_on_stale_allowlist_entry() -> None:
             "def f():\n    for n in NAMES:\n        v = os.getenv(n)\n",
             {"env:VAULT_ROOT"},
         ),
+        (
+            "import os\nVAULT_KEY = 'VAULT_ROOT'\ndef f():\n    return os.getenv(VAULT_KEY)\n",
+            {"env:VAULT_ROOT"},
+        ),
+        (
+            "import os\nNAMES = ('VAULT_DIR',)\n"
+            "def f():\n    return next(os.getenv(n) for n in NAMES)\n",
+            {"env:VAULT_DIR"},
+        ),
+        (
+            "import os\ndef f():\n    return [os.environ[n] for n in ('VAULT_ROOT',)]\n",
+            {"env:VAULT_ROOT"},
+        ),
     ],
 )
 def test_detector_sees_structural_forms_not_substrings(source: str, expected: set[str]) -> None:

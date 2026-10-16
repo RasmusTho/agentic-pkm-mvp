@@ -87,6 +87,22 @@ def test_companion_ui_change_selects_companion_and_api_targets() -> None:
     assert "not panel_llm_e2e" in selection.pytest_args
 
 
+@pytest.mark.parametrize(
+    "changed",
+    [
+        "app/api/routes/capture.py",
+        "app/agents/ask/graph.py",
+        "app/mcp/vault_tools.py",
+    ],
+)
+def test_guarded_request_entrypoints_always_run_the_context_boundary_gate(changed: str) -> None:
+    """#6136 review: a guarded entrypoint change cannot skip the MVR-05B boundary gate."""
+
+    selection = select_tests([changed])
+
+    assert "tests/architecture/test_multi_vault_context_boundaries.py" in selection.targets
+
+
 def test_mimer_mcp_adapter_selects_semantic_and_existing_http_contract_tests() -> None:
     selection = select_tests(["app/mimer_mcp/server.py"])
 
