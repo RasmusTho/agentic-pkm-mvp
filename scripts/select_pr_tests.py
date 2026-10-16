@@ -243,6 +243,47 @@ E2E_OWNER_BY_FILE["tests/e2e/test_panel_llm_e2e.py"] = "promotion_panel"
 
 GENERIC_PR_EXCLUDED_TARGETS = frozenset({"tests/e2e/test_panel_llm_e2e.py"})
 
+# Heavy test targets run on the PR path only when the PR changes a source they
+# exercise; otherwise the post-merge/nightly heavy-tests workflow
+# (.github/workflows/post-merge-heavy-tests.yml) runs them on main and files a
+# high-priority alert Issue when red (#6154, owner decision 2026-10-16). Admit
+# a target here only with a timing receipt. `tests/deploy` was ~1497 s of PR
+# #6134's 2287 s unit step and timed out PR #6152, because ops_deploy owns all
+# of `scripts/` and any script change unioned it in. A changed test module
+# inside a deferred directory still runs as its own changed-file target; any
+# other changed file inside the directory (conftest, helpers) keeps it whole.
+HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
+    "tests/deploy": (
+        # Every repo script tests/deploy references (census-enforced by
+        # tests/scripts/test_select_pr_tests.py), plus the deploy-channel
+        # config, ops and release-channel surfaces it exercises.
+        "scripts/lib/",
+        "scripts/companion_ui_postdeploy_smoke.sh",
+        "scripts/compose_env.py",
+        "scripts/deploy_channel.sh",
+        "scripts/dev_test_environment_clobber_preflight.py",
+        "scripts/export_runtime_env.sh",
+        "scripts/install_bws_deploy_runtime.sh",
+        "scripts/install_postmerge_controller.py",
+        "scripts/instance_state_writer_inventory.py",
+        "scripts/postgres_deploy_service.py",
+        "scripts/postgres_entrypoint.sh",
+        "scripts/postmerge_dev_test.py",
+        "scripts/prod_deploy_retry_preflight.py",
+        "scripts/prod_devui_gateway_preflight.py",
+        "scripts/run_migrations.sh",
+        "scripts/start_api.sh",
+        "scripts/start_full_system.sh",
+        "ops/",
+        "config/deploy/",
+        "app/release_channels/",
+        "tests/release_channels/",
+        "docs/RELEASE_CHANNELS/",
+        "tests/helpers/runtime_start_harness.py",
+        "tests/runtime/test_start_full_system_version_marker.py",
+    ),
+}
+
 SUBSYSTEMS: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "builder_system",
@@ -1210,12 +1251,14 @@ class Selection:
     targets: tuple[str, ...]
     reason: str
     unowned_paths: tuple[str, ...] = ()
+    deferred_targets: tuple[str, ...] = ()
 
     @property
     def pytest_args(self) -> str:
         marker = f'-m "{PR_MARKER_EXPRESSION}"'
         if self.full_suite:
-            return f"-q {marker} tests --ignore=tests/e2e"
+            ignores = "".join(f" --ignore={target}" for target in ("tests/e2e", *self.deferred_targets))
+            return f"-q {marker} tests{ignores}"
         return " ".join(("-q", marker, *self.targets))
 
 
@@ -1351,6 +1394,44 @@ def _pr_targets(targets: list[str]) -> tuple[str, ...]:
     )
 
 
+def _is_test_module(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+
+
+def _heavy_target_triggered(target: str, triggers: tuple[str, ...], paths: tuple[str, ...]) -> bool:
+    return any(
+        path in triggers
+        or any(trigger.endswith("/") and path.startswith(trigger) for trigger in triggers)
+        or (_within_target_dirs(path, (target,)) and not _is_test_module(path))
+        for path in paths
+    )
+
+
+def _deferred_heavy_targets(paths: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(
+        target
+        for target, triggers in HEAVY_PR_DEFERRED_TARGETS.items()
+        if not _heavy_target_triggered(target, triggers, paths)
+    )
+
+
+def _defer_heavy(selection: Selection, paths: tuple[str, ...]) -> Selection:
+    deferred = _deferred_heavy_targets(paths)
+    if not selection.full_suite:
+        deferred = tuple(target for target in deferred if target in selection.targets)
+    if not deferred:
+        return selection
+    return Selection(
+        selection.full_suite,
+        selection.subsystems,
+        tuple(target for target in selection.targets if target not in deferred),
+        selection.reason,
+        selection.unowned_paths,
+        deferred,
+    )
+
+
 def _unowned_runtime_code_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
     runtime_prefixes = ("app/", "companion-ui/")
     owned_prefixes = tuple(prefix for _, prefixes, _ in SUBSYSTEMS for prefix in prefixes)
@@ -1372,7 +1453,7 @@ def select_tests(changed_files: list[str]) -> Selection:
         return Selection(True, (), (), "no changed files were provided")
 
     if any(_is_full_suite_file(path) for path in paths):
-        return Selection(True, (), (), FULL_SUITE_REASONS[0])
+        return _defer_heavy(Selection(True, (), (), FULL_SUITE_REASONS[0]), paths)
 
     non_e2e_paths = tuple(path for path in paths if not path.startswith("tests/e2e/"))
     if not non_e2e_paths:
@@ -1390,7 +1471,7 @@ def select_tests(changed_files: list[str]) -> Selection:
         or path.startswith("tests/migrations/")
         for path in paths
     ):
-        return Selection(True, (), (), FULL_SUITE_REASONS[1])
+        return _defer_heavy(Selection(True, (), (), FULL_SUITE_REASONS[1]), paths)
 
     unowned_runtime_code = _unowned_runtime_code_paths(paths)
     if unowned_runtime_code:
@@ -1443,7 +1524,9 @@ def select_tests(changed_files: list[str]) -> Selection:
     # Every scoped branch funnels through this single return, so a changed
     # tests/** file is always unioned in exactly once — no per-branch splice
     # to forget if a future branch is added here (the #3383 failure mode).
-    return Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason)
+    return _defer_heavy(
+        Selection(False, subsystems, _pr_targets([*targets, *changed_tests]), reason), paths
+    )
 
 
 def changed_files_from_git(base_ref: str, head_ref: str) -> list[str]:
@@ -1490,6 +1573,7 @@ def _write_github_output(path: str, selection: Selection, *, runtime_checks: boo
         handle.write(f"subsystems={','.join(selection.subsystems) or 'all'}\n")
         handle.write(f"pytest_args={selection.pytest_args}\n")
         handle.write(f"reason={selection.reason}\n")
+        handle.write(f"deferred_targets={' '.join(selection.deferred_targets)}\n")
         handle.write(f"runtime_checks={'true' if runtime_checks else 'false'}\n")
 
 
@@ -1499,7 +1583,16 @@ def main() -> int:
     parser.add_argument("--base-ref", default="", help="Base git ref for diff selection.")
     parser.add_argument("--head-ref", default="HEAD", help="Head git ref for diff selection.")
     parser.add_argument("--github-output", default="", help="Optional GITHUB_OUTPUT path.")
+    parser.add_argument(
+        "--print-heavy-targets",
+        action="store_true",
+        help="Print the heavy targets the post-merge/nightly heavy-tests workflow runs, then exit.",
+    )
     args = parser.parse_args()
+
+    if args.print_heavy_targets:
+        print(" ".join(HEAVY_PR_DEFERRED_TARGETS))
+        return 0
 
     changed = args.changed_file
     if not changed and args.base_ref:
@@ -1513,11 +1606,13 @@ def main() -> int:
             _existing_test_targets(selection.targets),
             selection.reason,
             selection.unowned_paths,
+            selection.deferred_targets,
         )
     print(f"full_suite={'true' if selection.full_suite else 'false'}")
     print(f"subsystems={','.join(selection.subsystems) or 'all'}")
     print(f"pytest_args={selection.pytest_args}")
     print(f"reason={selection.reason}")
+    print(f"deferred_targets={' '.join(selection.deferred_targets)}")
     if selection.unowned_paths:
         print(f"unowned_paths={','.join(selection.unowned_paths)}")
         return 2

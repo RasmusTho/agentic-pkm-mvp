@@ -348,6 +348,7 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Runtime PRs should run focused tests first and add smoke only when the runtime surface is actually touched.
 - Subsystem-scoped CI must be conservative: workflow/test configuration, dependency files, migrations, and shared fixtures choose the broad deterministic suite. Unmapped runtime paths fail selection until an owner is declared; they must never silently borrow the whole repository's suite.
 - E2E coverage is reserved for post-merge, nightly, or explicit manual verification.
+- Heavy test targets in `HEAVY_PR_DEFERRED_TARGETS` run on the PR path only when the PR changes a source they exercise; otherwise they run in `post-merge-heavy-tests.yml` (see `:: Post-merge heavy tests`).
 - When a governing contract names an exact-ref browser proof, dispatch the dedicated workflow only
   after publishing the candidate and authenticate the result and artifacts against its resolved
   SHA; do not reinterpret ordinary unit CI as browser evidence.
@@ -355,6 +356,15 @@ records activation and ten-candidate measurement; measurement does not gate ordi
 - Direct repair PRs are classified by the surfaces they touch, not by whether they carry a governing issue.
 - Failing required checks must be classified, not ignored as out-of-scope.
 - A required check that is stale, missing, or unrelated to the current head SHA is a blocking classification problem, not a silent pass.
+
+## Post-merge heavy tests
+
+Owner decision (verbal, 2026-10-16, recorded in #6154): heavy test sets do not run on the PR path. They run after merge and nightly. Moving them to the ygg-dev / ygg-test verification VMs is a later step.
+
+- `scripts/select_pr_tests.py :: HEAVY_PR_DEFERRED_TARGETS` maps each heavy target to the source paths it exercises. A scoped or full-suite PR selection keeps a heavy target only when the PR changes one of those paths, or a non-test file inside the target (a `conftest.py` or helper). Otherwise the selector drops it and reports it as `deferred_targets` (stdout and `GITHUB_OUTPUT`). The full-suite lane skips the deferred shard and logs `SHARD DEFERRED`. A changed test module inside a deferred directory still runs as its own changed-file target.
+- The only entry today is `tests/deploy`, kept on the PR path for deploy-channel sources (`scripts/deploy_channel.sh`, `scripts/lib/**`, the deploy helper scripts, `ops/**`, `config/deploy/**`, release-channel surfaces). It took ~1497 s of PR #6134's 2287 s unit step and timed out PR #6152, because `ops_deploy` owns all of `scripts/`. A census test keeps the trigger set covering every repo script that `tests/deploy` references. Add a target only with a timing receipt.
+- `.github/workflows/post-merge-heavy-tests.yml` runs `select_pr_tests.py --print-heavy-targets` on every push to `main`, nightly, and on `workflow_dispatch`. It uses the PR marker expression and the 120-second per-test watchdog, and never cancels a started run. An empty target list fails instead of passing vacuously.
+- Red routing: a failed run opens one rolling `type:bug` + `prio:high` + `agent:ready` alert Issue rendered by `scripts/post_merge_heavy_tests_alert.py`, or comments on the open one. The alert job also exits red. The next green run comments and closes the alert. The workflow is not a required PR check; a green `Unit tests (not pg)` does not prove the deferred heavy targets.
 
 ## Historical selector replay
 

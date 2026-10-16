@@ -831,9 +831,13 @@ jobs:
         timeout-minutes: 60
         env:
           PYTEST_ADDOPTS: "--timeout=120 --timeout-method=thread"
+          # Heavy targets the selector deferred (#6154); the post-merge heavy
+          # tests workflow runs them on main and alerts when red.
+          DEFERRED_TARGETS: ${{ steps.select-tests.outputs.deferred_targets }}
         run: |
           set -euo pipefail
           echo "Selected subsystems: ${{ steps.select-tests.outputs.subsystems }}"
+          echo "Deferred to post-merge heavy tests: ${DEFERRED_TARGETS:-none}"
           echo "Selection reason: ${{ steps.select-tests.outputs.reason }}"
           # xdist workers are separate pytest processes, but this suite also
           # contains tests that inspect host-wide process state and tests whose
@@ -885,6 +889,10 @@ jobs:
               case "$shard" in
                 tests/ops|tests/e2e|tests/e2e/*) continue ;;
               esac
+              if [[ " ${DEFERRED_TARGETS:-} " == *" $shard "* ]]; then
+                echo "SHARD DEFERRED to post-merge heavy tests: $shard" >&2
+                continue
+              fi
               printf '%s\n' "$shard"
             done > "$shard_list"
 
