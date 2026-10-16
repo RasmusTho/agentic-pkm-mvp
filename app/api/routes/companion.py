@@ -1257,6 +1257,12 @@ def _resolve_browse_base() -> Path:
     Always returned as a realpath so the containment check compares like with
     like. Never raises: a misconfigured/unset vault root falls through to ``/``.
     """
+    scoped = _SCOPED_COMPANION_READ.get()
+    if scoped is not None and scoped.root is not None:
+        # A scoped browse is confined to its own bound root -- before the global
+        # VAULT_BROWSE_ROOT override and never its parent, either of which may
+        # hold another registered vault.
+        return scoped.root.expanduser().resolve()
     override = (os.getenv("VAULT_BROWSE_ROOT") or "").strip()
     if override:
         candidate = Path(override).expanduser()
@@ -1268,7 +1274,6 @@ def _resolve_browse_base() -> Path:
             # helper runs before the request-path guards and promises not to raise).
             return candidate
 
-    scoped = _SCOPED_COMPANION_READ.get()
     try:
         # Channel-aware (pass the active environment, like the other companion
         # helpers): a channel-specific binding such as PKM_ENVIRONMENT=test +
@@ -1276,10 +1281,6 @@ def _resolve_browse_base() -> Path:
         # otherwise it is ignored and the base falls through to '/', broadening
         # the first picker screen to the whole tree (#2565 Codex P2).
         # A scoped request browses beside its own bound root instead.
-        if scoped is not None and scoped.root is not None:
-            # A scoped browse is confined to its own bound root, never its parent:
-            # the parent may hold another registered vault.
-            return scoped.root.expanduser().resolve()
         configured = (
             None
             if scoped is not None
@@ -3466,6 +3467,10 @@ def _orientation_memory_mutation_intents(
     trace_id: str,
     emitted_at: datetime.datetime,
 ) -> list[WorkspaceOrientationMutationIntent]:
+    if _SCOPED_COMPANION_READ.get() is not None:
+        # A scoped read is read authority only: it must not append the
+        # process-global intent trace (scoped mutations stay sealed until 05C).
+        return []
     intents: list[WorkspaceOrientationMutationIntent] = []
     for candidate in candidates:
         if len(intents) >= ORIENTATION_MUTATION_INTENTS_CAP:

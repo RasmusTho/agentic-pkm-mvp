@@ -319,8 +319,10 @@ def test_scoped_now_orientation_and_browse_stay_inside_the_bound_vault(
     monkeypatch.setattr(now_surface, "query_reachout_receipts", forbidden)
     monkeypatch.setattr(companion_routes, "_orientation_memory_review_queue", forbidden)
     monkeypatch.setattr(companion_routes, "_proposal_count_for_artifact", forbidden)
-    monkeypatch.delenv("VAULT_BROWSE_ROOT", raising=False)
+    monkeypatch.setattr(companion_routes, "_append_orientation_memory_intent_trace", forbidden)
     runtime, first, _second = instance
+    # A global browse override must not widen a scoped browse beyond its root.
+    monkeypatch.setenv("VAULT_BROWSE_ROOT", str(Path(runtime.registry.lookup(first.vault_binding_id).path).parent))
     first_root = runtime.registry.lookup(first.vault_binding_id)
     assert first_root is not None
     from tests.helpers.vault_settings import initialize_test_vault
