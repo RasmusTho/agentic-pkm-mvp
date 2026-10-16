@@ -63,6 +63,7 @@ def test_context_boundary_inventory_and_allowlist_are_exact() -> None:
     """Inventory is derived and fully classified; the allowlist is neither short nor stale."""
 
     assert not inventory.missing_registered_modules()
+    assert not inventory.missing_fixed_entrypoints()
     assert not inventory.unclassified_route_modules(), (
         "request-handling route module is neither registered in app/api/app.py nor named in "
         "UNREGISTERED_ROUTE_MODULES"
@@ -159,6 +160,9 @@ def test_gate_fails_on_stale_allowlist_entry() -> None:
         ),
         ("def f():\n    return resolve_optional_vault_root()\n", {"resolve_optional_vault_root"}),
         ("def f():\n    return resolve_active_vault_root()\n", {"resolve_active_vault_root"}),
+        ("def f():\n    return resolve_vault_root()\n", {"resolve_vault_root"}),
+        ("import os\ndef f():\n    return os.getenv(key='VAULT_ROOT')\n", {"env:VAULT_ROOT"}),
+        ("def f():\n    return env_str(key='VAULT_DIR')\n", {"env:VAULT_DIR"}),
         (
             "import os\ndef f():\n    for n in ('X', 'VAULT_DIR'):\n        v = os.getenv(n)\n",
             {"env:VAULT_DIR"},
@@ -209,6 +213,17 @@ def test_detector_ignores_vault_env_literals_outside_environment_reads() -> None
         "    return {'VAULT_DIR': 1}\n"
     )
     assert scan_source(source) == {}
+
+
+def test_gate_fails_when_a_fixed_entrypoint_disappears(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#6152 review: a renamed fixed entrypoint fails instead of leaving the population."""
+
+    monkeypatch.setattr(
+        inventory,
+        "FIXED_ENTRYPOINT_MODULES",
+        (*inventory.FIXED_ENTRYPOINT_MODULES, "app/agents/ask/renamed_graph.py"),
+    )
+    assert inventory.missing_fixed_entrypoints() == {"app/agents/ask/renamed_graph.py"}
 
 
 def test_application_module_handlers_are_scanned() -> None:

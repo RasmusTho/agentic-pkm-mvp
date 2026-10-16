@@ -37,6 +37,9 @@ GLOBAL_RESOLUTION_SYMBOLS = frozenset(
         "get_vault_manager",
         "active_vault_root_or_selection_required",
         "resolve_optional_vault_root",
+        # The strict sibling of resolve_optional_vault_root reads the same
+        # process-global VAULT_ROOT.
+        "resolve_vault_root",
         "resolve_active_vault_root",
         "active_vault_selection_window",
     }
@@ -226,6 +229,16 @@ def missing_registered_modules() -> frozenset[str]:
     return frozenset(m for m in registered_router_modules() if not (ROOT / m).is_file())
 
 
+def missing_fixed_entrypoints() -> frozenset[str]:
+    """Fixed entrypoint modules that no longer exist (renamed or deleted).
+
+    A fixed entrypoint is named, not derived, so a rename must fail the gate
+    rather than silently drop the module from the scanned population.
+    """
+
+    return frozenset(m for m in FIXED_ENTRYPOINT_MODULES if not (ROOT / m).is_file())
+
+
 def entrypoint_modules() -> tuple[str, ...]:
     """Every production request-handling module the gate scans, derived."""
 
@@ -252,6 +265,8 @@ def _is_environ(node: ast.AST) -> bool:
 
 ENV_READ_FUNCTIONS = frozenset({"getenv", "env_str"})
 ENVIRON_READ_METHODS = frozenset({"get", "pop", "setdefault"})
+# ``os.getenv(key=...)`` and ``env_str(key=...)`` pass the name by keyword.
+ENV_READ_KEYWORDS = frozenset({"key"})
 
 
 def _env_names_in(node: ast.AST) -> tuple[str, ...]:
@@ -368,7 +383,10 @@ class _Scanner(ast.NodeVisitor):
         # ``getenv(...)``, ``env_str(...)`` and ``os.environ.get/pop/setdefault``.
         # A bare literal (an error argument, a docstring) is not a lookup.
         func = node.func
-        if node.args and (
+        key = node.args[0] if node.args else next(
+            (kw.value for kw in node.keywords if kw.arg in ENV_READ_KEYWORDS), None
+        )
+        if key is not None and (
             (isinstance(func, ast.Name) and func.id in ENV_READ_FUNCTIONS)
             or (isinstance(func, ast.Attribute) and func.attr in ENV_READ_FUNCTIONS)
             or (
@@ -377,7 +395,7 @@ class _Scanner(ast.NodeVisitor):
                 and _is_environ(func.value)
             )
         ):
-            self._record_env_key(node.args[0])
+            self._record_env_key(key)
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
