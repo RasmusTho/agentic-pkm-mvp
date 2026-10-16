@@ -1862,9 +1862,9 @@ def test_deploy_heavy_triggers_cover_scripts_referenced_by_deploy_tests() -> Non
     import re
 
     triggers = selector.HEAVY_PR_DEFERRED_TARGETS["tests/deploy"]
-    literal = re.compile(r"[\"']([A-Za-z0-9_./][A-Za-z0-9_./-]*)[\"']")
-    joined = re.compile(r'"([A-Za-z0-9_.-]+)"\s*/\s*"([A-Za-z0-9_.-]+)"')
-    single = re.compile(r'/\s*"([A-Za-z0-9_.-]+)"')
+    literal = re.compile(r"[\"']([A-Za-z0-9_./][A-Za-z0-9_./@+=,-]*)[\"']")
+    joined = re.compile(r'"([A-Za-z0-9_.@+=,-]+)"\s*/\s*"([A-Za-z0-9_.@+=,-]+)"')
+    single = re.compile(r'/\s*"([A-Za-z0-9_.@+=,-]+)"')
     referenced: set[str] = set()
     for test_file in (REPO_ROOT / "tests" / "deploy").rglob("*.py"):
         text = test_file.read_text(encoding="utf-8")
@@ -1877,7 +1877,10 @@ def test_deploy_heavy_triggers_cover_scripts_referenced_by_deploy_tests() -> Non
         and (REPO_ROOT / path).is_file()
     }
 
-    for required in ("scripts/deploy_channel.sh", "docker-compose.test.yml", "requirements.txt", "Dockerfile"):
+    for required in (
+        "scripts/deploy_channel.sh", "docker-compose.test.yml", "requirements.txt", "Dockerfile",
+        "config/systemd/yggdrasil-bws-deploy@.service",
+    ):
         assert required in existing, f"census no longer sees {required}"
     uncovered = sorted(
         path for path in existing

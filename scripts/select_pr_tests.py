@@ -295,6 +295,7 @@ HEAVY_PR_DEFERRED_TARGETS: dict[str, tuple[str, ...]] = {
         "config/runtime.defaults.env",
         "config/secrets/bws_reader_token_targets.json",
         "config/secrets/host_secret_contract.json",
+        "config/systemd/yggdrasil-bws-deploy@.service",
         "config/tts-disabled/.gitkeep",
         "docker-compose.app-bind.yml",
         "docker-compose.bws-external.yml",
