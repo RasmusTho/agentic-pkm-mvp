@@ -97,34 +97,77 @@ def test_two_sessions_use_distinct_vaults_without_cross_talk(instance, client, m
         [(first.vault_binding_id, "only-first.md")],
         [(second.vault_binding_id, "only-second.md")],
     ]
+
+    # MVR-05B2: the migrated companion read routes (the same URLs the legacy
+    # carrier-free journey uses) bind to each request's own context while both
+    # requests hold their shared binding leases concurrently.
+    migrated_entered = Barrier(2)
+
+    def paused_migrated(root, q=""):
+        migrated_entered.wait(timeout=5)
+        return original(root, q=q)
+
+    monkeypatch.setattr(companion_routes, "_list_vault_notes", paused_migrated)
+
+    def read_migrated(session: dict):
+        headers = {"X-Active-Context-Session": session["context_selection_id"]}
+        response = client.get("/api/companion/vault/notes", headers=headers)
+        assert response.status_code == 200, response.text
+        context = client.get("/api/companion/vault/context", headers=headers)
+        assert context.status_code == 200, context.text
+        return (
+            sorted(
+                note["path"] for note in response.json()["notes"] if note["path"].startswith("only-")
+            ),
+            context.json()["active_vault_path"],
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(read_migrated, first_session),
+            pool.submit(read_migrated, second_session),
+        ]
+        migrated = [future.result(timeout=5) for future in futures]
+
+    assert migrated == [
+        (["only-first.md"], str(Path(first_root.path).resolve())),
+        (["only-second.md"], str(Path(second_root.path).resolve())),
+    ]
+    # Neither scoped read consulted or created the process-wide selector.
+    import app.vault.manager as vault_manager_module
+
+    assert vault_manager_module._GLOBAL_MANAGER is None
     assert runtime.registry.load().default_vault_binding_id == first.vault_binding_id
 
 
 def test_authority_change_cannot_cross_read_effect_window(instance, client, monkeypatch) -> None:
-    """Rotation waits for a real scoped read, then invalidates its stale session."""
+    """Rotation waits for real scoped reads, then invalidates their stale session.
+
+    Both the dedicated scoped route and a migrated companion read route (MVR-05B2)
+    hold the shared binding lease from final revalidation through response
+    publication, so the exclusive authority mutation cannot cross either.
+    """
 
     runtime, first, _second = instance
     session = _create(client, first.vault_binding_id)
-    entered = Event()
+    headers = {"X-Active-Context-Session": session["context_selection_id"]}
+    read_routes = ("/api/companion/vault/notes/scoped", "/api/companion/vault/notes")
+    entered = Barrier(len(read_routes) + 1)
     release = Event()
     from app.api.routes import companion as companion_routes
 
     original = companion_routes._list_vault_notes
 
     def paused(root, q=""):
-        entered.set()
+        entered.wait(timeout=5)
         assert release.wait(timeout=5)
         return original(root, q=q)
 
     monkeypatch.setattr(companion_routes, "_list_vault_notes", paused)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        read_future = pool.submit(
-            client.get,
-            "/api/companion/vault/notes/scoped",
-            headers={"X-Active-Context-Session": session["context_selection_id"]},
-        )
-        assert entered.wait(timeout=5)
+    with ThreadPoolExecutor(max_workers=len(read_routes) + 1) as pool:
+        read_futures = [pool.submit(client.get, route, headers=headers) for route in read_routes]
+        entered.wait(timeout=5)
         rotation_future = pool.submit(
             principal_store(runtime).rotate_credential,
             credential="rotated-for-test",
@@ -132,20 +175,22 @@ def test_authority_change_cannot_cross_read_effect_window(instance, client, monk
         )
         with pytest.raises(TimeoutError):
             rotation_future.result(timeout=0.1)
-        # Releasing the read lets the exclusive authority mutation acquire the
-        # principal lock. Both futures must complete: no lock-order deadlock.
+        # Releasing the reads lets the exclusive authority mutation acquire the
+        # principal lock. Every future must complete: no lock-order deadlock.
         release.set()
-        read_response = read_future.result(timeout=5)
+        read_responses = [future.result(timeout=5) for future in read_futures]
         rotated = rotation_future.result(timeout=5)
 
-    assert read_response.status_code == 200, read_response.text
+    for read_response in read_responses:
+        assert read_response.status_code == 200, read_response.text
     assert rotated.revision == session["context"]["generation"] + 1
-    stale = client.get(
-        "/api/companion/vault/notes/scoped",
-        headers={"X-Active-Context-Session": session["context_selection_id"]},
-    )
-    assert stale.status_code == 401, stale.text
-    assert stale.json()["detail"] == "reselection_required: selection is not resolvable for this caller"
+    for route in read_routes:
+        stale = client.get(route, headers=headers)
+        assert stale.status_code == 401, stale.text
+        assert (
+            stale.json()["detail"]
+            == "reselection_required: selection is not resolvable for this caller"
+        )
 
 
 def test_subject_revocation_rejects_a_previously_issued_session(instance, client) -> None:

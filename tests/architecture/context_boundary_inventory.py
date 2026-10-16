@@ -92,7 +92,12 @@ def _a(module: str, scope: str, symbols: str, why: str, retired_by: str) -> Comp
 
 
 _COMPANION = "app/api/routes/companion.py"
-_COMPANION_READ = "legacy companion read route still resolves the selected vault globally"
+_COMPANION_LEGACY_READ = (
+    "carrier-free legacy companion read journey (MVR-05B2 migrated every companion read route "
+    "onto the per-request ActiveContextSet; a request without a selection carrier still renders "
+    "the process-wide single-binding selection until the shipped client sends the carrier and "
+    "the compatibility selector retires)"
+)
 _COMPANION_PICKER = (
     "legacy single-binding picker/initialize/settings bridge; the selector is the process-wide "
     "VaultManager until the background lifecycles are bound"
@@ -117,22 +122,12 @@ COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
     _a("app/api/routes/canvas.py", "_get_vault_root", "resolve_active_vault_root", _ROUTE_FAMILY, "05B3"),
     _a("app/api/routes/canvas.py", "_get_vault_root_or_picker", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
     _a("app/api/routes/capture.py", "capture_to_inbox", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
-    _a(_COMPANION, "_active_companion_vault_root", "get_vault_manager resolve_optional_vault_root", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "_memory_review_selection_required_response", "resolve_optional_vault_root", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "_memory_review_vault_context", "get_vault_manager resolve_optional_vault_root", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "_recent_vaults_response", "get_vault_manager", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "_resolve_browse_base", "resolve_optional_vault_root", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "_setting_blocked_reason", "get_vault_manager", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "_vault_context_response", "get_vault_manager", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "_vault_identity_state", "env:VAULT_ROOT get_vault_manager", _COMPANION_READ, "05B2"),
+    _a(_COMPANION, "_legacy_companion_vault_manager", "get_vault_manager", _COMPANION_LEGACY_READ, "retained:MVR-06"),
+    _a(_COMPANION, "_legacy_configured_vault_root", "resolve_optional_vault_root", _COMPANION_LEGACY_READ, "retained:MVR-06"),
+    _a(_COMPANION, "_legacy_vault_root_env_value", "env:VAULT_ROOT", _COMPANION_LEGACY_READ, "retained:MVR-06"),
     _a(_COMPANION, "initialize_companion_vault", "get_vault_manager", _COMPANION_PICKER, "retained:MVR-06"),
-    _a(_COMPANION, "read_companion_now", "get_vault_manager", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "read_companion_vault_context", "get_vault_manager resolve_optional_vault_root", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "read_companion_vault_settings", "get_vault_manager", _COMPANION_READ, "05B2"),
-    _a(_COMPANION, "read_today_briefing", "get_vault_manager", _COMPANION_READ, "05B2"),
     _a(_COMPANION, "reload_companion_vault", "get_vault_manager", _COMPANION_PICKER, "retained:MVR-06"),
     _a(_COMPANION, "select_companion_vault", "get_vault_manager", _COMPANION_PICKER, "retained:MVR-06"),
-    _a(_COMPANION, "trigger_first_contact_briefing", "get_vault_manager", _COMPANION_READ, "05B2"),
     _a(_COMPANION, "update_companion_vault_setting", "get_vault_manager", _COMPANION_PICKER, "retained:MVR-06"),
     _a("app/api/routes/debug.py", "debug_panel", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
     _a("app/api/routes/eval_drafts.py", "get_pending_eval_drafts", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
