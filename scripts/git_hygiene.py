@@ -1925,10 +1925,11 @@ class _DispatcherHTMLBlockTextParser(HTMLParser):
 def _dispatcher_render_html_block(content: str) -> str:
     parser = _DispatcherHTMLBlockTextParser()
     parser.feed(content)
-    # Closing a pending comment flushes its opener as data and hides split
-    # retention intent. Use the parser's actual pending buffer: a literal
-    # opener inside an unfinished tag must still be finalized as visible data.
-    if not parser.rawdata.startswith("<!--"):
+    # Pending comments stay hidden. Preserve an unfinished tag's source text
+    # explicitly: HTMLParser.close() drops it on newer Python patch releases.
+    if _DISPATCHER_HTML_TAG_NAME_RE.match(parser.rawdata):
+        parser.parts.append(parser.rawdata)
+    elif not parser.rawdata.startswith("<!--"):
         parser.close()
     return "".join(parser.parts)
 
