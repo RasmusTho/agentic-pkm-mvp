@@ -1792,6 +1792,12 @@ class LinuxEffects:
         request.validate()
         if self.config.channel != 'test':
             raise PostgresDeployError()
+        # A recovery reset is deliberately bounded to the managed TEST database.
+        # An external DSN would leave the real projection untouched while the
+        # local Compose volumes are unrelated; refuse before any journal,
+        # service, disposition, or volume mutation in that configuration.
+        if not self.local_database():
+            raise PostgresDeployError()
         receipt = self.config.journal.read()
         if (receipt is None or receipt.operation_id != request.failed_operation_id
             or receipt.stage not in {'activating', 'failed'}
@@ -1809,13 +1815,15 @@ class LinuxEffects:
                     or final.terminal_result != 'failed':
                 raise PostgresDeployError()
             return final
-        authority_plan = DeployPlan(
-            'test', request.plan.revision, request.plan.services, request.plan.consumers,
-            request.plan.ack_forward_only, request.plan.image_digest, False,
-            request.authority_cutover,
-        )
-        authority_plan.validate()
-        self.qualify_authority_cutover(authority_plan)
+        prepared = disposition is not None and disposition.get('state') == 'prepared'
+        if not prepared:
+            authority_plan = DeployPlan(
+                'test', request.plan.revision, request.plan.services, request.plan.consumers,
+                request.plan.ack_forward_only, request.plan.image_digest, False,
+                request.authority_cutover,
+            )
+            authority_plan.validate()
+            self.qualify_authority_cutover(authority_plan)
         with self.failed_reconciliation_lock() as handle:
             current = self.config.journal.read()
             if (current is None or current.operation_id != request.failed_operation_id
@@ -1824,8 +1832,14 @@ class LinuxEffects:
                 raise PostgresDeployError()
             if not self.quiescent():
                 raise PostgresDeployError()
-            self.recover_source_terminal(request.failed_operation_id, request.plan)
-            self._write_test_recovery_disposition(request, 'prepared')
+            # The prepared disposition is an authenticated durable checkpoint.
+            # Once it exists, source containers and the authority qualification
+            # inputs may already have been removed; retry the destructive
+            # cleanup from that checkpoint instead of re-qualifying absent
+            # containers or replaying the source observation.
+            if not prepared:
+                self.recover_source_terminal(request.failed_operation_id, request.plan)
+                self._write_test_recovery_disposition(request, 'prepared')
             if current.stage != 'failed':
                 self.config.journal.write(request.failed_operation_id, 'failed')
             self.compose(

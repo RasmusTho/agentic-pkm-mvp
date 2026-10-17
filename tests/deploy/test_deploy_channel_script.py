@@ -3946,6 +3946,7 @@ def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch
     cfg = SimpleNamespace(root=tmp_path, channel='test', journal=Journal())
     effects = linux.LinuxEffects(cfg)
     mutations: list[str] = []
+    effects.local_database = lambda: True
     effects.qualify_authority_cutover = lambda _plan: mutations.append('authority')
     effects.quiescent = lambda: mutations.append('quiescent') or True
     effects.recover_source_terminal = lambda *_args: mutations.append('source')
@@ -3978,6 +3979,86 @@ def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch
     supervisor = linux.DeploymentSupervisor(non_test)
     with pytest.raises(PostgresDeployError):
         supervisor.request({'action': 'test-recovery-reset', **request.payload()})
+
+
+def test_test_recovery_reset_resumes_prepared_disposition_without_requalification(tmp_path):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployJournal, DeployPlan,
+        TestRecoveryRequest,
+    )
+
+    root = tmp_path / 'checkout'
+    lock_dir = root / 'config/deploy/test.env.lock'
+    lock_dir.mkdir(parents=True, mode=0o700)
+    (lock_dir / 'bws-owner').touch(mode=0o600)
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'a' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + '1' * 64,
+                      automatic=True)
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    journal.record_source_failure(operation_id, plan.revision, 'legacy_identity_persistence_refused')
+    journal.write(operation_id, 'failed')
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    effects = linux.LinuxEffects(config)
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    request = TestRecoveryRequest(operation_id, plan, authority)
+    effects.local_database = lambda: True
+    disposition_states = ['prepared']
+    effects._read_test_recovery_disposition = lambda _request: {'state': disposition_states[-1]}
+    effects._write_test_recovery_disposition = lambda _request, state: disposition_states.append(state)
+    effects.qualify_authority_cutover = lambda _plan: (_ for _ in ()).throw(
+        AssertionError('prepared recovery must not re-qualify removed containers')
+    )
+    effects.recover_source_terminal = lambda *_args: (_ for _ in ()).throw(
+        AssertionError('prepared recovery must not replay the source one-shot')
+    )
+    effects.quiescent = lambda: True
+    composed: list[tuple[str, ...]] = []
+    effects.compose = lambda *args: composed.append(args) or ''
+    removed: list[str] = []
+    effects._test_recovery_remove_volume = lambda name: removed.append(name)
+
+    receipt = effects.reset_test_source_projection(request)
+
+    assert receipt.terminal_result == 'failed'
+    assert removed == ['pkm-test_pgdata', 'pkm-test_instance-state', 'pkm-test_runtime-tmp']
+    assert len(composed) == 2
+    assert disposition_states == ['prepared', 'complete']
+
+
+def test_test_recovery_reset_refuses_external_database_before_mutation(tmp_path):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, PostgresDeployError, TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'b' * 40, ('db',), ('postgres-db',), image_digest='sha256:' + '2' * 64,
+                      automatic=True)
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            raise AssertionError('external target must be refused before journal inspection')
+
+    effects = linux.LinuxEffects(SimpleNamespace(channel='test', root=tmp_path, journal=Journal()))
+    effects.local_database = lambda: False
+    request = TestRecoveryRequest(operation_id, plan, authority)
+    with pytest.raises(PostgresDeployError):
+        effects.reset_test_source_projection(request)
+    assert not effects._test_recovery_disposition_path(request).exists()
 
 
 def test_source_projection_refusal_retains_authenticated_recoverable_state(tmp_path, monkeypatch):
