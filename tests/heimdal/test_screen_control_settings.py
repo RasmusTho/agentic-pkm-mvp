@@ -235,8 +235,14 @@ def test_companion_remote_screen_write_requires_server_derived_authentication(sc
             json={"key": "screen_excluded_scopes", "value": ["private"]},
         )
         assert response.status_code == 200
-        assert response.json()["receipt"]["actor"] == SUBJECT_API_KEY_CREDENTIAL
-        assert screen_rows(screen_env)[-1].actor == SUBJECT_API_KEY_CREDENTIAL
+        receipt = response.json()["receipt"]
+        assert receipt["actor"] == SUBJECT_API_KEY_CREDENTIAL
+        assert receipt["operation_id"]
+        assert any(
+            row.operation_id == receipt["operation_id"]
+            and row.actor == SUBJECT_API_KEY_CREDENTIAL
+            for row in screen_rows(screen_env)
+        )
 
 
 def test_read_only_role_cannot_change_screen_controls(screen_env):
