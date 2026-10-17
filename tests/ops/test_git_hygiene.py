@@ -6461,6 +6461,52 @@ def _local_retirement_repo(tmp_path, monkeypatch):
     return repo, "refs/heads/old", sha
 
 
+def _record_missing_preserved_binding(repo: Path, branch: str, sha: str, path: Path) -> None:
+    from scripts import agent_worktree
+
+    canonical = path.resolve()
+    registry_path = agent_worktree._default_registry_path(repo)
+    payload = agent_worktree._read_registry(registry_path)
+    payload["worktrees"][str(canonical)] = {
+        "path": str(canonical),
+        "branch": branch,
+        "generation": "b" * 32,
+        "owner": "lost-owner",
+        "status": "missing_preserved",
+        "registered_at": 1,
+        "heartbeat_at": 2,
+        "expires_at": 3,
+        "missing_preserved_at": 4,
+        "missing_preserved_by": "lost-owner",
+        "missing_preserved_disposition": "retain-branch",
+        "missing_preserved_branch_head": sha,
+    }
+    agent_worktree._write_registry(registry_path, payload)
+
+
+def test_local_branch_retirement_preserves_missing_preserved_generation(
+    tmp_path, monkeypatch
+):
+    repo, _archive_ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
+    _record_missing_preserved_binding(
+        repo,
+        "old",
+        sha,
+        tmp_path / "lost-local-worktree",
+    )
+
+    result = git_hygiene.retire_inactive_local_branches(
+        repo,
+        targets={"refs/heads/old": sha},
+        snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard only when no preserved lifecycle binding remains",
+    )
+
+    assert result["deleted"] == 0
+    assert result["retained"]["refs/heads/old"] == "live_or_resumable_activity"
+    assert git_hygiene.run_git(["rev-parse", "refs/heads/old"], repo) == sha
+
+
 def test_local_retirement_discards_unmerged_unregistered_branch_with_rescue(tmp_path, monkeypatch):
     repo, ref, sha = _local_retirement_repo(tmp_path, monkeypatch)
     assert git_hygiene._is_ancestor(repo, ref, "main") is False
@@ -8184,6 +8230,29 @@ def test_remote_retirement_accepts_exact_merged_pr(tmp_path, monkeypatch):
     receipt = json.loads(Path(result["receipt"]).read_text())
     assert receipt["state"] == "completed"
     assert receipt["schema"] == "remote_owner_retirement.v1"
+
+
+def test_remote_branch_retirement_preserves_missing_preserved_generation(
+    tmp_path, monkeypatch
+):
+    repo, remote, target, _ = _remote_retirement_repo(tmp_path, monkeypatch)
+    _record_missing_preserved_binding(
+        repo,
+        "old",
+        target["sha"],
+        tmp_path / "lost-remote-worktree",
+    )
+
+    result = git_hygiene.retire_inactive_remote_branches(
+        repo,
+        targets=[target],
+        snapshot_directory=tmp_path / "rescue",
+        owner_discard="discard only when no preserved lifecycle binding remains",
+    )
+
+    assert result["deleted"] == 0
+    assert result["retained"]["refs/heads/old"] == "protected_or_resumable_activity"
+    assert git_hygiene._remote_ref_sha(repo, str(remote), "refs/heads/old") == target["sha"]
 
 
 @pytest.mark.parametrize("change", ["open", "draft", "ref", "sha", "repo"])

@@ -978,6 +978,8 @@ class PostgresBuilderOpsStore:
             result_document = self._result_json(result)
             if row["result"].get("lease") is not None:
                 result_document["lease"] = row["result"]["lease"]
+            if row["result"].get("correction") is not None:
+                result_document["correction"] = row["result"]["correction"]
             conn.execute(
                 "UPDATE builderops_receipts SET recovery_lsn = %s WHERE receipt_sequence = %s",
                 (recovery_lsn, receipt_sequence),
@@ -2325,6 +2327,199 @@ class PostgresBuilderOpsStore:
         ):
             raise IdempotencyConflict("claim result belongs to another holder or task")
         return result, persisted_lease
+
+    def correct_task_payload_status(
+        self,
+        *,
+        envelope: AuthorityEnvelope,
+        task_id: str,
+        lease: Lease,
+        idempotency_key: str,
+        expected_state: str,
+        expected_version: int,
+        expected_updated_at: datetime,
+        expected_payload_sha256: str,
+        proposal_sha256: str,
+        proposal_ref: str,
+        fault_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Correct only a completed GitHub task's redundant ready status.
+
+        Generic maintenance ownership never becomes task lifecycle ownership.
+        Exact committed replays precede lease/baseline checks, as in the kernel.
+        """
+        import re
+
+        _guard_idempotency_namespace(idempotency_key, envelope=envelope)
+        if (
+            expected_state != "completed"
+            or type(expected_version) is not int
+            or expected_version < 1
+            or expected_updated_at.tzinfo is None
+            or not idempotency_key
+            or not proposal_ref.strip()
+            or any(
+                re.fullmatch(r"sha256:[0-9a-f]{64}", h) is None
+                for h in (expected_payload_sha256, proposal_sha256)
+            )
+        ):
+            raise ValueError("exact correction guards and proposal binding required")
+        if (
+            lease.lease_kind != "generic"
+            or lease.repository != envelope.repository
+            or lease.resource_id != f"payload-status-correction:{task_id}"
+            or lease.holder != envelope.actor
+        ):
+            raise LeaseRequired("correction requires addressed principal's maintenance lease")
+        request = {
+            "operation": "correct_task_payload_status",
+            "task_id": task_id,
+            "envelope": envelope.as_json(),
+            "lease": self._lease_identity_json(lease),
+            "expected_state": expected_state,
+            "expected_version": expected_version,
+            "expected_updated_at": expected_updated_at.isoformat(),
+            "expected_payload_sha256": expected_payload_sha256,
+            "proposal_sha256": proposal_sha256,
+            "proposal_ref": proposal_ref,
+        }
+        request_hash = _hash(request)
+        replayed = False
+        with self._connect() as conn:
+            self._assert_executor_enabled(conn, envelope.repository)
+            conn.execute("SET LOCAL synchronous_commit = on")
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"idempotency:{envelope.repository}:{idempotency_key}",),
+            )
+            existing = conn.execute(
+                "SELECT request_hash, result FROM builderops_idempotency "
+                "WHERE repository=%s AND idempotency_key=%s FOR UPDATE",
+                (envelope.repository, idempotency_key),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_hash"] != request_hash:
+                    raise IdempotencyConflict("correction key has a different exact request")
+                document = existing["result"]
+                replayed = True
+            else:
+                conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"task:{envelope.repository}:{task_id}",),
+                )
+                self._assert_lease(
+                    conn, envelope.repository, lease.resource_id, lease, lease_kind="generic"
+                )
+                active = conn.execute(
+                    "SELECT expires_at, clock_timestamp() AS now FROM builderops_leases "
+                    "WHERE repository=%s AND resource_id=%s AND lease_kind='task' FOR UPDATE",
+                    (envelope.repository, task_id),
+                ).fetchone()
+                if active is not None and active["expires_at"] > active["now"]:
+                    raise LeaseUnavailable("active task ownership forbids metadata correction")
+                row = conn.execute(
+                    "SELECT state, version, updated_at, payload, authority_envelope "
+                    "FROM builderops_tasks WHERE repository=%s AND task_id=%s FOR UPDATE",
+                    (envelope.repository, task_id),
+                ).fetchone()
+                if (
+                    row is None
+                    or row["state"] != expected_state
+                    or row["version"] != expected_version
+                    or row["updated_at"] != expected_updated_at
+                ):
+                    raise StateConflict("correction task baseline changed")
+                before = row["payload"]
+                issue = before.get("issue_number")
+                expected_id = f"github-{envelope.repository.replace('/', '--')}-issue-{issue}"
+                if (
+                    type(issue) is not int
+                    or issue <= 0
+                    or task_id != expected_id
+                    or before.get("task_id") != task_id
+                    or before.get("repo") != envelope.repository
+                    or not isinstance(before.get("title"), str)
+                    or not before["title"].strip()
+                    or before.get("state") != "completed"
+                    or before.get("status") != "ready"
+                    or "issue_delivery" in before
+                    or "continuation" in before
+                ):
+                    raise StateConflict("unsupported terminal GitHub payload status conflict")
+                if "sha256:" + _hash(before) != expected_payload_sha256:
+                    raise StateConflict("correction payload hash changed")
+                after = dict(before, status="completed")
+                updated = conn.execute(
+                    "UPDATE builderops_tasks SET payload=%s, version=version+1, "
+                    "updated_at=clock_timestamp(), authority_envelope=%s "
+                    "WHERE repository=%s AND task_id=%s RETURNING version, updated_at",
+                    (Jsonb(after), Jsonb(envelope.as_json()), envelope.repository, task_id),
+                ).fetchone()
+                self._fault(fault_at, "after_correction_state")
+                receipt = conn.execute(
+                    "INSERT INTO builderops_receipts(repository, task_id, event_type, idempotency_key, "
+                    "lease_holder, lease_fencing_token, authority_envelope) "
+                    "VALUES (%s,%s,'task.payload_status_corrected',%s,%s,%s,%s) RETURNING receipt_sequence",
+                    (
+                        envelope.repository,
+                        task_id,
+                        idempotency_key,
+                        lease.holder,
+                        lease.fencing_token,
+                        Jsonb(envelope.as_json()),
+                    ),
+                ).fetchone()
+                assert receipt is not None and updated is not None
+                self._fault(fault_at, "after_correction_receipt")
+                document = self._result_json(
+                    TransactionResult(
+                        envelope.repository,
+                        task_id,
+                        "completed",
+                        int(receipt["receipt_sequence"]),
+                        "0/0",
+                        None,
+                    )
+                )
+                document["correction"] = {
+                    "before_version": expected_version,
+                    "after_version": int(updated["version"]),
+                    "before_updated_at": row["updated_at"].isoformat(),
+                    "after_updated_at": updated["updated_at"].isoformat(),
+                    "before_payload_sha256": expected_payload_sha256,
+                    "after_payload_sha256": "sha256:" + _hash(after),
+                    "before_status": "ready",
+                    "after_status": "completed",
+                    "previous_authority_envelope": row["authority_envelope"],
+                    "authority_envelope": envelope.as_json(),
+                    "proposal_sha256": proposal_sha256,
+                    "proposal_ref": proposal_ref,
+                }
+                conn.execute(
+                    "INSERT INTO builderops_idempotency(repository,idempotency_key,request_hash,"
+                    "authority_envelope,result) VALUES (%s,%s,%s,%s,%s)",
+                    (
+                        envelope.repository,
+                        idempotency_key,
+                        request_hash,
+                        Jsonb(envelope.as_json()),
+                        Jsonb(document),
+                    ),
+                )
+                self._fault(fault_at, "after_correction_idempotency")
+        self._fault(fault_at, "after_correction_commit")
+        result = self._finalize_transition(
+            envelope.repository,
+            idempotency_key,
+            int(document["receipt_sequence"]),
+            None,
+            self._flushed_lsn(),
+            replayed=replayed,
+        )
+        return {
+            "result": {**self._result_json(result), "replayed": result.replayed},
+            "correction": document["correction"],
+        }
 
     def release_task(
         self,

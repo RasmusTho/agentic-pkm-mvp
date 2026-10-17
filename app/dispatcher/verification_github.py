@@ -7,10 +7,11 @@ import hashlib
 import json
 import os
 import re
+import threading
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol, cast
 
 import httpx
 
@@ -22,6 +23,8 @@ from app.dispatcher.verification_merge import (
 from app.dispatcher.verification_contract import (
     has_closing_issue_attempt,
     resolve_neutralized_issue_authority,
+    resolve_issue_authority,
+    resolve_final_review_rounds,
 )
 from app.dispatcher.verified_merge import (
     FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
@@ -30,12 +33,26 @@ from app.dispatcher.verified_merge import (
     resolve_verified_merge_authority_receipt,
     resolve_verified_merge_phase,
     verified_merge_body_sha256,
+    plan_post_merge_reconciliation,
+    VERIFIED_MERGE_AUTHORITY_MARKER,
+    VERIFIED_MERGE_PHASE_MARKER,
 )
 
 _DEFAULT_MANIFEST_PATH = ".builderops/delivery-manifest.json"
 _MAX_MANIFEST_BYTES = 65_536
 _REQUIRED_VERIFICATION_CHECK = "Unit tests (not pg)"
 _REQUIRED_VERIFICATION_WORKFLOW = ".github/workflows/ci-smoke.yaml"
+_NATIVE_WEB_ISSUE_REFERENCE = re.compile(
+    r"https?://github[.]com/([0-9A-Za-z_.-]+)/([0-9A-Za-z_.-]+)/issues/([1-9][0-9]*)",
+    re.IGNORECASE,
+)
+_NATIVE_API_ISSUE_REFERENCE = re.compile(
+    r"https?://api[.]github[.]com/repos/([0-9A-Za-z_.-]+)/([0-9A-Za-z_.-]+)/issues/([1-9][0-9]*)",
+    re.IGNORECASE,
+)
+_NATIVE_QUALIFIED_ISSUE_REFERENCE = re.compile(
+    r"(?<![0-9A-Za-z_.-])([0-9A-Za-z_.-]+)/([0-9A-Za-z_.-]+)#([1-9][0-9]*)"
+)
 
 
 def _latest_github_result(
@@ -200,10 +217,10 @@ class GitHubProtectedRepositoryAuthority:
         self._token = token
         self.manifest_path = manifest_path
         self._owns_client = http_client is None
-        self._http = http_client or httpx.Client(
-            base_url="https://api.github.com", timeout=20.0
-        )
+        self._http = http_client or httpx.Client(base_url="https://api.github.com", timeout=20.0)
         self.conditional_transport = conditional_transport
+        self._native_merge_lock = threading.RLock()
+        self.closure_source: Any = None
 
     def close(self) -> None:
         if self._owns_client:
@@ -611,6 +628,344 @@ class GitHubProtectedRepositoryAuthority:
             "fixed_commit_title": fixed_verified_merge_commit_title(pr_number),
             "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
         }
+
+    def native_single_closer_prepared(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        run_id: str,
+        head_sha: str,
+    ) -> Mapping[str, object] | None:
+        """Read an exact, complete single-closer snapshot; ambiguity grants no authority."""
+        canonical = RepoRef.parse(repository).canonical
+        pull = self._pull(canonical, pr_number)
+        body, title = pull.get("body"), pull.get("title")
+        authority = resolve_issue_authority(body)
+        referenced_issues: set[int] = set()
+        referenced_repositories: set[str] = set()
+        if isinstance(body, str):
+            referenced_issues.update(int(n) for n in re.findall(r"#([1-9][0-9]*)", body))
+            for pattern in (
+                _NATIVE_WEB_ISSUE_REFERENCE,
+                _NATIVE_API_ISSUE_REFERENCE,
+                _NATIVE_QUALIFIED_ISSUE_REFERENCE,
+            ):
+                for owner, name, number in pattern.findall(body):
+                    referenced_repositories.add(f"{owner}/{name}".lower())
+                    referenced_issues.add(int(number))
+        if (
+            authority is None
+            or resolve_final_review_rounds(body) is None
+            or authority.closing_issues != (authority.governing_issue,)
+            or authority.supporting_issues
+            or not isinstance(body, str)
+            or not isinstance(title, str)
+            or has_closing_issue_attempt(title)
+            or referenced_repositories - {canonical}
+            or referenced_issues != {authority.governing_issue}
+        ):
+            return None
+        comments = self._issue_comments(canonical, pr_number)
+        if any(VERIFIED_MERGE_AUTHORITY_MARKER in str(row.get("body", ""))
+               or VERIFIED_MERGE_PHASE_MARKER in str(row.get("body", "")) for row in comments):
+            return None
+        base, head = pull.get("base"), pull.get("head")
+        base_repo = base.get("repo") if isinstance(base, Mapping) else None
+        exact_repository = base_repo.get("full_name") if isinstance(base_repo, Mapping) else None
+        if (
+            pull.get("number") != pr_number
+            or pull.get("state") != "open"
+            or pull.get("merged") is not False
+            or pull.get("merged_at") is not None
+            or pull.get("draft") is not False
+            or not isinstance(head, Mapping)
+            or head.get("sha") != head_sha
+            or not isinstance(base, Mapping)
+            or not isinstance(base.get("sha"), str)
+            or len(base["sha"]) != 40
+            or not isinstance(exact_repository, str)
+            or exact_repository.lower() != canonical
+            or base.get("ref") != self._default_branch(canonical)
+            or pull.get("html_url") != f"https://github.com/{exact_repository}/pull/{pr_number}"
+        ):
+            raise MergeAuthorityError("native single-closer PR identity is incomplete")
+        owner, name = exact_repository.split("/", 1)
+        numbers: list[int] = []
+        cursors: set[str] = set()
+        cursor = None
+        for _ in range(10):
+            response = self._graphql(
+                """
+              query($owner:String!,$name:String!,$number:Int!,$cursor:String) {
+                repository(owner:$owner,name:$name) { pullRequest(number:$number) {
+                  closingIssuesReferences(first:100,after:$cursor) {
+                    nodes { number repository { nameWithOwner } }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                } }
+              }
+            """,
+                {"owner": owner, "name": name, "number": pr_number, "cursor": cursor},
+            )
+            data = response["data"]
+            repo_row = data.get("repository")
+            pr_row = repo_row.get("pullRequest") if isinstance(repo_row, Mapping) else None
+            links = pr_row.get("closingIssuesReferences") if isinstance(pr_row, Mapping) else None
+            nodes = links.get("nodes") if isinstance(links, Mapping) else None
+            page = links.get("pageInfo") if isinstance(links, Mapping) else None
+            if (
+                not isinstance(nodes, list)
+                or len(nodes) > 100
+                or not isinstance(page, Mapping)
+                or type(page.get("hasNextPage")) is not bool
+            ):
+                raise MergeAuthorityError("native closing pagination is incomplete")
+            for node in nodes:
+                repo = node.get("repository") if isinstance(node, Mapping) else None
+                number = node.get("number") if isinstance(node, Mapping) else None
+                if (
+                    type(number) is not int
+                    or number < 1
+                    or number in numbers
+                    or not isinstance(repo, Mapping)
+                    or repo.get("nameWithOwner") != exact_repository
+                ):
+                    raise MergeAuthorityError("native closing pagination identity drift")
+                numbers.append(number)
+            if page["hasNextPage"] is False:
+                break
+            next_cursor = page.get("endCursor")
+            if (
+                not nodes
+                or not isinstance(next_cursor, str)
+                or not next_cursor
+                or next_cursor in cursors
+            ):
+                raise MergeAuthorityError("native closing cursor failed to advance")
+            cursors.add(next_cursor)
+            cursor = next_cursor
+        else:
+            raise MergeAuthorityError("native closing pagination exceeds bounded read")
+        if numbers != [authority.governing_issue]:
+            return None
+        issue = self._get(f"/repos/{canonical}/issues/{authority.governing_issue}")
+        if issue.get("state") != "open":
+            return None
+        if (
+            issue.get("number") != authority.governing_issue
+            or "pull_request" in issue
+            or issue.get("repository_url") != f"https://api.github.com/repos/{exact_repository}"
+            or not isinstance(issue.get("updated_at"), str)
+            or not isinstance(issue.get("body"), str)
+        ):
+            raise MergeAuthorityError("native governing Issue snapshot is incomplete")
+        threads = self._native_threads_resolved(canonical, pr_number)
+        if (
+            self._pull(canonical, pr_number) != pull
+            or self._get(f"/repos/{canonical}/issues/{authority.governing_issue}") != issue
+        ):
+            raise MergeAuthorityError("native PR or Issue snapshot drifted during pagination")
+        snapshot = {
+            "repository": exact_repository,
+            "pr_number": pr_number,
+            "run_id": run_id,
+            "head_sha": head_sha,
+            "base_sha": base["sha"],
+            "title": title,
+            "body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+            "governing_issue": authority.governing_issue,
+            "final_review_rounds": resolve_final_review_rounds(body),
+            "closing_issues": numbers,
+            "issue_updated_at": issue["updated_at"],
+            "issue_body_sha256": hashlib.sha256(issue["body"].encode()).hexdigest(),
+            "review_threads_sha256": hashlib.sha256(
+                json.dumps(threads, sort_keys=True).encode()
+            ).hexdigest(),
+        }
+        return {
+            "contract": "native_single_closer_gate.v1",
+            **snapshot,
+            "closing_reference_count": 1,
+            "body_edit": {"native_snapshot": snapshot},
+            "fixed_commit_title": fixed_verified_merge_commit_title(pr_number),
+            "fixed_commit_message": FIXED_VERIFIED_MERGE_COMMIT_MESSAGE,
+        }
+
+    def _native_threads_resolved(self, repository: str, pr_number: int) -> list[object]:
+        owner, name = repository.split("/", 1)
+        cursor = None
+        seen: set[str] = set()
+        threads: list[object] = []
+        for _ in range(10):
+            response = self._graphql(
+                """
+              query($owner:String!,$name:String!,$number:Int!,$cursor:String) {
+                repository(owner:$owner,name:$name) { pullRequest(number:$number) {
+                  reviewThreads(first:100,after:$cursor) {
+                    nodes { id isResolved } pageInfo { hasNextPage endCursor }
+                  }
+                } }
+              }
+            """,
+                {"owner": owner, "name": name, "number": pr_number, "cursor": cursor},
+            )
+            repo = response["data"].get("repository")
+            pull = repo.get("pullRequest") if isinstance(repo, Mapping) else None
+            connection = pull.get("reviewThreads") if isinstance(pull, Mapping) else None
+            nodes = connection.get("nodes") if isinstance(connection, Mapping) else None
+            page = connection.get("pageInfo") if isinstance(connection, Mapping) else None
+            if (
+                not isinstance(nodes, list)
+                or len(nodes) > 100
+                or not isinstance(page, Mapping)
+                or type(page.get("hasNextPage")) is not bool
+            ):
+                raise MergeAuthorityError("native review-thread pagination is incomplete")
+            for node in nodes:
+                identifier = node.get("id") if isinstance(node, Mapping) else None
+                if (
+                    not isinstance(identifier, str)
+                    or not identifier
+                    or identifier in seen
+                    or node.get("isResolved") is not True
+                ):
+                    raise MergeAuthorityError("native review thread is unresolved or ambiguous")
+                seen.add(identifier)
+                threads.append(dict(node))
+            if page["hasNextPage"] is False:
+                return threads
+            next_cursor = page.get("endCursor")
+            if (
+                not nodes
+                or not isinstance(next_cursor, str)
+                or not next_cursor
+                or next_cursor == cursor
+            ):
+                raise MergeAuthorityError("native review-thread cursor did not advance")
+            cursor = next_cursor
+        raise MergeAuthorityError("native review-thread evidence exceeds bounded read")
+
+    def native_single_closer_reconcile(
+        self,
+        repository: str,
+        pr_number: int,
+        *,
+        closing_issue: int,
+        readback: Mapping[str, object],
+        credential: object,
+        snapshot: Mapping[str, object] | None = None,
+        compensation_only: bool = False,
+        before_compensation: Callable[[], None] | None = None,
+    ) -> Mapping[str, object]:
+        # Reuse the existing bounded event enumeration and exact PR/SHA attribution.
+        from app.dispatcher.verification_consumer import GhCliVerificationSource
+
+        source: Any = self.closure_source or GhCliVerificationSource()
+        snapshot_drifted = False
+        if snapshot is not None:
+            pull = self._pull(repository, pr_number)
+            body = pull.get("body")
+            head = pull.get("head")
+            base = pull.get("base")
+            if (
+                pull.get("merged") is not True
+                or pull.get("merge_commit_sha") != readback.get("merge_commit_sha")
+                or not isinstance(body, str)
+                or hashlib.sha256(body.encode()).hexdigest() != snapshot.get("body_sha256")
+                or pull.get("title") != snapshot.get("title")
+                or not isinstance(head, Mapping)
+                or head.get("sha") != snapshot.get("head_sha")
+                or not isinstance(base, Mapping)
+                or base.get("sha") != snapshot.get("base_sha")
+            ):
+                snapshot_drifted = True
+        evidence = source.issue_set_closure_evidence(
+            repository,
+            pr_number,
+            issue_numbers=[closing_issue],
+            observed_issue_numbers=[],
+            merged_at=readback.get("merged_at"),
+            merge_commit_sha=readback.get("merge_commit_sha"),
+            actor_login=readback.get("actor_login"),
+        )
+        if evidence.get("closure_scan_complete") is not True:
+            raise MergeAuthorityError("native closure attribution is incomplete")
+        observed = evidence.get("observed_closing_issues")
+        issues = evidence.get("issue_evidence")
+        if (
+            not isinstance(observed, list)
+            or not isinstance(issues, list)
+            or any(not isinstance(row, Mapping) for row in issues)
+        ):
+            raise MergeAuthorityError("native closure evidence is malformed")
+        plan = plan_post_merge_reconciliation(
+            pr_number=pr_number,
+            authenticated_closing_issues=[closing_issue],
+            observed_closing_issues=cast(Sequence[int], observed),
+            issue_evidence=cast(Sequence[Mapping[str, object]], issues),
+        )
+        for number in plan["reopen_unauthorized"]:
+            # Revalidate the durable operation-bound refusal and current task
+            # owner immediately before every external compensation write. A
+            # task takeover between Issues cannot leave the former owner with
+            # authority for the next PATCH.
+            if before_compensation is None:
+                raise MergeAuthorityError(
+                    "native closure conflict lacks a durable recorder"
+                )
+            before_compensation()
+            self._native_write(
+                "PATCH", f"/repos/{repository}/issues/{number}", {"state": "open"}, credential
+            )
+            reopened = self._get(f"/repos/{repository}/issues/{number}")
+            if (reopened.get("state") != "open" or reopened.get("number") != number
+                    or reopened.get("repository_url") != f"https://api.github.com/repos/{repository}"):
+                raise MergeAuthorityError("unexpected native closure reopen was not confirmed")
+        if plan["unresolved_unauthorized_closures"]:
+            raise MergeAuthorityError("unexpected native closure blocks terminal delivery")
+        if plan["reopen_unauthorized"]:
+            if compensation_only:
+                return {
+                    **dict(evidence),
+                    "reopened_unauthorized_issues": list(plan["reopen_unauthorized"]),
+                }
+            raise MergeAuthorityError("unexpected native closure blocks terminal delivery")
+        if snapshot_drifted:
+            raise MergeAuthorityError("native post-merge PR snapshot drifted")
+        expected = [row for row in issues if row.get("number") == closing_issue]
+        if (
+            len(expected) != 1
+            or expected[0].get("state") != "closed"
+            or expected[0].get("closed_by_delivery") is not True
+            or expected[0].get("closed_by_pull_requests") != [pr_number]
+        ):
+            raise MergeAuthorityError("sole native closer is not closed by this exact PR")
+        return evidence
+
+    def _native_write(
+        self, method: str, path: str, payload: Mapping[str, object], credential: object
+    ) -> Mapping[str, Any]:
+        if not isinstance(credential, str) or not credential.strip():
+            raise MergeAuthorityError("native merge requires the resolved host credential")
+        response = self._http.request(
+            method,
+            path,
+            json=dict(payload),
+            headers={
+                "Authorization": f"Bearer {credential}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        if response.status_code >= 400:
+            raise MergeAuthorityError(
+                f"native expected-head effect refused ({response.status_code})"
+            )
+        value = response.json()
+        if not isinstance(value, Mapping):
+            raise MergeAuthorityError("native effect response is malformed")
+        return value
 
     def _counted_rows(
         self,
@@ -1062,7 +1417,51 @@ class GitHubProtectedRepositoryAuthority:
         commit_title: str,
         commit_message: str,
         credential: object,
+        effect_revalidator: Callable[[], None] | None = None,
     ) -> Mapping[str, object]:
+        snapshot = expected_body_edit.get("native_snapshot")
+        if isinstance(snapshot, Mapping):
+            with self._native_merge_lock:
+                if (
+                    self.protected_base_sha(repository) != expected_base_sha
+                    or self.delivery_manifest(repository, expected_base_sha).blob_sha
+                    != expected_manifest_blob_sha
+                    or not all(
+                        self.required_gates(repository, pr_number, expected_head_sha).values()
+                    )
+                ):
+                    raise MergeAuthorityError("native protected-base or required gates drifted")
+                gate = self.native_single_closer_prepared(
+                    repository,
+                    pr_number,
+                    run_id=str(snapshot.get("run_id")),
+                    head_sha=expected_head_sha,
+                )
+                if (
+                    gate is None
+                    or gate.get("body_edit") != expected_body_edit
+                    or gate.get("base_sha") != expected_base_sha
+                    or commit_title != fixed_verified_merge_commit_title(pr_number)
+                    or commit_message != FIXED_VERIFIED_MERGE_COMMIT_MESSAGE
+                ):
+                    raise MergeAuthorityError("native final snapshot or required gates drifted")
+                if effect_revalidator is None:
+                    raise MergeAuthorityError(
+                        "native merge requires final outbox effect revalidation"
+                    )
+                effect_revalidator()
+                result = self._native_write(
+                    "PUT",
+                    f"/repos/{repository}/pulls/{pr_number}/merge",
+                    {
+                        "sha": expected_head_sha,
+                        "merge_method": "squash",
+                        "commit_title": commit_title,
+                        "commit_message": commit_message,
+                    },
+                    credential,
+                )
+                return result
         if self.conditional_transport is None:
             raise MergeAuthorityError(
                 "no GitHub-enforced merge-queue/conditional transport is configured"
@@ -1079,30 +1478,20 @@ class GitHubProtectedRepositoryAuthority:
             credential=credential,
         )
 
-    def merge_readback(
-        self, repository: str, pr_number: int
-    ) -> Mapping[str, object]:
+    def merge_readback(self, repository: str, pr_number: int) -> Mapping[str, object]:
         pull = self._pull(repository, pr_number)
         head = pull.get("head")
         merge_commit_sha = pull.get("merge_commit_sha")
         merge_commit_title: str | None = None
         merge_commit_message: str | None = None
         if pull.get("merged") is True and isinstance(merge_commit_sha, str):
-            commit = self._get(
-                f"/repos/{repository}/commits/{merge_commit_sha}"
-            ).get("commit")
-            raw_message = (
-                commit.get("message")
-                if isinstance(commit, Mapping)
-                else None
-            )
+            commit = self._get(f"/repos/{repository}/commits/{merge_commit_sha}").get("commit")
+            raw_message = commit.get("message") if isinstance(commit, Mapping) else None
             if isinstance(raw_message, str):
                 title, separator, message = raw_message.partition("\n")
                 merge_commit_title = title
-                merge_commit_message = (
-                    message.lstrip("\n") if separator else ""
-                )
-        return {
+                merge_commit_message = message.lstrip("\n") if separator else ""
+        readback: dict[str, object] = {
             "merged": pull.get("merged") is True,
             "head_sha": head.get("sha") if isinstance(head, Mapping) else None,
             "merge_commit_sha": merge_commit_sha,
@@ -1110,6 +1499,11 @@ class GitHubProtectedRepositoryAuthority:
             "merge_commit_message": merge_commit_message,
             "merged_at": pull.get("merged_at"),
         }
+        merged_by = pull.get("merged_by")
+        actor_login = merged_by.get("login") if isinstance(merged_by, Mapping) else None
+        if isinstance(actor_login, str) and actor_login:
+            readback["actor_login"] = actor_login
+        return readback
 
 
 def _is_skipped_conclusion(value: object) -> bool:

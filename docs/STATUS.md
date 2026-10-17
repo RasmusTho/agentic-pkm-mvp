@@ -209,6 +209,12 @@ deployment, host, or owner-acceptance claims.
   VM102 deployment, qualified live sources, final-main deployed browser proof, complete health and
   owner acceptance remain under #5181, #4749 and parent #4741. The runtime/receipt owner contract is
   `docs/BUILDEROPS_CONTROL_PLANE/README.md :: Standalone DevUI receipt production`.
+- #6175 adds repository support for a fenced, same-state terminal task payload-status correction
+  in the existing BuilderOps API/client/CLI. It aligns only a completed GitHub task's redundant
+  ready status, retaining historical source data and ordinary lifecycle guards. The
+  [terminal correction contract](BUILDEROPS_CONTROL_PLANE/README.md#terminal-task-payload-status-correction)
+  separates this implementation from control-plane installation, task5495 data application,
+  owner acceptance and complete system/source qualification under #5181.
 - FCP-04 (#4697) implements the exact nonvisual Start/Hold preview and authenticated bounded
   Model Inquiry command in the existing BuilderOps service. Its production constructor uses the
   single skill-owned facade and destination reservation/attempt/readback interface; the existing

@@ -3612,6 +3612,20 @@ def _branch_has_lifecycle_preservation(
     )
 
 
+def _branch_has_missing_preserved_lifecycle(
+    branch: str,
+    lifecycle_records: Mapping[str, Mapping[str, Any]] | None,
+) -> bool:
+    if lifecycle_records is None:
+        return False
+    return any(
+        isinstance(record, Mapping)
+        and record.get("branch") == branch
+        and record.get("status") == "missing_preserved"
+        for record in lifecycle_records.values()
+    )
+
+
 def _is_finite_timestamp(value: object) -> TypeGuard[int | float]:
     return (
         isinstance(value, (int, float))
@@ -4993,13 +5007,19 @@ def _retire_inactive_ref_phase(
                         try:
                             for path, record in registry.items():
                                 if record.get("branch") == branch or _record_previously_bound(record, branch):
-                                    agent_worktree._validate_authority_record(path, record)
+                                    if record.get("status") == "missing_preserved":
+                                        agent_worktree._validate_missing_preserved_binding(
+                                            cwd, path, record
+                                        )
+                                    else:
+                                        agent_worktree._validate_authority_record(path, record)
                         except (RuntimeError, TypeError, ValueError):
                             receipt["retained"][ref] = "invalid_lifecycle_binding"
                             continue
                     branch_protected = kind in {"local_branch", "remote_tracking"} and (
                         any_live_lease or f"refs/heads/{branch}" in checked_refs or branch in open_branches
                         or _branch_has_worktree_path_lease(branch, resources, registry)
+                        or _branch_has_missing_preserved_lifecycle(branch, registry)
                         or any(record.get("branch") == branch and record.get("expires_at", 0) > time.time()
                                for record in registry.values())
                         or (special_protected is not None and (
@@ -5266,7 +5286,12 @@ def retire_inactive_remote_branches(
                 try:
                     for path, record in registry.items():
                         if record.get("branch") == branch or _record_previously_bound(record, branch):
-                            agent_worktree._validate_authority_record(path, record)
+                            if record.get("status") == "missing_preserved":
+                                agent_worktree._validate_missing_preserved_binding(
+                                    cwd, path, record
+                                )
+                            else:
+                                agent_worktree._validate_authority_record(path, record)
                 except (RuntimeError, TypeError, ValueError):
                     invalid = True
                 preserve = (
@@ -5275,6 +5300,7 @@ def retire_inactive_remote_branches(
                     or ref == special.pull_ref or sha == special.pull_sha
                     or re.search(r"(?:^|[-_/])" + str(special.issue_number) + r"(?:$|[-_/])", branch)
                     or any(record.get("branch") == branch and record["expires_at"] > time.time() for record in registry.values())
+                    or _branch_has_missing_preserved_lifecycle(branch, registry)
                     or any(row["kind"] == "lease" and not row["record"].get("released_at")
                            and _parse_dispatcher_time(row["record"].get("expires_at")).timestamp() > time.time() for row in dispatcher)
                     or any(branch in resource or sha in resource for resource in resources)
