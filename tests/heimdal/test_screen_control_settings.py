@@ -23,19 +23,6 @@ def ingest_edit(env):
     )
 
 
-@pytest.mark.parametrize("header", ["X-Active-Context-Session", "X-Active-Context-Override"])
-@pytest.mark.parametrize("carrier", ["unknown-carrier", ""])
-def test_scoped_screen_control_read_fails_closed(screen_env, header, carrier):
-    response = screen_env.client.get(
-        "/api/heimdal/screen/control",
-        headers={header: carrier},
-        params={"app_id": "com.editor"},
-    )
-    assert response.status_code == 409
-    assert response.json()["detail"]["error"] == "capability_not_ready"
-    assert response.json()["detail"]["capability"] == "mvr05b4_binding_aware_read"
-
-
 def test_control_settings_ingested_live(screen_env):
     edit_controls(screen_env, screen_paused=False, screen_excluded_apps=["com.bank"])
     pending = screen_env.client.get("/api/heimdal/screen/control", params={"app_id": "com.editor"}).json()

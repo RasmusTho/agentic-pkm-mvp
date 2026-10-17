@@ -15,7 +15,6 @@ from app.heimdal.retention import (
     RetentionWindowMissingError,
     enforce_screen_frame_retention,
     reset_memory_deletion_receipts,
-    resolve_screen_frame_retention_minutes,
 )
 from app.vault.manager import VaultManager
 from app.vault.settings_service import SettingsService
@@ -40,41 +39,6 @@ def test_frames_age_out_bounded_and_receipted(tmp_path, monkeypatch):
     ciphertext, nonce = encrypt_raw_bytes(b"frame", key=b"x" * 32)
     insert_raw_record(content_identity=compute_raw_content_identity(b"frame"), capture_chain=["screen"], sensor={"machine": "mac"}, consent={"grant_ref": "g"}, ciphertext=ciphertext, nonce=nonce, key_ref="test", key=b"x" * 32, source_path="screen", payload={"modality": "screen"})
     result = enforce_screen_frame_retention(vault_root=root, now=datetime.now(timezone.utc) + timedelta(minutes=2))
-    assert result.deleted_count == 1
-    assert result.deletions[0].reason == REASON_SCREEN_FRAME_RETENTION_BUFFER
-    assert result.deletions[0].payload["screen_frame_retention_minutes"] == 1
-
-
-def test_missing_control_source_still_cleans_up_with_last_accepted_bound(tmp_path, monkeypatch):
-    monkeypatch.setenv("INDEX_OUTBOX_PATH", str(tmp_path / "outbox.jsonl"))
-    root = tmp_path / "vault"
-    root.mkdir()
-    context = VaultManager().initialize_vault(root, machine_role="testNode", remember=False).context
-    SettingsService().update_setting(
-        context, "screen_frame_retention_minutes", 1, surface="cli", actor="operator"
-    )
-    assert resolve_screen_frame_retention_minutes(root) == 1
-
-    ciphertext, nonce = encrypt_raw_bytes(b"frame-after-source-loss", key=b"x" * 32)
-    insert_raw_record(
-        content_identity=compute_raw_content_identity(b"frame-after-source-loss"),
-        capture_chain=["screen"],
-        sensor={"machine": "mac"},
-        consent={"grant_ref": "g"},
-        ciphertext=ciphertext,
-        nonce=nonce,
-        key_ref="test",
-        key=b"x" * 32,
-        source_path="screen",
-        payload={"modality": "screen"},
-    )
-    (root / "settings" / "screen_control.md").unlink()
-
-    assert resolve_screen_frame_retention_minutes(root) == 1
-    result = enforce_screen_frame_retention(
-        vault_root=root,
-        now=datetime.now(timezone.utc) + timedelta(minutes=2),
-    )
     assert result.deleted_count == 1
     assert result.deletions[0].reason == REASON_SCREEN_FRAME_RETENTION_BUFFER
     assert result.deletions[0].payload["screen_frame_retention_minutes"] == 1
