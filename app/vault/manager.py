@@ -18,7 +18,7 @@ from app.instance.vault_registry import (
 from app.knowledge.multiwriter import is_conflict_artifact
 from app.settings.locations import LEGACY_COMPILED_DIR, resolve_settings_file
 from app.vault.markdown_settings import MarkdownSettingsError, MarkdownSettingsStore
-from app.settings.models import DEFAULT_ASK_SYSTEM_PROMPT
+from app.settings.models import DEFAULT_ASK_SYSTEM_PROMPT, ScreenControlSettings
 
 if TYPE_CHECKING:
     from app.write_guard import WriteGuard
@@ -1023,6 +1023,16 @@ def _static_shared_settings_seeds() -> tuple[tuple[str, dict[str, Any], str], ..
     not appear here and remain fail-loud when missing.
     """
     return (
+        (
+            "screen_control.md",
+            {
+                "schema": "heimdal.screen-control.v1",
+                "scope": "vault-shared",
+                **ScreenControlSettings().model_dump(),
+            },
+            "# Screen Stream Controls\nPause, exclusions, and provisional tunables.\n"
+            "The Settings Spine accepts each change with a durable receipt.\n",
+        ),
         (
             "paths.md",
             {

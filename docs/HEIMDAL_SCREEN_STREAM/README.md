@@ -155,7 +155,10 @@ list. These invariants hold *across* tasks; each names its partial-failure walk.
   "on" at restart, the owner would be observed without knowing. SCREEN-06 supplies the durable governed
   pause setting; SCREEN-03 renders status from the actual capture loop and must never show `observing`
   merely because the setting requests resume. The capability acceptance criterion verifies the
-  operator-visible status and capture behavior together.
+  operator-visible status and capture behavior together. The governed pause writer revokes active
+  `screen_always_on` grants through the canonical ledger before accepting the setting, including
+  the existing grant-linked hot/cold raw-erasure semantics. A resume setting alone cannot restore
+  consent; a separate explicit grant is required.
 - **INV-SCREEN-D — exclusion is honored at CAPTURE time, not derivation time.** An excluded app's (or
   excluded scope's) pixels **never leave the client** — the frontmost app / active scope is checked
   **before** a frame is sampled; an excluded target is never captured, never buffered, never shipped.
@@ -185,14 +188,41 @@ filing issues.
 
 ## Provisional constants (named, single-sourced, tunable)
 
-Like the ERE thresholds, the screen-stream tunables are **named constants documented as provisional**,
-declared once and settings-governed (SETTINGS_SPINE posture, SCREEN-06), tuned after live data:
+SCREEN-06 declares all defaults and bounds once in
+`app/settings/models.py::ScreenControlSettings`. The SettingsService registry and new-vault
+initializer derive their values from that model. The vault-shared source is
+`<vault>/settings/screen_control.md`; runtime consumers use its durably accepted Settings Spine
+projection. These values remain **provisional** and can be tuned after live evidence:
 
-- `screen_capture_cadence_seconds` — sample interval (idle-adaptive: a locked/idle screen is not
-  sampled). Default provisional.
-- `screen_frame_retention_minutes` — the bounded raw-frame reprocessing buffer (INV-SCREEN-A).
-- `screen_client_buffer_max` — bounded offline buffer cap (SCREEN-03 Restart posture).
-- `screen_coalesce_*` — dedup/coalescing sensitivity (SCREEN-02), preferring over-segmentation.
+| Setting | Initial value / bound | Consumer |
+| --- | --- | --- |
+| `screen_paused` | `true` | Pause revokes active screen grants; resume alone never grants consent |
+| `screen_excluded_apps` | Empty list of app bundle IDs | Host permission query; capture enforcement belongs to SCREEN-03 |
+| `screen_excluded_scopes` | Empty list of scope names | Host permission query; capture enforcement belongs to SCREEN-03 |
+| `screen_scope_app_mapping` | Empty map from scope names to app bundle ID lists | Combines mapped scopes with the query's scopes |
+| `screen_frame_retention_minutes` | `5`; integer `1..120` | Existing host raw-frame cleanup (INV-SCREEN-A) |
+| `screen_capture_cadence_seconds` | `10.0`; greater than `0`, at most `3600` | SCREEN-03 client cadence |
+| `screen_client_buffer_max` | `100`; integer `1..10000` | SCREEN-03 offline buffer cap |
+| `screen_coalesce_max_gap_seconds` | `30.0`; greater than `0`, at most `3600` | Reserved coalescing consumer |
+| `screen_coalesce_similarity_threshold` | `0.98`; `0..1` | Reserved coalescing consumer |
+
+The host exposes these controls through `GET`/`PUT /api/heimdal/screen/control`, the existing
+Companion settings writer, and live Markdown ingestion. Every effective change uses the existing
+actor-tagged `settings.write.receipt` seam with `receipt_type=heimdal_screen_control_receipt`.
+Invalid or unaccepted source edits are visible degradation and deny capture permission; a proven
+last-valid retention value remains usable. An existing `_heimdal/settings.md` retention policy
+requires an explicit canonical Settings Spine selection before activation.
+
+Pause uses the existing consent revocation and all-copy raw-erasure path. A cleanup or receipt
+failure leaves a refused/pending control change and never re-grants consent. Durable revocation
+rows retain erasure recovery; pause retry reconciles the screen scope before settings acceptance.
+An accepted resume remains effectively paused until a separate explicit grant exists. This does
+not retract published observations or revoke other capture lanes' grants.
+
+Declaring client and coalescing tunables does not implement the native client or change SCREEN-02's
+current coalescing algorithm. Host status distinguishes `resume_requested`/`ready` from actual
+capture, which remains `unknown_external_client`. Actual loop/indicator agreement and capability
+acceptance remain with Bifrost #72, validation pointer #3341, and parent #3340.
 
 ## Capability acceptance criteria
 

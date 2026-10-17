@@ -91,6 +91,12 @@ class SettingsWriteReceipt:
         if self.new_value is _NEW_VALUE_UNSET:
             object.__setattr__(self, "new_value", self.value)
 
+    @property
+    def receipt_type(self) -> str:
+        from app.settings.models import SCREEN_CONTROL_KEYS
+
+        return "heimdal_screen_control_receipt" if self.key in SCREEN_CONTROL_KEYS else "settings_write_receipt"
+
 
 def emit_settings_write_receipt(
     receipt: SettingsWriteReceipt, *, require_durable: bool = False
@@ -118,6 +124,7 @@ def emit_settings_write_receipt(
                 "local_instance_id": receipt.local_instance_id,
                 "timestamp": receipt.timestamp,
                 "is_runtime_gating": receipt.is_runtime_gating,
+                "receipt_type": receipt.receipt_type,
             },
         )
         record = envelope.model_dump(mode="json")

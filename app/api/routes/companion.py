@@ -68,6 +68,7 @@ from app.agent_memory.posture_projection import (
     agent_memory_posture_for_artifacts,
 )
 from app.auth import api_key_header, require_loopback_or_api_key, resolve_auth_subject
+from app.settings.models import SCREEN_CONTROL_KEYS
 from app.text.helpers import (
     body_contains_frontmatter as _body_contains_frontmatter,
     content_hash as _content_hash,
@@ -1815,13 +1816,16 @@ def read_companion_vault_settings() -> VaultSettingsResponse:
 
 @router.post("/vault/settings", response_model=VaultSettingUpdateResponse)
 @compatibility_selector_bridge
-def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSettingUpdateResponse:
+def update_companion_vault_setting(
+    req: VaultSettingUpdateRequest,
+    request: Request,
+    api_key: str | None = Depends(api_key_header),
+) -> VaultSettingUpdateResponse:
+    actor = resolve_auth_subject(request, api_key) if req.key in SCREEN_CONTROL_KEYS else "human"
     manager = get_vault_manager()
     # The settings write lands on the process-selected vault *before* the reload
-    # below rebinds anything, so it is a legacy write like any other: pin the
-    # selection and prove it is the durable compatibility binding (selection lock
-    # first, then the shared ingress window -- the /vault/select order), and
-    # release both before select_vault takes the ingress lock exclusively.
+    # below rebinds anything, so pin the selection and durable compatibility
+    # binding until the write completes.
     with compatibility_selection_window(), compatibility_write_target_window(
         None, selected_root=_legacy_companion_selected_root
     ):
@@ -1840,7 +1844,7 @@ def update_companion_vault_setting(req: VaultSettingUpdateRequest) -> VaultSetti
             raise HTTPException(status_code=403, detail=blocked_reason)
         try:
             updated, _receipt = service.update_setting(
-                context, req.key, req.value, surface="api", actor="human"
+                context, req.key, req.value, surface="api", actor=actor
             )
         except SettingsWriteError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

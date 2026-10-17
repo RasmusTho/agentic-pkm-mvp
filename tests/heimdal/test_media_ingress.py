@@ -66,6 +66,7 @@ from app.heimdal.retention import (
 )
 from app.heimdal.settings_notes import SETTINGS, SettingsNote, write_settings_note
 from app.write_guard import WriteGuard
+from tests.helpers.vault_settings import set_test_screen_retention
 
 pytestmark = pytest.mark.not_pg
 
@@ -157,6 +158,8 @@ def _write_retention_settings(vault_root: Path) -> None:
         ),
         write_guard=WriteGuard(lambda: {"state": "healthy"}),
     )
+
+    set_test_screen_retention(vault_root, 1)
 
 
 # ---------------------------------------------------------------------------

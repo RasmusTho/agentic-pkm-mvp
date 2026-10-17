@@ -22,6 +22,7 @@ import pytest
 
 from app.knowledge_acquisition.source_registry import VALID_ACQUISITION_MODES
 from app.receipts.settings_receipts import query_settings_receipts
+from app.settings.models import SCREEN_CONTROL_KEYS
 from app.vault.manager import VaultContext
 from app.vault.markdown_settings import MarkdownSettingsStore
 from app.vault.settings_service import (
@@ -131,7 +132,7 @@ def test_runtime_gating_receipt_identity_path_only_does_not_cross_vault_generati
     )
 
 
-def test_runtime_gating_current_consumers_bypass_accessor_scope_is_yss_only(
+def test_runtime_gating_accepted_accessor_scope_is_yss_and_screen_controls(
     tmp_path: Path,
 ) -> None:
     vault_root = tmp_path / "vault"
@@ -148,7 +149,7 @@ def test_runtime_gating_current_consumers_bypass_accessor_scope_is_yss_only(
         ACCEPTED_RUNTIME_GATING_SETTINGS
     )
     assert ACCEPTED_RUNTIME_GATING_SETTINGS == frozenset(
-        {"youtubeSync.enabled", "youtubeSync.runnerEnabled"}
+        {"youtubeSync.enabled", "youtubeSync.runnerEnabled"} | SCREEN_CONTROL_KEYS
     )
 
 
