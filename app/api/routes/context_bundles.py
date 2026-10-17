@@ -9,15 +9,16 @@ authority flags surfaced verbatim, ``may_write`` never upgraded here.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from app.api.request_active_context import refuse_carrier_until_binding_aware
 from app.context_bundles.construction import build_inspectable_bundle
 from app.context_bundles.runtime_registry import register_emitted_bundle
 from app.context_bundles.schema import AuthorityFlags, ContextBundle
 from app.retrieval.capability import RetrievalRequest
 from app.retrieval.production_bundle import retrieve_and_emit_bundle
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(refuse_carrier_until_binding_aware)])
 
 
 def _scope_emitted_bundle(bundle: ContextBundle, intended_use: list[str] | None) -> ContextBundle:

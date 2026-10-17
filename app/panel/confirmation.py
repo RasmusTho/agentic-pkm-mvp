@@ -676,6 +676,15 @@ def _resolve_note_file(note_path: str | None) -> Path | None:
     return None
 
 
+def staged_proposal_note_file(proposal_id: str) -> Path | None:
+    """The vault file a staged proposal's confirm/reject would write, if resolvable."""
+
+    proposal = _service._proposals.get(proposal_id)
+    if proposal is None:
+        return None
+    return _resolve_note_file(proposal.intent_event.payload.note.path)
+
+
 def _write_rejected_projection(proposal: StagedProposal) -> None:
     """Remove the proposed checkbox from the vault on rejection (no execution receipt)."""
     note_path = proposal.intent_event.payload.note.path

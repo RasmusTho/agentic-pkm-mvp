@@ -54,13 +54,69 @@ def _create(client: TestClient, binding_id: str) -> dict:
 def test_migrated_scoped_read_rejects_stripped_carrier_without_default_downgrade(
     instance, client, monkeypatch
 ) -> None:
-    """A scoped route fails before ASK and cannot fall back to the legacy default."""
+    """A scoped read whose carrier is stripped fails reselection-required, never downgrades.
+
+    The separately identified scoped routes stay server-identifiable by route when an
+    intermediary strips the carrier; their legacy twins refuse any carrier-bearing retry;
+    and the routes MVR-05B3 migrated in place never answer a present (even emptied or
+    stale) carrier from the instance default or the process-wide selection.
+    """
+
+    _runtime, first = instance
+    import app.api.request_active_context as request_context_module
+    import app.api.routes.search as search_routes
+    import app.api.routes.vault_resolution as vault_resolution
+
+    def _no_default(*_a, **_kw):
+        pytest.fail("default/no-vault resolution was consulted")
 
     monkeypatch.setattr(ask_routes, "run_ask_graph", lambda *_a, **_kw: pytest.fail("ASK ran"))
-    response = client.post("/api/ask/scoped", json={"question": "which context?"})
+    monkeypatch.setattr(search_routes, "retrieve", lambda *_a, **_kw: pytest.fail("search ran"))
+    monkeypatch.setattr(vault_resolution, "get_vault_manager", _no_default)
+    monkeypatch.setattr(vault_resolution, "resolve_optional_vault_root", _no_default)
+    monkeypatch.setattr(
+        request_context_module, "compatibility_vault_root_or_selection_required", _no_default
+    )
 
+    # 1. Stripped carrier on the separately identified scoped routes.
+    response = client.post("/api/ask/scoped", json={"question": "which context?"})
     assert response.status_code == 401, response.text
     assert response.json()["detail"] == "reselection_required"
+    for path in ("/search/scoped?q=context", "/api/companion/vault/notes/scoped"):
+        stripped = client.get(path)
+        assert stripped.status_code == 401, (path, stripped.text)
+        assert stripped.json()["detail"] == "reselection_required"
+
+    # 2. No retry/downgrade through the legacy twin while the carrier is present.
+    session = _create(client, first.vault_binding_id)["context_selection_id"]
+    for carrier in (
+        {"X-Active-Context-Session": session},
+        {"X-Active-Context-Override": session},
+        {"X-Active-Context-Session": ""},
+    ):
+        legacy_ask = client.post("/api/ask", json={"question": "which context?"}, headers=carrier)
+        assert legacy_ask.status_code == 409, legacy_ask.text
+        assert legacy_ask.json()["detail"] == "active_context_scoped_route_required"
+        legacy_search = client.get("/search?q=context", headers=carrier)
+        assert legacy_search.status_code == 409, legacy_search.text
+        assert legacy_search.json()["detail"] == "active_context_scoped_route_required"
+
+    # 3. Routes migrated in place by MVR-05B3: an emptied or stale carrier is a
+    #    scoped request and fails reselection-required before any default lookup.
+    for path in (
+        "/api/artifacts/note?note_path=note.md",
+        "/api/debug/panel?note_rel=note.md",
+        "/api/eval-drafts",
+    ):
+        for carrier in (
+            {"X-Active-Context-Session": ""},
+            {"X-Active-Context-Override": ""},
+            {"X-Active-Context-Session": "stale-session"},
+        ):
+            scoped = client.get(path, headers=carrier)
+            assert scoped.status_code == 401, (path, carrier, scoped.text)
+            assert str(scoped.json()["detail"]).startswith("reselection_required"), scoped.text
+            assert "stale-session" not in scoped.text
 
 
 def test_invalid_override_fails_closed_without_falling_back_to_session(

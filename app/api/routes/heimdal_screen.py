@@ -1,10 +1,16 @@
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from app.api.compatibility_mutation import seal_vault_mutation
 from app.heimdal.screen_capture import ingest_screen_bundle
 
-router = APIRouter(prefix="/api/heimdal/screen", tags=["heimdal"])
+# MVR-05B3: the vault-bound Heimdal ingress carries the pre-05C mutation seal.
+router = APIRouter(
+    prefix="/api/heimdal/screen",
+    tags=["heimdal"],
+    dependencies=[Depends(seal_vault_mutation)],
+)
 
 
 @router.post("/capture")

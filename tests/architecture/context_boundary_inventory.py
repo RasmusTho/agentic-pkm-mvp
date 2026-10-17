@@ -102,7 +102,13 @@ _COMPANION_PICKER = (
     "legacy single-binding picker/initialize/settings bridge; the selector is the process-wide "
     "VaultManager until the background lifecycles are bound"
 )
-_ROUTE_FAMILY = "legacy single-binding route still resolves the selected vault globally"
+_ROUTE_COMPATIBILITY = (
+    "carrier-free compatibility journey of the remaining API route modules (MVR-05B3 moved the "
+    "artifacts/debug/eval-drafts reads onto the per-request ActiveContextSet and sealed every "
+    "vault-bound mutation route; a carrier-free read, and a legacy write only inside the "
+    "compatibility write-target window that proves the sole compatibility binding, still resolve "
+    "the process-wide single-binding selection through these named adapters)"
+)
 _RESOLUTION_PRIMITIVE = (
     "shared global-resolution primitive every legacy route delegates to; retired with the "
     "single-binding compatibility selector"
@@ -116,12 +122,6 @@ _CLI_NOTE = "operator CLI resolves its vault from process environment or selecti
 COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
     _a("app/agents/ask/graph.py", "_active_recall_vault_id", "get_vault_manager", _CARRIER_NOTE, "05B4"),
     _a("app/agents/ask/graph.py", "_active_recall_vault_root", "get_vault_manager resolve_optional_vault_root", _CARRIER_NOTE, "05B4"),
-    _a("app/api/routes/artifacts.py", "read_artifact_note", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
-    _a("app/api/routes/ask.py", "_voice_sessions_for_selected_vault", "resolve_active_vault_root", _ROUTE_FAMILY, "05B3"),
-    _a("app/api/routes/ask.py", "ask_voice", "active_vault_selection_window", _ROUTE_FAMILY, "05B3"),
-    _a("app/api/routes/canvas.py", "_get_vault_root", "resolve_active_vault_root", _ROUTE_FAMILY, "05B3"),
-    _a("app/api/routes/canvas.py", "_get_vault_root_or_picker", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
-    _a("app/api/routes/capture.py", "capture_to_inbox", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
     _a(_COMPANION, "_legacy_companion_vault_manager", "get_vault_manager", _COMPANION_LEGACY_READ, "retained:MVR-06"),
     _a(_COMPANION, "_legacy_configured_vault_root", "resolve_optional_vault_root", _COMPANION_LEGACY_READ, "retained:MVR-06"),
     _a(_COMPANION, "_legacy_vault_root_env_value", "env:VAULT_ROOT", _COMPANION_LEGACY_READ, "retained:MVR-06"),
@@ -129,10 +129,9 @@ COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
     _a(_COMPANION, "reload_companion_vault", "get_vault_manager", _COMPANION_PICKER, "retained:MVR-06"),
     _a(_COMPANION, "select_companion_vault", "get_vault_manager", _COMPANION_PICKER, "retained:MVR-06"),
     _a(_COMPANION, "update_companion_vault_setting", "get_vault_manager", _COMPANION_PICKER, "retained:MVR-06"),
-    _a("app/api/routes/debug.py", "debug_panel", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
-    _a("app/api/routes/eval_drafts.py", "get_pending_eval_drafts", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
-    _a("app/api/routes/eval_drafts.py", "post_eval_draft_decision", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
-    _a("app/api/routes/provisional_memory.py", "post_provisional_memory", "active_vault_root_or_selection_required", _ROUTE_FAMILY, "05B3"),
+    _a("app/api/routes/vault_resolution.py", "compatibility_selection_window", "active_vault_selection_window", _ROUTE_COMPATIBILITY, "retained:MVR-06"),
+    _a("app/api/routes/vault_resolution.py", "compatibility_vault_root", "resolve_active_vault_root", _ROUTE_COMPATIBILITY, "retained:MVR-06"),
+    _a("app/api/routes/vault_resolution.py", "compatibility_vault_root_or_selection_required", "active_vault_root_or_selection_required", _ROUTE_COMPATIBILITY, "retained:MVR-06"),
     _a("app/api/routes/vault_resolution.py", "active_vault_root_or_selection_required", "resolve_active_vault_root", _RESOLUTION_PRIMITIVE, "retained:MVR-06"),
     _a("app/api/routes/vault_resolution.py", "active_vault_selection_window", "get_vault_manager", _RESOLUTION_PRIMITIVE, "retained:MVR-06"),
     _a("app/api/routes/vault_resolution.py", "resolve_active_vault_root", "get_vault_manager resolve_optional_vault_root", _RESOLUTION_PRIMITIVE, "retained:MVR-06"),
