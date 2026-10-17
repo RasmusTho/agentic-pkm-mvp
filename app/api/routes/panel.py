@@ -41,14 +41,22 @@ router = APIRouter(
 
 
 @router.post("/confirm", response_model=ConfirmResponse)
-async def panel_confirm(request: ConfirmRequest, http_request: Request) -> ConfirmResponse:
+async def panel_confirm(
+    request: ConfirmRequest,
+    http_request: Request = None,  # type: ignore[assignment]  # FastAPI injects; None only for direct calls
+) -> ConfirmResponse:
     # A staged proposal names its own note file (absolute, or relative to the
     # process VAULT_ROOT), which need not be the sealed compatibility binding:
     # prove the real target before any confirm/reject effect.
+    # FastAPI always injects the request; a direct in-process call (no router seal)
+    # has no sealed binding to prove against.
+    sealed_root = (
+        getattr(http_request.state, "compatibility_write_root", None) if http_request is not None else None
+    )
     target = confirm_module.staged_proposal_note_file(request.proposal_id)
-    if target is not None:
+    if http_request is not None and target is not None:
         require_compatibility_write_target(http_request, target)
-    elif getattr(http_request.state, "compatibility_write_root", None) is not None and (
+    elif sealed_root is not None and (
         confirm_module._service._proposals.get(request.proposal_id) is not None
     ):
         # A staged proposal whose note file cannot be resolved has no provable

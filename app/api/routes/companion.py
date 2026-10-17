@@ -5963,7 +5963,9 @@ def get_memory_review_queue(
 ) -> MemoryReviewQueueResponse:
     """Bounded read over pending memory candidates awaiting review."""
 
-    if x_active_context_session is not None or x_active_context_override is not None:
+    # A direct in-process call receives the ``Header(...)`` defaults, not values;
+    # only an actual (possibly blank) header string is a presented carrier.
+    if isinstance(x_active_context_session, str) or isinstance(x_active_context_override, str):
         # The review queue is process-global and not yet binding-aware (MVR-05B4,
         # #6139): a scoped request is refused rather than shown other vaults' items.
         raise HTTPException(status_code=409, detail="capability_not_ready")
