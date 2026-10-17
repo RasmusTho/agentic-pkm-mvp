@@ -141,31 +141,26 @@ var FIX={decision_id:"8f2e-fixture",title:"Postgres as projection, not source of
 var OUT=[["held","Held"],["partly_held","Partly held"],["did_not_hold","Did not hold"],["unknown_yet","Not sure yet"]];
 var LBL={};OUT.forEach(function(o){LBL[o[0]]=o[1]});
 var BASE="/companion/calibration/revisits/";
-function esc(s){return String(s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]})}
 function short(id){return id.length>4?id.slice(0,4)+"…":id}
-function badge(k,t){return '<span class="badge badge-'+k+'">'+t+'</span>'}
-function head(b){return '<header class="cal-head"><span class="cal-eyebrow">Decision calibration · revisit</span>'+b+'</header>'}
-function lead(u,r){return '<div class="cal-lead"><h3 id="'+u+'-q" class="cal-q" tabindex="-1">You decided <span class="cal-title">'+esc(r.title)+'</span> on <time datetime="'+esc(r.decided_on)+'">'+esc(r.decided_on)+'</time> — did it hold?</h3><p class="cal-meta">Decided '+esc(r.decided_on)+' · '+esc(r.rung_days)+'-day rung · decision '+esc(short(r.decision_id))+'</p></div>'}
-function attrs(s){var r=s.rev;return ' data-state="'+s.state+'" data-decision-id="'+esc(r.decision_id)+'" data-decided-on="'+esc(r.decided_on)+'" data-rung-days="'+esc(r.rung_days)+'" data-degraded="false" aria-labelledby="'+s.uid+'-q"'}
+function node(tag,cls,text){var n=document.createElement(tag);if(cls)n.className=cls;if(text!==undefined)n.textContent=text;return n}
+function attr(n,k,v){n.setAttribute(k,String(v));return n}
+function badge(k,t){return node("span","badge badge-"+k,t)}
+function head(b){var n=node("header","cal-head");n.append(node("span","cal-eyebrow","Decision calibration · revisit"),b);return n}
+function lead(u,r){var n=node("div","cal-lead"),h=node("h3","cal-q");attr(h,"id",u+"-q");attr(h,"tabindex","-1");h.append(document.createTextNode("You decided "),node("span","cal-title",r.title),document.createTextNode(" on "));var time=node("time",null,r.decided_on);attr(time,"datetime",r.decided_on);h.append(time,document.createTextNode(" — did it hold?"));var p=node("p","cal-meta","Decided "+r.decided_on+" · "+r.rung_days+"-day rung · decision "+short(r.decision_id));n.append(h,p);return n}
+function attrs(n,s){var r=s.rev;attr(n,"data-state",s.state);attr(n,"data-decision-id",r.decision_id);attr(n,"data-decided-on",r.decided_on);attr(n,"data-rung-days",r.rung_days);attr(n,"data-degraded","false");attr(n,"aria-labelledby",s.uid+"-q");return n}
 function render(s){
-var u=s.uid,r=s.rev;
-if(s.state==="absent")return '<section class="cal cal-quiet" data-state="absent" aria-labelledby="'+u+'-q"><h3 id="'+u+'-q" class="cal-eyebrow" tabindex="-1">Decision calibration</h3><p>No revisit due.</p></section>';
-if(s.state==="degraded")return '<section class="cal" data-state="degraded" data-degraded="true" aria-labelledby="'+u+'-q">'+head(badge("amber","Unavailable"))+'<div class="cal-lead"><h3 id="'+u+'-q" class="cal-q" tabindex="-1">Calibration revisits unavailable.</h3><p class="cal-body">Revisit state could not be read. Pending revisits are unknown, not zero.</p></div></section>';
-if(s.state==="answered")return '<section class="cal"'+attrs(s)+' data-outcome="'+s.outcome+'">'+head(badge("vault","Recorded"))+lead(u,r)+'<div class="cal-lead"><p class="cal-result">Outcome recorded: <strong>'+LBL[s.outcome]+'</strong>.</p><p class="cal-hint">This rung is closed. It cannot be edited or re-answered.</p></div><p class="cal-hint cal-status">'+(s.rereading?"Re-reading workspace state…":"Workspace state re-read.")+'</p></section>';
-if(s.state==="dismissed")return '<section class="cal"'+attrs(s)+'>'+head(badge("default","Deferred"))+lead(u,r)+'<div class="cal-lead"><p class="cal-result">Revisit deferred. No outcome recorded.</p></div><p class="cal-hint cal-status">'+(s.rereading?"Re-reading workspace state…":"Workspace state re-read.")+'</p></section>';
-var sa=s.state==="submitting_answer",sd=s.state==="submitting_dismiss",busy=sa||sd,f=s.state==="write_failed"?s.failure:null;
-var b=sa?badge("cyan","Recording"):sd?badge("cyan","Deferring"):f?badge("danger",f.kind==="blocked"?"Blocked":f.intent==="dismiss"?"Not deferred":"Not recorded"):badge("default","Pending");
-var dis=busy?' aria-disabled="true"':'';
-var alert="";
-if(f){var t=f.intent==="dismiss"?(f.kind==="blocked"?"Dismissal blocked.":"Dismissal not recorded."):(f.kind==="blocked"?"Answer blocked by the write guard.":"Answer not recorded. The write failed.");
-alert='<div class="cal-alert" data-failure="'+f.kind+'" data-intent="'+f.intent+'"><p class="cal-alert-t">'+t+'</p><p>Nothing durable happened. The revisit is still pending.</p></div>';}
-var picks=OUT.map(function(o){var ch=sa&&s.chosen===o[0];return '<button class="btn btn-secondary'+(ch?' is-chosen':'')+'" type="submit" name="outcome" value="'+o[0]+'" data-outcome="'+o[0]+'"'+dis+'>'+o[1]+(ch?'<span class="pick-state"> · recording</span>':'')+'</button>'}).join("");
-return '<section class="cal"'+attrs(s)+(busy?' aria-busy="true"':'')+'>'+head(b)+lead(u,r)+alert+
-'<form class="cal-answer" method="post" action="'+BASE+esc(r.decision_id)+'/decision" data-intent="answer">'+
-'<div class="field"><label class="label" for="'+u+'-note">Note <span class="opt">(optional)</span></label><textarea class="textarea" id="'+u+'-note" name="note" aria-describedby="'+u+'-nh"'+(busy?' readonly':'')+'>'+esc(s.note||"")+'</textarea><p class="cal-hint" id="'+u+'-nh">Not required. Sent only with an outcome.</p></div>'+
-'<fieldset class="picks-set" aria-describedby="'+u+'-eff"><legend>Did it hold?</legend><div class="picks">'+picks+'</div><p class="cal-hint" id="'+u+'-eff">'+(sa?"Recording "+LBL[s.chosen]+". Other picks are unavailable until the server responds.":"A pick records the outcome for this rung. It cannot be changed afterwards.")+'</p></fieldset></form>'+
-'<form class="cal-foot" method="post" action="'+BASE+esc(r.decision_id)+'/dismiss" data-intent="dismiss"><button class="btn btn-ghost" type="submit" aria-describedby="'+u+'-dis"'+dis+'>'+(sd?"Deferring…":"Dismiss for now")+'</button><p class="cal-hint" id="'+u+'-dis">'+(sd?"Deferring this revisit. No outcome will be recorded.":"Defers this revisit. Records no outcome.")+'</p></form>'+
-'<p class="print-only cal-hint">Outcome pending.</p></section>';
+var u=s.uid,r=s.rev,root=node("section","cal");
+if(s.state==="absent"){root.className="cal cal-quiet";attr(root,"data-state","absent");attr(root,"aria-labelledby",u+"-q");var ah=node("h3","cal-eyebrow","Decision calibration");attr(ah,"id",u+"-q");attr(ah,"tabindex","-1");root.append(ah,node("p",null,"No revisit due."));return root}
+if(s.state==="degraded"){attr(root,"data-state","degraded");attr(root,"data-degraded","true");attr(root,"aria-labelledby",u+"-q");var dh=node("h3","cal-q","Calibration revisits unavailable.");attr(dh,"id",u+"-q");attr(dh,"tabindex","-1");var dl=node("div","cal-lead");dl.append(dh,node("p","cal-body","Revisit state could not be read. Pending revisits are unknown, not zero."));root.append(head(badge("amber","Unavailable")),dl);return root}
+attrs(root,s);var sa=s.state==="submitting_answer",sd=s.state==="submitting_dismiss",busy=sa||sd,f=s.state==="write_failed"?s.failure:null;
+if(s.state==="answered"){attr(root,"data-outcome",s.outcome);var ar=node("div","cal-lead");ar.append(node("p","cal-result","Outcome recorded: "+LBL[s.outcome]+"."),node("p","cal-hint","This rung is closed. It cannot be edited or re-answered."));root.append(head(badge("vault","Recorded")),lead(u,r),ar,node("p","cal-hint cal-status",s.rereading?"Re-reading workspace state…":"Workspace state re-read."));return root}
+if(s.state==="dismissed"){var dr=node("div","cal-lead");dr.append(node("p","cal-result","Revisit deferred. No outcome recorded."));root.append(head(badge("default","Deferred")),lead(u,r),dr,node("p","cal-hint cal-status",s.rereading?"Re-reading workspace state…":"Workspace state re-read."));return root}
+if(busy)attr(root,"aria-busy","true");
+var b=sa?badge("cyan","Recording"):sd?badge("cyan","Deferring"):f?badge("danger",f.kind==="blocked"?"Blocked":f.intent==="dismiss"?"Not deferred":"Not recorded"):badge("default","Pending");root.append(head(b),lead(u,r));
+if(f){var t=f.intent==="dismiss"?(f.kind==="blocked"?"Dismissal blocked.":"Dismissal not recorded."):(f.kind==="blocked"?"Answer blocked by the write guard.":"Answer not recorded. The write failed."),alert=node("div","cal-alert");attr(alert,"data-failure",f.kind);attr(alert,"data-intent",f.intent);alert.append(node("p","cal-alert-t",t),node("p",null,"Nothing durable happened. The revisit is still pending."));root.append(alert)}
+var form=node("form","cal-answer"),field=node("div","field"),label=node("label","label","Note ");attr(form,"method","post");attr(form,"action",BASE+r.decision_id+"/decision");attr(form,"data-intent","answer");attr(label,"for",u+"-note");label.append(node("span","opt","(optional)"));var ta=node("textarea","textarea",s.note||"");attr(ta,"id",u+"-note");attr(ta,"name","note");attr(ta,"aria-describedby",u+"-nh");if(busy)attr(ta,"readonly","true");field.append(label,ta,node("p","cal-hint","Not required. Sent only with an outcome."));
+var fs=node("fieldset","picks-set"),lg=node("legend",null,"Did it hold?"),picks=node("div","picks");attr(fs,"aria-describedby",u+"-eff");OUT.forEach(function(o){var ch=sa&&s.chosen===o[0],button=node("button","btn btn-secondary"+(ch?" is-chosen":""),o[1]);attr(button,"type","submit");attr(button,"name","outcome");attr(button,"value",o[0]);attr(button,"data-outcome",o[0]);if(busy)attr(button,"aria-disabled","true");if(ch)button.append(node("span","pick-state"," · recording"));picks.append(button)});fs.append(lg,picks,node("p","cal-hint",sa?"Recording "+LBL[s.chosen]+". Other picks are unavailable until the server responds.":"A pick records the outcome for this rung. It cannot be changed afterwards."));form.append(field,fs);root.append(form);
+var df=node("form","cal-foot"),db=node("button","btn btn-ghost",sd?"Deferring…":"Dismiss for now");attr(df,"method","post");attr(df,"action",BASE+r.decision_id+"/dismiss");attr(df,"data-intent","dismiss");attr(db,"type","submit");attr(db,"aria-describedby",u+"-dis");if(busy)attr(db,"aria-disabled","true");df.append(db,node("p","cal-hint",sd?"Deferring this revisit. No outcome will be recorded.":"Defers this revisit. Records no outcome."));root.append(df,node("p","print-only cal-hint","Outcome pending."));return root;
 }
 /* gallery */
 var G=[
@@ -184,7 +179,7 @@ var G=[
 ["Narrow 360 — submitting answer",{state:"submitting_answer",chosen:"did_not_hold"},1]
 ];
 var gal=document.getElementById("gallery");
-gal.innerHTML=G.map(function(g,i){var s=Object.assign({rev:FIX,uid:"g"+i},g[1]);return '<div class="gitem'+(g[2]?' gitem-narrow':'')+'"><h3 class="mono-note">'+String(i+1).padStart(2,"0")+' · '+g[0]+' · data-state="'+s.state+'"</h3>'+render(s)+'</div>'}).join("");
+gal.replaceChildren.apply(gal,G.map(function(g,i){var s=Object.assign({rev:FIX,uid:"g"+i},g[1]),item=node("div","gitem"+(g[2]?" gitem-narrow":""));item.append(node("h3","mono-note",String(i+1).padStart(2,"0")+" · "+g[0]+" · data-state=\""+s.state+"\""),render(s));return item}));
 gal.addEventListener("submit",function(e){e.preventDefault();say("Static gallery card. Use the interactive card above to submit.")});
 gal.addEventListener("click",function(e){var b=e.target.closest('[aria-disabled="true"]');if(b)e.preventDefault()});
 /* live */
@@ -192,9 +187,9 @@ var live=document.getElementById("live"),logEl=document.getElementById("log"),po
 var S,nextResult="ok",projection="pending",timer=null,logged=false;
 function say(t){pol.textContent="";setTimeout(function(){pol.textContent=t},30)}
 function shout(t){ast.textContent="";setTimeout(function(){ast.textContent=t},30)}
-function log(m,p,body){if(!logged){logEl.innerHTML="";logged=true}var li=document.createElement("li");li.innerHTML=esc(m)+' <span>'+esc(p)+(body?" "+esc(JSON.stringify(body)):"")+'</span>';logEl.appendChild(li)}
+function log(m,p,body){if(!logged){logEl.replaceChildren();logged=true}var li=node("li"),span=node("span",null,p+(body?" "+JSON.stringify(body):""));li.append(document.createTextNode(m+" "),span);logEl.appendChild(li)}
 function fresh(){clearTimeout(timer);S={uid:"live",rev:FIX,state:projection==="pending"?"pending":projection,note:""}}
-function draw(sel){live.innerHTML=render(S);if(sel){var el=live.querySelector(sel);if(el)el.focus()}}
+function draw(sel){live.replaceChildren(render(S));if(sel){var el=live.querySelector(sel);if(el)el.focus()}}
 function reread(){S.rereading=true;draw(".cal-q");timer=setTimeout(function(){log("GET","WorkspaceStateResponse.calibration_revisit → null");S={uid:"live",rev:FIX,state:"absent"};draw(".cal-eyebrow");say("Workspace state re-read. No revisit due.")},1400)}
 live.addEventListener("click",function(e){var b=e.target.closest('[aria-disabled="true"]');if(b)e.preventDefault()});
 live.addEventListener("submit",function(e){
