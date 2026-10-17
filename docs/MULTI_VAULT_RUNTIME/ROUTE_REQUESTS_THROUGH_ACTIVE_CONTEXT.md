@@ -463,8 +463,8 @@ never drop or weaken, a criterion.
 | MVR-05B3 | [#6138](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6138) | remaining API route modules (`capture`, `artifacts`, `canvas`, `provisional_memory`, `eval_drafts`, `debug`) and the pre-05C `capability_not_ready` mutation seal across every vault-bound write route | 05B2 | Sol/xhigh |
 | MVR-05B4 | [#6139](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6139) | sub-hub for 05B4a–05B4c (see *05B4 split* below); no deliverable of its own, reconciled closed after 05B4c merges | 05B3 | — |
 | MVR-05B4a | [#6160](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6160) | agent, MCP, and CLI carrier propagation, production retrieval/cache provenance, request-wide settings conflict (including the `VAULT_SYSTEM_DIR_REL`/`VAULT_LAYOUT_NOTE_REL` classification), and the context-boundary gate hardening the carrier allowlist removal depends on | 05B3 | Sol/high |
-| MVR-05B4b | [#6161](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6161) | binding-aware companion read projections that 05B2 omits for scoped reads: vault-browser receipts and memory posture, workspace panel state and watcher status, `/now` nudges, orientation summaries, runtime signals, and the leave-point cursor | 05B4a | Sol/high |
-| MVR-05B4c | [#6162](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6162) | binding-stamped process-global stores behind the read surfaces 05B3 refuses for carriers (orientation frame, emitted-bundle registry, Heimdal capture/meeting), the memory review queue (one process-global queue keyed only by candidate id, so its entries need a binding stamp before any scoped read), and the scoped debug-panel diagnostics | 05B4b | Sol/high |
+| MVR-05B4b | [#6161](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6161) | companion read projections that 05B2 omits for scoped reads whose sources already record per-vault identity: vault-browser receipts (receipt `vault_id`), `/now` nudges (reach-out receipt `vault_id`), and workspace watcher status (heartbeat compared with the request binding's root) | 05B4a | Sol/high |
+| MVR-05B4c | [#6162](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6162) | binding-stamped process-global stores behind the read surfaces 05B3 refuses for carriers (orientation frame, emitted-bundle registry, Heimdal capture/meeting), the memory review queue and agent-memory posture (one process-global queue keyed only by candidate id), workspace panel proposal/idempotency state (keyed only by artifact id), orientation summaries and runtime signals (process-global counters), the leave-point cursor (keyed by display name), and the scoped debug-panel diagnostics — every source that needs a binding stamp before any scoped read | 05B4b | Sol/high |
 | MVR-05B5 | [#6140](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6140) | Companion client activation, stale-selection recovery, client first-vault bootstrap, and the `companion-ui/docs/UI_RUNTIME_BOUNDARIES.md` writeback | 05B4c | Sol/high |
 | 05B hub | [#3860](https://github.com/RasmusTho/agentic-pkm-mvp/issues/3860) | stage closer: full acceptance matrix on one exact head, `docs/ARCHITECTURE.md` and `docs/SETTINGS.md` writebacks, final allowlist truth, stage receipt to #2143 | 05B0–05B5 | Sol/high |
 
@@ -479,7 +479,8 @@ behind `refuse_carrier_until_binding_aware` whose stores carry no binding at all
 05B3 (PR #6159, +1,696/−138 across 27 files, 5 commits, 11 reviews) the remaining route modules;
 05B4 as filed is several of either. The split again follows mechanism: 05B4a
 propagates the context through the non-HTTP carriers and owns the original MVR-05B criteria;
-05B4b adds a binding predicate to companion projections whose stores already hold per-vault data;
+05B4b adds a binding predicate to companion projections whose sources already record per-vault
+identity;
 05B4c stamps a binding where an id-keyed process-global entry is created, then filters scoped
 reads on it. 05B4a also takes the gate hardening that the Known Defects KD-55D38D90BD05,
 KD-88B6B1EC0D9A, and KD-6BC9153BD3A2 tie to the first carrier allowlist removal. Each child adds
