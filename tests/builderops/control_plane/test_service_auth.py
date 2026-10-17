@@ -783,3 +783,44 @@ def test_fencing_token_exemption_still_allows_the_legitimate_lease_field(
     }
     # Must not raise: the exemption still covers the genuine typed field.
     _assert_durable_payload_safe(legitimate_request, registry)
+
+
+def test_scope_metadata_preserves_ascii_grammar_and_size_fence(tmp_path: Path) -> None:
+    registry = _registry(tmp_path)
+    store = _Store()
+    client = TestClient(
+        create_app(store=store, credentials=registry),
+        headers={"X-BuilderOps-Authority-Epoch": "1", "Authorization": "Bearer client-token"},
+    )  # type: ignore[arg-type]
+    cases = [
+        ([], 200),
+        (["a:b", "records:write", "a_0-b:c-2_d"], 200),
+        ("a:b", 400),
+        ([False], 400),
+        ([""], 400),
+        (["a"], 400),
+        ([":b"], 400),
+        (["a:"], 400),
+        (["a:b:c"], 400),
+        (["A:b"], 400),
+        (["a:B"], 400),
+        (["0a:b"], 400),
+        (["a:_b"], 400),
+        (["a:b "], 400),
+        (["a:b\n"], 400),
+        (["a:bé"], 400),
+        (["a:b١"], 400),
+        # Shape-valid long metadata still hits the existing durable text cap.
+        (["a" * 16_385 + ":b"], 400),
+        # An adversarial near-match is rejected before any persistence.
+        (["a" * 200_000 + ":b:"], 400),
+    ]
+    for index, (scopes, expected) in enumerate(cases):
+        store.last_actor = None
+        response = client.post(
+            "/v1/records",
+            json={**_record_payload({"scopes": scopes}), "idempotency_key": f"scope-shape-{index}"},
+        )
+        assert response.status_code == expected
+        assert store.last_actor == ("client:macbook" if expected == 200 else None)
+        assert "client-token" not in response.text
