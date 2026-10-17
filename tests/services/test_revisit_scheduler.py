@@ -198,3 +198,48 @@ def test_actioned_rungs_match_on_decision_uuid_not_re_minted_object_id() -> None
     )
     assert due_dismissal is not None
     assert due_dismissal.rung_index == 1
+
+
+def test_due_revisits_selects_producer_shaped_decision_note(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ingested decisions are ``note`` objects with semantic frontmatter."""
+
+    from app.calibration import scheduler
+    from app.objects import DomainObject
+
+    decision_uuid = uuid4()
+    decision = DomainObject(
+        uuid=str(uuid4()),
+        kind="note",
+        payload={
+            "title": "Use the canonical store",
+            "frontmatter": {
+                "artifact_class": "decision_record",
+                "uuid": str(decision_uuid),
+                "decided_on": "2026-01-01",
+            },
+        },
+        source_ref="Notes/decision.md",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    observed: dict[str, object] = {}
+
+    class _Store:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def list_objects(self, *, kind: str, limit: int | None) -> list[DomainObject]:
+            observed.update(kind=kind, limit=limit)
+            return [decision] if kind == "note" else []
+
+    monkeypatch.setattr(scheduler, "ObjectStore", _Store)
+    due = scheduler.due_revisits(
+        today=date(2026, 1, 15),
+        outcome_reader=lambda _: [],
+        dismissal_reader=lambda _: [],
+    )
+
+    assert observed == {"kind": "note", "limit": None}
+    assert len(due) == 1
+    assert due[0].decision_uuid == decision_uuid

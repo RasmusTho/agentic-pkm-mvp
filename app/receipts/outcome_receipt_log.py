@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import fcntl
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -27,6 +28,7 @@ SCHEMA_VERSION = 1
 OUTCOME_RECEIPT_WRITE_ACTION = "decision.outcome_receipt"
 _RECEIPTS_SUBDIR = Path("receipts") / "decision_outcomes"
 _APPEND_LOCK_NAME = ".append.lock"
+logger = logging.getLogger(__name__)
 OutcomeValue = Literal["held", "partly_held", "did_not_hold", "unknown_yet"]
 
 
@@ -180,12 +182,24 @@ def append_outcome_receipt(
             f"decision_uuid={decision_uuid} rung_index={rung_index}: {exc}"
         ) from exc
 
-    # Receipt-before-ack: this happens strictly after the append.  A projection
-    # failure is visible to the caller; CAL-04 rebuild tooling can repair it.
-    if vault_binding_id == COMPATIBILITY_BINDING_ID:
-        _insert_projection(receipt)
+    # Receipt-before-ack: the canonical append is the durable success.  A
+    # rebuildable projection may be unavailable, but that must not turn a
+    # committed answer into a client-visible failure (or invite a replay).
+    try:
+        if vault_binding_id == COMPATIBILITY_BINDING_ID:
+            _insert_projection(receipt)
+        else:
+            _insert_projection(receipt, vault_binding_id=vault_binding_id)
+    except Exception:  # pragma: no cover - backend-specific projection faults
+        logger.warning(
+            "decision outcome projection degraded after durable append",
+            exc_info=True,
+        )
+        receipt = dict(receipt)
+        receipt["projection_state"] = "degraded"
     else:
-        _insert_projection(receipt, vault_binding_id=vault_binding_id)
+        receipt = dict(receipt)
+        receipt["projection_state"] = "ready"
     return receipt
 
 

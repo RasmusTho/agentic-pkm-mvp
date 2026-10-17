@@ -70,14 +70,14 @@ def test_append_durable_even_if_projection_write_fails(
     monkeypatch.setattr(
         outcome_log, "_insert_projection", lambda _: (_ for _ in ()).throw(RuntimeError("db down"))
     )
-    with pytest.raises(RuntimeError, match="db down"):
-        outcome_log.append_outcome_receipt(
-            decision_object_id=object_id,
-            decision_uuid=decision_uuid,
-            rung_index=0,
-            outcome="partly_held",
-            vault_root=tmp_path / "vault",
-        )
+    receipt = outcome_log.append_outcome_receipt(
+        decision_object_id=object_id,
+        decision_uuid=decision_uuid,
+        rung_index=0,
+        outcome="partly_held",
+        vault_root=tmp_path / "vault",
+    )
+    assert receipt["projection_state"] == "degraded"
     assert len(_records(tmp_path / "vault")) == 1
 
 

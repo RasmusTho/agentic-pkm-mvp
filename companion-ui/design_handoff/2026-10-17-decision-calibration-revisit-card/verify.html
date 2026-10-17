@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-density="comfortable" data-focus="v2">
+<head><meta charset="UTF-8"><title>CAL-03 token parity + egress check</title>
+<link rel="stylesheet" href="tokens/colors_and_type.no-egress.css">
+<style>body{padding:var(--space-6);display:grid;gap:var(--space-4);font-family:var(--font-mono);font-size:var(--text-sm)}pre{white-space:pre-wrap}iframe{width:100%;height:240px;border:1px solid var(--border)}</style></head>
+<body><h1 class="h3">Token parity and egress check</h1><pre id="out">running…</pre><iframe id="f" src="prototype.html" title="prototype under test"></iframe>
+<script>
+(async function(){
+var EXP="edbc81c77209b5274b26b5e827191f95595f20d6bc5a97a17f7dd8751a774ba2",o=[];
+async function h(p){var r=await fetch(p,{cache:"no-store"});if(!r.ok)return null;var b=await r.arrayBuffer();var d=await crypto.subtle.digest("SHA-256",b);return{hex:[].map.call(new Uint8Array(d),function(x){return x.toString(16).padStart(2,"0")}).join(""),len:b.byteLength,text:new TextDecoder().decode(b)}}
+async function hs(p){try{return await h(p)}catch(e){return null}}
+var cp=await hs("tokens/colors_and_type.css"),ne=await hs("tokens/colors_and_type.no-egress.css"),ds=await hs("_ds/yggdrasil-design-system-f2b13410-af14-4875-8029-445352123f57/colors_and_type.css");
+o.push("expected (origin/main)       "+EXP);
+o.push(cp?"tokens/ archived exact copy  "+cp.hex+" ("+cp.len+" B) "+(cp.hex===EXP?"MATCH":"MISMATCH"):"tokens/colors_and_type.css   MISSING — package incomplete");
+o.push(ds?"optional _ds bound sheet     "+ds.hex+" "+(ds.hex===EXP?"MATCH":"MISMATCH"):"optional _ds bound sheet     not present in this package (expected in exports; not required)");
+if(cp&&ne){o.push("tokens/ no-egress copy       "+ne.hex+" ("+ne.len+" B)");
+var a=cp.text.split("\n"),b=ne.text.split("\n"),i=0;while(i<a.length&&a[i]===b[i])i++;var ja=a.length-1,jb=b.length-1;while(ja>=i&&jb>=i&&a[ja]===b[jb]){ja--;jb--}
+var rem=a.slice(i,ja+1),add=b.slice(i,jb+1);
+o.push("diff: removed "+rem.length+" line(s), added "+add.length+" line(s) at line "+(i+1));
+o.push("  removed is single Google Fonts @import: "+(rem.length===1&&/^@import url\('https:\/\/fonts\.googleapis\.com/.test(rem[0])));
+o.push("  added is 3-line comment: "+(add.length===3&&add[0].indexOf("/*")===0&&add[2].trim().slice(-2)==="*/"));}
+document.getElementById("out").textContent=o.join("\n");
+document.getElementById("f").addEventListener("load",function(){setTimeout(function(){var w=document.getElementById("f").contentWindow;var res=w.performance.getEntriesByType("resource").map(function(e){return e.name});var x=res.filter(function(n){return new URL(n).origin!==location.origin});o.push("","prototype resources: "+res.length,res.map(function(n){return"  "+n.replace(location.origin,"")}).join("\n"),"cross-origin requests (Resource Timing; CDP is authoritative): "+x.length+(x.length?"\n  "+x.join("\n  "):""));o.push("gallery renders: "+w.document.querySelectorAll("#gallery .gitem").length,"data-state values: "+[].map.call(w.document.querySelectorAll("#gallery [data-state]"),function(e){var a=e.querySelector(".cal-alert");return e.getAttribute("data-state")+(a?"["+a.getAttribute("data-intent")+","+a.getAttribute("data-failure")+"]":"")}).join(", "));document.getElementById("out").textContent=o.join("\n")},800)});
+})().catch(function(e){document.getElementById("out").textContent="error: "+e});
+</script></body></html>
