@@ -905,16 +905,16 @@ class GitHubProtectedRepositoryAuthority:
             observed_closing_issues=cast(Sequence[int], observed),
             issue_evidence=cast(Sequence[Mapping[str, object]], issues),
         )
-        if plan["reopen_unauthorized"] and not compensation_only:
+        for number in plan["reopen_unauthorized"]:
+            # Revalidate the durable operation-bound refusal and current task
+            # owner immediately before every external compensation write. A
+            # task takeover between Issues cannot leave the former owner with
+            # authority for the next PATCH.
             if before_compensation is None:
                 raise MergeAuthorityError(
                     "native closure conflict lacks a durable recorder"
                 )
-            # Persist the operation-bound refusal before compensation. A crash
-            # after reopening an Issue can therefore never erase the conflict
-            # from restart/recovery truth.
             before_compensation()
-        for number in plan["reopen_unauthorized"]:
             self._native_write(
                 "PATCH", f"/repos/{repository}/issues/{number}", {"state": "open"}, credential
             )

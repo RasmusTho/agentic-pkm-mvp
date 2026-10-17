@@ -474,6 +474,94 @@ def test_native_single_closer_crash_after_refusal_recovers_compensation_only():
     ] is True
 
 
+@pytest.mark.parametrize(
+    "replacement_holder",
+    ("verification-host", "replacement-verification-host"),
+    ids=("expired-task-reclaim", "actual-task-takeover"),
+)
+def test_native_single_closer_compensation_requires_current_task_owner(
+    replacement_holder,
+):
+    executor, run, outbox, calls = native_executor()
+    credential_resolutions = 0
+    resolve_credential = executor.credentials.resolve
+
+    def counted_credential_resolution(**kwargs):
+        nonlocal credential_resolutions
+        credential_resolutions += 1
+        return resolve_credential(**kwargs)
+
+    executor.credentials.resolve = counted_credential_resolution
+
+    class ClosureSource:
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            return {
+                "closure_scan_complete": True,
+                "observed_closing_issues": [3603, 3604],
+                "issue_evidence": [
+                    {
+                        "number": number,
+                        "state": "closed",
+                        "closed_by_delivery": True,
+                        "closed_by_pull_requests": [3603],
+                    }
+                    for number in (3603, 3604)
+                ],
+            }
+
+    executor.repository.closure_source = ClosureSource()
+    record_conflict = executor.ledger.record_native_merge_conflict
+
+    def crash_after_conflict(*args, **kwargs):
+        record_conflict(*args, **kwargs)
+        raise SystemExit("crash after durable closure refusal")
+
+    executor.ledger.record_native_merge_conflict = crash_after_conflict
+    with pytest.raises(SystemExit, match="durable closure refusal"):
+        executor.execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id,
+        )
+    executor.ledger.record_native_merge_conflict = record_conflict
+
+    assert outbox.state == "succeeded"
+    assert not any(call.method == "PATCH" for call in calls)
+    resolutions_before_stale_recovery = credential_resolutions
+    task = executor.ledger.client.tasks[run.run_id]
+    task["lease"]["expires_at"] = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    ).isoformat()
+
+    with pytest.raises(
+        MergeIdentityConflict,
+        match="conflict compensation remains incomplete",
+    ):
+        executor.recover(run)
+    assert not any(call.method == "PATCH" for call in calls)
+    assert credential_resolutions == resolutions_before_stale_recovery
+
+    current = executor.ledger.claim(run.run_id, replacement_holder)
+    assert current.lease_id != run.lease_id
+    assert current.claimed_by == replacement_holder
+    with pytest.raises(
+        MergeIdentityConflict,
+        match="merge or closure identity conflict requires governed repair",
+    ):
+        executor.recover(current)
+
+    assert credential_resolutions == resolutions_before_stale_recovery + 1
+    assert len([call for call in calls if call.method == "PUT"]) == 1
+    assert len(
+        [
+            call
+            for call in calls
+            if call.method == "PATCH"
+            and call.url.path.endswith("/issues/3604")
+        ]
+    ) == 1
+
+
 def test_native_single_closer_returned_sha_conflict_never_returns_merged():
     executor, run, outbox, calls = native_executor(returned_sha="e" * 40)
     with pytest.raises(MergeIdentityConflict):
@@ -818,6 +906,60 @@ def test_single_closer_route_reopens_unexpected_pr_attributed_closure():
         )
     assert durable_conflicts == ["recorded"]
     assert any(c.method == "PATCH" and json.loads(c.content) == {"state": "open"} for c in calls)
+
+
+def test_single_closer_route_revalidates_owner_before_each_reopen_write():
+    authority, calls = native_authority()
+    authorizations = 0
+
+    def authorize_next_write():
+        nonlocal authorizations
+        authorizations += 1
+        if authorizations == 2:
+            raise MergeAuthorityError("task owner changed between reopen writes")
+
+    class ClosureSource:
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            return {
+                "closure_scan_complete": True,
+                "observed_closing_issues": [3603, 3604, 3605],
+                "issue_evidence": [
+                    {
+                        "number": number,
+                        "state": "closed",
+                        "closed_by_delivery": True,
+                        "closed_by_pull_requests": [3603],
+                    }
+                    for number in (3603, 3604, 3605)
+                ],
+            }
+
+    authority.closure_source = ClosureSource()
+    with pytest.raises(
+        MergeAuthorityError,
+        match="task owner changed between reopen writes",
+    ):
+        authority.native_single_closer_reconcile(
+            REPO,
+            3603,
+            closing_issue=3603,
+            readback={
+                "merged_at": "2026-10-11T00:00:00Z",
+                "merge_commit_sha": "d" * 40,
+                "actor_login": "RasmusTho",
+            },
+            credential="test-token",
+            compensation_only=True,
+            before_compensation=authorize_next_write,
+        )
+
+    patched = [
+        int(call.url.path.rsplit("/", 1)[1])
+        for call in calls
+        if call.method == "PATCH"
+    ]
+    assert authorizations == 2
+    assert patched == [3604]
 
 
 def deployed_post_effect():

@@ -623,10 +623,7 @@ class VerificationMergeExecutor:
         readback: Mapping[str, object] | None = None,
         prepare_readback: bool = True,
     ) -> None:
-        writer = getattr(self.ledger, "record_native_merge_conflict", None)
-        if not callable(writer):
-            raise MergeAuthorityError("native refusal writer is unavailable")
-        writer(run.run_id, operation_key, holder=run.claimed_by or "", lease_id=run.lease_id or "")
+        self._record_native_conflict_fence(run, operation_key)
         if prepare_readback:
             self.ledger.prepare_merge_readback(operation_key)
         if readback is None:
@@ -637,22 +634,54 @@ class VerificationMergeExecutor:
             except Exception:
                 pass  # Unavailable compensation proof cannot clear the durable refusal.
 
+    def _record_native_conflict_fence(
+        self,
+        run: VerificationRun,
+        operation_key: str,
+    ) -> None:
+        if not run.claimed_by or not run.lease_id:
+            raise MergeAuthorityError(
+                "native compensation requires current task ownership"
+            )
+        writer = getattr(self.ledger, "record_native_merge_conflict", None)
+        if not callable(writer):
+            raise MergeAuthorityError("native refusal writer is unavailable")
+        writer(run.run_id, operation_key, holder=run.claimed_by or "", lease_id=run.lease_id or "")
+        persisted = self.ledger.pending_effect_binding(run.run_id)
+        if (
+            not isinstance(persisted, Mapping)
+            or persisted.get("operation_key") != operation_key
+            or persisted.get("native_merge_identity_conflict") is not True
+        ):
+            raise MergeAuthorityError("native closure conflict was not durable")
+
     def _native_compensation(self, run: VerificationRun, readback: Mapping[str, object]) -> Mapping[str, object]:
         pending = self.ledger.pending_effect_binding(run.run_id)
         payload = pending.get("payload") if isinstance(pending, Mapping) else None
         gate = payload.get("verified_merge_prepared") if isinstance(payload, Mapping) else None
-        if not isinstance(payload, Mapping) or not isinstance(gate, Mapping):
+        operation_key = (
+            pending.get("operation_key") if isinstance(pending, Mapping) else None
+        )
+        if (
+            not isinstance(payload, Mapping)
+            or not isinstance(gate, Mapping)
+            or not isinstance(operation_key, str)
+        ):
             raise MergeAuthorityError("native compensation intent is unavailable")
         body_edit = gate.get("body_edit")
         snapshot = body_edit.get("native_snapshot") if isinstance(body_edit, Mapping) else None
         compensate = getattr(self.repository, "native_single_closer_reconcile", None)
         if not isinstance(snapshot, Mapping) or not callable(compensate):
             raise MergeAuthorityError("native compensation snapshot is unavailable")
+        self._record_native_conflict_fence(run, operation_key)
         credential = self.credentials.resolve(repository=run.repository.lower(),
             credential_id=str(payload["credential_id"]), rotation_generation=int(payload["rotation_generation"]))
         return compensate(gate["repository"], run.pr_number, closing_issue=run.request["linked_issue"],
                           readback=readback, credential=credential, snapshot=snapshot,
-                          compensation_only=True)
+                          compensation_only=True,
+                          before_compensation=lambda: self._record_native_conflict_fence(
+                              run, operation_key
+                          ))
 
     def execute(
         self,
@@ -1421,28 +1450,7 @@ class VerificationMergeExecutor:
                     raise MergeAuthorityError("native closure attribution adapter is unavailable")
 
                 def record_closure_conflict() -> None:
-                    writer = getattr(
-                        self.ledger, "record_native_merge_conflict", None
-                    )
-                    if not callable(writer):
-                        raise MergeAuthorityError(
-                            "native closure-conflict writer is unavailable"
-                        )
-                    writer(
-                        run.run_id,
-                        operation_key,
-                        holder=run.claimed_by or "",
-                        lease_id=run.lease_id or "",
-                    )
-                    persisted = self.ledger.pending_effect_binding(run.run_id)
-                    if (
-                        not isinstance(persisted, Mapping)
-                        or persisted.get("operation_key") != operation_key
-                        or persisted.get("native_merge_identity_conflict") is not True
-                    ):
-                        raise MergeAuthorityError(
-                            "native closure conflict was not durable"
-                        )
+                    self._record_native_conflict_fence(run, operation_key)
 
                 closure = reconcile(
                     gate["repository"],

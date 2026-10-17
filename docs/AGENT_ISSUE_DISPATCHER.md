@@ -446,9 +446,11 @@ The dispatcher is an operational coordination layer, not a lifecycle replacement
   event enumeration and exact PR/repository/merge-SHA closure attribution, verifies the sole closer
   closed by that PR, and reopens only an unexpected closure attributed to that PR. Compensation or
   ambiguous attribution withholds the merge receipt. Before reopening an unexpected closure
-  attributed to this exact PR, the task-bound operation is durably fenced; reopening the Issue or
-  restarting cannot erase that refusal or reconstruct a successful merge receipt. Restart performs
-  readback and reconciliation, never another merge. A merge receipt is not terminal delivery:
+  attributed to this exact PR, the task-bound operation is durably fenced and every reopen write
+  revalidates its current task owner, lease, and exact operation binding; reopening the Issue,
+  restarting, lease expiry, or task takeover cannot erase that refusal, reuse former-owner write
+  authority, or reconstruct a successful merge receipt. Restart performs readback and reconciliation,
+  never another merge. A merge receipt is not terminal delivery:
   PR-specific owner-doc receipts and the governing verification workflow's final lifecycle/readback
   gates still apply. Repository delivery of this integration does not claim deployment.
 
