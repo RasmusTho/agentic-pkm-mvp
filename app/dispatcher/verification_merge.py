@@ -36,7 +36,7 @@ class MergeAuthorityError(RuntimeError):
 
 
 class MergeIdentityConflict(MergeAuthorityError):
-    """A returned merge identity contradicts authoritative GitHub readback."""
+    """A native merge or closure identity contradiction refuses delivery."""
 
 
 class MergeEffectNotStarted(MergeAuthorityError):
@@ -1154,7 +1154,7 @@ class VerificationMergeExecutor:
                         "native conflict compensation remains incomplete"
                     ) from exc
             raise MergeIdentityConflict(
-                "native contradictory merge identity requires governed repair"
+                "native merge or closure identity conflict requires governed repair"
             )
         native_effect_refused = bool(
             isinstance(prepared_gate, Mapping)
@@ -1419,6 +1419,31 @@ class VerificationMergeExecutor:
                 reconcile = getattr(self.repository, "native_single_closer_reconcile", None)
                 if not callable(reconcile):
                     raise MergeAuthorityError("native closure attribution adapter is unavailable")
+
+                def record_closure_conflict() -> None:
+                    writer = getattr(
+                        self.ledger, "record_native_merge_conflict", None
+                    )
+                    if not callable(writer):
+                        raise MergeAuthorityError(
+                            "native closure-conflict writer is unavailable"
+                        )
+                    writer(
+                        run.run_id,
+                        operation_key,
+                        holder=run.claimed_by or "",
+                        lease_id=run.lease_id or "",
+                    )
+                    persisted = self.ledger.pending_effect_binding(run.run_id)
+                    if (
+                        not isinstance(persisted, Mapping)
+                        or persisted.get("operation_key") != operation_key
+                        or persisted.get("native_merge_identity_conflict") is not True
+                    ):
+                        raise MergeAuthorityError(
+                            "native closure conflict was not durable"
+                        )
+
                 closure = reconcile(
                     gate["repository"],
                     run.pr_number,
@@ -1426,6 +1451,7 @@ class VerificationMergeExecutor:
                     readback=readback,
                     credential=credential,
                     snapshot=gate["body_edit"]["native_snapshot"],
+                    before_compensation=record_closure_conflict,
                 )
                 readback = {
                     **readback,

@@ -314,6 +314,166 @@ def test_native_single_closer_body_drift_still_compensates_exact_pr_closure():
     assert any(c.method == "PATCH" and c.url.path.endswith("/issues/3604") for c in calls)
 
 
+def test_native_single_closer_unexpected_closure_refusal_survives_restart():
+    executor, run, outbox, calls = native_executor()
+
+    class ClosureSource:
+        scans = 0
+
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            self.scans += 1
+            numbers = (3603, 3604) if self.scans == 1 else (3603,)
+            return {
+                "closure_scan_complete": True,
+                "observed_closing_issues": list(numbers),
+                "issue_evidence": [
+                    {
+                        "number": number,
+                        "state": "closed",
+                        "closed_by_delivery": True,
+                        "closed_by_pull_requests": [3603],
+                    }
+                    for number in numbers
+                ],
+            }
+
+    source = ClosureSource()
+    executor.repository.closure_source = source
+    with pytest.raises(
+        MergeAuthorityError,
+        match="unexpected native closure blocks terminal delivery",
+    ):
+        executor.execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id,
+        )
+
+    pending = executor.ledger.pending_effect_binding(run.run_id)
+    assert pending is not None
+    assert pending["native_merge_response_sha"] == "d" * 40
+    assert pending["native_merge_identity_conflict"] is True
+    assert len([call for call in calls if call.method == "PUT"]) == 1
+    assert len(
+        [
+            call
+            for call in calls
+            if call.method == "PATCH"
+            and call.url.path.endswith("/issues/3604")
+        ]
+    ) == 1
+
+    # The second scan models the canonical body restored and the compensated
+    # Issue already open: live closure enumeration now returns only the
+    # expected closer. A fresh process must still consume the durable refusal.
+    restarted_ledger = BuilderOpsVerificationLedger(
+        executor.ledger.client,
+        repository=REPO,
+        effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
+    )
+    restarted = VerificationMergeExecutor(
+        restarted_ledger,
+        outbox,
+        executor.repository,
+        executor.credentials,
+    )
+    with pytest.raises(
+        MergeIdentityConflict,
+        match="merge or closure identity conflict requires governed repair",
+    ):
+        restarted.recover(run)
+
+    assert source.scans == 2
+    assert len([call for call in calls if call.method == "PUT"]) == 1
+    assert len(
+        [
+            call
+            for call in calls
+            if call.method == "PATCH"
+            and call.url.path.endswith("/issues/3604")
+        ]
+    ) == 1
+    snapshot = restarted_ledger._snapshot(run.run_id)
+    assert snapshot["state"] == "claimed"
+    assert snapshot["payload"]["run"]["terminal_receipt"] is None
+    assert restarted_ledger.pending_effect_binding(run.run_id)[
+        "native_merge_identity_conflict"
+    ] is True
+
+
+def test_native_single_closer_crash_after_refusal_recovers_compensation_only():
+    executor, run, outbox, calls = native_executor()
+
+    class ClosureSource:
+        def issue_set_closure_evidence(self, *args, **kwargs):
+            return {
+                "closure_scan_complete": True,
+                "observed_closing_issues": [3603, 3604],
+                "issue_evidence": [
+                    {
+                        "number": number,
+                        "state": "closed",
+                        "closed_by_delivery": True,
+                        "closed_by_pull_requests": [3603],
+                    }
+                    for number in (3603, 3604)
+                ],
+            }
+
+    executor.repository.closure_source = ClosureSource()
+    record_conflict = executor.ledger.record_native_merge_conflict
+
+    def crash_after_conflict(*args, **kwargs):
+        record_conflict(*args, **kwargs)
+        raise SystemExit("crash after durable closure refusal")
+
+    executor.ledger.record_native_merge_conflict = crash_after_conflict
+    with pytest.raises(SystemExit, match="durable closure refusal"):
+        executor.execute(
+            run,
+            holder="verification-host",
+            lease_id=run.lease_id,
+        )
+
+    pending = executor.ledger.pending_effect_binding(run.run_id)
+    assert pending is not None
+    assert pending["native_merge_identity_conflict"] is True
+    assert len([call for call in calls if call.method == "PUT"]) == 1
+    assert not any(call.method == "PATCH" for call in calls)
+
+    restarted_ledger = BuilderOpsVerificationLedger(
+        executor.ledger.client,
+        repository=REPO,
+        effect_outbox=outbox,
+        post_effect_deployment=deployed_post_effect(),
+    )
+    restarted = VerificationMergeExecutor(
+        restarted_ledger,
+        outbox,
+        executor.repository,
+        executor.credentials,
+    )
+    with pytest.raises(
+        MergeIdentityConflict,
+        match="merge or closure identity conflict requires governed repair",
+    ):
+        restarted.recover(run)
+
+    assert len([call for call in calls if call.method == "PUT"]) == 1
+    assert len(
+        [
+            call
+            for call in calls
+            if call.method == "PATCH"
+            and call.url.path.endswith("/issues/3604")
+        ]
+    ) == 1
+    assert restarted_ledger.pending_effect_binding(run.run_id)[
+        "native_merge_identity_conflict"
+    ] is True
+
+
 def test_native_single_closer_returned_sha_conflict_never_returns_merged():
     executor, run, outbox, calls = native_executor(returned_sha="e" * 40)
     with pytest.raises(MergeIdentityConflict):
@@ -620,6 +780,11 @@ def test_native_effect_refusal_survives_takeover_until_readback_fence_recovers()
 
 def test_single_closer_route_reopens_unexpected_pr_attributed_closure():
     authority, calls = native_authority()
+    durable_conflicts = []
+
+    def record_before_compensation():
+        assert not any(call.method == "PATCH" for call in calls)
+        durable_conflicts.append("recorded")
 
     class ClosureSource:
         def issue_set_closure_evidence(self, *args, **kwargs):
@@ -649,7 +814,9 @@ def test_single_closer_route_reopens_unexpected_pr_attributed_closure():
                 "actor_login": "RasmusTho",
             },
             credential="test-token",
+            before_compensation=record_before_compensation,
         )
+    assert durable_conflicts == ["recorded"]
     assert any(c.method == "PATCH" and json.loads(c.content) == {"state": "open"} for c in calls)
 
 

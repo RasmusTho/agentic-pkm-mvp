@@ -856,6 +856,7 @@ class GitHubProtectedRepositoryAuthority:
         credential: object,
         snapshot: Mapping[str, object] | None = None,
         compensation_only: bool = False,
+        before_compensation: Callable[[], None] | None = None,
     ) -> Mapping[str, object]:
         # Reuse the existing bounded event enumeration and exact PR/SHA attribution.
         from app.dispatcher.verification_consumer import GhCliVerificationSource
@@ -904,6 +905,15 @@ class GitHubProtectedRepositoryAuthority:
             observed_closing_issues=cast(Sequence[int], observed),
             issue_evidence=cast(Sequence[Mapping[str, object]], issues),
         )
+        if plan["reopen_unauthorized"] and not compensation_only:
+            if before_compensation is None:
+                raise MergeAuthorityError(
+                    "native closure conflict lacks a durable recorder"
+                )
+            # Persist the operation-bound refusal before compensation. A crash
+            # after reopening an Issue can therefore never erase the conflict
+            # from restart/recovery truth.
+            before_compensation()
         for number in plan["reopen_unauthorized"]:
             self._native_write(
                 "PATCH", f"/repos/{repository}/issues/{number}", {"state": "open"}, credential
