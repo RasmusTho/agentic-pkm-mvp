@@ -74,7 +74,6 @@ RETIRING_STAGES = frozenset(
     {
         "05B2",
         "05B3",
-        "05B4",
         "retained:MVR-05C",
         "retained:MVR-06",
         # MCP context semantics and packaging are owned by #3368; until it defines
@@ -133,11 +132,17 @@ _MCP_COMPATIBILITY = (
     "nor an explicit path keeps the MCP_VAULT_ROOT/VAULT_DIR/VAULT_ROOT fallback until #3368 "
     "defines MCP context semantics)"
 )
-_CARRIER_NOTE = (
-    "agent/MCP carrier resolves its vault from process selection or environment, not from a "
-    "request-carried ActiveContextSet"
+_CLI_COMPATIBILITY = (
+    "compatibility branch of the CLI's one-context-per-invocation resolver (MVR-05B4a: every "
+    "vault-bound CLI entrypoint calls resolve_cli_vault_context once and passes the carrier down; "
+    "an explicit option or the instance registry wins, and only without a registry do these named "
+    "adapters read the legacy env keys or the process selection)"
 )
-_CLI_NOTE = "operator CLI resolves its vault from process environment or selection, not a request"
+_WATCHER_LIFECYCLE = (
+    "background watcher lifecycle reports the boot-time WATCHER_VAULT_PATH binding it idles on; "
+    "background lifecycles are bound per binding in MVR-06 (surfaced by the KD-55D38D90BD05 env-key "
+    "hardening, not a new read)"
+)
 
 COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
     _a("app/agents/ask/graph.py", "_compatibility_recall_vault_id", "get_vault_manager", _ASK_LEGACY_RECALL, "retained:MVR-06"),
@@ -155,15 +160,10 @@ COMPATIBILITY_ADAPTERS: tuple[CompatibilityAdapter, ...] = (
     _a("app/api/routes/vault_resolution.py", "active_vault_root_or_selection_required", "resolve_active_vault_root", _RESOLUTION_PRIMITIVE, "retained:MVR-06"),
     _a("app/api/routes/vault_resolution.py", "active_vault_selection_window", "get_vault_manager", _RESOLUTION_PRIMITIVE, "retained:MVR-06"),
     _a("app/api/routes/vault_resolution.py", "resolve_active_vault_root", "get_vault_manager resolve_optional_vault_root", _RESOLUTION_PRIMITIVE, "retained:MVR-06"),
-    _a("app/cli/__init__.py", "_resolve_mcp_vault_root_path", "env:VAULT_DIR", _CLI_NOTE, "05B4"),
-    _a("app/cli/__init__.py", "_resolve_vault_root_path", "resolve_optional_vault_root", _CLI_NOTE, "05B4"),
-    _a("app/cli/briefing.py", "_resolve_vault_context", "get_vault_manager", _CLI_NOTE, "05B4"),
-    _a("app/cli/episodes.py", "_default_vault_root", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
-    _a("app/cli/health.py", "_check_companion_diagnostics", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
-    _a("app/cli/settings_explain.py", "build_settings_explain_payload", "env:VAULT_ROOT", _CLI_NOTE, "05B4"),
-    _a("app/cli/vault.py", "vault_init", "get_vault_manager", _CLI_NOTE, "05B4"),
-    _a("app/cli/youtube_inbox_dev.py", "_build_youtube_inbox_dev_services.global_sync_enabled", "get_vault_manager", _CLI_NOTE, "05B4"),
-    _a("app/cli/youtube_inbox_dev.py", "drain", "get_vault_manager", _CLI_NOTE, "05B4"),
+    _a("app/cli/vault_context.py", "_compatibility_channel_root", "resolve_optional_vault_root", _CLI_COMPATIBILITY, "retained:MVR-06"),
+    _a("app/cli/vault_context.py", "_compatibility_process_selection", "get_vault_manager", _CLI_COMPATIBILITY, "retained:MVR-06"),
+    _a("app/cli/vault_context.py", "_legacy_env_snapshot", "env:EPISODES_VAULT_ROOT env:MCP_VAULT_ROOT env:VAULT_DIR env:VAULT_ROOT env:WATCHER_VAULT_PATH", _CLI_COMPATIBILITY, "retained:MVR-06"),
+    _a("app/cli/watcher.py", "_vault_idle_reason", "env:WATCHER_VAULT_PATH", _WATCHER_LIFECYCLE, "retained:MVR-06"),
     _a("app/mcp/vault_tools.py", "_compatibility_env_vault_root", "env:MCP_VAULT_ROOT env:VAULT_DIR resolve_optional_vault_root", _MCP_COMPATIBILITY, "retained:#3368"),
 )
 

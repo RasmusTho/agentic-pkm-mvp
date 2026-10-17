@@ -22,10 +22,13 @@ def test_tick_loads_remembered_vault_in_fresh_process(tmp_path: Path) -> None:
     manager = SimpleNamespace(
         context=VaultContext(status="none"),
         load_last_active=lambda: context,
+        validate_vault=lambda root: context if Path(root) == tmp_path / "vault" else None,
     )
     result = BriefingTriggerResult(False, "outside_scheduled_window", date(2026, 7, 11))
     with (
-        patch("app.cli.briefing.get_vault_manager", return_value=manager),
+        # The invocation's one context comes from the CLI resolver (MVR-05B4a).
+        patch("app.cli.vault_context.get_vault_manager", return_value=manager),
+        patch("app.cli.vault_context.VaultManager", return_value=manager),
         patch("app.cli.briefing.scheduled_briefing_tick", return_value=result) as trigger,
     ):
         invocation = CliRunner().invoke(briefing_group, ["tick", "--json"])
@@ -39,7 +42,8 @@ def test_regenerate_accepts_explicit_vault_root(tmp_path: Path) -> None:
     manager = SimpleNamespace(validate_vault=lambda root: context)
     result = BriefingTriggerResult(True, "manual_regenerate", date(2026, 7, 11))
     with (
-        patch("app.cli.briefing.get_vault_manager", return_value=manager),
+        patch("app.cli.vault_context.get_vault_manager", side_effect=AssertionError("selection read")),
+        patch("app.cli.vault_context.VaultManager", return_value=manager),
         patch("app.cli.briefing.regenerate_briefing", return_value=result) as trigger,
     ):
         invocation = CliRunner().invoke(

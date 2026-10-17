@@ -30,11 +30,11 @@ keeps the projection incrementally current on its own (creation via
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import click
 
+from app.cli.vault_context import CliVaultContextError, resolve_cli_vault_context
 from app.episodes.recut import run_recut_tick
 from app.episodes.segmenter import run_segmentation_tick
 from app.jobs.episodes_projection import rebuild_episodes_projection
@@ -42,12 +42,21 @@ from app.jobs.episodes_projection import rebuild_episodes_projection
 _VAULT_ROOT_ENV_CANDIDATES = ("EPISODES_VAULT_ROOT", "WATCHER_VAULT_PATH", "VAULT_ROOT")
 
 
-def _default_vault_root() -> str:
-    for env_name in _VAULT_ROOT_ENV_CANDIDATES:
-        value = os.getenv(env_name)
-        if value and value.strip():
-            return value.strip()
-    return "vault"
+def _invocation_vault_root(vault_root: str | None) -> Path:
+    """This invocation's one vault root (MVR-05B4a).
+
+    The ``--vault-root`` option, else the instance default, else the legacy
+    episodes environment keys, else ``vault``.
+    """
+
+    try:
+        carrier = resolve_cli_vault_context(
+            vault_root, env_policy="episodes", default_path=Path("vault")
+        )
+    except CliVaultContextError as exc:
+        raise click.ClickException(str(exc)) from exc
+    assert carrier.root is not None  # a default path is always supplied
+    return carrier.root
 
 
 @click.group(name="episodes", help="Episode Resolution Engine controls (ERE-04+).")
@@ -64,7 +73,7 @@ def episodes_group() -> None:
 )
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit the tick summary as JSON.")
 def tick(vault_root: str | None, as_json: bool) -> None:
-    root = Path(vault_root) if vault_root else Path(_default_vault_root())
+    root = _invocation_vault_root(vault_root)
     summary = run_segmentation_tick(vault_root=root)
     recut_summary = run_recut_tick(vault_root=root)
     summary.update(recut_summary)
@@ -94,7 +103,7 @@ def tick(vault_root: str | None, as_json: bool) -> None:
 )
 @click.option("--json", "as_json", is_flag=True, default=False, help="Emit the rebuild summary as JSON.")
 def rebuild_projection(vault_root: str | None, as_json: bool) -> None:
-    root = Path(vault_root) if vault_root else Path(_default_vault_root())
+    root = _invocation_vault_root(vault_root)
     summary = rebuild_episodes_projection(root)
     if as_json:
         click.echo(

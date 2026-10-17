@@ -25,6 +25,34 @@ from tests.architecture.context_boundary_inventory import (
 )
 
 _MIGRATED_ROUTE_MODULES = ("app/api/routes/search.py",)
+# The carrier allowlist entries MVR-05B4a (#6160) migrated.
+_MIGRATED_CARRIER_ENTRIES = frozenset(
+    {
+        ("app/agents/ask/graph.py", "_active_recall_vault_id"),
+        ("app/agents/ask/graph.py", "_active_recall_vault_root"),
+        ("app/cli/__init__.py", "_resolve_mcp_vault_root_path"),
+        ("app/cli/__init__.py", "_resolve_vault_root_path"),
+        ("app/cli/briefing.py", "_resolve_vault_context"),
+        ("app/cli/episodes.py", "_default_vault_root"),
+        ("app/cli/health.py", "_check_companion_diagnostics"),
+        ("app/cli/settings_explain.py", "build_settings_explain_payload"),
+        ("app/cli/vault.py", "vault_init"),
+        ("app/cli/youtube_inbox_dev.py", "_build_youtube_inbox_dev_services.global_sync_enabled"),
+        ("app/cli/youtube_inbox_dev.py", "drain"),
+        ("app/mcp/vault_tools.py", "_resolve_mcp_env_root"),
+        ("app/mcp/vault_tools.py", "get_vault_root"),
+    }
+)
+# Vault-bound CLI modules that now resolve only through app/cli/vault_context.py.
+_MIGRATED_CARRIER_MODULES = (
+    "app/cli/__init__.py",
+    "app/cli/briefing.py",
+    "app/cli/episodes.py",
+    "app/cli/health.py",
+    "app/cli/settings_explain.py",
+    "app/cli/vault.py",
+    "app/cli/youtube_inbox_dev.py",
+)
 
 
 def _names_in(relative: str, scope: str) -> set[str]:
@@ -89,6 +117,11 @@ def test_context_boundary_inventory_and_allowlist_are_exact() -> None:
 
     keys = [adapter_key(entry) for entry in COMPATIBILITY_ADAPTERS]
     assert len(keys) == len(set(keys)), "duplicate allowlist entry"
+    # MVR-05B4a migrated every agent/MCP/CLI carrier entry; none may come back.
+    assert set(keys).isdisjoint(_MIGRATED_CARRIER_ENTRIES)
+    assert "05B4" not in inventory.RETIRING_STAGES
+    for module in _MIGRATED_CARRIER_MODULES:
+        assert not [k for k in measured if k[0] == module], module
     for entry in COMPATIBILITY_ADAPTERS:
         assert entry.module in modules, entry
         assert entry.why.strip(), entry
