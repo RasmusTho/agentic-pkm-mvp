@@ -154,6 +154,7 @@ def build_context_pack(
     normalized_slice_id = _required_string(slice_id, "slice_id")
     if source_slice_id != normalized_slice_id:
         raise EpicRehydrationProbeError("slice_id must match the source receipt")
+    _validate_source_bytes_binding(sha256_bytes(raw), len(raw), normalized_source)
 
     instructions = _string_list(read_instructions, "read_instructions", non_empty=True)
     normalized_source_marker = _strict_object(
@@ -245,6 +246,9 @@ def normalize_context_pack(pack: Mapping[str, Any]) -> dict[str, Any]:
     if not _json_exact_equal(source["receipt"], source_receipt):
         raise EpicRehydrationProbeError("context_pack.source.receipt is not normalized")
     source["receipt"] = source_receipt
+    _validate_source_bytes_binding(
+        source["bytes_sha256"], source["bytes_length"], source_receipt
+    )
     source["external_state_marker"] = _strict_object(
         source["external_state_marker"], "context_pack.source.external_state_marker"
     )
@@ -270,6 +274,7 @@ def normalize_context_pack(pack: Mapping[str, Any]) -> dict[str, Any]:
     target["slice_id"] = _required_string(target["slice_id"], "context_pack.target.slice_id")
     if target["slice_id"] != source_receipt["slice_id"]:
         raise EpicRehydrationProbeError("context_pack target slice_id is not source-bound")
+    _validate_target_against_source_marker(target, source["external_state_marker"])
 
     normalized["read_instructions"] = _string_list(
         normalized["read_instructions"], "context_pack.read_instructions", non_empty=True
@@ -361,6 +366,7 @@ def normalize_rehydrated_observation(
         name: _normalize_observation_field(fields[name], f"observation.fields.{name}")
         for name in _OBSERVATION_FIELDS
     }
+    _validate_observation_field_types(normalized["fields"], "observation.fields")
     normalized["live_reads"] = _normalize_provenance_list(
         normalized["live_reads"], "observation.live_reads", non_empty=True
     )
@@ -405,13 +411,7 @@ def compare_rehydrated_observation(
     derived_missing = sorted(
         name for name in _COMPARED_FIELDS if field_results[name]["status"] == "unknown"
     )
-    derived_fabricated = sorted(
-        name for name in _COMPARED_FIELDS if field_results[name]["status"] == "mismatch"
-    )
-    for name, derived in (
-        ("missing_claims", derived_missing),
-        ("fabricated_claims", derived_fabricated),
-    ):
+    for name, derived in (("missing_claims", derived_missing),):
         observed_value = obs["fields"][name]["value"]
         field_results[name] = {
             "status": _comparison_status(observed_value, derived),
@@ -420,6 +420,18 @@ def compare_rehydrated_observation(
             "provenance": obs["fields"][name]["provenance"],
             "notes": obs["fields"][name]["notes"],
         }
+
+    # A mismatch is evidence of drift, not proof that the fresh agent fabricated a claim.
+    # Fabrication requires an independently audited claim and therefore remains unknown in
+    # this observer-only comparison.
+    fabricated = obs["fields"]["fabricated_claims"]
+    field_results["fabricated_claims"] = {
+        "status": "unknown",
+        "expected": UNKNOWN,
+        "observed": fabricated["value"],
+        "provenance": fabricated["provenance"],
+        "notes": fabricated["notes"],
+    }
 
     external_state = field_results["external_state"]
     return {
@@ -463,6 +475,11 @@ def build_probe_receipt(
     if obs["agent"]["start_status"] != "succeeded":
         raise EpicRehydrationProbeError("probe receipt requires a successful fresh-agent start")
     refs = _normalize_evidence_refs(evidence_refs)
+    expected_source_observed_at = pack["source"]["observed_at"]
+    if source_observed_at is not None and source_observed_at != expected_source_observed_at:
+        raise EpicRehydrationProbeError(
+            "source_observed_at must match the context pack source timestamp"
+        )
     receipt = {
         "schema_name": PROBE_RECEIPT_SCHEMA_NAME,
         "schema_version": SCHEMA_VERSION,
@@ -470,9 +487,7 @@ def build_probe_receipt(
         "mode": "one_initial_read_only",
         "source_checkpoint": {
             "origin": pack["source"]["origin"],
-            "observed_at": _required_string(
-                source_observed_at or pack["source"]["observed_at"], "source_observed_at"
-            ),
+            "observed_at": _required_string(expected_source_observed_at, "source_observed_at"),
             "source_ref": pack["source"]["source_ref"],
             "bytes_sha256": pack["source"]["bytes_sha256"],
         },
@@ -659,6 +674,30 @@ def _normalize_observation_field(value: Any, field: str) -> dict[str, Any]:
     return normalized
 
 
+def _validate_observation_field_types(
+    fields: Mapping[str, Mapping[str, Any]], field: str
+) -> None:
+    """Reject structurally invalid values before comparison can reinterpret them."""
+
+    expected_types: dict[str, type[Any] | tuple[type[Any], ...]] = {
+        "slice_status": (str,),
+        "decisions_and_invariants": (dict,),
+        "open_review_findings": (list,),
+        "external_state": (dict,),
+        "recommended_next_action": (dict, str),
+        "missing_claims": (list,),
+        "fabricated_claims": (list,),
+    }
+    for name, value_types in expected_types.items():
+        value = fields[name]["value"]
+        if value == UNKNOWN:
+            continue
+        if not isinstance(value, value_types):
+            raise EpicRehydrationProbeError(
+                f"{field}.{name}.value must be unknown or {value_types}"
+            )
+
+
 def _normalize_provenance_list(value: Any, field: str, *, non_empty: bool) -> list[dict[str, str]]:
     if type(value) is not list or (non_empty and not value):
         raise EpicRehydrationProbeError(f"{field} must be a non-empty list")
@@ -733,6 +772,45 @@ def _coerce_source_bytes(value: bytes | str, field: str) -> bytes:
     if isinstance(value, str):
         return value.encode("utf-8")
     raise EpicRehydrationProbeError(f"{field} must be bytes or string")
+
+
+def _validate_source_bytes_binding(
+    digest: Any, length: Any, receipt: Mapping[str, Any]
+) -> None:
+    """Require the source digest/length to describe the canonical accepted receipt bytes."""
+
+    canonical = canonical_json_bytes(receipt)
+    candidates = (canonical, canonical + b"\n")
+    if not any(
+        type(length) is int
+        and length == len(candidate)
+        and digest == sha256_bytes(candidate)
+        for candidate in candidates
+    ):
+        raise EpicRehydrationProbeError(
+            "context_pack source bytes_sha256/bytes_length do not bind the accepted receipt bytes"
+        )
+
+
+def _validate_target_against_source_marker(
+    target: Mapping[str, Any], marker: Mapping[str, Any]
+) -> None:
+    """Bind the target Issue/PR and verified SHAs to the live checkpoint marker."""
+
+    issue_marker = _required_string(marker.get("issue"), "source marker.issue")
+    pr_marker = _required_string(marker.get("pr"), "source marker.pr")
+    try:
+        issue_number = int(issue_marker.split(":", 1)[0])
+        pr_number = int(pr_marker.split(":", 1)[0])
+    except ValueError as exc:
+        raise EpicRehydrationProbeError("source marker Issue/PR values are malformed") from exc
+    if issue_number != target["issue_number"] or pr_number != target["pr_number"]:
+        raise EpicRehydrationProbeError("context_pack target is foreign to the source marker")
+    head_value = marker.get("pr_head_sha", marker.get("head_sha"))
+    if _required_string(head_value, "source marker.pr_head_sha") != target["verified_pr_head_sha"]:
+        raise EpicRehydrationProbeError("context_pack target head is foreign to the source marker")
+    if _required_string(marker.get("merge_sha"), "source marker.merge_sha") != target["merge_sha"]:
+        raise EpicRehydrationProbeError("context_pack target merge is foreign to the source marker")
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -851,6 +929,26 @@ def _write_json_file(path: Path, value: Mapping[str, Any]) -> None:
     path.write_bytes(canonical_json_bytes(value) + b"\n")
 
 
+def _reject_output_alias(output: Path, *inputs: Path) -> None:
+    """Refuse output paths that alias any input, including symlinks or hardlinks."""
+
+    output_resolved = output.resolve()
+    for input_path in inputs:
+        input_resolved = input_path.resolve()
+        if output_resolved == input_resolved:
+            raise EpicRehydrationProbeError(
+                f"output path aliases input path: {output}"
+            )
+        if output.exists() and input_path.exists():
+            try:
+                if output.stat().st_ino == input_path.stat().st_ino and output.stat().st_dev == input_path.stat().st_dev:
+                    raise EpicRehydrationProbeError(
+                        f"output path aliases input inode: {output}"
+                    )
+            except OSError as exc:
+                raise EpicRehydrationProbeError("unable to verify output/input alias") from exc
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manual observer-only rehydration probe evidence")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -890,6 +988,7 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     try:
         if args.command == "build-pack":
+            _reject_output_alias(args.output, args.source_file)
             pack = build_context_pack(
                 args.source_file.read_bytes(),
                 source_ref=args.source_ref,
@@ -905,10 +1004,19 @@ def cli_main(argv: Sequence[str] | None = None) -> int:
             )
             _write_json_file(args.output, pack)
         elif args.command == "compare":
+            _reject_output_alias(args.output, args.pack_file, args.observation_file)
             pack = normalize_context_pack(_read_json_file(args.pack_file))
             observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
             _write_json_file(args.output, compare_rehydrated_observation(pack, observation))
         elif args.command == "receipt":
+            _reject_output_alias(
+                args.output,
+                args.pack_file,
+                args.observation_file,
+                args.comparison_file,
+                args.telemetry_file,
+                args.evidence_file,
+            )
             pack = normalize_context_pack(_read_json_file(args.pack_file))
             observation = normalize_rehydrated_observation(_read_json_file(args.observation_file), context_pack=pack)
             comparison = normalize_comparison(_read_json_file(args.comparison_file), context_pack=pack, observation=observation)

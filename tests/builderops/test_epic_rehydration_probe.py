@@ -15,6 +15,7 @@ from app.builderops.epic_rehydration_probe import (
     canonical_json_bytes,
     compare_rehydrated_observation,
     normalize_context_pack,
+    normalize_rehydrated_observation,
     parse_strict_json,
 )
 from app.builderops.epic_run_context_budget import (
@@ -115,6 +116,22 @@ def test_strict_boundaries_reject_invalid_input() -> None:
     malformed["unexpected"] = "reject"
     with pytest.raises(EpicRehydrationProbeError):
         normalize_context_pack(malformed)
+    malformed = deepcopy(_pack())
+    malformed["source"]["bytes_sha256"] = "0" * 64  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_context_pack(malformed)
+    malformed = deepcopy(_pack())
+    malformed["target"]["issue_number"] = 9999  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_context_pack(malformed)
+    malformed_observation = _observation(_pack())
+    malformed_observation["fields"]["slice_status"]["value"] = {}  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_rehydrated_observation(malformed_observation, context_pack=_pack())
+    malformed_observation = _observation(_pack())
+    malformed_observation["fields"]["missing_claims"]["value"] = 42  # type: ignore[index]
+    with pytest.raises(EpicRehydrationProbeError):
+        normalize_rehydrated_observation(malformed_observation, context_pack=_pack())
     with pytest.raises(EpicRehydrationProbeError):
         build_context_pack(
             b"{}",
@@ -142,7 +159,7 @@ def test_comparison_preserves_field_mismatches_and_unknowns() -> None:
     changed["fields"]["fabricated_claims"]["value"] = ["slice_status"]  # type: ignore[index]
     mismatch = compare_rehydrated_observation(pack, changed)
     assert mismatch["field_results"]["slice_status"]["status"] == "mismatch"  # type: ignore[index]
-    assert mismatch["field_results"]["fabricated_claims"]["status"] == "match"  # type: ignore[index]
+    assert mismatch["field_results"]["fabricated_claims"]["status"] == "unknown"  # type: ignore[index]
     assert "status" not in mismatch and "score" not in mismatch
 
 
@@ -176,6 +193,29 @@ def test_probe_receipt_preserves_telemetry_and_agent_provenance() -> None:
     assert receipt["telemetry"]["human_minutes"] == "unknown"  # type: ignore[index]
     assert receipt["telemetry"]["agent_starts"] == 1  # type: ignore[index]
     assert all(value == [] for value in receipt["effects"].values())  # type: ignore[union-attr]
+    with pytest.raises(EpicRehydrationProbeError):
+        build_probe_receipt(
+            pack,
+            observation,
+            comparison,
+            evidence_refs={
+                "source_checkpoint": "evidence/source.json",
+                "context_pack": "evidence/packet.json",
+                "agent_response": "evidence/response.json",
+                "comparison_receipt": "evidence/comparison.json",
+            },
+            telemetry={
+                "probe_count": 1,
+                "agent_starts": 1,
+                "repairs": {"implementation": 0, "ci": 0, "review": 0},
+                "handoffs": 0,
+                "context_tokens": "unknown",
+                "model_cost_usd": "unknown",
+                "elapsed_minutes": "unknown",
+                "human_minutes": "unknown",
+            },
+            source_observed_at="2026-10-18T20:00:00Z",
+        )
 
 
 def test_manual_probe_has_no_authority_effects(tmp_path: Path) -> None:
@@ -194,3 +234,28 @@ def test_manual_probe_has_no_authority_effects(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "observer-only" in result.stdout
     assert not output.exists()
+
+    pack_path = tmp_path / "pack.json"
+    observation_path = tmp_path / "observation.json"
+    pack_path.write_bytes(canonical_json_bytes(_pack()))
+    observation_path.write_bytes(canonical_json_bytes(_observation(_pack())))
+    before = pack_path.read_bytes()
+    aliased = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "app.builderops.epic_rehydration_probe",
+            "compare",
+            "--pack-file",
+            str(pack_path),
+            "--observation-file",
+            str(observation_path),
+            "--output",
+            str(pack_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert aliased.returncode == 2
+    assert pack_path.read_bytes() == before
