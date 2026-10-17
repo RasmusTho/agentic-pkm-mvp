@@ -4,11 +4,13 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from pathlib import Path
 import stat
 import subprocess
 import sys
+import tempfile
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.ops.bws_secret_admin import BwsAdminConfig, BwsSecretAdmin
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
@@ -153,6 +155,97 @@ def require_qualification(controller: HostSecretController) -> None:
         raise PostgresDeployError()
 
 
+_TEST_RECOVERY_MARKER_SCHEMA = 'test-source-recovery-host.v1'
+
+
+def _test_recovery_marker_path(controller: HostSecretController,
+                               request: TestRecoveryRequest) -> Path:
+    request.validate()
+    directory = controller.directory
+    if (not directory.is_absolute()
+            or any(parent.is_symlink() for parent in (directory, *directory.parents))):
+        raise PostgresDeployError()
+    return directory / ('test-source-recovery-' + request.failed_operation_id + '.json')
+
+
+def _read_test_recovery_marker(controller: HostSecretController,
+                               request: TestRecoveryRequest) -> dict[str, Any] | None:
+    path = _test_recovery_marker_path(controller, request)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    with os.fdopen(descriptor, 'r', encoding='utf-8') as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1
+                or info.st_size > 65536):
+            raise PostgresDeployError()
+        marker = json.load(source, object_pairs_hook=_unique_metadata_object)
+    if (not isinstance(marker, dict)
+            or set(marker) != {'schema', 'state', 'request', 'fresh_operation_id'}
+            or marker['schema'] != _TEST_RECOVERY_MARKER_SCHEMA
+            or marker['state'] not in {'resetting', 'ready'}):
+        raise PostgresDeployError()
+    try:
+        fresh_operation_id = _canonical_uuid(marker['fresh_operation_id'])
+    except Exception:
+        raise PostgresDeployError() from None
+    if fresh_operation_id != marker['fresh_operation_id']:
+        raise PostgresDeployError()
+    stored = TestRecoveryRequest.from_payload(marker['request'])
+    if stored != request:
+        raise PostgresDeployError()
+    return marker
+
+
+def _write_test_recovery_marker(controller: HostSecretController,
+                                request: TestRecoveryRequest, state: str,
+                                fresh_operation_id: str) -> None:
+    if state not in {'resetting', 'ready'}:
+        raise PostgresDeployError()
+    fresh_operation_id = _canonical_uuid(fresh_operation_id)
+    path = _test_recovery_marker_path(controller, request)
+    directory = path.parent
+    try:
+        info = directory.stat()
+    except OSError:
+        raise PostgresDeployError() from None
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise PostgresDeployError()
+    prior = _read_test_recovery_marker(controller, request)
+    if prior is not None:
+        if prior['fresh_operation_id'] != fresh_operation_id:
+            raise PostgresDeployError()
+        if prior['state'] == state:
+            return
+    payload = {
+        'schema': _TEST_RECOVERY_MARKER_SCHEMA,
+        'state': state,
+        'request': request.payload(),
+        'fresh_operation_id': fresh_operation_id,
+    }
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=directory, prefix='.' + path.name + '.', text=True,
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+            json.dump(payload, stream, sort_keys=True)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument('channel', choices=('dev', 'test', 'prod'))
@@ -230,19 +323,41 @@ def main(argv: list[str] | None = None) -> int:
         plan.validate()
         if recovery_request is not None:
             remote = SshDeployRemote('ygg-test')
-
-            def readback(operation_id: str, kind: str, target: str) -> TerminalEvidence:
-                if (operation_id != recovery_request.failed_operation_id
-                    or kind != 'deploy' or target != 'test'):
-                    raise PostgresDeployError()
-                receipt = remote.test_recovery_reset(recovery_request)
-                return receipt.evidence()
-
-            controller.reconcile(readback, expected=('deploy', 'test', False))
+            marker = _read_test_recovery_marker(controller, recovery_request)
+            if marker is None:
+                fresh_operation_id = str(uuid4())
+                marker_state = 'resetting'
+            else:
+                fresh_operation_id = marker['fresh_operation_id']
+                marker_state = marker['state']
+            if marker_state == 'resetting':
+                # Keep the old host operation bound until the VM has returned
+                # exact failed terminal evidence. If the old operation was
+                # already terminalized before a crash, deploy_operation exposes
+                # that exact completed ID and the reset remains idempotent.
+                with controller.deploy_operation(
+                    'test', allow_bootstrap=False,
+                    operation_id=recovery_request.failed_operation_id,
+                ) as (operation, resumed):
+                    if not resumed:
+                        raise PostgresDeployError()
+                    _write_test_recovery_marker(
+                        controller, recovery_request, 'resetting', fresh_operation_id,
+                    )
+                    receipt = remote.test_recovery_reset(recovery_request)
+                    if receipt.terminal_result != 'failed':
+                        raise PostgresDeployError()
+                    if operation.completed_result is None:
+                        operation.finish(receipt.evidence())
+                    elif operation.completed_result != 'failed':
+                        raise PostgresDeployError()
+                    _write_test_recovery_marker(
+                        controller, recovery_request, 'ready', fresh_operation_id,
+                    )
             admin = SecretAdmin(_configured_host_admin(), controller=controller)
             receipt = deploy_from_host(
                 admin, remote, plan, qualified=lambda: require_qualification(controller),
-                allow_bootstrap=False,
+                allow_bootstrap=False, operation_id=fresh_operation_id,
             )
             print(json.dumps(receipt.payload(), sort_keys=True))
             return 0 if receipt.terminal_result == 'committed' else 78

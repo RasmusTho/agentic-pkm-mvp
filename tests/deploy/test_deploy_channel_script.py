@@ -3838,6 +3838,7 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
 
 
 def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_path):
+    from contextlib import contextmanager
     from types import SimpleNamespace
     from uuid import uuid4
 
@@ -3856,7 +3857,7 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
     authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
     controller = SimpleNamespace(directory=tmp_path)
     recovered: list[TestRecoveryRequest] = []
-    deployed: list[tuple[DeployPlan, bool]] = []
+    deployed: list[tuple[DeployPlan, bool, str]] = []
 
     class Remote:
         def __init__(self, hostname):
@@ -3869,17 +3870,24 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
             recovered.append(request)
             return DeployReceipt(failed_operation_id, 'test', 'deploy', 'failed', 'failed')
 
-    def reconcile(readback, *, expected):
-        assert expected == ('deploy', 'test', False)
-        evidence = readback(failed_operation_id, 'deploy', 'test')
-        assert evidence.operation_id == failed_operation_id
+    class Operation:
+        completed_result = None
 
-    def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap):
+        def finish(self, evidence):
+            assert evidence.operation_id == failed_operation_id
+            self.completed_result = evidence.result
+
+    @contextmanager
+    def deploy_operation(target, *, allow_bootstrap, operation_id):
+        assert (target, allow_bootstrap, operation_id) == ('test', False, failed_operation_id)
+        yield Operation(), True
+
+    def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap, operation_id):
         qualified()
-        deployed.append((selected, allow_bootstrap))
-        return DeployReceipt(str(uuid4()), 'test', 'deploy', 'committed', 'committed')
+        deployed.append((selected, allow_bootstrap, operation_id))
+        return DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
 
-    controller.reconcile = reconcile
+    controller.deploy_operation = deploy_operation
     monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
     monkeypatch.setattr(host, 'SshDeployRemote', Remote)
     monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
@@ -3898,11 +3906,91 @@ def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_p
     assert host.main(args) == 0
     assert len(recovered) == 1
     assert recovered[0] == TestRecoveryRequest(failed_operation_id, plan, authority)
-    assert deployed == [(plan, False)]
+    assert len(deployed) == 1
+    assert deployed[0][:2] == (plan, False)
+    assert deployed[0][2] != failed_operation_id
 
     # A changed candidate is a new request, never an alias for the failed operation.
     assert host.main([*args[:1], 'b' * 40, *args[2:]]) == 78
     assert len(recovered) == 1
+
+
+def test_test_recovery_reset_retry_survives_host_crash_before_fresh_deploy(monkeypatch, tmp_path):
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.host_secret_controller import HostSecretController
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt,
+        TestRecoveryRequest,
+    )
+
+    controller = HostSecretController(tmp_path / 'controller')
+    with controller.deploy_operation('test', allow_bootstrap=False) as (operation, resumed):
+        assert resumed is False
+        operation.prepare_mutation()
+    failed_operation_id = operation.operation_id
+    digest = 'sha256:' + '4' * 64
+    plan = DeployPlan(
+        'test', 'c' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    request = TestRecoveryRequest(failed_operation_id, plan, authority)
+    recovered: list[TestRecoveryRequest] = []
+    deployed: list[str] = []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def test_recovery_reset(self, selected):
+            selected.validate()
+            recovered.append(selected)
+            return DeployReceipt(failed_operation_id, 'test', 'deploy', 'failed', 'failed')
+
+    admin_attempts = 0
+
+    def configured_admin():
+        nonlocal admin_attempts
+        admin_attempts += 1
+        if admin_attempts == 1:
+            # Crash after reset/reconciliation but before fresh deployment.
+            raise RuntimeError('simulated host setup interruption')
+        return object()
+
+    def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap, operation_id):
+        qualified()
+        assert selected == plan
+        assert allow_bootstrap is False
+        deployed.append(operation_id)
+        return DeployReceipt(operation_id, 'test', 'deploy', 'committed', 'committed')
+
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_host_admin', configured_admin)
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+    args = [
+        'test', plan.revision, '--automatic', '--image-digest', digest,
+        '--existing-secrets-only', '--recover-test-source',
+        '--failed-operation-id', failed_operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+
+    assert host.main(args) == 78
+    marker = host._read_test_recovery_marker(controller, request)
+    assert marker is not None and marker['state'] == 'ready'
+    fresh_operation_id = marker['fresh_operation_id']
+    assert recovered == [request]
+    with controller._locked_journal() as descriptor:
+        assert controller._pending(descriptor) is None
+
+    assert host.main(args) == 0
+    assert recovered == [request]
+    assert deployed == [fresh_operation_id]
 
 
 def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch, tmp_path):
