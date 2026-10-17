@@ -426,7 +426,7 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
                           'materialize_moment', 'append_decision_receipt', 'render_episode_note', 'discover_candidates_from_companions'}
     assert produced['resource_generation'] == generation
     assert produced['note_sha256'] == hashlib.sha256((tmp_path / 'vault' / fixture.NOTE_PATH).read_bytes()).hexdigest()
-    assert companion.get_memory_review_queue().pending_count == 4
+    assert companion.get_memory_review_queue(None, None).pending_count == 4
     assert {entry.candidate_id for entry in companion._MEMORY_CANDIDATE_REVIEW_QUEUE.pending()} == set(fixture.CANDIDATE_IDS)
     from app.main import app
     producing_queue = companion._MEMORY_CANDIDATE_REVIEW_QUEUE
@@ -494,7 +494,7 @@ def test_api_process_bootstrap_uses_canonical_producers(tmp_path, monkeypatch):
     with pytest.raises(WritesBlockedError):
         fixture.bootstrap_fixture(tmp_path / 'blocked-vault', str(uuid4()), review_queue=companion._MEMORY_CANDIDATE_REVIEW_QUEUE)
     assert not (tmp_path / 'blocked-vault' / fixture.NOTE_PATH).exists()
-    assert companion.get_memory_review_queue().pending_count == 0
+    assert companion.get_memory_review_queue(None, None).pending_count == 0
 
 
 def _require_actual_serving_queue(app, producing_queue, candidate_ids, monkeypatch):
