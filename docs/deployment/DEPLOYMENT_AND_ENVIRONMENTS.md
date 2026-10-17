@@ -5,7 +5,7 @@ Doc role: Core SoT (deployment)
 Authority: Canonical deployment + environment-separation contract. `docs/ENVIRONMENTS.md` owns environment *selection* and *path scoping* (what data/config each channel touches); `docs/RELEASE_CHANNELS/README.md` owns *channel identity, per-channel DB isolation, promotion-plan contract, migration reversibility classification, and rollback semantics*. `docs/YGGDRASIL_PLATFORM_AND_OPERATIONS_SYSTEM/README.md` owns the target ecosystem boundary for the operational platform; it does not replace this current deployment contract. This document owns *how a deploy physically happens*: image build/promote, managed gateways, deploy/rollback runbook, health gates, and the proxy-trust topology. Operations, runbooks, and component docs should reference this document instead of restating deployment procedure.
 Temporal class: operational
 Review cadence: as deployment topology, build pipeline, or channel ports change
-Last reviewed: 2026-10-15 (BWS secret-provisioning section; other deployment sections were not re-audited)
+Last reviewed: 2026-10-17 (TEST dormant preparation context/admission continuity; BWS secret-provisioning review remains 2026-10-15; other deployment sections were not re-audited)
 Last live runtime verification: 2026-10-11 UTC (accepted native DEV/TEST activation, health/version/UI and isolated PostgreSQL verification under #5675; the earlier read-only route checks remain separate, and `prod` was not queried)
 Last verified against: `docker-compose.yaml`, `docker-compose.{dev,test,prod}.yml`, `docker-compose.{full-host-vault,legacy-vault,test-vault}.yml`, `Makefile`, `Dockerfile`, `scripts/lib/companion_ui_startup.sh`, `scripts/lib/instance_ownership_host_state.sh`, `companion-ui/companion-app/companion_ui/workspace/serve_dev_page.py`, `serve_production_page.py`, `app/auth.py`, `app/version.py`, `app/api/routes/health_contract.py`, `app/activation/ask_synthesis.py`, `config/platform/product_tars_channel_topology.v1.schema.json`, `app/ops/product_tars_channel_topology.py`, `docs/deployment/profiles/TARS_PROXMOX.md`; owner clarification for the TARS → Bob-1 / builder-system identity mapping is recorded in BuilderOps LearningSignal `lrn_20260910211500_ab12b37b`; Builder Vault dated evidence is recorded in `docs/handoffs/TARS_CHANNEL_ACCESS_MEMORY.md`, `docs/handoffs/TARS_CHANNEL_ACCESS_REPAIR_RECEIPT_2026-09-07.md`, and `docs/handoffs/TARS_DEV_WATCHER_UPGRADE_2026-09-07.md`; read-only live evidence is recorded in [MARR Issue #5618, 2026-10-03 addendum](https://github.com/RasmusTho/agentic-pkm-mvp/issues/5618#issuecomment-5973820903); Issue #5868 and the existing-secret deployment Verify targets, which establish repository behavior only.
 Verification update (2026-10-10): repository support includes post-merge image admission and private-host dev/test orchestration under #5922. Deterministic verification establishes the orchestration, digest and migration boundaries; live activation and functional channel acceptance are recorded separately under #5675.
@@ -343,6 +343,60 @@ selected explicitly by the deploy wrapper and uses a Compose-owned compatibility
 start only when neither the host-global lease nor any channel restart fence exists. Current images
 always run the full authenticated runtime preflight; module absence outside explicit rollback fails
 closed.
+
+#### Explicit TEST dormant ownership preparation
+
+The explicit TEST preparation-only entrypoint `prepare_test_dormant_ownership_window` reuses this
+producer's owner baseline, two-pass stopped-writer inventory and database no-client fence. It
+refuses foreign owners before any stop and returns after `deployment-bind-owner-proof`, retaining
+the actual controller, lease and restart fence. It does not select principal/scalar cutover, the
+MVR-05 floor, migration, finalization or startup. Ordinary deploy/start callers keep their existing
+mode and never select ownership initialization.
+
+This future operator route requires one exact clean native source revision and existing native
+interpreter, matching runtime UID/GID, accessible existing private instance/host roots, actual live
+controller start identity, and correlated native process/filesystem namespace. The read-only
+`deployment-qualify-native` facade refuses a dirty/shadowed source, missing dependency, wrong user,
+dead/zombie controller or unavailable view. A default image, code-only mount or visible numeric PID
+is not qualification; this route installs nothing and grants no namespace or access privilege.
+Native proof paths are produced directly, not rewritten from container proofs.
+
+Qualification emits only a redacted context digest. Native begin consumes that original digest;
+the existing private lease, restart fence, inventory, proof and owner binding retain the exact
+source/root/revision/module origins and launcher/resolved-interpreter identity. Every later native
+authority command revalidates that original context, including the separate initializer's lock-held
+fresh and reserved-retry checks and guarded release. Missing, stripped, replaced or changed evidence
+refuses without clearing the pending epoch or fence. The authenticated backup retains the original
+proof bytes so interrupted cleanup cannot replace the qualified context after unlinking its live copy.
+Native begin requires the same persisted context on every existing-claim path, including root-only
+crash retry, and cannot upgrade an ordinary claim. Only a genuinely fresh begin with all lease,
+compatibility, restart-fence, pending-reservation and canonical-proof evidence absent may retire a
+validated private prior-window census; its directory is fsynced before the first new blocker.
+Once claimed, missing or changed census/proof nonce or context refuses and preserves safety state.
+If begin completes interrupted cleanup, it revalidates the original context and repeats fresh
+admission/retirement under the same admission lock before creating a new nonce or root blocker.
+The original context is checked again after retirement's fsync. Native prove/release/inventory
+commands normalize expected private-input and durability errors to fixed redacted refusals, even
+when one safety mirror is damaged or cleanup removes the last mirror. This changes error
+presentation only, preserves remaining evidence, and leaves ordinary CLI errors unchanged.
+
+Within that held window, the separate explicit `deployment-initialize-dormant-ownership` command
+requires `--channel test`, existing `--instance-state-root` and `--host-global-root`, retained
+`--vault-binding-id`, `--expected-registry-sha256`, canonical `--owner-receipt-path` and its current
+`--expected-owner-receipt-sha256`, canonical `--quiescence-proof-path`, a disjoint private
+`--backup-root`, and `--acknowledge-new-ownership-epoch`. It admits exactly one initialized dormant
+registration with no ownership pair, under deployment → producer → ledger → registry locks. The
+private existing-format backup package binds its absent before-image, prepared key/ledger and
+acknowledged epoch; existing lease/restart-fence reservation evidence prevents a second backup
+destination from minting another epoch. Partial reservations, missing packages and failed directory
+barriers remain fenced, and exact retries repeat the publication/key/ledger durability barriers.
+Ordinary begin, release, cleanup and finalization cannot erase a pending or indeterminate epoch;
+generic restore and rotation reject the operation-specific package. Public results are redacted.
+
+After the exact pair is authenticated durable, guarded `deployment-release` completes only this
+preparation window. A separately authorized ordinary B47 producer must create its own compatible
+proof; no manual state edit, migration retarget, B47 completion, live TEST repair or activation is
+inferred. This source preparation does not itself authorize the future live operation or owner ACK.
 
 #### Legacy owner root namespace authority (#4539)
 

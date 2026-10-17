@@ -1,4 +1,4 @@
-"""Explicit DEV-only re-attestation of a retained v1 owner in a stopped window.
+"""Explicit stopped-window DEV re-attestation and dormant TEST preparation.
 
 This is new operator authority, never an alternative legacy authentication rule.
 The backup manifest is the convergence receipt; it is not a runtime owner store.
@@ -7,25 +7,38 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import importlib
 import json
 import os
 import stat
+import secrets
+import tempfile
+import subprocess
+import sys
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 from app.instance.instance_state import (
+    DeploymentQuiescenceProof,
     InstanceStateLayout,
     InstanceStatePreflightError,
     _atomic_private_write,
     _read_private_bytes,
     _read_private_json,
+    _fsync_directory,
 )
-from app.instance.ownership_ledger import LEGACY_LEDGER_SCHEMA, LEDGER_SCHEMA, OwnershipLedger
+from app.instance.ownership_ledger import (
+    LEGACY_LEDGER_SCHEMA, LEDGER_SCHEMA, LegacyOwner, LedgerSnapshot,
+    OwnershipLedger, _KeyMaterial,
+)
 from app.instance.vault_registry import VaultRegistryStore
 
 _SCHEMA = "agentic-pkm.dev-owner-reattest-backup.v1"
+_PREPARATION = "dormant_ownership_preparation"
+_NATIVE_CONTEXT = "native_execution_context"
 
 
 def _bytes(value: Any) -> bytes:
@@ -57,6 +70,649 @@ def _backup_destination(destination: Path, protected: tuple[Path, ...]) -> Path:
         ):
             raise _refuse()
     return absolute
+
+
+class _TestPreparationRefusal(InstanceStatePreflightError):
+    """Redacted explicit TEST-route refusal; ordinary CLI behavior is unchanged."""
+
+
+def _test_refusal() -> InstanceStatePreflightError:
+    return _TestPreparationRefusal("TEST dormant ownership preparation refused")
+
+
+@dataclass(frozen=True)
+class _Geometry:
+    path: Path
+    # Ordered root-to-ancestor observations; no identity values leave private evidence.
+    ancestry: tuple[tuple[int, int, int, int, int], ...]
+
+
+def _capture_geometry(path: Path) -> _Geometry:
+    path = Path(path).expanduser()
+    try:
+        canonical = path.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        # pathlib on Python 3.12 reports a symlink loop as RuntimeError,
+        # not OSError. It is unsafe input, never a public traceback/path.
+        raise _test_refusal() from exc
+    if not path.is_absolute() or path != canonical:
+        raise _test_refusal()
+    chain = (path, *path.parents)
+    observations = []
+    for part in chain:
+        info = part.lstat()
+        if not stat.S_ISDIR(info.st_mode):
+            raise _test_refusal()
+        observations.append((info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid))
+    return _Geometry(path, tuple(observations))
+
+
+def _overlaps(left: _Geometry, right: _Geometry) -> bool:
+    a, b = left.ancestry[0][:2], right.ancestry[0][:2]
+    return (
+        left.path == right.path or left.path in right.path.parents or right.path in left.path.parents
+        or a in {item[:2] for item in right.ancestry}
+        or b in {item[:2] for item in left.ancestry}
+    )
+
+
+def _private_directory(path: Path) -> None:
+    info = path.lstat()
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o700):
+        raise _test_refusal()
+
+
+def require_test_controller(proof: DeploymentQuiescenceProof, roots: tuple[Path, ...]) -> None:
+    inventory = importlib.import_module("scripts.instance_state_writer_inventory")
+    try:
+        if (
+            proof.channel_id != "test" or proof.controller_pid is None
+            or inventory.controller_token(proof.controller_pid) != proof.controller_start_token
+            or proof.controller_namespace_digest is None
+            or inventory.controller_namespace_digest(proof.controller_pid, roots) != proof.controller_namespace_digest
+        ):
+            raise _test_refusal()
+    except (OSError, RuntimeError) as exc:
+        raise _test_refusal() from exc
+
+
+def qualify_test_native_source(
+    *, channel: str, source_root: Path, expected_revision: str,
+    instance_state_root: Path, host_global_root: Path, controller_pid: int,
+    controller_start_token: str, runtime_uid: int, runtime_gid: int,
+    native_launcher: Path | None = None,
+) -> dict[str, object]:
+    """Read-only qualification, not an installation, namespace grant or authority.
+
+    The future preparation caller uses this same interpreter/source tree for
+    every command; native proofs are produced directly with native paths.
+    """
+    context = capture_test_native_context(channel=channel, source_root=source_root,
+        expected_revision=expected_revision, instance_state_root=instance_state_root,
+        host_global_root=host_global_root, controller_pid=controller_pid,
+        controller_start_token=controller_start_token, runtime_uid=runtime_uid,
+        runtime_gid=runtime_gid, native_launcher=native_launcher or Path(sys.executable))
+    return {"channel": "test", "qualified": True, "source_revision": expected_revision,
+        "native_context_sha256": _sha(_bytes(context)), "activation": "inactive_fenced"}
+
+
+def _native_file_identity(path: Path) -> dict[str, object]:
+    path = path.absolute()
+    resolved = path.resolve(strict=True)
+    info = resolved.stat()
+    if not stat.S_ISREG(info.st_mode):
+        raise _test_refusal()
+    # Retain lexical launcher symlinks as well as the actual executable bytes.
+    chain = []
+    for component in (path, *path.parents):
+        value = component.lstat()
+        chain.append([str(component), value.st_dev, value.st_ino, value.st_mode,
+            value.st_uid, value.st_gid, os.readlink(component) if component.is_symlink() else None])
+    return {"path": str(path), "resolved": str(resolved), "chain": chain,
+        "file": [info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_size, info.st_mtime_ns, info.st_ctime_ns], "sha256": _sha(resolved.read_bytes())}
+
+
+def capture_test_native_context(
+    *, channel: str, source_root: Path, expected_revision: str,
+    instance_state_root: Path, host_global_root: Path, controller_pid: int,
+    controller_start_token: str, runtime_uid: int, runtime_gid: int, native_launcher: Path,
+) -> dict[str, Any]:
+    """Private original context, carried only in existing safety/proof formats."""
+    inventory = importlib.import_module("scripts.instance_state_writer_inventory")
+    roots = (source_root, instance_state_root, host_global_root)
+    try:
+        if (channel != "test" or os.geteuid() != runtime_uid or os.getegid() != runtime_gid
+            or len(expected_revision) != 40
+            or any(c not in "0123456789abcdef" for c in expected_revision)):
+            raise _test_refusal()
+        geometry = [_capture_geometry(root) for root in roots]
+        for root in roots[1:]:
+            _private_directory(root)
+        source = Path(source_root)
+        modules = {}
+        for name in ("app.instance.runtime", "app.instance.legacy_owner_recovery",
+            "app.instance.ownership_ledger", "app.instance.instance_state",
+            "scripts.instance_state_writer_inventory"):
+            module = __import__(name, fromlist=["__file__"])
+            origin = Path(str(module.__file__)).resolve(strict=True)
+            if origin != source / (name.replace(".", "/") + ".py"):
+                raise _test_refusal()
+            modules[name] = _native_file_identity(origin)
+        # Every loaded repository dependency must belong to the reviewed tree,
+        # not an editable install or a code-file mount over an unrelated image.
+        for name, module in tuple(sys.modules.items()):
+            if name.startswith(("app.", "scripts.")) and getattr(module, "__file__", None):
+                if not Path(str(module.__file__)).resolve(strict=True).is_relative_to(source):
+                    raise _test_refusal()
+        def git(*args: str) -> str:
+            git_environment = {key: value for key, value in os.environ.items()
+                if not key.startswith("GIT_")}
+            git_environment |= {"GIT_OPTIONAL_LOCKS": "0", "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": os.devnull}
+            result = subprocess.run(["git", "-c", "core.fsmonitor=false", "-C", str(source), *args],
+                check=True, capture_output=True, text=True, env=git_environment)
+            return result.stdout.strip()
+        if git("rev-parse", "HEAD") != expected_revision or git("status", "--porcelain", "--untracked-files=normal"):
+            raise _test_refusal()
+        if inventory.controller_token(controller_pid) != controller_start_token:
+            raise _test_refusal()
+        namespace = inventory.controller_namespace_digest(controller_pid, roots)
+        context = {"source_root": str(source), "source_revision": expected_revision,
+            "instance_state_root": str(instance_state_root), "host_global_root": str(host_global_root),
+            "geometry": [(str(g.path), g.ancestry) for g in geometry], "modules": modules,
+            "launcher": _native_file_identity(native_launcher),
+            "interpreter": _native_file_identity(Path(sys.executable)),
+            "runtime_uid": runtime_uid, "runtime_gid": runtime_gid,
+            "controller_pid": controller_pid, "controller_start_token": controller_start_token,
+            "controller_namespace_digest": namespace}
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
+        raise _test_refusal() from exc
+    return json.loads(_bytes(context))
+
+
+def require_test_native_context(context: object) -> dict[str, Any]:
+    try:
+        if not isinstance(context, dict):
+            raise _test_refusal()
+        current = capture_test_native_context(channel="test", source_root=Path(context["source_root"]),
+            expected_revision=context["source_revision"], instance_state_root=Path(context["instance_state_root"]),
+            host_global_root=Path(context["host_global_root"]), controller_pid=context["controller_pid"],
+            controller_start_token=context["controller_start_token"], runtime_uid=context["runtime_uid"],
+            runtime_gid=context["runtime_gid"], native_launcher=Path(context["launcher"]["path"]))
+        if current != context:
+            raise _test_refusal()
+        return current
+    except (KeyError, TypeError, OSError, RuntimeError, ValueError) as exc:
+        raise _test_refusal() from exc
+
+
+@contextmanager
+def native_operation_refusal(host: Path | None, *, required: bool = False) -> Iterator[Callable[[], None]]:
+    """Keep expected private-input/durability errors inside the native envelope.
+
+    Selection is sticky through cleanup: one intact native safety mirror (or
+    explicit native helper mode) suffices even when another mirror is damaged.
+    This only selects error presentation, never authorizes the operation. With
+    no native selection, ordinary exceptions and CLI behavior remain unchanged.
+    """
+    native = required
+    def observe() -> None:
+        nonlocal native
+        for path in _reservation_records(host) if host is not None else ():
+            try:
+                if _read_private_json(path).get(_NATIVE_CONTEXT) is not None:
+                    native = True
+            except (OSError, RuntimeError, ValueError):
+                pass  # The operation still validates every authority read.
+    observe()
+    try:
+        yield observe
+    except (OSError, RuntimeError, ValueError) as exc:
+        if native:
+            raise _test_refusal() from exc
+        raise
+
+
+def require_native_window(host: Path, *, required: bool = False) -> dict[str, Any] | None:
+    with native_operation_refusal(host, required=required):
+        return _require_native_window(host, required=required)
+
+
+def _require_native_window(host: Path, *, required: bool = False) -> dict[str, Any] | None:
+    values = [_read_private_json(p).get(_NATIVE_CONTEXT)
+        for p in _reservation_records(host) if os.path.lexists(p)]
+    contexts = [value for value in values if value is not None]
+    if not contexts and not required:
+        return None
+    if not contexts or any(value != contexts[0] for value in values):
+        raise _test_refusal()
+    context = require_test_native_context(contexts[0])
+    if context["host_global_root"] != str(host):
+        raise _test_refusal()
+    public, _, compatibility = _reservation_records(host)
+    lease = _read_private_json(public if os.path.lexists(public) else compatibility)
+    nonce = lease.get("nonce")
+    inventory_path = host / "deployment-quiescence-inventory.json"
+    if os.path.lexists(inventory_path):
+        inventory = _read_private_json(inventory_path)
+        if inventory.get("deployment_nonce") != nonce or inventory.get(_NATIVE_CONTEXT) != context:
+            raise _test_refusal()
+    proof_path = host / "deployment-quiescence-proof.json"
+    if os.path.lexists(proof_path):
+        proof = _read_private_json(proof_path)
+        if proof.get("nonce") != nonce or proof.get(_NATIVE_CONTEXT) != context:
+            raise _test_refusal()
+    return context
+
+
+def require_native_begin_context(host: Path, context: dict[str, object] | None,
+    *, retire_inventory: bool = False) -> None:
+    """Admission-lock-held native begin; never adopt or upgrade another claim.
+
+    A released window's private census is rebuildable, not authority. Retire it
+    only before the first blocker of a genuinely fresh claim. Once any claim
+    exists, every inventory/proof must instead match its exact original context
+    and nonce, including a root-only crash retry. The caller repeats this check
+    after setup and holds admission through retirement and first publication.
+    """
+    if context is None:
+        if require_native_window(host) is not None:
+            raise _test_refusal()
+        return  # Ordinary begin remains unchanged when no native claim exists.
+    records = _reservation_records(host)
+    fences = tuple(host.glob("deployment-*-restart-fence.json"))
+    if any(path != records[1] for path in fences):
+        raise _test_refusal()
+    if any(os.path.lexists(path) for path in records):
+        if (require_native_window(host, required=True) != context
+            or read_preparation_reservation(host) is not None):
+            raise _test_refusal()
+        return
+    # lexists includes dangling symlinks: missing targets are not absence of
+    # safety evidence. No proof/fence/pending mirror may be retired as census.
+    if fences or os.path.lexists(host / "deployment-quiescence-proof.json"):
+        raise _test_refusal()
+    inventory_path = host / "deployment-quiescence-inventory.json"
+    if os.path.lexists(inventory_path):
+        from app.instance.runtime import _CONTROLLER_START_TOKEN_RE, _QUIESCENCE_INVENTORY_SCHEMA
+        inventory = _read_private_json(inventory_path)
+        domains: dict[str, list[object]] = {name: [] for name in ("dev", "native", "prod", "test")}
+        digest = hashlib.sha256(json.dumps(domains, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        controller = inventory.get("controller")
+        prior_context = inventory.get(_NATIVE_CONTEXT)
+        prior_nonce = inventory.get("deployment_nonce")
+        if (inventory.get("schema") != _QUIESCENCE_INVENTORY_SCHEMA
+            or inventory.get("inventory_complete") is not True
+            or inventory.get("all_consumers_stopped") is not True
+            or inventory.get("probe_count") != 2 or inventory.get("domains") != domains
+            or inventory.get("snapshot_digests") != [digest, digest]
+            or not isinstance(controller, dict) or type(controller.get("pid")) is not int
+            or controller["pid"] <= 0
+            or _CONTROLLER_START_TOKEN_RE.fullmatch(str(controller.get("start_token") or "")) is None
+            or (prior_context is None and prior_nonce is not None)
+            or (prior_context is not None and (not isinstance(prior_context, dict)
+                or not isinstance(prior_nonce, str) or len(prior_nonce) != 32
+                or any(char not in "0123456789abcdef" for char in prior_nonce)))):
+            raise _test_refusal()
+        if retire_inventory:
+            inventory_path.unlink()
+            _fsync_directory(host)
+    if retire_inventory:
+        # Retirement's durability barrier is itself an observation gap. Never
+        # mint the next nonce/root blocker from a context changed during it.
+        require_test_native_context(context)
+
+
+def _reservation_records(host: Path) -> tuple[Path, ...]:
+    return (
+        host / "deployment-public" / "deployment-host-global-lease.json",
+        host / "deployment-test-restart-fence.json",
+        host / "deployment-host-global-lease.json",
+    )
+
+
+def read_preparation_reservation(host: Path) -> dict[str, object] | None:
+    """Read all mirrors; a partial reservation is pending, never absent."""
+    found: list[dict[str, object]] = []
+    for path in _reservation_records(host):
+        if not os.path.lexists(path):
+            continue
+        value = _read_private_json(path)
+        if _PREPARATION in value:
+            reservation = value[_PREPARATION]
+            if value.get("channel_id") != "test" or not isinstance(reservation, dict):
+                raise _test_refusal()
+            found.append(reservation)
+    if not found:
+        return None
+    if any(item != found[0] for item in found):
+        raise _test_refusal()
+    return found[0]
+
+
+def _authenticate_prepared_package(
+    package: Path,
+) -> tuple[dict[str, Any], dict[str, bytes], _KeyMaterial, LedgerSnapshot]:
+    _private_directory(package)
+    manifest: dict[str, Any] = _read_private_json(package / "manifest.json")
+    op = manifest.get("dormant_ownership")
+    checksums = manifest.get("checksums")
+    if (manifest.get("schema") != "agentic-pkm.instance-state-backup.v1"
+        or manifest.get("channel_id") != "test" or not isinstance(op, dict)
+        or not isinstance(checksums, dict) or op.get("before") != {"key": None, "ledger": None}
+        or op.get("decision") != "explicit-new-ownership-epoch"
+        or op.get("activation") != "inactive_fenced"):
+        raise _test_refusal()
+    if set(p.name for p in package.iterdir()) != {*checksums, "manifest.json"}:
+        raise _test_refusal()
+    payloads = {name: _read_private_bytes(package / name) for name in checksums
+        if isinstance(name, str) and Path(name).name == name}
+    if len(payloads) != len(checksums) or any(_sha(raw) != checksums[name] for name, raw in payloads.items()):
+        raise _test_refusal()
+    parser = OwnershipLedger(package)
+    key = parser._parse_key_value(json.loads(payloads["ownership-key.json"]))
+    ledger = parser._parse_ledger_value(json.loads(payloads["ownership-ledger.json"]))
+    signed = dict(manifest)
+    auth = signed.pop("authentication", None)
+    if (len(key.secret) != 32 or ledger.key_id != key.key_id or ledger.generation != key.generation
+        or ledger.schema != LEDGER_SCHEMA or not ledger.legacy_bootstrap_complete
+        or not isinstance(auth, str)
+        or not hmac.compare_digest(auth, hmac.new(key.secret, _bytes(signed), hashlib.sha256).hexdigest())):
+        raise _test_refusal()
+    return manifest, payloads, key, ledger
+
+
+def _reservation_for(package: Path, destination: Path, sibling: Path) -> dict[str, object]:
+    manifest, payloads, _, _ = _authenticate_prepared_package(package)
+    op = manifest["dormant_ownership"]
+    return {"backup_root": str(destination), "sibling": str(sibling),
+        "epoch_id": op["epoch_id"], "input_digest": op["input_digest"],
+        "manifest_sha256": _sha(_read_private_bytes(package / "manifest.json")),
+        "ledger_sha256": _sha(payloads["ownership-ledger.json"]),
+        "key_sha256": _sha(payloads["ownership-key.json"])}
+
+
+def require_completed_preparation(host: Path) -> None:
+    """Ordinary callers may remove safety state only after exact pair durability.
+
+    No TEST reservation means no changed behavior for ordinary/legacy consumers.
+    This authenticates existing evidence; it cannot initialize or recover a pair.
+    """
+    require_native_window(host)
+    reserved = read_preparation_reservation(host)
+    if reserved is None:
+        return
+    try:
+        destination = Path(str(reserved["backup_root"]))
+        sibling = Path(str(reserved["sibling"]))
+        _capture_geometry(destination)
+        manifest, payloads, _, _ = _authenticate_prepared_package(destination)
+        if _reservation_for(destination, destination, sibling) != reserved:
+            raise _test_refusal()
+        op = manifest["dormant_ownership"]
+        if op["host_global_root"] != str(host):
+            raise _test_refusal()
+        context = require_native_window(host, required=True)
+        proof_path = host / "deployment-quiescence-proof.json"
+        # The existing authenticated backup retains the original proof bytes;
+        # cleanup may already have unlinked the canonical copy before a crash.
+        original_proof = payloads["deployment-quiescence-proof.json"]
+        if (_sha(original_proof) != op["proof_sha256"]
+            or json.loads(original_proof).get(_NATIVE_CONTEXT) != context
+            or (os.path.lexists(proof_path) and _read_private_bytes(proof_path) != original_proof)):
+            raise _test_refusal()
+        for name in ("ownership-key.json", "ownership-ledger.json"):
+            if _read_private_bytes(host / name) != payloads[name]:
+                raise _test_refusal()
+        # Repeat every publication/pair barrier even when bytes are visible.
+        _fsync_directory(destination)
+        _fsync_directory(destination.parent)
+        _fsync_directory(host)
+        _fsync_directory(host / "deployment-public")
+    except (OSError, KeyError, ValueError, TypeError) as exc:
+        raise _test_refusal() from exc
+
+
+def initialize_dormant_ownership(
+    *, channel: str, instance_state_root: Path, host_global_root: Path,
+    vault_binding_id: str, expected_registry_sha256: str, owner_receipt_path: Path,
+    expected_owner_receipt_sha256: str, quiescence_proof_path: Path,
+    backup_root: Path, acknowledge_new_ownership_epoch: bool,
+) -> dict[str, object]:
+    """Prepare one explicitly acknowledged TEST epoch, leaving activation fenced."""
+    from app.instance.runtime import (
+        _deployment_admission_locked, _load_deployment_quiescence_proof,
+        _legacy_owner_identity_evidence, _producer_transition_locked, _replace_private_json,
+    )
+    if channel != "test" or not acknowledge_new_ownership_epoch or not vault_binding_id:
+        raise _test_refusal()
+    for digest in (expected_registry_sha256, expected_owner_receipt_sha256):
+        if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+            raise _test_refusal()
+    state, host = Path(instance_state_root), Path(host_global_root)
+    state_geometry, host_geometry = _capture_geometry(state), _capture_geometry(host)
+    _private_directory(state)
+    _private_directory(host)
+    if _overlaps(state_geometry, host_geometry):
+        raise _test_refusal()
+    layout = InstanceStateLayout.for_channel(state, channel)
+    layout.require_existing()
+    ledger, store = OwnershipLedger(host), VaultRegistryStore(layout.registry_path)
+    if (quiescence_proof_path != host / "deployment-quiescence-proof.json"
+        or owner_receipt_path != host / "legacy-owner-inventory.json"):
+        raise _test_refusal()
+    destination = Path(backup_root)
+    parent_geometry = _capture_geometry(destination.parent)
+    if not destination.is_absolute() or destination.name in {"", ".", ".."}:
+        raise _test_refusal()
+    witness: tuple[_Geometry, ...] = (state_geometry, host_geometry, _capture_geometry(layout.root),
+        _capture_geometry(host / "deployment-public"), parent_geometry)
+    if os.path.lexists(store.transaction_path) or os.path.lexists(ledger.rotation_path):
+        raise _test_refusal()
+    with _deployment_admission_locked(host), _producer_transition_locked(layout), \
+        ledger._locked(recover_rotation=False), store._locked(recover_transactions=False):
+        registry = store._read_current_locked(recover=False)
+        if (registry.authority != "dormant" or registry.revision < 1
+            or set(registry.registrations) != {vault_binding_id}
+            or registry.removal_tombstones or registry.transfer_lineage
+            or os.path.lexists(store.transaction_path) or os.path.lexists(ledger.rotation_path)):
+            raise _test_refusal()
+        registration = registry.registrations[vault_binding_id]
+        if not registration.vault_id or not registration.local_instance_id:
+            raise _test_refusal()
+        content = Path(registration.path)
+        content_geometry = _capture_geometry(content)
+        if any(_overlaps(content_geometry, geo) for geo in (state_geometry, host_geometry)):
+            raise _test_refusal()
+        if any(destination == root.path or destination in root.path.parents
+            or root.path in destination.parents for root in (content_geometry, state_geometry, host_geometry)):
+            raise _test_refusal()
+        # Prospective destinations have exactly one missing terminal component.
+        # Comparing their nearest parent catches case/physical aliases while
+        # permitting safe siblings beneath a common parent.
+        if any(root.ancestry[0][:2] in {item[:2] for item in parent_geometry.ancestry}
+            for root in (content_geometry, state_geometry, host_geometry)):
+            raise _test_refusal()
+        destination_geometry: _Geometry | None = None
+        if os.path.lexists(destination):
+            actual = _capture_geometry(destination)
+            if any(_overlaps(actual, root) for root in (content_geometry, state_geometry, host_geometry)):
+                raise _test_refusal()
+            destination_geometry = actual
+        witness += (content_geometry,)
+        proof = _load_deployment_quiescence_proof(quiescence_proof_path)
+        raw_proof = _read_private_bytes(quiescence_proof_path)
+        raw_owner = _read_private_bytes(owner_receipt_path)
+        registry_bytes = _read_private_bytes(store.path)
+        if _sha(raw_owner) != expected_owner_receipt_sha256 or _sha(registry_bytes) != expected_registry_sha256:
+            raise _test_refusal()
+        owner_payload = proof.require_canonical_authority(channel_id="test", host_global_root=host,
+            owner_receipt_path=owner_receipt_path)
+        context = require_native_window(host, required=True)
+        if context is None or proof.native_execution_context != context or context["instance_state_root"] != str(state):
+            raise _test_refusal()
+        require_test_controller(proof, (state, host, content, destination.parent))
+        identities = _legacy_owner_identity_evidence(owner_payload)
+        owners = owner_payload.get("owners")
+        source_evidence = owner_payload.get("source_evidence")
+        if (not isinstance(owners, list) or len(owners) != 1
+            or len(identities) != 1 or not isinstance(source_evidence, dict)
+            or source_evidence.get("retired_owner_identities")
+            or not source_evidence.get("docker") or not source_evidence.get("config")):
+            raise _test_refusal()
+        owner_row = owners[0]
+        if (owner_row.get("channel_id") != "test" or owner_row.get("root") != str(content)
+            or owner_row.get("vault_binding_id") not in (None, "", vault_binding_id)):
+            raise _test_refusal()
+        identity, ancestors, physical = identities[("test", str(content))]
+        expected_identity = f"inode:{content_geometry.ancestry[0][0]}:{content_geometry.ancestry[0][1]}"
+        expected_physical = tuple(f"inode:{item[0]}:{item[1]}" for item in content_geometry.ancestry[1:])
+        if (identity != expected_identity or set(ancestors) != {f"path:{p}" for p in content.parents}
+            or len(ancestors) != len(content.parents) or physical != expected_physical):
+            raise _test_refusal()
+        # The explicit operator binding, not inventory order/path guessing,
+        # establishes the association with the one physically attested owner.
+        owner = LegacyOwner("test", vault_binding_id, content, identity, ancestors, physical,
+            proof.owner_receipt_digest)
+        payloads = {"deployment-quiescence-proof.json": raw_proof, "vault-registry.md": registry_bytes,
+            "vault-registry.md.last-good": _read_private_bytes(store.snapshot_path),
+            "vault-registry.md.last-good.sha256": _read_private_bytes(store.snapshot_checksum_path),
+            "vault-registry.md.legacy-export": _read_private_bytes(store.rollback_export_path)}
+        if (payloads["vault-registry.md.last-good"] != registry_bytes
+            or payloads["vault-registry.md.last-good.sha256"].decode().strip() != _sha(registry_bytes)
+            or payloads["vault-registry.md.legacy-export"] != store._rollback_export_payload(registry)):
+            raise _test_refusal()
+        inputs = {"state": str(state), "host": str(host), "destination": str(destination),
+            "binding": vault_binding_id, "registry": expected_registry_sha256,
+            "owner": expected_owner_receipt_sha256, "proof": _sha(raw_proof),
+            "geometry": [(str(g.path), g.ancestry) for g in witness]}
+        input_digest = _sha(_bytes(inputs))
+        package_geometry: _Geometry | None = None
+
+        def recheck() -> None:
+            if require_native_window(host, required=True) != context:
+                raise _test_refusal()
+            if any(_capture_geometry(g.path) != g for g in witness):
+                raise _test_refusal()
+            if (_read_private_bytes(store.path) != registry_bytes
+                or _read_private_bytes(owner_receipt_path) != raw_owner
+                or _read_private_bytes(quiescence_proof_path) != raw_proof
+                or os.path.lexists(store.transaction_path) or os.path.lexists(ledger.rotation_path)):
+                raise _test_refusal()
+            proof.require_canonical_authority(channel_id="test", host_global_root=host,
+                owner_receipt_path=owner_receipt_path)
+            require_test_controller(proof, (state, host, content, destination.parent))
+            if destination_geometry is None:
+                if os.path.lexists(destination):
+                    raise _test_refusal()
+            elif _capture_geometry(destination) != destination_geometry:
+                raise _test_refusal()
+            if package_geometry is not None:
+                current_package = _capture_geometry(package_geometry.path)
+                if current_package != package_geometry or any(_overlaps(current_package, root)
+                    for root in (content_geometry, state_geometry, host_geometry)):
+                    raise _test_refusal()
+
+        recheck()
+        reserved = read_preparation_reservation(host)
+        if reserved is None:
+            if os.path.lexists(destination) or os.path.lexists(ledger.key_path) or os.path.lexists(ledger.path):
+                raise _test_refusal()
+            key = _KeyMaterial(f"key-{uuid.uuid4()}", 1, secrets.token_bytes(32))
+            candidate = LedgerSnapshot(LEDGER_SCHEMA, 1, key.key_id,
+                leases={vault_binding_id: ledger._lease_for_legacy_owner(owner, key=key)},
+                legacy_bootstrap_complete=True)
+            payloads |= {"ownership-key.json": _bytes(ledger._key_value(key)),
+                "ownership-ledger.json": _bytes(ledger._ledger_value(candidate))}
+            manifest: dict[str, Any] = {"schema": "agentic-pkm.instance-state-backup.v1", "channel_id": "test",
+                "registry_checksum": expected_registry_sha256,
+                "ownership_key_id": key.key_id, "ownership_generation": 1,
+                "checksums": {name: _sha(raw) for name, raw in payloads.items()},
+                "dormant_ownership": {"epoch_id": str(uuid.uuid4()), "input_digest": input_digest,
+                    "before": {"key": None, "ledger": None}, "instance_state_root": str(state),
+                    "host_global_root": str(host), "registry_sha256": expected_registry_sha256,
+                    "owner_receipt_sha256": expected_owner_receipt_sha256, "proof_sha256": _sha(raw_proof),
+                    "deployment_nonce": proof.nonce, "decision": "explicit-new-ownership-epoch",
+                    "activation": "inactive_fenced"}}
+            manifest["authentication"] = hmac.new(key.secret, _bytes(manifest), hashlib.sha256).hexdigest()
+            recheck()
+            sibling = Path(tempfile.mkdtemp(prefix=f".{destination.name}-prepared-", dir=destination.parent))
+            sibling_geometry = _capture_geometry(sibling)
+            package_geometry = sibling_geometry
+            # Before reservation, interrupted proposals have no authority. They
+            # are left private for diagnosis; never guessed as resumable epochs.
+            for name, raw in payloads.items():
+                recheck()
+                if _capture_geometry(sibling) != sibling_geometry:
+                    raise _test_refusal()
+                _atomic_private_write(sibling / name, raw)
+            recheck()
+            _atomic_private_write(sibling / "manifest.json", _bytes(manifest))
+            recheck()
+            _fsync_directory(sibling)
+            recheck()
+            _fsync_directory(sibling.parent)
+            reserved = _reservation_for(sibling, destination, sibling)
+        else:
+            if reserved.get("backup_root") != str(destination) or reserved.get("input_digest") != input_digest:
+                raise _test_refusal()
+            sibling = Path(str(reserved.get("sibling")))
+            if sibling.parent != destination.parent or not sibling.name.startswith(f".{destination.name}-prepared-"):
+                raise _test_refusal()
+            if os.path.lexists(sibling) == os.path.lexists(destination):
+                raise _test_refusal()
+            sibling_geometry = _capture_geometry(sibling if sibling.exists() else destination)
+            package_geometry = sibling_geometry
+        package = destination if destination.exists() else sibling
+        manifest, payloads, _, _ = _authenticate_prepared_package(package)
+        if (_reservation_for(package, destination, sibling) != reserved
+            or manifest["dormant_ownership"]["input_digest"] != input_digest):
+            raise _test_refusal()
+        for name in ("ownership-key.json", "ownership-ledger.json"):
+            if os.path.lexists(host / name) and _read_private_bytes(host / name) != payloads[name]:
+                raise _test_refusal()
+        for record in _reservation_records(host):
+            recheck()
+            value = _read_private_json(record)
+            if value.get(_PREPARATION) not in (None, reserved):
+                raise _test_refusal()
+            if value.get(_PREPARATION) is None:
+                _replace_private_json(record, value | {_PREPARATION: reserved})
+            # Visible mirrors are not evidence of completed directory barriers.
+            recheck()
+            _fsync_directory(record.parent)
+        recheck()
+        if package == sibling:
+            if _capture_geometry(sibling) != sibling_geometry or os.path.lexists(destination):
+                raise _test_refusal()
+            _fsync_directory(sibling)
+            _fsync_directory(sibling.parent)
+            recheck()
+            os.rename(sibling, destination)
+            package_geometry = replace(sibling_geometry, path=destination)
+            destination_geometry = package_geometry
+        recheck()
+        _fsync_directory(destination)
+        recheck()
+        _fsync_directory(destination.parent)
+        if _reservation_for(destination, destination, sibling) != read_preparation_reservation(host):
+            raise _test_refusal()
+        for name in ("ownership-key.json", "ownership-ledger.json"):
+            recheck()
+            if not os.path.lexists(host / name):
+                _atomic_private_write(host / name, payloads[name])
+            if _read_private_bytes(host / name) != payloads[name]:
+                raise _test_refusal()
+            recheck()
+            _fsync_directory(host)
+        recheck()
+        require_completed_preparation(host)
+        return {"channel": "test", "prepared": True,
+            "epoch_id": manifest["dormant_ownership"]["epoch_id"],
+            "activation": "inactive_fenced", "prior_effects": "not_inferred",
+            "registry_sha256": expected_registry_sha256}
 
 
 def reattest_legacy_owner(

@@ -2646,6 +2646,27 @@
       "why_load_bearing": "Retained run-state evidence records the accepted public Bifrost constituent references needed to audit the shadow rehydration checkpoint; it is operational evidence, not personal vault data.",
       "disposition": "stay",
       "issue": "#6165"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_field_contract_v2/live-dispatcher-status.json",
+      "category": "iv",
+      "why_load_bearing": "Exact historical preparation custody for the #6174 shadow probe retains the configured public Bifrost repository identity in dispatcher output, not personal vault data; rewriting it would invalidate raw evidence.",
+      "disposition": "stay",
+      "issue": "#6174"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_field_contract_v2/accepted/live-dispatcher-status.json",
+      "category": "iv",
+      "why_load_bearing": "The accepted #6174 source checkpoint binds this exact dispatcher read, including the configured public Bifrost repository identity; this is Builder evidence, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#6174"
+    },
+    {
+      "artifact": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-dispatcher.json",
+      "category": "iv",
+      "why_load_bearing": "The fresh #6174 observer's immutable live-read envelope retains the public Bifrost repository identity from dispatcher output; this exact original evidence is neither Product data nor an operator vault binding.",
+      "disposition": "stay",
+      "issue": "#6174"
     }
   ]
 }

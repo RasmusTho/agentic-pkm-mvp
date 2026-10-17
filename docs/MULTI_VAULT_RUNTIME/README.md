@@ -4,7 +4,7 @@ State: Active capability specification.
 Temporal class: strategic
 Review cadence: at each MVR child merge or stage-acceptance update
 Source of truth: this document for capability and stage decomposition; live Issues, PRs, and exact-SHA CI for delivery state
-Last reviewed: 2026-10-15
+Last reviewed: 2026-10-17 (TEST dormant preparation context/admission continuity; other sections retain their existing evidence)
 Last verified against: MVR-05A stage acceptance on `origin/main` `2a47ceb6fd3a` ([nightly pg-contracts](https://github.com/RasmusTho/agentic-pkm-mvp/actions/runs/38696096987), 366 passed, zero required skips); exact-head production proof #6051 / PR #6054 ([receipt](https://github.com/RasmusTho/agentic-pkm-mvp/issues/6051#issuecomment-6184628420)); outbox repair #5989 / PR #6057; stage hub #3859 closed; open validation hub #2143
 
 Delivered: MVR-01A/01B/01C (#3853/#3854/#3855) mechanical substrate and authority cutover, MVR-02
@@ -275,6 +275,34 @@ new attempt requires a new authoritative readback. Neither an empty local record
 journal/backup, nor a stale lease may be interpreted as proof of ownership, completion, or an absent
 effect. Activation must consume the complete convergence receipt; it cannot create ownership or a
 prior effect result by inference.
+
+The explicit TEST-only `deployment-initialize-dormant-ownership` operator seam prepares a fresh
+protected pair for one retained, populated dormant registration when both previous ownership
+artifacts are absent. It requires the retained binding explicitly, exact registry and canonical
+owner-receipt digests, the current native stopped-window proof, physically disjoint private roots
+and backup destination, and acknowledgement of a new ownership epoch. It preserves the registry,
+default selection, retained identities and source bytes; it does not recover lost authority or
+infer prior effects. DEV, PROD, partial/divergent evidence and implicit ordinary-deploy recovery
+remain refused.
+
+The existing private backup manifest binds the absent-pair before-image and one authenticated
+prepared epoch. Reservation evidence in the existing TEST deployment safety records fences retries
+to that package, including interrupted directory durability; generic restore and rotation do not
+consume it. The original qualified native source/module and launcher/interpreter identity remains
+bound through the existing proof and safety records, including lock-held initialization retries
+and guarded release; the authenticated backup retains that proof for interrupted cleanup.
+Native begin cannot adopt an ordinary claim or change an existing claim's original context.
+A released window's validated private census is retired under admission only when every safety
+record and canonical proof is absent; current-window census/proof nonce or context damage refuses
+instead of being treated as prior evidence.
+After exact interrupted cleanup completes, native begin revalidates the original context and
+re-evaluates fresh admission under the same lock before a new nonce or blocker is published.
+It rechecks the original context after retirement's fsync as well. Once native mode is established,
+expected private-input or durability errors produce a fixed redacted refusal, retaining pending
+evidence; ordinary CLI error behavior is unchanged.
+Preparation remains `inactive_fenced`. Source support and synthetic fixture proof are
+not live TEST repair or activation: a future invocation still needs the separately attributable
+operator acknowledgement, qualified native execution, and existing downstream activation gates.
 
 ## Reconciliation — do not duplicate
 

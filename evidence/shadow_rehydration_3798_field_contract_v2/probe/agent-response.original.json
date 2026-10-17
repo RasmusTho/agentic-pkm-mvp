@@ -1,0 +1,205 @@
+{
+  "schema_name": "epic_rehydrated_observation",
+  "schema_version": 2,
+  "probe_id": "shadow_rehydration_3798_field_contract",
+  "observed_at": "2026-10-17T21:52:57Z",
+  "target": {
+    "repository": "RasmusTho/agentic-pkm-mvp",
+    "issue_number": 3798,
+    "pr_number": 3803,
+    "verified_pr_head_sha": "7df955c4c4d0cdefef5556fdad6b9a66c45d3c8c",
+    "merge_sha": "ed52d564a30f6ac6a02d585f488de0f1f9b7eacd"
+  },
+  "agent": {
+    "admitted_model": "gpt-6-luna",
+    "admitted_reasoning_effort": "xhigh",
+    "engine_identity": "unknown",
+    "engine_identity_source": "native carrier admission metadata does not expose engine identity",
+    "start_status": "succeeded",
+    "start_observed_at": "2026-10-17T21:51:41Z"
+  },
+  "context_pack": {
+    "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/context-pack.json",
+    "sha256": "b7ec0ce7fb140bcaddfedde6245d9200ebde44adb6d36bb6b3015e99aab9ebe0",
+    "bytes_length": 31502
+  },
+  "fields": {
+    "slice_status": {
+      "value": "unknown",
+      "provenance": [
+        {
+          "kind": "github",
+          "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-github.json"
+        }
+      ],
+      "notes": [
+        "The Issue read returned CLOSED, but the required PR view failed twice; without a retained fresh PR state, closed_merged cannot be established."
+      ]
+    },
+    "checkpoint_decision_delta": {
+      "value": [
+        "accepted new post-closure context-budget checkpoint from fresh live #3798/#3803/review/repository/dispatcher reads",
+        "retain observer-only manual shadow boundary; no rotation, dispatch or delivery effects"
+      ],
+      "provenance": [
+        {
+          "kind": "checkpoint",
+          "ref": "packet:shadow_rehydration_3798_field_contract#/source/receipt/checkpoint/decision_log_delta"
+        }
+      ],
+      "notes": []
+    },
+    "checkpoint_gate_invariants": {
+      "value": {
+        "ci": "unchanged_required",
+        "independent_review": "unchanged_required",
+        "merge": "unchanged_required",
+        "closure": "unchanged_required"
+      },
+      "provenance": [
+        {
+          "kind": "checkpoint",
+          "ref": "packet:shadow_rehydration_3798_field_contract#/source/receipt/gate_invariants"
+        }
+      ],
+      "notes": []
+    },
+    "open_review_findings": {
+      "value": "unknown",
+      "provenance": [
+        {
+          "kind": "github",
+          "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-github.json"
+        }
+      ],
+      "notes": [
+        "Review-thread pagination completed with six nodes and hasNextPage=false, all marked resolved; the composite GitHub capture is unavailable because the fresh PR object could not be read and retained."
+      ]
+    },
+    "external_state": {
+      "value": {
+        "issue": "unknown",
+        "pr": "unknown",
+        "pr_head_sha": "unknown",
+        "merge_sha": "unknown",
+        "repository_head": "unknown",
+        "ci": {
+          "status": "unknown",
+          "scope": "all_returned_pr_rollup_entries_including_historical_duplicates_not_a_current_required_ci_verdict"
+        },
+        "dispatcher": {
+          "coordination_mode": "dispatcher-backed",
+          "db_exists": true
+        }
+      },
+      "provenance": [
+        {
+          "kind": "github",
+          "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-github.json"
+        },
+        {
+          "kind": "repository",
+          "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-repository.json"
+        },
+        {
+          "kind": "dispatcher",
+          "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-dispatcher.json"
+        }
+      ],
+      "notes": [
+        "The fresh PR view and remote main read failed. The local origin/main diagnostic is not used as remote state; dispatcher status was observed."
+      ]
+    },
+    "checkpoint_recommendations": {
+      "value": {
+        "recommendations": {
+          "coordinator_lifecycle": "keep",
+          "model_tier": "terra",
+          "slice_execution": "thin_worker"
+        },
+        "reasons": [
+          "context_measurement_unknown",
+          "isolated_thin_worker_candidate",
+          "model_tier_terra"
+        ]
+      },
+      "provenance": [
+        {
+          "kind": "checkpoint",
+          "ref": "packet:shadow_rehydration_3798_field_contract#/source/receipt/recommendations"
+        }
+      ],
+      "notes": []
+    },
+    "live_slice_next_action": {
+      "value": "unknown",
+      "provenance": [
+        {
+          "kind": "github",
+          "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-github.json"
+        }
+      ],
+      "notes": [
+        "The required fresh PR lifecycle read was unavailable, so no live next action can be grounded."
+      ]
+    },
+    "missing_claims": {
+      "value": [
+        "slice_status",
+        "open_review_findings",
+        "external_state"
+      ],
+      "provenance": [
+        {
+          "kind": "agent",
+          "ref": "agent:shadow_rehydration_3798_field_contract"
+        }
+      ],
+      "notes": [
+        "These comparable observations are unknown or contain unknown dimensions because required fresh GitHub and remote-repository reads could not be retained."
+      ]
+    },
+    "fabricated_claims": {
+      "value": "unknown",
+      "provenance": [
+        {
+          "kind": "agent",
+          "ref": "agent:shadow_rehydration_3798_field_contract"
+        }
+      ],
+      "notes": [
+        "No independent audit was performed; mismatch or self-audit would not establish fabrication."
+      ]
+    }
+  },
+  "live_reads": [
+    {
+      "kind": "github",
+      "evidence": {
+        "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-github.json",
+        "sha256": "0bf12d0bfbc1e71b36f03a3a200dd7ce95e017bd5a239b77d08eaaac2012852e",
+        "bytes_length": 782
+      }
+    },
+    {
+      "kind": "repository",
+      "evidence": {
+        "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-repository.json",
+        "sha256": "cfd6c3043a4402fd24dcd49d00db1adcf279261baa15a921b3ccff1b8d3f85ce",
+        "bytes_length": 667
+      }
+    },
+    {
+      "kind": "dispatcher",
+      "evidence": {
+        "ref": "evidence/shadow_rehydration_3798_field_contract_v2/probe/live-read-dispatcher.json",
+        "sha256": "42101a48f7ec720e13d066515808ee163caf02e6c601b106a31027b9b1c8d682",
+        "bytes_length": 3386
+      }
+    }
+  ],
+  "limitations": [
+    "The PR-view request failed twice with an API connection error; remote git ls-remote failed twice because github.com could not be resolved. The allowed local origin/main diagnostic was not treated as remote evidence.",
+    "The native carrier did not expose engine identity or context-token, cost, or human-effort telemetry; no estimate was made."
+  ]
+}
