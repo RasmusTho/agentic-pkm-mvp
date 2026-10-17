@@ -176,7 +176,7 @@ class OwnershipLedger:
         _assert_private_file(self.rotation_path)
         try:
             journal = json.loads(self.rotation_path.read_text(encoding="utf-8"))
-            if journal.get("schema") != ROTATION_SCHEMA:
+            if journal.get("schema") != ROTATION_SCHEMA or "dormant_ownership" in journal:
                 raise ValueError
             journal_key = self._parse_key_value(journal["key"])
             journal_ledger = self._parse_ledger_value(journal["ledger"])
@@ -2829,7 +2829,7 @@ class OwnershipLedger:
         _assert_private_file(self.rotation_path)
         try:
             journal = json.loads(self.rotation_path.read_text(encoding="utf-8"))
-            if journal.get("schema") != ROTATION_SCHEMA:
+            if journal.get("schema") != ROTATION_SCHEMA or "dormant_ownership" in journal:
                 raise ValueError
             key = journal["key"]
             ledger = journal["ledger"]
