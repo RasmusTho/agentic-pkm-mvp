@@ -38,6 +38,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.api.compatibility_mutation import seal_vault_mutation
+from app.vault.manager import nearest_enclosing_vault_root
 from app.api.request_active_context import (
     current_scoped_route_read,
     route_read_vault_root_or_selection_required,
@@ -193,7 +194,11 @@ def _scoped_drafts_dir_is_contained(vault_root: Path) -> bool:
         drafts_dir.relative_to(root)
     except ValueError:
         return False
-    return drafts_dir != root
+    if drafts_dir == root:
+        return False
+    # An initialized nested child vault is a hard read boundary: a system folder
+    # configured beneath one belongs to that child, not to this binding.
+    return nearest_enclosing_vault_root(drafts_dir, search_root=root) == root
 
 
 @router.get("", response_model=PendingEvalDraftsResponse)

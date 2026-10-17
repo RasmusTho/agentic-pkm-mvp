@@ -15,7 +15,11 @@ from app.api.request_active_context import (
     reject_carrier_on_legacy_read,
     require_scoped_read_context,
 )
-from app.api.compatibility_mutation import seal_vault_mutation
+from app.api.compatibility_mutation import (
+    compatibility_write_target_window,
+    seal_vault_mutation,
+    seals_write_window_inside,
+)
 from app.api.routes.vault_resolution import (
     NoSelectedVaultError,
     SelectedVaultUninitializedError,
@@ -383,6 +387,7 @@ def _run_ask(
     response_model=VoiceAskResponse,
     dependencies=[Depends(seal_vault_mutation)],
 )
+@seals_write_window_inside
 async def ask_voice(
     request: Request,
     audio: UploadFile = File(...),
@@ -445,7 +450,9 @@ async def ask_voice(
     # The synchronous selection endpoint runs in a worker thread. Pin its
     # actual manager selection through retrieval and transcript publication.
     # Release before derived TTS work so speech cannot hold the selector.
-    with compatibility_selection_window():
+    # Lock order matches /vault/select: selection lock first, then the shared
+    # compatibility write window (the router seal does not hold it here).
+    with compatibility_selection_window(), compatibility_write_target_window(request):
         sessions = _voice_sessions_for_selected_vault()
         question = transcript
         if session_id is not None and sessions is None:

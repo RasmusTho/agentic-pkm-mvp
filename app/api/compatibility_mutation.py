@@ -34,6 +34,7 @@ CAPABILITY = "mvr05c_scoped_write"
 _TOKEN_TTL_SECONDS = 600
 _MUTATION_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _SELECTOR_BRIDGE_ATTRIBUTE = "__mvr05b3_compatibility_selector_bridge__"
+_SEALS_INSIDE_ATTRIBUTE = "__mvr05b3_seals_write_window_inside_endpoint__"
 
 _Endpoint = TypeVar("_Endpoint", bound=Callable[..., Any])
 
@@ -181,6 +182,25 @@ def is_compatibility_selector_bridge(endpoint: object) -> bool:
     return bool(getattr(endpoint, _SELECTOR_BRIDGE_ATTRIBUTE, False))
 
 
+def seals_write_window_inside(endpoint: _Endpoint) -> _Endpoint:
+    """Mark a legacy write route that opens its own write-target window.
+
+    A route that must also pin the process selection (``compatibility_selection_window``)
+    takes the selection lock *first* and the shared ingress window inside it -- the
+    same order ``/vault/select`` uses (selection lock, then exclusive ingress for the
+    rebind). Holding the router-level window around such a route would invert that
+    order and can deadlock against a concurrent picker. The router seal still
+    refuses every scoped carrier and migrated precondition for it.
+    """
+
+    setattr(endpoint, _SEALS_INSIDE_ATTRIBUTE, True)
+    return endpoint
+
+
+def _seals_inside(endpoint: object) -> bool:
+    return bool(getattr(endpoint, _SEALS_INSIDE_ATTRIBUTE, False))
+
+
 def reject_scoped_vault_mutation(request: Request) -> None:
     """Seal every legacy vault mutation from consuming a scoped bearer.
 
@@ -290,9 +310,22 @@ def make_vault_mutation_seal(
     def seal(request: Request) -> Iterator[None]:
         reject_scoped_vault_mutation(request)
         if (
+            request.method.upper() in _MUTATION_METHODS
+            and _seals_inside(request.scope.get("endpoint"))
+        ):
+            # Fail a misrouted legacy write before request parsing or any effect,
+            # holding the window only momentarily (no selection lock is held here,
+            # so nothing nests); the endpoint then re-proves the target inside its
+            # own selection-then-ingress window.
+            with compatibility_write_target_window(request, selected_root=selected_root):
+                pass
+            yield
+            return
+        if (
             request.method.upper() not in _MUTATION_METHODS
             or _is_compatibility_route(request)
             or is_compatibility_selector_bridge(request.scope.get("endpoint"))
+            or _seals_inside(request.scope.get("endpoint"))
         ):
             yield
             return
@@ -317,6 +350,22 @@ def require_compatibility_write_root(request: Request, root: Path) -> None:
     expected = getattr(getattr(request, "state", None), "compatibility_write_root", None)
     if expected is not None and not _same_root(Path(root), Path(expected)):
         raise _capability_not_ready()
+
+
+def require_compatibility_write_target(request: Request, target: Path) -> None:
+    """Fail closed when a route writes a path outside the sealed binding root.
+
+    For routes whose effect lands on a path they resolve themselves (a staged
+    proposal's note file) rather than on the binding root as a whole.
+    """
+
+    expected = getattr(getattr(request, "state", None), "compatibility_write_root", None)
+    if expected is None:
+        return
+    try:
+        Path(target).expanduser().resolve().relative_to(Path(expected).expanduser().resolve())
+    except ValueError as exc:
+        raise _capability_not_ready() from exc
 
 
 def require_compatibility_mutation(
@@ -368,7 +417,9 @@ __all__ = [
     "issue_compatibility_precondition",
     "make_vault_mutation_seal",
     "reject_scoped_vault_mutation",
+    "seals_write_window_inside",
     "require_compatibility_mutation",
     "require_compatibility_write_root",
+    "require_compatibility_write_target",
     "seal_vault_mutation",
 ]

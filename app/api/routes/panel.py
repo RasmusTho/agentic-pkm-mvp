@@ -11,7 +11,7 @@ runtime-declared Panel checkbox option to the canonical checked Markdown state.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 import app.panel.confirmation as confirm_module
 import app.panel.checkbox_projection as checkbox_projection_module
@@ -27,7 +27,7 @@ from app.panel.confirmation import (
     SameTurnExecutionError,
     UnknownProposalError,
 )
-from app.api.compatibility_mutation import seal_vault_mutation
+from app.api.compatibility_mutation import require_compatibility_write_target, seal_vault_mutation
 
 router = APIRouter(
     prefix="/panel",
@@ -37,7 +37,13 @@ router = APIRouter(
 
 
 @router.post("/confirm", response_model=ConfirmResponse)
-async def panel_confirm(request: ConfirmRequest) -> ConfirmResponse:
+async def panel_confirm(request: ConfirmRequest, http_request: Request) -> ConfirmResponse:
+    # A staged proposal names its own note file (absolute, or relative to the
+    # process VAULT_ROOT), which need not be the sealed compatibility binding:
+    # prove the real target before any confirm/reject effect.
+    target = confirm_module.staged_proposal_note_file(request.proposal_id)
+    if target is not None:
+        require_compatibility_write_target(http_request, target)
     try:
         return confirm_module._service.confirm(request)
     except UnknownProposalError as exc:

@@ -39,7 +39,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator
 
-from app.api.compatibility_mutation import seal_vault_mutation
+from app.api.compatibility_mutation import require_compatibility_write_root, seal_vault_mutation
 from app.api.request_active_context import refuse_carrier_until_binding_aware
 from app.api.routes.heimdal_capture import _assert_lan_posture, _trace_id
 from app.events.schema import make_outbox_event
@@ -162,6 +162,14 @@ def close_session(
     """Close a session; a re-post replays the recorded close outcome."""
     trace_id = _trace_id(request)
     _assert_lan_posture(request, trace_id)
+    # Close triggers finalization into HEIMDAL_MEETING_VAULT_ROOT, which need not be
+    # the sealed compatibility binding: prove it before the close or any vault effect.
+    try:
+        meeting_root = meeting_finalization.configured_meeting_vault_root()
+    except meeting_finalization.MeetingFinalizationError:
+        meeting_root = None  # finalization reports its own misconfiguration
+    if meeting_root is not None:
+        require_compatibility_write_root(request, meeting_root)
     try:
         session, newly_closed = meeting_ledger.close_meeting_session(
             session_id=session_id, final_seq_count=body.final_seq_count

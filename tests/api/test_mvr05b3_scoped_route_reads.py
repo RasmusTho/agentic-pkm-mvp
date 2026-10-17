@@ -181,3 +181,112 @@ def test_scoped_reads_refuse_many_bindings_and_render_zero_binding_as_no_vault(
         assert no_vault.json()["reason"] == "no_vault_bound"
         # The scoped no-vault journey never offers the process-configured root.
         assert no_vault.json()["configured_vault_root"] is None
+
+
+def test_scoped_eval_drafts_never_read_a_nested_child_vaults_system_folder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#6159 review: an initialized nested child vault is a hard read boundary."""
+
+    from app.api.routes import eval_drafts as eval_routes
+
+    parent = tmp_path / "parent"
+    initialize_test_vault(parent)
+    initialize_test_vault(parent / "child")
+    (parent / "child" / "_system" / eval_routes.DRAFT_DIR_NAME).mkdir(parents=True)
+    monkeypatch.setattr(eval_routes, "get_vault_system_dir_rel", lambda _root: "child/_system")
+
+    assert eval_routes._scoped_drafts_dir_is_contained(parent) is False
+
+    monkeypatch.setattr(eval_routes, "get_vault_system_dir_rel", lambda _root: "_system")
+    assert eval_routes._scoped_drafts_dir_is_contained(parent) is True
+
+
+def test_route_specific_write_targets_are_proved_against_the_sealed_root(tmp_path: Path) -> None:
+    """#6159 review: a route's own write target must lie in the sealed compatibility root."""
+
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+
+    from app.api.compatibility_mutation import (
+        require_compatibility_write_root,
+        require_compatibility_write_target,
+    )
+
+    bound, other = tmp_path / "bound", tmp_path / "other"
+    bound.mkdir()
+    other.mkdir()
+    sealed = SimpleNamespace(state=SimpleNamespace(compatibility_write_root=bound))
+    unsealed = SimpleNamespace(state=SimpleNamespace())
+
+    require_compatibility_write_target(sealed, bound / "note.md")
+    require_compatibility_write_root(sealed, bound)
+    for check, target in (
+        (require_compatibility_write_target, other / "note.md"),
+        (require_compatibility_write_root, other),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            check(sealed, target)
+        assert exc.value.status_code == 409
+        assert exc.value.detail["error"] == "capability_not_ready"
+    # Pre-floor journey (no sealed binding): the process selection is the only binding.
+    require_compatibility_write_target(unsealed, other / "note.md")
+
+
+def test_panel_confirm_and_meeting_close_check_their_real_targets(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#6159 review: both routes prove the target they actually write before any effect."""
+
+    from fastapi import HTTPException
+
+    import app.panel.confirmation as confirm_module
+    from app.api.routes import heimdal_meeting as meeting_routes
+    from app.api.routes import panel as panel_routes
+    from app.heimdal import meeting_finalization
+
+    checked: list[tuple[str, Path]] = []
+
+    def refuse(kind):
+        def _check(_request, target):
+            checked.append((kind, Path(target)))
+            raise HTTPException(status_code=409, detail="capability_not_ready")
+
+        return _check
+
+    monkeypatch.setattr(confirm_module, "staged_proposal_note_file", lambda _pid: Path("/elsewhere/note.md"))
+    monkeypatch.setattr(panel_routes, "require_compatibility_write_target", refuse("panel"))
+    monkeypatch.setattr(meeting_finalization, "configured_meeting_vault_root", lambda: Path("/elsewhere"))
+    monkeypatch.setattr(meeting_routes, "require_compatibility_write_root", refuse("meeting"))
+    effects: list[str] = []
+    monkeypatch.setattr(confirm_module._service, "confirm", lambda *_a, **_k: effects.append("confirm"))
+    monkeypatch.setattr(
+        meeting_routes.meeting_ledger, "close_meeting_session", lambda **_k: effects.append("close")
+    )
+    monkeypatch.setattr(meeting_routes, "_assert_lan_posture", lambda *_a, **_k: None)
+    client = TestClient(app)
+
+    panel = client.post(
+        "/api/panel/confirm",
+        json={"proposal_id": "p-1", "artifact_id": "a-1", "action": "confirm", "idempotency_key": "k-1"},
+    )
+    meeting = client.post("/api/heimdal/meeting/s-1/close", json={"final_seq_count": 1})
+
+    assert panel.status_code == 409, panel.text
+    assert meeting.status_code == 409, meeting.text
+    assert checked == [("panel", Path("/elsewhere/note.md")), ("meeting", Path("/elsewhere"))]
+    assert effects == []
+
+
+def test_voice_route_takes_the_selection_lock_before_the_write_window() -> None:
+    """#6159 review: /ask/voice must not hold the ingress window around the selection lock."""
+
+    import inspect
+
+    from app.api import compatibility_mutation as mutation
+    from app.api.routes import ask as ask_routes
+
+    assert mutation._seals_inside(ask_routes.ask_voice)
+    source = inspect.getsource(ask_routes.ask_voice)
+    selection = source.index("compatibility_selection_window()")
+    window = source.index("compatibility_write_target_window(request)")
+    assert selection < window
