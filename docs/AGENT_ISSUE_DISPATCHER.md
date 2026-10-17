@@ -1211,6 +1211,36 @@ review, acceptance, merge, or closure state, or weaken any quality gate. See
 [the Dispatcher And Routing Model](development/BUILDER_SYSTEM_PROCESS_MAP.md#5-dispatcher-and-routing-model)
 for the cross-system classification.
 
+#### Manual shadow rehydration probe
+
+The delivered `app/builderops/epic_rehydration_probe.py` provides a manual, observer-only
+rehydration measurement for one accepted checkpoint. `build_context_pack` accepts only a strictly
+normalized `epic_run_context_budget_receipt.v1`, binds its exact source bytes/digest, target
+Issue/PR and verified head/merge SHAs, and carries explicit live-read instructions. A fresh probe
+agent must receive only that packet and the packet's instructions; it returns one strict
+`epic_rehydrated_observation.v1` object with provenance for every field. The comparison receipt
+preserves match, mismatch, and unknown results plus refresh, missing-claim, and fabricated-claim
+evidence without a quality aggregate. Retained packet, observation, comparison, and source
+custody refs are hashed as their exact JSON bytes and validated against the parsed normalized
+objects; external refresh compares the source marker projection to the same live marker
+projection, not the checkpoint envelope.
+
+The `build-pack`, `compare`, and `receipt` subcommands write only operator-selected local JSON
+evidence, and each output path must be new: existing files, symlinks, hardlinks, direct inputs, and
+transitive source/custody refs are rejected without changing bytes. Every pack consumer re-reads the
+retained source ref, requires its exact raw digest/length and parsed object to match the supplied
+receipt, and fails closed for missing or malformed custody. They do not import dispatcher, GitHub,
+lease, or agent-launch adapters and enumerate dispatch, lease, CI, review, acceptance, merge,
+closure, and agent-start effects as empty. Live external-state projection never fills missing live
+fields from the checkpoint; a sparse lifecycle/head observation is `unknown`, while a complete equal
+projection is `match` and a complete drift is `mismatch`. The operator must first emit a new actual
+checkpoint through the existing evaluator, read live GitHub, repository, and dispatcher truth, and
+accept/pin that receipt in run-state. A July serialization, fixture, stale source, automatic
+rotation, worker launch, or later lifecycle action is outside this manual shadow behavior.
+Standalone receipt deserialization reconstructs the retained pack, observation, comparison, and source
+chain and cross-binds their normalized objects and metadata before accepting any receipt. Unmeasured
+token, cost, elapsed-time, and human-minute values remain `unknown`.
+
 When a PR is locally validated but GitHub Actions are still pending, coordinators may separate the
 implementation handoff from terminal closure with a CI-monitor handoff record:
 

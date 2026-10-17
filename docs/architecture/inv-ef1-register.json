@@ -2625,6 +2625,20 @@
       "why_load_bearing": "The ADR index names the owner-approved Mac mini portal decision so readers can identify the governing architecture choice.",
       "disposition": "stay",
       "issue": "#5819"
+    },
+    {
+      "artifact": "evidence/live-dispatcher-status.json",
+      "category": "iv",
+      "why_load_bearing": "Retained live dispatcher evidence records the configured public Bifrost constituent as part of the accepted shadow rehydration checkpoint; it is operational evidence, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#6165"
+    },
+    {
+      "artifact": "evidence/run-state-update.json",
+      "category": "iv",
+      "why_load_bearing": "Retained run-state evidence records the accepted public Bifrost constituent references needed to audit the shadow rehydration checkpoint; it is operational evidence, not personal vault data.",
+      "disposition": "stay",
+      "issue": "#6165"
     }
   ]
 }
