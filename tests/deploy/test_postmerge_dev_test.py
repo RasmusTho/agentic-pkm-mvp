@@ -380,6 +380,103 @@ def test_controller_recovers_only_native_terminal_evidence(tmp_path):
                     deploy=lambda *_args: pytest.fail('fresh activation'))
 
 
+def _absence_proof(channel, candidate):
+    return {
+        'contract': 'postmerge-native-operation-absence.v1',
+        'operation_id': candidate.operation_id(channel),
+        'channel': channel,
+        'candidate_sha': candidate.sha,
+        'image_digest': candidate.digest,
+        'host_operation_absent': True,
+        'host_operation_retired': True,
+        'native_operation_absent': True,
+        'native_worker_absent': True,
+        'native_lock_absent': True,
+        'native_request_absent': True,
+    }
+
+
+def test_pre_mutation_refusal_with_exact_absence_retires_pending_checkpoint(tmp_path):
+    tmp_path.chmod(0o700)
+    stale = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    current = driver.Candidate('c' * 40, 'sha256:' + 'd' * 64, 124, 1, 457)
+    path = tmp_path / 'postmerge-dev-test.json'
+    driver._save_outcome(path, stale, {
+        'source_sha': stale.sha, 'image_digest': stale.digest, 'source_run_id': stale.run_id,
+        'source_run_attempt': stale.run_attempt, 'artifact_id': stale.artifact_id,
+        'channel': 'dev', 'result': 'pending', 'operation_id': stale.operation_id('dev'),
+    })
+    calls = []
+
+    def deploy(channel, candidate):
+        calls.append((channel, candidate))
+        return _native_receipt(channel, candidate)
+
+    assert driver.poll(
+        tmp_path,
+        build=lambda: current.run_id,
+        load=lambda _run: current,
+        resume=lambda *_args: (_ for _ in ()).throw(
+            driver.CandidateRefused('native_terminal_evidence_refused')
+        ),
+        absence=lambda channel, candidate: _absence_proof(channel, candidate),
+        deploy=deploy,
+        current_main=lambda: current.sha,
+    ) == 0
+    assert calls == [('dev', current), ('test', current)]
+    checkpoint = json.loads(path.read_text())
+    assert checkpoint['candidate'] == driver.asdict(current)
+    assert checkpoint['phase'] == 'passed' and checkpoint['channel'] == 'test'
+
+
+@pytest.mark.parametrize('field,value', [
+    ('operation_id', str(uuid4())),
+    ('candidate_sha', 'c' * 40),
+    ('native_request_absent', False),
+    ('native_lock_absent', False),
+])
+def test_absence_proof_requires_exact_checkpoint_binding_and_complete_evidence(tmp_path, field, value):
+    tmp_path.chmod(0o700)
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    path = tmp_path / 'postmerge-dev-test.json'
+    driver._save_outcome(path, candidate, {
+        'source_sha': candidate.sha, 'image_digest': candidate.digest, 'source_run_id': candidate.run_id,
+        'source_run_attempt': candidate.run_attempt, 'artifact_id': candidate.artifact_id,
+        'channel': 'dev', 'result': 'pending', 'operation_id': candidate.operation_id('dev'),
+    })
+    proof = _absence_proof('dev', candidate)
+    proof[field] = value
+    with pytest.raises(driver.CandidateRefused, match='native_absence_evidence_refused'):
+        driver.poll(
+            tmp_path,
+            resume=lambda *_args: (_ for _ in ()).throw(
+                driver.CandidateRefused('native_terminal_evidence_refused')
+            ),
+            absence=lambda *_args: proof,
+            deploy=lambda *_args: pytest.fail('ambiguous absence advanced deployment'),
+        )
+    assert json.loads(path.read_text())['phase'] == 'pending'
+
+
+@pytest.mark.parametrize('reason', ['pending', 'transport_failed', 'native_absence_evidence_refused'])
+def test_absence_proof_preserves_admitted_and_unknown_operations(tmp_path, reason):
+    tmp_path.chmod(0o700)
+    candidate = driver.Candidate(SHA, DIGEST, 123, 1, 456)
+    path = tmp_path / 'postmerge-dev-test.json'
+    driver._save_outcome(path, candidate, {
+        'source_sha': candidate.sha, 'image_digest': candidate.digest, 'source_run_id': candidate.run_id,
+        'source_run_attempt': candidate.run_attempt, 'artifact_id': candidate.artifact_id,
+        'channel': 'dev', 'result': 'pending', 'operation_id': candidate.operation_id('dev'),
+    })
+    with pytest.raises(driver.CandidateRefused):
+        driver.poll(
+            tmp_path,
+            resume=lambda *_args: (_ for _ in ()).throw(driver.CandidateRefused(reason)),
+            absence=lambda *_args: pytest.fail('non-terminal refusal attempted absence'),
+        )
+    assert json.loads(path.read_text())['phase'] == 'pending'
+
+
 def test_controller_lock_and_atomic_checkpoint_survive_stale_temporary(tmp_path):
     tmp_path.chmod(0o700)
     with driver.checkpoint_lock(tmp_path):

@@ -172,6 +172,10 @@ def main(argv: list[str] | None = None) -> int:
         '--reconcile-pending', action='store_true',
         help='reconcile this exact existing-secrets-only operation after remote terminal evidence',
     )
+    parser.add_argument(
+        '--prove-never-admitted', action='store_true',
+        help='prove this exact automatic operation left no host or native mutation footprint',
+    )
     args = parser.parse_args(argv)
     try:
         cutover = None
@@ -195,6 +199,29 @@ def main(argv: list[str] | None = None) -> int:
                           (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only,
                           args.image_digest, args.automatic, cutover)
         plan.validate()
+        if args.prove_never_admitted:
+            if (
+                not args.existing_secrets_only
+                or not args.automatic
+                or args.operation_id is None
+                or args.reconcile_pending
+                or args.channel not in {'dev', 'test'}
+            ):
+                raise PostgresDeployError()
+            remote = SshDeployRemote('ygg-' + args.channel)
+            proof = controller.prove_deploy_absence(
+                args.operation_id,
+                args.channel,
+                lambda: remote.prove_absence(args.operation_id, plan),
+            )
+            proof = {
+                **proof,
+                'contract': 'postmerge-native-operation-absence.v1',
+                'candidate_sha': args.revision,
+                'image_digest': args.image_digest or '',
+            }
+            print(json.dumps(proof, sort_keys=True))
+            return 0
         if args.reconcile_pending:
             if not args.existing_secrets_only:
                 raise PostgresDeployError()

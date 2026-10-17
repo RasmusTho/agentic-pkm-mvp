@@ -35,6 +35,8 @@ _TERMINAL_SOURCES = {
     "deploy": "remote-terminal",
 }
 _TOKEN_PUSH_LOCAL_ABORT_SOURCE = "host-preflight"
+_DEPLOY_ABSENCE_SOURCE = "postmerge-controller"
+_DEPLOY_ABSENCE_STAGE = "retired-before-admission"
 
 
 @dataclass(frozen=True)
@@ -289,6 +291,17 @@ class HostSecretController:
                         raise HostSecretAdmissionError()
                 elif set(record) != {"operation_id", "kind", "target", "stage", "source"}:
                     raise HostSecretAdmissionError()
+                if record["stage"] == _DEPLOY_ABSENCE_STAGE:
+                    if (
+                        record["kind"] != "deploy"
+                        or record["target"] not in {"dev", "test"}
+                        or record.get("allow_bootstrap") is not False
+                        or record["source"] != _DEPLOY_ABSENCE_SOURCE
+                        or record["operation_id"] in seen
+                    ):
+                        raise HostSecretAdmissionError()
+                    seen.add(record["operation_id"])
+                    continue
                 if record["stage"] == "prepared":
                     if (
                         pending is not None
@@ -398,6 +411,71 @@ class HostSecretController:
                 operation.finish(evidence)
             finally:
                 operation._active = False
+
+    def prove_deploy_absence(
+        self,
+        operation_id: str,
+        target: str,
+        readback: Callable[[], dict[str, str | bool]],
+    ) -> dict[str, str | bool]:
+        """Prove that one automatic deploy ID never entered host admission.
+
+        The downstream readback runs while the shared host journal lock is held,
+        so another cooperating entrypoint cannot admit the ID between the host
+        history check and the remote fixed-field observation.  No journal record
+        is appended by this read-only path.
+        """
+        if (
+            target not in {"dev", "test"}
+            or not isinstance(operation_id, str)
+            or str(UUID(operation_id)) != operation_id
+        ):
+            raise HostSecretAdmissionError()
+        with self._locked_journal(wait=True) as descriptor:
+            self._pending(descriptor)  # Validate the complete append-only history.
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            with os.fdopen(os.dup(descriptor), "r", encoding="utf-8") as source:
+                records = [json.loads(line) for line in source]
+            matches = [record for record in records if record["operation_id"] == operation_id]
+            retired = len(matches) == 1 and matches[0] == {
+                "operation_id": operation_id,
+                "kind": "deploy",
+                "target": target,
+                "stage": _DEPLOY_ABSENCE_STAGE,
+                "source": _DEPLOY_ABSENCE_SOURCE,
+                "allow_bootstrap": False,
+            }
+            if matches and not retired:
+                raise HostSecretAdmissionError()
+            result = readback()
+            if (
+                not isinstance(result, dict)
+                or result.get("operation_id") != operation_id
+                or result.get("channel") != target
+                or result.get("native_operation_absent") is not True
+                or result.get("native_worker_absent") is not True
+                or result.get("native_lock_absent") is not True
+                or result.get("native_request_absent") is not True
+            ):
+                raise HostSecretAdmissionError()
+            if not retired:
+                record = {
+                    "operation_id": operation_id,
+                    "kind": "deploy",
+                    "target": target,
+                    "stage": _DEPLOY_ABSENCE_STAGE,
+                    "source": _DEPLOY_ABSENCE_SOURCE,
+                    "allow_bootstrap": False,
+                }
+                raw = (json.dumps(record, sort_keys=True) + "\n").encode()
+                if os.write(descriptor, raw) != len(raw):
+                    raise HostSecretAdmissionError()
+                os.fsync(descriptor)
+            return {
+                **result,
+                "host_operation_absent": True,
+                "host_operation_retired": True,
+            }
 
     @contextmanager
     def token_push_operation(

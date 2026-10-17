@@ -208,6 +208,7 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
          load: Callable[[int], Candidate] = load_candidate,
          deploy: Callable[[str, Candidate], dict[str, Any]] | None = None,
          resume: Callable[[str, Candidate], dict[str, Any]] | None = None,
+         absence: Callable[[str, Candidate], dict[str, Any]] | None = None,
          current_main: Callable[[], str] = _current_main) -> int:
     # No CI job runs this path. It is supervised on the existing private agent
     # host, which already owns credentials, SSH dispatch and terminal recovery.
@@ -230,18 +231,34 @@ def poll(directory: Path, *, build: Callable[[], int] = latest_build,
             # The candidate's durable operation ID covers both a lost pending
             # reply and a committed native receipt preceding checkpoint fsync.
             candidate = Candidate(**checkpoint['candidate'])
-            receipt = (resume or native_deploy)(checkpoint['channel'], candidate)
-            _require_terminal_profile(receipt, checkpoint['channel'], candidate)
-            result = 'passed' if receipt['terminal_result'] == 'committed' else 'failed'
-            outcome = {**checkpoint['outcome'], 'result': result, 'operation_id': receipt['operation_id']}
-            if result == 'passed':
-                outcome['pg_acceptance'] = receipt['pg_acceptance']
+            try:
+                receipt = (resume or native_deploy)(checkpoint['channel'], candidate)
+            except CandidateRefused as error:
+                if str(error) != 'native_terminal_evidence_refused':
+                    raise
+                proof = (absence or native_absence)(checkpoint['channel'], candidate)
+                _require_absence_profile(proof, checkpoint['channel'], candidate)
+                outcome = {
+                    **checkpoint['outcome'],
+                    'result': 'superseded_before_deployment',
+                    'channel': None,
+                    'operation_id': candidate.operation_id(checkpoint['channel']),
+                    'absence_proof': 'qualified',
+                }
+                _save_outcome(path, candidate, outcome)
+                checkpoint.update(phase='superseded_before_deployment', channel=None, outcome=outcome)
             else:
-                outcome.update(_source_failure(receipt))
-            _save_outcome(path, candidate, outcome)
-            checkpoint.update(phase=result, outcome=outcome)
-            if result != 'passed':
-                return 78
+                _require_terminal_profile(receipt, checkpoint['channel'], candidate)
+                result = 'passed' if receipt['terminal_result'] == 'committed' else 'failed'
+                outcome = {**checkpoint['outcome'], 'result': result, 'operation_id': receipt['operation_id']}
+                if result == 'passed':
+                    outcome['pg_acceptance'] = receipt['pg_acceptance']
+                else:
+                    outcome.update(_source_failure(receipt))
+                _save_outcome(path, candidate, outcome)
+                checkpoint.update(phase=result, outcome=outcome)
+                if result != 'passed':
+                    return 78
         if checkpoint and checkpoint['phase'] == 'passed':
             candidate = Candidate(**checkpoint['candidate'])
             try:
@@ -326,6 +343,43 @@ def native_deploy(channel: str, candidate: Candidate) -> dict[str, Any]:
         return receipt
     except Exception:
         raise CandidateRefused('native_terminal_evidence_refused') from None
+
+
+def native_absence(channel: str, candidate: Candidate) -> dict[str, Any]:
+    """Obtain exact host+native absence proof without reading private identities."""
+    environment = {k: v for k, v in os.environ.items() if k not in {'GH_TOKEN', 'GITHUB_TOKEN'}}
+    command = [
+        sys.executable, '-m', 'app.ops.postgres_deploy_host', channel, candidate.sha,
+        '--operation-id', candidate.operation_id(channel), '--existing-secrets-only',
+        '--automatic', '--image-digest', candidate.digest, '--prove-never-admitted',
+    ]
+    result = subprocess.run(command, env=environment, capture_output=True, text=True, check=False)
+    try:
+        proof = json.loads(result.stdout)
+        _require_absence_profile(proof, channel, candidate)
+        if result.returncode != 0:
+            raise ValueError()
+        return proof
+    except Exception:
+        raise CandidateRefused('native_absence_evidence_refused') from None
+
+
+def _require_absence_profile(proof: dict[str, Any], channel: str, candidate: Candidate) -> None:
+    expected = {
+        'contract': 'postmerge-native-operation-absence.v1',
+        'operation_id': candidate.operation_id(channel),
+        'channel': channel,
+        'candidate_sha': candidate.sha,
+        'image_digest': candidate.digest,
+        'host_operation_absent': True,
+        'host_operation_retired': True,
+        'native_operation_absent': True,
+        'native_worker_absent': True,
+        'native_lock_absent': True,
+        'native_request_absent': True,
+    }
+    if proof != expected:
+        raise CandidateRefused('native_absence_evidence_refused')
 
 
 def _source_failure(receipt: dict[str, Any]) -> dict[str, str]:
