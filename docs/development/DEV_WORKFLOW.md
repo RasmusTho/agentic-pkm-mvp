@@ -653,7 +653,10 @@ Enforcement surfaces:
   with the lifecycle lock held through that one command. Before Git removal it durably records a
   generation-bound `removal_pending` transition. Successful removal durably retires the exact
   generation before branch deletion; restart reconciliation completes only a pending transition
-  and never infers removal from an ordinary missing lifecycle record. Branch deletion after a
+  and never infers removal from an ordinary missing lifecycle record. A separate explicit
+  `preserve-missing` operation can mark one exact expired active generation `missing_preserved`
+  when its checkout is absent; it retains the branch and path identity, blocks path reuse and
+  branch retirement, and never authorizes cleanup. Branch deletion after a
   removal revalidates both the `worktree:<path>` and the `branch:<branch>` lease identity
   immediately before the irreversible delete and fails closed if either is claimed. That
   revalidation reads a foreign lease file it cannot lock, so it is a check-then-act guard, not
