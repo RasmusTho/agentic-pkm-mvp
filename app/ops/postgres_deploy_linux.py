@@ -64,6 +64,7 @@ _SOURCE_PROJECTION_FAILURE_REASONS = frozenset({
     'embedding_identity_unavailable', 'embedding_identity_invalid',
     'embedding_service_unavailable', 'embedding_service_not_ready',
     'embedding_model_unavailable', 'embedding_model_not_ready', 'embedding_probe_failed',
+    'embedding_guard_refused',
     'embedding_probe_client_failed', 'embedding_probe_identity_mismatch',
     'embedding_probe_generation_failed', 'embedding_probe_vector_invalid',
     'embedding_probe_cleanup_failed',

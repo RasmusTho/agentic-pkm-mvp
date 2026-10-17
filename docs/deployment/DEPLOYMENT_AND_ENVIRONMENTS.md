@@ -913,7 +913,10 @@ repair operation below unchanged; that operation still runs after migrations.
 The probe's fixed child exit statuses 114–118 map respectively to
 `embedding_probe_client_failed`, `embedding_probe_identity_mismatch`,
 `embedding_probe_generation_failed`, `embedding_probe_vector_invalid`, and
-`embedding_probe_cleanup_failed`; unknown exits retain `embedding_probe_failed`.
+`embedding_probe_cleanup_failed`; unknown exits (including 119) retain `embedding_probe_failed`.
+Status 120 maps to `embedding_guard_refused` and is reserved by the supervised Compose wrapper when the
+inherited BWS guard refuses before Docker executes; the receipt retains no checkpoint, status,
+or other private guard payload.
 This probe-only status namespace is separate from source-worker checkpoints: worker exits
 114–119 or other unsupported statuses retain generic worker failure, never probe attribution.
 Only these allowlisted reasons cross the supervised wrapper into the native operation journal,
