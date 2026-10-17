@@ -3837,6 +3837,187 @@ def test_bws_host_cli_binds_forward_only_ack_to_plan(monkeypatch, tmp_path):
     assert captured[-1][1] is False
 
 
+def test_test_recovery_reset_is_candidate_and_operation_bound(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_host as host
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
+    )
+
+    failed_operation_id = str(uuid4())
+    digest = 'sha256:' + '1' * 64
+    plan = DeployPlan(
+        'test', 'a' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    controller = SimpleNamespace(directory=tmp_path)
+    recovered: list[TestRecoveryRequest] = []
+    deployed: list[tuple[DeployPlan, bool]] = []
+
+    class Remote:
+        def __init__(self, hostname):
+            assert hostname == 'ygg-test'
+
+        def test_recovery_reset(self, request):
+            request.validate()
+            if request.plan != plan:
+                raise PostgresDeployError()
+            recovered.append(request)
+            return DeployReceipt(failed_operation_id, 'test', 'deploy', 'failed', 'failed')
+
+    def reconcile(readback, *, expected):
+        assert expected == ('deploy', 'test', False)
+        evidence = readback(failed_operation_id, 'deploy', 'test')
+        assert evidence.operation_id == failed_operation_id
+
+    def deploy(_admin, _remote, selected, *, qualified, allow_bootstrap):
+        qualified()
+        deployed.append((selected, allow_bootstrap))
+        return DeployReceipt(str(uuid4()), 'test', 'deploy', 'committed', 'committed')
+
+    controller.reconcile = reconcile
+    monkeypatch.setattr(host, 'HostSecretController', lambda: controller)
+    monkeypatch.setattr(host, 'SshDeployRemote', Remote)
+    monkeypatch.setattr(host, '_configured_host_admin', lambda: object())
+    monkeypatch.setattr(host, 'SecretAdmin', lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(host, 'require_qualification', lambda _controller: None)
+    monkeypatch.setattr(host, 'deploy_from_host', deploy)
+
+    args = [
+        'test', plan.revision, '--automatic', '--image-digest', digest,
+        '--existing-secrets-only', '--recover-test-source',
+        '--failed-operation-id', failed_operation_id,
+        '--authority-cutover-binding', authority.binding_id,
+        '--authority-cutover-root', authority.root,
+        '--authority-cutover-ownership-root', authority.ownership_root,
+    ]
+    assert host.main(args) == 0
+    assert len(recovered) == 1
+    assert recovered[0] == TestRecoveryRequest(failed_operation_id, plan, authority)
+    assert deployed == [(plan, False)]
+
+    # A changed candidate is a new request, never an alias for the failed operation.
+    assert host.main([*args[:1], 'b' * 40, *args[2:]]) == 78
+    assert len(recovered) == 1
+
+
+def test_test_recovery_reset_refuses_boundary_drift_without_mutation(monkeypatch, tmp_path):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import (
+        AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError,
+        TestRecoveryRequest,
+    )
+
+    operation_id = str(uuid4())
+    digest = 'sha256:' + '2' * 64
+    plan = DeployPlan(
+        'test', 'c' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False, digest, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    receipt = DeployReceipt(
+        operation_id, 'test', 'deploy', 'activating', None,
+        source_failure='legacy_identity_persistence_refused',
+    )
+
+    class Journal:
+        directory = tmp_path / 'journal'
+        channel = 'test'
+
+        def read(self):
+            return receipt
+
+        def bound_plan(self, selected):
+            assert selected == operation_id
+            return plan
+
+        def write(self, *_args, **_kwargs):
+            raise AssertionError('journal mutation must not occur on boundary drift')
+
+    cfg = SimpleNamespace(root=tmp_path, channel='test', journal=Journal())
+    effects = linux.LinuxEffects(cfg)
+    mutations: list[str] = []
+    effects.qualify_authority_cutover = lambda _plan: mutations.append('authority')
+    effects.quiescent = lambda: mutations.append('quiescent') or True
+    effects.recover_source_terminal = lambda *_args: mutations.append('source')
+    effects.compose = lambda *_args: mutations.append('compose')
+    effects._write_test_recovery_disposition = lambda *_args: mutations.append('disposition')
+    effects._test_recovery_remove_volume = lambda *_args: mutations.append('volume')
+    request = TestRecoveryRequest(operation_id, plan, authority)
+
+    # Candidate and operation mismatches fail before authority qualification or effects.
+    for drifted in (
+        replace(request, plan=replace(plan, revision='d' * 40)),
+        replace(request, failed_operation_id=str(uuid4())),
+    ):
+        with pytest.raises(PostgresDeployError):
+            effects.reset_test_source_projection(drifted)
+    assert mutations == []
+
+    # A changed authority is admitted only through the live qualification gate;
+    # a refusal there is still before any source, journal, service, or volume effect.
+    effects.qualify_authority_cutover = lambda _plan: (_ for _ in ()).throw(PostgresDeployError())
+    with pytest.raises(PostgresDeployError):
+        effects.reset_test_source_projection(replace(request, authority_cutover=replace(
+            authority, binding_id='other-binding'
+        )))
+    assert mutations == []
+
+    # A non-TEST supervisor cannot route the canonical reset action at all.
+    non_test = SimpleNamespace(channel='dev', journal=Journal())
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: non_test)
+    supervisor = linux.DeploymentSupervisor(non_test)
+    with pytest.raises(PostgresDeployError):
+        supervisor.request({'action': 'test-recovery-reset', **request.payload()})
+
+
+def test_source_projection_refusal_retains_authenticated_recoverable_state(tmp_path, monkeypatch):
+    import threading
+    from dataclasses import asdict
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.postgres_deploy import DeployJournal, DeployPlan, PostgresDeployError
+
+    root = tmp_path / 'checkout'
+    lock_dir = root / 'config/deploy/test.env.lock'
+    lock_dir.mkdir(parents=True, mode=0o700)
+    (lock_dir / 'bws-owner').touch(mode=0o600)
+    journal = DeployJournal(tmp_path / 'journal', 'test')
+    operation_id = str(uuid4())
+    plan = DeployPlan('test', 'e' * 40, ('db',), ('postgres-db',))
+    journal.bind_request(operation_id, plan, False, create=True)
+    for stage in ('prepared', 'preflighted', 'materialized', 'activating'):
+        journal.write(operation_id, stage)
+    config = SimpleNamespace(channel='test', root=root, journal=journal)
+    monkeypatch.setattr(linux.LinuxConfig, 'load', lambda _channel: config)
+    supervisor = linux.DeploymentSupervisor(config)
+    not_ready = threading.Event()
+    supervisor.operation = SimpleNamespace(
+        operation_id=operation_id, plan=plan, bootstrap=False, failed=False,
+        finished=not_ready, thread=SimpleNamespace(is_alive=lambda: True),
+    )
+    request = {
+        'action': 'reconcile-failed', 'operation_id': operation_id,
+        'plan': asdict(plan), 'bootstrap': False,
+    }
+    with pytest.raises(PostgresDeployError):
+        supervisor.request(request)
+    assert journal.read().stage == 'activating'
+    assert journal.read().terminal_result is None
+    assert lock_dir.is_dir()
+
+
 def test_bws_supervisor_binds_forward_only_ack_and_refuses_changed_retry(tmp_path, monkeypatch):
     from dataclasses import asdict, replace
     import json
@@ -4381,6 +4562,45 @@ def test_ssh_reconcile_failed_sends_exact_same_id_and_existing_secrets_mode(monk
         },
         'bootstrap': False,
     }
+
+
+def test_ssh_test_recovery_reset_sends_exact_candidate_operation_authority(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from app.ops import postgres_deploy_linux as linux
+    from app.ops.host_secret_contract import DATABASE_CONSUMERS
+    from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, DeployReceipt, TestRecoveryRequest
+
+    operation_id = str(uuid4())
+    plan = DeployPlan(
+        'test', 'f' * 40, tuple(DATABASE_CONSUMERS.values()),
+        (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), False,
+        'sha256:' + '3' * 64, True,
+    )
+    authority = AuthorityCutover('test-binding', '/srv/ygg/test-vault', '/srv/ygg/test-state')
+    request = TestRecoveryRequest(operation_id, plan, authority)
+    calls = []
+    response = {
+        'recovery': 'test-derived-reset-complete',
+        'receipt': {
+            **DeployReceipt(
+                operation_id, 'test', 'deploy', 'failed', 'failed',
+                source_failure='legacy_identity_persistence_refused',
+            ).payload(),
+        },
+    }
+
+    def ssh(argv, **kwargs):
+        calls.append((argv, json.loads(kwargs['input'])))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(response))
+
+    monkeypatch.setattr(linux.subprocess, 'run', ssh)
+    receipt = linux.SshDeployRemote('ygg-test').test_recovery_reset(request)
+    assert receipt.operation_id == operation_id
+    assert calls[0][0][-2:] == ['rpc', 'test']
+    assert calls[0][1] == json.loads(json.dumps({'action': 'test-recovery-reset', **request.payload()}))
 
 
 def test_vm_channel_lock_is_retained_until_matching_terminal_receipt(tmp_path):
@@ -6354,6 +6574,42 @@ case "$*" in
         assert f"APP_IMAGE_TAG={prior_sha}\n" in (root / "config/deploy/dev.env").read_text()
         assert any("up -d --force-recreate api" in event for event in events)
     assert "hostile-child-canary" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("worker_state", "expected_rc"),
+    [("running", 0), ("exited", 1)],
+)
+def test_source_projection_refusal_restores_complete_previous_runtime(
+    tmp_path: Path, worker_state: str, expected_rc: int
+) -> None:
+    """Compensation is healthy only when the complete runtime is running."""
+    script = SCRIPT.read_text(encoding="utf-8")
+    start = script.index("rollback_runtime_complete_gate()")
+    end = script.index("\nrollback_failed_startup()", start)
+    gate = script[start:end]
+    rows = json.dumps([
+        {"Service": "api", "State": "running", "Health": "healthy"},
+        {"Service": "worker", "State": worker_state, "Health": ""},
+        {"Service": "watcher", "State": "running", "Health": ""},
+    ])
+    compose = tmp_path / "compose"
+    compose.write_text(
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"${FAKE_COMPOSE_ROWS:?}\"\n",
+        encoding="utf-8",
+    )
+    compose.chmod(0o755)
+    env = os.environ.copy()
+    env.update(COMPOSE_BIN=str(compose), FAKE_COMPOSE_ROWS=rows, PYTHON=sys.executable)
+    result = subprocess.run(
+        ["bash", "-c", f"compose() {{ \"${{COMPOSE_BIN}}\"; }}\n{gate}\nrollback_runtime_complete_gate"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == expected_rc, result.stdout + result.stderr
 
 
 def test_native_source_timeout_terminates_descendants_even_when_parent_exits(tmp_path: Path) -> None:

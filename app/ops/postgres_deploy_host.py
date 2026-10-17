@@ -13,7 +13,10 @@ from uuid import UUID
 from app.ops.bws_secret_admin import BwsAdminConfig, BwsSecretAdmin
 from app.ops.host_secret_contract import DATABASE_CONSUMERS
 from app.ops.host_secret_controller import HostSecretController, TerminalEvidence
-from app.ops.postgres_deploy import AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, deploy_from_host
+from app.ops.postgres_deploy import (
+    AuthorityCutover, DeployPlan, DeployReceipt, PostgresDeployError, TestRecoveryRequest,
+    deploy_from_host,
+)
 from app.ops.postgres_deploy_linux import SshDeployRemote
 from app.ops.secret_admin import SecretAdmin
 
@@ -172,16 +175,38 @@ def main(argv: list[str] | None = None) -> int:
         '--reconcile-pending', action='store_true',
         help='reconcile this exact existing-secrets-only operation after remote terminal evidence',
     )
+    parser.add_argument(
+        '--recover-test-source', action='store_true',
+        help='reset only the exact failed TEST source projection, then deploy this candidate',
+    )
+    parser.add_argument(
+        '--failed-operation-id',
+        help='exact failed TEST deployment operation authenticated by --recover-test-source',
+    )
     args = parser.parse_args(argv)
     try:
         cutover = None
+        recovery_authority = None
         if any(value is not None for value in (args.authority_cutover_binding, args.authority_cutover_root,
                                                args.authority_cutover_ownership_root)):
             if (not args.authority_cutover_binding or not args.authority_cutover_root
                 or not args.authority_cutover_ownership_root or not args.existing_secrets_only):
                 raise PostgresDeployError()
-            cutover = AuthorityCutover(args.authority_cutover_binding, args.authority_cutover_root,
-                                       args.authority_cutover_ownership_root)
+            selected = AuthorityCutover(args.authority_cutover_binding, args.authority_cutover_root,
+                                        args.authority_cutover_ownership_root)
+            if args.recover_test_source:
+                recovery_authority = selected
+            else:
+                cutover = selected
+        if args.recover_test_source:
+            if (args.channel != 'test' or not args.automatic or not args.existing_secrets_only
+                or args.reconcile_pending or args.operation_id is not None
+                or args.failed_operation_id is None or recovery_authority is None):
+                raise PostgresDeployError()
+            if not isinstance(args.failed_operation_id, str) or str(UUID(args.failed_operation_id)) != args.failed_operation_id:
+                raise PostgresDeployError()
+        elif args.failed_operation_id is not None:
+            raise PostgresDeployError()
         if args.automatic and not args.existing_secrets_only:
             raise PostgresDeployError()
         if args.operation_id is not None and (
@@ -194,7 +219,33 @@ def main(argv: list[str] | None = None) -> int:
         plan = DeployPlan(args.channel, args.revision, tuple(DATABASE_CONSUMERS.values()),
                           (*DATABASE_CONSUMERS, 'heimdal-api-ingress'), args.ack_forward_only,
                           args.image_digest, args.automatic, cutover)
+        recovery_request = None
+        if args.recover_test_source:
+            failed_operation_id = args.failed_operation_id
+            selected_authority = recovery_authority
+            if not isinstance(failed_operation_id, str) or selected_authority is None:
+                raise PostgresDeployError()
+            recovery_request = TestRecoveryRequest(failed_operation_id, plan, selected_authority)
+            recovery_request.validate()
         plan.validate()
+        if recovery_request is not None:
+            remote = SshDeployRemote('ygg-test')
+
+            def readback(operation_id: str, kind: str, target: str) -> TerminalEvidence:
+                if (operation_id != recovery_request.failed_operation_id
+                    or kind != 'deploy' or target != 'test'):
+                    raise PostgresDeployError()
+                receipt = remote.test_recovery_reset(recovery_request)
+                return receipt.evidence()
+
+            controller.reconcile(readback, expected=('deploy', 'test', False))
+            admin = SecretAdmin(_configured_host_admin(), controller=controller)
+            receipt = deploy_from_host(
+                admin, remote, plan, qualified=lambda: require_qualification(controller),
+                allow_bootstrap=False,
+            )
+            print(json.dumps(receipt.payload(), sort_keys=True))
+            return 0 if receipt.terminal_result == 'committed' else 78
         if args.reconcile_pending:
             if not args.existing_secrets_only:
                 raise PostgresDeployError()

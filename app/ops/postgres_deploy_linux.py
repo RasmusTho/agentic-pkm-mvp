@@ -22,6 +22,7 @@ import socketserver
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 from typing import Any, Callable, Iterator
 from uuid import UUID, uuid4
@@ -33,6 +34,7 @@ from app.ops.host_secret_contract import DATABASE_CONSUMERS
 from app.ops.native_web_acceptance import NativeWebRefusal, WEB_PROFILE
 from app.ops.postgres_deploy import (
     AuthorityCutover, DeployJournal, DeployPlan, DeployReceipt, DeployWorker, PostgresDeployError,
+    TestRecoveryRequest,
     password_authenticate, vm_selected_values,
 )
 
@@ -1688,6 +1690,165 @@ class LinuxEffects:
                                        observe_terminal=retain, docker_command=_command):
             raise PostgresDeployError()
 
+    def _test_recovery_disposition_path(self, request: TestRecoveryRequest) -> Path:
+        request.validate()
+        directory = self.config.journal.directory
+        if (not directory.is_absolute() or directory.is_symlink()
+                or any(parent.is_symlink() for parent in (directory, *directory.parents))):
+            raise PostgresDeployError()
+        return directory / ('test-source-recovery-' + request.failed_operation_id + '.json')
+
+    def _read_test_recovery_disposition(self, request: TestRecoveryRequest) -> dict[str, Any] | None:
+        path = self._test_recovery_disposition_path(request)
+        try:
+            raw = _private_json(path)
+        except FileNotFoundError:
+            return None
+        expected = {
+            'schema': 'test-source-recovery.v1',
+            'channel': 'test',
+            'failed_operation_id': request.failed_operation_id,
+            'revision': request.plan.revision,
+            'image_digest': request.plan.image_digest,
+            'authority_cutover': {
+                'binding_id': request.authority_cutover.binding_id,
+                'root': request.authority_cutover.root,
+                'ownership_root': request.authority_cutover.ownership_root,
+            },
+        }
+        if (set(raw) != set(expected) | {'state'}
+            or any(raw.get(key) != value for key, value in expected.items())
+            or raw.get('state') not in {'prepared', 'complete'}):
+            raise PostgresDeployError()
+        return raw
+
+    def _write_test_recovery_disposition(self, request: TestRecoveryRequest, state: str) -> None:
+        if state not in {'prepared', 'complete'}:
+            raise PostgresDeployError()
+        path = self._test_recovery_disposition_path(request)
+        directory = path.parent
+        directory.mkdir(mode=0o700, exist_ok=True)
+        info = directory.stat()
+        if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+            raise PostgresDeployError()
+        prior = self._read_test_recovery_disposition(request)
+        if prior is not None and prior.get('state') == state:
+            return
+        payload = {
+            'schema': 'test-source-recovery.v1',
+            'channel': 'test',
+            'state': state,
+            'failed_operation_id': request.failed_operation_id,
+            'revision': request.plan.revision,
+            'image_digest': request.plan.image_digest,
+            'authority_cutover': {
+                'binding_id': request.authority_cutover.binding_id,
+                'root': request.authority_cutover.root,
+                'ownership_root': request.authority_cutover.ownership_root,
+            },
+        }
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=directory, prefix='.' + path.name + '.', text=True
+        )
+        temporary = Path(temporary_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, 'w', encoding='utf-8') as stream:
+                json.dump(payload, stream, sort_keys=True)
+                stream.write('\n')
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _test_recovery_remove_volume(self, name: str) -> None:
+        if not re.fullmatch(r'pkm-test_(?:pgdata|instance-state|runtime-tmp)', name):
+            raise PostgresDeployError()
+        listed = _command(['docker', 'volume', 'ls', '--quiet', '--filter', 'name=^' + name + '$'])
+        names = tuple(line for line in listed.splitlines() if line)
+        if any(item != name for item in names) or len(names) > 1:
+            raise PostgresDeployError()
+        if not names:
+            return
+        rows = json.loads(_command(['docker', 'volume', 'inspect', name]))
+        if not isinstance(rows, list) or len(rows) != 1 or rows[0].get('Name') != name:
+            raise PostgresDeployError()
+        labels = rows[0].get('Labels') or {}
+        if (not isinstance(labels, dict)
+            or labels.get('com.docker.compose.project') not in {None, 'pkm-test'}):
+            raise PostgresDeployError()
+        removed = _command(['docker', 'volume', 'rm', name]).splitlines()
+        if removed != [name]:
+            raise PostgresDeployError()
+
+    def reset_test_source_projection(self, request: TestRecoveryRequest) -> DeployReceipt:
+        """Reset only derived TEST volumes after an exact failed source projection."""
+        request.validate()
+        if self.config.channel != 'test':
+            raise PostgresDeployError()
+        receipt = self.config.journal.read()
+        if (receipt is None or receipt.operation_id != request.failed_operation_id
+            or receipt.stage not in {'activating', 'failed'}
+            or receipt.source_failure not in _SOURCE_PROJECTION_FAILURE_REASONS
+            or self.config.journal.bound_plan(request.failed_operation_id) != request.plan):
+            raise PostgresDeployError()
+        disposition = self._read_test_recovery_disposition(request)
+        lock_path = self.config.root / 'config/deploy' / 'test.env.lock'
+        if disposition is not None and disposition.get('state') == 'complete':
+            if lock_path.exists():
+                with self.failed_reconciliation_lock() as handle:
+                    self.retire_reconciled_channel_lock(handle)
+            final = self.config.journal.read()
+            if final is None or final.operation_id != request.failed_operation_id \
+                    or final.terminal_result != 'failed':
+                raise PostgresDeployError()
+            return final
+        authority_plan = DeployPlan(
+            'test', request.plan.revision, request.plan.services, request.plan.consumers,
+            request.plan.ack_forward_only, request.plan.image_digest, False,
+            request.authority_cutover,
+        )
+        authority_plan.validate()
+        self.qualify_authority_cutover(authority_plan)
+        with self.failed_reconciliation_lock() as handle:
+            current = self.config.journal.read()
+            if (current is None or current.operation_id != request.failed_operation_id
+                or current.stage not in {'activating', 'failed'}
+                or self.config.journal.bound_plan(request.failed_operation_id) != request.plan):
+                raise PostgresDeployError()
+            if not self.quiescent():
+                raise PostgresDeployError()
+            self.recover_source_terminal(request.failed_operation_id, request.plan)
+            self._write_test_recovery_disposition(request, 'prepared')
+            if current.stage != 'failed':
+                self.config.journal.write(request.failed_operation_id, 'failed')
+            self.compose(
+                'stop', 'api', 'worker', 'watcher', 'heimdal-capture-watch',
+                'companion-ui', 'db', 'instance-state-init', 'migrate',
+            )
+            self.compose(
+                'rm', '--force', '--stop', 'api', 'worker', 'watcher',
+                'heimdal-capture-watch', 'companion-ui', 'db',
+                'instance-state-init', 'migrate',
+            )
+            if not self.quiescent():
+                raise PostgresDeployError()
+            for volume in ('pkm-test_pgdata', 'pkm-test_instance-state', 'pkm-test_runtime-tmp'):
+                self._test_recovery_remove_volume(volume)
+            self._write_test_recovery_disposition(request, 'complete')
+            final = self.config.journal.read()
+            if final is None or final.operation_id != request.failed_operation_id \
+                    or final.terminal_result != 'failed':
+                raise PostgresDeployError()
+            self.retire_reconciled_channel_lock(handle)
+            return final
+
     @contextmanager
     def channel_lock(self, *, journal: DeployJournal | None = None,
                      owner_marker: dict[str, str] | None = None,
@@ -1959,6 +2120,31 @@ class DeploymentSupervisor:
             effects.retire_reconciled_channel_lock(lock)
         return {'receipt': receipt.payload()}
 
+    def _test_recovery_reset(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Run the exact, TEST-only derived-state reset behind the VM RPC."""
+        self._require_current_config()
+        if set(data) != {'action', 'failed_operation_id', 'plan', 'authority_cutover'}:
+            raise PostgresDeployError()
+        request = TestRecoveryRequest.from_payload({
+            'failed_operation_id': data['failed_operation_id'],
+            'plan': data['plan'],
+            'authority_cutover': data['authority_cutover'],
+        })
+        if request.plan.channel != self.config.channel:
+            raise PostgresDeployError()
+        operation = self.operation
+        if operation is not None:
+            if operation.operation_id != request.failed_operation_id or not operation.finished.is_set():
+                raise PostgresDeployError()
+        receipt = LinuxEffects(self.config).reset_test_source_projection(request)
+        receipt.validate()
+        if (receipt.operation_id != request.failed_operation_id
+            or receipt.channel != 'test' or receipt.terminal_result != 'failed'):
+            raise PostgresDeployError()
+        if operation is not None:
+            self.operation = None
+        return {'receipt': receipt.payload(), 'recovery': 'test-derived-reset-complete'}
+
     def request(self, data: dict[str, Any]) -> dict[str, Any]:
         if data.get('action') in {'karakeep-acquire', 'karakeep-project'}:
             from app.ops.karakeep_runtime import dispatch
@@ -1974,6 +2160,9 @@ class DeploymentSupervisor:
             # inside durable refusal handling for new deploy IDs. Other
             # operations keep the existing fail-closed configuration gate.
             return self.karakeep.request(data)
+        if data.get('action') == 'test-recovery-reset':
+            with self.mutex:
+                return self._test_recovery_reset(data)
         if set(data) != {'action', 'operation_id', 'plan', 'bootstrap'}:
             raise PostgresDeployError()
         operation_id = str(data['operation_id'])
@@ -2105,6 +2294,26 @@ class SshDeployRemote:
         if not isinstance(response, dict) or response.get('refused'):
             raise PostgresDeployError()
         return response
+
+    def test_recovery_reset(self, request: TestRecoveryRequest) -> DeployReceipt:
+        request.validate()
+        payload = {'action': 'test-recovery-reset', **request.payload()}
+        result = subprocess.run(['ssh', '-o', 'BatchMode=yes', '--', self.host,
+            'sudo', '-n', '/usr/local/libexec/yggdrasil-bws-deploy', 'rpc', 'test'],
+            input=json.dumps(payload) + '\n', text=True, capture_output=True, check=False)
+        if result.returncode:
+            raise PostgresDeployError()
+        response = json.loads(result.stdout)
+        if (not isinstance(response, dict) or response.get('refused')
+            or response.get('recovery') != 'test-derived-reset-complete'):
+            raise PostgresDeployError()
+        receipt = DeployReceipt(**response['receipt'])
+        receipt.validate()
+        receipt.require_profile(request.plan)
+        if (receipt.operation_id != request.failed_operation_id
+            or receipt.channel != 'test' or receipt.terminal_result != 'failed'):
+            raise PostgresDeployError()
+        return receipt
 
     def prepare(self, operation_id: str, plan: DeployPlan, *, bootstrap: bool) -> bool:
         self.bootstrap = bootstrap
