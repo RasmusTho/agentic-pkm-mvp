@@ -46,6 +46,36 @@ def _create(client: TestClient, binding_id: str) -> dict:
     return response.json()
 
 
+def test_screen_control_refuses_authorized_scoped_session_before_legacy_read(
+    instance, client, monkeypatch
+) -> None:
+    """A valid vault-B carrier cannot fall back to the process-selected vault A."""
+    from pathlib import Path
+
+    import app.vault.manager as vault_manager_module
+    from app.api.routes import heimdal_screen
+    from app.vault.manager import VaultManager
+
+    _runtime, first, second = instance
+    manager = VaultManager()
+    manager.select_vault(Path(first.path), remember=False)
+    monkeypatch.setattr(vault_manager_module, "_GLOBAL_MANAGER", manager)
+    monkeypatch.setattr(
+        heimdal_screen,
+        "screen_control_status",
+        lambda *_args, **_kwargs: pytest.fail("scoped request read process-selected controls"),
+    )
+    session = _create(client, second.vault_binding_id)
+
+    response = client.get(
+        "/api/heimdal/screen/control",
+        headers={"X-Active-Context-Session": session["context_selection_id"]},
+        params={"app_id": "com.editor"},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["capability"] == "mvr05b4_binding_aware_read"
+
+
 def test_two_sessions_use_distinct_vaults_without_cross_talk(instance, client, monkeypatch) -> None:
     """Two real scoped API reads hold shared fences concurrently and stay isolated."""
 
